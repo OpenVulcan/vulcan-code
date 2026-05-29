@@ -17,6 +17,7 @@ use crate::provider_config::{
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
 use std::path::PathBuf;
 use vulcan_prompt_composer::PersonalityCatalog;
+use vulcan_vmm::VmmConfigLayer;
 
 /// Loads user-defined prompt personalities for the settings picker.
 /// 为设置下拉框加载用户自定义提示词人格。
@@ -856,6 +857,7 @@ impl VulcanWorkbench {
             provider_config::load_project_configuration_file(&workspace_path).unwrap_or_default();
         project_config.prompt = Some(project_prompt);
         provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
+        self.refresh_vmm_hook_config_snapshot();
         let normalized_prompt_path_for_cache = normalized_prompt_path.clone();
         self.project_prompt_settings_draft.path = normalized_prompt_path;
         self.project_prompt_settings_draft.has_project_override = true;
@@ -873,6 +875,103 @@ impl VulcanWorkbench {
         );
         self.refresh_runtime_foundation();
         self.refresh_prompt_composer_inspector_buffer();
+        Ok(())
+    }
+
+    /// Reloads the global VMM settings draft from the persisted provider configuration.
+    /// 从持久化 Provider 配置重新载入全局 VMM 设置草稿。
+    pub(super) fn reload_global_vmm_settings_draft(&mut self) {
+        self.vmm_settings_draft = VmmSettingsDraft::from_layer(
+            &self.provider_configuration.vmm,
+            String::from("已重新载入全局 VMM 配置。"),
+        );
+    }
+
+    /// Saves the global VMM settings draft to the provider configuration file.
+    /// 将全局 VMM 设置草稿保存到 Provider 配置文件。
+    pub(super) fn save_global_vmm_settings_draft(&mut self) -> Result<(), String> {
+        let next_layer = self.vmm_settings_draft.to_layer()?;
+        let previous = self.provider_configuration.vmm.clone();
+        self.provider_configuration.vmm = next_layer.clone();
+        if let Err(error) = provider_config::save_configuration_file(&self.provider_configuration) {
+            self.provider_configuration.vmm = previous;
+            return Err(error);
+        }
+        self.vmm_settings_draft =
+            VmmSettingsDraft::from_layer(&next_layer, String::from("已保存全局 VMM 配置。"));
+        self.refresh_vmm_hook_config_snapshot();
+        self.refresh_runtime_foundation();
+        Ok(())
+    }
+
+    /// Reloads the project VMM settings draft for the opened project settings modal.
+    /// 为已打开的项目设置弹窗重新载入项目 VMM 设置草稿。
+    pub(super) fn reload_project_vmm_settings_draft(&mut self) {
+        let Some(project) = self.project_settings_task_project() else {
+            self.project_vmm_settings_draft = ProjectVmmSettingsDraft::default();
+            return;
+        };
+        let workspace_path = PathBuf::from(project.path.clone());
+        let workspace_text = workspace_path.display().to_string();
+        match provider_config::load_project_configuration_file(&workspace_path) {
+            Ok(project_config) => {
+                let has_override = !project_config.vmm.is_empty();
+                let notice = if has_override {
+                    format!(
+                        "已载入项目 VMM 配置：{}",
+                        provider_config::project_configuration_file_path(&workspace_path).display()
+                    )
+                } else {
+                    String::from("当前项目未设置 VMM 覆盖，正在继承全局配置。")
+                };
+                self.project_vmm_settings_draft = ProjectVmmSettingsDraft::from_project_layer(
+                    workspace_text,
+                    &project_config.vmm,
+                    &self.provider_configuration.vmm,
+                    notice,
+                );
+            }
+            Err(error) => {
+                self.project_vmm_settings_draft = ProjectVmmSettingsDraft::from_project_layer(
+                    workspace_text,
+                    &VmmConfigLayer::default(),
+                    &self.provider_configuration.vmm,
+                    format!("载入项目 VMM 配置失败：{error}"),
+                );
+            }
+        }
+    }
+
+    /// Saves the project VMM settings draft to the current project configuration file.
+    /// 将项目 VMM 设置草稿保存到当前项目配置文件。
+    pub(super) fn save_project_vmm_settings_draft(&mut self) -> Result<(), String> {
+        let Some(project) = self.project_settings_task_project() else {
+            return Err(String::from("当前没有打开的项目设置，无法保存 VMM 配置。"));
+        };
+        let workspace_path = PathBuf::from(project.path.clone());
+        let mut project_config =
+            provider_config::load_project_configuration_file(&workspace_path).unwrap_or_default();
+        project_config.vmm = if self.project_vmm_settings_draft.project_override_enabled {
+            self.project_vmm_settings_draft.settings.to_layer()?
+        } else {
+            VmmConfigLayer::default()
+        };
+        provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
+        self.project_vmm_settings_draft = ProjectVmmSettingsDraft::from_project_layer(
+            workspace_path.display().to_string(),
+            &project_config.vmm,
+            &self.provider_configuration.vmm,
+            if project_config.vmm.is_empty() {
+                String::from("已清除项目 VMM 覆盖，当前继承全局配置。")
+            } else {
+                format!(
+                    "已保存项目 VMM 配置：{}",
+                    provider_config::project_configuration_file_path(&workspace_path).display()
+                )
+            },
+        );
+        self.refresh_vmm_hook_config_snapshot();
+        self.refresh_runtime_foundation();
         Ok(())
     }
 
@@ -1149,6 +1248,19 @@ impl VulcanWorkbench {
         if section == super::WorkbenchAiCapabilitySection::PromptSkills {
             return true;
         }
+        if section == super::WorkbenchAiCapabilitySection::VmmMemory {
+            let session_layer = self
+                .session_runtime_state
+                .get(&self.selected_session)
+                .map(|state| &state.vmm);
+            let project_layer = self.current_project_vmm_configuration(self.selected_session);
+            let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+                &self.provider_configuration.vmm,
+                Some(&project_layer),
+                session_layer,
+            );
+            return !effective.grpc_target.trim().is_empty();
+        }
         let Some(capability_kind) = section.capability_kind() else {
             return false;
         };
@@ -1164,6 +1276,19 @@ impl VulcanWorkbench {
     ) -> bool {
         if section == super::WorkbenchAiCapabilitySection::PromptSkills {
             return self.provider_configuration.prompt_skills.enabled;
+        }
+        if section == super::WorkbenchAiCapabilitySection::VmmMemory {
+            let session_layer = self
+                .session_runtime_state
+                .get(&self.selected_session)
+                .map(|state| &state.vmm);
+            let project_layer = self.current_project_vmm_configuration(self.selected_session);
+            return vulcan_vmm::VmmEffectiveConfig::resolve(
+                &self.provider_configuration.vmm,
+                Some(&project_layer),
+                session_layer,
+            )
+            .enabled;
         }
         let Some(capability_kind) = section.capability_kind() else {
             return false;
@@ -1477,6 +1602,20 @@ impl VulcanWorkbench {
         };
         provider_config::load_project_configuration_file(&PathBuf::from(workspace_path))
             .map(|config| config.prompt_skills)
+            .unwrap_or_default()
+    }
+
+    /// Loads project-level VMM overrides for the selected session workspace.
+    /// 为选中会话工作区载入项目级 VMM 覆盖。
+    pub(super) fn current_project_vmm_configuration(
+        &self,
+        session_id: SessionId,
+    ) -> VmmConfigLayer {
+        let Some(workspace_path) = self.workspace_path_for_session_id(session_id) else {
+            return VmmConfigLayer::default();
+        };
+        provider_config::load_project_configuration_file(&PathBuf::from(workspace_path))
+            .map(|config| config.vmm)
             .unwrap_or_default()
     }
 
@@ -2323,6 +2462,7 @@ impl VulcanWorkbench {
             return Ok(false);
         }
         provider_config::save_project_configuration_file(&workspace_path, &project_config)?;
+        self.refresh_vmm_hook_config_snapshot();
         self.refresh_runtime_foundation();
         Ok(true)
     }

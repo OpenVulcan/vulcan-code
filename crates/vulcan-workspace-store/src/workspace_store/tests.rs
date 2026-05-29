@@ -7,6 +7,7 @@ use serde_json::json;
 use vulcan_context_injection::{
     ContextInjectionState, InjectionInsert, InjectionKind, InjectionPanelCard,
 };
+use vulcan_vmm::{PostActionRequest, VmmConfigLayer};
 
 /// Verifies that transcript metadata keeps display fields while preserving one compact `change_set` host payload for later change-summary reconstruction.
 /// 验证转录元数据会保留展示字段，同时保留一份紧凑 `change_set` 宿主载荷以便后续重建变更摘要。
@@ -942,6 +943,101 @@ fn runtime_state_rows_store_context_injection_state_separately() {
             }],
         }]
     );
+}
+
+/// Verifies that session-level VMM overrides persist beside hidden context injection state.
+/// 验证会话级 VMM 覆盖会与隐藏上下文注入状态一起持久化。
+#[test]
+fn runtime_state_rows_store_vmm_overrides_separately() {
+    let session_id = SessionId::from_u128(45);
+    let session = SessionSummary::new(
+        session_id,
+        None,
+        String::from("VMM 测试会话"),
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    );
+    let runtime_state = SessionRuntimeStateEntry {
+        vmm: VmmConfigLayer {
+            enabled: Some(false),
+            ai_tools_enabled: Some(false),
+            ..VmmConfigLayer::default()
+        },
+        updated_at: String::from("1"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let mut runtime_states = BTreeMap::new();
+    runtime_states.insert(session_id, runtime_state);
+    let mut rows = Vec::new();
+
+    push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(&rows[0][8], ControllerSqliteValue::Null));
+    assert!(matches!(&rows[0][10], ControllerSqliteValue::Null));
+    let vmm_json = match &rows[0][11] {
+        ControllerSqliteValue::String(value) => value,
+        other => panic!("expected VMM JSON string, got {other:?}"),
+    };
+    let parsed = parse_vmm_config_layer_from_json(vmm_json).expect("VMM config parses");
+    assert_eq!(parsed.enabled, Some(false));
+    assert_eq!(parsed.ai_tools_enabled, Some(false));
+}
+
+/// Verifies that queued VMM writebacks persist separately from conversation JSON.
+/// 验证排队的 VMM 写回会独立于会话正文 JSON 持久化。
+#[test]
+fn runtime_state_rows_store_vmm_writeback_outbox_separately() {
+    let session_id = SessionId::from_u128(46);
+    let session = SessionSummary::new(
+        session_id,
+        None,
+        String::from("VMM outbox 测试会话"),
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    );
+    let runtime_state = SessionRuntimeStateEntry {
+        vmm_writeback_outbox: vec![VmmWritebackOutboxEntry {
+            id: String::from("outbox-1"),
+            request: PostActionRequest {
+                session_id: session_id.to_string(),
+                user_id: 1,
+                project_id: 2,
+                user_content: String::from("user"),
+                assistant_content: String::from("assistant"),
+                timeline: Vec::new(),
+            },
+            attempt_count: 2,
+            last_error: Some(String::from("transport failed")),
+            created_at: String::from("1"),
+            updated_at: String::from("2"),
+        }],
+        updated_at: String::from("2"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let mut runtime_states = BTreeMap::new();
+    runtime_states.insert(session_id, runtime_state);
+    let mut rows = Vec::new();
+
+    push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(&rows[0][8], ControllerSqliteValue::Null));
+    let outbox_json = match &rows[0][12] {
+        ControllerSqliteValue::String(value) => value,
+        other => panic!("expected VMM outbox JSON string, got {other:?}"),
+    };
+    let parsed = parse_vmm_writeback_outbox_from_json(outbox_json).expect("outbox parses");
+    assert_eq!(parsed.len(), 1);
+    assert_eq!(parsed[0].id, "outbox-1");
+    assert_eq!(parsed[0].request.user_content, "user");
+    assert_eq!(parsed[0].attempt_count, 2);
 }
 
 /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.

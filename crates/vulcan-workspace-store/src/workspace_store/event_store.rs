@@ -122,6 +122,14 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// 保留在转录记录之外的隐藏上下文注入运行态。
     #[serde(default)]
     pub context_injection_state: ContextInjectionState,
+    /// Session-level VMM memory integration overrides.
+    /// 会话级 VMM 记忆集成覆盖配置。
+    #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
+    pub vmm: VmmConfigLayer,
+    /// Pending VMM writebacks retained for FIFO replay.
+    /// 为 FIFO 重放保留的待处理 VMM 写回项。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vmm_writeback_outbox: Vec<VmmWritebackOutboxEntry>,
     /// Latest active compaction identifier retained by the session runtime.
     /// 被会话运行时保留的最近活动压缩标识。
     pub last_compaction_id: Option<String>,
@@ -694,6 +702,8 @@ fn runtime_state_to_store_document(
         active_temperature: runtime_state.active_temperature,
         prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
         context_injection_state: runtime_state.context_injection_state.clone(),
+        vmm: runtime_state.vmm.clone(),
+        vmm_writeback_outbox: runtime_state.vmm_writeback_outbox.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
         live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),
@@ -1740,6 +1750,45 @@ mod tests {
         );
         assert_eq!(loaded.conversation_state.messages.len(), 1);
         remove_session_event_store(project_id, session_id).expect("cleanup context event-store");
+    }
+
+    /// Verifies that session-level VMM overrides survive the event-store runtime cache.
+    /// 验证会话级 VMM 覆盖可以通过事件存储运行时缓存往返保留。
+    #[test]
+    fn runtime_state_round_trips_vmm_overrides_through_event_store_files() {
+        let project_id = "project-vmm-runtime";
+        let session_id = SessionId::from_u128(78);
+        remove_session_event_store(project_id, session_id).expect("cleanup vmm runtime store");
+        let session = SessionSummary::new(
+            session_id,
+            Some(String::from(project_id)),
+            String::from("VMM 运行态"),
+            String::new(),
+            SessionState::Draft,
+            0,
+            0,
+            String::from("刚刚"),
+        );
+        let runtime_state = SessionRuntimeStateEntry {
+            vmm: VmmConfigLayer {
+                enabled: Some(false),
+                ai_tools_enabled: Some(false),
+                grpc_target: Some(String::from("127.0.0.1:50051")),
+                ..VmmConfigLayer::default()
+            },
+            updated_at: String::from("456"),
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        persist_session_event_store(&session, &[], Some(&runtime_state), &[])
+            .expect("persist vmm runtime state");
+        let loaded = load_session_event_store_runtime_state(project_id, session_id)
+            .expect("load vmm runtime state");
+
+        assert_eq!(loaded.vmm.enabled, Some(false));
+        assert_eq!(loaded.vmm.ai_tools_enabled, Some(false));
+        assert_eq!(loaded.vmm.grpc_target.as_deref(), Some("127.0.0.1:50051"));
+        remove_session_event_store(project_id, session_id).expect("cleanup vmm runtime store");
     }
 
     /// Verifies that persisting the standalone current-context document also materializes a minimal manifest for future hydration.

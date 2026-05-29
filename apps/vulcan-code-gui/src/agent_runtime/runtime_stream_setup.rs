@@ -103,6 +103,8 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         }
     }
 

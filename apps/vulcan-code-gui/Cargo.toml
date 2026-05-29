@@ -42,6 +42,7 @@ vulcan-provider-config.workspace = true
 vulcan-context.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-hooks.workspace = true
+vulcan-vmm.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-file-watcher.workspace = true
 vulcan-prompt-composer.workspace = true

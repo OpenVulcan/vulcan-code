@@ -955,6 +955,10 @@ pub struct HookDispatchReport {
     /// 从处理器和调度失败中收集的诊断信息。
     #[serde(default)]
     pub diagnostics: Vec<HookDiagnostic>,
+    /// Hook-specific metadata collected from successful handlers and grouped by key.
+    /// 从成功处理器收集并按键分组的 hook 特定元数据。
+    #[serde(default)]
+    pub metadata: BTreeMap<String, Vec<Value>>,
     /// Handler ids that completed successfully.
     /// 成功完成的处理器标识。
     #[serde(default)]
@@ -977,6 +981,7 @@ impl HookDispatchReport {
             decision: HookDecision::Continue,
             injections: Vec::new(),
             diagnostics: Vec::new(),
+            metadata: BTreeMap::new(),
             completed_hooks: Vec::new(),
             failures: Vec::new(),
             has_queueable_failure: false,
@@ -993,6 +998,9 @@ impl HookDispatchReport {
             self.decision = decision;
         }
         self.injections.extend(result.injections);
+        for (key, value) in result.metadata {
+            self.metadata.entry(key).or_default().push(value);
+        }
         self.diagnostics
             .extend(result.diagnostics.into_iter().map(|mut diagnostic| {
                 if diagnostic.hook_id.is_none() {

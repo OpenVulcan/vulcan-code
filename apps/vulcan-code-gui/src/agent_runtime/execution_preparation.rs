@@ -93,6 +93,8 @@ pub(crate) fn prepare_execution(
         enabled_prompt_skill_names,
         prompt_skill_user_root.clone(),
         implicit_luaskill_prompt_entries.clone(),
+        request.project_vmm.clone(),
+        request.session_vmm.clone(),
     );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
     let prompt_skill_tool_available = request.prompt_purpose == ExecutionPromptPurpose::UserTurn
@@ -190,6 +192,8 @@ pub(crate) fn prepare_execution(
         context_baseline: None,
         context_request_mode: None,
         context_injection: request.context_injection.clone(),
+        project_vmm: request.project_vmm.clone(),
+        session_vmm: request.session_vmm.clone(),
     })
 }
 

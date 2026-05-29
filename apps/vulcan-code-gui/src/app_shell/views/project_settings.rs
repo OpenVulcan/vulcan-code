@@ -51,6 +51,7 @@ impl VulcanWorkbench {
                 ]
                 .align_y(Center),
                 project_summary,
+                self.view_project_vmm_settings_card(),
                 self.view_project_prompt_skills_card(project),
                 self.view_project_attachment_cleanup_card(project),
             ]

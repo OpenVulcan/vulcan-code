@@ -16,3 +16,4 @@ vulcan-context.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-provider-config.workspace = true
+vulcan-vmm.workspace = true

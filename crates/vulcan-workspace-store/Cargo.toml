@@ -23,3 +23,4 @@ vulcan-core.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-workbench-model.workspace = true
+vulcan-vmm.workspace = true

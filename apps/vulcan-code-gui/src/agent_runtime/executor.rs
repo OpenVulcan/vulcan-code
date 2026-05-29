@@ -142,6 +142,8 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -280,6 +282,8 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -625,6 +629,8 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -697,6 +703,8 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

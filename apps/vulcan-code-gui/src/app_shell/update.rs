@@ -259,6 +259,7 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
+                        self.refresh_vmm_hook_config_snapshot();
                         self.startup_lifecycle = StartupLifecycle::Ready;
                         self.status_message =
                             String::from("工作台列表已加载完成，当前会话正文将按需载入。");
@@ -512,6 +513,26 @@ impl VulcanWorkbench {
             | Message::SetPromptSkillsEnabled(_)
             | Message::SetPromptSkillGlobalState { .. }
             | Message::SetPromptSkillSessionState { .. }
+            | Message::SetSessionVmmEnabled(_)
+            | Message::SetSessionVmmAiToolsEnabled(_)
+            | Message::GlobalVmmEnabledChanged(_)
+            | Message::GlobalVmmGrpcTargetChanged(_)
+            | Message::GlobalVmmApiKeyChanged(_)
+            | Message::GlobalVmmUserIdChanged(_)
+            | Message::GlobalVmmProjectIdChanged(_)
+            | Message::GlobalVmmManagementUserRefChanged(_)
+            | Message::GlobalVmmManagementProjectRefChanged(_)
+            | Message::GlobalVmmImplicitTurnsChanged(_)
+            | Message::GlobalVmmProfileRefreshTurnsChanged(_)
+            | Message::GlobalVmmVisibleMemoryChanged(_)
+            | Message::GlobalVmmSessionCompactRecallChanged(_)
+            | Message::GlobalVmmAiToolsChanged(_)
+            | Message::GlobalVmmInjectionTagChanged(_)
+            | Message::GlobalVmmInjectionDescriptionChanged(_)
+            | Message::ReloadGlobalVmmConfiguration
+            | Message::SaveGlobalVmmConfiguration
+            | Message::RunGlobalVmmManagement(_)
+            | Message::GlobalVmmManagementFinished(_)
             | Message::TogglePromptSkillDetails(_)) => {
                 self.update_prompt_skills_message(prompt_skills_message)
             }
@@ -2464,6 +2485,25 @@ impl VulcanWorkbench {
             project_settings_message @ (Message::OpenTaskProjectSettings(_)
             | Message::CloseTaskProjectSettings
             | Message::SetPromptSkillProjectState { .. }
+            | Message::ProjectVmmOverrideToggled(_)
+            | Message::ProjectVmmEnabledChanged(_)
+            | Message::ProjectVmmGrpcTargetChanged(_)
+            | Message::ProjectVmmApiKeyChanged(_)
+            | Message::ProjectVmmUserIdChanged(_)
+            | Message::ProjectVmmProjectIdChanged(_)
+            | Message::ProjectVmmManagementUserRefChanged(_)
+            | Message::ProjectVmmManagementProjectRefChanged(_)
+            | Message::ProjectVmmImplicitTurnsChanged(_)
+            | Message::ProjectVmmProfileRefreshTurnsChanged(_)
+            | Message::ProjectVmmVisibleMemoryChanged(_)
+            | Message::ProjectVmmSessionCompactRecallChanged(_)
+            | Message::ProjectVmmAiToolsChanged(_)
+            | Message::ProjectVmmInjectionTagChanged(_)
+            | Message::ProjectVmmInjectionDescriptionChanged(_)
+            | Message::ReloadProjectVmmConfiguration
+            | Message::SaveProjectVmmConfiguration
+            | Message::RunProjectVmmManagement(_)
+            | Message::ProjectVmmManagementFinished(_)
             | Message::OpenProjectAttachmentCleanupDatePicker
             | Message::CancelProjectAttachmentCleanupDatePicker
             | Message::ProjectAttachmentCleanupDateSelected(_)

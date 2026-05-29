@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::PathBuf;
+use vulcan_vmm::VmmConfigLayer;
 /// Persisted skill family used by the runtime foundation.
 /// 运行时基础架构使用的持久化技能类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -876,6 +877,10 @@ pub struct ProjectVulcanCodeConfigurationFile {
         skip_serializing_if = "ProjectPromptSkillsConfiguration::is_empty"
     )]
     pub prompt_skills: ProjectPromptSkillsConfiguration,
+    /// Optional project-local VMM memory integration overrides.
+    /// 可选的项目级 VMM 记忆集成覆盖配置。
+    #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
+    pub vmm: VmmConfigLayer,
 }
 
 /// Returns the default workspace-relative project prompt path.

@@ -866,9 +866,126 @@ pub(super) enum Message {
     /// Updates one session prompt skill state override.
     /// 更新单个会话级提示词技能状态覆盖。
     SetPromptSkillSessionState { name: String, enabled: bool },
+    /// Updates the selected session VMM memory override.
+    /// 更新当前选中会话的 VMM 记忆覆盖开关。
+    SetSessionVmmEnabled(bool),
+    /// Updates the selected session VMM AI-tool override.
+    /// 更新当前选中会话的 VMM AI 工具覆盖开关。
+    SetSessionVmmAiToolsEnabled(bool),
     /// Updates one project prompt skill state override.
     /// 更新单个项目级提示词技能状态覆盖。
     SetPromptSkillProjectState { name: String, enabled: bool },
+    /// Updates the global VMM enabled draft flag.
+    /// 更新全局 VMM 启用草稿开关。
+    GlobalVmmEnabledChanged(bool),
+    /// Updates the global VMM gRPC target draft.
+    /// 更新全局 VMM gRPC 目标草稿。
+    GlobalVmmGrpcTargetChanged(String),
+    /// Updates the global VMM optional API key draft.
+    /// 更新全局 VMM 可选 API key 草稿。
+    GlobalVmmApiKeyChanged(String),
+    /// Updates the global VMM user id draft.
+    /// 更新全局 VMM 用户标识草稿。
+    GlobalVmmUserIdChanged(String),
+    /// Updates the global VMM project id draft.
+    /// 更新全局 VMM 项目标识草稿。
+    GlobalVmmProjectIdChanged(String),
+    /// Updates the global VMM management user reference draft.
+    /// 更新全局 VMM 管理用户引用草稿。
+    GlobalVmmManagementUserRefChanged(String),
+    /// Updates the global VMM management project reference draft.
+    /// 更新全局 VMM 管理项目引用草稿。
+    GlobalVmmManagementProjectRefChanged(String),
+    /// Updates the global VMM transient memory TTL draft.
+    /// 更新全局 VMM 临时记忆 TTL 草稿。
+    GlobalVmmImplicitTurnsChanged(String),
+    /// Updates the global VMM profile refresh interval draft.
+    /// 更新全局 VMM 画像刷新间隔草稿。
+    GlobalVmmProfileRefreshTurnsChanged(String),
+    /// Toggles the global VMM visible-memory draft flag.
+    /// 切换全局 VMM 可见记忆草稿开关。
+    GlobalVmmVisibleMemoryChanged(bool),
+    /// Toggles the global VMM compact-aware recall draft flag.
+    /// 切换全局 VMM 压缩感知召回草稿开关。
+    GlobalVmmSessionCompactRecallChanged(bool),
+    /// Toggles the global VMM AI-only tool exposure draft flag.
+    /// 切换全局 VMM AI 专属工具暴露草稿开关。
+    GlobalVmmAiToolsChanged(bool),
+    /// Updates the global VMM injection tag draft.
+    /// 更新全局 VMM 注入标签草稿。
+    GlobalVmmInjectionTagChanged(String),
+    /// Updates the global VMM injection description draft.
+    /// 更新全局 VMM 注入说明草稿。
+    GlobalVmmInjectionDescriptionChanged(String),
+    /// Reloads the global VMM configuration draft from persisted settings.
+    /// 从持久化设置重新载入全局 VMM 配置草稿。
+    ReloadGlobalVmmConfiguration,
+    /// Saves the global VMM configuration draft.
+    /// 保存全局 VMM 配置草稿。
+    SaveGlobalVmmConfiguration,
+    /// Runs one global VMM management RPC from the current draft.
+    /// 基于当前草稿执行一次全局 VMM 管理 RPC。
+    RunGlobalVmmManagement(VmmManagementAction),
+    /// Applies the completed global VMM management RPC result.
+    /// 应用已完成的全局 VMM 管理 RPC 结果。
+    GlobalVmmManagementFinished(Result<String, String>),
+    /// Toggles the project-level VMM override draft flag.
+    /// 切换项目级 VMM 覆盖草稿开关。
+    ProjectVmmOverrideToggled(bool),
+    /// Updates the project VMM enabled draft flag.
+    /// 更新项目 VMM 启用草稿开关。
+    ProjectVmmEnabledChanged(bool),
+    /// Updates the project VMM gRPC target draft.
+    /// 更新项目 VMM gRPC 目标草稿。
+    ProjectVmmGrpcTargetChanged(String),
+    /// Updates the project VMM optional API key draft.
+    /// 更新项目 VMM 可选 API key 草稿。
+    ProjectVmmApiKeyChanged(String),
+    /// Updates the project VMM user id draft.
+    /// 更新项目 VMM 用户标识草稿。
+    ProjectVmmUserIdChanged(String),
+    /// Updates the project VMM project id draft.
+    /// 更新项目 VMM 项目标识草稿。
+    ProjectVmmProjectIdChanged(String),
+    /// Updates the project VMM management user reference draft.
+    /// 更新项目 VMM 管理用户引用草稿。
+    ProjectVmmManagementUserRefChanged(String),
+    /// Updates the project VMM management project reference draft.
+    /// 更新项目 VMM 管理项目引用草稿。
+    ProjectVmmManagementProjectRefChanged(String),
+    /// Updates the project VMM transient memory TTL draft.
+    /// 更新项目 VMM 临时记忆 TTL 草稿。
+    ProjectVmmImplicitTurnsChanged(String),
+    /// Updates the project VMM profile refresh interval draft.
+    /// 更新项目 VMM 画像刷新间隔草稿。
+    ProjectVmmProfileRefreshTurnsChanged(String),
+    /// Toggles the project VMM visible-memory draft flag.
+    /// 切换项目 VMM 可见记忆草稿开关。
+    ProjectVmmVisibleMemoryChanged(bool),
+    /// Toggles the project VMM compact-aware recall draft flag.
+    /// 切换项目 VMM 压缩感知召回草稿开关。
+    ProjectVmmSessionCompactRecallChanged(bool),
+    /// Toggles the project VMM AI-only tool exposure draft flag.
+    /// 切换项目 VMM AI 专属工具暴露草稿开关。
+    ProjectVmmAiToolsChanged(bool),
+    /// Updates the project VMM injection tag draft.
+    /// 更新项目 VMM 注入标签草稿。
+    ProjectVmmInjectionTagChanged(String),
+    /// Updates the project VMM injection description draft.
+    /// 更新项目 VMM 注入说明草稿。
+    ProjectVmmInjectionDescriptionChanged(String),
+    /// Reloads the project VMM configuration draft from disk.
+    /// 从磁盘重新载入项目 VMM 配置草稿。
+    ReloadProjectVmmConfiguration,
+    /// Saves the project VMM configuration draft to disk.
+    /// 将项目 VMM 配置草稿保存到磁盘。
+    SaveProjectVmmConfiguration,
+    /// Runs one project VMM management RPC from the current draft.
+    /// 基于当前草稿执行一次项目 VMM 管理 RPC。
+    RunProjectVmmManagement(VmmManagementAction),
+    /// Applies the completed project VMM management RPC result.
+    /// 应用已完成的项目 VMM 管理 RPC 结果。
+    ProjectVmmManagementFinished(Result<String, String>),
     /// Toggles one prompt skill detail preview card.
     /// 切换单个提示词技能详情预览卡片。
     TogglePromptSkillDetails(String),

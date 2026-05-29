@@ -20,6 +20,7 @@ use vulcan_core::types::{
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
+use vulcan_vmm::VmmConfigLayer;
 
 /// Minimal execution request captured from the current GUI state.
 /// 从当前 GUI 状态捕获的最小执行请求。
@@ -65,6 +66,12 @@ pub struct ExecutionPreparationRequest {
     /// Provider-facing context-injection overlay captured for the current run.
     /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
     pub context_injection: Option<CoreProviderContextInjection>,
+    /// Project-level VMM configuration captured for the current workspace.
+    /// 为当前工作区捕获的项目级 VMM 配置。
+    pub project_vmm: VmmConfigLayer,
+    /// Session-level VMM configuration captured for the current conversation.
+    /// 为当前会话捕获的会话级 VMM 配置。
+    pub session_vmm: VmmConfigLayer,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -210,6 +217,12 @@ pub struct ExecutionPreparation {
     /// Provider-facing context-injection overlay captured for the current run.
     /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
     pub context_injection: Option<CoreProviderContextInjection>,
+    /// Effective project-level VMM configuration captured for this run.
+    /// 为本次运行捕获的有效项目级 VMM 配置。
+    pub project_vmm: VmmConfigLayer,
+    /// Effective session-level VMM configuration captured for this run.
+    /// 为本次运行捕获的有效会话级 VMM 配置。
+    pub session_vmm: VmmConfigLayer,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.

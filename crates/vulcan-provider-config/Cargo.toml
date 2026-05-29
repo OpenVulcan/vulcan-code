@@ -16,3 +16,4 @@ serde.workspace = true
 serde_json.workspace = true
 vulcan-core.workspace = true
 vulcan-runtime-assets.workspace = true
+vulcan-vmm.workspace = true

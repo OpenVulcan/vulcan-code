@@ -531,6 +531,8 @@ mod tests {
                 reason: ContextFullRequestReason::ProviderContinuationMissing,
             }),
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),

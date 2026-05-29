@@ -2,6 +2,7 @@
 //! 主工作台的会话转录运行态与规范会话辅助逻辑。
 
 use super::*;
+use crate::model::VmmWritebackOutboxEntry;
 use vulcan_context::{ContextBudgetSeverity, observed_input_tokens_from_usage};
 use vulcan_core::types::ProviderUsageSnapshot;
 
@@ -2009,28 +2010,31 @@ impl VulcanWorkbench {
                 Some(provider_request_count),
             );
             let now = current_unix_millis_text();
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state.context_injection_state.consume_turn(
-                &format!(
-                    "session-{session_id}-{}",
-                    runtime_state.conversation_state.messages.len()
-                ),
-                &now,
-            );
-            runtime_state.updated_at = now;
             let project_id = self
                 .session_by_id(session_id)
                 .and_then(|session| session.project_id.clone());
             let conversation_state = self.session_conversation_state(session_id);
-            self.conversation_hook_runtime.complete_turn(
-                session_id,
-                project_id,
-                summary_assistant_output.as_deref().unwrap_or(
-                    "The model completed the run but did not return visible text output.",
-                ),
-                provider_request_count,
-                &conversation_state,
+            let (hook_turn_id, vmm_writeback_effects) =
+                self.conversation_hook_runtime.complete_turn(
+                    session_id,
+                    project_id,
+                    summary_assistant_output.as_deref().unwrap_or(
+                        "The model completed the run but did not return visible text output.",
+                    ),
+                    provider_request_count,
+                    &conversation_state,
+                );
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state
+                .context_injection_state
+                .consume_turn(&hook_turn_id, &now);
+            apply_vmm_writeback_effects_to_runtime_state(
+                runtime_state,
+                vmm_writeback_effects,
+                &now,
             );
+            runtime_state.updated_at = now;
+            self.refresh_vmm_hook_config_snapshot();
         } else {
             let project_id = self
                 .session_by_id(session_id)
@@ -2224,6 +2228,128 @@ impl VulcanWorkbench {
                 )
             })
             .unwrap_or_default()
+    }
+}
+
+/// Applies VMM writeback hook effects to one session runtime state.
+/// 将 VMM 写回 hook 效果应用到单个会话运行时状态。
+fn apply_vmm_writeback_effects_to_runtime_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    effects: Vec<super::conversation_hooks::VmmWritebackHookEffect>,
+    now: &str,
+) {
+    for effect in effects {
+        match effect {
+            super::conversation_hooks::VmmWritebackHookEffect::Flushed { entry_ids } => {
+                let ids = entry_ids.into_iter().collect::<BTreeSet<_>>();
+                runtime_state
+                    .vmm_writeback_outbox
+                    .retain(|entry| !ids.contains(&entry.id));
+            }
+            super::conversation_hooks::VmmWritebackHookEffect::Enqueue { request, error } => {
+                let id = format!(
+                    "vmm-outbox-{}-{}",
+                    request.session_id,
+                    stable_vmm_outbox_request_hash(&request)
+                );
+                if let Some(existing) = runtime_state
+                    .vmm_writeback_outbox
+                    .iter_mut()
+                    .find(|entry| entry.id == id)
+                {
+                    existing.request = request;
+                    existing.attempt_count = existing.attempt_count.saturating_add(1);
+                    existing.last_error = Some(error);
+                    existing.updated_at = now.to_string();
+                } else {
+                    runtime_state
+                        .vmm_writeback_outbox
+                        .push(VmmWritebackOutboxEntry {
+                            id,
+                            request,
+                            attempt_count: 1,
+                            last_error: Some(error),
+                            created_at: now.to_string(),
+                            updated_at: now.to_string(),
+                        });
+                }
+            }
+            super::conversation_hooks::VmmWritebackHookEffect::Failed { entry_id, error } => {
+                if let Some(existing) = runtime_state
+                    .vmm_writeback_outbox
+                    .iter_mut()
+                    .find(|entry| entry.id == entry_id)
+                {
+                    existing.attempt_count = existing.attempt_count.saturating_add(1);
+                    existing.last_error = Some(error);
+                    existing.updated_at = now.to_string();
+                }
+            }
+        }
+    }
+}
+
+/// Builds one stable hash for a VMM writeback request.
+/// 为一条 VMM 写回请求构建稳定哈希。
+fn stable_vmm_outbox_request_hash(request: &vulcan_vmm::PostActionRequest) -> u64 {
+    let mut hasher = StableVmmOutboxHasher::default();
+    hasher.write_str(&request.session_id);
+    hasher.write_u64(request.user_id);
+    hasher.write_u64(request.project_id);
+    hasher.write_str(&request.user_content);
+    hasher.write_str(&request.assistant_content);
+    for item in &request.timeline {
+        hasher.write_str(item.kind.as_wire_type());
+        hasher.write_str(&item.content);
+    }
+    hasher.finish()
+}
+
+/// Tiny deterministic FNV-1a helper used for persisted VMM outbox ids.
+/// 用于持久化 VMM outbox 标识的小型确定性 FNV-1a 辅助器。
+struct StableVmmOutboxHasher {
+    /// Current FNV-1a accumulator.
+    /// 当前 FNV-1a 累加值。
+    value: u64,
+}
+
+impl Default for StableVmmOutboxHasher {
+    /// Creates one FNV-1a hasher with the canonical 64-bit offset basis.
+    /// 使用标准 64 位 offset basis 创建一个 FNV-1a 哈希器。
+    fn default() -> Self {
+        Self {
+            value: 0xcbf29ce484222325,
+        }
+    }
+}
+
+impl StableVmmOutboxHasher {
+    /// Writes a length-prefixed string into the hash stream.
+    /// 将带长度前缀的字符串写入哈希流。
+    fn write_str(&mut self, value: &str) {
+        self.write_u64(value.len() as u64);
+        self.write_bytes(value.as_bytes());
+    }
+
+    /// Writes one integer into the hash stream in little-endian form.
+    /// 以小端形式将一个整数写入哈希流。
+    fn write_u64(&mut self, value: u64) {
+        self.write_bytes(&value.to_le_bytes());
+    }
+
+    /// Writes raw bytes into the FNV-1a accumulator.
+    /// 将原始字节写入 FNV-1a 累加器。
+    fn write_bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.value ^= u64::from(*byte);
+            self.value = self.value.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    /// Returns the final deterministic hash value.
+    /// 返回最终的确定性哈希值。
+    fn finish(self) -> u64 {
+        self.value
     }
 }
 

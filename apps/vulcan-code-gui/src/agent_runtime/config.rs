@@ -460,7 +460,12 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         id: String::from(ANALYSIS_SAFE_TOOL_POLICY_ID),
         name: String::from("分析只读策略"),
         allow_all_native: false,
-        native_tools: vec![String::from("shell_command"), String::from("shell_session")],
+        native_tools: vec![
+            String::from("shell_command"),
+            String::from("shell_session"),
+            String::from("vmm_memory_search"),
+            String::from("vmm_turn_details"),
+        ],
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }
@@ -473,7 +478,12 @@ fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         id: String::from(LUA_SAFE_TOOL_POLICY_ID),
         name: String::from("Lua 定向策略"),
         allow_all_native: false,
-        native_tools: vec![String::from("shell_command"), String::from("shell_session")],
+        native_tools: vec![
+            String::from("shell_command"),
+            String::from("shell_session"),
+            String::from("vmm_memory_search"),
+            String::from("vmm_turn_details"),
+        ],
         mcp_servers: Vec::new(),
         mcp_tools: Vec::new(),
     }
@@ -809,7 +819,12 @@ mod tests {
             .expect("analysis-safe runtime policy should exist");
         assert_eq!(
             analysis_safe.native_tools,
-            vec![String::from("shell_command"), String::from("shell_session")]
+            vec![
+                String::from("shell_command"),
+                String::from("shell_session"),
+                String::from("vmm_memory_search"),
+                String::from("vmm_turn_details"),
+            ]
         );
 
         let lua_safe = runtime_config
@@ -818,7 +833,12 @@ mod tests {
             .expect("lua-safe runtime policy should exist");
         assert_eq!(
             lua_safe.native_tools,
-            vec![String::from("shell_command"), String::from("shell_session")]
+            vec![
+                String::from("shell_command"),
+                String::from("shell_session"),
+                String::from("vmm_memory_search"),
+                String::from("vmm_turn_details"),
+            ]
         );
     }
 

@@ -187,6 +187,7 @@ impl RuntimeFoundation {
             &runtime_config,
             config.default_command_shell.as_deref(),
             Arc::clone(&command_session_runtime),
+            config.vmm.clone(),
         );
         let mut warnings = Vec::new();
         let (luaskills_tools, luaskills_dispatch_tools, implicit_luaskill_prompt_entries) =

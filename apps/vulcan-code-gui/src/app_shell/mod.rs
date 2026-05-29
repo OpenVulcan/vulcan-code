@@ -51,6 +51,8 @@ mod turn_stats_state;
 mod ui_state;
 mod update;
 mod views;
+mod vmm_hooks;
+mod vmm_management;
 mod workbench_model_state;
 mod workspace_state;
 
@@ -80,9 +82,9 @@ use self::turn_stats_state::{
 };
 
 use self::configuration_state::{
-    AgentChoice, CommandShellPickerChoice, ProjectPromptSettingsDraft, PromptPersonalityChoice,
-    ProviderEditorState, ProviderFormState, ProviderModelOverrideEditorState,
-    ProviderModelPickerState,
+    AgentChoice, CommandShellPickerChoice, ProjectPromptSettingsDraft, ProjectVmmSettingsDraft,
+    PromptPersonalityChoice, ProviderEditorState, ProviderFormState,
+    ProviderModelOverrideEditorState, ProviderModelPickerState, VmmSettingsDraft,
 };
 use self::context_menu::{WorkbenchContextMenuItem, WorkbenchContextMenuState};
 use self::conversation_hooks::ConversationHookRuntime;
@@ -123,6 +125,8 @@ use self::ui_state::{
     WorkbenchNoticeConfirmAction, WorkbenchNoticeModalState, WorkbenchQuestionAnswerDraft,
     WorkbenchQuestionModalOrigin, WorkbenchQuestionModalStage, WorkbenchQuestionModalState,
 };
+use self::vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle};
+use self::vmm_management::VmmManagementAction;
 use self::workbench_model_state::{
     WorkbenchModelChoice, WorkbenchOpenRouterEndpointChoice,
     WorkbenchOpenRouterEndpointPickerState, WorkbenchReasoningEffort,
@@ -1472,6 +1476,9 @@ pub struct VulcanWorkbench {
     /// Session-scoped hook runtime used to assemble logical turns and notify extension handlers.
     /// 用于组装逻辑回合并通知扩展处理器的按会话 hook 运行时。
     conversation_hook_runtime: ConversationHookRuntime,
+    /// Shared built-in VMM hook runtime snapshot.
+    /// 共享内置 VMM hook 运行时快照。
+    vmm_hook_runtime: VmmHookRuntimeHandle,
     /// Archived session-scoped runtime-state snapshots retained for later restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
     archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
@@ -1704,6 +1711,12 @@ pub struct VulcanWorkbench {
     /// Editable project-level prompt settings draft for the currently selected workspace.
     /// 当前选中工作区的可编辑项目级提示词设置草稿。
     project_prompt_settings_draft: ProjectPromptSettingsDraft,
+    /// Editable global VMM settings draft.
+    /// 可编辑全局 VMM 设置草稿。
+    vmm_settings_draft: VmmSettingsDraft,
+    /// Editable project-level VMM settings draft for the current project settings modal.
+    /// 当前项目设置弹窗使用的可编辑项目级 VMM 设置草稿。
+    project_vmm_settings_draft: ProjectVmmSettingsDraft,
     /// Standalone AI capability tool configuration loaded from the dedicated Vulcan AI capability file.
     /// 从独立 Vulcan AI 能力配置文件载入的独立 AI 能力工具配置。
     ai_tool_configuration: PersistedAiToolConfiguration,
@@ -2288,6 +2301,14 @@ impl VulcanWorkbench {
         };
         let initial_workbench_disabled_ai_capability_kinds =
             ai_tool_configuration.disabled_capability_kinds.clone();
+        let vmm_hook_runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot {
+            global: provider_configuration.vmm.clone(),
+            ..VmmHookConfigSnapshot::default()
+        });
+        let vmm_settings_draft = VmmSettingsDraft::from_layer(
+            &provider_configuration.vmm,
+            String::from("已载入全局 VMM 配置。"),
+        );
 
         let mut application = Self {
             main_window_id: Some(main_window_id),
@@ -2390,6 +2411,7 @@ impl VulcanWorkbench {
             archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
             conversation_hook_runtime: ConversationHookRuntime::new(),
+            vmm_hook_runtime,
             archived_session_runtime_state: BTreeMap::new(),
             hydrated_session_ids: BTreeSet::new(),
             dirty_session_payload_ids: BTreeSet::new(),
@@ -2469,6 +2491,8 @@ impl VulcanWorkbench {
             luaskills_operation_progress: None,
             provider_configuration,
             project_prompt_settings_draft: ProjectPromptSettingsDraft::default(),
+            vmm_settings_draft,
+            project_vmm_settings_draft: ProjectVmmSettingsDraft::default(),
             ai_tool_configuration,
             agent_profile_catalog,
             selected_user_agent_profile_id,
@@ -2553,6 +2577,8 @@ impl VulcanWorkbench {
 
         let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
         application.reload_project_prompt_settings_draft();
+        application.refresh_vmm_hook_config_snapshot();
+        application.register_builtin_vmm_hooks();
         mark_startup_trace("VulcanWorkbench::new:state-built");
 
         (

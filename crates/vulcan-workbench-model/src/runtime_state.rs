@@ -10,6 +10,7 @@ use vulcan_provider_config::config::PersistedPromptSkillState;
 use vulcan_provider_config::config::{
     AiToolKind, OpenRouterEndpointRouteSelection, ReasoningEffortLevel,
 };
+use vulcan_vmm::{PostActionRequest, VmmConfigLayer};
 
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
@@ -272,6 +273,32 @@ impl SessionTranscriptUiState {
     }
 }
 
+/// One persisted VMM PostAction writeback retry entry.
+/// 一条持久化的 VMM PostAction 写回重试项。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VmmWritebackOutboxEntry {
+    /// Stable local outbox entry identifier.
+    /// 稳定的本地 outbox 条目标识。
+    pub id: String,
+    /// Original VMM PostAction request to replay.
+    /// 需要重放的原始 VMM PostAction 请求。
+    pub request: PostActionRequest,
+    /// Number of failed delivery attempts recorded so far.
+    /// 当前累计记录的失败投递次数。
+    #[serde(default)]
+    pub attempt_count: u32,
+    /// Last failure message observed during delivery.
+    /// 最近一次投递时观察到的失败消息。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    /// Unix-millis text captured when the entry was created.
+    /// 捕获该条目创建时间的 Unix 毫秒文本。
+    pub created_at: String,
+    /// Unix-millis text captured when the entry was last attempted or updated.
+    /// 捕获该条目最近尝试或更新时刻的 Unix 毫秒文本。
+    pub updated_at: String,
+}
+
 /// Session-scoped runtime state required for context reconstruction and agent tracing.
 /// 上下文重建与代理追踪所需的按会话归属运行时状态。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -305,6 +332,14 @@ pub struct SessionRuntimeStateEntry {
     /// 保留在可见转录之外的会话级上下文注入运行态。
     #[serde(default, skip_serializing_if = "ContextInjectionState::is_empty")]
     pub context_injection_state: ContextInjectionState,
+    /// Session-level VMM memory integration overrides.
+    /// 会话级 VMM 记忆集成覆盖配置。
+    #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
+    pub vmm: VmmConfigLayer,
+    /// Pending VMM PostAction writebacks retained for FIFO replay.
+    /// 为 FIFO 重放保留的待处理 VMM PostAction 写回队列。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vmm_writeback_outbox: Vec<VmmWritebackOutboxEntry>,
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,

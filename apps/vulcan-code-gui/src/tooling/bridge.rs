@@ -111,9 +111,18 @@ pub fn build_vulcan_tools_manager(
     enabled_prompt_skill_names: Vec<String>,
     prompt_skill_user_root: Option<PathBuf>,
     implicit_luaskill_prompt_entries: Vec<LuaSkillPromptEntry>,
+    project_vmm: vulcan_vmm::VmmConfigLayer,
+    session_vmm: vulcan_vmm::VmmConfigLayer,
 ) -> VulcanToolsManager {
     let mut candidates = Vec::new();
     let mut occupied_public_tool_ids = BTreeSet::new();
+    let vmm_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+        native_catalog.vmm_global_config(),
+        Some(&project_vmm),
+        Some(&session_vmm),
+    );
+    let vmm_ai_tools_enabled = vmm_effective.ai_tools_enabled
+        && vmm_effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
 
     let task_candidate = build_task_tool_candidate(task_runtime);
     occupied_public_tool_ids.insert(task_candidate.descriptor.id.clone());
@@ -123,6 +132,9 @@ pub fn build_vulcan_tools_manager(
     candidates.push(ask_candidate);
 
     for tool_id in candidate_native_tool_ids {
+        if native_tool_id_is_vmm_memory_tool(&tool_id) && !vmm_ai_tools_enabled {
+            continue;
+        }
         let Some(definition) = native_catalog.definition(&tool_id) else {
             continue;
         };
@@ -133,6 +145,8 @@ pub fn build_vulcan_tools_manager(
         let workspace_root_for_context = workspace_root.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
+        let project_vmm_for_context = project_vmm.clone();
+        let session_vmm_for_context = session_vmm.clone();
         candidates.push(VulcanToolCandidate {
             descriptor,
             parameters_schema: definition.args_schema.clone(),
@@ -144,6 +158,8 @@ pub fn build_vulcan_tools_manager(
                 let workspace_root = workspace_root_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
+                let project_vmm = project_vmm_for_context.clone();
+                let session_vmm = session_vmm_for_context.clone();
                 Box::pin(async move {
                     catalog
                         .invoke(
@@ -159,6 +175,8 @@ pub fn build_vulcan_tools_manager(
                                 workspace_root,
                                 enabled_prompt_skill_names,
                                 prompt_skill_user_root,
+                                project_vmm,
+                                session_vmm,
                             },
                         )
                         .await
@@ -705,6 +723,15 @@ fn native_descriptor_to_vulcan(descriptor: &NativeToolDescriptor) -> VulcanToolD
     }
 }
 
+/// Returns whether a native tool id belongs to the VMM memory tool family.
+/// 返回单个原生工具标识是否属于 VMM 记忆工具族。
+fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
+    matches!(
+        tool_id,
+        "vmm_memory_search" | "vmm_turn_details" | "vmm_memory_write"
+    )
+}
+
 /// Converts one LuaSkills runtime entry into the unified host-facing tool descriptor.
 /// 将单条 LuaSkills 运行时入口转换为统一宿主侧工具描述。
 fn luaskills_descriptor_to_vulcan(
@@ -1145,11 +1172,12 @@ mod tests {
 
     use super::{
         AiToolFallbackAlias, append_ai_tool_fallback_aliases, build_luaskills_dispatch_candidate,
-        build_luaskills_help_candidate, inject_host_managed_pwd_if_needed,
-        luaskills_entry_to_call_view,
+        build_luaskills_help_candidate, build_vulcan_tools_manager,
+        inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
     };
     use crate::luaskills_runtime::PWD_PARAMETER_NAME;
     use crate::provider_config::AiToolKind;
+    use crate::tooling::build_native_tool_catalog;
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
     use std::path::Path;
@@ -1160,6 +1188,7 @@ mod tests {
         VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor,
         VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
     };
+    use vulcan_vmm::VmmConfigLayer;
 
     /// Builds one inert host-tool candidate used by fallback alias tests.
     /// 构建一条供回退别名测试使用的惰性宿主工具候选项。
@@ -1313,5 +1342,97 @@ mod tests {
         let view = luaskills_entry_to_call_view(&entry);
 
         assert_eq!(view.canonical_name, "vulcan-codekit-ast-tree");
+    }
+
+    /// Verifies VMM memory tools stay hidden until the effective VMM config is ready and AI tools are enabled.
+    /// 验证 VMM 记忆工具在最终 VMM 配置就绪且 AI 工具启用前保持隐藏。
+    #[test]
+    fn vmm_memory_tools_are_filtered_by_effective_config() {
+        let runtime_config = crate::agent_runtime::config::AgentRuntimeConfig {
+            active_model: None,
+            active_agent_id: String::from("agent-a"),
+            agents: Vec::new(),
+            skills: Vec::new(),
+            tool_policies: Default::default(),
+            configured_mcp_server_ids: Vec::new(),
+            enabled_mcp_server_ids: Vec::new(),
+        };
+        let global_vmm = VmmConfigLayer {
+            grpc_target: Some(String::from("127.0.0.1:19090")),
+            user_id: Some(1),
+            project_id: Some(2),
+            ai_tools_enabled: Some(true),
+            ..VmmConfigLayer::default()
+        };
+        let native_catalog = build_native_tool_catalog(
+            &runtime_config,
+            None,
+            Arc::new(crate::tooling::CommandSessionRuntime::new()),
+            global_vmm,
+        );
+        let base_ids = vec![
+            String::from("vmm_memory_search"),
+            String::from("vmm_turn_details"),
+            String::from("vmm_memory_write"),
+        ];
+
+        let enabled_manager = build_vulcan_tools_manager(
+            Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+            Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+            native_catalog.clone(),
+            None,
+            None,
+            Vec::new(),
+            base_ids.clone(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            VmmConfigLayer::default(),
+            VmmConfigLayer::default(),
+        );
+        let enabled_ids = enabled_manager
+            .resolve_for_execution_mode("Build")
+            .descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        assert!(enabled_ids.iter().any(|id| id == "vmm_memory_search"));
+        assert!(enabled_ids.iter().any(|id| id == "vmm_turn_details"));
+        assert!(enabled_ids.iter().any(|id| id == "vmm_memory_write"));
+
+        let disabled_manager = build_vulcan_tools_manager(
+            Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
+            Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
+            native_catalog,
+            None,
+            None,
+            Vec::new(),
+            base_ids,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            Default::default(),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            VmmConfigLayer::default(),
+            VmmConfigLayer {
+                ai_tools_enabled: Some(false),
+                ..VmmConfigLayer::default()
+            },
+        );
+        let disabled_ids = disabled_manager
+            .resolve_for_execution_mode("Build")
+            .descriptors
+            .into_iter()
+            .map(|descriptor| descriptor.id)
+            .collect::<Vec<_>>();
+        assert!(!disabled_ids.iter().any(|id| id.starts_with("vmm_")));
     }
 }

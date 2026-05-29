@@ -42,6 +42,8 @@ impl VulcanWorkbench {
         let right_panel: Element<'_, Message> =
             if selected_section == WorkbenchAiCapabilitySection::PromptSkills {
                 self.view_workbench_prompt_skills_quick_panel()
+            } else if selected_section == WorkbenchAiCapabilitySection::VmmMemory {
+                self.view_workbench_vmm_quick_panel()
             } else if let Some(capability_kind) = selected_section.capability_kind() {
                 self.view_ai_capability_management_panel(capability_kind, false, false, true)
             } else if selected_section.supports_routing_strategy() {
@@ -210,6 +212,11 @@ impl VulcanWorkbench {
                 .line_height(1.0)
                 .color(color)
                 .into(),
+            WorkbenchAiCapabilitySection::VmmMemory => lucide::database()
+                .size(15)
+                .line_height(1.0)
+                .color(color)
+                .into(),
         };
 
         container(icon).width(18).center_y(Fill).into()
@@ -230,6 +237,13 @@ impl VulcanWorkbench {
                     .size(16)
                     .on_toggle(Message::SetPromptSkillsEnabled)
                     .into()
+            } else if section == WorkbenchAiCapabilitySection::VmmMemory {
+                let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
+                if toggle_available {
+                    checkbox.on_toggle(Message::SetSessionVmmEnabled).into()
+                } else {
+                    checkbox.into()
+                }
             } else if section.capability_kind().is_some() {
                 let checkbox = checkbox(toggle_enabled).spacing(0).size(16);
                 if toggle_available {
@@ -248,6 +262,7 @@ impl VulcanWorkbench {
             Some(toggle),
             self.view_workbench_ai_capability_section_icon(section),
             if section == WorkbenchAiCapabilitySection::PromptSkills
+                || section == WorkbenchAiCapabilitySection::VmmMemory
                 || section.capability_kind().is_some()
             {
                 section.label().to_string()
@@ -323,6 +338,82 @@ impl VulcanWorkbench {
         .padding(16)
         .style(container::bordered_box)
         .width(Fill)
+        .into()
+    }
+
+    /// Builds the session-scoped VMM quick toggle panel.
+    /// 构建会话级 VMM 快捷开关面板。
+    pub(super) fn view_workbench_vmm_quick_panel(&self) -> Element<'_, Message> {
+        let session_layer = self
+            .session_runtime_state
+            .get(&self.selected_session)
+            .map(|state| &state.vmm);
+        let project_layer = self.current_project_vmm_configuration(self.selected_session);
+        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+            &self.provider_configuration.vmm,
+            Some(&project_layer),
+            session_layer,
+        );
+        let toggle_available = !effective.grpc_target.trim().is_empty();
+        let session_memory_enabled = session_layer
+            .and_then(|layer| layer.enabled)
+            .unwrap_or(effective.enabled);
+        let session_ai_tools_enabled = session_layer
+            .and_then(|layer| layer.ai_tools_enabled)
+            .unwrap_or(effective.ai_tools_enabled);
+        let diagnostic = effective.diagnose_memory_flow(!effective.grpc_target.trim().is_empty());
+        let memory_checkbox = checkbox(session_memory_enabled);
+        let memory_checkbox: Element<'_, Message> = if toggle_available {
+            memory_checkbox
+                .on_toggle(Message::SetSessionVmmEnabled)
+                .into()
+        } else {
+            memory_checkbox.into()
+        };
+        let ai_tools_checkbox = checkbox(session_ai_tools_enabled);
+        let ai_tools_checkbox: Element<'_, Message> = if toggle_available {
+            ai_tools_checkbox
+                .on_toggle(Message::SetSessionVmmAiToolsEnabled)
+                .into()
+        } else {
+            ai_tools_checkbox.into()
+        };
+        container(
+            column![
+                text("当前会话 VMM").size(16),
+                text(format!(
+                    "gRPC：{} · user/project：{}/{}",
+                    if effective.grpc_target.trim().is_empty() {
+                        "未配置"
+                    } else {
+                        effective.grpc_target.as_str()
+                    },
+                    effective
+                        .user_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("-")),
+                    effective
+                        .project_id
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| String::from("-")),
+                ))
+                .size(12),
+                row![memory_checkbox, text("本会话启用记忆").size(13),]
+                    .spacing(8)
+                    .align_y(Center),
+                row![ai_tools_checkbox, text("本会话启用 AI 专属工具").size(13),]
+                    .spacing(8)
+                    .align_y(Center),
+                text(format!("状态：{diagnostic:?}")).size(12),
+                text(
+                    "这里只写入当前会话覆盖；全局地址与项目 ID 请在能力供应商页或项目设置中配置。"
+                )
+                .size(12),
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .style(container::bordered_box)
         .into()
     }
 
@@ -488,11 +579,17 @@ impl VulcanWorkbench {
                 .into()
         };
 
-        scrollable(container(vendor_entries).width(Fill))
-            .height(Fill)
-            .spacing(8)
-            .width(Fill)
-            .into()
+        scrollable(
+            column![
+                self.view_global_vmm_settings_card(),
+                container(vendor_entries).width(Fill)
+            ]
+            .spacing(12),
+        )
+        .height(Fill)
+        .spacing(8)
+        .width(Fill)
+        .into()
     }
     /// Builds the insertion indicator shown before one enabled AI capability route row while reordering.
     /// 构建 AI 能力已启用路由行重排期间显示在某条目标行之前的插入指示器。

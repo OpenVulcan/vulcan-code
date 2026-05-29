@@ -9,6 +9,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use vulcan_vmm::VmmConfigLayer;
 
 /// Provider identifiers that are intentionally excluded because their protocol or auth flow is not supported yet.
 /// 因当前尚未支持其协议或认证流程而被刻意排除的供应商标识集合。
@@ -1804,6 +1805,10 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "PersistedAiToolConfiguration::is_default"
     )]
     pub ai_tools: PersistedAiToolConfiguration,
+    /// Global VMM memory integration configuration.
+    /// 全局 VMM 记忆集成配置。
+    #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
+    pub vmm: VmmConfigLayer,
     /// Persisted MCP server configuration block.
     /// 持久化的 MCP 服务器配置块。
     #[serde(default, skip_serializing_if = "PersistedMcpConfiguration::is_empty")]

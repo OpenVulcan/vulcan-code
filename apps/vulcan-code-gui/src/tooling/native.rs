@@ -33,6 +33,11 @@ use vulcan_prompt_skills::{
     PromptSkillsSessionConfig, render_skill_tool_output, resolve_prompt_skills,
 };
 use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
+use vulcan_vmm::{
+    GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient, VmmClient,
+    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
+    WriteMemoriesRequest, WriteMemoryItem,
+};
 
 /// One lightweight descriptor for a registered native tool.
 /// 单个已注册原生工具的轻量描述。
@@ -77,6 +82,9 @@ pub struct NativeToolRuntimeSnapshot {
     /// Enabled MCP server identifiers.
     /// 已启用的 MCP 服务器标识集合。
     pub enabled_mcp_server_ids: Vec<String>,
+    /// Global VMM configuration layer.
+    /// 全局 VMM 配置层。
+    pub vmm_global: VmmConfigLayer,
 }
 
 /// One lightweight native-tool error surfaced by the host-side tool layer.
@@ -130,6 +138,12 @@ pub struct NativeToolExecutionRequest {
     /// Optional prompt-skill user root captured for the current execution turn.
     /// 当前执行回合捕获的可选提示词技能用户根目录。
     pub prompt_skill_user_root: Option<PathBuf>,
+    /// Project-level VMM configuration captured for the current execution turn.
+    /// 为当前执行回合捕获的项目级 VMM 配置。
+    pub project_vmm: VmmConfigLayer,
+    /// Session-level VMM configuration captured for the current execution turn.
+    /// 为当前执行回合捕获的会话级 VMM 配置。
+    pub session_vmm: VmmConfigLayer,
 }
 
 /// Shared boxed future returned by one native-tool handler.
@@ -176,9 +190,18 @@ pub struct NativeToolCatalog {
     /// Lightweight tool descriptors used by UI and diagnostics.
     /// 供界面与诊断使用的轻量工具描述集合。
     pub descriptors: Vec<NativeToolDescriptor>,
+    /// Global VMM configuration layer captured at catalog build time.
+    /// 构建目录时捕获的全局 VMM 配置层。
+    pub vmm_global: VmmConfigLayer,
 }
 
 impl NativeToolCatalog {
+    /// Returns the global VMM configuration layer captured when the catalog was built.
+    /// 返回构建目录时捕获的全局 VMM 配置层。
+    pub fn vmm_global_config(&self) -> &VmmConfigLayer {
+        &self.vmm_global
+    }
+
     /// Resolves one native-tool definition by its stable identifier.
     /// 通过稳定标识解析单个原生工具定义。
     pub fn definition(&self, tool_id: &str) -> Option<Arc<NativeToolDefinition>> {
@@ -207,6 +230,7 @@ pub fn build_native_tool_catalog(
     config: &AgentRuntimeConfig,
     configured_default_command_shell_id: Option<&str>,
     command_session_runtime: Arc<CommandSessionRuntime>,
+    vmm_global: VmmConfigLayer,
 ) -> NativeToolCatalog {
     let snapshot = NativeToolRuntimeSnapshot {
         workspace_directory: std::env::current_dir()
@@ -217,6 +241,7 @@ pub fn build_native_tool_catalog(
         skill_count: config.skills.len(),
         configured_mcp_server_ids: config.configured_mcp_server_ids.clone(),
         enabled_mcp_server_ids: config.enabled_mcp_server_ids.clone(),
+        vmm_global: vmm_global.clone(),
     };
     let snapshot = Arc::new(snapshot);
     let shell_support =
@@ -229,7 +254,10 @@ pub fn build_native_tool_catalog(
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone()),
         build_shell_session_tool(command_session_runtime, shell_support),
-        build_mcp_server_list_tool(snapshot),
+        build_mcp_server_list_tool(snapshot.clone()),
+        build_vmm_memory_search_tool(snapshot.clone()),
+        build_vmm_turn_details_tool(snapshot.clone()),
+        build_vmm_memory_write_tool(snapshot),
     ];
 
     let mut definition_map = BTreeMap::new();
@@ -242,6 +270,7 @@ pub fn build_native_tool_catalog(
     NativeToolCatalog {
         definitions: definition_map,
         descriptors,
+        vmm_global,
     }
 }
 
@@ -512,6 +541,81 @@ fn build_mcp_server_list_tool(
     )
 }
 
+/// Builds the VMM memory-search native tool.
+/// 构建 VMM 记忆检索原生工具。
+fn build_vmm_memory_search_tool(
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from("vmm_memory_search"),
+        name: String::from("vmm_memory_search"),
+        description: String::from(
+            "Search durable VulcanMemoryMesh memories for the current session's configured user and project. Use this when recalled context is insufficient and you need targeted memory lookup.",
+        ),
+        ai_visible: true,
+        available_in_plan: true,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        vmm_memory_search_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            let snapshot = snapshot.clone();
+            Box::pin(async move { execute_vmm_memory_search_tool(request, snapshot).await })
+        },
+    )
+}
+
+/// Builds the VMM turn-detail native tool.
+/// 构建 VMM turn 详情原生工具。
+fn build_vmm_turn_details_tool(
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from("vmm_turn_details"),
+        name: String::from("vmm_turn_details"),
+        description: String::from(
+            "Load structured details for one or more VMM turn ids returned by memory search. Use this before relying on a memory that needs original-dialogue verification.",
+        ),
+        ai_visible: true,
+        available_in_plan: true,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        vmm_turn_details_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            let snapshot = snapshot.clone();
+            Box::pin(async move { execute_vmm_turn_details_tool(request, snapshot).await })
+        },
+    )
+}
+
+/// Builds the VMM direct memory-write native tool.
+/// 构建 VMM 主动写记忆原生工具。
+fn build_vmm_memory_write_tool(
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from("vmm_memory_write"),
+        name: String::from("vmm_memory_write"),
+        description: String::from(
+            "Write explicit durable memories into VulcanMemoryMesh for the current configured user and project. Use only for stable facts, durable preferences, or user-approved memory candidates.",
+        ),
+        ai_visible: true,
+        available_in_plan: false,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        vmm_memory_write_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            let snapshot = snapshot.clone();
+            Box::pin(async move { execute_vmm_memory_write_tool(request, snapshot).await })
+        },
+    )
+}
+
 /// One typed argument payload accepted by the host-owned `shell_command` native tool.
 /// 宿主自有 `shell_command` 原生工具接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
@@ -540,6 +644,64 @@ struct PromptSkillDetailToolArgs {
     /// Prompt skill name listed in the runtime prompt-skill catalog.
     /// 运行时技能目录中列出的技能名称。
     name: String,
+}
+
+/// One typed argument payload accepted by `vmm_memory_search`.
+/// `vmm_memory_search` 接受的一份强类型参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct VmmMemorySearchToolArgs {
+    /// Natural-language memory lookup queries.
+    /// 自然语言记忆检索查询集合。
+    queries: Vec<String>,
+    /// Optional maximum hits per query.
+    /// 每条查询可选的最大命中数量。
+    top_k: Option<u32>,
+}
+
+/// One typed argument payload accepted by `vmm_turn_details`.
+/// `vmm_turn_details` 接受的一份强类型参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct VmmTurnDetailsToolArgs {
+    /// Turn identifiers returned by VMM memory search.
+    /// VMM 记忆检索返回的 turn 标识集合。
+    #[serde(rename = "turnIds")]
+    turn_ids: Vec<u64>,
+}
+
+/// One typed direct-memory item accepted by `vmm_memory_write`.
+/// `vmm_memory_write` 接收的一条强类型主动记忆项。
+#[derive(Debug, Clone, Deserialize)]
+struct VmmMemoryWriteToolItemArgs {
+    /// Compact memory abstract.
+    /// 精简记忆摘要。
+    #[serde(rename = "abstract")]
+    abstract_text: String,
+    /// Full memory details.
+    /// 完整记忆详情。
+    details: String,
+    /// Numeric memory category.
+    /// 数字记忆分类。
+    category: i32,
+    /// Optional VMM scope level.
+    /// 可选 VMM 作用域级别。
+    #[serde(rename = "scopeLevel")]
+    scope_level: Option<i32>,
+    /// Optional VMM priority.
+    /// 可选 VMM 优先级。
+    priority: Option<i32>,
+    /// Optional VMM memory level.
+    /// 可选 VMM 记忆层级。
+    #[serde(rename = "memoryLevel")]
+    memory_level: Option<i32>,
+}
+
+/// One typed argument payload accepted by `vmm_memory_write`.
+/// `vmm_memory_write` 接受的一份强类型参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct VmmMemoryWriteToolArgs {
+    /// Direct memory items to persist.
+    /// 需要持久化的主动记忆项集合。
+    items: Vec<VmmMemoryWriteToolItemArgs>,
 }
 
 /// One internal execution status returned by the host-owned shell-command runner.
@@ -750,6 +912,102 @@ fn prompt_skill_detail_args_schema() -> Value {
             }
         },
         "required": ["name"],
+        "additionalProperties": false
+    })
+}
+
+/// Builds the JSON Schema advertised to the model for `vmm_memory_search`.
+/// 为 `vmm_memory_search` 构建对模型声明的 JSON Schema。
+fn vmm_memory_search_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "queries": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1,
+                "description": "One or more concise natural-language memory lookup queries."
+            },
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20,
+                "description": "Optional maximum hit count per query. Default: 5."
+            }
+        },
+        "required": ["queries"],
+        "additionalProperties": false
+    })
+}
+
+/// Builds the JSON Schema advertised to the model for `vmm_turn_details`.
+/// 为 `vmm_turn_details` 构建对模型声明的 JSON Schema。
+fn vmm_turn_details_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "turnIds": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 1 },
+                "minItems": 1,
+                "description": "One or more VMM turn ids returned by memory search."
+            }
+        },
+        "required": ["turnIds"],
+        "additionalProperties": false
+    })
+}
+
+/// Builds the JSON Schema advertised to the model for `vmm_memory_write`.
+/// 为 `vmm_memory_write` 构建对模型声明的 JSON Schema。
+fn vmm_memory_write_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "items": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "abstract": {
+                            "type": "string",
+                            "description": "Compact durable memory abstract."
+                        },
+                        "details": {
+                            "type": "string",
+                            "description": "Full durable memory details."
+                        },
+                        "category": {
+                            "type": "integer",
+                            "description": "Numeric memory category accepted by VMM."
+                        },
+                        "scopeLevel": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3,
+                            "description": "Optional VMM scope level. Default: 0."
+                        },
+                        "priority": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 2,
+                            "description": "Optional VMM priority. Default: 0."
+                        },
+                        "memoryLevel": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 3,
+                            "description": "Optional VMM memory level. Default: 0."
+                        }
+                    },
+                    "required": ["abstract", "details", "category"],
+                    "additionalProperties": false
+                },
+                "description": "Direct memory items to persist."
+            }
+        },
+        "required": ["items"],
         "additionalProperties": false
     })
 }
@@ -1104,6 +1362,109 @@ fn parse_prompt_skill_detail_tool_arguments(
         ));
     }
     Ok(parsed)
+}
+
+/// Parses and validates VMM memory-search arguments.
+/// 解析并校验 VMM 记忆检索参数。
+fn parse_vmm_memory_search_arguments(
+    arguments: Value,
+) -> Result<VmmMemorySearchToolArgs, NativeToolError> {
+    let mut parsed =
+        serde_json::from_value::<VmmMemorySearchToolArgs>(arguments).map_err(|error| {
+            NativeToolError::new(format!(
+                "Failed to parse vmm_memory_search arguments: {error}"
+            ))
+        })?;
+    parsed.queries = parsed
+        .queries
+        .into_iter()
+        .map(|query| query.trim().to_string())
+        .filter(|query| !query.is_empty())
+        .collect();
+    if parsed.queries.is_empty() {
+        return Err(NativeToolError::new(
+            "The `queries` argument for vmm_memory_search cannot be empty.",
+        ));
+    }
+    parsed.top_k = Some(parsed.top_k.unwrap_or(5).clamp(1, 20));
+    Ok(parsed)
+}
+
+/// Parses and validates VMM turn-detail arguments.
+/// 解析并校验 VMM turn 详情参数。
+fn parse_vmm_turn_details_arguments(
+    arguments: Value,
+) -> Result<VmmTurnDetailsToolArgs, NativeToolError> {
+    let parsed = serde_json::from_value::<VmmTurnDetailsToolArgs>(arguments).map_err(|error| {
+        NativeToolError::new(format!(
+            "Failed to parse vmm_turn_details arguments: {error}"
+        ))
+    })?;
+    if parsed.turn_ids.is_empty() || parsed.turn_ids.iter().any(|turn_id| *turn_id == 0) {
+        return Err(NativeToolError::new(
+            "The `turnIds` argument for vmm_turn_details must contain positive turn ids.",
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Parses and validates VMM direct memory-write arguments.
+/// 解析并校验 VMM 主动写记忆参数。
+fn parse_vmm_memory_write_arguments(
+    arguments: Value,
+) -> Result<VmmMemoryWriteToolArgs, NativeToolError> {
+    let parsed = serde_json::from_value::<VmmMemoryWriteToolArgs>(arguments).map_err(|error| {
+        NativeToolError::new(format!(
+            "Failed to parse vmm_memory_write arguments: {error}"
+        ))
+    })?;
+    if parsed.items.is_empty() {
+        return Err(NativeToolError::new(
+            "The `items` argument for vmm_memory_write cannot be empty.",
+        ));
+    }
+    for item in &parsed.items {
+        if item.abstract_text.trim().is_empty() || item.details.trim().is_empty() {
+            return Err(NativeToolError::new(
+                "`abstract` and `details` are required for every vmm_memory_write item.",
+            ));
+        }
+    }
+    Ok(parsed)
+}
+
+/// Resolves the effective VMM config for one native tool invocation.
+/// 为一次原生工具调用解析最终 VMM 配置。
+fn effective_vmm_config_for_native_request(
+    request: &NativeToolExecutionRequest,
+    snapshot: &NativeToolRuntimeSnapshot,
+) -> Result<VmmEffectiveConfig, NativeToolError> {
+    let config = VmmEffectiveConfig::resolve(
+        &snapshot.vmm_global,
+        Some(&request.project_vmm),
+        Some(&request.session_vmm),
+    );
+    if !config.ai_tools_enabled {
+        return Err(NativeToolError::new(
+            "VMM AI tools are disabled for the current project or session.",
+        ));
+    }
+    match config.diagnose_memory_flow(true) {
+        VmmConfigDiagnostic::Ready => Ok(config),
+        diagnostic => Err(NativeToolError::new(format!(
+            "VMM memory tools are not ready for the current session: {diagnostic:?}"
+        ))),
+    }
+}
+
+/// Connects a VMM client for one native tool invocation.
+/// 为一次原生工具调用连接 VMM 客户端。
+async fn connect_vmm_native_client(
+    config: &VmmEffectiveConfig,
+) -> Result<TonicVmmClient, NativeToolError> {
+    TonicVmmClient::connect(VmmTransportConfig::from_effective(config))
+        .await
+        .map_err(|error| NativeToolError::new(error.to_string()))
 }
 
 /// Samples support files under one prompt-skill directory without reading their contents.
@@ -1967,6 +2328,130 @@ async fn execute_prompt_skill_detail_tool(
     ))
 }
 
+/// Executes the host-owned `vmm_memory_search` tool.
+/// 执行宿主自有 `vmm_memory_search` 工具。
+async fn execute_vmm_memory_search_tool(
+    request: NativeToolExecutionRequest,
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let parsed_args = parse_vmm_memory_search_arguments(request.arguments.clone())?;
+    let config = effective_vmm_config_for_native_request(&request, &snapshot)?;
+    let client = connect_vmm_native_client(&config).await?;
+    let response = client
+        .search_memory_events(SearchMemoryEventsRequest {
+            user_id: config.user_id.unwrap_or_default(),
+            project_id: config.project_id.unwrap_or_default(),
+            queries: parsed_args.queries,
+            top_k: parsed_args.top_k.unwrap_or(5),
+        })
+        .await
+        .map_err(|error| NativeToolError::new(error.to_string()))?;
+
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "trace_id": response.trace_id,
+        "query_count": response.results.len(),
+        "results": response.results.into_iter().map(|group| {
+            json!({
+                "query_index": group.query_index,
+                "query": group.query,
+                "hit_count": group.hits.len(),
+                "hits": group.hits.into_iter().map(|hit| json!({
+                    "memory_id": hit.memory_id,
+                    "source_turn_id": hit.source_turn_id,
+                    "has_source_turn": hit.source_turn_id != 0,
+                    "abstract": hit.abstract_text,
+                    "details_preview": hit.details_preview,
+                    "category": hit.category,
+                    "created_datetime": hit.created_datetime,
+                })).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+    })))
+}
+
+/// Executes the host-owned `vmm_turn_details` tool.
+/// 执行宿主自有 `vmm_turn_details` 工具。
+async fn execute_vmm_turn_details_tool(
+    request: NativeToolExecutionRequest,
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let parsed_args = parse_vmm_turn_details_arguments(request.arguments.clone())?;
+    let config = effective_vmm_config_for_native_request(&request, &snapshot)?;
+    let client = connect_vmm_native_client(&config).await?;
+    let response = client
+        .get_turn_details(GetTurnDetailsRequest {
+            turn_ids: parsed_args.turn_ids,
+        })
+        .await
+        .map_err(|error| NativeToolError::new(error.to_string()))?;
+
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "trace_id": response.trace_id,
+        "turn_count": response.turns.len(),
+        "turns": response.turns.into_iter().map(|turn| json!({
+            "turn_id": turn.turn_id,
+            "user_question": turn.user_question,
+            "timeline": turn.timeline.into_iter().map(|item| json!({
+                "type": item.kind.as_wire_type(),
+                "content": item.content,
+            })).collect::<Vec<_>>(),
+            "assistant_answer": turn.assistant_answer,
+            "detail": turn.detail,
+            "previous_turn_ids": turn.previous_turn_ids,
+            "next_turn_ids": turn.next_turn_ids,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+/// Executes the host-owned `vmm_memory_write` tool.
+/// 执行宿主自有 `vmm_memory_write` 工具。
+async fn execute_vmm_memory_write_tool(
+    request: NativeToolExecutionRequest,
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let parsed_args = parse_vmm_memory_write_arguments(request.arguments.clone())?;
+    let session_id = request
+        .session_id
+        .map(|session_id| session_id.to_string())
+        .filter(|session_id| !session_id.trim().is_empty())
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "vmm_memory_write requires a real session id for durable attribution.",
+            )
+        })?;
+    let config = effective_vmm_config_for_native_request(&request, &snapshot)?;
+    let client = connect_vmm_native_client(&config).await?;
+    let response = client
+        .write_memories(WriteMemoriesRequest {
+            session_id,
+            user_id: config.user_id.unwrap_or_default(),
+            project_id: config.project_id.unwrap_or_default(),
+            items: parsed_args
+                .items
+                .into_iter()
+                .map(|item| WriteMemoryItem {
+                    scope_level: item.scope_level.unwrap_or(0),
+                    abstract_text: item.abstract_text.trim().to_string(),
+                    details: item.details.trim().to_string(),
+                    category: item.category,
+                    priority: item.priority.unwrap_or(0),
+                    memory_level: item.memory_level.unwrap_or(0),
+                })
+                .collect(),
+        })
+        .await
+        .map_err(|error| NativeToolError::new(error.to_string()))?;
+
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "trace_id": response.trace_id,
+        "item_count": response.items.len(),
+        "items": response.items.into_iter().map(|item| json!({
+            "memory_id": item.memory_id,
+            "deduped": item.deduped,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1991,6 +2476,7 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use uuid::Uuid;
+    use vulcan_vmm::VmmConfigLayer;
 
     /// Builds one compact detected-shell record for tests that only care about shell identity and dynamic schema exposure.
     /// 为仅关注 shell 身份与动态 schema 暴露的测试构建一条紧凑检测记录。
@@ -2047,6 +2533,7 @@ mod tests {
             skill_count: 1,
             configured_mcp_server_ids: vec![String::from("server-a")],
             enabled_mcp_server_ids: vec![String::from("server-a")],
+            vmm_global: VmmConfigLayer::default(),
         });
         let config = AgentRuntimeConfig {
             active_model: Some(String::from("openai/gpt-5")),
@@ -2095,6 +2582,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("agent registry tool should execute");
@@ -2125,6 +2614,7 @@ mod tests {
             skill_count: 0,
             configured_mcp_server_ids: vec![String::from("server-a")],
             enabled_mcp_server_ids: vec![String::from("server-a")],
+            vmm_global: VmmConfigLayer::default(),
         });
         let config = AgentRuntimeConfig {
             active_model: Some(String::from("openai/gpt-5")),
@@ -2159,6 +2649,7 @@ mod tests {
             skill_count: 1,
             configured_mcp_server_ids: vec![],
             enabled_mcp_server_ids: vec![],
+            vmm_global: VmmConfigLayer::default(),
         });
         let config = AgentRuntimeConfig {
             active_model: Some(String::from("openai/gpt-5")),
@@ -2188,6 +2679,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("skill registry tool should execute");
@@ -2510,6 +3003,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell command should execute");
@@ -2547,6 +3042,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell session start should execute");
@@ -2572,6 +3069,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell session read should execute");
@@ -2608,6 +3107,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell session write should execute");
@@ -2632,6 +3133,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell session second read should execute");
@@ -2662,6 +3165,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("shell session stop should execute");
@@ -2696,6 +3201,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("long running shell session should start");
@@ -2718,6 +3225,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect_err("foreign session should not control another session");
@@ -2738,6 +3247,8 @@ mod tests {
                 spill_root: None,
                 enabled_prompt_skill_names: Vec::new(),
                 prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
             })
             .await
             .expect("owner should stop the command session");

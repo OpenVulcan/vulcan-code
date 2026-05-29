@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use vulcan_vmm::VmmConfigLayer;
 
 /// Builds a unique temporary directory path for provider configuration tests.
 /// 为 Provider 配置测试构建一个唯一临时目录路径。
@@ -406,6 +407,35 @@ fn provider_configuration_round_trips_default_command_shell() {
     let restored: ProviderConfigurationFile =
         serde_json::from_value(value).expect("provider configuration must deserialize");
     assert_eq!(restored.default_command_shell.as_deref(), Some("pwsh"));
+}
+
+/// Verifies global VMM configuration keeps the stable root `vmm` field and skips empty defaults.
+/// 验证全局 VMM 配置保持稳定的根级 `vmm` 字段，并跳过空默认值。
+#[test]
+fn provider_configuration_round_trips_vmm_configuration() {
+    let default_value = serde_json::to_value(ProviderConfigurationFile::default())
+        .expect("provider configuration must serialize");
+    assert!(default_value.get("vmm").is_none());
+
+    let config = ProviderConfigurationFile {
+        vmm: VmmConfigLayer {
+            enabled: Some(true),
+            grpc_target: Some(String::from("127.0.0.1:50051")),
+            user_id: Some(7),
+            project_id: Some(42),
+            ai_tools_enabled: Some(false),
+            ..VmmConfigLayer::default()
+        },
+        ..ProviderConfigurationFile::default()
+    };
+
+    let value = serde_json::to_value(&config).expect("provider configuration must serialize");
+    assert_eq!(value["vmm"]["grpc_target"], json!("127.0.0.1:50051"));
+    assert_eq!(value["vmm"]["ai_tools_enabled"], json!(false));
+
+    let restored: ProviderConfigurationFile =
+        serde_json::from_value(value).expect("provider configuration must deserialize");
+    assert_eq!(restored.vmm, config.vmm);
 }
 
 /// Verifies API-native tool configuration keeps the stable root `aiTools.webSearch` shape through serialization.
@@ -1471,6 +1501,7 @@ fn project_configuration_file_roundtrips_prompt_settings() {
             ..super::PersistedPromptConfiguration::default()
         }),
         prompt_skills: Default::default(),
+        vmm: Default::default(),
     };
 
     save_project_configuration_file(&root, &config).expect("save project config");
@@ -1485,6 +1516,31 @@ fn project_configuration_file_roundtrips_prompt_settings() {
                 .to_string_lossy()
                 .ends_with(".vulcan/code/config.json")
     );
+
+    let _ = fs::remove_dir_all(root);
+}
+
+/// Verifies project-local VMM overrides round-trip through the shared project configuration helpers.
+/// 验证项目级 VMM 覆盖配置可以通过共享项目配置辅助函数完成读写往返。
+#[test]
+fn project_configuration_file_roundtrips_vmm_settings() {
+    let root = unique_temp_dir("vulcan-project-vmm-config-roundtrip");
+    let config = ProjectVulcanCodeConfigurationFile {
+        prompt: None,
+        prompt_skills: Default::default(),
+        vmm: VmmConfigLayer {
+            enabled: Some(false),
+            project_id: Some(1001),
+            implicit_memory_turns: Some(5),
+            ..VmmConfigLayer::default()
+        },
+    };
+
+    save_project_configuration_file(&root, &config).expect("save project config");
+    let loaded = load_project_configuration_file(&root).expect("load project config");
+
+    assert_eq!(loaded, config);
+    assert_eq!(loaded.vmm.project_id, Some(1001));
 
     let _ = fs::remove_dir_all(root);
 }

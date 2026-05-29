@@ -3007,12 +3007,15 @@ async fn conversation_hook_registration_exposes_dispatcher_to_extensions() {
         )
         .expect("hook registration should succeed");
 
-    assert_eq!(
+    assert!(
         workbench
             .conversation_hook_dispatcher()
             .registry()
-            .count_for(super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK),
-        1
+            .registration_snapshots(Some(
+                super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+            ))
+            .iter()
+            .any(|snapshot| snapshot.registration.id == "test-precheck")
     );
 
     workbench.conversation_hook_runtime.record_user_prompt(

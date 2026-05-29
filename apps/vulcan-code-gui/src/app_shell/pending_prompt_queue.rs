@@ -1005,6 +1005,11 @@ impl VulcanWorkbench {
                         &state.context_injection_state,
                     )
                 }),
+            project_vmm: self.current_project_vmm_configuration(session_id),
+            session_vmm: self
+                .session_runtime_state(session_id)
+                .map(|state| state.vmm.clone())
+                .unwrap_or_default(),
         };
 
         self.replace_session_runtime_events(session_id, Vec::new());

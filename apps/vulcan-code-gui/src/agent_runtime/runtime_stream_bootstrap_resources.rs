@@ -73,6 +73,8 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         vulcan_prompt_skills::enabled_skill_names(&preparation.prompt_skills),
         preparation.prompt_skill_user_root.clone(),
         preparation.implicit_luaskill_prompt_entries.clone(),
+        preparation.project_vmm.clone(),
+        preparation.session_vmm.clone(),
     );
     let mut resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)

@@ -151,6 +151,156 @@ impl VulcanWorkbench {
                 );
                 Task::none()
             }
+            Message::SetSessionVmmEnabled(enabled) => {
+                self.set_session_vmm_enabled(enabled);
+                self.prompt_skills_notice = if enabled {
+                    String::from("当前会话已启用 VMM 记忆覆盖。")
+                } else {
+                    String::from("当前会话已关闭 VMM 记忆覆盖。")
+                };
+                Task::none()
+            }
+            Message::SetSessionVmmAiToolsEnabled(enabled) => {
+                self.set_session_vmm_ai_tools_enabled(enabled);
+                self.prompt_skills_notice = if enabled {
+                    String::from("当前会话已启用 VMM AI 专属工具。")
+                } else {
+                    String::from("当前会话已关闭 VMM AI 专属工具。")
+                };
+                Task::none()
+            }
+            Message::GlobalVmmEnabledChanged(value) => {
+                self.vmm_settings_draft.enabled = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 启用状态已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmGrpcTargetChanged(value) => {
+                self.vmm_settings_draft.grpc_target = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM gRPC 地址已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmApiKeyChanged(value) => {
+                self.vmm_settings_draft.grpc_api_key = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM API key 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmUserIdChanged(value) => {
+                self.vmm_settings_draft.user_id = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 用户 ID 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmProjectIdChanged(value) => {
+                self.vmm_settings_draft.project_id = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 项目 ID 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmManagementUserRefChanged(value) => {
+                self.vmm_settings_draft.management_user_ref = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 管理用户引用已修改，可直接执行管理动作。");
+                Task::none()
+            }
+            Message::GlobalVmmManagementProjectRefChanged(value) => {
+                self.vmm_settings_draft.management_project_ref = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 管理项目引用已修改，可直接执行管理动作。");
+                Task::none()
+            }
+            Message::GlobalVmmImplicitTurnsChanged(value) => {
+                self.vmm_settings_draft.implicit_memory_turns = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 临时记忆 TTL 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmProfileRefreshTurnsChanged(value) => {
+                self.vmm_settings_draft.profile_refresh_turns = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 画像刷新间隔已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmVisibleMemoryChanged(value) => {
+                self.vmm_settings_draft.visible_memory_injection = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 可见记忆模式已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmSessionCompactRecallChanged(value) => {
+                self.vmm_settings_draft.session_compact_recall = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 压缩感知召回已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmAiToolsChanged(value) => {
+                self.vmm_settings_draft.ai_tools_enabled = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM AI 专属工具开关已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmInjectionTagChanged(value) => {
+                self.vmm_settings_draft.injection_tag = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 注入标签已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmInjectionDescriptionChanged(value) => {
+                self.vmm_settings_draft.injection_description = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 注入说明已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ReloadGlobalVmmConfiguration => {
+                self.reload_global_vmm_settings_draft();
+                self.prompt_skills_notice = self.vmm_settings_draft.notice.clone();
+                Task::none()
+            }
+            Message::SaveGlobalVmmConfiguration => {
+                match self.save_global_vmm_settings_draft() {
+                    Ok(()) => self.prompt_skills_notice = self.vmm_settings_draft.notice.clone(),
+                    Err(error) => {
+                        self.vmm_settings_draft.notice = error.clone();
+                        self.prompt_skills_notice = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::RunGlobalVmmManagement(action) => {
+                let layer = match self.vmm_settings_draft.to_layer() {
+                    Ok(layer) => layer,
+                    Err(error) => {
+                        self.vmm_settings_draft.notice = error.clone();
+                        self.prompt_skills_notice = error;
+                        return Task::none();
+                    }
+                };
+                self.vmm_settings_draft.notice =
+                    format!("正在执行 VMM 管理动作：{}。", action.label());
+                self.prompt_skills_notice = self.vmm_settings_draft.notice.clone();
+                let management_user_ref = self.vmm_settings_draft.management_user_ref.clone();
+                let management_project_ref = self.vmm_settings_draft.management_project_ref.clone();
+                Task::perform(
+                    vmm_management::run_vmm_management_action(
+                        action,
+                        layer,
+                        management_user_ref,
+                        management_project_ref,
+                    ),
+                    Message::GlobalVmmManagementFinished,
+                )
+            }
+            Message::GlobalVmmManagementFinished(result) => {
+                let notice = match result {
+                    Ok(message) => message,
+                    Err(error) => format!("VMM 管理调用失败：{error}"),
+                };
+                self.vmm_settings_draft.notice = notice.clone();
+                self.prompt_skills_notice = notice;
+                Task::none()
+            }
             Message::TogglePromptSkillDetails(name) => {
                 self.selected_prompt_skill_name = (self.selected_prompt_skill_name.as_deref()
                     != Some(name.as_str()))
@@ -178,5 +328,33 @@ impl VulcanWorkbench {
             .prompt_skill_overrides
             .insert(name.trim().to_string(), state);
         runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Persists the selected session VMM memory override.
+    /// 持久化当前选中会话的 VMM 记忆覆盖。
+    fn set_session_vmm_enabled(&mut self, enabled: bool) {
+        let session_id = self.selected_session;
+        if session_id.is_nil() {
+            return;
+        }
+        let now = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.vmm.enabled = Some(enabled);
+        runtime_state.updated_at = now;
+        self.refresh_vmm_hook_config_snapshot();
+    }
+
+    /// Persists the selected session VMM AI-tool override.
+    /// 持久化当前选中会话的 VMM AI 工具覆盖。
+    fn set_session_vmm_ai_tools_enabled(&mut self, enabled: bool) {
+        let session_id = self.selected_session;
+        if session_id.is_nil() {
+            return;
+        }
+        let now = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.vmm.ai_tools_enabled = Some(enabled);
+        runtime_state.updated_at = now;
+        self.refresh_vmm_hook_config_snapshot();
     }
 }

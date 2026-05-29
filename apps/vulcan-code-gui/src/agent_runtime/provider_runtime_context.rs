@@ -540,6 +540,7 @@ mod tests {
                 project_prompt_enabled: true,
                 project_prompt_path: String::from(".vulcan/code/prompt.md"),
             }),
+            vmm: Default::default(),
         };
         save_project_configuration_file(&root, &project_config)
             .expect("write project prompt config");
@@ -663,6 +664,8 @@ mod tests {
             context_baseline: Option::<ContextBaseline>::None,
             context_request_mode: None,
             context_injection: None,
+            project_vmm: Default::default(),
+            session_vmm: Default::default(),
         }
     }
 

@@ -20,6 +20,7 @@ impl VulcanWorkbench {
                 self.project_attachment_cleanup_last_report = None;
                 self.project_attachment_cleanup_notice =
                     format!("正在管理项目 `{project_title}` 的历史附件缓存。");
+                self.reload_project_vmm_settings_draft();
                 Task::none()
             }
             Message::CloseTaskProjectSettings => {
@@ -42,6 +43,172 @@ impl VulcanWorkbench {
                             format!("保存项目级提示词技能 `{name}` 失败：{error}");
                     }
                 }
+                Task::none()
+            }
+            Message::ProjectVmmOverrideToggled(value) => {
+                self.project_vmm_settings_draft.project_override_enabled = value;
+                self.project_vmm_settings_draft.settings.notice = if value {
+                    String::from("项目 VMM 覆盖已启用，点击保存后写入当前项目。")
+                } else {
+                    String::from("项目 VMM 覆盖已关闭，点击保存后继承全局配置。")
+                };
+                Task::none()
+            }
+            Message::ProjectVmmEnabledChanged(value) => {
+                self.project_vmm_settings_draft.settings.enabled = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 启用状态已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmGrpcTargetChanged(value) => {
+                self.project_vmm_settings_draft.settings.grpc_target = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM gRPC 地址已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmApiKeyChanged(value) => {
+                self.project_vmm_settings_draft.settings.grpc_api_key = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM API key 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmUserIdChanged(value) => {
+                self.project_vmm_settings_draft.settings.user_id = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 用户 ID 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmProjectIdChanged(value) => {
+                self.project_vmm_settings_draft.settings.project_id = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 项目 ID 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmManagementUserRefChanged(value) => {
+                self.project_vmm_settings_draft.settings.management_user_ref = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 管理用户引用已修改，可直接执行管理动作。");
+                Task::none()
+            }
+            Message::ProjectVmmManagementProjectRefChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .management_project_ref = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 管理项目引用已修改，可直接执行管理动作。");
+                Task::none()
+            }
+            Message::ProjectVmmImplicitTurnsChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .implicit_memory_turns = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 临时记忆 TTL 已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmProfileRefreshTurnsChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .profile_refresh_turns = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 画像刷新间隔已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmVisibleMemoryChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .visible_memory_injection = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 可见记忆模式已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmSessionCompactRecallChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .session_compact_recall = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 压缩感知召回已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmAiToolsChanged(value) => {
+                self.project_vmm_settings_draft.settings.ai_tools_enabled = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM AI 专属工具开关已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmInjectionTagChanged(value) => {
+                self.project_vmm_settings_draft.settings.injection_tag = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 注入标签已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ProjectVmmInjectionDescriptionChanged(value) => {
+                self.project_vmm_settings_draft
+                    .settings
+                    .injection_description = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 注入说明已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::ReloadProjectVmmConfiguration => {
+                self.reload_project_vmm_settings_draft();
+                self.project_attachment_cleanup_notice =
+                    self.project_vmm_settings_draft.settings.notice.clone();
+                Task::none()
+            }
+            Message::SaveProjectVmmConfiguration => {
+                match self.save_project_vmm_settings_draft() {
+                    Ok(()) => {
+                        self.project_attachment_cleanup_notice =
+                            self.project_vmm_settings_draft.settings.notice.clone();
+                    }
+                    Err(error) => {
+                        self.project_vmm_settings_draft.settings.notice = error.clone();
+                        self.project_attachment_cleanup_notice = error;
+                    }
+                }
+                Task::none()
+            }
+            Message::RunProjectVmmManagement(action) => {
+                let layer = match self.project_vmm_settings_draft.settings.to_layer() {
+                    Ok(layer) => layer,
+                    Err(error) => {
+                        self.project_vmm_settings_draft.settings.notice = error.clone();
+                        self.project_attachment_cleanup_notice = error;
+                        return Task::none();
+                    }
+                };
+                self.project_vmm_settings_draft.settings.notice =
+                    format!("正在执行项目 VMM 管理动作：{}。", action.label());
+                self.project_attachment_cleanup_notice =
+                    self.project_vmm_settings_draft.settings.notice.clone();
+                let management_user_ref = self
+                    .project_vmm_settings_draft
+                    .settings
+                    .management_user_ref
+                    .clone();
+                let management_project_ref = self
+                    .project_vmm_settings_draft
+                    .settings
+                    .management_project_ref
+                    .clone();
+                Task::perform(
+                    vmm_management::run_vmm_management_action(
+                        action,
+                        layer,
+                        management_user_ref,
+                        management_project_ref,
+                    ),
+                    Message::ProjectVmmManagementFinished,
+                )
+            }
+            Message::ProjectVmmManagementFinished(result) => {
+                let notice = match result {
+                    Ok(message) => message,
+                    Err(error) => format!("项目 VMM 管理调用失败：{error}"),
+                };
+                self.project_vmm_settings_draft.settings.notice = notice.clone();
+                self.project_attachment_cleanup_notice = notice;
                 Task::none()
             }
             Message::OpenProjectAttachmentCleanupDatePicker => {

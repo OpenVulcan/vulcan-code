@@ -12,6 +12,7 @@ use crate::model::{
     SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
+    VmmWritebackOutboxEntry,
 };
 use crate::provider_usage::{parse_provider_usage_from_json, serialize_provider_usage_to_json};
 use crate::tooling::change_set::compact_change_set_host_result;
@@ -26,6 +27,7 @@ use vldb_controller_client::{
     ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
 };
 use vulcan_context_injection::ContextInjectionState;
+use vulcan_vmm::VmmConfigLayer;
 
 mod event_store;
 mod history_search;
@@ -668,6 +670,14 @@ struct StoredRuntimeStateRow {
     /// 可选的隐藏上下文注入运行态载荷。
     #[serde(default)]
     context_injection_json: Option<String>,
+    /// Optional persisted session-level VMM override payload.
+    /// 可选的持久化会话级 VMM 覆盖载荷。
+    #[serde(default)]
+    vmm_json: Option<String>,
+    /// Optional persisted VMM writeback outbox payload.
+    /// 可选的持久化 VMM 写回 outbox 载荷。
+    #[serde(default)]
+    vmm_writeback_outbox_json: Option<String>,
     /// Updated-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的更新时间。
     updated_at: String,
@@ -756,6 +766,16 @@ pub async fn load_workspace_snapshot(
                 .context_injection_json
                 .as_deref()
                 .and_then(parse_context_injection_state_from_json)
+                .unwrap_or_default(),
+            vmm: row
+                .vmm_json
+                .as_deref()
+                .and_then(parse_vmm_config_layer_from_json)
+                .unwrap_or_default(),
+            vmm_writeback_outbox: row
+                .vmm_writeback_outbox_json
+                .as_deref()
+                .and_then(parse_vmm_writeback_outbox_from_json)
                 .unwrap_or_default(),
             last_compaction_id: row.last_compaction_id,
             context_start_message_id: row.context_start_message_id,
@@ -1234,7 +1254,7 @@ async fn query_session_runtime_state_shell_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -1379,6 +1399,16 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .context_injection_json
             .as_deref()
             .and_then(parse_context_injection_state_from_json)
+            .unwrap_or_default(),
+        vmm: row
+            .vmm_json
+            .as_deref()
+            .and_then(parse_vmm_config_layer_from_json)
+            .unwrap_or_default(),
+        vmm_writeback_outbox: row
+            .vmm_writeback_outbox_json
+            .as_deref()
+            .and_then(parse_vmm_writeback_outbox_from_json)
             .unwrap_or_default(),
         last_compaction_id: row.last_compaction_id,
         context_start_message_id: row.context_start_message_id,
@@ -2071,6 +2101,38 @@ fn serialize_context_injection_state_to_json(state: &ContextInjectionState) -> O
     } else {
         serde_json::to_string(state).ok()
     }
+}
+
+/// Serializes session-level VMM overrides into the persisted JSON payload when needed.
+/// 在需要时将会话级 VMM 覆盖序列化为持久化 JSON 载荷。
+fn serialize_vmm_config_layer_to_json(layer: &VmmConfigLayer) -> Option<String> {
+    if layer.is_empty() {
+        None
+    } else {
+        serde_json::to_string(layer).ok()
+    }
+}
+
+/// Parses persisted session-level VMM overrides from a JSON payload.
+/// 从 JSON 载荷解析持久化的会话级 VMM 覆盖。
+fn parse_vmm_config_layer_from_json(value: &str) -> Option<VmmConfigLayer> {
+    serde_json::from_str(value).ok()
+}
+
+/// Serializes the VMM writeback outbox into the persisted JSON payload when needed.
+/// 在需要时将 VMM 写回 outbox 序列化为持久化 JSON 载荷。
+fn serialize_vmm_writeback_outbox_to_json(outbox: &[VmmWritebackOutboxEntry]) -> Option<String> {
+    if outbox.is_empty() {
+        None
+    } else {
+        serde_json::to_string(outbox).ok()
+    }
+}
+
+/// Parses a persisted VMM writeback outbox JSON payload.
+/// 解析持久化的 VMM 写回 outbox JSON 载荷。
+fn parse_vmm_writeback_outbox_from_json(value: &str) -> Option<Vec<VmmWritebackOutboxEntry>> {
+    serde_json::from_str(value).ok()
 }
 
 /// Serializes one typed canonical conversation state into the persisted JSON payload when it still carries messages or records.

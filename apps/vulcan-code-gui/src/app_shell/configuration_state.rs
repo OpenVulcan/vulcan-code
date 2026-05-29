@@ -8,6 +8,10 @@ use crate::provider_config::{
 };
 use crate::tooling::shell_host::HostCommandShell;
 use std::collections::{BTreeMap, BTreeSet};
+use vulcan_vmm::{
+    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS,
+    DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, VmmConfigLayer,
+};
 
 /// Editable provider form state kept in sync with the persisted provider configuration file.
 /// 与持久化供应商配置文件保持同步的可编辑供应商表单状态。
@@ -257,4 +261,227 @@ impl ProjectPromptSettingsDraft {
             notice,
         }
     }
+}
+
+/// Editable VMM configuration draft shared by global and project settings surfaces.
+/// 供全局与项目设置界面复用的可编辑 VMM 配置草稿。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct VmmSettingsDraft {
+    /// Whether the VMM memory flow is enabled for this layer.
+    /// 当前层是否启用 VMM 记忆流程。
+    pub(super) enabled: bool,
+    /// Editable gRPC target such as `127.0.0.1:50051`.
+    /// 可编辑 gRPC 目标，例如 `127.0.0.1:50051`。
+    pub(super) grpc_target: String,
+    /// Editable optional gRPC API key.
+    /// 可编辑的可选 gRPC API key。
+    pub(super) grpc_api_key: String,
+    /// Editable numeric VMM user id.
+    /// 可编辑 VMM 数字用户标识。
+    pub(super) user_id: String,
+    /// Editable numeric VMM project id.
+    /// 可编辑 VMM 数字项目标识。
+    pub(super) project_id: String,
+    /// Editable user reference used only by VMM management RPC helpers.
+    /// 仅供 VMM 管理 RPC 辅助功能使用的可编辑用户引用。
+    pub(super) management_user_ref: String,
+    /// Editable project reference or Team/Space/Project path used only by VMM management RPC helpers.
+    /// 仅供 VMM 管理 RPC 辅助功能使用的可编辑项目引用或 Team/Space/Project 路径。
+    pub(super) management_project_ref: String,
+    /// Editable transient memory TTL.
+    /// 可编辑临时记忆持续回合数。
+    pub(super) implicit_memory_turns: String,
+    /// Editable profile refresh accepted-turn interval.
+    /// 可编辑画像刷新 accepted turn 间隔。
+    pub(super) profile_refresh_turns: String,
+    /// Whether VMM should use visible memory mode.
+    /// VMM 是否使用可见记忆模式。
+    pub(super) visible_memory_injection: bool,
+    /// Whether compact-aware recall is enabled.
+    /// 是否启用压缩感知召回。
+    pub(super) session_compact_recall: bool,
+    /// Whether VMM AI-only tools are exposed.
+    /// 是否暴露 VMM AI 专属工具。
+    pub(super) ai_tools_enabled: bool,
+    /// Editable context-injection tag.
+    /// 可编辑上下文注入标签。
+    pub(super) injection_tag: String,
+    /// Editable context-injection description.
+    /// 可编辑上下文注入说明。
+    pub(super) injection_description: String,
+    /// Local settings notice shown near VMM controls.
+    /// 显示在 VMM 控件附近的局部设置提示。
+    pub(super) notice: String,
+}
+
+impl Default for VmmSettingsDraft {
+    /// Builds a draft from built-in VMM defaults.
+    /// 基于内置 VMM 默认值构建草稿。
+    fn default() -> Self {
+        Self::from_layer(
+            &VmmConfigLayer::default(),
+            String::from("尚未载入 VMM 配置。"),
+        )
+    }
+}
+
+impl VmmSettingsDraft {
+    /// Builds an editable draft from one optional VMM config layer.
+    /// 基于一层可选 VMM 配置构建可编辑草稿。
+    pub(super) fn from_layer(layer: &VmmConfigLayer, notice: String) -> Self {
+        let user_id = layer
+            .user_id
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        let project_id = layer
+            .project_id
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        Self {
+            enabled: layer.enabled.unwrap_or(true),
+            grpc_target: layer.grpc_target.clone().unwrap_or_default(),
+            grpc_api_key: layer.grpc_api_key.clone().unwrap_or_default(),
+            user_id: user_id.clone(),
+            project_id: project_id.clone(),
+            management_user_ref: user_id,
+            management_project_ref: project_id,
+            implicit_memory_turns: layer
+                .implicit_memory_turns
+                .unwrap_or(DEFAULT_IMPLICIT_MEMORY_TURNS)
+                .to_string(),
+            profile_refresh_turns: layer
+                .profile_refresh_turns
+                .unwrap_or(DEFAULT_PROFILE_REFRESH_TURNS)
+                .to_string(),
+            visible_memory_injection: layer.visible_memory_injection.unwrap_or(false),
+            session_compact_recall: layer.session_compact_recall.unwrap_or(false),
+            ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(true),
+            injection_tag: layer
+                .injection_tag
+                .clone()
+                .unwrap_or_else(|| DEFAULT_VMM_INJECTION_TAG.to_string()),
+            injection_description: layer
+                .injection_description
+                .clone()
+                .unwrap_or_else(|| DEFAULT_VMM_INJECTION_DESCRIPTION.to_string()),
+            notice,
+        }
+    }
+
+    /// Converts the draft into a concrete config layer.
+    /// 将草稿转换成具体配置层。
+    pub(super) fn to_layer(&self) -> Result<VmmConfigLayer, String> {
+        let user_id = parse_optional_u64(&self.user_id, "VMM 用户 ID")?;
+        let project_id = parse_optional_u64(&self.project_id, "VMM 项目 ID")?;
+        let implicit_memory_turns = parse_required_u32(
+            &self.implicit_memory_turns,
+            "临时记忆持续回合数",
+            DEFAULT_IMPLICIT_MEMORY_TURNS,
+        )?;
+        let profile_refresh_turns = parse_required_u32(
+            &self.profile_refresh_turns,
+            "画像刷新间隔",
+            DEFAULT_PROFILE_REFRESH_TURNS,
+        )?;
+        Ok(VmmConfigLayer {
+            enabled: Some(self.enabled),
+            grpc_target: optional_trimmed_string(&self.grpc_target),
+            grpc_api_key: optional_trimmed_string(&self.grpc_api_key),
+            user_id,
+            project_id,
+            implicit_memory_turns: Some(implicit_memory_turns),
+            profile_refresh_turns: Some(profile_refresh_turns),
+            visible_memory_injection: Some(self.visible_memory_injection),
+            session_compact_recall: Some(self.session_compact_recall),
+            ai_tools_enabled: Some(self.ai_tools_enabled),
+            injection_tag: optional_trimmed_string(&self.injection_tag),
+            injection_description: optional_trimmed_string(&self.injection_description),
+            ..VmmConfigLayer::default()
+        })
+    }
+}
+
+/// Editable project-scoped VMM override draft.
+/// 可编辑项目级 VMM 覆盖草稿。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProjectVmmSettingsDraft {
+    /// Workspace path owning this project-level VMM draft.
+    /// 拥有该项目级 VMM 草稿的工作区路径。
+    pub(super) workspace_path: String,
+    /// Whether this project should persist its own VMM layer.
+    /// 当前项目是否应保存自己的 VMM 配置层。
+    pub(super) project_override_enabled: bool,
+    /// Editable VMM settings for the project layer.
+    /// 项目层使用的可编辑 VMM 设置。
+    pub(super) settings: VmmSettingsDraft,
+}
+
+impl Default for ProjectVmmSettingsDraft {
+    /// Builds an empty project VMM settings draft.
+    /// 构建空项目 VMM 设置草稿。
+    fn default() -> Self {
+        Self {
+            workspace_path: String::new(),
+            project_override_enabled: false,
+            settings: VmmSettingsDraft::from_layer(
+                &VmmConfigLayer::default(),
+                String::from("尚未载入项目 VMM 配置。"),
+            ),
+        }
+    }
+}
+
+impl ProjectVmmSettingsDraft {
+    /// Builds a project draft from its persisted layer and inherited global fallback.
+    /// 基于持久化项目层与继承的全局回退构建项目草稿。
+    pub(super) fn from_project_layer(
+        workspace_path: String,
+        project_layer: &VmmConfigLayer,
+        inherited_layer: &VmmConfigLayer,
+        notice: String,
+    ) -> Self {
+        let has_project_override = !project_layer.is_empty();
+        let source = if has_project_override {
+            project_layer
+        } else {
+            inherited_layer
+        };
+        Self {
+            workspace_path,
+            project_override_enabled: has_project_override,
+            settings: VmmSettingsDraft::from_layer(source, notice),
+        }
+    }
+}
+
+/// Returns a trimmed string only when it contains visible content.
+/// 仅在字符串包含可见内容时返回修剪后的字符串。
+fn optional_trimmed_string(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Parses an optional unsigned integer field.
+/// 解析可选无符号整数字段。
+fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
+/// Parses a required unsigned integer field with a default fallback for blank input.
+/// 解析必填无符号整数字段，并在空输入时使用默认回退。
+fn parse_required_u32(value: &str, label: &str, default_value: u32) -> Result<u32, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(default_value);
+    }
+    trimmed
+        .parse::<u32>()
+        .map_err(|_| format!("{label} 必须是非负整数。"))
 }

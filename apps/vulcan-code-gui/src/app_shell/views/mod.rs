@@ -23,6 +23,7 @@ mod settings_cards;
 mod settings_navigation;
 mod task_tree;
 mod transcript;
+mod vmm_settings;
 
 /// Minimum delay used to coalesce project-rules filesystem bursts.
 /// 用于合并项目规则文件系统突发事件的最小延迟。

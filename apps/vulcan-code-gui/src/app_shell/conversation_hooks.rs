@@ -15,6 +15,11 @@ use vulcan_hooks::{
     HookActor, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookMode,
     HookPayload, HookPointDescriptor, HookScope,
 };
+use vulcan_vmm::PostActionRequest;
+
+/// Metadata key used by hooks to report VMM writeback side effects.
+/// hook 用于报告 VMM 写回副作用的 metadata 键。
+pub(super) const HOOK_METADATA_VMM_WRITEBACK_EFFECTS: &str = "vmm_writeback_effects";
 
 /// Hook point fired before a user turn is sent to provider preparation.
 /// 在用户回合发送到 Provider 准备阶段前触发的 hook 点位。
@@ -67,6 +72,40 @@ pub(super) struct ConversationTimelineItem {
     /// 可选来源标识，例如请求标识或工具调用标识。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
+}
+
+/// Host-visible VMM writeback effect returned by hook handlers.
+/// hook 处理器返回给宿主可见的 VMM 写回效果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum VmmWritebackHookEffect {
+    /// Previously queued outbox entries were flushed successfully.
+    /// 先前排队的 outbox 条目已成功冲刷。
+    Flushed {
+        /// Local outbox entry ids that should be removed.
+        /// 应被移除的本地 outbox 条目标识。
+        entry_ids: Vec<String>,
+    },
+    /// One PostAction request should be retained for later replay.
+    /// 一条 PostAction 请求应保留用于后续重放。
+    Enqueue {
+        /// Original VMM PostAction request.
+        /// 原始 VMM PostAction 请求。
+        request: PostActionRequest,
+        /// Failure message that caused the enqueue.
+        /// 导致入队的失败消息。
+        error: String,
+    },
+    /// One queued PostAction request failed during replay.
+    /// 一条排队的 PostAction 请求在重放时失败。
+    Failed {
+        /// Local outbox entry id that should be updated.
+        /// 应被更新的本地 outbox 条目标识。
+        entry_id: String,
+        /// Failure message observed during replay.
+        /// 重放期间观察到的失败消息。
+        error: String,
+    },
 }
 
 impl ConversationTimelineItem {
@@ -442,11 +481,12 @@ impl ConversationHookRuntime {
         assistant_content: &str,
         provider_request_count: usize,
         conversation_state: &SessionConversationState,
-    ) {
+    ) -> (String, Vec<VmmWritebackHookEffect>) {
         let turn = self
             .active_turns
             .remove(&session_id)
             .unwrap_or_else(|| self.reconstruct_turn_from_state(session_id, conversation_state));
+        let completed_turn_id = turn.turn_id.clone();
         let payload = json!({
             "session_id": session_id.to_string(),
             "project_id": project_id,
@@ -458,12 +498,19 @@ impl ConversationHookRuntime {
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
         });
-        self.dispatch_json(
+        let report = self.dispatch_json_blocking(
             HOOK_CONVERSATION_TURN_COMPLETED,
             session_id,
             payload,
             HookScope::Session,
         );
+        (
+            completed_turn_id,
+            report
+                .as_ref()
+                .map(vmm_writeback_effects_from_report)
+                .unwrap_or_default(),
+        )
     }
 
     /// Terminates one logical turn and fires the terminated hook payload.
@@ -609,7 +656,7 @@ impl ConversationHookRuntime {
         let request = HookDispatchRequest::new(context, HookPayload { value: payload });
         std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_time()
+                .enable_all()
                 .build()
                 .ok()?;
             runtime.block_on(async move {
@@ -626,6 +673,30 @@ impl ConversationHookRuntime {
         .ok()
         .flatten()
     }
+}
+
+/// Extracts VMM writeback effects from one hook dispatch report.
+/// 从一次 hook 调度报告中提取 VMM 写回效果。
+fn vmm_writeback_effects_from_report(report: &HookDispatchReport) -> Vec<VmmWritebackHookEffect> {
+    report
+        .metadata
+        .get(HOOK_METADATA_VMM_WRITEBACK_EFFECTS)
+        .into_iter()
+        .flat_map(|values| values.iter())
+        .flat_map(|value| {
+            if let Some(items) = value.as_array() {
+                items
+                    .iter()
+                    .filter_map(|item| serde_json::from_value(item.clone()).ok())
+                    .collect::<Vec<_>>()
+            } else {
+                serde_json::from_value(value.clone())
+                    .ok()
+                    .into_iter()
+                    .collect()
+            }
+        })
+        .collect()
 }
 
 /// Builds descriptors for every built-in conversation hook point.
@@ -702,7 +773,21 @@ fn spawn_hook_dispatch(dispatcher: HookDispatcher, request: HookDispatchRequest)
         handle.spawn(async move {
             let _ = dispatcher.dispatch(request).await;
         });
+        return;
     }
+
+    std::thread::spawn(move || {
+        // Effect hooks can perform async IO such as gRPC calls even when fired from the UI thread.
+        // 即使 effect hook 从 UI 线程触发，也允许它执行 gRPC 等异步 IO。
+        if let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            runtime.block_on(async move {
+                let _ = dispatcher.dispatch(request).await;
+            });
+        }
+    });
 }
 
 /// Returns the hook event kind for one pending prompt source.
@@ -914,5 +999,65 @@ mod tests {
 
         assert!(injections.is_empty());
         assert!(started_at.elapsed() < Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS + 1_500));
+    }
+
+    #[test]
+    fn effect_hook_dispatch_runs_without_ambient_tokio_runtime() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+        use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
+
+        let mut runtime = ConversationHookRuntime::new();
+        let (sender, receiver) = mpsc::channel();
+        let sender = Arc::new(sender);
+        runtime
+            .dispatcher_mut()
+            .register(
+                HookRegistration::new(
+                    "effect-listener",
+                    HOOK_CONVERSATION_TURN_COMPLETED,
+                    HookMode::Effect,
+                ),
+                Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+                    let sender = Arc::clone(&sender);
+                    async move {
+                        let assistant_content = invocation
+                            .payload
+                            .value
+                            .get("assistant_content")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string();
+                        let _ = sender.send(assistant_content);
+                        Ok(HookResult::default())
+                    }
+                })),
+            )
+            .expect("hook registration should succeed");
+
+        let session_id = SessionId::from_u128(46);
+        runtime.record_user_prompt(
+            session_id,
+            "entry-1",
+            None,
+            String::from("D:/workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            "hello",
+            &SessionConversationState::default(),
+        );
+        let _ = runtime.complete_turn(
+            session_id,
+            None,
+            "done",
+            1,
+            &SessionConversationState::default(),
+        );
+
+        assert_eq!(
+            receiver
+                .recv_timeout(Duration::from_secs(2))
+                .expect("effect hook should run"),
+            "done"
+        );
     }
 }
