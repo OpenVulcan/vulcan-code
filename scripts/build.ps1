@@ -1,4 +1,4 @@
-# build.ps1 packages vulcan-code-gui into one runnable output directory.
+﻿# build.ps1 packages vulcan-code-gui into one runnable output directory.
 # build.ps1 用于把 vulcan-code-gui 打包到可运行的 output 目录。
 # Usage:
 # 用法：
@@ -40,6 +40,10 @@ Set-Location $ProjectDir
 # BaseOutDir 用于保存绝对 output 根目录，确保文件系统操作永远不依赖调用方当前目录。
 $BaseOutDir = Join-Path $ProjectDir "output"
 
+# LuaRuntimeOut stores the independent LuaSkills runtime root required by LuaSkills 0.4.6.
+# LuaRuntimeOut 保存 LuaSkills 0.4.6 要求的独立 LuaSkills 运行时根目录。
+$LuaRuntimeOut = Join-Path $BaseOutDir "lua_runtime"
+
 $BinName = "vulcan-code-gui"
 $BinaryFileName = $BinName
 if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
@@ -76,18 +80,50 @@ if (-not (Test-Path $BinExe)) {
 }
 
 # Output directories
-$LibsOut = Join-Path $BaseOutDir "libs"
-$SkillsOut = Join-Path $BaseOutDir "skills"
-$PkgOut = Join-Path $BaseOutDir "lua_packages"
+$RuntimeBinOut = Join-Path $LuaRuntimeOut "bin"
+$LibsOut = Join-Path $LuaRuntimeOut "libs"
+$SkillsOut = Join-Path $LuaRuntimeOut "skills"
+$PkgOut = Join-Path $LuaRuntimeOut "lua_packages"
 $ConfigOut = Join-Path $BaseOutDir "config"
 $ResourcesOut = Join-Path $BaseOutDir "resources"
-$LicensesOut = Join-Path $BaseOutDir "licenses"
-$DependenciesOut = Join-Path $BaseOutDir "dependencies"
-$DatabasesOut = Join-Path $BaseOutDir "databases"
-$StateOut = Join-Path $BaseOutDir "state"
-$TempOut = Join-Path $BaseOutDir "temp"
+$LuaConfigOut = Join-Path $LuaRuntimeOut "config"
+$LicensesOut = Join-Path $LuaRuntimeOut "licenses"
+$DependenciesOut = Join-Path $LuaRuntimeOut "dependencies"
+$DatabasesOut = Join-Path $LuaRuntimeOut "databases"
+$StateOut = Join-Path $LuaRuntimeOut "state"
+$TempOut = Join-Path $LuaRuntimeOut "temp"
 $LogsOut = Join-Path $BaseOutDir "logs"
 $LuaSkillsRuntimeRoot = Join-Path $ProjectDir "third_party\luaskills_runtime"
+
+# LuaRuntimeRequiredDirectories lists the fixed LuaSkills 0.4.6 package directories that must exist after a full package sync.
+# LuaRuntimeRequiredDirectories 列出完整包同步后仍必须存在的 LuaSkills 0.4.6 固定包目录。
+$LuaRuntimeRequiredDirectories = @(
+    $RuntimeBinOut,
+    $LibsOut,
+    $SkillsOut,
+    $PkgOut,
+    $LuaConfigOut,
+    (Join-Path $LuaRuntimeOut "resources"),
+    $LicensesOut,
+    $DependenciesOut,
+    $DatabasesOut,
+    $StateOut,
+    $TempOut,
+    (Join-Path $TempOut "downloads"),
+    (Join-Path $LuaRuntimeOut "system_lua_lib")
+)
+
+# LuaRuntimeCompatibilityDirectories lists host-created compatibility leaves under the independent Lua runtime package.
+# LuaRuntimeCompatibilityDirectories 列出独立 Lua 运行时包下由宿主补齐的兼容叶子目录。
+$LuaRuntimeCompatibilityDirectories = @(
+    "$DependenciesOut\\shared\\tools",
+    "$DependenciesOut\\shared\\lua",
+    "$DependenciesOut\\shared\\ffi",
+    "$DependenciesOut\\skill",
+    "$DatabasesOut\\sqlite",
+    "$DatabasesOut\\lancedb",
+    "$StateOut\\skills"
+)
 
 # RustThirdPartyGeneratedLicenseFileNames stores the generated license-sidecar file names that should survive static resource syncs.
 # RustThirdPartyGeneratedLicenseFileNames 用于保存需要跨静态资源同步保留下来的生成许可证文件名集合。
@@ -280,19 +316,12 @@ function Enable-OutputModelConfigForLocalTesting {
 
 # Ensure output directories exist
 if (-not (Test-Path $BaseOutDir)) { New-Item -ItemType Directory -Path $BaseOutDir -Force | Out-Null }
+if (-not (Test-Path $LuaRuntimeOut)) { New-Item -ItemType Directory -Path $LuaRuntimeOut -Force | Out-Null }
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-foreach ($dir in @($LibsOut, $SkillsOut, $PkgOut, $ConfigOut, $ResourcesOut, $LicensesOut, $DependenciesOut, $DatabasesOut, $StateOut, $TempOut, $LogsOut)) {
+foreach ($dir in ($LuaRuntimeRequiredDirectories + @($ConfigOut, $ResourcesOut, $LogsOut))) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 }
-foreach ($dir in @(
-    "$DependenciesOut\\shared\\tools",
-    "$DependenciesOut\\shared\\lua",
-    "$DependenciesOut\\shared\\ffi",
-    "$DependenciesOut\\skill",
-    "$DatabasesOut\\sqlite",
-    "$DatabasesOut\\lancedb",
-    "$StateOut\\skills"
-)) {
+foreach ($dir in $LuaRuntimeCompatibilityDirectories) {
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 }
 
@@ -311,29 +340,27 @@ foreach ($GeneratedFileName in $RustThirdPartyGeneratedLicenseFileNames) {
 Copy-Item -Force $BinExe (Join-Path $OutDir $BinaryFileName)
 Write-Host "==> Binary copied to $OutDir\"
 
-# Sync official LuaSkills runtime package exports to output/.
+# Sync official LuaSkills runtime package root to output/lua_runtime/.
+# 将官方 LuaSkills 运行时包根目录完整同步到 output/lua_runtime/。
 # Build packaging treats third_party/luaskills_runtime as a caller-managed asset root and copies it as-is.
 # 构建打包会把 third_party/luaskills_runtime 视为调用方自管的资产根目录，并按现状直接同步。
 # Cross-platform validation is intentionally omitted because forks may replace lua_packages/runtime payloads with custom layouts.
 # 这里有意不做跨平台校验，因为 fork 方可能会用自定义布局替换 lua_packages/runtime 载荷。
 if (Test-Path -LiteralPath $LuaSkillsRuntimeRoot) {
-    $RuntimeSyncs = @()
-    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "lua_packages"); destination = $PkgOut; name = "lua_packages" }
-    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "libs"); destination = $LibsOut; name = "libs" }
-    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "resources"); destination = $ResourcesOut; name = "resources" }
-    $RuntimeSyncs += @{ source = (Join-Path $LuaSkillsRuntimeRoot "licenses"); destination = $LicensesOut; name = "licenses" }
-
-    foreach ($Sync in $RuntimeSyncs) {
-        if ((Copy-DirectoryContents -Source $Sync.source -Destination $Sync.destination)) {
-            Write-Host "==> LuaSkills runtime $($Sync.name) synced to $($Sync.destination)\"
-        }
-        else {
-            Write-Host "==> LuaSkills runtime package has no $($Sync.name) directory"
-        }
-    }
+    Copy-DirectoryContents -Source $LuaSkillsRuntimeRoot -Destination $LuaRuntimeOut | Out-Null
+    Write-Host "==> LuaSkills runtime package synced to $LuaRuntimeOut\"
 }
 else {
     Write-Host "==> No third_party/luaskills_runtime found (run make deps first)"
+}
+
+# Ensure the full Lua runtime package keeps host-managed empty directories after the package root reset.
+# 确保完整 Lua 运行时包在包根重置后仍保留宿主管理的空目录。
+foreach ($dir in $LuaRuntimeRequiredDirectories) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+}
+foreach ($dir in $LuaRuntimeCompatibilityDirectories) {
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
 }
 
 # Sync shared runtime resources that are consumed outside the GUI crate.
@@ -414,6 +441,9 @@ if (Test-Path (Join-Path $AppResourcesRoot "vulcan-mark.svg")) {
 if (Test-Path "config") {
     if (-not (Test-Path $ConfigOut)) { New-Item -ItemType Directory -Path $ConfigOut -Force | Out-Null }
     Copy-Item -Force -Recurse "config\*" "$ConfigOut\"
+    if (Test-Path "config\luaskills_root_skills.yaml") {
+        Copy-Item -Force "config\luaskills_root_skills.yaml" "$LuaConfigOut\luaskills_root_skills.yaml"
+    }
     Enable-OutputModelConfigForLocalTesting -ConfigDirectory $ConfigOut
     Write-Host "==> Base configs synced to $ConfigOut\"
 }
@@ -438,8 +468,8 @@ else {
     Write-Host "==> No runtime/resources directory found"
 }
 
-# Sync runtime state records to output/state/
-# 同步运行时状态记录到 output/state/
+# Sync runtime state records to output/lua_runtime/state/
+# 同步运行时状态记录到 output/lua_runtime/state/
 if (Test-Path "runtime\state") {
     Copy-Item -Force -Recurse "runtime\state\*" "$StateOut\"
     Write-Host "==> Runtime state synced to $StateOut\"
@@ -448,7 +478,8 @@ else {
     Write-Host "==> No runtime/state directory found"
 }
 
-# Sync runtime Lua skills to output/skills/
+# Sync runtime Lua skills to output/lua_runtime/skills/
+# 同步运行时 Lua 技能到 output/lua_runtime/skills/
 if (Test-Path "runtime\skills") {
     Copy-DirectoryContents -Source "runtime\skills" -Destination $SkillsOut | Out-Null
     Write-Host "==> Runtime Lua skills synced to $SkillsOut\"
@@ -457,8 +488,9 @@ else {
     Write-Host "==> No runtime/skills directory found"
 }
 
-# Prepare output/bin/tools/ as the host runtime tool directory.
-$HostToolsOut = Join-Path $BaseOutDir "bin\tools"
+# Prepare output/lua_runtime/bin/ as the LuaSkills 0.4.6 host runtime tool directory.
+# 将 output/lua_runtime/bin/ 准备为 LuaSkills 0.4.6 宿主运行时工具目录。
+$HostToolsOut = $RuntimeBinOut
 if (-not (Test-Path $HostToolsOut)) { New-Item -ItemType Directory -Path $HostToolsOut -Force | Out-Null }
 Write-Host "==> Host tool output directory prepared at $HostToolsOut\"
 

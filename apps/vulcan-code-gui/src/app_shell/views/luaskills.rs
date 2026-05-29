@@ -171,7 +171,7 @@ impl VulcanWorkbench {
             .push(
                 row![
                     install_button,
-                    text("说明：GitHub 与包地址都走 LuaSkills 0.4.4 的受管安装链，并会回传细粒度进度。").size(12),
+                    text("说明：GitHub 与包地址都走 LuaSkills 0.4.6 的受管安装链，并会回传细粒度进度。").size(12),
                 ]
                 .spacing(10)
                 .align_y(Center),

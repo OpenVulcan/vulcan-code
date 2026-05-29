@@ -1,4 +1,4 @@
-# run.ps1 launches one packaged vulcan-code-gui binary from the output directory.
+﻿# run.ps1 launches one packaged vulcan-code-gui binary from the output directory.
 # run.ps1 用于从 output 目录启动一个已打包的 vulcan-code-gui 二进制。
 # Usage:
 # 用法：
@@ -53,17 +53,17 @@ if (-not (Test-Path $BinPath)) {
     exit 1
 }
 
-# RuntimePathEntries contains native DLL and helper binary directories required by packaged LuaSkills modules.
-# RuntimePathEntries 包含打包 LuaSkills 模块所需的原生 DLL 与辅助二进制目录。
-$RuntimePathEntries = @()
-if (Test-Path (Join-Path $OutputRoot "libs")) {
-    $RuntimePathEntries += (Join-Path $OutputRoot "libs")
-}
+# PathEntries lists executable directories that must be visible before the packaged app starts.
+# PathEntries 列出打包应用启动前必须可见的可执行目录。
+$PathEntries = @()
 if (Test-Path (Join-Path $OutputRoot "bin")) {
-    $RuntimePathEntries += (Join-Path $OutputRoot "bin")
+    $PathEntries += (Join-Path $OutputRoot "bin")
 }
-if ($RuntimePathEntries.Count -gt 0) {
-    $env:PATH = (($RuntimePathEntries + @($env:PATH)) -join ";")
+if (Test-Path (Join-Path $OutputRoot "lua_runtime\bin")) {
+    $PathEntries += (Join-Path $OutputRoot "lua_runtime\bin")
+}
+if ($PathEntries.Count -gt 0) {
+    $env:PATH = (($PathEntries + @($env:PATH)) -join ";")
 }
 $env:VULCAN_CODE_OUTPUT_ROOT = $OutputRoot
 

@@ -60,7 +60,7 @@ vulcan-token-counter = { path = "crates/vulcan-token-counter" }
 vulcan-tools-luaskills-call = { path = "crates/vulcan-tools-luaskills-call" }
 vulcan-luaskills-prompt = { path = "crates/vulcan-luaskills-prompt" }
 vldb-controller-client = "0.2.1"
-luaskills = "=0.4.4"
+luaskills = "=0.4.6"
 async-trait = "0.1.89"
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0.228", features = ["derive"] }

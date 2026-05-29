@@ -39,6 +39,10 @@ const SYSTEM_PROMPT_SKILLS_DIR_NAME: &str = "system";
 /// 打包到 output 根目录中的 Lua 运行时包目录名称。
 const LUA_PACKAGES_DIR_NAME: &str = "lua_packages";
 
+/// Relative LuaSkills runtime root directory name bundled below the output root.
+/// 打包在 output 根目录下的 LuaSkills 运行时根目录名称。
+const LUASKILLS_RUNTIME_ROOT_DIR_NAME: &str = "lua_runtime";
+
 /// Relative controller binary directory name bundled into the output root.
 /// 打包到 output 根目录中的控制器二进制目录名称。
 const CONTROLLER_BIN_DIR_NAME: &str = "bin";
@@ -151,6 +155,10 @@ pub fn resolve_bundled_controller_executable_path() -> Option<PathBuf> {
 /// 解析图形界面宿主实际使用的 LuaSkills 活动运行根目录。
 pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
     if let Some(output_root) = resolve_output_root() {
+        let packaged_runtime_root = output_root.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME);
+        if packaged_runtime_root.is_dir() {
+            return Some(packaged_runtime_root);
+        }
         return Some(output_root);
     }
 
@@ -159,6 +167,10 @@ pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
         .join("..")
         .join("output");
     if repository_output_root.is_dir() {
+        let packaged_runtime_root = repository_output_root.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME);
+        if packaged_runtime_root.is_dir() {
+            return Some(packaged_runtime_root);
+        }
         return Some(repository_output_root);
     }
 
@@ -185,6 +197,7 @@ fn resolve_output_root() -> Option<PathBuf> {
     candidates.into_iter().find(|candidate| {
         candidate.join(RESOURCES_DIR_NAME).is_dir()
             || candidate.join(CONFIG_DIR_NAME).is_dir()
+            || candidate.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME).is_dir()
             || candidate.join(LUA_PACKAGES_DIR_NAME).is_dir()
             || candidate.join(CONTROLLER_BIN_DIR_NAME).is_dir()
     })

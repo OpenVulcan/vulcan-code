@@ -24,7 +24,6 @@ use luaskills::{
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -344,7 +343,6 @@ fn bootstrap_luaskills_runtime_blocking(
         String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
     })?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
-    ensure_runtime_libs_visible_on_process_path(&runtime_root)?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(&runtime_root, controller);
     let pool_config = LuaVmPoolConfig {
@@ -1031,7 +1029,18 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     let resources_dir = runtime_root.join("resources");
     let lua_packages_dir = runtime_root.join("lua_packages");
     let libs_root = runtime_root.join("libs");
-    let tool_root = runtime_root.join("bin").join("tools");
+    // BinRoot follows LuaSkills 0.4.6 fixed host-tool layout directly under runtime_root/bin.
+    // BinRoot 遵循 LuaSkills 0.4.6 固定宿主工具布局，直接位于 runtime_root/bin。
+    let bin_root = runtime_root.join("bin");
+    // DependenciesDir stores runtime-managed dependency payloads beside the fixed skills root.
+    // DependenciesDir 用于在固定 skills 根旁保存运行时托管的依赖载荷。
+    let dependencies_dir = runtime_root.join("dependencies");
+    // DatabasesDir stores file-backed databases when a runtime path backend is selected.
+    // DatabasesDir 用于在选择路径型后端时保存文件型数据库。
+    let databases_dir = runtime_root.join("databases");
+    // ConfigDir owns the default unified skill_config.json resolved from runtime_root.
+    // ConfigDir 拥有从 runtime_root 推导出的默认统一 skill_config.json。
+    let config_dir = runtime_root.join("config");
     let state_dir = runtime_root.join("state");
     let download_root = temp_dir.join("downloads");
     let root_skills_dir = runtime_root.join("skills");
@@ -1044,7 +1053,10 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
         resources_dir.as_path(),
         lua_packages_dir.as_path(),
         libs_root.as_path(),
-        tool_root.as_path(),
+        bin_root.as_path(),
+        dependencies_dir.as_path(),
+        databases_dir.as_path(),
+        config_dir.as_path(),
         state_dir.as_path(),
         download_root.as_path(),
         root_skills_dir.as_path(),
@@ -1071,53 +1083,14 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
     ])
 }
 
-/// Validate that runtime native libraries are visible to the current process DLL loader.
-/// 校验运行时原生库目录对当前进程的 DLL 加载器可见。
-fn ensure_runtime_libs_visible_on_process_path(runtime_root: &Path) -> Result<(), String> {
-    // LibsRoot points at native dependency DLLs such as libcurl.dll and zlib1.dll.
-    // LibsRoot 指向 libcurl.dll 与 zlib1.dll 等原生依赖 DLL。
-    let libs_root = runtime_root.join("libs");
-    if !libs_root.is_dir() {
-        return Ok(());
-    }
-
-    // existing_path reflects the process environment captured before LuaSkills bootstrapping starts.
-    // existing_path 反映 LuaSkills 引导开始前进程已经捕获到的环境变量。
-    let existing_path = env::var_os("PATH").unwrap_or_default();
-
-    // path_contains_libs_root prevents C modules such as lcurl.dll from losing transitive DLL dependencies.
-    // path_contains_libs_root 防止 lcurl.dll 等 C 模块找不到其传递 DLL 依赖。
-    let path_contains_libs_root = env::split_paths(&existing_path).any(|path| path == libs_root);
-    if !path_contains_libs_root {
-        return Err(format!(
-            "LuaSkills 原生依赖目录未加入 PATH：{}。请通过 scripts/run.ps1 启动，或在启动 vulcan-code-gui 前把该目录加入 PATH，否则 lcurl.safe 可能无法加载 libcurl.dll。",
-            libs_root.display()
-        ));
-    }
-    Ok(())
-}
-
 /// Builds one host option object that forces LuaSkills to route both databases through the controller.
 /// 构建一份宿主选项对象，强制 LuaSkills 通过控制器路由 SQLite 与 LanceDB。
 fn build_host_options(
     runtime_root: &Path,
     controller: PersistedControllerConfiguration,
 ) -> LuaRuntimeHostOptions {
-    let mut host_options = LuaRuntimeHostOptions::default();
-    host_options.temp_dir = Some(runtime_root.join("temp"));
-    host_options.resources_dir = Some(runtime_root.join("resources"));
-    host_options.lua_packages_dir = Some(runtime_root.join("lua_packages"));
-    host_options.host_provided_lua_root = Some(runtime_root.join("lua_packages"));
-    host_options.host_provided_ffi_root = Some(runtime_root.join("libs"));
-    host_options.host_provided_tool_root = Some(runtime_root.join("bin").join("tools"));
-    host_options.system_lua_lib_dir = Some(runtime_root.join("system_lua_lib"));
-    host_options.download_cache_root = Some(runtime_root.join("temp").join("downloads"));
+    let mut host_options = LuaRuntimeHostOptions::with_runtime_root(runtime_root.to_path_buf());
     host_options.allow_network_download = true;
-    host_options.dependency_dir_name = String::from("dependencies");
-    host_options.state_dir_name = String::from("state");
-    host_options.database_dir_name = String::from("databases");
-    host_options.skill_config_file_path =
-        Some(runtime_root.join("config").join("skill_config.json"));
     host_options.sqlite_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.lancedb_provider_mode = LuaRuntimeDatabaseProviderMode::SpaceController;
     host_options.space_controller.endpoint = controller
