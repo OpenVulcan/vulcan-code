@@ -24,6 +24,7 @@ use luaskills::{
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -343,6 +344,7 @@ fn bootstrap_luaskills_runtime_blocking(
         String::from("未找到 LuaSkills 活动运行根，请先执行 make build 并从 output 目录启动应用。")
     })?;
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
+    ensure_runtime_libs_visible_on_process_path(&runtime_root)?;
     let system_lua_lib_dir = runtime_root.join("system_lua_lib");
     let host_options = build_host_options(&runtime_root, controller);
     let pool_config = LuaVmPoolConfig {
@@ -1067,6 +1069,32 @@ fn ensure_runtime_root_layout(runtime_root: &Path) -> Result<Vec<RuntimeSkillRoo
             skills_dir: user_skills_dir,
         },
     ])
+}
+
+/// Validate that runtime native libraries are visible to the current process DLL loader.
+/// 校验运行时原生库目录对当前进程的 DLL 加载器可见。
+fn ensure_runtime_libs_visible_on_process_path(runtime_root: &Path) -> Result<(), String> {
+    // LibsRoot points at native dependency DLLs such as libcurl.dll and zlib1.dll.
+    // LibsRoot 指向 libcurl.dll 与 zlib1.dll 等原生依赖 DLL。
+    let libs_root = runtime_root.join("libs");
+    if !libs_root.is_dir() {
+        return Ok(());
+    }
+
+    // existing_path reflects the process environment captured before LuaSkills bootstrapping starts.
+    // existing_path 反映 LuaSkills 引导开始前进程已经捕获到的环境变量。
+    let existing_path = env::var_os("PATH").unwrap_or_default();
+
+    // path_contains_libs_root prevents C modules such as lcurl.dll from losing transitive DLL dependencies.
+    // path_contains_libs_root 防止 lcurl.dll 等 C 模块找不到其传递 DLL 依赖。
+    let path_contains_libs_root = env::split_paths(&existing_path).any(|path| path == libs_root);
+    if !path_contains_libs_root {
+        return Err(format!(
+            "LuaSkills 原生依赖目录未加入 PATH：{}。请通过 scripts/run.ps1 启动，或在启动 vulcan-code-gui 前把该目录加入 PATH，否则 lcurl.safe 可能无法加载 libcurl.dll。",
+            libs_root.display()
+        ));
+    }
+    Ok(())
 }
 
 /// Builds one host option object that forces LuaSkills to route both databases through the controller.

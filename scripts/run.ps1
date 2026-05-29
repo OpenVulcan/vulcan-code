@@ -53,8 +53,17 @@ if (-not (Test-Path $BinPath)) {
     exit 1
 }
 
+# RuntimePathEntries contains native DLL and helper binary directories required by packaged LuaSkills modules.
+# RuntimePathEntries 包含打包 LuaSkills 模块所需的原生 DLL 与辅助二进制目录。
+$RuntimePathEntries = @()
+if (Test-Path (Join-Path $OutputRoot "libs")) {
+    $RuntimePathEntries += (Join-Path $OutputRoot "libs")
+}
 if (Test-Path (Join-Path $OutputRoot "bin")) {
-    $env:PATH = "$(Join-Path $OutputRoot 'bin');$env:PATH"
+    $RuntimePathEntries += (Join-Path $OutputRoot "bin")
+}
+if ($RuntimePathEntries.Count -gt 0) {
+    $env:PATH = (($RuntimePathEntries + @($env:PATH)) -join ";")
 }
 $env:VULCAN_CODE_OUTPUT_ROOT = $OutputRoot
 
