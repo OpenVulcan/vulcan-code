@@ -9,6 +9,7 @@ members = [
     "crates/vulcan-workspace-store",
     "crates/vulcan-context",
     "crates/vulcan-context-injection",
+    "crates/vulcan-hooks",
     "crates/vulcan-context-compaction",
     "crates/vulcan-prompt-composer",
     "crates/vulcan-prompt-skills",
@@ -54,6 +55,7 @@ vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
 vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-injection = { path = "crates/vulcan-context-injection" }
+vulcan-hooks = { path = "crates/vulcan-hooks" }
 vulcan-context-compaction = { path = "crates/vulcan-context-compaction" }
 vulcan-prompt-composer = { path = "crates/vulcan-prompt-composer" }
 vulcan-prompt-skills = { path = "crates/vulcan-prompt-skills" }

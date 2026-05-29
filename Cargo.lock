@@ -6505,6 +6505,7 @@ dependencies = [
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-file-watcher",
+ "vulcan-hooks",
  "vulcan-host-tools",
  "vulcan-luaskills-prompt",
  "vulcan-markdown",
@@ -6564,6 +6565,17 @@ dependencies = [
  "notify",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "vulcan-hooks"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tokio",
+ "vulcan-context-injection",
 ]
 
 [[package]]

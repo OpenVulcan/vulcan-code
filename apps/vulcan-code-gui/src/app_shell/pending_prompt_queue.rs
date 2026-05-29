@@ -910,6 +910,25 @@ impl VulcanWorkbench {
                 .apply_inserts(injection_ops, &now);
             runtime_state.updated_at = now;
         }
+        let hook_conversation_state = self.session_conversation_state(session_id);
+        let hook_injection_ops = self.conversation_hook_runtime.record_user_prompt(
+            session_id,
+            &prompt_entry.id,
+            owning_project_id.clone(),
+            self.workspace_path_for_session_id(session_id)
+                .unwrap_or_else(|| self.workspace_path.clone()),
+            prompt_entry.source,
+            &prompt_entry.prompt,
+            &hook_conversation_state,
+        );
+        if !hook_injection_ops.is_empty() {
+            let now = current_unix_millis_text();
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state
+                .context_injection_state
+                .apply_inserts(hook_injection_ops, &now);
+            runtime_state.updated_at = now;
+        }
         if let (Some(project_id), Some(runtime_state)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
@@ -1349,12 +1368,24 @@ impl VulcanWorkbench {
                 current_prompt,
                 self.composer_attachments.clone(),
             );
+            let hook_prompt = panel_entry.prompt.clone();
+            let hook_entry_id = panel_entry.id.clone();
             if let Err(error) =
                 self.enqueue_session_pending_prompt_panel_entry(session_id, panel_entry)
             {
                 self.status_message = error;
                 return Task::none();
             }
+            self.conversation_hook_runtime.record_queued_user_prompt(
+                session_id,
+                &hook_entry_id,
+                self.session_by_id(session_id)
+                    .and_then(|session| session.project_id.clone()),
+                self.workspace_path_for_session_id(session_id)
+                    .unwrap_or_else(|| self.workspace_path.clone()),
+                PendingSessionPromptSource::UserFollowup,
+                &hook_prompt,
+            );
             self.clear_composer_input();
             self.status_message = String::from(
                 "已加入发送队列；当前轮次结束后会自动开始，点击插入可立即接入系统队列并插队。",
@@ -1378,6 +1409,18 @@ impl VulcanWorkbench {
             None,
             None,
         );
+        if interrupt_running && self.session_has_active_run(session_id) {
+            self.conversation_hook_runtime.record_queued_user_prompt(
+                session_id,
+                &prompt_entry.id,
+                self.session_by_id(session_id)
+                    .and_then(|session| session.project_id.clone()),
+                self.workspace_path_for_session_id(session_id)
+                    .unwrap_or_else(|| self.workspace_path.clone()),
+                prompt_source,
+                &prompt_entry.prompt,
+            );
+        }
         let workspace_path = self.attachment_workspace_path_for_session(session_id);
         let dispatch_scope =
             Self::prompt_dispatch_attachment_ref_scope(session_id, &prompt_entry.id);

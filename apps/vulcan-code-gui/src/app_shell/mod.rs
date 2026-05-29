@@ -11,6 +11,7 @@ mod composer_command_state;
 mod configuration;
 mod configuration_state;
 mod context_menu;
+mod conversation_hooks;
 mod diff_state;
 mod helpers;
 mod integration_form_state;
@@ -84,6 +85,7 @@ use self::configuration_state::{
     ProviderModelPickerState,
 };
 use self::context_menu::{WorkbenchContextMenuItem, WorkbenchContextMenuState};
+use self::conversation_hooks::ConversationHookRuntime;
 use self::diff_state::{
     DiffPreviewPayload, DiffVisualSliceRange, VisibleDiffHunkSlice, WindowControlIcon,
 };
@@ -274,6 +276,10 @@ use vulcan_agent_view::{
 };
 use vulcan_core::types::CoreEventKind as VulcanCoreEventKind;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_hooks::{
+    HookDispatcher, HookError, HookEventListener, HookHandler, HookListenerId, HookPointDescriptor,
+    HookRegistration,
+};
 use vulcan_markdown as markdown;
 
 /// Bundled SVG mark bytes used in the header.
@@ -1463,6 +1469,9 @@ pub struct VulcanWorkbench {
     /// Session-scoped runtime-state snapshots retained for title, summary, and compaction chaining.
     /// 为标题、摘要与压缩串联保留的按会话归属运行时状态快照集合。
     session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    /// Session-scoped hook runtime used to assemble logical turns and notify extension handlers.
+    /// 用于组装逻辑回合并通知扩展处理器的按会话 hook 运行时。
+    conversation_hook_runtime: ConversationHookRuntime,
     /// Archived session-scoped runtime-state snapshots retained for later restoration.
     /// 为后续恢复保留的按归档会话归属运行时状态快照集合。
     archived_session_runtime_state: BTreeMap<SessionId, SessionRuntimeStateEntry>,
@@ -1922,6 +1931,83 @@ impl VulcanWorkbench {
         self.language_manager.current_locale()
     }
 
+    /// Returns the shared conversation hook dispatcher for diagnostics and extension registration.
+    /// 返回用于诊断与扩展注册的共享会话 hook 调度器。
+    #[allow(dead_code)]
+    pub(crate) fn conversation_hook_dispatcher(&self) -> &HookDispatcher {
+        self.conversation_hook_runtime.dispatcher()
+    }
+
+    /// Returns built-in and extension-visible conversation hook point descriptors.
+    /// 返回内置与扩展可见的会话 hook 点位描述。
+    #[allow(dead_code)]
+    pub(crate) fn conversation_hook_point_descriptors(&self) -> Vec<HookPointDescriptor> {
+        self.conversation_hook_runtime
+            .dispatcher()
+            .registry()
+            .point_descriptors()
+    }
+
+    /// Registers one conversation hook handler on the shared hook dispatcher.
+    /// 在共享 hook 调度器上注册一个会话 hook 处理器。
+    #[allow(dead_code)]
+    pub(crate) fn register_conversation_hook(
+        &mut self,
+        registration: HookRegistration,
+        handler: std::sync::Arc<dyn HookHandler>,
+    ) -> Result<(), HookError> {
+        self.conversation_hook_runtime
+            .dispatcher_mut()
+            .register(registration, handler)
+    }
+
+    /// Unregisters conversation hook handlers by id and optional point filter.
+    /// 按标识和可选点位过滤注销会话 hook 处理器。
+    #[allow(dead_code)]
+    pub(crate) fn unregister_conversation_hook(
+        &mut self,
+        hook_id: &str,
+        point: Option<&str>,
+    ) -> usize {
+        self.conversation_hook_runtime
+            .dispatcher_mut()
+            .unregister(hook_id, point)
+    }
+
+    /// Registers one conversation hook lifecycle listener on the shared dispatcher.
+    /// 在共享调度器上注册一个会话 hook 生命周期监听器。
+    #[allow(dead_code)]
+    pub(crate) fn register_conversation_hook_listener(
+        &mut self,
+        listener: std::sync::Arc<dyn HookEventListener>,
+    ) -> HookListenerId {
+        self.conversation_hook_runtime
+            .dispatcher_mut()
+            .add_listener(listener)
+    }
+
+    /// Registers or replaces one conversation hook lifecycle listener by id.
+    /// 按标识注册或替换一个会话 hook 生命周期监听器。
+    #[allow(dead_code)]
+    pub(crate) fn register_conversation_hook_listener_with_id(
+        &mut self,
+        listener_id: impl Into<HookListenerId>,
+        listener: std::sync::Arc<dyn HookEventListener>,
+    ) -> Result<(), HookError> {
+        self.conversation_hook_runtime
+            .dispatcher_mut()
+            .add_listener_with_id(listener_id, listener)
+    }
+
+    /// Unregisters one conversation hook lifecycle listener by id.
+    /// 按标识注销一个会话 hook 生命周期监听器。
+    #[allow(dead_code)]
+    pub(crate) fn unregister_conversation_hook_listener(&mut self, listener_id: &str) -> bool {
+        self.conversation_hook_runtime
+            .dispatcher_mut()
+            .remove_listener(listener_id)
+    }
+
     /// Resolves one localized plain text using the current GUI locale.
     /// 使用当前图形界面语言解析一条普通本地化文本。
     fn t(&self, key: I18nKey) -> String {
@@ -2303,6 +2389,7 @@ impl VulcanWorkbench {
             session_compactions: BTreeMap::new(),
             archived_session_compactions: BTreeMap::new(),
             session_runtime_state: BTreeMap::new(),
+            conversation_hook_runtime: ConversationHookRuntime::new(),
             archived_session_runtime_state: BTreeMap::new(),
             hydrated_session_ids: BTreeSet::new(),
             dirty_session_payload_ids: BTreeSet::new(),
@@ -3963,6 +4050,8 @@ impl VulcanWorkbench {
     /// Appends one runtime event to the current session event stream and refreshes the corresponding raw/Markdown caches.
     /// 向当前会话事件流追加一条运行时事件，并刷新对应的原文与 Markdown 缓存。
     fn push_session_runtime_event(&mut self, session_id: SessionId, event: RuntimeEvent) {
+        self.conversation_hook_runtime
+            .record_tool_runtime_event(session_id, &event);
         if self.absorb_tool_runtime_event_into_transcript(session_id, &event) {
             return;
         }

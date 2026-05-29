@@ -1287,7 +1287,7 @@ impl VulcanWorkbench {
                 SessionMessageKind::Assistant,
                 SessionMessageRecordKind::CompactionStatus,
                 "上下文总结",
-                fallback_summary_body,
+                fallback_summary_body.clone(),
                 Some(json!({
                     "context_compaction_status": true,
                     "context_compaction_section_id": status_message_id,
@@ -1308,6 +1308,21 @@ impl VulcanWorkbench {
             );
         }
         self.set_session_run_phase(session_id, previous_phase);
+        let project_id = self
+            .session_by_id(session_id)
+            .and_then(|session| session.project_id.clone());
+        let trigger_label = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => "manual_slash",
+            SessionPromptCompactionTrigger::BudgetAuto => "budget_auto",
+        };
+        self.conversation_hook_runtime.record_compacted(
+            session_id,
+            project_id,
+            trigger_label,
+            execution.fallback_used,
+            execution.provider_request_count,
+            &fallback_summary_body,
+        );
         self.status_message = match (trigger, execution.fallback_used) {
             (SessionPromptCompactionTrigger::ManualSlash, false) => {
                 format!("当前会话已执行手动上下文压缩：{budget_note}。")
@@ -2003,6 +2018,29 @@ impl VulcanWorkbench {
                 &now,
             );
             runtime_state.updated_at = now;
+            let project_id = self
+                .session_by_id(session_id)
+                .and_then(|session| session.project_id.clone());
+            let conversation_state = self.session_conversation_state(session_id);
+            self.conversation_hook_runtime.complete_turn(
+                session_id,
+                project_id,
+                summary_assistant_output.as_deref().unwrap_or(
+                    "The model completed the run but did not return visible text output.",
+                ),
+                provider_request_count,
+                &conversation_state,
+            );
+        } else {
+            let project_id = self
+                .session_by_id(session_id)
+                .and_then(|session| session.project_id.clone());
+            self.conversation_hook_runtime.terminate_turn(
+                session_id,
+                project_id,
+                "execution_failed",
+                provider_request_count,
+            );
         }
         perf_trace.checkpoint("append_hidden_summary_and_stats", phase_started_at);
         phase_started_at = Instant::now();

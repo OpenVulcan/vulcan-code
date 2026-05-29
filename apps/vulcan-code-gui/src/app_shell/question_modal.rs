@@ -298,6 +298,11 @@ impl VulcanWorkbench {
             Self::reconcile_question_modal_state(state);
             return false;
         }
+        self.conversation_hook_runtime.record_question_asked(
+            next_request.session_id,
+            &next_request.id,
+            &next_request.questions,
+        );
         self.active_question_modal = Some(Self::build_question_modal_state(next_request));
         self.status_message = String::from("当前执行正在等待你回答补充问题。");
         true
@@ -664,7 +669,7 @@ impl VulcanWorkbench {
         }
 
         let validation = self.collect_active_question_modal_answers();
-        let (request_id, origin, questions, answers) = {
+        let (request_id, session_id, origin, questions, answers) = {
             let Some(state) = self.active_question_modal.as_mut() else {
                 return Task::none();
             };
@@ -673,6 +678,7 @@ impl VulcanWorkbench {
                     state.validation_error = None;
                     (
                         state.request.id.clone(),
+                        state.request.session_id,
                         state.origin,
                         state.request.questions.clone(),
                         answers,
@@ -703,9 +709,15 @@ impl VulcanWorkbench {
         match self
             .runtime_foundation
             .question_runtime()
-            .reply(&request_id, answers)
+            .reply(&request_id, answers.clone())
         {
             Ok(_) => {
+                self.conversation_hook_runtime.record_question_answered(
+                    session_id,
+                    &request_id,
+                    &questions,
+                    &answers,
+                );
                 self.active_question_modal = None;
                 self.status_message = String::from("补充问题已提交，正在继续执行。");
             }
@@ -721,10 +733,14 @@ impl VulcanWorkbench {
     /// Rejects the currently visible ask/question modal and propagates a cancellation error back into the waiting tool invocation.
     /// 拒绝当前可见 ask/question 弹窗，并把取消错误回传给等待中的工具调用。
     pub(super) fn reject_active_question_modal(&mut self) -> Task<Message> {
-        let Some((request_id, origin)) = self
-            .active_question_modal
-            .as_ref()
-            .map(|state| (state.request.id.clone(), state.origin))
+        let Some((request_id, session_id, origin)) =
+            self.active_question_modal.as_ref().map(|state| {
+                (
+                    state.request.id.clone(),
+                    state.request.session_id,
+                    state.origin,
+                )
+            })
         else {
             return Task::none();
         };
@@ -739,6 +755,8 @@ impl VulcanWorkbench {
             .reject(&request_id)
         {
             Ok(_) => {
+                self.conversation_hook_runtime
+                    .record_question_rejected(session_id, &request_id);
                 self.active_question_modal = None;
                 self.status_message = String::from("已放弃当前补充问题，本次对话执行已中断。");
             }

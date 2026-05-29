@@ -31,8 +31,13 @@ use iced::Task;
 use iced::widget::text_editor;
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use vulcan_agent_view::AgentViewBlock;
 use vulcan_core::types::{ConversationAttachmentKind, ProviderUsageSnapshot};
+use vulcan_hooks::{
+    FnHookEventListener, FnHookHandler, HookEvent, HookEventKind, HookInvocation, HookMode,
+    HookRegistration, HookResult,
+};
 
 /// Builds a compact session summary for queue-related unit tests.
 /// 为队列相关单元测试构建一条紧凑会话摘要。
@@ -2964,5 +2969,150 @@ fn visible_streaming_session_keeps_heavy_message_view_caches_stable() {
         workbench
             .session_message_markdown_buffers
             .contains_key(&message_id)
+    );
+}
+
+#[tokio::test]
+async fn conversation_hook_registration_exposes_dispatcher_to_extensions() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let captured = Arc::new(Mutex::new(Vec::<String>::new()));
+    let lifecycle = Arc::new(Mutex::new(Vec::<HookEventKind>::new()));
+    workbench.register_conversation_hook_listener(Arc::new(FnHookEventListener::new({
+        let lifecycle = Arc::clone(&lifecycle);
+        move |event: HookEvent| {
+            lifecycle
+                .lock()
+                .expect("lifecycle hook list should not be poisoned")
+                .push(event.kind);
+        }
+    })));
+    let captured_for_hook = Arc::clone(&captured);
+    workbench
+        .register_conversation_hook(
+            HookRegistration::new(
+                "test-precheck",
+                super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Observe,
+            ),
+            Arc::new(FnHookHandler::new(move |invocation: HookInvocation| {
+                let captured_for_hook = Arc::clone(&captured_for_hook);
+                async move {
+                    captured_for_hook
+                        .lock()
+                        .expect("captured hook list should not be poisoned")
+                        .push(invocation.context.point);
+                    Ok(HookResult::default())
+                }
+            })),
+        )
+        .expect("hook registration should succeed");
+
+    assert_eq!(
+        workbench
+            .conversation_hook_dispatcher()
+            .registry()
+            .count_for(super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK),
+        1
+    );
+
+    workbench.conversation_hook_runtime.record_user_prompt(
+        SessionId::from_u128(77),
+        "entry-77",
+        Some(String::from("project")),
+        String::from("D:/workspace"),
+        PendingSessionPromptSource::UserFollowup,
+        "hello hook",
+        &SessionConversationState::default(),
+    );
+
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    assert_eq!(
+        *captured
+            .lock()
+            .expect("captured hook list should not be poisoned"),
+        vec![String::from(
+            super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK
+        )]
+    );
+    let lifecycle = lifecycle
+        .lock()
+        .expect("lifecycle hook list should not be poisoned");
+    assert!(lifecycle.contains(&HookEventKind::Registered));
+    assert!(lifecycle.contains(&HookEventKind::DispatchStarted));
+    assert!(lifecycle.contains(&HookEventKind::HandlerCompleted));
+}
+
+#[test]
+fn conversation_hook_dispatcher_exposes_builtin_point_catalog() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let descriptors = workbench.conversation_hook_point_descriptors();
+    let points = descriptors
+        .iter()
+        .map(|descriptor| descriptor.point.as_str())
+        .collect::<Vec<_>>();
+
+    assert!(points.contains(&super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK));
+    assert!(points.contains(&super::conversation_hooks::HOOK_CONVERSATION_TURN_COMPLETED));
+    assert!(points.contains(&super::conversation_hooks::HOOK_CONVERSATION_COMPACTED));
+    assert!(
+        workbench
+            .register_conversation_hook(
+                HookRegistration::new(
+                    "bad-precheck-mode",
+                    super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+                    HookMode::Decision,
+                ),
+                Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                    Ok(HookResult::default())
+                })),
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn conversation_hook_extension_surface_unregisters_handlers_and_listeners() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let lifecycle = Arc::new(Mutex::new(Vec::<HookEventKind>::new()));
+    workbench
+        .register_conversation_hook_listener_with_id(
+            "test-listener",
+            Arc::new(FnHookEventListener::new({
+                let lifecycle = Arc::clone(&lifecycle);
+                move |event: HookEvent| {
+                    lifecycle
+                        .lock()
+                        .expect("lifecycle hook list should not be poisoned")
+                        .push(event.kind);
+                }
+            })),
+        )
+        .expect("listener registration should succeed");
+    workbench
+        .register_conversation_hook(
+            HookRegistration::new(
+                "test-completed",
+                super::conversation_hooks::HOOK_CONVERSATION_TURN_COMPLETED,
+                HookMode::Effect,
+            ),
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Ok(HookResult::default())
+            })),
+        )
+        .expect("hook registration should succeed");
+
+    assert_eq!(
+        workbench.unregister_conversation_hook(
+            "test-completed",
+            Some(super::conversation_hooks::HOOK_CONVERSATION_TURN_COMPLETED),
+        ),
+        1
+    );
+    assert!(workbench.unregister_conversation_hook_listener("test-listener"));
+    assert!(
+        lifecycle
+            .lock()
+            .expect("lifecycle hook list should not be poisoned")
+            .contains(&HookEventKind::Unregistered)
     );
 }
