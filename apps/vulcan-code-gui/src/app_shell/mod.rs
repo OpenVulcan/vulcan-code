@@ -93,8 +93,8 @@ use self::integration_form_state::{
 };
 use self::interaction_state::{
     HoveredDiffLine, PendingAiCapabilityRouteDrag, PendingMainTaskPanelResize,
-    PendingPendingPromptDrag, PendingTaskProjectInteraction, PendingWindowTitleBarDrag,
-    WindowTitleBarPointer,
+    PendingPendingPromptDrag, PendingSessionFeaturePanelResize, PendingTaskProjectInteraction,
+    PendingWindowTitleBarDrag, WindowTitleBarPointer,
 };
 use self::luaskills_progress_state::{
     LuaSkillsOperationProgressState, LuaSkillsOperationVisualKind,
@@ -384,6 +384,26 @@ const MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT: f32 = 20.0;
 /// Shared width used by the compact fold and restore toggle button attached to the task drawer edge.
 /// 附着在任务抽屉边缘上的紧凑折叠与恢复按钮使用的共享宽度。
 const MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH: f32 = 14.0;
+
+/// Shared default width used by the right session feature panel.
+/// 右侧会话特殊功能面板使用的共享默认宽度。
+const SESSION_FEATURE_PANEL_DEFAULT_WIDTH: f32 = 320.0;
+
+/// Shared minimal width used by the right session feature panel.
+/// 右侧会话特殊功能面板使用的共享最小宽度。
+const SESSION_FEATURE_PANEL_MIN_WIDTH: f32 = 260.0;
+
+/// Shared maximal width used by the right session feature panel.
+/// 右侧会话特殊功能面板使用的共享最大宽度。
+const SESSION_FEATURE_PANEL_MAX_WIDTH: f32 = 520.0;
+
+/// Shared width used by the drag handle between the session canvas and right feature panel.
+/// 会话画布与右侧功能面板之间拖拽分隔柄使用的共享宽度。
+const SESSION_FEATURE_PANEL_RESIZE_HANDLE_WIDTH: f32 = 14.0;
+
+/// Shared width used by the restore rail shown when the right feature panel is collapsed.
+/// 右侧功能面板折叠后显示的恢复导轨使用的共享宽度。
+const SESSION_FEATURE_PANEL_RESTORE_RAIL_WIDTH: f32 = 14.0;
 
 /// Shared square size used by each icon button inside the vertical activity bar.
 /// 竖向活动条内部每个图标按钮使用的共享方形尺寸。
@@ -1193,6 +1213,18 @@ pub struct VulcanWorkbench {
     /// Whether the task-drawer resize handle is currently hovered.
     /// 任务抽屉缩放柄当前是否处于悬停状态。
     main_task_panel_resize_handle_hovered: bool,
+    /// Current width of the right session feature panel.
+    /// 右侧会话特殊功能面板的当前宽度。
+    session_feature_panel_width: f32,
+    /// Whether the right session feature panel is currently expanded.
+    /// 右侧会话特殊功能面板当前是否展开。
+    session_feature_panel_expanded: bool,
+    /// Pending resize candidate captured from the right session feature panel divider.
+    /// 从右侧会话功能面板分隔柄捕获的待确认缩放候选状态。
+    pending_session_feature_panel_resize: Option<PendingSessionFeaturePanelResize>,
+    /// Whether the right session feature panel divider is currently hovered.
+    /// 右侧会话功能面板分隔柄当前是否处于悬停状态。
+    session_feature_panel_resize_handle_hovered: bool,
     /// Pane grid state describing the high-level application layout.
     /// 描述应用高层布局的分栏网格状态。
     panes: pane_grid::State<PaneKind>,
@@ -2186,6 +2218,10 @@ impl VulcanWorkbench {
             main_task_panel_expanded: true,
             pending_main_task_panel_resize: None,
             main_task_panel_resize_handle_hovered: false,
+            session_feature_panel_width: SESSION_FEATURE_PANEL_DEFAULT_WIDTH,
+            session_feature_panel_expanded: false,
+            pending_session_feature_panel_resize: None,
+            session_feature_panel_resize_handle_hovered: false,
             panes,
             focus,
             workspace_path: String::from(r"D:\openvulcan\vulcan-code"),

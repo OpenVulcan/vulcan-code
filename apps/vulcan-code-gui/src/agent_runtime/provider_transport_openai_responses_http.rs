@@ -37,6 +37,11 @@ use vulcan_core::types::{
 };
 use vulcan_tools_manager::{VulcanToolSchemaProjectionProfile, project_tool_parameters_schema};
 
+/// Internal additional-params key used to suppress OpenAI Responses continuation persistence.
+/// 用于抑制 OpenAI Responses continuation 持久化的内部附加参数键。
+pub(crate) const SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM: &str =
+    "__vulcan_suppress_openai_responses_continuation";
+
 /// Minimal OpenAI Responses top-level error payload decoded from one failed HTTP response or SSE error event.
 /// 从单个失败 HTTP 响应或 SSE 错误事件解码出的最小 OpenAI Responses 顶层错误载荷。
 #[derive(Debug, Clone, Deserialize)]
@@ -232,6 +237,14 @@ where
     let client =
         build_openai_responses_http_client(provider_id, provider_label, api_key, request_headers)?;
     let endpoint = build_openai_responses_endpoint(base_url);
+    let suppress_continuation = request
+        .snapshot
+        .additional_params
+        .as_ref()
+        .and_then(|value| value.as_object())
+        .and_then(|object| object.get(SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
     let payload =
         build_openai_responses_request_payload(model_id, request, provider_tool_definitions)?;
     let dry_run = provider_request_dry_run_active(api_key);
@@ -440,7 +453,12 @@ where
         });
     };
 
-    build_openai_responses_turn_response(provider_id, model_id, completed_response)
+    build_openai_responses_turn_response(
+        provider_id,
+        model_id,
+        completed_response,
+        suppress_continuation,
+    )
 }
 
 /// Builds one direct OpenAI Responses HTTP client with merged authorization and caller-supplied request headers.
@@ -486,6 +504,7 @@ fn build_openai_responses_request_payload(
         }
         None => JsonMap::new(),
     };
+    payload.remove(SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM);
 
     let mut input = current_history
         .iter()
@@ -714,6 +733,7 @@ fn build_openai_responses_turn_response(
     provider_id: &str,
     model_id: &str,
     response: OpenAiResponsesCompletedResponse,
+    suppress_continuation: bool,
 ) -> Result<CoreProviderTurnResponse, VulcanCoreError> {
     let mut assistant_content = Vec::new();
 
@@ -768,13 +788,17 @@ fn build_openai_responses_turn_response(
         }
     }
 
-    Ok(build_openai_compatible_turn_response(
+    let mut turn_response = build_openai_compatible_turn_response(
         provider_id,
         model_id,
         Some(response.id),
         &assistant_content,
         response.usage.and_then(openai_responses_usage_to_snapshot),
-    ))
+    );
+    if suppress_continuation {
+        turn_response.continuation = None;
+    }
+    Ok(turn_response)
 }
 
 /// Extracts one best-effort response identifier from one non-terminal OpenAI Responses SSE event payload.
@@ -1329,8 +1353,9 @@ mod tests {
         }))
         .expect("response should deserialize");
 
-        let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
-            .expect("turn response should build");
+        let turn_response =
+            build_openai_responses_turn_response("openai", "gpt-5", response, false)
+                .expect("turn response should build");
 
         assert_eq!(
             turn_response.provider_message_id.as_deref(),
@@ -1384,8 +1409,9 @@ mod tests {
         )
         .expect("fallback response should synthesize");
 
-        let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
-            .expect("turn response should build");
+        let turn_response =
+            build_openai_responses_turn_response("openai", "gpt-5", response, false)
+                .expect("turn response should build");
 
         assert_eq!(
             turn_response.provider_message_id.as_deref(),
@@ -1408,8 +1434,9 @@ mod tests {
         )
         .expect("fallback response should synthesize");
 
-        let turn_response = build_openai_responses_turn_response("openai", "gpt-5", response)
-            .expect("turn response should build");
+        let turn_response =
+            build_openai_responses_turn_response("openai", "gpt-5", response, false)
+                .expect("turn response should build");
 
         assert_eq!(
             turn_response.provider_message_id.as_deref(),

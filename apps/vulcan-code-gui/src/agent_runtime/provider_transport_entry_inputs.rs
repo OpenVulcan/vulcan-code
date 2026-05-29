@@ -12,7 +12,9 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::sync::Arc;
 use vulcan_core::types::{
-    ControllerConfig as CoreControllerConfig, ProviderPromptLayers as CoreProviderPromptLayers,
+    ControllerConfig as CoreControllerConfig,
+    ProviderContextInjection as CoreProviderContextInjection,
+    ProviderPromptLayers as CoreProviderPromptLayers,
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -64,6 +66,7 @@ pub(crate) fn prepare_provider_transport_entry_inputs(
     max_turns: usize,
     headers: &HeaderMap,
     additional_params: Option<Value>,
+    context_injection: Option<CoreProviderContextInjection>,
 ) -> PreparedProviderTransportEntryInputs {
     let provider_id = provider_id.to_string();
     let model_id = model_id.to_string();
@@ -81,6 +84,7 @@ pub(crate) fn prepare_provider_transport_entry_inputs(
             temperature,
             max_turns,
             additional_params,
+            context_injection,
         },
     }
 }
@@ -96,6 +100,7 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
     max_turns: usize,
     headers: &HeaderMap,
     additional_params: Option<Value>,
+    context_injection: Option<CoreProviderContextInjection>,
     tools_manager: VulcanToolsManager,
     resolved_tools: &[ResolvedToolDefinition],
     session_id: SessionId,
@@ -113,6 +118,7 @@ pub(crate) fn prepare_provider_transport_runtime_inputs(
             max_turns,
             headers,
             additional_params,
+            context_injection,
         ),
         tool_context: prepare_host_tool_runtime_context(
             tools_manager,
@@ -131,4 +137,41 @@ pub(crate) fn normalize_optional_base_url(base_url: Option<&str>) -> Option<Stri
     base_url
         .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Provider transport entry-input regression tests.
+    //! Provider 传输入口输入回归测试。
+
+    use super::*;
+
+    #[test]
+    fn entry_inputs_preserve_context_injection_overlay() {
+        let injection = CoreProviderContextInjection {
+            persistent_blocks: vec![String::from("<perm>\n固定\n</perm>")],
+            transient_prefix: String::from("<temp>\n临时\n</temp>"),
+            fingerprint: String::from("fingerprint"),
+        };
+
+        let inputs = prepare_provider_transport_entry_inputs(
+            "openai",
+            "gpt-test",
+            "system",
+            "prompt",
+            Some(0.2),
+            4,
+            &HeaderMap::new(),
+            None,
+            Some(injection.clone()),
+        );
+
+        let captured = inputs
+            .controller_config
+            .context_injection
+            .expect("context injection should be preserved");
+        assert_eq!(captured.persistent_blocks, injection.persistent_blocks);
+        assert_eq!(captured.transient_prefix, injection.transient_prefix);
+        assert_eq!(captured.fingerprint, injection.fingerprint);
+    }
 }

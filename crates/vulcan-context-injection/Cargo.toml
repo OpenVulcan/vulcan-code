@@ -1,0 +1,14 @@
+[package]
+name = "vulcan-context-injection"
+description = "Shared context-injection primitives for hook-driven hidden and transient user context."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

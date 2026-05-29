@@ -70,6 +70,13 @@ impl VulcanWorkbench {
                 .session_runtime_state(session_id)
                 .map(|state| state.prompt_skill_overrides.clone())
                 .unwrap_or_default(),
+            context_injection: self
+                .session_runtime_state(session_id)
+                .and_then(|state| {
+                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state(
+                        &state.context_injection_state,
+                    )
+                }),
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

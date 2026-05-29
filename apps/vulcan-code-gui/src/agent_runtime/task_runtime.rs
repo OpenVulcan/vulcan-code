@@ -1800,6 +1800,7 @@ mod tests {
             temperature: None,
             max_turns: 8,
             additional_params: None,
+            context_injection: None,
         }
     }
 
@@ -1839,6 +1840,7 @@ mod tests {
             temperature: Some(0.7),
             max_turns: 3,
             additional_params: Some(json!({ "stored": true })),
+            context_injection: None,
         };
 
         let config = build_task_controller_config(

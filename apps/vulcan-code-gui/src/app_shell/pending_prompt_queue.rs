@@ -806,7 +806,7 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
         session_title: String,
-        prompt_entry: PendingSessionPromptEntry,
+        mut prompt_entry: PendingSessionPromptEntry,
     ) -> Task<Message> {
         if !composer_input_has_submittable_content(&prompt_entry.prompt, &prompt_entry.attachments)
         {
@@ -876,6 +876,14 @@ impl VulcanWorkbench {
             self.execution_mode
         };
         self.execution_mode = execution_mode;
+        let prompt_before_injection_sanitizing = prompt_entry.prompt.clone();
+        let (injection_ops, sanitized_prompt) =
+            crate::agent_runtime::context_injection_runtime::collect_builtin_manual_injection_ops_and_sanitized_prompt(
+                &prompt_entry.prompt,
+            );
+        if sanitized_prompt != prompt_before_injection_sanitizing {
+            prompt_entry.prompt = sanitized_prompt;
+        }
 
         if let Err(error) = self.append_user_prompt_to_session_conversation(
             session_id,
@@ -893,6 +901,14 @@ impl VulcanWorkbench {
             self.show_workbench_notice_modal("附件无法发送", error.clone());
             self.status_message = error;
             return Task::none();
+        }
+        if !injection_ops.is_empty() {
+            let now = current_unix_millis_text();
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state
+                .context_injection_state
+                .apply_inserts(injection_ops, &now);
+            runtime_state.updated_at = now;
         }
         if let (Some(project_id), Some(runtime_state)) = (
             owning_project_id.as_deref(),
@@ -963,6 +979,13 @@ impl VulcanWorkbench {
                 .session_runtime_state(session_id)
                 .map(|state| state.prompt_skill_overrides.clone())
                 .unwrap_or_default(),
+            context_injection: self
+                .session_runtime_state(session_id)
+                .and_then(|state| {
+                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state(
+                        &state.context_injection_state,
+                    )
+                }),
         };
 
         self.replace_session_runtime_events(session_id, Vec::new());

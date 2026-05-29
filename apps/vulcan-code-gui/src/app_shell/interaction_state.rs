@@ -51,6 +51,18 @@ pub(super) struct PendingMainTaskPanelResize {
     pub(super) initial_width: f32,
 }
 
+/// Pending resize candidate captured from the right special-feature panel divider.
+/// 从右侧特殊功能面板分隔柄捕获的待确认缩放候选状态。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PendingSessionFeaturePanelResize {
+    /// Cursor x position captured when the panel resize interaction started.
+    /// 面板缩放交互开始时捕获到的鼠标横向位置。
+    pub(super) origin_x: f32,
+    /// Panel width captured when the resize interaction started.
+    /// 面板缩放交互开始时捕获到的面板宽度。
+    pub(super) initial_width: f32,
+}
+
 /// Pending interaction candidate captured from one project-row press inside the task tree.
 /// 从任务树某个项目行按下动作中捕获的待判定交互候选状态。
 #[derive(Debug, Clone)]

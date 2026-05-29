@@ -530,6 +530,7 @@ mod tests {
             context_request_mode: Some(ContextRequestMode::Full {
                 reason: ContextFullRequestReason::ProviderContinuationMissing,
             }),
+            context_injection: None,
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_context::SessionConversationState;
+use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
 use vulcan_provider_config::config::PersistedPromptSkillState;
 use vulcan_provider_config::config::{
@@ -300,6 +301,10 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级提示词技能状态覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub prompt_skill_overrides: BTreeMap<String, PersistedPromptSkillState>,
+    /// Session-level context-injection runtime state kept outside the visible transcript.
+    /// 保留在可见转录之外的会话级上下文注入运行态。
+    #[serde(default, skip_serializing_if = "ContextInjectionState::is_empty")]
+    pub context_injection_state: ContextInjectionState,
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,

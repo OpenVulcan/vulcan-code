@@ -443,6 +443,7 @@ mod tests {
                 temperature: Some(0.2),
                 max_turns: 3,
                 additional_params: None,
+                context_injection: None,
             },
             ConversationSnapshot::default(),
         );
@@ -521,6 +522,7 @@ mod tests {
                 temperature: Some(0.2),
                 max_turns: 3,
                 additional_params: None,
+                context_injection: None,
             },
             ConversationSnapshot::default(),
         );

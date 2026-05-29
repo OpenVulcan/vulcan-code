@@ -6502,6 +6502,7 @@ dependencies = [
  "vulcan-change-set",
  "vulcan-context",
  "vulcan-context-compaction",
+ "vulcan-context-injection",
  "vulcan-core",
  "vulcan-file-watcher",
  "vulcan-host-tools",
@@ -6536,6 +6537,14 @@ dependencies = [
  "vulcan-context",
  "vulcan-core",
  "vulcan-prompt-composer",
+]
+
+[[package]]
+name = "vulcan-context-injection"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6671,6 +6680,7 @@ dependencies = [
  "serde",
  "uuid",
  "vulcan-context",
+ "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
 ]
@@ -6687,6 +6697,7 @@ dependencies = [
  "vldb-controller-client",
  "vulcan-change-set",
  "vulcan-context",
+ "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
  "vulcan-runtime-assets",

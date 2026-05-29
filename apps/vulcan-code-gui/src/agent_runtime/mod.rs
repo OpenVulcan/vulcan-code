@@ -3,6 +3,7 @@
 
 pub mod ai_tool_router;
 pub mod config;
+pub mod context_injection_runtime;
 pub mod context_request_mode;
 pub mod events;
 pub mod execution_models;

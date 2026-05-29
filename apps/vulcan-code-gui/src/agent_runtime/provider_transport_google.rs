@@ -16,6 +16,7 @@ use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
+    ProviderContextInjection as CoreProviderContextInjection,
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -38,6 +39,7 @@ pub(crate) fn execute_google_gemini_stream(
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
+    context_injection: Option<CoreProviderContextInjection>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
 ) -> ProviderDeltaStream {
@@ -52,6 +54,7 @@ pub(crate) fn execute_google_gemini_stream(
         max_turns,
         headers,
         additional_params,
+        context_injection,
         tools_manager,
         &resolved_tools,
         session_id,

@@ -7,6 +7,7 @@ use super::*;
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Maximum body size kept inline inside one persisted event row before the full text is moved into a blob file.
@@ -117,6 +118,10 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// 会话级提示词技能状态覆盖。
     #[serde(default)]
     pub prompt_skill_overrides: BTreeMap<String, crate::provider_config::PersistedPromptSkillState>,
+    /// Hidden context-injection runtime state kept outside transcript records.
+    /// 保留在转录记录之外的隐藏上下文注入运行态。
+    #[serde(default)]
+    pub context_injection_state: ContextInjectionState,
     /// Latest active compaction identifier retained by the session runtime.
     /// 被会话运行时保留的最近活动压缩标识。
     pub last_compaction_id: Option<String>,
@@ -688,6 +693,7 @@ fn runtime_state_to_store_document(
         active_reasoning_effort: runtime_state.active_reasoning_effort,
         active_temperature: runtime_state.active_temperature,
         prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
+        context_injection_state: runtime_state.context_injection_state.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
         live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),

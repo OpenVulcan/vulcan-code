@@ -661,6 +661,27 @@ impl VulcanWorkbench {
                 self.main_task_panel_resize_handle_hovered = is_hovered;
                 Task::none()
             }
+            Message::ToggleSessionFeaturePanel => {
+                self.session_feature_panel_expanded = !self.session_feature_panel_expanded;
+                self.pending_session_feature_panel_resize = None;
+                self.session_feature_panel_resize_handle_hovered = false;
+                Task::none()
+            }
+            Message::StartSessionFeaturePanelResize => {
+                if let Some(position) = self.main_window_cursor_position {
+                    self.pending_session_feature_panel_resize =
+                        Some(PendingSessionFeaturePanelResize {
+                            origin_x: position.x,
+                            initial_width: self.session_feature_panel_width,
+                        });
+                    self.session_feature_panel_resize_handle_hovered = true;
+                }
+                Task::none()
+            }
+            Message::SessionFeaturePanelResizeHandleHovered(is_hovered) => {
+                self.session_feature_panel_resize_handle_hovered = is_hovered;
+                Task::none()
+            }
             Message::MainDisplayPanelSelected(panel) => {
                 let previous_panel = self.active_main_panel;
                 self.active_main_panel = panel;
@@ -762,6 +783,15 @@ impl VulcanWorkbench {
                             .clamp(MAIN_TASK_PANEL_MIN_WIDTH, MAIN_TASK_PANEL_MAX_WIDTH);
                         self.main_task_panel_width = new_width;
                     }
+                    if let Some(pending_resize) = self.pending_session_feature_panel_resize {
+                        let new_width = (pending_resize.initial_width
+                            - (position.x - pending_resize.origin_x))
+                            .clamp(
+                                SESSION_FEATURE_PANEL_MIN_WIDTH,
+                                SESSION_FEATURE_PANEL_MAX_WIDTH,
+                            );
+                        self.session_feature_panel_width = new_width;
+                    }
 
                     if let Some(pending_project_interaction) =
                         self.pending_task_project_interaction.as_ref()
@@ -826,6 +856,7 @@ impl VulcanWorkbench {
                         modal.pan_pointer = None;
                     }
                     self.pending_main_task_panel_resize = None;
+                    self.pending_session_feature_panel_resize = None;
 
                     let toggled_project_id = self
                         .pending_task_project_interaction

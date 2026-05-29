@@ -25,5 +25,6 @@ pub(crate) fn build_core_controller_config_with_layers(
         temperature: preparation.temperature.map(f64::from),
         max_turns: max_turns_override.unwrap_or(DEFAULT_RUNTIME_MAX_TURNS_LIMIT),
         additional_params,
+        context_injection: preparation.context_injection.clone(),
     }
 }

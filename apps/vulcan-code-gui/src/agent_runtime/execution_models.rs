@@ -14,7 +14,8 @@ use serde_json::Value;
 use std::path::PathBuf;
 use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
-    ConversationAttachment, CoreEvent as CoreControllerEvent, ProviderUsageSnapshot,
+    ConversationAttachment, CoreEvent as CoreControllerEvent,
+    ProviderContextInjection as CoreProviderContextInjection, ProviderUsageSnapshot,
 };
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
@@ -61,6 +62,9 @@ pub struct ExecutionPreparationRequest {
     /// 为当前会话捕获的会话级提示词技能覆盖。
     pub session_prompt_skill_overrides:
         std::collections::BTreeMap<String, crate::provider_config::PersistedPromptSkillState>,
+    /// Provider-facing context-injection overlay captured for the current run.
+    /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
+    pub context_injection: Option<CoreProviderContextInjection>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -203,6 +207,9 @@ pub struct ExecutionPreparation {
     /// Optional context request send-mode diagnostic captured from the final request shape.
     /// 从最终请求形态捕获的可选上下文请求发送模式诊断。
     pub context_request_mode: Option<ContextRequestMode>,
+    /// Provider-facing context-injection overlay captured for the current run.
+    /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
+    pub context_injection: Option<CoreProviderContextInjection>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.

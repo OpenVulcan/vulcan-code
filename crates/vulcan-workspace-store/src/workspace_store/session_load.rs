@@ -292,7 +292,7 @@ async fn query_session_runtime_state_row(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.context_injection_json, r.updated_at
 FROM session_runtime_state AS r
 WHERE r.session_id = ?1
 LIMIT 1;
@@ -508,6 +508,9 @@ async fn hydrate_session_runtime_state(
         .or(runtime_state.active_temperature);
     if !runtime_state_cache.prompt_skill_overrides.is_empty() {
         runtime_state.prompt_skill_overrides = runtime_state_cache.prompt_skill_overrides;
+    }
+    if !runtime_state_cache.context_injection_state.is_empty() {
+        runtime_state.context_injection_state = runtime_state_cache.context_injection_state;
     }
     runtime_state.last_compaction_id = runtime_state_cache
         .last_compaction_id

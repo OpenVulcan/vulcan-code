@@ -17,6 +17,7 @@ tokio.workspace = true
 uuid.workspace = true
 vldb-controller-client.workspace = true
 vulcan-change-set.workspace = true
+vulcan-context-injection.workspace = true
 vulcan-context.workspace = true
 vulcan-core.workspace = true
 vulcan-provider-config.workspace = true

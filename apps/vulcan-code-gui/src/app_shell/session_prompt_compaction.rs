@@ -123,6 +123,7 @@ pub(super) fn stream_prompt_compaction_job(
             prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
+            context_injection: None,
         };
 
         let launch = prepare_runtime_stream_launch(

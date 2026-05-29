@@ -293,6 +293,12 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE session_runtime_state ADD COLUMN continuation_json TEXT;",
     )
     .await?;
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN context_injection_json TEXT;",
+    )
+    .await?;
     ensure_optional_session_compaction_column(
         client,
         sqlite_binding_id,
@@ -708,6 +714,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     provider_usage_json TEXT,
     conversation_state_json TEXT,
     continuation_json TEXT,
+    context_injection_json TEXT,
     updated_at TEXT NOT NULL
 );
 

@@ -755,6 +755,7 @@ impl VulcanWorkbench {
             runtime_state.context_start_message_id = context_start_message_id;
             runtime_state.anchor_context_budget_fingerprint = checkpoint_budget_fingerprint;
             runtime_state.anchor_context_assembly_fingerprint = checkpoint_assembly_fingerprint;
+            runtime_state.context_injection_state.apply_compaction();
             runtime_state.updated_at = created_at;
         }
         if let Some(summary_message_id) = summary_message_id {
@@ -1992,6 +1993,16 @@ impl VulcanWorkbench {
                 SessionTurnStatsStatus::Completed,
                 Some(provider_request_count),
             );
+            let now = current_unix_millis_text();
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state.context_injection_state.consume_turn(
+                &format!(
+                    "session-{session_id}-{}",
+                    runtime_state.conversation_state.messages.len()
+                ),
+                &now,
+            );
+            runtime_state.updated_at = now;
         }
         perf_trace.checkpoint("append_hidden_summary_and_stats", phase_started_at);
         phase_started_at = Instant::now();

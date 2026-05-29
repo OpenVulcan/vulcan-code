@@ -40,6 +40,7 @@ vulcan-workspace-store.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-context.workspace = true
+vulcan-context-injection.workspace = true
 vulcan-context-compaction.workspace = true
 vulcan-file-watcher.workspace = true
 vulcan-prompt-composer.workspace = true

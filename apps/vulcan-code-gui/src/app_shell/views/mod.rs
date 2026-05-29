@@ -13,6 +13,7 @@ mod about_licenses;
 mod agents;
 mod ai_capability;
 mod composer;
+mod context_injection;
 mod diff;
 mod luaskills;
 mod project_settings;
@@ -1683,9 +1684,126 @@ impl VulcanWorkbench {
 
         row![
             task_panel,
-            container(self.view_main_canvas()).width(Fill).height(Fill)
+            container(self.view_main_canvas()).width(Fill).height(Fill),
+            self.view_session_feature_panel_region(),
         ]
         .height(Fill)
+        .into()
+    }
+
+    /// Builds the right session feature panel region with collapse and resize affordances.
+    /// 构建带收起与缩放交互的右侧会话功能面板区域。
+    pub(super) fn view_session_feature_panel_region(&self) -> Element<'_, Message> {
+        if self.session_feature_panel_expanded {
+            row![
+                self.view_session_feature_panel_resize_handle(),
+                container(self.view_session_context_injection_panel())
+                    .width(Pixels(self.session_feature_panel_width))
+                    .height(Fill)
+                    .padding([12, 12]),
+            ]
+            .spacing(0)
+            .height(Fill)
+            .into()
+        } else {
+            container(self.view_session_feature_panel_restore_rail())
+                .width(SESSION_FEATURE_PANEL_RESTORE_RAIL_WIDTH)
+                .height(Fill)
+                .into()
+        }
+    }
+
+    /// Builds the draggable divider between the central session canvas and right feature panel.
+    /// 构建中央会话画布与右侧功能面板之间的可拖拽分隔柄。
+    pub(super) fn view_session_feature_panel_resize_handle(&self) -> Element<'_, Message> {
+        let is_highlighted = self.session_feature_panel_resize_handle_hovered
+            || self.pending_session_feature_panel_resize.is_some();
+        let drag_surface = mouse_area(
+            container(
+                container(space())
+                    .width(if is_highlighted { 2 } else { 1 })
+                    .height(Fill)
+                    .style(move |theme| {
+                        style::main_task_panel_resize_indicator_style(theme, is_highlighted)
+                    }),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center_x(Fill)
+            .center_y(Fill),
+        )
+        .interaction(iced::mouse::Interaction::ResizingHorizontally)
+        .on_enter(Message::SessionFeaturePanelResizeHandleHovered(true))
+        .on_exit(Message::SessionFeaturePanelResizeHandleHovered(false))
+        .on_press(Message::StartSessionFeaturePanelResize);
+        let collapse_button = tooltip(
+            button(
+                container(codicon::chevron_right().size(10).line_height(1.0))
+                    .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT)
+                    .center_x(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .center_y(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+            )
+            .padding(0)
+            .style(style::subtle_panel_button_style)
+            .on_press(Message::ToggleSessionFeaturePanel),
+            "收起会话功能面板",
+            tooltip::Position::Left,
+        )
+        .style(container::rounded_box);
+
+        container(stack([
+            drag_surface.into(),
+            column![
+                space::vertical().height(Fill),
+                container(collapse_button)
+                    .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                    .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                space::vertical().height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .align_x(Center)
+            .into(),
+        ]))
+        .width(SESSION_FEATURE_PANEL_RESIZE_HANDLE_WIDTH)
+        .height(Fill)
+        .into()
+    }
+
+    /// Builds the subtle restore rail shown when the right session feature panel is collapsed.
+    /// 构建右侧会话功能面板折叠后显示的轻量恢复导轨。
+    pub(super) fn view_session_feature_panel_restore_rail(&self) -> Element<'_, Message> {
+        container(
+            column![
+                space::vertical().height(Fill),
+                container(
+                    tooltip(
+                        button(
+                            container(codicon::chevron_left().size(10).line_height(1.0))
+                                .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                                .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT)
+                                .center_x(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                                .center_y(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                        )
+                        .padding(0)
+                        .style(style::subtle_panel_button_style)
+                        .on_press(Message::ToggleSessionFeaturePanel),
+                        "展开会话功能面板",
+                        tooltip::Position::Left,
+                    )
+                    .style(container::rounded_box),
+                )
+                .width(MAIN_TASK_PANEL_EDGE_TOGGLE_WIDTH)
+                .height(MAIN_TASK_PANEL_EDGE_TOGGLE_HEIGHT),
+                space::vertical().height(Fill),
+            ]
+            .width(Fill)
+            .height(Fill)
+            .align_x(Center),
+        )
+        .height(Fill)
+        .style(style::main_task_panel_restore_rail_style)
         .into()
     }
 

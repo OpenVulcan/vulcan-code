@@ -669,6 +669,7 @@ fn build_openai_compatible_request_payload(
         current_history,
         current_prompt,
         interleaved_reasoning,
+        ..
     } = request;
     let usage_policy =
         resolve_openai_compatible_streaming_usage_policy(snapshot.provider_id.as_str());

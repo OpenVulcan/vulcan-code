@@ -4,6 +4,9 @@
 use super::*;
 use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
 use serde_json::json;
+use vulcan_context_injection::{
+    ContextInjectionState, InjectionInsert, InjectionKind, InjectionPanelCard,
+};
 
 /// Verifies that transcript metadata keeps display fields while preserving one compact `change_set` host payload for later change-summary reconstruction.
 /// 验证转录元数据会保留展示字段，同时保留一份紧凑 `change_set` 宿主载荷以便后续重建变更摘要。
@@ -880,6 +883,65 @@ fn runtime_state_rows_store_full_canonical_conversation_state() {
         other => panic!("expected continuation JSON string, got {other:?}"),
     };
     assert!(continuation_json.contains("resp-1"));
+}
+
+/// Verifies that hidden context-injection state persists in the runtime-state row without touching conversation JSON.
+/// 验证隐藏上下文注入状态会进入运行时状态行，同时不写入会话正文 JSON。
+#[test]
+fn runtime_state_rows_store_context_injection_state_separately() {
+    let session_id = SessionId::from_u128(44);
+    let session = SessionSummary::new(
+        session_id,
+        None,
+        String::from("注入测试会话"),
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    );
+    let mut injection_state = ContextInjectionState::default();
+    injection_state.apply_insert(
+        InjectionInsert::single(
+            InjectionKind::Transient,
+            "manual_inject",
+            "临时说明",
+            "隐藏内容",
+            Some(3),
+        ),
+        "1",
+    );
+    let runtime_state = SessionRuntimeStateEntry {
+        context_injection_state: injection_state,
+        updated_at: String::from("1"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let mut runtime_states = BTreeMap::new();
+    runtime_states.insert(session_id, runtime_state);
+    let mut rows = Vec::new();
+
+    push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(&rows[0][8], ControllerSqliteValue::Null));
+    let context_injection_json = match &rows[0][10] {
+        ControllerSqliteValue::String(value) => value,
+        other => panic!("expected context injection JSON string, got {other:?}"),
+    };
+    let parsed =
+        parse_context_injection_state_from_json(context_injection_json).expect("state parses");
+    assert_eq!(
+        parsed.panel_cards(),
+        vec![InjectionPanelCard {
+            tag: String::from("manual_inject"),
+            description: String::from("临时说明"),
+            items: vec![vulcan_context_injection::InjectionPanelItem {
+                content: String::from("隐藏内容"),
+                ttl_label: String::from("TTL: 3"),
+                source_display: None,
+            }],
+        }]
+    );
 }
 
 /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.

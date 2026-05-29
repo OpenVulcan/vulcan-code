@@ -82,6 +82,42 @@ pub struct ControllerConfig {
     /// Optional provider-specific additional parameters.
     /// 可选的 Provider 专属附加参数。
     pub additional_params: Option<Value>,
+    /// Optional provider-facing context-injection overlay rendered outside the canonical transcript.
+    /// 在规范转录之外渲染的可选 Provider 可见上下文注入覆盖层。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_injection: Option<ProviderContextInjection>,
+}
+
+/// Represents provider-facing context-injection text resolved before one controller run starts.
+/// 表示单次控制器运行开始前解析完成的 Provider 可见上下文注入文本。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProviderContextInjection {
+    /// Persistent hidden user blocks rendered as clean tag text.
+    /// 渲染为干净标签文本的永久隐藏用户块。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub persistent_blocks: Vec<String>,
+    /// Transient blocks that should prefix the target user prompt.
+    /// 应前置到目标用户提示词的临时块。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub transient_prefix: String,
+    /// Stable fingerprint for diagnostics and continuation safety checks.
+    /// 用于诊断与 continuation 安全检查的稳定指纹。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub fingerprint: String,
+}
+
+impl ProviderContextInjection {
+    /// Returns whether no provider-facing injection content is present.
+    /// 返回是否不存在任何 Provider 可见注入内容。
+    pub fn is_empty(&self) -> bool {
+        self.persistent_blocks.is_empty() && self.transient_prefix.trim().is_empty()
+    }
+
+    /// Returns whether transient provider-facing content is present.
+    /// 返回是否存在临时 Provider 可见内容。
+    pub fn has_transient(&self) -> bool {
+        !self.transient_prefix.trim().is_empty()
+    }
 }
 
 /// Represents one provider continuation cursor snapshot kept beside the canonical history.

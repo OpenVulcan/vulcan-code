@@ -452,7 +452,7 @@ async fn query_session_runtime_state_entry(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.context_injection_json, r.updated_at
 FROM session_runtime_state AS r
 WHERE r.session_id = ?1
 LIMIT 1;
@@ -1443,8 +1443,9 @@ INSERT INTO session_runtime_state (
     provider_usage_json,
     conversation_state_json,
     continuation_json,
+    context_injection_json,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12);
 "#,
         batch_params,
         "写入会话运行时状态失败",
@@ -1921,6 +1922,9 @@ pub(super) fn push_session_runtime_state_batch_rows(
                 ControllerSqliteValue::Null,
                 optional_sqlite_string(&serialize_session_continuation_to_json(
                     &entry.conversation_state.continuation,
+                )),
+                optional_sqlite_string(&serialize_context_injection_state_to_json(
+                    &entry.context_injection_state,
                 )),
                 ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
             ]);

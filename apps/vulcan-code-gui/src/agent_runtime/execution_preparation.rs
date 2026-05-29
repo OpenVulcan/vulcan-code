@@ -189,6 +189,7 @@ pub(crate) fn prepare_execution(
         context_assembly: None,
         context_baseline: None,
         context_request_mode: None,
+        context_injection: request.context_injection.clone(),
     })
 }
 

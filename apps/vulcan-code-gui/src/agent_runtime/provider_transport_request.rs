@@ -12,6 +12,7 @@ use std::sync::Arc;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
+    ProviderContextInjection as CoreProviderContextInjection,
 };
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -75,6 +76,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional provider-specific additional parameters already merged by upper layers.
     /// 已由上层合并完成的可选 Provider 专用附加参数。
     pub(crate) additional_params: Option<Value>,
+    /// Optional provider-facing context injection overlay for the current turn.
+    /// 当前回合可选的 Provider 可见上下文注入覆盖层。
+    pub(crate) context_injection: Option<CoreProviderContextInjection>,
     /// Optional model-scoped interleaved reasoning capability reused by OpenAI-compatible transports.
     /// 供 OpenAI 兼容传输链路复用的可选模型级交错推理能力描述。
     pub(crate) interleaved_reasoning: Option<ModelInterleavedCapability>,
@@ -107,6 +111,7 @@ pub(crate) fn build_provider_transport_execution_request(
     session_id: SessionId,
     resolved_tools: Vec<ResolvedToolDefinition>,
     additional_params: Option<Value>,
+    context_injection: Option<CoreProviderContextInjection>,
     interleaved_reasoning: Option<ModelInterleavedCapability>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
@@ -131,6 +136,7 @@ pub(crate) fn build_provider_transport_execution_request(
         session_id,
         resolved_tools,
         additional_params,
+        context_injection,
         interleaved_reasoning,
         request_budget_guard,
         retry_policy,

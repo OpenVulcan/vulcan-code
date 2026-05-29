@@ -193,6 +193,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
         preparation.session_id,
         resolved_tools,
         additional_params,
+        preparation.context_injection.clone(),
         preparation.model_blueprint.interleaved_reasoning.clone(),
         request_budget_guard,
         retry_policy,

@@ -6,6 +6,7 @@ use crate::agent_runtime::provider_protocol_bridge::{
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
 use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+use crate::agent_runtime::provider_transport_openai_responses_http::SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM;
 use crate::agent_runtime::provider_transport_turn_request::{
     OpenAiCompatibleCoreTurnRequest, build_host_controlled_turn_request,
 };
@@ -100,10 +101,27 @@ pub(crate) fn build_openai_responses_streaming_request(
 ) -> Result<OpenAiCompatibleCoreTurnRequest, VulcanCoreError> {
     let scoped_continuation =
         scope_continuation_to_active_provider(&snapshot.continuation, provider_id, model_id);
-    let effective_additional_params = inject_previous_response_id_into_additional_params(
-        config.additional_params.clone(),
-        &scoped_continuation,
-    );
+    let suppress_continuation = config
+        .context_injection
+        .as_ref()
+        .is_some_and(|injection| injection.has_transient());
+    let effective_additional_params = if suppress_continuation {
+        let mut params = config
+            .additional_params
+            .clone()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        params.insert(
+            String::from(SUPPRESS_OPENAI_RESPONSES_CONTINUATION_PARAM),
+            serde_json::Value::Bool(true),
+        );
+        Some(serde_json::Value::Object(params))
+    } else {
+        inject_previous_response_id_into_additional_params(
+            config.additional_params.clone(),
+            &scoped_continuation,
+        )
+    };
     build_host_controlled_turn_request(
         provider_id,
         model_id,

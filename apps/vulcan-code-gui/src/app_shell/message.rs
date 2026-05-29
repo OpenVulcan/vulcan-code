@@ -94,6 +94,15 @@ pub(super) enum Message {
     /// Updates whether the task-drawer resize handle is currently hovered.
     /// 更新任务抽屉缩放柄当前是否处于悬停状态。
     MainTaskPanelResizeHandleHovered(bool),
+    /// Toggles the right session feature panel shown inside the main workbench panel.
+    /// 切换显示在主工作台面板中的右侧会话功能面板。
+    ToggleSessionFeaturePanel,
+    /// Starts resizing the right session feature panel shown inside the main workbench panel.
+    /// 开始缩放显示在主工作台面板中的右侧会话功能面板。
+    StartSessionFeaturePanelResize,
+    /// Updates whether the right session feature panel resize handle is currently hovered.
+    /// 更新右侧会话功能面板缩放柄当前是否处于悬停状态。
+    SessionFeaturePanelResizeHandleHovered(bool),
     /// Reports the latest maximized state of one tracked window.
     /// 回传某个受跟踪窗口当前最新的最大化状态。
     WindowMaximizedStateChanged(window::Id, bool),

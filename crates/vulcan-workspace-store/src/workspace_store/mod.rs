@@ -25,6 +25,7 @@ use uuid::Uuid;
 use vldb_controller_client::{
     ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
 };
+use vulcan_context_injection::ContextInjectionState;
 
 mod event_store;
 mod history_search;
@@ -663,6 +664,10 @@ struct StoredRuntimeStateRow {
     /// 可选的持久化轻量 Provider continuation 载荷。
     #[serde(default)]
     continuation_json: Option<String>,
+    /// Optional persisted hidden context-injection runtime payload.
+    /// 可选的隐藏上下文注入运行态载荷。
+    #[serde(default)]
+    context_injection_json: Option<String>,
     /// Updated-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的更新时间。
     updated_at: String,
@@ -747,6 +752,11 @@ pub async fn load_workspace_snapshot(
             active_reasoning_effort: None,
             active_temperature: None,
             prompt_skill_overrides: Default::default(),
+            context_injection_state: row
+                .context_injection_json
+                .as_deref()
+                .and_then(parse_context_injection_state_from_json)
+                .unwrap_or_default(),
             last_compaction_id: row.last_compaction_id,
             context_start_message_id: row.context_start_message_id,
             live_context_budget_fingerprint: None,
@@ -1224,7 +1234,7 @@ async fn query_session_runtime_state_shell_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -1365,6 +1375,11 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         active_reasoning_effort: None,
         active_temperature: None,
         prompt_skill_overrides: Default::default(),
+        context_injection_state: row
+            .context_injection_json
+            .as_deref()
+            .and_then(parse_context_injection_state_from_json)
+            .unwrap_or_default(),
         last_compaction_id: row.last_compaction_id,
         context_start_message_id: row.context_start_message_id,
         live_context_budget_fingerprint: None,
@@ -2016,6 +2031,12 @@ fn parse_session_conversation_state_from_json(
     value.and_then(|payload| serde_json::from_str(payload).ok())
 }
 
+/// Parses one persisted hidden context-injection JSON payload into runtime state.
+/// 将一条持久化隐藏上下文注入 JSON 载荷解析为运行态。
+fn parse_context_injection_state_from_json(value: &str) -> Option<ContextInjectionState> {
+    serde_json::from_str(value).ok()
+}
+
 /// Serializes one typed transcript UI-state structure into the persisted JSON payload when needed.
 /// 在需要时将一条带类型的转录界面状态结构序列化为持久化 JSON 载荷。
 fn serialize_session_ui_state_to_json(state: &SessionTranscriptUiState) -> Option<String> {
@@ -2039,6 +2060,16 @@ fn serialize_session_continuation_to_json(
         None
     } else {
         serde_json::to_string(continuation).ok()
+    }
+}
+
+/// Serializes hidden context-injection runtime state into the persisted JSON payload when needed.
+/// 在需要时将隐藏上下文注入运行态序列化为持久化 JSON 载荷。
+fn serialize_context_injection_state_to_json(state: &ContextInjectionState) -> Option<String> {
+    if state.is_empty() {
+        None
+    } else {
+        serde_json::to_string(state).ok()
     }
 }
 

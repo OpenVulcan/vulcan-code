@@ -300,6 +300,7 @@ mod tests {
                 temperature: Some(0.1),
                 max_turns: 4,
                 additional_params: None,
+                context_injection: None,
             },
             ConversationSnapshot::default(),
         ))

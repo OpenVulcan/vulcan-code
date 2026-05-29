@@ -165,6 +165,7 @@ mod tests {
             context_assembly: None,
             context_baseline: None,
             context_request_mode: None,
+            context_injection: None,
         }
     }
 
@@ -184,6 +185,7 @@ mod tests {
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
+            context_injection: None,
         }
     }
 
@@ -217,6 +219,7 @@ mod tests {
                 temperature: Some(0.2),
                 max_turns: 4,
                 additional_params: None,
+                context_injection: None,
             },
             core_snapshot.clone(),
         );

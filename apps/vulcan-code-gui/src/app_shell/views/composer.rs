@@ -1083,7 +1083,13 @@ impl VulcanWorkbench {
         } else {
             MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH
         };
-        let chrome_width = MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + 36.0;
+        let right_region_width = if self.session_feature_panel_expanded {
+            self.session_feature_panel_width + SESSION_FEATURE_PANEL_RESIZE_HANDLE_WIDTH
+        } else {
+            SESSION_FEATURE_PANEL_RESTORE_RAIL_WIDTH
+        };
+        let chrome_width =
+            MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + right_region_width + 36.0;
         let canvas_width = (self.main_window_size.width - chrome_width).max(420.0);
 
         (canvas_width * 0.80).max(420.0)
@@ -1097,7 +1103,13 @@ impl VulcanWorkbench {
         } else {
             MAIN_TASK_PANEL_RESTORE_RAIL_WIDTH
         };
-        let chrome_width = MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + 36.0;
+        let right_region_width = if self.session_feature_panel_expanded {
+            self.session_feature_panel_width + SESSION_FEATURE_PANEL_RESIZE_HANDLE_WIDTH
+        } else {
+            SESSION_FEATURE_PANEL_RESTORE_RAIL_WIDTH
+        };
+        let chrome_width =
+            MAIN_PANEL_ACTIVITY_BAR_WIDTH + left_region_width + right_region_width + 36.0;
         let canvas_width = (self.main_window_size.width - chrome_width).max(420.0);
         let composer_panel_width = self.composer_panel_width();
 
