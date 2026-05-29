@@ -209,14 +209,7 @@ pub fn render_luaskill_help_output(
     };
 
     let mut output = String::new();
-    output.push_str("# LuaSkill Help\n\n");
-    output.push_str("- Name: `");
-    output.push_str(&entry.name);
-    output.push_str("`\n");
-    push_non_empty_field(&mut output, "Description", &entry.description);
-    if let Some(help_flow) = entry.help_flow.as_deref() {
-        push_non_empty_field(&mut output, "LuaSkills help flow", help_flow);
-    }
+    output.push_str("# LuaSkill Usage\n");
     if let Some(help_summary) = entry.help_summary.as_deref() {
         output.push_str("\n## LuaSkills Help\n\n");
         output.push_str(entry.help_content.as_deref().unwrap_or(help_summary));
@@ -552,6 +545,10 @@ mod tests {
 
         let output =
             render_luaskill_help_output("vulcan-curl-get", &entries).expect("help should render");
+        assert!(output.starts_with("# LuaSkill Usage"));
+        assert!(!output.contains("- Name:"));
+        assert!(!output.contains("Description:"));
+        assert!(!output.contains("LuaSkills help flow"));
         assert!(output.contains("## Schema"));
         assert!(output.contains("Target URL"));
         assert!(!output.contains("## Dispatch Rule"));

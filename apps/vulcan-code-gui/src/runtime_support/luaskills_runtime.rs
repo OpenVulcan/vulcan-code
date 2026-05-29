@@ -17,10 +17,10 @@ use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,
     LuaRuntimeHostOptions, LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig,
-    RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeHelpNodeDescriptor, RuntimeInvocationResult,
-    RuntimeRequestContext, RuntimeSkillOperationProgressEvent, RuntimeSkillRoot,
-    SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority, SkillManager,
-    SkillManagerConfig, SkillMeta, SkillUninstallOptions, set_skill_operation_progress_callback,
+    RuntimeClientInfo, RuntimeEntryDescriptor, RuntimeInvocationResult, RuntimeRequestContext,
+    RuntimeSkillOperationProgressEvent, RuntimeSkillRoot, SkillInstallRequest,
+    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    SkillUninstallOptions, set_skill_operation_progress_callback,
 };
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, VecDeque};
@@ -765,33 +765,19 @@ pub fn render_luaskills_entry_help_summary(
     entry: &RuntimeEntryDescriptor,
 ) -> Result<Option<LuaSkillsEntryHelpSummary>, String> {
     let engine = lock_runtime_engine(handle)?;
-    let help_descriptors =
-        engine.list_skill_help_for_authority(SkillManagementAuthority::DelegatedTool);
-    let flow_name = help_descriptors
-        .iter()
-        .find(|help| help.skill_id == entry.skill_id)
-        .and_then(|help| {
-            std::iter::once(&help.main)
-                .chain(help.flows.iter())
-                .find(|node| help_node_matches_entry(node, entry))
-                .map(|node| node.flow_name.clone())
-        });
-    let Some(flow_name) = flow_name else {
+    let flow_name = entry.local_name.trim();
+    if flow_name.is_empty() {
         return Ok(None);
-    };
+    }
     let Some(detail) = engine
         .render_skill_help_detail_for_authority(
-            SkillManagementAuthority::DelegatedTool,
+            SkillManagementAuthority::System,
             &entry.skill_id,
-            &flow_name,
+            flow_name,
             None,
         )
-        .map_err(|error| {
-            format!(
-                "渲染 LuaSkills `{}` 的 help `{}` 失败：{}",
-                entry.canonical_name, flow_name, error
-            )
-        })?
+        .ok()
+        .flatten()
     else {
         return Ok(None);
     };
@@ -800,29 +786,6 @@ pub fn render_luaskills_entry_help_summary(
         description: detail.description,
         content: detail.content,
     }))
-}
-
-/// Returns whether one LuaSkills help node belongs to the selected runtime entry.
-/// 判断单个 LuaSkills help 节点是否属于当前选中的运行时入口。
-fn help_node_matches_entry(
-    node: &RuntimeHelpNodeDescriptor,
-    entry: &RuntimeEntryDescriptor,
-) -> bool {
-    let canonical_from_parts = format!("{}-{}", entry.skill_id, entry.local_name);
-    let expected_names = [
-        entry.canonical_name.trim(),
-        entry.local_name.trim(),
-        canonical_from_parts.trim(),
-    ];
-    if node.related_entries.iter().any(|related| {
-        let related = related.trim();
-        expected_names
-            .iter()
-            .any(|expected| !expected.is_empty() && related == *expected)
-    }) {
-        return true;
-    }
-    node.related_entries.is_empty() && node.flow_name.trim() == entry.local_name.trim()
 }
 
 /// Call one LuaSkills runtime entry on a dedicated blocking thread and return the structured result.
@@ -1351,11 +1314,9 @@ fn normalize_optional_field(value: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::luaskills_entry_args_schema;
     use super::{LUASKILL_SID_PARAMETER_NAME, PWD_PARAMETER_NAME};
-    use super::{help_node_matches_entry, luaskills_entry_args_schema};
-    use luaskills::{
-        RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor, RuntimeHelpNodeDescriptor,
-    };
+    use luaskills::{RuntimeEntryDescriptor, RuntimeEntryParameterDescriptor};
     use serde_json::json;
 
     #[test]
@@ -1484,60 +1445,6 @@ mod tests {
                 "required": ["query"]
             })
         );
-    }
-
-    #[test]
-    fn help_node_matches_entry_accepts_local_name_related_entries() {
-        let entry = build_entry(
-            "vulcan-codekit",
-            "rg",
-            Vec::new(),
-            json!({ "type": "object" }),
-        );
-        let node = RuntimeHelpNodeDescriptor {
-            flow_name: String::from("rg"),
-            description: String::from("Text-anchor lookup workflow."),
-            related_entries: vec![String::from("rg")],
-            is_main: false,
-        };
-
-        assert!(help_node_matches_entry(&node, &entry));
-    }
-
-    #[test]
-    fn help_node_matches_entry_accepts_empty_related_flow_fallback() {
-        let entry = build_entry(
-            "vulcan-codekit",
-            "rg",
-            Vec::new(),
-            json!({ "type": "object" }),
-        );
-        let node = RuntimeHelpNodeDescriptor {
-            flow_name: String::from("rg"),
-            description: String::from("Text-anchor lookup workflow."),
-            related_entries: Vec::new(),
-            is_main: false,
-        };
-
-        assert!(help_node_matches_entry(&node, &entry));
-    }
-
-    #[test]
-    fn help_node_matches_entry_rejects_other_local_name() {
-        let entry = build_entry(
-            "vulcan-codekit",
-            "rg",
-            Vec::new(),
-            json!({ "type": "object" }),
-        );
-        let node = RuntimeHelpNodeDescriptor {
-            flow_name: String::from("patch"),
-            description: String::from("Patch workflow."),
-            related_entries: vec![String::from("patch")],
-            is_main: false,
-        };
-
-        assert!(!help_node_matches_entry(&node, &entry));
     }
 
     fn build_entry(
