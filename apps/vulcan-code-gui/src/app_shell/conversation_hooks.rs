@@ -278,7 +278,7 @@ impl ConversationHookRuntime {
                 HookScope::Session,
             );
         }
-        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload)
+        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
     }
 
     /// Records a queued user prompt as timeline-only input without running precheck.
@@ -688,17 +688,32 @@ pub(super) struct ConversationPrecheckRequest {
     /// JSON payload sent to the hook point.
     /// 发送给 hook 点位的 JSON 载荷。
     payload: Value,
+    /// Logical turn id associated with this precheck request.
+    /// 与该 precheck 请求关联的逻辑回合标识。
+    turn_id: String,
 }
 
 impl ConversationPrecheckRequest {
     /// Builds one prepared asynchronous precheck request.
     /// 构建一条已准备的异步 precheck 请求。
-    fn new(dispatcher: HookDispatcher, session_id: SessionId, payload: Value) -> Self {
+    fn new(
+        dispatcher: HookDispatcher,
+        session_id: SessionId,
+        payload: Value,
+        turn_id: impl Into<String>,
+    ) -> Self {
         Self {
             dispatcher,
             session_id,
             payload,
+            turn_id: turn_id.into(),
         }
+    }
+
+    /// Returns the logical turn id associated with this precheck request.
+    /// 返回与该 precheck 请求关联的逻辑回合标识。
+    pub(super) fn turn_id(&self) -> &str {
+        &self.turn_id
     }
 
     /// Runs the precheck hook dispatch on a worker thread and returns a non-panicking report result.
@@ -712,6 +727,7 @@ impl ConversationPrecheckRequest {
     pub(super) fn skip(self) -> ConversationPrecheckOutcome {
         ConversationPrecheckOutcome {
             session_id: self.session_id,
+            turn_id: self.turn_id,
             report: Ok(HookDispatchReport::empty(HookPayload {
                 value: self.payload,
             })),
@@ -722,6 +738,7 @@ impl ConversationPrecheckRequest {
     /// 在私有 Tokio 运行时中执行异步 hook 调度，避免阻塞 UI 执行器。
     async fn run_on_worker_thread(self) -> ConversationPrecheckOutcome {
         let session_id = self.session_id;
+        let turn_id = self.turn_id.clone();
         let context = HookContext {
             run_id: format!("{}:{}", HOOK_CONVERSATION_TURN_PRECHECK, session_id),
             point: HOOK_CONVERSATION_TURN_PRECHECK.to_string(),
@@ -751,13 +768,18 @@ impl ConversationPrecheckRequest {
         if let Err(error) = spawn_result {
             return ConversationPrecheckOutcome {
                 session_id,
+                turn_id,
                 report: Err(format!("precheck hook thread failed to start: {error}")),
             };
         }
         let report = receiver
             .await
             .unwrap_or_else(|_| Err(String::from("precheck hook dispatch thread disconnected")));
-        ConversationPrecheckOutcome { session_id, report }
+        ConversationPrecheckOutcome {
+            session_id,
+            turn_id,
+            report,
+        }
     }
 }
 
@@ -795,6 +817,9 @@ pub(super) struct ConversationPrecheckOutcome {
     /// Hook dispatch report or a non-fatal error message.
     /// hook 调度报告或非致命错误消息。
     pub(super) report: Result<HookDispatchReport, String>,
+    /// Logical turn id associated with this precheck.
+    /// 与该 precheck 关联的逻辑回合标识。
+    pub(super) turn_id: String,
 }
 
 /// Extracts VMM writeback effects from one hook dispatch report.

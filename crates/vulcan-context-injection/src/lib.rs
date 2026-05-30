@@ -2,6 +2,7 @@
 //! 面向 hook 驱动 Provider 上下文覆盖层的共享上下文注入原语。
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Describes how one injection should be placed into the provider-facing request.
@@ -92,6 +93,18 @@ pub struct InjectionInsertItem {
     /// 仅在诊断和界面中展示的可选来源标签。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_display: Option<String>,
+    /// Optional renderer id used to turn structured metadata into model and UI text.
+    /// 用于将结构化元数据转换为模型与界面文本的可选渲染器标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer_id: Option<String>,
+    /// Optional structured metadata retained for plugin-specific rendering.
+    /// 为插件专属渲染保留的可选结构化元数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    /// Optional stable key used for deduplication before rendered text is built.
+    /// 在生成渲染文本前用于去重的可选稳定键。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<String>,
 }
 
 impl InjectionInsertItem {
@@ -103,6 +116,9 @@ impl InjectionInsertItem {
             ttl_turns: None,
             compaction_policy: None,
             source_display: None,
+            renderer_id: None,
+            metadata: None,
+            dedupe_key: None,
         }
     }
 }
@@ -250,6 +266,22 @@ pub struct InjectionStateItem {
     /// 仅在诊断和界面中展示的来源标签。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_display: Option<String>,
+    /// Optional renderer id used to turn structured metadata into model and UI text.
+    /// 用于将结构化元数据转换为模型与界面文本的可选渲染器标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renderer_id: Option<String>,
+    /// Optional structured metadata retained for plugin-specific rendering.
+    /// 为插件专属渲染保留的可选结构化元数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    /// Optional stable key used for deduplication before rendered text is built.
+    /// 在生成渲染文本前用于去重的可选稳定键。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<String>,
+    /// Logical turn marker that created or most recently refreshed this item.
+    /// 创建或最近刷新该内容项的逻辑回合标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_turn_marker: Option<String>,
     /// Unix-millis text captured when the item was first created.
     /// 内容项首次创建时捕获的 Unix 毫秒文本。
     #[serde(default)]
@@ -313,8 +345,19 @@ impl ContextInjectionState {
     /// Applies hook-collected insertion operations to the state.
     /// 将 hook 收集到的插入操作应用到当前状态。
     pub fn apply_inserts(&mut self, inserts: Vec<InjectionInsert>, now: &str) {
+        self.apply_inserts_for_turn(inserts, now, None);
+    }
+
+    /// Applies hook-collected insertion operations and records their creating turn marker.
+    /// 应用 hook 收集到的插入操作，并记录其创建回合标记。
+    pub fn apply_inserts_for_turn(
+        &mut self,
+        inserts: Vec<InjectionInsert>,
+        now: &str,
+        turn_marker: Option<&str>,
+    ) {
         for insert in inserts {
-            self.apply_insert(insert, now);
+            self.apply_insert_for_turn(insert, now, turn_marker);
         }
         self.remove_empty_groups();
     }
@@ -322,6 +365,17 @@ impl ContextInjectionState {
     /// Applies one hook-collected insertion operation to the state.
     /// 将一条 hook 收集到的插入操作应用到当前状态。
     pub fn apply_insert(&mut self, insert: InjectionInsert, now: &str) {
+        self.apply_insert_for_turn(insert, now, None);
+    }
+
+    /// Applies one insertion operation and records the creating turn marker on transient items.
+    /// 应用一条插入操作，并在临时内容项上记录创建回合标记。
+    pub fn apply_insert_for_turn(
+        &mut self,
+        insert: InjectionInsert,
+        now: &str,
+        turn_marker: Option<&str>,
+    ) {
         let tag = normalize_tag(&insert.tag);
         if tag.is_empty() {
             return;
@@ -348,7 +402,6 @@ impl ContextInjectionState {
             if normalized_content.is_empty() {
                 continue;
             }
-            let content_hash = stable_content_hash(&normalized_content);
             let ttl_turns = match insert.kind {
                 InjectionKind::Persistent => None,
                 InjectionKind::Transient => {
@@ -358,10 +411,29 @@ impl ContextInjectionState {
             if insert.kind == InjectionKind::Transient && ttl_turns.is_none() {
                 continue;
             }
+            let renderer_id = item.renderer_id.and_then(|value| {
+                let normalized = normalize_renderer_id(&value);
+                (!normalized.is_empty()).then_some(normalized)
+            });
+            let metadata = item.metadata;
+            let dedupe_key = item.dedupe_key.and_then(|value| {
+                let normalized = normalize_content(&value);
+                (!normalized.is_empty()).then_some(normalized)
+            });
+            let content_hash =
+                stable_content_hash(dedupe_key.as_deref().unwrap_or(normalized_content.as_str()));
             let compaction_policy = item.compaction_policy.unwrap_or(insert.compaction_policy);
             let source_display = item
                 .source_display
                 .or_else(|| insert.source_display.clone());
+            let created_turn_marker = if insert.kind == InjectionKind::Transient {
+                turn_marker
+                    .map(str::trim)
+                    .filter(|marker| !marker.is_empty())
+                    .map(str::to_string)
+            } else {
+                None
+            };
             group
                 .items
                 .entry(content_hash.clone())
@@ -371,6 +443,10 @@ impl ContextInjectionState {
                     existing.remaining_turns = ttl_turns;
                     existing.compaction_policy = compaction_policy;
                     existing.source_display = source_display.clone();
+                    existing.renderer_id = renderer_id.clone();
+                    existing.metadata = metadata.clone();
+                    existing.dedupe_key = dedupe_key.clone();
+                    existing.created_turn_marker = created_turn_marker.clone();
                     existing.updated_at = now.to_string();
                 })
                 .or_insert_with(|| InjectionStateItem {
@@ -381,6 +457,10 @@ impl ContextInjectionState {
                     last_consumed_turn_id: None,
                     compaction_policy,
                     source_display,
+                    renderer_id,
+                    metadata,
+                    dedupe_key,
+                    created_turn_marker,
                     created_at: now.to_string(),
                     updated_at: now.to_string(),
                 });
@@ -423,10 +503,19 @@ impl ContextInjectionState {
     /// Builds the provider-facing resolved view without mutating persisted state.
     /// 构建面向 Provider 的解析视图，同时不修改持久化状态。
     pub fn resolve_view(&self) -> ResolvedInjectionView {
+        self.resolve_view_with_options(&InjectionRenderOptions::default())
+    }
+
+    /// Builds the provider-facing resolved view with custom renderers and turn grouping.
+    /// 使用自定义渲染器与回合分组构建面向 Provider 的解析视图。
+    pub fn resolve_view_with_options(
+        &self,
+        options: &InjectionRenderOptions<'_>,
+    ) -> ResolvedInjectionView {
         let mut persistent_blocks = Vec::new();
         let mut transient_blocks = Vec::new();
         for group in self.sorted_groups() {
-            let Some(block) = render_group_block(group) else {
+            let Some(block) = render_group_block(group, options) else {
                 continue;
             };
             match group.kind {
@@ -451,6 +540,15 @@ impl ContextInjectionState {
     /// Builds the simple side-panel cards from currently effective items.
     /// 根据当前有效内容项构建简洁侧面板卡片。
     pub fn panel_cards(&self) -> Vec<InjectionPanelCard> {
+        self.panel_cards_with_registry(&InjectionRendererRegistry::default())
+    }
+
+    /// Builds side-panel cards with renderer-specific summaries and details.
+    /// 使用渲染器专属摘要与详情构建侧面板卡片。
+    pub fn panel_cards_with_registry(
+        &self,
+        registry: &InjectionRendererRegistry,
+    ) -> Vec<InjectionPanelCard> {
         self.sorted_groups()
             .into_iter()
             .filter_map(|group| {
@@ -458,7 +556,9 @@ impl ContextInjectionState {
                     .items
                     .values()
                     .map(|item| InjectionPanelItem {
-                        content: item.content.clone(),
+                        content: registry.panel_content(item),
+                        detail: registry.panel_detail(item),
+                        turn_label: item_turn_label(item, None),
                         ttl_label: item
                             .remaining_turns
                             .map(|ttl| format!("TTL: {ttl}"))
@@ -532,9 +632,15 @@ pub struct InjectionPanelCard {
 /// 一个活动注入内容对应的简洁侧面板条目。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InjectionPanelItem {
-    /// Full provider-visible item content.
-    /// 完整的 Provider 可见内容项。
+    /// Compact item content shown directly inside the panel.
+    /// 直接显示在面板中的紧凑内容项。
     pub content: String,
+    /// Detailed hover text assembled by the renderer.
+    /// 由渲染器组装的悬停详情文本。
+    pub detail: String,
+    /// Optional turn-origin label shown in the panel.
+    /// 面板中展示的可选回合来源标签。
+    pub turn_label: Option<String>,
     /// Human-readable TTL label shown in muted text.
     /// 以灰色文字展示的人类可读 TTL 标签。
     pub ttl_label: String,
@@ -543,9 +649,117 @@ pub struct InjectionPanelItem {
     pub source_display: Option<String>,
 }
 
+/// Options used when rendering provider-visible injection blocks.
+/// 渲染 Provider 可见注入块时使用的选项。
+pub struct InjectionRenderOptions<'a> {
+    /// Renderer registry used for structured plugin metadata.
+    /// 用于结构化插件元数据的渲染器注册表。
+    pub registry: &'a InjectionRendererRegistry,
+    /// Current logical turn marker used to split transient items.
+    /// 用于拆分临时内容项的当前逻辑回合标记。
+    pub current_turn_marker: Option<&'a str>,
+}
+
+impl Default for InjectionRenderOptions<'_> {
+    /// Builds default render options with no custom renderer and no current turn marker.
+    /// 构建无自定义渲染器且无当前回合标记的默认渲染选项。
+    fn default() -> Self {
+        Self {
+            registry: &DEFAULT_RENDERER_REGISTRY,
+            current_turn_marker: None,
+        }
+    }
+}
+
+/// Empty renderer registry used by default render options.
+/// 默认渲染选项使用的空渲染器注册表。
+static DEFAULT_RENDERER_REGISTRY: InjectionRendererRegistry = InjectionRendererRegistry {
+    renderers: BTreeMap::new(),
+};
+
+/// Renderer callback set for one structured injection item type.
+/// 单类结构化注入内容项的渲染回调集合。
+#[derive(Clone, Copy)]
+pub struct InjectionItemRenderer {
+    /// Renders one item for provider-visible model context.
+    /// 为模型可见上下文渲染单条内容项。
+    pub render_model: fn(&InjectionStateItem) -> String,
+    /// Renders one compact panel row.
+    /// 渲染一条紧凑面板行。
+    pub render_panel: fn(&InjectionStateItem) -> String,
+    /// Renders one detailed panel tooltip body.
+    /// 渲染一段详细面板悬停正文。
+    pub render_detail: fn(&InjectionStateItem) -> String,
+}
+
+/// Registry that maps structured injection renderer ids to renderers.
+/// 将结构化注入渲染器标识映射到渲染器的注册表。
+#[derive(Default)]
+pub struct InjectionRendererRegistry {
+    /// Registered renderers keyed by renderer id.
+    /// 按渲染器标识索引的已注册渲染器。
+    renderers: BTreeMap<String, InjectionItemRenderer>,
+}
+
+impl InjectionRendererRegistry {
+    /// Registers one renderer id and returns the registry for chaining.
+    /// 注册一个渲染器标识，并返回注册表以便链式调用。
+    pub fn with_renderer(mut self, id: impl Into<String>, renderer: InjectionItemRenderer) -> Self {
+        self.register(id, renderer);
+        self
+    }
+
+    /// Registers or replaces one renderer id.
+    /// 注册或替换一个渲染器标识。
+    pub fn register(&mut self, id: impl Into<String>, renderer: InjectionItemRenderer) {
+        let id = normalize_renderer_id(&id.into());
+        if !id.is_empty() {
+            self.renderers.insert(id, renderer);
+        }
+    }
+
+    /// Renders one item for provider-visible model context.
+    /// 为模型可见上下文渲染一条内容项。
+    pub fn model_content(&self, item: &InjectionStateItem) -> String {
+        self.renderer_for(item)
+            .map(|renderer| (renderer.render_model)(item))
+            .filter(|content| !content.trim().is_empty())
+            .unwrap_or_else(|| item.content.clone())
+    }
+
+    /// Renders one compact panel row.
+    /// 渲染一条紧凑面板行。
+    pub fn panel_content(&self, item: &InjectionStateItem) -> String {
+        self.renderer_for(item)
+            .map(|renderer| (renderer.render_panel)(item))
+            .filter(|content| !content.trim().is_empty())
+            .unwrap_or_else(|| item.content.clone())
+    }
+
+    /// Renders one detailed panel tooltip body.
+    /// 渲染一段详细面板悬停正文。
+    pub fn panel_detail(&self, item: &InjectionStateItem) -> String {
+        self.renderer_for(item)
+            .map(|renderer| (renderer.render_detail)(item))
+            .filter(|content| !content.trim().is_empty())
+            .unwrap_or_else(|| item.content.clone())
+    }
+
+    /// Returns the renderer registered for one item.
+    /// 返回一条内容项注册的渲染器。
+    fn renderer_for(&self, item: &InjectionStateItem) -> Option<&InjectionItemRenderer> {
+        item.renderer_id
+            .as_deref()
+            .and_then(|id| self.renderers.get(id))
+    }
+}
+
 /// Renders one group into provider-facing tag text.
 /// 将一个分组渲染为面向 Provider 的标签文本。
-fn render_group_block(group: &InjectionStateGroup) -> Option<String> {
+fn render_group_block(
+    group: &InjectionStateGroup,
+    options: &InjectionRenderOptions<'_>,
+) -> Option<String> {
     if group.items.is_empty() {
         return None;
     }
@@ -555,11 +769,58 @@ fn render_group_block(group: &InjectionStateGroup) -> Option<String> {
     if !description.is_empty() {
         lines.push(description.to_string());
     }
-    for item in group.items.values() {
-        lines.push(item.content.clone());
+    match group.kind {
+        InjectionKind::Persistent => {
+            for item in group.items.values() {
+                let content = options.registry.model_content(item);
+                if !content.trim().is_empty() {
+                    lines.push(content);
+                }
+            }
+        }
+        InjectionKind::Transient => {
+            append_transient_section(
+                &mut lines,
+                "CURRENT_TURN",
+                group.items.values().filter(|item| {
+                    item_turn_origin(item, options.current_turn_marker)
+                        == InjectionTurnOrigin::Current
+                }),
+                options.registry,
+            );
+            append_transient_section(
+                &mut lines,
+                "RETAINED_FROM_EARLIER_TURNS",
+                group.items.values().filter(|item| {
+                    item_turn_origin(item, options.current_turn_marker)
+                        == InjectionTurnOrigin::Retained
+                }),
+                options.registry,
+            );
+        }
     }
     lines.push(format!("</{}>", group.tag));
     Some(lines.join("\n"))
+}
+
+/// Appends one transient turn-origin section when it contains renderable items.
+/// 当临时回合来源分段包含可渲染内容项时追加该分段。
+fn append_transient_section<'a>(
+    lines: &mut Vec<String>,
+    section_tag: &str,
+    items: impl Iterator<Item = &'a InjectionStateItem>,
+    registry: &InjectionRendererRegistry,
+) {
+    let contents = items
+        .map(|item| registry.model_content(item))
+        .filter(|content| !content.trim().is_empty())
+        .collect::<Vec<_>>();
+    if contents.is_empty() {
+        return;
+    }
+    lines.push(format!("<{section_tag}>"));
+    lines.extend(contents);
+    lines.push(format!("</{section_tag}>"));
 }
 
 /// Normalizes one tag name to the stable limited form accepted by the renderer.
@@ -575,6 +836,59 @@ fn normalize_tag(tag: &str) -> String {
 /// 规范化一条 Provider 可见内容值。
 fn normalize_content(content: &str) -> String {
     content.trim().replace("\r\n", "\n").replace('\r', "\n")
+}
+
+/// Normalizes one renderer id to a stable lookup key.
+/// 将渲染器标识规范化为稳定查询键。
+fn normalize_renderer_id(id: &str) -> String {
+    id.trim().to_ascii_lowercase()
+}
+
+/// Provider-visible transient turn-origin category.
+/// Provider 可见临时注入的回合来源分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InjectionTurnOrigin {
+    /// Item belongs to the current user turn.
+    /// 内容项属于当前用户回合。
+    Current,
+    /// Item was retained from an earlier user turn.
+    /// 内容项从更早用户回合保留下来。
+    Retained,
+}
+
+/// Classifies one item by comparing its marker to the current turn marker.
+/// 通过比较内容项标记与当前回合标记对其分类。
+fn item_turn_origin(
+    item: &InjectionStateItem,
+    current_turn_marker: Option<&str>,
+) -> InjectionTurnOrigin {
+    let Some(current_turn_marker) = current_turn_marker
+        .map(str::trim)
+        .filter(|marker| !marker.is_empty())
+    else {
+        return if item.last_consumed_turn_id.is_some() {
+            InjectionTurnOrigin::Retained
+        } else {
+            InjectionTurnOrigin::Current
+        };
+    };
+    if item.created_turn_marker.as_deref() == Some(current_turn_marker) {
+        InjectionTurnOrigin::Current
+    } else {
+        InjectionTurnOrigin::Retained
+    }
+}
+
+/// Builds a short human label for one item's turn origin.
+/// 为内容项回合来源构建简短人类标签。
+fn item_turn_label(item: &InjectionStateItem, current_turn_marker: Option<&str>) -> Option<String> {
+    if item.created_turn_marker.is_none() {
+        return None;
+    }
+    Some(match item_turn_origin(item, current_turn_marker) {
+        InjectionTurnOrigin::Current => String::from("当前轮次"),
+        InjectionTurnOrigin::Retained => String::from("历史保留"),
+    })
 }
 
 /// Builds a stable short content hash without adding an extra dependency.
@@ -635,7 +949,7 @@ mod tests {
         let view = state.resolve_view();
         assert_eq!(
             view.transient_prefix,
-            "<vmm_inject>\n这是vmm记忆的说明，以下内容仅供参考，不作为事实标准\nVMM_ID:137 这个是某个记忆\n</vmm_inject>"
+            "<vmm_inject>\n这是vmm记忆的说明，以下内容仅供参考，不作为事实标准\n<CURRENT_TURN>\nVMM_ID:137 这个是某个记忆\n</CURRENT_TURN>\n</vmm_inject>"
         );
         assert!(!view.transient_prefix.contains("TTL"));
         assert!(!view.transient_prefix.contains("source"));
@@ -669,6 +983,9 @@ mod tests {
             ttl_turns: Some(5),
             compaction_policy: Some(InjectionCompactionPolicy::Clear),
             source_display: None,
+            renderer_id: None,
+            metadata: None,
+            dedupe_key: None,
         });
         state.apply_insert(insert, "1");
 
@@ -693,6 +1010,9 @@ mod tests {
             ttl_turns: Some(5),
             compaction_policy: None,
             source_display: None,
+            renderer_id: None,
+            metadata: None,
+            dedupe_key: None,
         });
         state.apply_insert(insert, "1");
 
@@ -723,5 +1043,109 @@ mod tests {
             cards[0].items[0].source_display.as_deref(),
             Some("manual-test")
         );
+    }
+
+    /// Renders test structured items for model context.
+    /// 为测试结构化内容项渲染模型上下文。
+    fn test_render_model(item: &InjectionStateItem) -> String {
+        format!("model:{}", item.content)
+    }
+
+    /// Renders test structured items for the side panel.
+    /// 为测试结构化内容项渲染侧边栏内容。
+    fn test_render_panel(item: &InjectionStateItem) -> String {
+        format!("panel:{}", item.content)
+    }
+
+    /// Renders test structured item details for the side panel.
+    /// 为测试结构化内容项渲染侧边栏详情。
+    fn test_render_detail(item: &InjectionStateItem) -> String {
+        format!("detail:{}", item.content)
+    }
+
+    /// Builds the renderer registry used by structured item tests.
+    /// 构建结构化内容项测试使用的渲染器注册表。
+    fn test_registry() -> InjectionRendererRegistry {
+        InjectionRendererRegistry::default().with_renderer(
+            "test.memory",
+            InjectionItemRenderer {
+                render_model: test_render_model,
+                render_panel: test_render_panel,
+                render_detail: test_render_detail,
+            },
+        )
+    }
+
+    #[test]
+    fn structured_renderer_controls_model_and_panel_output() {
+        let mut insert = transient_insert("desc", "memory", 5);
+        insert.items[0].renderer_id = Some(String::from("test.memory"));
+        insert.items[0].metadata = Some(serde_json::json!({ "id": 1 }));
+        let mut state = ContextInjectionState::default();
+        state.apply_insert_for_turn(insert, "1", Some("turn-a"));
+        let registry = test_registry();
+        let options = InjectionRenderOptions {
+            registry: &registry,
+            current_turn_marker: Some("turn-a"),
+        };
+
+        let view = state.resolve_view_with_options(&options);
+        let cards = state.panel_cards_with_registry(&registry);
+
+        assert!(view.transient_prefix.contains("<CURRENT_TURN>"));
+        assert!(view.transient_prefix.contains("model:memory"));
+        assert_eq!(cards[0].items[0].content, "panel:memory");
+        assert_eq!(cards[0].items[0].detail, "detail:memory");
+        assert_eq!(cards[0].items[0].turn_label.as_deref(), Some("当前轮次"));
+    }
+
+    #[test]
+    fn transient_render_splits_current_and_retained_turn_items() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert_for_turn(transient_insert("desc", "current", 5), "1", Some("turn-b"));
+        state.apply_insert_for_turn(transient_insert("desc", "retained", 5), "2", Some("turn-a"));
+        let options = InjectionRenderOptions {
+            registry: &InjectionRendererRegistry::default(),
+            current_turn_marker: Some("turn-b"),
+        };
+
+        let view = state.resolve_view_with_options(&options);
+
+        assert!(view.transient_prefix.contains("<CURRENT_TURN>\ncurrent"));
+        assert!(
+            view.transient_prefix
+                .contains("<RETAINED_FROM_EARLIER_TURNS>\nretained")
+        );
+    }
+
+    #[test]
+    fn structured_dedupe_key_resets_ttl_without_duplicate_items() {
+        let mut insert = transient_insert("old", "first text", 2);
+        insert.items[0].dedupe_key = Some(String::from("memory:1"));
+        let mut state = ContextInjectionState::default();
+        state.apply_insert_for_turn(insert, "1", Some("turn-a"));
+        state.consume_turn("turn-a", "2");
+        let mut refreshed = transient_insert("new", "updated text", 5);
+        refreshed.items[0].dedupe_key = Some(String::from("memory:1"));
+
+        state.apply_insert_for_turn(refreshed, "3", Some("turn-b"));
+
+        let group = state.groups.get("vmm_inject").expect("group exists");
+        assert_eq!(group.items.len(), 1);
+        let item = group.items.values().next().expect("item exists");
+        assert_eq!(item.content, "updated text");
+        assert_eq!(item.remaining_turns, Some(5));
+        assert_eq!(item.created_turn_marker.as_deref(), Some("turn-b"));
+    }
+
+    #[test]
+    fn panel_label_treats_consumed_transient_items_as_retained_without_current_marker() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert_for_turn(transient_insert("desc", "memory", 5), "1", Some("turn-a"));
+        state.consume_turn("turn-a", "2");
+
+        let cards = state.panel_cards();
+
+        assert_eq!(cards[0].items[0].turn_label.as_deref(), Some("历史保留"));
     }
 }

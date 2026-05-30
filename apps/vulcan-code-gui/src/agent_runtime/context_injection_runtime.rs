@@ -3,6 +3,7 @@
 
 use vulcan_context_injection::{
     ContextInjectionState, InjectionHelper, InjectionInsert, InjectionKind, InjectionPanelCard,
+    InjectionRenderOptions, InjectionRendererRegistry,
 };
 use vulcan_core::types::ProviderContextInjection as CoreProviderContextInjection;
 
@@ -10,12 +11,18 @@ use vulcan_core::types::ProviderContextInjection as CoreProviderContextInjection
 /// 用户提示词中内置手动测试 hook 使用的标记前缀。
 const MANUAL_TEST_INJECTION_PREFIX: &str = "@inject ";
 
-/// Converts shared context-injection state into the core provider-facing overlay.
-/// 将共享上下文注入状态转换为 core 的 Provider 可见覆盖层。
-pub(crate) fn core_provider_context_injection_from_state(
+/// Converts shared context-injection state into the core overlay for one logical turn.
+/// 将共享上下文注入状态转换为某个逻辑回合的 core 覆盖层。
+pub(crate) fn core_provider_context_injection_from_state_for_turn(
     state: &ContextInjectionState,
+    current_turn_marker: Option<&str>,
 ) -> Option<CoreProviderContextInjection> {
-    let view = state.resolve_view();
+    let registry = context_injection_renderer_registry();
+    let options = InjectionRenderOptions {
+        registry: &registry,
+        current_turn_marker,
+    };
+    let view = state.resolve_view_with_options(&options);
     let injection = CoreProviderContextInjection {
         persistent_blocks: view.persistent_blocks,
         transient_prefix: view.transient_prefix,
@@ -29,7 +36,17 @@ pub(crate) fn core_provider_context_injection_from_state(
 pub(crate) fn context_injection_panel_cards(
     state: &ContextInjectionState,
 ) -> Vec<InjectionPanelCard> {
-    state.panel_cards()
+    let registry = context_injection_renderer_registry();
+    state.panel_cards_with_registry(&registry)
+}
+
+/// Builds the renderer registry used by GUI runtime context-injection views.
+/// 构建 GUI 运行时上下文注入视图使用的渲染器注册表。
+fn context_injection_renderer_registry() -> InjectionRendererRegistry {
+    InjectionRendererRegistry::default().with_renderer(
+        vulcan_vmm::adapter::VMM_PRECHECK_MEMORY_RENDERER_ID,
+        vulcan_vmm::adapter::vmm_precheck_memory_renderer(),
+    )
 }
 
 /// Runs the built-in manual test hook and returns collected injections plus the cleaned user prompt.

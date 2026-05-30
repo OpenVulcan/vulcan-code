@@ -7,11 +7,12 @@ use crate::protocol::{
     PreCheckRequest, PreCheckResponse,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::fmt::{self, Display};
 use vulcan_context_injection::{
-    InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionKind, InjectionScope,
+    InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionItemRenderer,
+    InjectionKind, InjectionScope, InjectionStateItem,
 };
 
 /// Maximum user content characters sent to VMM.
@@ -25,6 +26,30 @@ const ASSISTANT_CONTENT_LIMIT: usize = 6_000;
 /// Maximum middle timeline content characters sent to VMM.
 /// 发送给 VMM 的中间时间线内容最大字符数。
 const TIMELINE_CONTENT_LIMIT: usize = 1_600;
+
+/// Renderer id used for VMM precheck memory injection items.
+/// VMM precheck 记忆注入项使用的渲染器标识。
+pub const VMM_PRECHECK_MEMORY_RENDERER_ID: &str = "vmm.precheck.memory";
+
+/// Metadata key for VMM precheck memory text.
+/// VMM precheck 记忆文本的元数据键。
+const VMM_METADATA_TEXT: &str = "text";
+
+/// Metadata key for VMM relevance score.
+/// VMM 相关性分数的元数据键。
+const VMM_METADATA_SCORE: &str = "score";
+
+/// Metadata key for source turn id.
+/// 来源 turn 标识的元数据键。
+const VMM_METADATA_TURN_ID: &str = "turn_id";
+
+/// Metadata key for source dialogue availability.
+/// 来源对话可回查性的元数据键。
+const VMM_METADATA_HAS_DIALOGUE: &str = "has_dialogue";
+
+/// Metadata key for VMM creation datetime.
+/// VMM 创建时间的元数据键。
+const VMM_METADATA_CREATED_DATETIME: &str = "created_datetime";
 
 /// Error returned while projecting hook payload into VMM requests.
 /// 将 hook payload 投影为 VMM 请求时返回的错误。
@@ -154,12 +179,12 @@ pub fn injection_from_precheck_response(
     let items = response
         .context_items
         .iter()
-        .filter_map(format_context_item)
-        .map(|content| InjectionInsertItem {
-            content,
+        .filter_map(vmm_context_item_to_injection_item)
+        .map(|item| InjectionInsertItem {
             ttl_turns: Some(config.implicit_memory_turns),
             compaction_policy: Some(InjectionCompactionPolicy::Keep),
             source_display: Some(String::from("VMM")),
+            ..item
         })
         .collect::<Vec<_>>();
     if items.is_empty() {
@@ -274,28 +299,104 @@ fn dedupe_adjacent_timeline(timeline: Vec<PostActionTimelineItem>) -> Vec<PostAc
     deduped
 }
 
-/// Formats one PreCheck context item into provider-visible recall content.
-/// 将一条 PreCheck 上下文项格式化为 Provider 可见召回内容。
-fn format_context_item(item: &ContextItem) -> Option<String> {
+/// Builds the renderer used for VMM precheck memory items.
+/// 构建 VMM precheck 记忆内容项使用的渲染器。
+pub fn vmm_precheck_memory_renderer() -> InjectionItemRenderer {
+    InjectionItemRenderer {
+        render_model: render_vmm_precheck_memory_model,
+        render_panel: render_vmm_precheck_memory_panel,
+        render_detail: render_vmm_precheck_memory_detail,
+    }
+}
+
+/// Converts one PreCheck context item into a structured injection item.
+/// 将一条 PreCheck 上下文项转换为结构化注入内容项。
+fn vmm_context_item_to_injection_item(item: &ContextItem) -> Option<InjectionInsertItem> {
     let text = collapse_context_item_text(&item.text);
     if text.is_empty() {
         return None;
     }
-    let turn_label = format_context_turn_label(item);
-    let source_score = format_context_source_score(item.score);
-    let created_time = format_context_created_time(&item.created_datetime)
-        .map(|time| format!("|TIME:{time}"))
-        .unwrap_or_default();
-    Some(format!(
-        "[{turn_label}|SOURCE:{source_score}{created_time}]{text}"
-    ))
+    let metadata = json!({
+        VMM_METADATA_TEXT: item.text,
+        VMM_METADATA_SCORE: item.score,
+        VMM_METADATA_TURN_ID: item.turn_id,
+        VMM_METADATA_HAS_DIALOGUE: item.has_dialogue,
+        VMM_METADATA_CREATED_DATETIME: item.created_datetime,
+    });
+    let turn_identity = if item.has_dialogue && item.turn_id > 0 {
+        format!("turn:{}", item.turn_id)
+    } else {
+        String::from("noturn")
+    };
+    let dedupe_key = format!("{VMM_PRECHECK_MEMORY_RENDERER_ID}:{turn_identity}:{text}");
+    Some(InjectionInsertItem {
+        content: text,
+        renderer_id: Some(String::from(VMM_PRECHECK_MEMORY_RENDERER_ID)),
+        metadata: Some(metadata),
+        dedupe_key: Some(dedupe_key),
+        ..InjectionInsertItem::new(String::new())
+    })
 }
 
-/// Builds the dialogue lookup marker for one recalled context item.
-/// 为单条召回上下文构建对话回查标记。
-fn format_context_turn_label(item: &ContextItem) -> String {
-    if item.has_dialogue && item.turn_id > 0 {
-        format!("TURN_ID:{}", item.turn_id)
+/// Renders one VMM precheck memory item for provider-visible model context.
+/// 为模型可见上下文渲染一条 VMM precheck 记忆项。
+fn render_vmm_precheck_memory_model(item: &InjectionStateItem) -> String {
+    let text = vmm_metadata_text(item);
+    if text.is_empty() {
+        return item.content.clone();
+    }
+    let turn_label = format_vmm_metadata_turn_label(item);
+    let source_score = format_context_source_score(vmm_metadata_score(item));
+    let created_time = vmm_metadata_created_datetime(item)
+        .map(|time| format!("|TIME:{time}"))
+        .unwrap_or_default();
+    format!("[{turn_label}|SOURCE:{source_score}{created_time}]{text}")
+}
+
+/// Renders one compact VMM precheck memory panel row.
+/// 渲染一条紧凑的 VMM precheck 记忆面板行。
+fn render_vmm_precheck_memory_panel(item: &InjectionStateItem) -> String {
+    let text = vmm_metadata_text(item);
+    if text.is_empty() {
+        item.content.clone()
+    } else {
+        text
+    }
+}
+
+/// Renders one detailed VMM precheck memory tooltip body.
+/// 渲染一段详细的 VMM precheck 记忆悬停正文。
+fn render_vmm_precheck_memory_detail(item: &InjectionStateItem) -> String {
+    let mut lines = Vec::new();
+    let text = vmm_metadata_text(item);
+    if !text.is_empty() {
+        lines.push(format!("内容：{text}"));
+    }
+    if let Some(created_datetime) = vmm_metadata_created_datetime(item) {
+        lines.push(format!("时间：{created_datetime}"));
+    }
+    lines.push(format!("来源：{}", format_vmm_metadata_turn_label(item)));
+    lines.push(format!(
+        "相关性：{}",
+        format_context_source_score(vmm_metadata_score(item))
+    ));
+    lines.push(format!(
+        "可回查：{}",
+        if vmm_metadata_has_dialogue(item) {
+            "是"
+        } else {
+            "否"
+        }
+    ));
+    lines.join("\n")
+}
+
+/// Builds the dialogue lookup marker from structured VMM metadata.
+/// 从结构化 VMM 元数据构建对话回查标记。
+fn format_vmm_metadata_turn_label(item: &InjectionStateItem) -> String {
+    let turn_id = vmm_metadata_turn_id(item);
+    if vmm_metadata_has_dialogue(item) && turn_id > 0 {
+        format!("TURN_ID:{turn_id}")
     } else {
         String::from("NOTURN")
     }
@@ -320,6 +421,58 @@ fn format_context_created_time(value: &str) -> Option<String> {
     } else {
         Some(normalized)
     }
+}
+
+/// Reads structured VMM memory text from one injection item.
+/// 从注入内容项读取结构化 VMM 记忆文本。
+fn vmm_metadata_text(item: &InjectionStateItem) -> String {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_TEXT))
+        .and_then(Value::as_str)
+        .map(collapse_context_item_text)
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| item.content.clone())
+}
+
+/// Reads structured VMM relevance score from one injection item.
+/// 从注入内容项读取结构化 VMM 相关性分数。
+fn vmm_metadata_score(item: &InjectionStateItem) -> f64 {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_SCORE))
+        .and_then(Value::as_f64)
+        .unwrap_or_default()
+}
+
+/// Reads structured VMM source turn id from one injection item.
+/// 从注入内容项读取结构化 VMM 来源 turn 标识。
+fn vmm_metadata_turn_id(item: &InjectionStateItem) -> u64 {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_TURN_ID))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+}
+
+/// Reads structured VMM dialogue availability from one injection item.
+/// 从注入内容项读取结构化 VMM 对话可回查性。
+fn vmm_metadata_has_dialogue(item: &InjectionStateItem) -> bool {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_HAS_DIALOGUE))
+        .and_then(Value::as_bool)
+        .unwrap_or_default()
+}
+
+/// Reads structured VMM creation datetime from one injection item.
+/// 从注入内容项读取结构化 VMM 创建时间。
+fn vmm_metadata_created_datetime(item: &InjectionStateItem) -> Option<String> {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_CREATED_DATETIME))
+        .and_then(Value::as_str)
+        .and_then(format_context_created_time)
 }
 
 /// Collapses a recalled context field into one compact inline string.
@@ -496,14 +649,74 @@ mod tests {
         assert_eq!(insert.tag, "vmm_inject");
         assert_eq!(insert.ttl_turns, Some(5));
         assert_eq!(insert.items.len(), 2);
+        assert_eq!(insert.items[0].content, "memory one second line");
         assert_eq!(
-            insert.items[0].content,
-            "[TURN_ID:11|SOURCE:0.999|TIME:2026-05-02 14:20:00]memory one second line"
+            insert.items[0].renderer_id.as_deref(),
+            Some(VMM_PRECHECK_MEMORY_RENDERER_ID)
         );
         assert_eq!(
-            insert.items[1].content,
-            "[NOTURN|SOURCE:0.250]detached memory"
+            insert.items[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(VMM_METADATA_TEXT))
+                .and_then(Value::as_str),
+            Some("memory one\nsecond line")
         );
+        assert_eq!(
+            insert.items[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(VMM_METADATA_TURN_ID))
+                .and_then(Value::as_u64),
+            Some(11)
+        );
+        assert_eq!(insert.items[1].content, "detached memory");
         assert_eq!(insert.items[0].source_display.as_deref(), Some("VMM"));
+    }
+
+    #[test]
+    fn vmm_renderer_builds_model_and_panel_text_from_metadata() {
+        let mut state = vulcan_context_injection::ContextInjectionState::default();
+        let response = PreCheckResponse {
+            should_inject: true,
+            context_items: vec![ContextItem {
+                text: String::from("memory one\nsecond line"),
+                score: 0.9986,
+                turn_id: 11,
+                has_dialogue: true,
+                created_datetime: String::from("2026-05-02 14:20:00"),
+            }],
+            ..PreCheckResponse::default()
+        };
+        state.apply_insert_for_turn(
+            injection_from_precheck_response(&response, &ready_config()).expect("insert"),
+            "1",
+            Some("turn-a"),
+        );
+        let registry = vulcan_context_injection::InjectionRendererRegistry::default()
+            .with_renderer(
+                VMM_PRECHECK_MEMORY_RENDERER_ID,
+                vmm_precheck_memory_renderer(),
+            );
+        let options = vulcan_context_injection::InjectionRenderOptions {
+            registry: &registry,
+            current_turn_marker: Some("turn-a"),
+        };
+
+        let view = state.resolve_view_with_options(&options);
+        let cards = state.panel_cards_with_registry(&registry);
+
+        assert!(view.transient_prefix.contains("<CURRENT_TURN>"));
+        assert!(
+            view.transient_prefix.contains(
+                "[TURN_ID:11|SOURCE:0.999|TIME:2026-05-02 14:20:00]memory one second line"
+            )
+        );
+        assert_eq!(cards[0].items[0].content, "memory one second line");
+        assert!(
+            cards[0].items[0]
+                .detail
+                .contains("时间：2026-05-02 14:20:00")
+        );
     }
 }

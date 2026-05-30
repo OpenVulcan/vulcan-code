@@ -938,6 +938,8 @@ fn runtime_state_rows_store_context_injection_state_separately() {
             description: String::from("临时说明"),
             items: vec![vulcan_context_injection::InjectionPanelItem {
                 content: String::from("隐藏内容"),
+                detail: String::from("隐藏内容"),
+                turn_label: None,
                 ttl_label: String::from("TTL: 3"),
                 source_display: None,
             }],

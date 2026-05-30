@@ -10,8 +10,7 @@ pub const DEFAULT_VMM_INJECTION_TAG: &str = "vmm_inject";
 
 /// Default tag description rendered before VMM recall items.
 /// VMM 召回条目前渲染的默认标签说明。
-pub const DEFAULT_VMM_INJECTION_DESCRIPTION: &str =
-    "VMM memory context. These notes are for reference only and are not authoritative facts.";
+pub const DEFAULT_VMM_INJECTION_DESCRIPTION: &str = "VMM memory context. CURRENT_TURN items were recalled for the latest user request; RETAINED_FROM_EARLIER_TURNS items remain from earlier turns by TTL. These notes are for reference only and are not authoritative facts.";
 
 /// Default handshake timeout used before a project overrides it.
 /// 项目覆盖前使用的默认握手超时时间。

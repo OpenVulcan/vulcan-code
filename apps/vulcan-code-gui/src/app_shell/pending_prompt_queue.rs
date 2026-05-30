@@ -905,14 +905,6 @@ impl VulcanWorkbench {
             self.status_message = error;
             return Task::none();
         }
-        if !injection_ops.is_empty() {
-            let now = current_unix_millis_text();
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state
-                .context_injection_state
-                .apply_inserts(injection_ops, &now);
-            runtime_state.updated_at = now;
-        }
         let hook_conversation_state = self.session_conversation_state(session_id);
         let precheck_request = self.conversation_hook_runtime.prepare_user_prompt_precheck(
             session_id,
@@ -924,6 +916,15 @@ impl VulcanWorkbench {
             &prompt_entry.prompt,
             &hook_conversation_state,
         );
+        let precheck_turn_id = precheck_request.turn_id().to_string();
+        if !injection_ops.is_empty() {
+            let now = current_unix_millis_text();
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            runtime_state
+                .context_injection_state
+                .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
+            runtime_state.updated_at = now;
+        }
         let vmm_precheck_enabled = {
             let session_layer = self
                 .session_runtime_state(session_id)
@@ -1106,7 +1107,7 @@ impl VulcanWorkbench {
                     let runtime_state = self.ensure_session_runtime_state_mut(session_id);
                     runtime_state
                         .context_injection_state
-                        .apply_inserts(report.injections, &now);
+                        .apply_inserts_for_turn(report.injections, &now, Some(&outcome.turn_id));
                     runtime_state.updated_at = now;
                 }
             }
@@ -1170,8 +1171,9 @@ impl VulcanWorkbench {
             context_injection: self
                 .session_runtime_state(session_id)
                 .and_then(|state| {
-                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state(
+                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state_for_turn(
                         &state.context_injection_state,
+                        Some(&outcome.turn_id),
                     )
                 }),
             project_vmm: self.current_project_vmm_configuration(session_id),

@@ -2,7 +2,7 @@
 //! 上下文注入侧面板视图组合逻辑。
 
 use super::*;
-use iced::widget::column;
+use iced::widget::{column, tooltip};
 
 impl VulcanWorkbench {
     /// Builds the read-only context-injection panel for the selected session.
@@ -54,28 +54,53 @@ impl VulcanWorkbench {
         let palette = self.app_theme.extended_palette();
         let mut item_list = column![].spacing(8);
         for item in card.items {
+            let turn_label = item
+                .turn_label
+                .as_deref()
+                .filter(|label| !label.trim().is_empty())
+                .map(str::to_string);
             let source_label = item
                 .source_display
                 .as_deref()
                 .filter(|source| !source.trim().is_empty())
                 .map(|source| format!("来源：{source} · {}", item.ttl_label))
                 .unwrap_or(item.ttl_label);
-            item_list = item_list.push(
-                container(
-                    column![
-                        text(item.content)
-                            .size(13)
+            let meta_label = turn_label
+                .map(|turn| format!("{turn} · {source_label}"))
+                .unwrap_or(source_label);
+            let item_box = container(
+                column![
+                    text(item.content)
+                        .size(13)
+                        .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
+                    text(meta_label)
+                        .size(11)
+                        .color(palette.background.base.text.scale_alpha(0.54)),
+                ]
+                .spacing(8),
+            )
+            .padding([10, 12])
+            .width(Fill)
+            .style(container::rounded_box);
+            let detail = item.detail.trim().to_string();
+            let item_element: Element<'_, Message> = if detail.is_empty() {
+                item_box.into()
+            } else {
+                tooltip(
+                    item_box,
+                    container(
+                        text(detail)
+                            .size(12)
                             .wrapping(iced::advanced::text::Wrapping::WordOrGlyph),
-                        text(source_label)
-                            .size(11)
-                            .color(palette.background.base.text.scale_alpha(0.54)),
-                    ]
-                    .spacing(8),
+                    )
+                    .padding(10)
+                    .style(container::bordered_box)
+                    .width(iced::Length::Fixed(320.0)),
+                    tooltip::Position::Left,
                 )
-                .padding([10, 12])
-                .width(Fill)
-                .style(container::rounded_box),
-            );
+                .into()
+            };
+            item_list = item_list.push(item_element);
         }
 
         container(

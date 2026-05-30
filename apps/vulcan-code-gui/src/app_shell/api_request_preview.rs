@@ -73,8 +73,9 @@ impl VulcanWorkbench {
             context_injection: self
                 .session_runtime_state(session_id)
                 .and_then(|state| {
-                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state(
+                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state_for_turn(
                         &state.context_injection_state,
+                        Some("api-request-simulation"),
                     )
                 }),
             project_vmm: self.current_project_vmm_configuration(session_id),

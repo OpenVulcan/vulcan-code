@@ -1088,6 +1088,7 @@ fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
     drop(task);
     let outcome = super::conversation_hooks::ConversationPrecheckOutcome {
         session_id,
+        turn_id: String::from("test-turn"),
         report: Ok(HookDispatchReport {
             payload: HookPayload::from_serializable(json!({
                 "user_content": "rewritten prompt",
