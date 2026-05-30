@@ -52,6 +52,9 @@ pub struct NativeToolDescriptor {
     /// Human-readable tool description.
     /// 人类可读的工具描述。
     pub description: String,
+    /// Optional Markdown usage guidance injected into the runtime prompt when the tool is visible.
+    /// 工具可见时注入运行时提示词的可选 Markdown 使用说明。
+    pub help_text: Option<String>,
     /// Whether the tool should be directly visible to AI agents.
     /// 当前工具是否应直接对 AI 代理可见。
     pub ai_visible: bool,
@@ -299,6 +302,7 @@ fn build_workspace_describe_tool(
         description: String::from(
             "Return the current workspace directory, active model, and basic runtime statistics.",
         ),
+        help_text: None,
         ai_visible: false,
         available_in_plan: false,
     };
@@ -371,6 +375,7 @@ fn build_agent_list_tool(
         id: String::from("native_registry_list_agents"),
         name: String::from("List Agents"),
         description: String::from("Return the currently declared agent catalog."),
+        help_text: None,
         ai_visible: false,
         available_in_plan: false,
     };
@@ -423,6 +428,7 @@ fn build_skill_list_tool(
         id: String::from("native_registry_list_skills"),
         name: String::from("List Skills"),
         description: String::from("Return the currently declared skill catalog."),
+        help_text: None,
         ai_visible: false,
         available_in_plan: false,
     };
@@ -452,6 +458,7 @@ fn build_prompt_skill_detail_tool() -> Arc<NativeToolDefinition> {
         description: String::from(
             "Load the full SKILL.md instructions for one enabled prompt skill by name. Use this before applying a listed prompt skill.",
         ),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -472,6 +479,7 @@ fn build_shell_command_tool(shell_support: HostCommandShellSupport) -> Arc<Nativ
         id: String::from("shell_command"),
         name: String::from("shell_command"),
         description: shell_command_tool_description(),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -496,6 +504,7 @@ fn build_shell_session_tool(
         id: String::from("shell_session"),
         name: String::from("shell_session"),
         description: shell_session_tool_description(),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -522,6 +531,7 @@ fn build_mcp_server_list_tool(
         id: String::from("native_mcp_list_servers"),
         name: String::from("List MCP Servers"),
         description: String::from("Return the current MCP server configuration and enabled state."),
+        help_text: None,
         ai_visible: false,
         available_in_plan: false,
     };
@@ -552,6 +562,7 @@ fn build_vmm_memory_search_tool(
         description: String::from(
             "Search durable VulcanMemoryMesh memories for the current session's configured user and project. Use this when recalled context is insufficient and you need targeted memory lookup.",
         ),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -577,6 +588,7 @@ fn build_vmm_turn_details_tool(
         description: String::from(
             "Load structured details for one or more VMM turn ids returned by memory search. Use this before relying on a memory that needs original-dialogue verification.",
         ),
+        help_text: None,
         ai_visible: true,
         available_in_plan: true,
     };
@@ -602,6 +614,7 @@ fn build_vmm_memory_write_tool(
         description: String::from(
             "Write explicit durable memories into VulcanMemoryMesh for the current configured user and project. Use only for stable facts, durable preferences, or user-approved memory candidates.",
         ),
+        help_text: Some(vmm_memory_write_usage_help_markdown().to_string()),
         ai_visible: true,
         available_in_plan: false,
     };
@@ -958,6 +971,24 @@ fn vmm_turn_details_args_schema() -> Value {
     })
 }
 
+/// Returns Markdown usage guidance for the VMM direct memory-write tool.
+/// 返回 VMM 主动写记忆工具的 Markdown 使用说明。
+fn vmm_memory_write_usage_help_markdown() -> &'static str {
+    r#"Use `vmm_memory_write` only for explicit durable memories: stable user preferences, project facts, architecture/API decisions, long-lived requirements, verified bug/debt notes, and user-approved memory candidates. It writes memory rows only; it does not create a turn, timeline, or profile update by itself.
+
+Avoid writing transient current-turn context, duplicate recalled memories, secrets, credentials, or speculative claims. When a memory was retrieved from VMM, do not write it back unless the user corrects, confirms, or materially extends it.
+
+Each `items[]` entry requires:
+- `abstract`: compact search-facing summary.
+- `details`: complete durable memory body with enough context to stand alone.
+- `category`: numeric category: `0 = general`, `1 = architecture_decision`, `2 = tech_spec_api`, `3 = business_logic`, `4 = requirement_todo`, `5 = project_context`, `6 = logical_bug_debt`, `7 = security_policy`.
+
+Optional numeric fields:
+- `scopeLevel`: `0 = VMM default`, `1 = session`, `2 = project`, `3 = user`. Prefer `2` for project facts and `3` for stable user preferences.
+- `priority`: `0 = VMM default`, `1 = P0/highest`, `2 = P1/ordinary durable`, `3 = P2/weak or tentative`.
+- `memoryLevel`: `0 = VMM infer/default`, `1 = L0`, `2 = L1`, `3 = L2`, `4 = L3`. Prefer `2` for ordinary durable project/user memories unless the user or VMM policy indicates otherwise."#
+}
+
 /// Builds the JSON Schema advertised to the model for `vmm_memory_write`.
 /// 为 `vmm_memory_write` 构建对模型声明的 JSON Schema。
 fn vmm_memory_write_args_schema() -> Value {
@@ -980,25 +1011,27 @@ fn vmm_memory_write_args_schema() -> Value {
                         },
                         "category": {
                             "type": "integer",
-                            "description": "Numeric memory category accepted by VMM."
+                            "minimum": 0,
+                            "maximum": 7,
+                            "description": "Numeric VMM memory category: 0=general, 1=architecture_decision, 2=tech_spec_api, 3=business_logic, 4=requirement_todo, 5=project_context, 6=logical_bug_debt, 7=security_policy."
                         },
                         "scopeLevel": {
                             "type": "integer",
                             "minimum": 0,
                             "maximum": 3,
-                            "description": "Optional VMM scope level. Default: 0."
+                            "description": "Optional VMM scope level: 0=VMM default, 1=session, 2=project, 3=user. Prefer 2 for project facts and 3 for stable user preferences."
                         },
                         "priority": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 2,
-                            "description": "Optional VMM priority. Default: 0."
+                            "maximum": 3,
+                            "description": "Optional VMM priority: 0=VMM default, 1=P0/highest, 2=P1/ordinary durable, 3=P2/weak or tentative."
                         },
                         "memoryLevel": {
                             "type": "integer",
                             "minimum": 0,
-                            "maximum": 3,
-                            "description": "Optional VMM memory level. Default: 0."
+                            "maximum": 4,
+                            "description": "Optional VMM memory level: 0=VMM infer/default, 1=L0, 2=L1, 3=L2, 4=L3."
                         }
                     },
                     "required": ["abstract", "details", "category"],
@@ -2898,6 +2931,43 @@ mod tests {
                 .as_str()
                 .unwrap_or_default()
                 .contains("hidden concatenation")
+        );
+    }
+
+    /// The VMM write tool should expose category mappings through schema text and registration help.
+    /// VMM 写入工具应通过 schema 文案与注册说明暴露分类映射。
+    #[test]
+    fn vmm_memory_write_tool_documents_numeric_mappings() {
+        let snapshot = Arc::new(super::NativeToolRuntimeSnapshot {
+            workspace_directory: String::from(r"D:\workspace"),
+            active_model: Some(String::from("openai/gpt-5")),
+            agent_count: 0,
+            skill_count: 0,
+            configured_mcp_server_ids: vec![],
+            enabled_mcp_server_ids: vec![],
+            vmm_global: VmmConfigLayer::default(),
+        });
+        let tool = super::build_vmm_memory_write_tool(snapshot);
+        let help_text = tool
+            .descriptor
+            .help_text
+            .as_deref()
+            .expect("vmm write tool should expose prompt help");
+        let schema = super::vmm_memory_write_args_schema();
+        let item_properties = &schema["properties"]["items"]["items"]["properties"];
+
+        assert!(help_text.contains("0 = general"));
+        assert!(help_text.contains("5 = project_context"));
+        assert!(help_text.contains("7 = security_policy"));
+        assert!(help_text.contains("2 = P1/ordinary durable"));
+        assert_eq!(item_properties["category"]["maximum"], json!(7));
+        assert_eq!(item_properties["priority"]["maximum"], json!(3));
+        assert_eq!(item_properties["memoryLevel"]["maximum"], json!(4));
+        assert!(
+            item_properties["category"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("1=architecture_decision")
         );
     }
 

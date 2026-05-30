@@ -893,6 +893,21 @@ pub(super) enum Message {
     /// Updates the global VMM request timeout draft.
     /// 更新全局 VMM 请求超时时间草稿。
     GlobalVmmReceiveTimeoutChanged(String),
+    /// Updates the global VMM handshake timeout draft.
+    /// 更新全局 VMM 握手超时时间草稿。
+    GlobalVmmHandshakeTimeoutChanged(String),
+    /// Updates the global VMM max receive message bytes draft.
+    /// 更新全局 VMM 最大接收消息字节数草稿。
+    GlobalVmmMaxReceiveMessageBytesChanged(String),
+    /// Updates the global VMM gRPC keepalive interval draft.
+    /// 更新全局 VMM gRPC keepalive 间隔草稿。
+    GlobalVmmKeepaliveTimeChanged(String),
+    /// Updates the global VMM gRPC keepalive timeout draft.
+    /// 更新全局 VMM gRPC keepalive 超时草稿。
+    GlobalVmmKeepaliveTimeoutChanged(String),
+    /// Toggles the global VMM idle keepalive draft flag.
+    /// 切换全局 VMM 空闲 keepalive 草稿开关。
+    GlobalVmmKeepalivePermitWithoutCallsChanged(bool),
     /// Updates the global VMM management user reference draft.
     /// 更新全局 VMM 管理用户引用草稿。
     GlobalVmmManagementUserRefChanged(String),
@@ -905,12 +920,6 @@ pub(super) enum Message {
     /// Updates the global VMM profile refresh interval draft.
     /// 更新全局 VMM 画像刷新间隔草稿。
     GlobalVmmProfileRefreshTurnsChanged(String),
-    /// Toggles the global VMM visible-memory draft flag.
-    /// 切换全局 VMM 可见记忆草稿开关。
-    GlobalVmmVisibleMemoryChanged(bool),
-    /// Toggles the global VMM compact-aware recall draft flag.
-    /// 切换全局 VMM 压缩感知召回草稿开关。
-    GlobalVmmSessionCompactRecallChanged(bool),
     /// Toggles the global VMM AI-only tool exposure draft flag.
     /// 切换全局 VMM AI 专属工具暴露草稿开关。
     GlobalVmmAiToolsChanged(bool),
@@ -953,6 +962,21 @@ pub(super) enum Message {
     /// Updates the project VMM request timeout draft.
     /// 更新项目 VMM 请求超时时间草稿。
     ProjectVmmReceiveTimeoutChanged(String),
+    /// Updates the project VMM handshake timeout draft.
+    /// 更新项目 VMM 握手超时时间草稿。
+    ProjectVmmHandshakeTimeoutChanged(String),
+    /// Updates the project VMM max receive message bytes draft.
+    /// 更新项目 VMM 最大接收消息字节数草稿。
+    ProjectVmmMaxReceiveMessageBytesChanged(String),
+    /// Updates the project VMM gRPC keepalive interval draft.
+    /// 更新项目 VMM gRPC keepalive 间隔草稿。
+    ProjectVmmKeepaliveTimeChanged(String),
+    /// Updates the project VMM gRPC keepalive timeout draft.
+    /// 更新项目 VMM gRPC keepalive 超时草稿。
+    ProjectVmmKeepaliveTimeoutChanged(String),
+    /// Toggles the project VMM idle keepalive draft flag.
+    /// 切换项目 VMM 空闲 keepalive 草稿开关。
+    ProjectVmmKeepalivePermitWithoutCallsChanged(bool),
     /// Updates the project VMM management user reference draft.
     /// 更新项目 VMM 管理用户引用草稿。
     ProjectVmmManagementUserRefChanged(String),
@@ -965,12 +989,6 @@ pub(super) enum Message {
     /// Updates the project VMM profile refresh interval draft.
     /// 更新项目 VMM 画像刷新间隔草稿。
     ProjectVmmProfileRefreshTurnsChanged(String),
-    /// Toggles the project VMM visible-memory draft flag.
-    /// 切换项目 VMM 可见记忆草稿开关。
-    ProjectVmmVisibleMemoryChanged(bool),
-    /// Toggles the project VMM compact-aware recall draft flag.
-    /// 切换项目 VMM 压缩感知召回草稿开关。
-    ProjectVmmSessionCompactRecallChanged(bool),
     /// Toggles the project VMM AI-only tool exposure draft flag.
     /// 切换项目 VMM AI 专属工具暴露草稿开关。
     ProjectVmmAiToolsChanged(bool),
@@ -992,6 +1010,111 @@ pub(super) enum Message {
     /// Applies the completed project VMM management RPC result.
     /// 应用已完成的项目 VMM 管理 RPC 结果。
     ProjectVmmManagementFinished(Result<String, String>),
+    /// Changes the dedicated VMM management workbench scope.
+    /// 切换专用 VMM 管理工作台作用域。
+    VmmWorkbenchScopeChanged(VmmManagementScopeChoice),
+    /// Changes the dedicated VMM management workbench section.
+    /// 切换专用 VMM 管理工作台分区。
+    VmmWorkbenchSectionChanged(VmmManagementSection),
+    /// Changes the target task project for project-scoped VMM management.
+    /// 切换项目作用域 VMM 管理使用的目标任务项目。
+    VmmWorkbenchProjectScopeChanged(VmmProjectScopeChoice),
+    /// Updates the VMM management launcher filter draft.
+    /// 更新 VMM 管理启动器筛选草稿。
+    VmmWorkbenchSectionFilterChanged(String),
+    /// Saves the project-scoped VMM workbench settings to the selected task project.
+    /// 将项目作用域 VMM 工作台设置保存到选中的任务项目。
+    SaveVmmWorkbenchProjectConfiguration,
+    /// Binds one listed VMM user into the current workbench scope.
+    /// 将列表中的一个 VMM 用户绑定到当前工作台作用域。
+    BindVmmWorkbenchUser(u64),
+    /// Clears the current workbench user binding.
+    /// 清空当前工作台用户绑定。
+    ClearVmmWorkbenchUserBinding,
+    /// Binds one listed VMM project into the current workbench scope.
+    /// 将列表中的一个 VMM 项目绑定到当前工作台作用域。
+    BindVmmWorkbenchProject(u64),
+    /// Clears the current workbench project binding.
+    /// 清空当前工作台项目绑定。
+    ClearVmmWorkbenchProjectBinding,
+    /// Changes the selected VMM profile target.
+    /// 切换选中的 VMM 画像目标。
+    VmmWorkbenchProfileTargetChanged(VmmProfileTargetChoice),
+    /// Updates the manual profile instruction draft.
+    /// 更新手工画像指令草稿。
+    VmmWorkbenchProfileInstructionChanged(String),
+    /// Updates the profile-node list filter draft.
+    /// 更新画像节点列表筛选草稿。
+    VmmWorkbenchProfileFilterChanged(String),
+    /// Updates the VMM workbench user reference draft.
+    /// 更新 VMM 工作台用户引用草稿。
+    VmmWorkbenchUserRefChanged(String),
+    /// Updates the user-manager list filter draft.
+    /// 更新用户管理列表筛选草稿。
+    VmmWorkbenchUserFilterChanged(String),
+    /// Updates the VMM workbench user deletion confirmation code draft.
+    /// 更新 VMM 工作台用户删除确认码草稿。
+    VmmWorkbenchUserDeleteConfirmationCodeChanged(String),
+    /// Updates the VMM workbench project path draft.
+    /// 更新 VMM 工作台项目路径草稿。
+    VmmWorkbenchProjectPathChanged(String),
+    /// Updates the project-manager list filter draft.
+    /// 更新项目管理列表筛选草稿。
+    VmmWorkbenchProjectFilterChanged(String),
+    /// Toggles the VMM workbench project deletion confirmation.
+    /// 切换 VMM 工作台项目删除确认。
+    VmmWorkbenchProjectDeleteConfirmedChanged(bool),
+    /// Updates the VMM workbench migration source project path draft.
+    /// 更新 VMM 工作台迁移源项目路径草稿。
+    VmmWorkbenchMigrateSourceProjectPathChanged(String),
+    /// Updates the VMM workbench migration target project path draft.
+    /// 更新 VMM 工作台迁移目标项目路径草稿。
+    VmmWorkbenchMigrateTargetProjectPathChanged(String),
+    /// Toggles the VMM workbench project migration confirmation.
+    /// 切换 VMM 工作台项目迁移确认。
+    VmmWorkbenchMigrateConfirmedChanged(bool),
+    /// Updates the VMM tools-debug memory-search query draft.
+    /// 更新 VMM 工具调试记忆检索查询草稿。
+    VmmWorkbenchToolSearchQueriesChanged(String),
+    /// Updates the VMM tools-debug memory-search top-k draft.
+    /// 更新 VMM 工具调试记忆检索 top-k 草稿。
+    VmmWorkbenchToolSearchTopKChanged(String),
+    /// Updates the VMM tools-debug turn-id list draft.
+    /// 更新 VMM 工具调试 turn 标识列表草稿。
+    VmmWorkbenchToolTurnIdsChanged(String),
+    /// Updates the VMM tools-debug direct-write abstract draft.
+    /// 更新 VMM 工具调试主动写入摘要草稿。
+    VmmWorkbenchToolWriteAbstractChanged(String),
+    /// Updates the VMM tools-debug direct-write details draft.
+    /// 更新 VMM 工具调试主动写入详情草稿。
+    VmmWorkbenchToolWriteDetailsChanged(String),
+    /// Updates the VMM tools-debug direct-write scope-level draft.
+    /// 更新 VMM 工具调试主动写入作用域级别草稿。
+    VmmWorkbenchToolWriteScopeLevelChanged(String),
+    /// Updates the VMM tools-debug direct-write category draft.
+    /// 更新 VMM 工具调试主动写入分类草稿。
+    VmmWorkbenchToolWriteCategoryChanged(String),
+    /// Updates the VMM tools-debug direct-write priority draft.
+    /// 更新 VMM 工具调试主动写入优先级草稿。
+    VmmWorkbenchToolWritePriorityChanged(String),
+    /// Updates the VMM tools-debug direct-write memory-level draft.
+    /// 更新 VMM 工具调试主动写入记忆层级草稿。
+    VmmWorkbenchToolWriteMemoryLevelChanged(String),
+    /// Runs one dedicated VMM workbench action.
+    /// 执行一次专用 VMM 工作台动作。
+    RunVmmWorkbenchAction(VmmWorkbenchAction),
+    /// Builds and runs the VMM memory-search debug action from current form state.
+    /// 从当前表单状态构建并执行 VMM 记忆检索调试动作。
+    RunVmmWorkbenchSearchMemoryEvents,
+    /// Builds and runs the VMM turn-detail debug action from current form state.
+    /// 从当前表单状态构建并执行 VMM turn 详情调试动作。
+    RunVmmWorkbenchGetTurnDetails,
+    /// Builds and runs the VMM direct-write debug action from current form state.
+    /// 从当前表单状态构建并执行 VMM 主动写入调试动作。
+    RunVmmWorkbenchWriteMemories,
+    /// Applies one completed dedicated VMM workbench action.
+    /// 应用一次已完成的专用 VMM 工作台动作。
+    VmmWorkbenchActionFinished(Result<VmmManagementOutcome, String>),
     /// Toggles one prompt skill detail preview card.
     /// 切换单个提示词技能详情预览卡片。
     TogglePromptSkillDetails(String),

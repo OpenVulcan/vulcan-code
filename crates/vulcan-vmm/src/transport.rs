@@ -5,25 +5,35 @@ use crate::client::{VmmClient, VmmClientError};
 use crate::config::VmmEffectiveConfig;
 use crate::grpc::vmm_service_client::VmmServiceClient;
 use crate::grpc::{
-    ChatCompactRequest as GrpcChatCompactRequest, EnsureProjectRequest as GrpcEnsureProjectRequest,
+    ApplyProfileInstructionRequest as GrpcApplyProfileInstructionRequest,
+    ChatCompactRequest as GrpcChatCompactRequest, DeleteProjectRequest as GrpcDeleteProjectRequest,
+    DeleteUserRequest as GrpcDeleteUserRequest, EnsureProjectRequest as GrpcEnsureProjectRequest,
     GetProfileBundleRequest as GrpcGetProfileBundleRequest,
-    GetTurnDetailsRequest as GrpcGetTurnDetailsRequest, PostActionRequest as GrpcPostActionRequest,
+    GetProfileNodesRequest as GrpcGetProfileNodesRequest,
+    GetTurnDetailsRequest as GrpcGetTurnDetailsRequest,
+    MigrateProjectRequest as GrpcMigrateProjectRequest, PostActionRequest as GrpcPostActionRequest,
     PostActionTimelineItem as GrpcPostActionTimelineItem,
     PreCheckRecallMode as GrpcPreCheckRecallMode, PreCheckRequest as GrpcPreCheckRequest,
-    ProfileBundleMode as GrpcProfileBundleMode, ProjectEntry as GrpcProjectEntry,
-    ResolveProjectRequest as GrpcResolveProjectRequest,
+    ProfileBundleMode as GrpcProfileBundleMode, ProfileNodeEntry as GrpcProfileNodeEntry,
+    ProfileNodeSourceKind as GrpcProfileNodeSourceKind, ProfileTarget as GrpcProfileTarget,
+    ProjectEntry as GrpcProjectEntry, ResolveProjectRequest as GrpcResolveProjectRequest,
     ResolveUserRequest as GrpcResolveUserRequest,
+    RetiredProfileNodeEntry as GrpcRetiredProfileNodeEntry,
     SearchMemoryEventsRequest as GrpcSearchMemoryEventsRequest, UserEntry as GrpcUserEntry,
     WriteMemoriesRequest as GrpcWriteMemoriesRequest, WriteMemoryItem as GrpcWriteMemoryItem,
 };
 use crate::protocol::{
-    ChatCompactRequest, ChatCompactResponse, ContextItem, EnsureProjectRequest,
-    EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
-    GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse,
-    ListUsersResponse, MemorySearchGroupResult, MemorySearchHit, PostActionRequest,
-    PostActionResponse, PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode,
-    PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProjectEntry, ResolveProjectRequest,
-    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, SearchMemoryEventsRequest,
+    ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
+    ChatCompactResponse, ContextItem, DeleteProjectRequest, DeleteProjectResponse,
+    DeleteUserRequest, DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse,
+    GetProfileBundleRequest, GetProfileBundleResponse, GetProfileNodesRequest,
+    GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse,
+    ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult, MemorySearchHit,
+    MigrateProjectRequest, MigrateProjectResponse, PostActionRequest, PostActionResponse,
+    PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode, PreCheckRequest,
+    PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
+    ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
+    ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
     SearchMemoryEventsResponse, TurnDetailEntry, UserEntry, WriteMemoriesRequest,
     WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
 };
@@ -52,6 +62,15 @@ pub struct VmmTransportConfig {
     /// Optional max receive message bytes.
     /// 可选最大接收消息字节数。
     pub max_receive_message_bytes: Option<usize>,
+    /// HTTP/2 keepalive interval.
+    /// HTTP/2 keepalive 间隔。
+    pub keepalive_time: Duration,
+    /// HTTP/2 keepalive acknowledgement timeout.
+    /// HTTP/2 keepalive ACK 超时时间。
+    pub keepalive_timeout: Duration,
+    /// Whether HTTP/2 keepalive can run while no RPC call is active.
+    /// 没有活跃 RPC 时是否允许 HTTP/2 keepalive。
+    pub keepalive_while_idle: bool,
 }
 
 impl VmmTransportConfig {
@@ -64,6 +83,9 @@ impl VmmTransportConfig {
             handshake_timeout: Duration::from_millis(config.handshake_timeout_ms),
             request_timeout: Duration::from_millis(config.receive_timeout_ms),
             max_receive_message_bytes: config.max_receive_message_bytes,
+            keepalive_time: Duration::from_millis(config.grpc_keepalive_time_ms),
+            keepalive_timeout: Duration::from_millis(config.grpc_keepalive_timeout_ms),
+            keepalive_while_idle: config.grpc_keepalive_permit_without_calls,
         }
     }
 }
@@ -89,6 +111,9 @@ impl TonicVmmClient {
             .map_err(|error| VmmClientError::new("invalid_endpoint", error.to_string()))?
             .connect_timeout(config.handshake_timeout)
             .timeout(config.request_timeout)
+            .http2_keep_alive_interval(config.keepalive_time)
+            .keep_alive_timeout(config.keepalive_timeout)
+            .keep_alive_while_idle(config.keepalive_while_idle)
             .connect()
             .await
             .map_err(status_like_error("connect_failed"))?;
@@ -178,6 +203,34 @@ impl VmmClient for TonicVmmClient {
         Ok(protocol_ensure_project_response(response.into_inner()))
     }
 
+    /// Calls VMM DeleteProject.
+    /// 调用 VMM DeleteProject。
+    async fn delete_project(
+        &self,
+        request: DeleteProjectRequest,
+    ) -> Result<DeleteProjectResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .delete_project(self.request(grpc_delete_project_request(request), "deleteproject")?)
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_delete_project_response(response.into_inner()))
+    }
+
+    /// Calls VMM MigrateProject.
+    /// 调用 VMM MigrateProject。
+    async fn migrate_project(
+        &self,
+        request: MigrateProjectRequest,
+    ) -> Result<MigrateProjectResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .migrate_project(self.request(grpc_migrate_project_request(request), "migrateproject")?)
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_migrate_project_response(response.into_inner()))
+    }
+
     /// Calls VMM ListUsers.
     /// 调用 VMM ListUsers。
     async fn list_users(&self) -> Result<ListUsersResponse, VmmClientError> {
@@ -203,6 +256,36 @@ impl VmmClient for TonicVmmClient {
         Ok(protocol_resolve_user_response(response.into_inner()))
     }
 
+    /// Calls VMM DeleteUser.
+    /// 调用 VMM DeleteUser。
+    async fn delete_user(
+        &self,
+        request: DeleteUserRequest,
+    ) -> Result<DeleteUserResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .delete_user(self.request(grpc_delete_user_request(request), "deleteuser")?)
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_delete_user_response(response.into_inner()))
+    }
+
+    /// Calls VMM GetProfileNodes.
+    /// 调用 VMM GetProfileNodes。
+    async fn get_profile_nodes(
+        &self,
+        request: GetProfileNodesRequest,
+    ) -> Result<GetProfileNodesResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .get_profile_nodes(
+                self.request(grpc_get_profile_nodes_request(request), "profilenodes")?,
+            )
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_get_profile_nodes_response(response.into_inner()))
+    }
+
     /// Calls VMM GetProfileBundle.
     /// 调用 VMM GetProfileBundle。
     async fn get_profile_bundle(
@@ -217,6 +300,25 @@ impl VmmClient for TonicVmmClient {
             .await
             .map_err(status_error)?;
         Ok(protocol_get_profile_bundle_response(response.into_inner()))
+    }
+
+    /// Calls VMM ApplyProfileInstruction.
+    /// 调用 VMM ApplyProfileInstruction。
+    async fn apply_profile_instruction(
+        &self,
+        request: ApplyProfileInstructionRequest,
+    ) -> Result<ApplyProfileInstructionResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .apply_profile_instruction(self.request(
+                grpc_apply_profile_instruction_request(request),
+                "profileinstruction",
+            )?)
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_apply_profile_instruction_response(
+            response.into_inner(),
+        ))
     }
 
     /// Calls VMM PreCheck.
@@ -365,12 +467,51 @@ fn grpc_ensure_project_request(request: EnsureProjectRequest) -> GrpcEnsureProje
     }
 }
 
+/// Converts a protocol DeleteProject request into generated protobuf shape.
+/// 将协议 DeleteProject 请求转换为生成的 protobuf 结构。
+fn grpc_delete_project_request(request: DeleteProjectRequest) -> GrpcDeleteProjectRequest {
+    GrpcDeleteProjectRequest {
+        project_path: request.project_path,
+        confirm_delete: request.confirm_delete,
+    }
+}
+
+/// Converts a protocol MigrateProject request into generated protobuf shape.
+/// 将协议 MigrateProject 请求转换为生成的 protobuf 结构。
+fn grpc_migrate_project_request(request: MigrateProjectRequest) -> GrpcMigrateProjectRequest {
+    GrpcMigrateProjectRequest {
+        source_project_path: request.source_project_path,
+        target_project_path: request.target_project_path,
+        confirm_migrate: request.confirm_migrate,
+    }
+}
+
 /// Converts a protocol ResolveUser request into generated protobuf shape.
 /// 将协议 ResolveUser 请求转换为生成的 protobuf 结构。
 fn grpc_resolve_user_request(request: ResolveUserRequest) -> GrpcResolveUserRequest {
     GrpcResolveUserRequest {
         user_ref: request.user_ref,
         confirm_create: request.confirm_create,
+    }
+}
+
+/// Converts a protocol DeleteUser request into generated protobuf shape.
+/// 将协议 DeleteUser 请求转换为生成的 protobuf 结构。
+fn grpc_delete_user_request(request: DeleteUserRequest) -> GrpcDeleteUserRequest {
+    GrpcDeleteUserRequest {
+        user_ref: request.user_ref,
+        confirmation_code: request.confirmation_code,
+    }
+}
+
+/// Converts a protocol GetProfileNodes request into generated protobuf shape.
+/// 将协议 GetProfileNodes 请求转换为生成的 protobuf 结构。
+fn grpc_get_profile_nodes_request(request: GetProfileNodesRequest) -> GrpcGetProfileNodesRequest {
+    GrpcGetProfileNodesRequest {
+        target: grpc_profile_target(request.target) as i32,
+        user_id: request.user_id,
+        project_id: request.project_id,
+        limit: request.limit,
     }
 }
 
@@ -384,6 +525,19 @@ fn grpc_get_profile_bundle_request(
         project_id: request.project_id,
         mode: grpc_profile_bundle_mode(request.mode) as i32,
         include_explanation: request.include_explanation,
+    }
+}
+
+/// Converts a protocol ApplyProfileInstruction request into generated protobuf shape.
+/// 将协议 ApplyProfileInstruction 请求转换为生成的 protobuf 结构。
+fn grpc_apply_profile_instruction_request(
+    request: ApplyProfileInstructionRequest,
+) -> GrpcApplyProfileInstructionRequest {
+    GrpcApplyProfileInstructionRequest {
+        target: grpc_profile_target(request.target) as i32,
+        user_id: request.user_id,
+        project_id: request.project_id,
+        instruction: request.instruction,
     }
 }
 
@@ -497,6 +651,54 @@ fn protocol_profile_bundle_mode(mode: i32) -> ProfileBundleMode {
     }
 }
 
+/// Converts a protocol profile target into generated protobuf enum.
+/// 将协议画像目标转换为生成的 protobuf 枚举。
+fn grpc_profile_target(target: ProfileTarget) -> GrpcProfileTarget {
+    match target {
+        ProfileTarget::ProfileTargetUnspecified => GrpcProfileTarget::Unspecified,
+        ProfileTarget::ProfileTargetUser => GrpcProfileTarget::User,
+        ProfileTarget::ProfileTargetProject => GrpcProfileTarget::Project,
+        ProfileTarget::ProfileTargetTeam => GrpcProfileTarget::Team,
+        ProfileTarget::ProfileTargetSpace => GrpcProfileTarget::Space,
+    }
+}
+
+/// Converts a generated protobuf profile target into protocol enum.
+/// 将生成的 protobuf 画像目标转换为协议枚举。
+fn protocol_profile_target(target: i32) -> ProfileTarget {
+    match GrpcProfileTarget::try_from(target).unwrap_or(GrpcProfileTarget::Unspecified) {
+        GrpcProfileTarget::User => ProfileTarget::ProfileTargetUser,
+        GrpcProfileTarget::Project => ProfileTarget::ProfileTargetProject,
+        GrpcProfileTarget::Team => ProfileTarget::ProfileTargetTeam,
+        GrpcProfileTarget::Space => ProfileTarget::ProfileTargetSpace,
+        GrpcProfileTarget::Unspecified => ProfileTarget::ProfileTargetUnspecified,
+    }
+}
+
+/// Converts a generated protobuf profile-node source into protocol enum.
+/// 将生成的 protobuf 画像节点来源转换为协议枚举。
+fn protocol_profile_node_source_kind(source_kind: i32) -> ProfileNodeSourceKind {
+    match GrpcProfileNodeSourceKind::try_from(source_kind)
+        .unwrap_or(GrpcProfileNodeSourceKind::Unspecified)
+    {
+        GrpcProfileNodeSourceKind::TurnExtract => {
+            ProfileNodeSourceKind::ProfileNodeSourceKindTurnExtract
+        }
+        GrpcProfileNodeSourceKind::ManualInstruction => {
+            ProfileNodeSourceKind::ProfileNodeSourceKindManualInstruction
+        }
+        GrpcProfileNodeSourceKind::SystemSeed => {
+            ProfileNodeSourceKind::ProfileNodeSourceKindSystemSeed
+        }
+        GrpcProfileNodeSourceKind::RetainedAfterUserDelete => {
+            ProfileNodeSourceKind::ProfileNodeSourceKindRetainedAfterUserDelete
+        }
+        GrpcProfileNodeSourceKind::Unspecified => {
+            ProfileNodeSourceKind::ProfileNodeSourceKindUnspecified
+        }
+    }
+}
+
 /// Converts a generated protobuf project entry into protocol shape.
 /// 将生成的 protobuf 项目记录转换为协议结构。
 fn protocol_project_entry(entry: GrpcProjectEntry) -> ProjectEntry {
@@ -578,6 +780,45 @@ fn protocol_ensure_project_response(
     }
 }
 
+/// Converts generated protobuf DeleteProject response into protocol shape.
+/// 将生成的 protobuf DeleteProject 响应转换为协议结构。
+fn protocol_delete_project_response(
+    response: crate::grpc::DeleteProjectResponse,
+) -> DeleteProjectResponse {
+    DeleteProjectResponse {
+        project: protocol_optional_project_entry(response.project),
+        message: response.message,
+        needs_confirm: response.needs_confirm,
+        deleted_sessions: response.deleted_sessions,
+        deleted_messages: response.deleted_messages,
+        deleted_memories: response.deleted_memories,
+        deleted_vector_rows: response.deleted_vector_rows,
+        trace_id: response.trace_id,
+        deleted_projects: response.deleted_projects,
+        deleted_spaces: response.deleted_spaces,
+        deleted_teams: response.deleted_teams,
+        deleted_profiles: response.deleted_profiles,
+    }
+}
+
+/// Converts generated protobuf MigrateProject response into protocol shape.
+/// 将生成的 protobuf MigrateProject 响应转换为协议结构。
+fn protocol_migrate_project_response(
+    response: crate::grpc::MigrateProjectResponse,
+) -> MigrateProjectResponse {
+    MigrateProjectResponse {
+        source_project: protocol_optional_project_entry(response.source_project),
+        target_project: protocol_optional_project_entry(response.target_project),
+        message: response.message,
+        needs_confirm: response.needs_confirm,
+        migrated_sessions: response.migrated_sessions,
+        migrated_messages: response.migrated_messages,
+        migrated_memories: response.migrated_memories,
+        rebuilt_vector_rows: response.rebuilt_vector_rows,
+        trace_id: response.trace_id,
+    }
+}
+
 /// Converts generated protobuf ListUsers response into protocol shape.
 /// 将生成的 protobuf ListUsers 响应转换为协议结构。
 fn protocol_list_users_response(response: crate::grpc::ListUsersResponse) -> ListUsersResponse {
@@ -586,6 +827,39 @@ fn protocol_list_users_response(response: crate::grpc::ListUsersResponse) -> Lis
             .users
             .into_iter()
             .map(protocol_user_entry)
+            .collect(),
+        trace_id: response.trace_id,
+    }
+}
+
+/// Converts generated protobuf DeleteUser response into protocol shape.
+/// 将生成的 protobuf DeleteUser 响应转换为协议结构。
+fn protocol_delete_user_response(response: crate::grpc::DeleteUserResponse) -> DeleteUserResponse {
+    DeleteUserResponse {
+        user: protocol_optional_user_entry(response.user),
+        message: response.message,
+        requires_confirmation: response.requires_confirmation,
+        confirmation_code: response.confirmation_code,
+        deleted_sessions: response.deleted_sessions,
+        deleted_messages: response.deleted_messages,
+        deleted_memories: response.deleted_memories,
+        deleted_vector_rows: response.deleted_vector_rows,
+        trace_id: response.trace_id,
+        deleted_users: response.deleted_users,
+        deleted_profiles: response.deleted_profiles,
+    }
+}
+
+/// Converts generated protobuf GetProfileNodes response into protocol shape.
+/// 将生成的 protobuf GetProfileNodes 响应转换为协议结构。
+fn protocol_get_profile_nodes_response(
+    response: crate::grpc::GetProfileNodesResponse,
+) -> GetProfileNodesResponse {
+    GetProfileNodesResponse {
+        nodes: response
+            .nodes
+            .into_iter()
+            .map(protocol_profile_node_entry)
             .collect(),
         trace_id: response.trace_id,
     }
@@ -602,6 +876,58 @@ fn protocol_resolve_user_response(
         created: response.created,
         exists: response.exists,
         trace_id: response.trace_id,
+    }
+}
+
+/// Converts generated protobuf ApplyProfileInstruction response into protocol shape.
+/// 将生成的 protobuf ApplyProfileInstruction 响应转换为协议结构。
+fn protocol_apply_profile_instruction_response(
+    response: crate::grpc::ApplyProfileInstructionResponse,
+) -> ApplyProfileInstructionResponse {
+    ApplyProfileInstructionResponse {
+        instruction_id: response.instruction_id,
+        accepted_nodes: response
+            .accepted_nodes
+            .into_iter()
+            .map(protocol_profile_node_entry)
+            .collect(),
+        retired_nodes: response
+            .retired_nodes
+            .into_iter()
+            .map(protocol_retired_profile_node_entry)
+            .collect(),
+        review_reason: response.review_reason,
+        trace_id: response.trace_id,
+    }
+}
+
+/// Converts a generated protobuf profile node into protocol shape.
+/// 将生成的 protobuf 画像节点转换为协议结构。
+fn protocol_profile_node_entry(entry: GrpcProfileNodeEntry) -> ProfileNodeEntry {
+    ProfileNodeEntry {
+        profile_node_id: entry.profile_node_id,
+        target: protocol_profile_target(entry.target),
+        bind_id: entry.bind_id,
+        content: entry.content,
+        priority: entry.priority,
+        level: entry.level,
+        refresh_weight: entry.refresh_weight,
+        profile_date: entry.profile_date,
+        expires_timestamp: entry.expires_timestamp,
+        level_reason: entry.level_reason,
+        source_kind: protocol_profile_node_source_kind(entry.source_kind),
+        source_id: entry.source_id,
+    }
+}
+
+/// Converts a generated protobuf retired profile node into protocol shape.
+/// 将生成的 protobuf 退役画像节点转换为协议结构。
+fn protocol_retired_profile_node_entry(
+    entry: GrpcRetiredProfileNodeEntry,
+) -> RetiredProfileNodeEntry {
+    RetiredProfileNodeEntry {
+        profile_node_id: entry.profile_node_id,
+        reason: entry.reason,
     }
 }
 
@@ -798,5 +1124,48 @@ mod tests {
 
         assert_eq!(request.timeline[0].r#type, "assistant");
         assert_eq!(request.timeline[0].content, "ask");
+    }
+
+    #[test]
+    fn profile_management_conversion_keeps_targets_and_nodes() {
+        let request = grpc_get_profile_nodes_request(GetProfileNodesRequest {
+            target: ProfileTarget::ProfileTargetTeam,
+            user_id: 7,
+            project_id: 11,
+            limit: 50,
+        });
+        assert_eq!(request.target, GrpcProfileTarget::Team as i32);
+        assert_eq!(request.user_id, 7);
+        assert_eq!(request.project_id, 11);
+        assert_eq!(request.limit, 50);
+
+        let response = protocol_get_profile_nodes_response(crate::grpc::GetProfileNodesResponse {
+            nodes: vec![GrpcProfileNodeEntry {
+                profile_node_id: 9,
+                target: GrpcProfileTarget::Project as i32,
+                bind_id: 11,
+                content: String::from("Project uses Rust."),
+                priority: String::from("P1"),
+                level: String::from("L2"),
+                refresh_weight: 3,
+                profile_date: String::from("2026-05-30"),
+                expires_timestamp: 0,
+                level_reason: String::from("stable project fact"),
+                source_kind: GrpcProfileNodeSourceKind::ManualInstruction as i32,
+                source_id: 77,
+            }],
+            trace_id: String::from("trace"),
+        });
+
+        assert_eq!(response.nodes.len(), 1);
+        assert_eq!(
+            response.nodes[0].target,
+            ProfileTarget::ProfileTargetProject
+        );
+        assert_eq!(
+            response.nodes[0].source_kind,
+            ProfileNodeSourceKind::ProfileNodeSourceKindManualInstruction
+        );
+        assert_eq!(response.trace_id, "trace");
     }
 }

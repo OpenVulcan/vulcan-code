@@ -66,6 +66,9 @@ pub struct VulcanToolDescriptor {
     /// Human-readable tool description.
     /// 人类可读工具描述。
     pub description: String,
+    /// Optional Markdown guidance injected into the prompt when this tool is exposed.
+    /// 当前工具暴露时注入提示词的可选 Markdown 使用说明。
+    pub help_text: Option<String>,
     /// Stable tool-source kind.
     /// 稳定工具来源类型。
     pub source: VulcanToolSourceKind,
@@ -1327,6 +1330,7 @@ mod tests {
                 id: id.to_string(),
                 name: id.to_string(),
                 description: format!("测试工具 {id}"),
+                help_text: None,
                 source,
             },
             parameters_schema: json!({"type": "object"}),

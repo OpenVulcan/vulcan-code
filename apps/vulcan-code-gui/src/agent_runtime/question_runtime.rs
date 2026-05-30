@@ -297,6 +297,7 @@ pub fn build_question_tool_candidate(
             description: String::from(
                 "Ask the user one or more structured questions and wait for the answers before continuing. Use this tool whenever progress depends on a user decision, preference, missing requirement, or explicit confirmation. Prefer this tool over guessing when choices are ambiguous, risky, or approval-sensitive.",
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: question_tool_args_schema(),

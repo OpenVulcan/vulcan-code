@@ -157,7 +157,7 @@ fn build_runtime_prompt_assembly_input(
                     id: tool.id.clone(),
                     title: tool.name.clone(),
                     description: tool.description.clone(),
-                    help_text: None,
+                    help_text: tool.help_text.clone(),
                     schema_fingerprint: None,
                 })
                 .collect(),
@@ -593,6 +593,32 @@ mod tests {
         );
     }
 
+    /// Verifies tool registration help reaches the runtime tool-guidance layer.
+    /// 验证工具注册说明会进入运行时工具指导层。
+    #[test]
+    fn runtime_prompt_layers_include_registered_tool_help_text() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.tool_descriptors = vec![vulcan_tools_manager::VulcanToolDescriptor {
+            id: String::from("custom_tool"),
+            name: String::from("custom_tool"),
+            description: String::from("Custom test tool"),
+            help_text: Some(String::from("Use category 5 for project context.")),
+            source: vulcan_tools_manager::VulcanToolSourceKind::Native,
+        }];
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .tool_guidance
+                .contains("Use category 5 for project context.")
+        );
+    }
+
     /// Verifies context-compaction prompts use the prompt composer instead of a post-launch system suffix.
     /// 验证上下文压缩提示词会使用提示词组合器，而不是启动后追加系统提示词后缀。
     #[test]
@@ -606,6 +632,7 @@ mod tests {
             id: String::from("shell_command"),
             name: String::from("shell_command"),
             description: String::from("Run one shell command"),
+            help_text: None,
             source: vulcan_tools_manager::VulcanToolSourceKind::Native,
         }];
 

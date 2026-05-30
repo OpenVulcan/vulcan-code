@@ -15,11 +15,23 @@ pub const DEFAULT_VMM_INJECTION_DESCRIPTION: &str =
 
 /// Default handshake timeout used before a project overrides it.
 /// 项目覆盖前使用的默认握手超时时间。
-pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 3_000;
+pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 15_000;
 
 /// Default receive timeout used before a project overrides it.
 /// 项目覆盖前使用的默认接收超时时间。
 pub const DEFAULT_RECEIVE_TIMEOUT_MS: u64 = 15_000;
+
+/// Default HTTP/2 keepalive interval for the VMM gRPC channel.
+/// VMM gRPC 通道默认 HTTP/2 keepalive 间隔。
+pub const DEFAULT_GRPC_KEEPALIVE_TIME_MS: u64 = 300_000;
+
+/// Default HTTP/2 keepalive acknowledgement timeout for the VMM gRPC channel.
+/// VMM gRPC 通道默认 HTTP/2 keepalive ACK 超时时间。
+pub const DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS: u64 = 20_000;
+
+/// Default idle keepalive policy for the VMM gRPC channel.
+/// VMM gRPC 通道默认空闲 keepalive 策略。
+pub const DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS: bool = false;
 
 /// Default transient recall TTL.
 /// 默认临时召回持续回合数。
@@ -75,6 +87,18 @@ pub struct VmmConfigLayer {
     /// 可选最大接收消息字节数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_receive_message_bytes: Option<usize>,
+    /// Optional gRPC keepalive interval in milliseconds.
+    /// 可选 gRPC keepalive 间隔，单位毫秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_keepalive_time_ms: Option<u64>,
+    /// Optional gRPC keepalive acknowledgement timeout in milliseconds.
+    /// 可选 gRPC keepalive ACK 超时时间，单位毫秒。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_keepalive_timeout_ms: Option<u64>,
+    /// Optional gRPC idle keepalive policy.
+    /// 可选 gRPC 空闲 keepalive 策略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grpc_keepalive_permit_without_calls: Option<bool>,
     /// Optional VMM user id.
     /// 可选 VMM 用户标识。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +196,15 @@ pub struct VmmEffectiveConfig {
     /// Final optional max receive bytes.
     /// 最终可选最大接收字节数。
     pub max_receive_message_bytes: Option<usize>,
+    /// Final gRPC keepalive interval.
+    /// 最终 gRPC keepalive 间隔。
+    pub grpc_keepalive_time_ms: u64,
+    /// Final gRPC keepalive acknowledgement timeout.
+    /// 最终 gRPC keepalive ACK 超时时间。
+    pub grpc_keepalive_timeout_ms: u64,
+    /// Final gRPC idle keepalive policy.
+    /// 最终 gRPC 空闲 keepalive 策略。
+    pub grpc_keepalive_permit_without_calls: bool,
     /// Final VMM user id.
     /// 最终 VMM 用户标识。
     pub user_id: Option<u64>,
@@ -217,12 +250,15 @@ impl Default for VmmEffectiveConfig {
             handshake_timeout_ms: DEFAULT_HANDSHAKE_TIMEOUT_MS,
             receive_timeout_ms: DEFAULT_RECEIVE_TIMEOUT_MS,
             max_receive_message_bytes: None,
+            grpc_keepalive_time_ms: DEFAULT_GRPC_KEEPALIVE_TIME_MS,
+            grpc_keepalive_timeout_ms: DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS,
+            grpc_keepalive_permit_without_calls: DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS,
             user_id: None,
             project_id: None,
             visible_memory_injection: false,
             implicit_memory_turns: DEFAULT_IMPLICIT_MEMORY_TURNS,
             profile_refresh_turns: DEFAULT_PROFILE_REFRESH_TURNS,
-            session_compact_recall: false,
+            session_compact_recall: true,
             ai_tools_enabled: true,
             injection_tag: DEFAULT_VMM_INJECTION_TAG.to_string(),
             injection_description: DEFAULT_VMM_INJECTION_DESCRIPTION.to_string(),
@@ -248,6 +284,8 @@ impl VmmEffectiveConfig {
             apply_layer(&mut config, session, VmmEffectiveConfigSource::Session);
         }
         config.grpc_target = config.grpc_target.trim().to_string();
+        config.visible_memory_injection = false;
+        config.session_compact_recall = true;
         config.injection_tag = normalize_tag_or_default(&config.injection_tag);
         config.injection_description =
             normalize_description_or_default(&config.injection_description);
@@ -338,23 +376,26 @@ fn apply_layer(
     if let Some(max_receive_message_bytes) = layer.max_receive_message_bytes {
         config.max_receive_message_bytes = Some(max_receive_message_bytes);
     }
+    if let Some(grpc_keepalive_time_ms) = layer.grpc_keepalive_time_ms {
+        config.grpc_keepalive_time_ms = grpc_keepalive_time_ms;
+    }
+    if let Some(grpc_keepalive_timeout_ms) = layer.grpc_keepalive_timeout_ms {
+        config.grpc_keepalive_timeout_ms = grpc_keepalive_timeout_ms;
+    }
+    if let Some(grpc_keepalive_permit_without_calls) = layer.grpc_keepalive_permit_without_calls {
+        config.grpc_keepalive_permit_without_calls = grpc_keepalive_permit_without_calls;
+    }
     if let Some(user_id) = layer.user_id {
         config.user_id = Some(user_id);
     }
     if let Some(project_id) = layer.project_id {
         config.project_id = Some(project_id);
     }
-    if let Some(visible_memory_injection) = layer.visible_memory_injection {
-        config.visible_memory_injection = visible_memory_injection;
-    }
     if let Some(implicit_memory_turns) = layer.implicit_memory_turns {
         config.implicit_memory_turns = implicit_memory_turns;
     }
     if let Some(profile_refresh_turns) = layer.profile_refresh_turns {
         config.profile_refresh_turns = profile_refresh_turns;
-    }
-    if let Some(session_compact_recall) = layer.session_compact_recall {
-        config.session_compact_recall = session_compact_recall;
     }
     if let Some(ai_tools_enabled) = layer.ai_tools_enabled {
         config.ai_tools_enabled = ai_tools_enabled;
@@ -443,6 +484,34 @@ mod tests {
         assert_eq!(resolved.enabled_source, VmmEffectiveConfigSource::Session);
         assert_eq!(resolved.project_id, Some(100));
         assert_eq!(resolved.implicit_memory_turns, 2);
+    }
+
+    #[test]
+    fn resolve_forces_hidden_memory_and_compact_recall() {
+        let global = VmmConfigLayer {
+            visible_memory_injection: Some(true),
+            session_compact_recall: Some(false),
+            ..base_global_layer()
+        };
+        let project = VmmConfigLayer {
+            visible_memory_injection: Some(true),
+            session_compact_recall: Some(false),
+            ..VmmConfigLayer::default()
+        };
+        let session = VmmConfigLayer {
+            visible_memory_injection: Some(true),
+            session_compact_recall: Some(false),
+            ..VmmConfigLayer::default()
+        };
+
+        let resolved = VmmEffectiveConfig::resolve(&global, Some(&project), Some(&session));
+
+        assert!(!resolved.visible_memory_injection);
+        assert!(resolved.session_compact_recall);
+        assert_eq!(
+            resolved.precheck_recall_mode(),
+            PreCheckRecallMode::PreCheckRecallModeSessionCompact
+        );
     }
 
     #[test]

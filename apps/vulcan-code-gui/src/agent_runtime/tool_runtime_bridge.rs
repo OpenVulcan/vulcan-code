@@ -168,6 +168,7 @@ mod tests {
                     id: String::from("demo_tool"),
                     name: String::from("demo_tool"),
                     description: String::from("Demo tool"),
+                    help_text: None,
                     source: VulcanToolSourceKind::Native,
                 },
                 parameters_schema: json!({
@@ -197,6 +198,7 @@ mod tests {
                     id: String::from("failing_tool"),
                     name: String::from("failing_tool"),
                     description: String::from("Failing demo tool"),
+                    help_text: None,
                     source: VulcanToolSourceKind::Native,
                 },
                 parameters_schema: json!({

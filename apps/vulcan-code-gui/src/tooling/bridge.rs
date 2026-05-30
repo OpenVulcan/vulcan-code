@@ -399,6 +399,7 @@ fn configured_web_search_candidate(
                 "Execute web search through the user-configured external search target chain. Available `target` values: {}. When `auto` is provided, targets are tried in the current default order.",
                 target_summary
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_web_search_parameters_schema(&configuration),
@@ -453,6 +454,7 @@ fn configured_understand_image_candidate(
                 "Read image attachments from the current session through the user-configured image-understanding target chain. Available `target` values: {}. Available images: {}.",
                 target_summary, image_summary
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_understand_image_parameters_schema(
@@ -499,6 +501,7 @@ fn configured_image_generation_candidate(
                 "Generate images through the user-configured image-generation target chain.",
                 &target_summary,
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_image_generation_parameters_schema(
@@ -550,6 +553,7 @@ fn configured_video_generation_candidate(
                 "Generate videos through the user-configured video-generation target chain.",
                 &target_summary,
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_video_generation_parameters_schema(
@@ -600,6 +604,7 @@ fn configured_speech_synthesis_candidate(
                 "Synthesize speech through the user-configured text-to-speech target chain.",
                 &target_summary,
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_speech_synthesis_parameters_schema(&configuration),
@@ -640,6 +645,7 @@ fn configured_music_generation_candidate(
                 "Generate songs or instrumental music through the user-configured music-generation target chain.",
                 &target_summary,
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_music_generation_parameters_schema(&configuration),
@@ -685,6 +691,7 @@ fn configured_music_cover_candidate(
                 "Create a music cover from reference audio through the user-configured music-cover target chain.",
                 &target_summary,
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: configured_music_cover_parameters_schema(
@@ -719,6 +726,7 @@ fn native_descriptor_to_vulcan(descriptor: &NativeToolDescriptor) -> VulcanToolD
         id: descriptor.id.clone(),
         name: descriptor.name.clone(),
         description: descriptor.description.clone(),
+        help_text: descriptor.help_text.clone(),
         source: VulcanToolSourceKind::Native,
     }
 }
@@ -752,6 +760,7 @@ fn luaskills_descriptor_to_vulcan(
         id: public_id.clone(),
         name: public_id,
         description: entry.description.clone(),
+        help_text: None,
         source: VulcanToolSourceKind::LuaSkills,
     }
 }
@@ -767,6 +776,7 @@ fn build_luaskills_help_candidate(entries: Vec<LuaSkillPromptEntry>) -> VulcanTo
             description: String::from(
                 "Return full prompt help and structured Markdown argument schema help for one enabled implicit LuaSkills entry by complete canonical name.",
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: luaskill_help_args_schema(),
@@ -802,6 +812,7 @@ fn build_luaskills_dispatch_candidate(
             description: String::from(
                 "Call one enabled LuaSkills entry by its complete canonical tool name with compact argument pairs. Use this dispatcher for implicit LuaSkills entries that are not registered as direct function tools.",
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: call_luaskill_args_schema(),
@@ -970,6 +981,7 @@ fn mcp_tool_binding_to_vulcan(tool: &McpRuntimeToolBinding) -> VulcanToolDescrip
         id: tool.id().to_string(),
         name: tool.name().to_string(),
         description: tool.description().to_string(),
+        help_text: None,
         source: VulcanToolSourceKind::Mcp,
     }
 }
@@ -1055,6 +1067,7 @@ fn build_ai_tool_fallback_candidate(
             id: semantic_tool_name.clone(),
             name: semantic_tool_name.clone(),
             description: semantic_description.clone(),
+            help_text: target.descriptor.help_text,
             source: VulcanToolSourceKind::AiFallback,
         },
         parameters_schema: target.parameters_schema,
@@ -1198,6 +1211,7 @@ mod tests {
                 id: id.to_string(),
                 name: id.to_string(),
                 description: String::from("Search the web"),
+                help_text: None,
                 source,
             },
             parameters_schema: json!({

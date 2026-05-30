@@ -21,18 +21,24 @@ pub use adapter::{
 };
 pub use client::{VmmClient, VmmClientError};
 pub use config::{
-    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
-    DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, VmmConfigDiagnostic,
-    VmmConfigLayer, VmmEffectiveConfig, VmmEffectiveConfigSource, VmmInstallReservation,
+    DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, DEFAULT_GRPC_KEEPALIVE_TIME_MS,
+    DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS, DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_IMPLICIT_MEMORY_TURNS,
+    DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS, DEFAULT_VMM_INJECTION_DESCRIPTION,
+    DEFAULT_VMM_INJECTION_TAG, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
+    VmmEffectiveConfigSource, VmmInstallReservation,
 };
 pub use protocol::{
-    ChatCompactRequest, ChatCompactResponse, ContextItem, EnsureProjectRequest,
-    EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
-    GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse,
-    ListUsersResponse, MemorySearchGroupResult, MemorySearchHit, PostActionRequest,
-    PostActionResponse, PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode,
-    PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProjectEntry, ResolveProjectRequest,
-    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, SearchMemoryEventsRequest,
+    ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
+    ChatCompactResponse, ContextItem, DeleteProjectRequest, DeleteProjectResponse,
+    DeleteUserRequest, DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse,
+    GetProfileBundleRequest, GetProfileBundleResponse, GetProfileNodesRequest,
+    GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse,
+    ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult, MemorySearchHit,
+    MigrateProjectRequest, MigrateProjectResponse, PostActionRequest, PostActionResponse,
+    PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode, PreCheckRequest,
+    PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
+    ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
+    ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
     SearchMemoryEventsResponse, TurnDetailEntry, UserEntry, WriteMemoriesRequest,
     WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
 };

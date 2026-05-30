@@ -2,13 +2,15 @@
 //! 运行时适配器与测试使用的 VMM 客户端抽象。
 
 use crate::protocol::{
-    ChatCompactRequest, ChatCompactResponse, EnsureProjectRequest, EnsureProjectResponse,
-    GetProfileBundleRequest, GetProfileBundleResponse, GetTurnDetailsRequest,
-    GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse, ListUsersResponse,
-    PostActionRequest, PostActionResponse, PreCheckRequest, PreCheckResponse,
-    ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse,
-    SearchMemoryEventsRequest, SearchMemoryEventsResponse, WriteMemoriesRequest,
-    WriteMemoriesResponse,
+    ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
+    ChatCompactResponse, DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest,
+    DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest,
+    GetProfileBundleResponse, GetProfileNodesRequest, GetProfileNodesResponse,
+    GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse,
+    ListUsersResponse, MigrateProjectRequest, MigrateProjectResponse, PostActionRequest,
+    PostActionResponse, PreCheckRequest, PreCheckResponse, ResolveProjectRequest,
+    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, SearchMemoryEventsRequest,
+    SearchMemoryEventsResponse, WriteMemoriesRequest, WriteMemoriesResponse,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -86,6 +88,20 @@ pub trait VmmClient: Send + Sync {
         request: EnsureProjectRequest,
     ) -> Result<EnsureProjectResponse, VmmClientError>;
 
+    /// Calls VMM DeleteProject.
+    /// 调用 VMM DeleteProject。
+    async fn delete_project(
+        &self,
+        request: DeleteProjectRequest,
+    ) -> Result<DeleteProjectResponse, VmmClientError>;
+
+    /// Calls VMM MigrateProject.
+    /// 调用 VMM MigrateProject。
+    async fn migrate_project(
+        &self,
+        request: MigrateProjectRequest,
+    ) -> Result<MigrateProjectResponse, VmmClientError>;
+
     /// Calls VMM ListUsers.
     /// 调用 VMM ListUsers。
     async fn list_users(&self) -> Result<ListUsersResponse, VmmClientError>;
@@ -97,12 +113,33 @@ pub trait VmmClient: Send + Sync {
         request: ResolveUserRequest,
     ) -> Result<ResolveUserResponse, VmmClientError>;
 
+    /// Calls VMM DeleteUser.
+    /// 调用 VMM DeleteUser。
+    async fn delete_user(
+        &self,
+        request: DeleteUserRequest,
+    ) -> Result<DeleteUserResponse, VmmClientError>;
+
+    /// Calls VMM GetProfileNodes.
+    /// 调用 VMM GetProfileNodes。
+    async fn get_profile_nodes(
+        &self,
+        request: GetProfileNodesRequest,
+    ) -> Result<GetProfileNodesResponse, VmmClientError>;
+
     /// Calls VMM GetProfileBundle.
     /// 调用 VMM GetProfileBundle。
     async fn get_profile_bundle(
         &self,
         request: GetProfileBundleRequest,
     ) -> Result<GetProfileBundleResponse, VmmClientError>;
+
+    /// Calls VMM ApplyProfileInstruction.
+    /// 调用 VMM ApplyProfileInstruction。
+    async fn apply_profile_instruction(
+        &self,
+        request: ApplyProfileInstructionRequest,
+    ) -> Result<ApplyProfileInstructionResponse, VmmClientError>;
 
     /// Calls VMM PreCheck.
     /// 调用 VMM PreCheck。

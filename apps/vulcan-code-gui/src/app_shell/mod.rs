@@ -53,6 +53,7 @@ mod update;
 mod views;
 mod vmm_hooks;
 mod vmm_management;
+mod vmm_management_state;
 mod workbench_model_state;
 mod workspace_state;
 
@@ -126,7 +127,11 @@ use self::ui_state::{
     WorkbenchQuestionModalOrigin, WorkbenchQuestionModalStage, WorkbenchQuestionModalState,
 };
 use self::vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle};
-use self::vmm_management::VmmManagementAction;
+use self::vmm_management::{VmmManagementAction, VmmManagementOutcome, VmmWorkbenchAction};
+use self::vmm_management_state::{
+    VmmManagementScopeChoice, VmmManagementSection, VmmManagementWorkbenchState,
+    VmmProfileTargetChoice, VmmProjectScopeChoice,
+};
 use self::workbench_model_state::{
     WorkbenchModelChoice, WorkbenchOpenRouterEndpointChoice,
     WorkbenchOpenRouterEndpointPickerState, WorkbenchReasoningEffort,
@@ -1717,6 +1722,9 @@ pub struct VulcanWorkbench {
     /// Editable project-level VMM settings draft for the current project settings modal.
     /// 当前项目设置弹窗使用的可编辑项目级 VMM 设置草稿。
     project_vmm_settings_draft: ProjectVmmSettingsDraft,
+    /// Structured VMM management workbench state for the dedicated memory panel.
+    /// 专用记忆面板使用的结构化 VMM 管理工作台状态。
+    vmm_management_workbench: VmmManagementWorkbenchState,
     /// Standalone AI capability tool configuration loaded from the dedicated Vulcan AI capability file.
     /// 从独立 Vulcan AI 能力配置文件载入的独立 AI 能力工具配置。
     ai_tool_configuration: PersistedAiToolConfiguration,
@@ -2493,6 +2501,7 @@ impl VulcanWorkbench {
             project_prompt_settings_draft: ProjectPromptSettingsDraft::default(),
             vmm_settings_draft,
             project_vmm_settings_draft: ProjectVmmSettingsDraft::default(),
+            vmm_management_workbench: VmmManagementWorkbenchState::new(),
             ai_tool_configuration,
             agent_profile_catalog,
             selected_user_agent_profile_id,

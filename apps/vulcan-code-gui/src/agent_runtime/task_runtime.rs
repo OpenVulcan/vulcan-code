@@ -719,6 +719,7 @@ pub fn build_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCa
             description: String::from(
                 "Create or resume a recoverable subtask session. Always provide `description` and `subagent` so the subtask keeps a stable title, identity, and resume target.",
             ),
+            help_text: None,
             source: VulcanToolSourceKind::Native,
         },
         parameters_schema: task_tool_args_schema(),

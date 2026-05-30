@@ -61,15 +61,16 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ProjectVmmGrpcTargetChanged(value) => {
-                self.project_vmm_settings_draft.settings.grpc_target = value;
-                self.project_vmm_settings_draft.settings.notice =
-                    String::from("项目 VMM gRPC 地址已修改，点击保存后生效。");
+                let _discarded_project_transport_value = value;
+                self.project_vmm_settings_draft.settings.notice = String::from(
+                    "项目级 VMM 不再允许修改 gRPC 地址，请到全局 VMM 传输设置中修改。",
+                );
                 Task::none()
             }
             Message::ProjectVmmApiKeyChanged(value) => {
-                self.project_vmm_settings_draft.settings.grpc_api_key = value;
+                let _discarded_project_transport_value = value;
                 self.project_vmm_settings_draft.settings.notice =
-                    String::from("项目 VMM API key 已修改，点击保存后生效。");
+                    String::from("项目级 VMM 不再允许修改 API key，请到全局 VMM 传输设置中修改。");
                 Task::none()
             }
             Message::ProjectVmmUserIdChanged(value) => {
@@ -85,9 +86,43 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ProjectVmmReceiveTimeoutChanged(value) => {
-                self.project_vmm_settings_draft.settings.receive_timeout_ms = value;
+                let _ = value;
                 self.project_vmm_settings_draft.settings.notice =
-                    String::from("项目 VMM 请求超时时间已修改，点击保存后生效。");
+                    String::from("项目级 VMM 不再允许修改请求超时，请到全局 VMM 传输设置中修改。");
+                Task::none()
+            }
+            Message::ProjectVmmHandshakeTimeoutChanged(value) => {
+                let _ = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目级 VMM 不再允许修改握手超时，请到全局 VMM 传输设置中修改。");
+                Task::none()
+            }
+            Message::ProjectVmmMaxReceiveMessageBytesChanged(value) => {
+                let _ = value;
+                self.project_vmm_settings_draft.settings.notice = String::from(
+                    "项目级 VMM 不再允许修改最大接收字节数，请到全局 VMM 传输设置中修改。",
+                );
+                Task::none()
+            }
+            Message::ProjectVmmKeepaliveTimeChanged(value) => {
+                let _ = value;
+                self.project_vmm_settings_draft.settings.notice = String::from(
+                    "项目级 VMM 不再允许修改 keepalive 间隔，请到全局 VMM 传输设置中修改。",
+                );
+                Task::none()
+            }
+            Message::ProjectVmmKeepaliveTimeoutChanged(value) => {
+                let _ = value;
+                self.project_vmm_settings_draft.settings.notice = String::from(
+                    "项目级 VMM 不再允许修改 keepalive 超时，请到全局 VMM 传输设置中修改。",
+                );
+                Task::none()
+            }
+            Message::ProjectVmmKeepalivePermitWithoutCallsChanged(value) => {
+                let _ = value;
+                self.project_vmm_settings_draft.settings.notice = String::from(
+                    "项目级 VMM 不再允许修改空闲 keepalive，请到全局 VMM 传输设置中修改。",
+                );
                 Task::none()
             }
             Message::ProjectVmmManagementUserRefChanged(value) => {
@@ -118,22 +153,6 @@ impl VulcanWorkbench {
                     .profile_refresh_turns = value;
                 self.project_vmm_settings_draft.settings.notice =
                     String::from("项目 VMM 画像刷新间隔已修改，点击保存后生效。");
-                Task::none()
-            }
-            Message::ProjectVmmVisibleMemoryChanged(value) => {
-                self.project_vmm_settings_draft
-                    .settings
-                    .visible_memory_injection = value;
-                self.project_vmm_settings_draft.settings.notice =
-                    String::from("项目 VMM 可见记忆模式已修改，点击保存后生效。");
-                Task::none()
-            }
-            Message::ProjectVmmSessionCompactRecallChanged(value) => {
-                self.project_vmm_settings_draft
-                    .settings
-                    .session_compact_recall = value;
-                self.project_vmm_settings_draft.settings.notice =
-                    String::from("项目 VMM 压缩感知召回已修改，点击保存后生效。");
                 Task::none()
             }
             Message::ProjectVmmAiToolsChanged(value) => {
@@ -176,13 +195,52 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::RunProjectVmmManagement(action) => {
-                let layer = match self.project_vmm_settings_draft.settings.to_layer() {
-                    Ok(layer) => layer,
+                let project_layer = match self.project_vmm_settings_draft.settings.to_layer() {
+                    Ok(mut layer) => {
+                        layer.grpc_target = None;
+                        layer.grpc_api_key = None;
+                        layer.handshake_timeout_ms = None;
+                        layer.receive_timeout_ms = None;
+                        layer.max_receive_message_bytes = None;
+                        layer.grpc_keepalive_time_ms = None;
+                        layer.grpc_keepalive_timeout_ms = None;
+                        layer.grpc_keepalive_permit_without_calls = None;
+                        layer
+                    }
                     Err(error) => {
                         self.project_vmm_settings_draft.settings.notice = error.clone();
                         self.project_attachment_cleanup_notice = error;
                         return Task::none();
                     }
+                };
+                let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+                    &self.provider_configuration.vmm,
+                    Some(&project_layer),
+                    None,
+                );
+                let layer = vulcan_vmm::VmmConfigLayer {
+                    enabled: Some(effective.enabled),
+                    grpc_target: (!effective.grpc_target.trim().is_empty())
+                        .then(|| effective.grpc_target.clone()),
+                    grpc_api_key: effective.grpc_api_key.clone(),
+                    handshake_timeout_ms: Some(effective.handshake_timeout_ms),
+                    receive_timeout_ms: Some(effective.receive_timeout_ms),
+                    max_receive_message_bytes: effective.max_receive_message_bytes,
+                    grpc_keepalive_time_ms: Some(effective.grpc_keepalive_time_ms),
+                    grpc_keepalive_timeout_ms: Some(effective.grpc_keepalive_timeout_ms),
+                    grpc_keepalive_permit_without_calls: Some(
+                        effective.grpc_keepalive_permit_without_calls,
+                    ),
+                    user_id: effective.user_id,
+                    project_id: effective.project_id,
+                    visible_memory_injection: Some(effective.visible_memory_injection),
+                    implicit_memory_turns: Some(effective.implicit_memory_turns),
+                    profile_refresh_turns: Some(effective.profile_refresh_turns),
+                    session_compact_recall: Some(effective.session_compact_recall),
+                    ai_tools_enabled: Some(effective.ai_tools_enabled),
+                    injection_tag: Some(effective.injection_tag),
+                    injection_description: Some(effective.injection_description),
+                    install: Some(effective.install),
                 };
                 self.project_vmm_settings_draft.settings.notice =
                     format!("正在执行项目 VMM 管理动作：{}。", action.label());

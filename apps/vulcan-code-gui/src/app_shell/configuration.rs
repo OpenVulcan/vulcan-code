@@ -942,6 +942,42 @@ impl VulcanWorkbench {
         }
     }
 
+    /// Reloads the project VMM settings draft for one explicit workspace path.
+    /// 为一个显式工作区路径重新载入项目 VMM 设置草稿。
+    pub(super) fn reload_project_vmm_settings_draft_for_workspace(
+        &mut self,
+        workspace_path: PathBuf,
+    ) {
+        let workspace_text = workspace_path.display().to_string();
+        match provider_config::load_project_configuration_file(&workspace_path) {
+            Ok(project_config) => {
+                let has_override = !project_config.vmm.is_empty();
+                let notice = if has_override {
+                    format!(
+                        "已载入项目 VMM 配置：{}",
+                        provider_config::project_configuration_file_path(&workspace_path).display()
+                    )
+                } else {
+                    String::from("当前项目未设置 VMM 覆盖，正在继承全局配置。")
+                };
+                self.project_vmm_settings_draft = ProjectVmmSettingsDraft::from_project_layer(
+                    workspace_text,
+                    &project_config.vmm,
+                    &self.provider_configuration.vmm,
+                    notice,
+                );
+            }
+            Err(error) => {
+                self.project_vmm_settings_draft = ProjectVmmSettingsDraft::from_project_layer(
+                    workspace_text,
+                    &VmmConfigLayer::default(),
+                    &self.provider_configuration.vmm,
+                    format!("载入项目 VMM 配置失败：{error}"),
+                );
+            }
+        }
+    }
+
     /// Saves the project VMM settings draft to the current project configuration file.
     /// 将项目 VMM 设置草稿保存到当前项目配置文件。
     pub(super) fn save_project_vmm_settings_draft(&mut self) -> Result<(), String> {
@@ -949,10 +985,28 @@ impl VulcanWorkbench {
             return Err(String::from("当前没有打开的项目设置，无法保存 VMM 配置。"));
         };
         let workspace_path = PathBuf::from(project.path.clone());
+        self.save_project_vmm_settings_draft_for_workspace(workspace_path)
+    }
+
+    /// Saves the project VMM settings draft to one explicit project configuration file.
+    /// 将项目 VMM 设置草稿保存到一个显式项目配置文件。
+    pub(super) fn save_project_vmm_settings_draft_for_workspace(
+        &mut self,
+        workspace_path: PathBuf,
+    ) -> Result<(), String> {
         let mut project_config =
             provider_config::load_project_configuration_file(&workspace_path).unwrap_or_default();
         project_config.vmm = if self.project_vmm_settings_draft.project_override_enabled {
-            self.project_vmm_settings_draft.settings.to_layer()?
+            let mut layer = self.project_vmm_settings_draft.settings.to_layer()?;
+            layer.grpc_target = None;
+            layer.grpc_api_key = None;
+            layer.handshake_timeout_ms = None;
+            layer.receive_timeout_ms = None;
+            layer.max_receive_message_bytes = None;
+            layer.grpc_keepalive_time_ms = None;
+            layer.grpc_keepalive_timeout_ms = None;
+            layer.grpc_keepalive_permit_without_calls = None;
+            layer
         } else {
             VmmConfigLayer::default()
         };

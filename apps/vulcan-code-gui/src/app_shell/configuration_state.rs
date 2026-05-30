@@ -9,9 +9,15 @@ use crate::provider_config::{
 use crate::tooling::shell_host::HostCommandShell;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_vmm::{
-    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
-    DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, VmmConfigLayer,
+    DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, DEFAULT_GRPC_KEEPALIVE_TIME_MS,
+    DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS, DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_IMPLICIT_MEMORY_TURNS,
+    DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS, DEFAULT_VMM_INJECTION_DESCRIPTION,
+    DEFAULT_VMM_INJECTION_TAG, VmmConfigLayer,
 };
+
+/// Maximum accepted gRPC keepalive value in milliseconds.
+/// 允许保存的 gRPC keepalive 最大毫秒值。
+const MAX_GRPC_KEEPALIVE_MS: u64 = 3_600_000;
 
 /// Editable provider form state kept in sync with the persisted provider configuration file.
 /// 与持久化供应商配置文件保持同步的可编辑供应商表单状态。
@@ -291,6 +297,21 @@ pub(super) struct VmmSettingsDraft {
     /// Editable VMM request timeout in milliseconds.
     /// 可编辑 VMM 请求超时时间，单位毫秒。
     pub(super) receive_timeout_ms: String,
+    /// Editable VMM handshake timeout in milliseconds.
+    /// 可编辑 VMM 握手超时时间，单位毫秒。
+    pub(super) handshake_timeout_ms: String,
+    /// Editable optional VMM max receive message bytes.
+    /// 可编辑 VMM 可选最大接收消息字节数。
+    pub(super) max_receive_message_bytes: String,
+    /// Editable VMM gRPC keepalive interval in milliseconds.
+    /// 可编辑 VMM gRPC keepalive 间隔，单位毫秒。
+    pub(super) grpc_keepalive_time_ms: String,
+    /// Editable VMM gRPC keepalive acknowledgement timeout in milliseconds.
+    /// 可编辑 VMM gRPC keepalive ACK 超时时间，单位毫秒。
+    pub(super) grpc_keepalive_timeout_ms: String,
+    /// Whether gRPC keepalive may run while no RPC is active.
+    /// 没有活跃 RPC 时是否允许 gRPC keepalive。
+    pub(super) grpc_keepalive_permit_without_calls: bool,
     /// Editable transient memory TTL.
     /// 可编辑临时记忆持续回合数。
     pub(super) implicit_memory_turns: String,
@@ -352,6 +373,25 @@ impl VmmSettingsDraft {
                 .receive_timeout_ms
                 .unwrap_or(DEFAULT_RECEIVE_TIMEOUT_MS)
                 .to_string(),
+            handshake_timeout_ms: layer
+                .handshake_timeout_ms
+                .unwrap_or(DEFAULT_HANDSHAKE_TIMEOUT_MS)
+                .to_string(),
+            max_receive_message_bytes: layer
+                .max_receive_message_bytes
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            grpc_keepalive_time_ms: layer
+                .grpc_keepalive_time_ms
+                .unwrap_or(DEFAULT_GRPC_KEEPALIVE_TIME_MS)
+                .to_string(),
+            grpc_keepalive_timeout_ms: layer
+                .grpc_keepalive_timeout_ms
+                .unwrap_or(DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS)
+                .to_string(),
+            grpc_keepalive_permit_without_calls: layer
+                .grpc_keepalive_permit_without_calls
+                .unwrap_or(DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS),
             implicit_memory_turns: layer
                 .implicit_memory_turns
                 .unwrap_or(DEFAULT_IMPLICIT_MEMORY_TURNS)
@@ -360,8 +400,8 @@ impl VmmSettingsDraft {
                 .profile_refresh_turns
                 .unwrap_or(DEFAULT_PROFILE_REFRESH_TURNS)
                 .to_string(),
-            visible_memory_injection: layer.visible_memory_injection.unwrap_or(false),
-            session_compact_recall: layer.session_compact_recall.unwrap_or(false),
+            visible_memory_injection: false,
+            session_compact_recall: true,
             ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(true),
             injection_tag: layer
                 .injection_tag
@@ -380,11 +420,41 @@ impl VmmSettingsDraft {
     pub(super) fn to_layer(&self) -> Result<VmmConfigLayer, String> {
         let user_id = parse_optional_u64(&self.user_id, "VMM 用户 ID")?;
         let project_id = parse_optional_u64(&self.project_id, "VMM 项目 ID")?;
-        let receive_timeout_ms = parse_required_u64(
+        let receive_timeout_ms = parse_required_positive_u64(
             &self.receive_timeout_ms,
             "VMM 请求超时时间",
             DEFAULT_RECEIVE_TIMEOUT_MS,
         )?;
+        let handshake_timeout_ms = parse_required_positive_u64(
+            &self.handshake_timeout_ms,
+            "VMM 握手超时时间",
+            DEFAULT_HANDSHAKE_TIMEOUT_MS,
+        )?;
+        let max_receive_message_bytes =
+            parse_optional_usize(&self.max_receive_message_bytes, "VMM 最大接收消息字节数")?;
+        let grpc_keepalive_time_ms = parse_required_positive_u64(
+            &self.grpc_keepalive_time_ms,
+            "VMM keepalive 间隔",
+            DEFAULT_GRPC_KEEPALIVE_TIME_MS,
+        )?;
+        let grpc_keepalive_timeout_ms = parse_required_positive_u64(
+            &self.grpc_keepalive_timeout_ms,
+            "VMM keepalive 超时",
+            DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS,
+        )?;
+        if grpc_keepalive_time_ms > MAX_GRPC_KEEPALIVE_MS {
+            return Err(format!(
+                "VMM keepalive 间隔不能超过 {MAX_GRPC_KEEPALIVE_MS} ms。"
+            ));
+        }
+        if grpc_keepalive_timeout_ms > MAX_GRPC_KEEPALIVE_MS {
+            return Err(format!(
+                "VMM keepalive 超时不能超过 {MAX_GRPC_KEEPALIVE_MS} ms。"
+            ));
+        }
+        if grpc_keepalive_timeout_ms >= grpc_keepalive_time_ms {
+            return Err(String::from("VMM keepalive 超时必须小于 keepalive 间隔。"));
+        }
         let implicit_memory_turns = parse_required_u32(
             &self.implicit_memory_turns,
             "临时记忆持续回合数",
@@ -399,13 +469,18 @@ impl VmmSettingsDraft {
             enabled: Some(self.enabled),
             grpc_target: optional_trimmed_string(&self.grpc_target),
             grpc_api_key: optional_trimmed_string(&self.grpc_api_key),
+            handshake_timeout_ms: Some(handshake_timeout_ms),
             receive_timeout_ms: Some(receive_timeout_ms),
+            max_receive_message_bytes,
+            grpc_keepalive_time_ms: Some(grpc_keepalive_time_ms),
+            grpc_keepalive_timeout_ms: Some(grpc_keepalive_timeout_ms),
+            grpc_keepalive_permit_without_calls: Some(self.grpc_keepalive_permit_without_calls),
             user_id,
             project_id,
             implicit_memory_turns: Some(implicit_memory_turns),
             profile_refresh_turns: Some(profile_refresh_turns),
-            visible_memory_injection: Some(self.visible_memory_injection),
-            session_compact_recall: Some(self.session_compact_recall),
+            visible_memory_injection: None,
+            session_compact_recall: None,
             ai_tools_enabled: Some(self.ai_tools_enabled),
             injection_tag: optional_trimmed_string(&self.injection_tag),
             injection_description: optional_trimmed_string(&self.injection_description),
@@ -487,6 +562,19 @@ fn parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>, String> {
         .map_err(|_| format!("{label} 必须是非负整数。"))
 }
 
+/// Parses an optional `usize` field while preserving blank as none.
+/// 解析可选 `usize` 字段，并将空输入保留为无值。
+fn parse_optional_usize(value: &str, label: &str) -> Result<Option<usize>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
 /// Parses a required unsigned integer field with a default fallback for blank input.
 /// 解析必填无符号整数字段，并在空输入时使用默认回退。
 fn parse_required_u32(value: &str, label: &str, default_value: u32) -> Result<u32, String> {
@@ -499,14 +587,22 @@ fn parse_required_u32(value: &str, label: &str, default_value: u32) -> Result<u3
         .map_err(|_| format!("{label} 必须是非负整数。"))
 }
 
-/// Parses a required unsigned 64-bit integer field with a default fallback for blank input.
-/// 解析必填 64 位无符号整数字段，并在空输入时使用默认回退。
-fn parse_required_u64(value: &str, label: &str, default_value: u64) -> Result<u64, String> {
+/// Parses a required positive 64-bit integer field with a default fallback for blank input.
+/// 解析必填正 64 位无符号整数字段，并在空输入时使用默认回退。
+fn parse_required_positive_u64(
+    value: &str,
+    label: &str,
+    default_value: u64,
+) -> Result<u64, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(default_value);
     }
-    trimmed
+    let parsed = trimmed
         .parse::<u64>()
-        .map_err(|_| format!("{label} 必须是非负整数。"))
+        .map_err(|_| format!("{label} 必须是正整数。"))?;
+    if parsed == 0 {
+        return Err(format!("{label} 必须大于 0。"));
+    }
+    Ok(parsed)
 }
