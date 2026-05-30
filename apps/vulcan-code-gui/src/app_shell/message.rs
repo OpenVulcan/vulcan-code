@@ -890,6 +890,9 @@ pub(super) enum Message {
     /// Updates the global VMM project id draft.
     /// 更新全局 VMM 项目标识草稿。
     GlobalVmmProjectIdChanged(String),
+    /// Updates the global VMM request timeout draft.
+    /// 更新全局 VMM 请求超时时间草稿。
+    GlobalVmmReceiveTimeoutChanged(String),
     /// Updates the global VMM management user reference draft.
     /// 更新全局 VMM 管理用户引用草稿。
     GlobalVmmManagementUserRefChanged(String),
@@ -947,6 +950,9 @@ pub(super) enum Message {
     /// Updates the project VMM project id draft.
     /// 更新项目 VMM 项目标识草稿。
     ProjectVmmProjectIdChanged(String),
+    /// Updates the project VMM request timeout draft.
+    /// 更新项目 VMM 请求超时时间草稿。
+    ProjectVmmReceiveTimeoutChanged(String),
     /// Updates the project VMM management user reference draft.
     /// 更新项目 VMM 管理用户引用草稿。
     ProjectVmmManagementUserRefChanged(String),

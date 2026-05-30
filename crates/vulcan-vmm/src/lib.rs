@@ -21,7 +21,7 @@ pub use adapter::{
 };
 pub use client::{VmmClient, VmmClientError};
 pub use config::{
-    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS,
+    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
     DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, VmmConfigDiagnostic,
     VmmConfigLayer, VmmEffectiveConfig, VmmEffectiveConfigSource, VmmInstallReservation,
 };

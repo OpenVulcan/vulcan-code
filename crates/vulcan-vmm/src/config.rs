@@ -19,7 +19,7 @@ pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 3_000;
 
 /// Default receive timeout used before a project overrides it.
 /// 项目覆盖前使用的默认接收超时时间。
-pub const DEFAULT_RECEIVE_TIMEOUT_MS: u64 = 8_000;
+pub const DEFAULT_RECEIVE_TIMEOUT_MS: u64 = 15_000;
 
 /// Default transient recall TTL.
 /// 默认临时召回持续回合数。

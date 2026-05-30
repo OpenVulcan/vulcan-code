@@ -161,6 +161,7 @@ impl VulcanWorkbench {
                         api_key: Message::GlobalVmmApiKeyChanged,
                         user_id: Message::GlobalVmmUserIdChanged,
                         project_id: Message::GlobalVmmProjectIdChanged,
+                        receive_timeout: Message::GlobalVmmReceiveTimeoutChanged,
                         management_user_ref: Message::GlobalVmmManagementUserRefChanged,
                         management_project_ref: Message::GlobalVmmManagementProjectRefChanged,
                         implicit_turns: Message::GlobalVmmImplicitTurnsChanged,
@@ -194,6 +195,7 @@ impl VulcanWorkbench {
                     api_key: Message::ProjectVmmApiKeyChanged,
                     user_id: Message::ProjectVmmUserIdChanged,
                     project_id: Message::ProjectVmmProjectIdChanged,
+                    receive_timeout: Message::ProjectVmmReceiveTimeoutChanged,
                     management_user_ref: Message::ProjectVmmManagementUserRefChanged,
                     management_project_ref: Message::ProjectVmmManagementProjectRefChanged,
                     implicit_turns: Message::ProjectVmmImplicitTurnsChanged,
@@ -274,6 +276,12 @@ impl VulcanWorkbench {
             row![
                 self.view_vmm_text_field("用户 ID", "数字", &draft.user_id, messages.user_id),
                 self.view_vmm_text_field("项目 ID", "数字", &draft.project_id, messages.project_id),
+                self.view_vmm_text_field(
+                    "请求超时 ms",
+                    "15000",
+                    &draft.receive_timeout_ms,
+                    messages.receive_timeout,
+                ),
             ]
             .spacing(10),
             row![
@@ -404,6 +412,9 @@ struct VmmSettingsMessageMap {
     /// Project-id message constructor.
     /// 项目标识消息构造器。
     project_id: fn(String) -> Message,
+    /// Request-timeout message constructor.
+    /// 请求超时时间消息构造器。
+    receive_timeout: fn(String) -> Message,
     /// Management user-reference message constructor.
     /// 管理用户引用消息构造器。
     management_user_ref: fn(String) -> Message,

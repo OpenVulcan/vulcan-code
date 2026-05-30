@@ -9,7 +9,7 @@ use crate::provider_config::{
 use crate::tooling::shell_host::HostCommandShell;
 use std::collections::{BTreeMap, BTreeSet};
 use vulcan_vmm::{
-    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS,
+    DEFAULT_IMPLICIT_MEMORY_TURNS, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
     DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, VmmConfigLayer,
 };
 
@@ -288,6 +288,9 @@ pub(super) struct VmmSettingsDraft {
     /// Editable project reference or Team/Space/Project path used only by VMM management RPC helpers.
     /// 仅供 VMM 管理 RPC 辅助功能使用的可编辑项目引用或 Team/Space/Project 路径。
     pub(super) management_project_ref: String,
+    /// Editable VMM request timeout in milliseconds.
+    /// 可编辑 VMM 请求超时时间，单位毫秒。
+    pub(super) receive_timeout_ms: String,
     /// Editable transient memory TTL.
     /// 可编辑临时记忆持续回合数。
     pub(super) implicit_memory_turns: String,
@@ -345,6 +348,10 @@ impl VmmSettingsDraft {
             project_id: project_id.clone(),
             management_user_ref: user_id,
             management_project_ref: project_id,
+            receive_timeout_ms: layer
+                .receive_timeout_ms
+                .unwrap_or(DEFAULT_RECEIVE_TIMEOUT_MS)
+                .to_string(),
             implicit_memory_turns: layer
                 .implicit_memory_turns
                 .unwrap_or(DEFAULT_IMPLICIT_MEMORY_TURNS)
@@ -373,6 +380,11 @@ impl VmmSettingsDraft {
     pub(super) fn to_layer(&self) -> Result<VmmConfigLayer, String> {
         let user_id = parse_optional_u64(&self.user_id, "VMM 用户 ID")?;
         let project_id = parse_optional_u64(&self.project_id, "VMM 项目 ID")?;
+        let receive_timeout_ms = parse_required_u64(
+            &self.receive_timeout_ms,
+            "VMM 请求超时时间",
+            DEFAULT_RECEIVE_TIMEOUT_MS,
+        )?;
         let implicit_memory_turns = parse_required_u32(
             &self.implicit_memory_turns,
             "临时记忆持续回合数",
@@ -387,6 +399,7 @@ impl VmmSettingsDraft {
             enabled: Some(self.enabled),
             grpc_target: optional_trimmed_string(&self.grpc_target),
             grpc_api_key: optional_trimmed_string(&self.grpc_api_key),
+            receive_timeout_ms: Some(receive_timeout_ms),
             user_id,
             project_id,
             implicit_memory_turns: Some(implicit_memory_turns),
@@ -483,5 +496,17 @@ fn parse_required_u32(value: &str, label: &str, default_value: u32) -> Result<u3
     }
     trimmed
         .parse::<u32>()
+        .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
+/// Parses a required unsigned 64-bit integer field with a default fallback for blank input.
+/// 解析必填 64 位无符号整数字段，并在空输入时使用默认回退。
+fn parse_required_u64(value: &str, label: &str, default_value: u64) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(default_value);
+    }
+    trimmed
+        .parse::<u64>()
         .map_err(|_| format!("{label} 必须是非负整数。"))
 }

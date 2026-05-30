@@ -421,6 +421,7 @@ fn provider_configuration_round_trips_vmm_configuration() {
         vmm: VmmConfigLayer {
             enabled: Some(true),
             grpc_target: Some(String::from("127.0.0.1:50051")),
+            receive_timeout_ms: Some(15_000),
             user_id: Some(7),
             project_id: Some(42),
             ai_tools_enabled: Some(false),
@@ -431,6 +432,7 @@ fn provider_configuration_round_trips_vmm_configuration() {
 
     let value = serde_json::to_value(&config).expect("provider configuration must serialize");
     assert_eq!(value["vmm"]["grpc_target"], json!("127.0.0.1:50051"));
+    assert_eq!(value["vmm"]["receive_timeout_ms"], json!(15_000));
     assert_eq!(value["vmm"]["ai_tools_enabled"], json!(false));
 
     let restored: ProviderConfigurationFile =
@@ -1531,6 +1533,7 @@ fn project_configuration_file_roundtrips_vmm_settings() {
         vmm: VmmConfigLayer {
             enabled: Some(false),
             project_id: Some(1001),
+            receive_timeout_ms: Some(30_000),
             implicit_memory_turns: Some(5),
             ..VmmConfigLayer::default()
         },
@@ -1541,6 +1544,7 @@ fn project_configuration_file_roundtrips_vmm_settings() {
 
     assert_eq!(loaded, config);
     assert_eq!(loaded.vmm.project_id, Some(1001));
+    assert_eq!(loaded.vmm.receive_timeout_ms, Some(30_000));
 
     let _ = fs::remove_dir_all(root);
 }

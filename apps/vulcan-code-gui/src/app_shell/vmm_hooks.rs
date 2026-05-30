@@ -31,6 +31,9 @@ const VMM_POST_ACTION_HOOK_ID: &str = "builtin.vmm.post_action";
 /// Stable id used by the built-in VMM chat-compaction hook.
 /// 内置 VMM 会话压缩 hook 使用的稳定标识。
 const VMM_CHAT_COMPACT_HOOK_ID: &str = "builtin.vmm.chat_compact";
+/// Host-side ceiling for built-in VMM hook calls; request timeout remains user-configurable.
+/// 内置 VMM hook 调用的宿主侧兜底上限；请求超时仍由用户配置控制。
+const VMM_HOOK_TIMEOUT_CEILING_MS: u64 = 120_000;
 
 /// Shared VMM configuration snapshot captured by hook closures.
 /// 被 hook 闭包捕获的共享 VMM 配置快照。
@@ -225,7 +228,7 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
     let mut registration = HookRegistration::new(id, point, mode);
     registration.scope = HookScope::Session;
     registration.priority = -100;
-    registration.timeout_ms = Some(3_000);
+    registration.timeout_ms = Some(VMM_HOOK_TIMEOUT_CEILING_MS);
     registration.failure_policy = HookFailurePolicy::Continue;
     registration
         .requested_capabilities

@@ -84,6 +84,12 @@ impl VulcanWorkbench {
                     String::from("项目 VMM 项目 ID 已修改，点击保存后生效。");
                 Task::none()
             }
+            Message::ProjectVmmReceiveTimeoutChanged(value) => {
+                self.project_vmm_settings_draft.settings.receive_timeout_ms = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 请求超时时间已修改，点击保存后生效。");
+                Task::none()
+            }
             Message::ProjectVmmManagementUserRefChanged(value) => {
                 self.project_vmm_settings_draft.settings.management_user_ref = value;
                 self.project_vmm_settings_draft.settings.notice =

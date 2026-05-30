@@ -51,9 +51,9 @@ pub(super) const HOOK_CONVERSATION_TURN_TERMINATED: &str = "conversation.turn.te
 /// Hook point fired when a session context compaction finishes.
 /// 会话上下文压缩完成时触发的 hook 点位。
 pub(super) const HOOK_CONVERSATION_COMPACTED: &str = "conversation.compacted";
-/// Maximum time the UI send path may wait for precheck hook results.
-/// UI 发送路径等待 precheck hook 结果的最长时间。
-const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 3_000;
+/// Host-side safety ceiling for waiting on precheck hook results.
+/// 等待 precheck hook 结果的宿主侧安全兜底上限。
+const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 
 /// One compact timeline item emitted to conversation hook consumers.
 /// 发送给会话 hook 消费方的一条精简 timeline 项。
@@ -973,14 +973,18 @@ mod tests {
         use std::time::{Duration, Instant};
         use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
 
+        const TEST_HOOK_TIMEOUT_MS: u64 = 250;
+
         let mut runtime = ConversationHookRuntime::new();
+        let mut registration =
+            HookRegistration::new("slow", HOOK_CONVERSATION_TURN_PRECHECK, HookMode::Transform);
+        registration.timeout_ms = Some(TEST_HOOK_TIMEOUT_MS);
         runtime
             .dispatcher_mut()
             .register(
-                HookRegistration::new("slow", HOOK_CONVERSATION_TURN_PRECHECK, HookMode::Transform),
+                registration,
                 Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
-                    tokio::time::sleep(Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS + 500))
-                        .await;
+                    tokio::time::sleep(Duration::from_millis(TEST_HOOK_TIMEOUT_MS + 500)).await;
                     Ok(HookResult::default())
                 })),
             )
@@ -998,7 +1002,7 @@ mod tests {
         );
 
         assert!(injections.is_empty());
-        assert!(started_at.elapsed() < Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS + 1_500));
+        assert!(started_at.elapsed() < Duration::from_millis(TEST_HOOK_TIMEOUT_MS + 1_500));
     }
 
     #[test]
