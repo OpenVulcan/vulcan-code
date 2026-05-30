@@ -52,6 +52,25 @@ impl VulcanWorkbench {
         let ai_tool_configuration =
             self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
         let config_for_run = self.provider_configuration.clone();
+        let system_prompt_hook_phase =
+            self.vmm_profile_placement_phase_for_next_user_prompt(session_id, false);
+        let session_vmm = self
+            .session_runtime_state(session_id)
+            .map(|state| state.vmm.clone())
+            .unwrap_or_default();
+        let project_vmm = self.current_project_vmm_configuration(session_id);
+        let effective_vmm_config = vulcan_vmm::VmmEffectiveConfig::resolve(
+            &self.provider_configuration.vmm,
+            Some(&project_vmm),
+            Some(&session_vmm),
+        );
+        let system_prompt_hook_blocks = self
+            .vmm_hook_runtime
+            .cached_profile_system_prompt_blocks_for_session(
+                session_id,
+                &effective_vmm_config,
+                system_prompt_hook_phase,
+            );
         let request = ExecutionPreparationRequest {
             session_id,
             session_title,
@@ -78,11 +97,9 @@ impl VulcanWorkbench {
                         Some("api-request-simulation"),
                     )
                 }),
-            project_vmm: self.current_project_vmm_configuration(session_id),
-            session_vmm: self
-                .session_runtime_state(session_id)
-                .map(|state| state.vmm.clone())
-                .unwrap_or_default(),
+            system_prompt_hook_blocks,
+            project_vmm,
+            session_vmm,
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

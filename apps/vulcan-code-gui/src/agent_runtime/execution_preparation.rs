@@ -192,6 +192,7 @@ pub(crate) fn prepare_execution(
         context_baseline: None,
         context_request_mode: None,
         context_injection: request.context_injection.clone(),
+        system_prompt_hook_blocks: request.system_prompt_hook_blocks.clone(),
         project_vmm: request.project_vmm.clone(),
         session_vmm: request.session_vmm.clone(),
     })

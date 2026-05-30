@@ -3,23 +3,29 @@
 
 use super::conversation_hooks::{
     HOOK_CONVERSATION_COMPACTED, HOOK_CONVERSATION_TURN_COMPLETED, HOOK_CONVERSATION_TURN_PRECHECK,
-    HOOK_METADATA_VMM_WRITEBACK_EFFECTS, VmmWritebackHookEffect,
+    HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT, HOOK_METADATA_VMM_WRITEBACK_EFFECTS,
+    VmmProfileSyncHookEffect, VmmWritebackHookEffect,
 };
 use super::*;
-use crate::model::VmmWritebackOutboxEntry;
+use crate::model::{VmmProfileSyncState, VmmWritebackOutboxEntry};
 use crate::provider_config;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use vulcan_context_injection::{
+    InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem, InjectionKind,
+};
 use vulcan_hooks::{
     FnHookHandler, HookCapability, HookError, HookFailurePolicy, HookInvocation, HookMode,
-    HookRegistration, HookResult, HookScope,
+    HookRegistration, HookResult, HookScope, SystemPromptHookBlock, SystemPromptHookPhase,
 };
 use vulcan_vmm::{
-    TonicVmmClient, VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
-    VmmTransportConfig, chat_compact_request_from_payload, injection_from_precheck_response,
-    post_action_request_from_completed_payload, precheck_request_from_payload,
+    GetProfileBundleRequest, GetProfileNodesRequest, ProfileBundleMode, ProfileNodeEntry,
+    ProfileTarget, TonicVmmClient, VmmClient, VmmConfigDiagnostic, VmmConfigLayer,
+    VmmEffectiveConfig, VmmTransportConfig, chat_compact_request_from_payload,
+    injection_from_precheck_response, post_action_request_from_completed_payload,
+    precheck_request_from_payload,
 };
 
 /// Stable id used by the built-in VMM precheck hook.
@@ -34,6 +40,15 @@ const VMM_CHAT_COMPACT_HOOK_ID: &str = "builtin.vmm.chat_compact";
 /// Host-side ceiling for built-in VMM hook calls; request timeout remains user-configurable.
 /// 内置 VMM hook 调用的宿主侧兜底上限；请求超时仍由用户配置控制。
 const VMM_HOOK_TIMEOUT_CEILING_MS: u64 = 120_000;
+/// Stable system-prompt tag used for VMM profile injection.
+/// VMM 画像注入使用的稳定系统提示词标签。
+const VMM_PROFILE_SYSTEM_PROMPT_TAG: &str = "vmm_profile";
+/// Maximum active profile nodes pulled for local diff snapshots per target.
+/// 每个目标为本地差量快照拉取的最大 active 画像节点数。
+const VMM_PROFILE_SYNC_NODE_LIMIT: u32 = 256;
+/// Stable hidden-user injection tag used for VMM profile delta updates.
+/// VMM 画像增量更新使用的稳定隐藏用户注入标签。
+const VMM_PROFILE_DELTA_INJECTION_TAG: &str = "vmm_profile_delta";
 
 /// Shared VMM configuration snapshot captured by hook closures.
 /// 被 hook 闭包捕获的共享 VMM 配置快照。
@@ -51,6 +66,12 @@ pub(super) struct VmmHookConfigSnapshot {
     /// Pending writeback outboxes keyed by session id string.
     /// 按会话标识字符串索引的待处理写回 outbox。
     pub outboxes: BTreeMap<String, Vec<VmmWritebackOutboxEntry>>,
+    /// Profile synchronization states keyed by session id string.
+    /// 按会话标识字符串索引的画像同步状态。
+    pub profile_sync: BTreeMap<String, VmmProfileSyncState>,
+    /// Latest compaction identifiers keyed by session id string.
+    /// 按会话标识字符串索引的最近压缩标识。
+    pub last_compaction_ids: BTreeMap<String, Option<String>>,
 }
 
 /// Shared runtime handle used by built-in VMM hook handlers.
@@ -60,23 +81,97 @@ pub(super) struct VmmHookRuntimeHandle {
     /// Latest configuration snapshot visible to hook handlers.
     /// hook 处理器可见的最新配置快照。
     state: Arc<RwLock<VmmHookConfigSnapshot>>,
+    /// Runtime-owned profile sync cache keyed by session id string.
+    /// 按会话标识索引且由运行时持有的画像同步缓存。
+    profile_cache: Arc<RwLock<BTreeMap<String, VmmProfileSyncState>>>,
 }
 
 impl VmmHookRuntimeHandle {
     /// Builds a shared VMM hook runtime handle.
     /// 构建共享 VMM hook 运行时句柄。
     pub(super) fn new(snapshot: VmmHookConfigSnapshot) -> Self {
+        let profile_cache = snapshot.profile_sync.clone();
         Self {
             state: Arc::new(RwLock::new(snapshot)),
+            profile_cache: Arc::new(RwLock::new(profile_cache)),
         }
     }
 
-    /// Replaces the full configuration snapshot.
-    /// 替换完整配置快照。
+    /// Replaces the configuration snapshot while preserving runtime-owned profile cache.
+    /// 替换配置快照，同时保留运行时持有的画像缓存。
     pub(super) fn replace_snapshot(&self, snapshot: VmmHookConfigSnapshot) {
+        let profile_sync = self
+            .profile_cache
+            .read()
+            .map(|cache| cache.clone())
+            .unwrap_or_default();
         if let Ok(mut state) = self.state.write() {
+            let mut snapshot = snapshot;
+            snapshot.profile_sync = profile_sync;
             *state = snapshot;
         }
+    }
+
+    /// Seeds the runtime profile cache from persisted state during startup or session load.
+    /// 在启动或会话加载时用持久化状态初始化运行时画像缓存。
+    pub(super) fn seed_profile_cache(&self, profile_sync: BTreeMap<String, VmmProfileSyncState>) {
+        if let Ok(mut cache) = self.profile_cache.write() {
+            *cache = profile_sync.clone();
+        }
+        if let Ok(mut state) = self.state.write() {
+            state.profile_sync = profile_sync;
+        }
+    }
+
+    /// Stores a freshly produced profile sync state in the runtime cache.
+    /// 将刚产生的画像同步状态写入运行时缓存。
+    fn store_profile_sync_for_session(&self, session_id: &str, profile_sync: VmmProfileSyncState) {
+        if let Ok(mut cache) = self.profile_cache.write() {
+            if profile_sync.is_empty() {
+                cache.remove(session_id);
+            } else {
+                cache.insert(session_id.to_string(), profile_sync.clone());
+            }
+        }
+        if let Ok(mut state) = self.state.write() {
+            if profile_sync.is_empty() {
+                state.profile_sync.remove(session_id);
+            } else {
+                state
+                    .profile_sync
+                    .insert(session_id.to_string(), profile_sync);
+            }
+        }
+    }
+
+    /// Stores a freshly produced profile sync state in the runtime cache.
+    /// 将刚产生的画像同步状态写入运行时缓存。
+    pub(super) fn store_profile_sync_state(
+        &self,
+        session_id: SessionId,
+        profile_sync: VmmProfileSyncState,
+    ) {
+        self.store_profile_sync_for_session(&session_id.to_string(), profile_sync);
+    }
+
+    /// Builds read-only cached profile system blocks for a request preview.
+    /// 为请求预览构建只读缓存画像系统提示词块。
+    pub(super) fn cached_profile_system_prompt_blocks_for_session(
+        &self,
+        session_id: SessionId,
+        config: &VmmEffectiveConfig,
+        phase: SystemPromptHookPhase,
+    ) -> Vec<SystemPromptHookBlock> {
+        if config.diagnose_memory_flow(true) != VmmConfigDiagnostic::Ready {
+            return Vec::new();
+        }
+        self.profile_cache
+            .read()
+            .ok()
+            .and_then(|cache| cache.get(&session_id.to_string()).cloned())
+            .and_then(|state| base_profile_block(&state, phase, "cached-preview"))
+            .into_iter()
+            .collect()
     }
 
     /// Resolves the effective VMM configuration for one hook invocation payload.
@@ -121,6 +216,36 @@ impl VmmHookRuntimeHandle {
             .cloned()
             .unwrap_or_default()
     }
+
+    /// Loads the profile sync state for one hook invocation.
+    /// 为一次 hook 调用读取画像同步状态。
+    fn profile_sync_for_invocation(&self, invocation: &HookInvocation) -> VmmProfileSyncState {
+        self.profile_cache
+            .read()
+            .ok()
+            .and_then(|cache| {
+                invocation_session_id(invocation)
+                    .as_deref()
+                    .and_then(|session_id| cache.get(session_id))
+                    .cloned()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Loads the latest compaction id for one hook invocation.
+    /// 为一次 hook 调用读取最近压缩标识。
+    fn last_compaction_id_for_invocation(&self, invocation: &HookInvocation) -> Option<String> {
+        let snapshot = self
+            .state
+            .read()
+            .map(|state| state.clone())
+            .unwrap_or_default();
+        invocation_session_id(invocation)
+            .as_deref()
+            .and_then(|session_id| snapshot.last_compaction_ids.get(session_id))
+            .cloned()
+            .flatten()
+    }
 }
 
 impl VulcanWorkbench {
@@ -163,11 +288,37 @@ impl VulcanWorkbench {
                 })
             })
             .collect::<BTreeMap<_, _>>();
+        let profile_sync = self
+            .session_runtime_state
+            .iter()
+            .chain(self.archived_session_runtime_state.iter())
+            .filter_map(|(session_id, runtime_state)| {
+                (!runtime_state.vmm_profile_sync.is_empty()).then(|| {
+                    (
+                        session_id.to_string(),
+                        runtime_state.vmm_profile_sync.clone(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        let last_compaction_ids = self
+            .session_runtime_state
+            .iter()
+            .chain(self.archived_session_runtime_state.iter())
+            .map(|(session_id, runtime_state)| {
+                (
+                    session_id.to_string(),
+                    runtime_state.last_compaction_id.clone(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
         VmmHookConfigSnapshot {
             global: self.provider_configuration.vmm.clone(),
             projects_by_workspace,
             sessions,
             outboxes,
+            profile_sync,
+            last_compaction_ids,
         }
     }
 
@@ -176,6 +327,46 @@ impl VulcanWorkbench {
     pub(super) fn refresh_vmm_hook_config_snapshot(&self) {
         self.vmm_hook_runtime
             .replace_snapshot(self.build_vmm_hook_config_snapshot());
+    }
+
+    /// Seeds the shared VMM hook profile cache from loaded session runtime state.
+    /// 使用已载入会话运行态初始化共享 VMM hook 画像缓存。
+    pub(super) fn seed_vmm_hook_profile_cache_from_runtime_state(&self) {
+        let profile_sync = self
+            .session_runtime_state
+            .iter()
+            .chain(self.archived_session_runtime_state.iter())
+            .filter_map(|(session_id, runtime_state)| {
+                (!runtime_state.vmm_profile_sync.is_empty()).then(|| {
+                    (
+                        session_id.to_string(),
+                        runtime_state.vmm_profile_sync.clone(),
+                    )
+                })
+            })
+            .collect::<BTreeMap<_, _>>();
+        self.vmm_hook_runtime.seed_profile_cache(profile_sync);
+    }
+
+    /// Resolves the VMM profile placement phase for the next user prompt in one session.
+    /// 解析某个会话下一条用户提示对应的 VMM 画像放置阶段。
+    pub(super) fn vmm_profile_placement_phase_for_next_user_prompt(
+        &self,
+        session_id: SessionId,
+        user_prompt_already_appended: bool,
+    ) -> SystemPromptHookPhase {
+        let conversation_state = self.session_conversation_state(session_id);
+        let runtime_state = self.session_runtime_state(session_id);
+        let message_count = if user_prompt_already_appended {
+            conversation_state.messages.len()
+        } else {
+            conversation_state.messages.len().saturating_add(1)
+        };
+        vmm_profile_placement_phase(
+            message_count,
+            runtime_state.and_then(|state| state.last_compaction_id.as_deref()),
+            runtime_state.and_then(|state| state.vmm_profile_sync.covered_compaction_id.as_deref()),
+        )
     }
 
     /// Registers the built-in VMM hook handlers on the shared conversation hook dispatcher.
@@ -261,20 +452,45 @@ async fn handle_vmm_precheck(
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
     let config = runtime.resolve_effective_config(&invocation);
-    if !should_run_vmm_precheck(&config) {
+    if !config.enabled {
         return Ok(HookResult::default());
     }
     ensure_vmm_ready(&config)?;
-    let request = precheck_request_from_payload(&invocation.payload.value, &config)
-        .map_err(|error| HookError::handler(error.to_string()))?;
     let client = connect_vmm_client(&config).await?;
-    let response = client
-        .pre_check(request)
-        .await
-        .map_err(|error| HookError::handler(error.to_string()))?;
-    let injection = injection_from_precheck_response(&response, &config);
+    let profile_sync = maybe_sync_vmm_profile(&client, &runtime, &invocation, &config).await?;
+    let injection = if should_run_vmm_precheck(&config) {
+        let request = precheck_request_from_payload(&invocation.payload.value, &config)
+            .map_err(|error| HookError::handler(error.to_string()))?;
+        let response = client
+            .pre_check(request)
+            .await
+            .map_err(|error| HookError::handler(error.to_string()))?;
+        injection_from_precheck_response(&response, &config)
+    } else {
+        None
+    };
+    let mut metadata = BTreeMap::new();
+    let mut system_prompt_blocks = Vec::new();
+    let mut injections = injection.into_iter().collect::<Vec<_>>();
+    if let Some(profile_sync) = profile_sync {
+        if let Some(session_id) = invocation_session_id(&invocation) {
+            runtime.store_profile_sync_for_session(&session_id, profile_sync.state.clone());
+        }
+        metadata.insert(
+            HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT.to_string(),
+            json!(VmmProfileSyncHookEffect {
+                state: profile_sync.state
+            }),
+        );
+        if let Some(block) = profile_sync.block {
+            system_prompt_blocks.push(block);
+        }
+        injections.extend(profile_sync.injections);
+    }
     Ok(HookResult {
-        injections: injection.into_iter().collect(),
+        injections,
+        system_prompt_blocks,
+        metadata,
         ..HookResult::default()
     })
 }
@@ -359,6 +575,463 @@ fn ensure_vmm_ready(config: &VmmEffectiveConfig) -> Result<(), HookError> {
     }
 }
 
+/// VMM profile synchronization output for one precheck dispatch.
+/// 单次 precheck 调度产生的 VMM 画像同步输出。
+struct VmmProfileSyncOutput {
+    /// Updated session-scoped profile sync state.
+    /// 更新后的会话级画像同步状态。
+    state: VmmProfileSyncState,
+    /// Optional system prompt block for the current request.
+    /// 当前请求可选的系统提示词块。
+    block: Option<SystemPromptHookBlock>,
+    /// Optional hidden-user injection for this request.
+    /// 当前请求可选的隐藏用户注入。
+    injections: Vec<InjectionInsert>,
+}
+
+/// Runs the VMM profile synchronization policy before provider preparation.
+/// 在 Provider 准备前运行 VMM 画像同步策略。
+async fn maybe_sync_vmm_profile(
+    client: &TonicVmmClient,
+    runtime: &VmmHookRuntimeHandle,
+    invocation: &HookInvocation,
+    config: &VmmEffectiveConfig,
+) -> Result<Option<VmmProfileSyncOutput>, HookError> {
+    let mut state = runtime.profile_sync_for_invocation(invocation);
+    let latest_compaction_id = runtime.last_compaction_id_for_invocation(invocation);
+    let sync_phase = vmm_profile_sync_phase(&state, latest_compaction_id.as_deref());
+    let placement_phase = invocation_system_prompt_hook_phase(invocation).unwrap_or(sync_phase);
+
+    match sync_phase {
+        SystemPromptHookPhase::FirstSession | SystemPromptHookPhase::AfterContextCompaction => {
+            let content = fetch_full_profile_content(client, config).await?;
+            let nodes_by_id = fetch_all_profile_nodes(client, config)
+                .await
+                .unwrap_or_default();
+            apply_vmm_profile_base_refresh(
+                &mut state,
+                &content,
+                nodes_by_id,
+                latest_compaction_id,
+                current_unix_millis_text(),
+            );
+            let block = base_profile_block(&state, placement_phase, "full");
+            Ok(Some(VmmProfileSyncOutput {
+                state,
+                block,
+                injections: Vec::new(),
+            }))
+        }
+        SystemPromptHookPhase::SubsequentSession => {
+            let block = base_profile_block(&state, placement_phase, "baseline");
+            let mut injections = Vec::new();
+            // Initial base refreshes do not count as turn one; this check refreshes only
+            // after the configured number of completed turns since that base.
+            // 初始化基点刷新不计为第一轮；此处仅在基点之后已完成指定轮数时刷新。
+            if !vmm_profile_refresh_threshold_reached(&state, config.profile_refresh_turns) {
+                return Ok(Some(VmmProfileSyncOutput {
+                    state,
+                    block,
+                    injections,
+                }));
+            }
+
+            let latest_content = fetch_full_profile_content(client, config).await?;
+            let latest_content = latest_content.trim().to_string();
+            let comparison_base = state
+                .delta_profile_content
+                .as_deref()
+                .or(state.base_profile_content.as_deref())
+                .unwrap_or_default();
+            let delta = render_profile_text_delta(comparison_base, &latest_content);
+            state.completed_turns_since_sync = 0;
+            state.delta_profile_content = normalized_optional_text(&latest_content);
+            state.nodes_by_id = fetch_all_profile_nodes(client, config)
+                .await
+                .unwrap_or_else(|_| state.nodes_by_id.clone());
+            state.updated_at = Some(current_unix_millis_text());
+            if !delta.trim().is_empty() {
+                injections.push(vmm_profile_delta_injection(
+                    &delta,
+                    "refresh",
+                    state.updated_at.as_deref().unwrap_or("unknown"),
+                ));
+            }
+            Ok(Some(VmmProfileSyncOutput {
+                state,
+                block,
+                injections,
+            }))
+        }
+    }
+}
+
+/// Builds a persistent hidden-user injection from the cached profile baseline.
+/// 使用缓存的画像基点构建持久隐藏用户注入。
+#[cfg(test)]
+fn cached_vmm_profile_baseline_output(state: VmmProfileSyncState) -> Option<VmmProfileSyncOutput> {
+    let block = base_profile_block(&state, SystemPromptHookPhase::SubsequentSession, "baseline");
+    block.as_ref()?;
+    Some(VmmProfileSyncOutput {
+        state,
+        block,
+        injections: Vec::new(),
+    })
+}
+
+/// Resolves where a full profile refresh should be placed for the current request.
+/// 解析当前请求中的全量画像刷新应放置的位置。
+pub(super) fn vmm_profile_placement_phase(
+    conversation_message_count: usize,
+    latest_compaction_id: Option<&str>,
+    covered_compaction_id: Option<&str>,
+) -> SystemPromptHookPhase {
+    if conversation_message_count <= 1 {
+        return SystemPromptHookPhase::FirstSession;
+    }
+    if latest_compaction_id.is_some() && latest_compaction_id != covered_compaction_id {
+        return SystemPromptHookPhase::AfterContextCompaction;
+    }
+    SystemPromptHookPhase::SubsequentSession
+}
+
+/// Resolves the profile sync phase from current session state and compaction boundary.
+/// 根据当前会话状态和压缩边界解析画像同步阶段。
+pub(super) fn vmm_profile_sync_phase(
+    state: &VmmProfileSyncState,
+    latest_compaction_id: Option<&str>,
+) -> SystemPromptHookPhase {
+    if state.base_profile_content.is_none() && state.nodes_by_id.is_empty() {
+        return SystemPromptHookPhase::FirstSession;
+    }
+    if latest_compaction_id != state.covered_compaction_id.as_deref() {
+        return SystemPromptHookPhase::AfterContextCompaction;
+    }
+    SystemPromptHookPhase::SubsequentSession
+}
+
+/// Reads the host-calculated system prompt hook phase from one invocation payload.
+/// 从一次调用载荷中读取宿主计算的系统提示词 hook 阶段。
+fn invocation_system_prompt_hook_phase(
+    invocation: &HookInvocation,
+) -> Option<SystemPromptHookPhase> {
+    match payload_string(&invocation.payload.value, "system_prompt_hook_phase")?.as_str() {
+        "first_session" => Some(SystemPromptHookPhase::FirstSession),
+        "after_context_compaction" => Some(SystemPromptHookPhase::AfterContextCompaction),
+        "subsequent_session" => Some(SystemPromptHookPhase::SubsequentSession),
+        _ => None,
+    }
+}
+
+/// Fetches one full profile bundle from VMM.
+/// 从 VMM 拉取一份完整画像 bundle。
+async fn fetch_profile_bundle(
+    client: &TonicVmmClient,
+    config: &VmmEffectiveConfig,
+) -> Result<vulcan_vmm::GetProfileBundleResponse, HookError> {
+    client
+        .get_profile_bundle(GetProfileBundleRequest {
+            user_id: config.user_id.unwrap_or_default(),
+            project_id: config.project_id.unwrap_or_default(),
+            mode: ProfileBundleMode::ProfileBundleModeFull,
+            include_explanation: Some(false),
+        })
+        .await
+        .map_err(|error| HookError::handler(error.to_string()))
+}
+
+/// Fetches and renders the latest full profile content with node fallback.
+/// 拉取并渲染最新全量画像内容，并在 bundle 为空时回退到节点快照。
+async fn fetch_full_profile_content(
+    client: &TonicVmmClient,
+    config: &VmmEffectiveConfig,
+) -> Result<String, HookError> {
+    let bundle = fetch_profile_bundle(client, config).await?;
+    let content = render_full_profile_prompt(&bundle);
+    if !content.trim().is_empty() {
+        return Ok(content);
+    }
+    let nodes_by_id = fetch_all_profile_nodes(client, config)
+        .await
+        .unwrap_or_default();
+    Ok(render_profile_node_snapshot(&nodes_by_id))
+}
+
+/// Fetches active profile nodes for every supported VMM target.
+/// 为所有受支持的 VMM 目标拉取 active 画像节点。
+async fn fetch_all_profile_nodes(
+    client: &TonicVmmClient,
+    config: &VmmEffectiveConfig,
+) -> Result<BTreeMap<u64, ProfileNodeEntry>, HookError> {
+    let mut nodes = BTreeMap::new();
+    for target in [
+        ProfileTarget::ProfileTargetTeam,
+        ProfileTarget::ProfileTargetSpace,
+        ProfileTarget::ProfileTargetProject,
+        ProfileTarget::ProfileTargetUser,
+    ] {
+        let response = client
+            .get_profile_nodes(GetProfileNodesRequest {
+                target,
+                user_id: config.user_id.unwrap_or_default(),
+                project_id: config.project_id.unwrap_or_default(),
+                limit: VMM_PROFILE_SYNC_NODE_LIMIT,
+            })
+            .await
+            .map_err(|error| HookError::handler(error.to_string()))?;
+        for node in response.nodes {
+            nodes.insert(node.profile_node_id, node);
+        }
+    }
+    Ok(nodes)
+}
+
+/// Renders the full profile bundle into provider-visible system prompt text.
+/// 将完整画像 bundle 渲染为 Provider 可见系统提示词文本。
+fn render_full_profile_prompt(bundle: &vulcan_vmm::GetProfileBundleResponse) -> String {
+    let mut sections = Vec::new();
+    push_non_empty_profile_section(
+        &mut sections,
+        "Environment Priority",
+        &bundle.environment_priority_text,
+    );
+    push_non_empty_profile_section(&mut sections, "Profile Bundle", &bundle.combined_text);
+    push_non_empty_profile_section(&mut sections, "Team Profile", &bundle.team_profile);
+    push_non_empty_profile_section(&mut sections, "Space Profile", &bundle.space_profile);
+    push_non_empty_profile_section(&mut sections, "Project Profile", &bundle.project_profile);
+    push_non_empty_profile_section(&mut sections, "User Profile", &bundle.user_profile);
+    sections.join("\n\n")
+}
+
+/// Appends one non-empty profile section.
+/// 追加一个非空画像段落。
+fn push_non_empty_profile_section(sections: &mut Vec<String>, title: &str, content: &str) {
+    let content = content.trim();
+    if !content.is_empty() {
+        sections.push(format!("# {title}\n{content}"));
+    }
+}
+
+/// Renders local profile node changes into a compact diff prompt.
+/// 将本地画像节点变化渲染为紧凑差量提示词。
+#[cfg(test)]
+fn render_profile_node_diff(
+    previous: &BTreeMap<u64, ProfileNodeEntry>,
+    next: &BTreeMap<u64, ProfileNodeEntry>,
+) -> String {
+    let mut sections = Vec::new();
+    let added = next
+        .iter()
+        .filter(|(id, _)| !previous.contains_key(id))
+        .map(|(_, node)| render_profile_node_line("ADDED", node))
+        .collect::<Vec<_>>();
+    if !added.is_empty() {
+        sections.push(format!("# Added Profile Nodes\n{}", added.join("\n")));
+    }
+    let removed = previous
+        .iter()
+        .filter(|(id, _)| !next.contains_key(id))
+        .map(|(_, node)| render_profile_node_line("REMOVED", node))
+        .collect::<Vec<_>>();
+    if !removed.is_empty() {
+        sections.push(format!("# Removed Profile Nodes\n{}", removed.join("\n")));
+    }
+    let changed = next
+        .iter()
+        .filter_map(|(id, node)| {
+            previous
+                .get(id)
+                .filter(|previous_node| *previous_node != node)
+                .map(|_| render_profile_node_line("UPDATED", node))
+        })
+        .collect::<Vec<_>>();
+    if !changed.is_empty() {
+        sections.push(format!("# Updated Profile Nodes\n{}", changed.join("\n")));
+    }
+    sections.join("\n\n")
+}
+
+/// Renders active profile nodes as a full snapshot fallback.
+/// 将 active 画像节点渲染为全量快照回退内容。
+fn render_profile_node_snapshot(nodes: &BTreeMap<u64, ProfileNodeEntry>) -> String {
+    if nodes.is_empty() {
+        return String::new();
+    }
+    let lines = nodes
+        .values()
+        .map(|node| render_profile_node_line("ACTIVE", node))
+        .collect::<Vec<_>>();
+    format!("# Active Profile Nodes\n{}", lines.join("\n"))
+}
+
+/// Renders a compact text-level delta between two full profile snapshots.
+/// 渲染两个全量画像快照之间的紧凑文本级差量。
+fn render_profile_text_delta(previous: &str, next: &str) -> String {
+    let previous_lines = normalized_profile_lines(previous);
+    let next_lines = normalized_profile_lines(next);
+    if previous_lines == next_lines {
+        return String::new();
+    }
+    let added = next_lines
+        .iter()
+        .filter(|line| !previous_lines.contains(*line))
+        .cloned()
+        .collect::<Vec<_>>();
+    let removed = previous_lines
+        .iter()
+        .filter(|line| !next_lines.contains(*line))
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut sections = Vec::new();
+    if !added.is_empty() {
+        sections.push(format!("# Added Profile Facts\n{}", added.join("\n")));
+    }
+    if !removed.is_empty() {
+        sections.push(format!("# Removed Profile Facts\n{}", removed.join("\n")));
+    }
+    sections.join("\n\n")
+}
+
+/// Normalizes one full profile snapshot into comparable non-empty lines.
+/// 将一份全量画像快照规范化为可比较的非空行。
+fn normalized_profile_lines(content: &str) -> Vec<String> {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Converts non-empty text into a persisted optional string.
+/// 将非空文本转换为持久化可选字符串。
+fn normalized_optional_text(content: &str) -> Option<String> {
+    let content = content.trim();
+    (!content.is_empty()).then(|| content.to_string())
+}
+
+/// Applies a full profile refresh as the new system baseline.
+/// 将一次全量画像刷新应用为新的系统基点。
+fn apply_vmm_profile_base_refresh(
+    state: &mut VmmProfileSyncState,
+    content: &str,
+    nodes_by_id: BTreeMap<u64, ProfileNodeEntry>,
+    covered_compaction_id: Option<String>,
+    updated_at: String,
+) {
+    state.covered_compaction_id = covered_compaction_id;
+    state.completed_turns_since_sync = 0;
+    state.base_profile_content = normalized_optional_text(content);
+    state.delta_profile_content = None;
+    state.nodes_by_id = nodes_by_id;
+    state.updated_at = Some(updated_at);
+}
+
+/// Returns whether the incremental profile refresh threshold has been reached.
+/// 返回增量画像刷新阈值是否已经达到。
+fn vmm_profile_refresh_threshold_reached(state: &VmmProfileSyncState, threshold: u32) -> bool {
+    threshold > 0 && state.completed_turns_since_sync >= threshold
+}
+
+/// Renders one profile node as a stable compact line.
+/// 将单个画像节点渲染为稳定紧凑行。
+fn render_profile_node_line(prefix: &str, node: &ProfileNodeEntry) -> String {
+    format!(
+        "- {prefix} VMM_PROFILE_NODE_ID:{} target={:?} priority={} level={} date={} content={}",
+        node.profile_node_id,
+        node.target,
+        node.priority.trim(),
+        node.level.trim(),
+        node.profile_date.trim(),
+        node.content.trim()
+    )
+}
+
+/// Builds one VMM profile system prompt hook block.
+/// 构建一个 VMM 画像系统提示词 hook 块。
+fn vmm_profile_hook_block(
+    content: &str,
+    phase: SystemPromptHookPhase,
+    kind: &str,
+) -> SystemPromptHookBlock {
+    SystemPromptHookBlock {
+        tag: VMM_PROFILE_SYSTEM_PROMPT_TAG.to_string(),
+        description: String::from(
+            "VMM profile context. This block carries the current active profile snapshot; when a refresh detects changes, a compact change summary is appended. Treat removed profile nodes as no longer active.",
+        ),
+        content: content.trim().to_string(),
+        source: Some(format!("VMM profile {kind}")),
+        phase,
+    }
+}
+
+/// Builds the persistent system-prompt block for the cached profile baseline.
+/// 为缓存画像基点构建持续系统提示词块。
+fn base_profile_block(
+    state: &VmmProfileSyncState,
+    phase: SystemPromptHookPhase,
+    kind: &str,
+) -> Option<SystemPromptHookBlock> {
+    state
+        .base_profile_content
+        .as_deref()
+        .map(|content| vmm_profile_hook_block(content, phase, kind))
+}
+
+/// Builds one hidden-user delta profile injection for refresh changes.
+/// 为刷新变化构建一条隐藏用户画像增量注入。
+fn vmm_profile_delta_injection(content: &str, kind: &str, sync_marker: &str) -> InjectionInsert {
+    vmm_profile_hidden_user_injection(
+        content,
+        kind,
+        VMM_PROFILE_DELTA_INJECTION_TAG,
+        &format!(
+            "vmm_profile:delta:{sync_marker}:{}",
+            stable_profile_delta_key(content)
+        ),
+        "VMM profile changes since the previous profile sync. Apply these changes on top of the baseline profile and treat removed facts as no longer active.",
+        -49,
+    )
+}
+
+/// Builds a compact stable key suffix for one profile delta content block.
+/// 为一段画像增量内容构建紧凑稳定键后缀。
+fn stable_profile_delta_key(content: &str) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in content.trim().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Builds one persistent hidden-user profile injection with stable replacement semantics.
+/// 使用稳定替换语义构建一条持久隐藏用户画像注入。
+fn vmm_profile_hidden_user_injection(
+    content: &str,
+    kind: &str,
+    tag: &str,
+    dedupe_key: &str,
+    description: &str,
+    priority: i32,
+) -> InjectionInsert {
+    let mut item = InjectionInsertItem::new(content.trim());
+    item.dedupe_key = Some(dedupe_key.to_string());
+    item.compaction_policy = Some(InjectionCompactionPolicy::Clear);
+    let mut insert = InjectionInsert::single(
+        InjectionKind::Persistent,
+        tag,
+        description,
+        String::new(),
+        None,
+    );
+    insert.items = vec![item];
+    insert.compaction_policy = InjectionCompactionPolicy::Clear;
+    insert.source_display = Some(format!("VMM profile {kind}"));
+    insert.priority = priority;
+    insert
+}
+
 /// Flushes queued VMM writebacks in FIFO order until the first failure.
 /// 按 FIFO 顺序冲刷排队的 VMM 写回，直到遇到第一个失败。
 async fn flush_vmm_writeback_outbox(
@@ -438,6 +1111,16 @@ fn payload_string(payload: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Reads the session id associated with one hook invocation.
+/// 读取一次 hook 调用关联的会话标识。
+fn invocation_session_id(invocation: &HookInvocation) -> Option<String> {
+    invocation
+        .context
+        .session_id
+        .clone()
+        .or_else(|| payload_string(&invocation.payload.value, "session_id"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -507,6 +1190,61 @@ mod tests {
         assert_eq!(config.project_id, Some(2));
     }
 
+    /// Verifies configuration refreshes do not overwrite runtime-owned profile cache from stale snapshots.
+    /// 验证配置刷新不会用陈旧快照覆盖运行时持有的画像缓存。
+    #[test]
+    fn vmm_hook_profile_cache_is_seeded_explicitly_and_preserved_on_refresh() {
+        let session_id = SessionId::from_u128(77);
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        let mut seeded = BTreeMap::new();
+        seeded.insert(
+            session_id.to_string(),
+            VmmProfileSyncState {
+                base_profile_content: Some(String::from("loaded base")),
+                ..VmmProfileSyncState::default()
+            },
+        );
+        runtime.seed_profile_cache(seeded);
+        runtime.store_profile_sync_state(
+            session_id,
+            VmmProfileSyncState {
+                base_profile_content: Some(String::from("runtime base")),
+                ..VmmProfileSyncState::default()
+            },
+        );
+        let mut stale = BTreeMap::new();
+        stale.insert(
+            session_id.to_string(),
+            VmmProfileSyncState {
+                base_profile_content: Some(String::from("stale stored base")),
+                ..VmmProfileSyncState::default()
+            },
+        );
+
+        runtime.replace_snapshot(VmmHookConfigSnapshot {
+            profile_sync: stale,
+            ..VmmHookConfigSnapshot::default()
+        });
+
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                VMM_PRECHECK_HOOK_ID,
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            context: vulcan_hooks::HookContext {
+                session_id: Some(session_id.to_string()),
+                ..vulcan_hooks::HookContext::new("test", HOOK_CONVERSATION_TURN_PRECHECK)
+            },
+            payload: vulcan_hooks::HookPayload {
+                value: serde_json::json!({}),
+            },
+        };
+        let cached = runtime.profile_sync_for_invocation(&invocation);
+
+        assert_eq!(cached.base_profile_content.as_deref(), Some("runtime base"));
+    }
+
     /// Verifies the precheck switch disables only automatic recall.
     /// 验证 precheck 开关只关闭自动前置召回。
     #[test]
@@ -532,5 +1270,297 @@ mod tests {
             config.diagnose_precheck_flow(true),
             VmmConfigDiagnostic::DisabledByConfig
         );
+    }
+
+    /// Verifies profile sync phase detection handles first, compaction, and ordinary turns.
+    /// 验证画像同步阶段检测可以处理首次、压缩后和普通回合。
+    #[test]
+    fn vmm_profile_sync_phase_detects_lifecycle_states() {
+        let empty = VmmProfileSyncState::default();
+        assert_eq!(
+            vmm_profile_sync_phase(&empty, None),
+            SystemPromptHookPhase::FirstSession
+        );
+
+        let initialized = VmmProfileSyncState {
+            covered_compaction_id: None,
+            base_profile_content: Some(String::from("profile")),
+            ..VmmProfileSyncState::default()
+        };
+        assert_eq!(
+            vmm_profile_sync_phase(&initialized, Some("cp-1")),
+            SystemPromptHookPhase::AfterContextCompaction
+        );
+
+        let covered = VmmProfileSyncState {
+            covered_compaction_id: Some(String::from("cp-1")),
+            base_profile_content: Some(String::from("profile")),
+            ..VmmProfileSyncState::default()
+        };
+        assert_eq!(
+            vmm_profile_sync_phase(&covered, Some("cp-1")),
+            SystemPromptHookPhase::SubsequentSession
+        );
+    }
+
+    /// Verifies profile placement uses system only for new sessions and compaction boundaries.
+    /// 验证画像放置只在新会话和压缩边界使用系统提示词。
+    #[test]
+    fn vmm_profile_placement_phase_detects_new_old_and_compacted_sessions() {
+        assert_eq!(
+            vmm_profile_placement_phase(1, None, None),
+            SystemPromptHookPhase::FirstSession
+        );
+        assert_eq!(
+            vmm_profile_placement_phase(3, None, None),
+            SystemPromptHookPhase::SubsequentSession
+        );
+        assert_eq!(
+            vmm_profile_placement_phase(3, Some("cp-1"), None),
+            SystemPromptHookPhase::AfterContextCompaction
+        );
+        assert_eq!(
+            vmm_profile_placement_phase(3, Some("cp-1"), Some("cp-1")),
+            SystemPromptHookPhase::SubsequentSession
+        );
+    }
+
+    /// Verifies host phase parsing distinguishes new-session system placement from old-session hidden-user placement.
+    /// 验证宿主阶段解析可以区分新会话系统放置与老会话隐藏用户放置。
+    #[test]
+    fn invocation_system_prompt_hook_phase_reads_payload_phase() {
+        let invocation = HookInvocation {
+            registration: vmm_hook_registration(
+                VMM_PRECHECK_HOOK_ID,
+                HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            context: vulcan_hooks::HookContext::new("test", HOOK_CONVERSATION_TURN_PRECHECK),
+            payload: vulcan_hooks::HookPayload {
+                value: serde_json::json!({
+                    "system_prompt_hook_phase": "subsequent_session",
+                }),
+            },
+        };
+
+        assert_eq!(
+            invocation_system_prompt_hook_phase(&invocation),
+            Some(SystemPromptHookPhase::SubsequentSession)
+        );
+    }
+
+    /// Verifies profile baseline content remains a system prompt block on later turns.
+    /// 验证画像基点内容在后续回合仍保持为系统提示词块。
+    #[test]
+    fn base_profile_block_uses_system_prompt_for_subsequent_turns() {
+        let block = base_profile_block(
+            &VmmProfileSyncState {
+                base_profile_content: Some(String::from("profile body")),
+                ..VmmProfileSyncState::default()
+            },
+            SystemPromptHookPhase::SubsequentSession,
+            "baseline",
+        )
+        .expect("baseline should produce a system block");
+
+        assert_eq!(block.tag, VMM_PROFILE_SYSTEM_PROMPT_TAG);
+        assert_eq!(block.phase, SystemPromptHookPhase::SubsequentSession);
+        assert_eq!(block.content, "profile body");
+    }
+
+    /// Verifies cached profile baselines remain available without a refresh.
+    /// 验证缓存画像基点在不刷新时仍保持可用。
+    #[test]
+    fn cached_vmm_profile_baseline_output_reuses_system_block() {
+        let output = cached_vmm_profile_baseline_output(VmmProfileSyncState {
+            base_profile_content: Some(String::from("cached profile")),
+            ..VmmProfileSyncState::default()
+        })
+        .expect("cached baseline should produce one output");
+
+        let block = output.block.expect("cached baseline should stay in system");
+        assert_eq!(block.tag, VMM_PROFILE_SYSTEM_PROMPT_TAG);
+        assert_eq!(block.content, "cached profile");
+        assert_eq!(block.phase, SystemPromptHookPhase::SubsequentSession);
+        assert!(output.injections.is_empty());
+    }
+
+    /// Verifies unavailable VMM configuration suppresses cached preview profile blocks.
+    /// 验证不可用 VMM 配置会抑制请求预览中的缓存画像块。
+    #[test]
+    fn cached_profile_preview_blocks_respect_effective_readiness() {
+        let session_id = SessionId::from_u128(88);
+        let runtime = VmmHookRuntimeHandle::new(VmmHookConfigSnapshot::default());
+        runtime.store_profile_sync_state(
+            session_id,
+            VmmProfileSyncState {
+                base_profile_content: Some(String::from("cached preview profile")),
+                ..VmmProfileSyncState::default()
+            },
+        );
+        let ready_config = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                grpc_target: Some(String::from("127.0.0.1:50051")),
+                user_id: Some(1),
+                project_id: Some(2),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
+        let unavailable_config = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                enabled: Some(true),
+                grpc_target: Some(String::new()),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
+
+        assert_eq!(
+            runtime
+                .cached_profile_system_prompt_blocks_for_session(
+                    session_id,
+                    &ready_config,
+                    SystemPromptHookPhase::SubsequentSession,
+                )
+                .len(),
+            1
+        );
+        assert!(
+            runtime
+                .cached_profile_system_prompt_blocks_for_session(
+                    session_id,
+                    &unavailable_config,
+                    SystemPromptHookPhase::SubsequentSession,
+                )
+                .is_empty()
+        );
+    }
+
+    /// Verifies a full base refresh clears delta state and resets refresh counting.
+    /// 验证全量基点刷新会清空增量状态并重置刷新计数。
+    #[test]
+    fn apply_vmm_profile_base_refresh_resets_delta_and_turn_counter() {
+        let mut state = VmmProfileSyncState {
+            completed_turns_since_sync: 9,
+            base_profile_content: Some(String::from("old base")),
+            delta_profile_content: Some(String::from("old delta snapshot")),
+            updated_at: Some(String::from("old")),
+            ..VmmProfileSyncState::default()
+        };
+        let mut nodes = BTreeMap::new();
+        nodes.insert(9, test_profile_node(9, "fresh node"));
+
+        apply_vmm_profile_base_refresh(
+            &mut state,
+            "new base",
+            nodes,
+            Some(String::from("cp-2")),
+            String::from("1000"),
+        );
+
+        assert_eq!(state.completed_turns_since_sync, 0);
+        assert_eq!(state.base_profile_content.as_deref(), Some("new base"));
+        assert_eq!(state.delta_profile_content, None);
+        assert_eq!(state.covered_compaction_id.as_deref(), Some("cp-2"));
+        assert_eq!(state.updated_at.as_deref(), Some("1000"));
+        assert!(state.nodes_by_id.contains_key(&9));
+    }
+
+    /// Verifies refresh counting starts after initialization and triggers on the Nth completed turn.
+    /// 验证刷新计数从初始化之后开始，并在第 N 个已完成回合触发。
+    #[test]
+    fn vmm_profile_refresh_threshold_triggers_after_n_completed_turns() {
+        let threshold = 3;
+        let mut state = VmmProfileSyncState::default();
+        apply_vmm_profile_base_refresh(
+            &mut state,
+            "base",
+            BTreeMap::new(),
+            None,
+            String::from("init"),
+        );
+
+        assert!(!vmm_profile_refresh_threshold_reached(&state, threshold));
+        state.record_completed_turn();
+        assert!(!vmm_profile_refresh_threshold_reached(&state, threshold));
+        state.record_completed_turn();
+        assert!(!vmm_profile_refresh_threshold_reached(&state, threshold));
+        state.record_completed_turn();
+        assert!(vmm_profile_refresh_threshold_reached(&state, threshold));
+        assert!(!vmm_profile_refresh_threshold_reached(&state, 0));
+    }
+
+    /// Verifies profile deltas are retained as independent persistent hidden-user entries.
+    /// 验证画像增量会作为独立的持久隐藏用户条目保留。
+    #[test]
+    fn vmm_profile_delta_injections_use_distinct_dedupe_keys() {
+        let first = vmm_profile_delta_injection("added A", "refresh", "100");
+        let second = vmm_profile_delta_injection("added B", "refresh", "200");
+
+        assert_eq!(first.kind, InjectionKind::Persistent);
+        assert_eq!(first.tag, VMM_PROFILE_DELTA_INJECTION_TAG);
+        assert_eq!(second.tag, VMM_PROFILE_DELTA_INJECTION_TAG);
+        assert_ne!(first.items[0].dedupe_key, second.items[0].dedupe_key);
+    }
+
+    /// Verifies text-level profile deltas report added and removed facts.
+    /// 验证文本级画像差量会报告新增和移除事实。
+    #[test]
+    fn render_profile_text_delta_reports_added_and_removed_lines() {
+        let delta = render_profile_text_delta("A\nB", "B\nC");
+
+        assert!(delta.contains("# Added Profile Facts"));
+        assert!(delta.contains("C"));
+        assert!(delta.contains("# Removed Profile Facts"));
+        assert!(delta.contains("A"));
+    }
+
+    /// Verifies profile node diff renders added, removed, and updated profile nodes.
+    /// 验证画像节点差量会渲染新增、移除和更新的画像节点。
+    #[test]
+    fn render_profile_node_diff_reports_changes() {
+        let mut previous = BTreeMap::new();
+        previous.insert(1, test_profile_node(1, "old"));
+        previous.insert(2, test_profile_node(2, "removed"));
+        let mut next = BTreeMap::new();
+        next.insert(1, test_profile_node(1, "new"));
+        next.insert(3, test_profile_node(3, "added"));
+
+        let diff = render_profile_node_diff(&previous, &next);
+
+        assert!(diff.contains("UPDATED VMM_PROFILE_NODE_ID:1"));
+        assert!(diff.contains("REMOVED VMM_PROFILE_NODE_ID:2"));
+        assert!(diff.contains("ADDED VMM_PROFILE_NODE_ID:3"));
+    }
+
+    /// Verifies active profile nodes can render as a full snapshot fallback.
+    /// 验证 active 画像节点可以渲染为全量快照回退内容。
+    #[test]
+    fn render_profile_node_snapshot_reports_active_nodes() {
+        let mut nodes = BTreeMap::new();
+        nodes.insert(7, test_profile_node(7, "active profile"));
+
+        let snapshot = render_profile_node_snapshot(&nodes);
+
+        assert!(snapshot.contains("# Active Profile Nodes"));
+        assert!(snapshot.contains("ACTIVE VMM_PROFILE_NODE_ID:7"));
+        assert!(snapshot.contains("active profile"));
+    }
+
+    /// Builds a minimal profile node for tests.
+    /// 为测试构建一个最小画像节点。
+    fn test_profile_node(id: u64, content: &str) -> ProfileNodeEntry {
+        ProfileNodeEntry {
+            profile_node_id: id,
+            target: ProfileTarget::ProfileTargetUser,
+            content: content.to_string(),
+            priority: String::from("normal"),
+            level: String::from("user"),
+            profile_date: String::from("2026-05-30"),
+            ..ProfileNodeEntry::default()
+        }
     }
 }

@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::ProviderUsageSnapshot;
+use vulcan_workbench_model::VmmProfileSyncState;
 
 /// Maximum body size kept inline inside one persisted event row before the full text is moved into a blob file.
 /// 单条持久化事件行允许内联保留正文的最大大小，超过后会将完整文本移动到 blob 文件中。
@@ -130,6 +131,10 @@ pub(super) struct SessionEventStoreRuntimeState {
     /// 为 FIFO 重放保留的待处理 VMM 写回项。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub vmm_writeback_outbox: Vec<VmmWritebackOutboxEntry>,
+    /// Session-scoped VMM profile synchronization state.
+    /// 会话级 VMM 画像同步状态。
+    #[serde(default, skip_serializing_if = "VmmProfileSyncState::is_empty")]
+    pub vmm_profile_sync: VmmProfileSyncState,
     /// Latest active compaction identifier retained by the session runtime.
     /// 被会话运行时保留的最近活动压缩标识。
     pub last_compaction_id: Option<String>,
@@ -704,6 +709,7 @@ fn runtime_state_to_store_document(
         context_injection_state: runtime_state.context_injection_state.clone(),
         vmm: runtime_state.vmm.clone(),
         vmm_writeback_outbox: runtime_state.vmm_writeback_outbox.clone(),
+        vmm_profile_sync: runtime_state.vmm_profile_sync.clone(),
         last_compaction_id: runtime_state.last_compaction_id.clone(),
         context_start_message_id: runtime_state.context_start_message_id.clone(),
         live_context_budget_fingerprint: runtime_state.live_context_budget_fingerprint.clone(),

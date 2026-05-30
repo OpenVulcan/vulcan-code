@@ -574,9 +574,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
         record: SessionDerivedRecord,
     ) -> String {
-        let record_kind = record.record_kind;
-        let body = record.body.clone();
-        let message_id = self.push_hidden_session_message(
+        self.push_hidden_session_message(
             session_id,
             record.kind,
             record.record_kind,
@@ -585,14 +583,7 @@ impl VulcanWorkbench {
             Some(json!({
                 "preview": record.preview,
             })),
-        );
-        self.maybe_mirror_hidden_record_to_session_conversation(
-            session_id,
-            record_kind,
-            &message_id,
-            &body,
-        );
-        message_id
+        )
     }
 
     /// Ensures the target session has one canonical conversation snapshot owned by the runtime-state layer.
@@ -651,31 +642,6 @@ impl VulcanWorkbench {
             runtime_state.updated_at = updated_at;
         }
         Ok(())
-    }
-
-    /// Mirrors selected hidden transcript records into the canonical conversation state so existing derived context remains effective.
-    /// 将选定的隐藏转录记录镜像到规范会话状态，从而保留既有派生上下文效果。
-    pub(super) fn maybe_mirror_hidden_record_to_session_conversation(
-        &mut self,
-        session_id: SessionId,
-        record_kind: SessionMessageRecordKind,
-        message_id: &str,
-        body: &str,
-    ) {
-        let should_mirror = matches!(record_kind, SessionMessageRecordKind::ExploreOutput);
-        if !should_mirror {
-            return;
-        }
-
-        self.ensure_session_conversation_state_loaded(session_id);
-        let updated_at = current_unix_millis_text();
-        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-        append_assistant_text_message(
-            &mut runtime_state.conversation_state,
-            message_id.to_string(),
-            body.to_string(),
-        );
-        runtime_state.updated_at = updated_at;
     }
 
     /// Rewrites the canonical conversation window after one transcript compaction summary is created.
@@ -759,6 +725,7 @@ impl VulcanWorkbench {
             runtime_state.context_injection_state.apply_compaction();
             runtime_state.updated_at = created_at;
         }
+        self.refresh_vmm_hook_config_snapshot();
         if let Some(summary_message_id) = summary_message_id {
             self.compact_session_conversation_history(
                 session_id,
@@ -2028,12 +1995,16 @@ impl VulcanWorkbench {
             runtime_state
                 .context_injection_state
                 .consume_turn(&hook_turn_id, &now);
+            runtime_state.vmm_profile_sync.record_completed_turn();
+            let profile_sync = runtime_state.vmm_profile_sync.clone();
             apply_vmm_writeback_effects_to_runtime_state(
                 runtime_state,
                 vmm_writeback_effects,
                 &now,
             );
             runtime_state.updated_at = now;
+            self.vmm_hook_runtime
+                .store_profile_sync_state(session_id, profile_sync);
             self.refresh_vmm_hook_config_snapshot();
         } else {
             let project_id = self
@@ -2198,6 +2169,7 @@ impl VulcanWorkbench {
         runtime_state.anchor_context_budget_fingerprint = None;
         runtime_state.anchor_context_assembly_fingerprint = None;
         runtime_state.updated_at = current_unix_millis_text();
+        self.refresh_vmm_hook_config_snapshot();
 
         if had_previous_anchor {
             let mismatch_reason = context_budget

@@ -17,6 +17,7 @@ use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent,
     ProviderContextInjection as CoreProviderContextInjection, ProviderUsageSnapshot,
 };
+use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
@@ -66,6 +67,9 @@ pub struct ExecutionPreparationRequest {
     /// Provider-facing context-injection overlay captured for the current run.
     /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
     pub context_injection: Option<CoreProviderContextInjection>,
+    /// Request-scoped system-prompt hook blocks captured for the current run.
+    /// 为当前运行捕获的请求级系统提示词 hook 块。
+    pub system_prompt_hook_blocks: Vec<SystemPromptHookBlock>,
     /// Project-level VMM configuration captured for the current workspace.
     /// 为当前工作区捕获的项目级 VMM 配置。
     pub project_vmm: VmmConfigLayer,
@@ -217,6 +221,9 @@ pub struct ExecutionPreparation {
     /// Provider-facing context-injection overlay captured for the current run.
     /// 为当前运行捕获的 Provider 可见上下文注入覆盖层。
     pub context_injection: Option<CoreProviderContextInjection>,
+    /// Request-scoped system-prompt hook blocks captured for the current run.
+    /// 为当前运行捕获的请求级系统提示词 hook 块。
+    pub system_prompt_hook_blocks: Vec<SystemPromptHookBlock>,
     /// Effective project-level VMM configuration captured for this run.
     /// 为本次运行捕获的有效项目级 VMM 配置。
     pub project_vmm: VmmConfigLayer,

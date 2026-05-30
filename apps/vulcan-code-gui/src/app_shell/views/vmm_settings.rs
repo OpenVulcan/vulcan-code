@@ -1522,7 +1522,7 @@ impl VulcanWorkbench {
                 ),
                 self.view_vmm_text_field(
                     "画像刷新间隔",
-                    "5",
+                    "10",
                     &draft.profile_refresh_turns,
                     messages.profile_refresh_turns,
                 ),

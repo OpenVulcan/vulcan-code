@@ -124,6 +124,7 @@ pub(super) fn stream_prompt_compaction_job(
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         };

@@ -185,9 +185,8 @@ use crate::context_compaction::{
     plan_compaction,
 };
 use crate::conversation_protocol::{
-    SessionConversationPayload, SessionConversationRecord, SessionConversationState,
-    append_assistant_text_message, append_record, append_record_body_delta,
-    append_user_text_message, compact_conversation_records_after_summary,
+    SessionConversationPayload, SessionConversationRecord, SessionConversationState, append_record,
+    append_record_body_delta, append_user_text_message, compact_conversation_records_after_summary,
     compact_conversation_with_summary, conversation_state_to_context_records,
     conversation_state_to_session_messages,
 };
@@ -2590,6 +2589,7 @@ impl VulcanWorkbench {
 
         let _ = application.reconcile_workbench_reasoning_effort_for_active_model();
         application.reload_project_prompt_settings_draft();
+        application.seed_vmm_hook_profile_cache_from_runtime_state();
         application.refresh_vmm_hook_config_snapshot();
         application.register_builtin_vmm_hooks();
         mark_startup_trace("VulcanWorkbench::new:state-built");

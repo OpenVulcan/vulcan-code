@@ -424,6 +424,7 @@ impl VulcanWorkbench {
                 runtime_state.last_compaction_id = None;
                 runtime_state.anchor_context_budget_fingerprint = None;
                 runtime_state.anchor_context_assembly_fingerprint = None;
+                self.refresh_vmm_hook_config_snapshot();
             }
             rollback
         };

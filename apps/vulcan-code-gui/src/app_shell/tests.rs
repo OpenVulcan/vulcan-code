@@ -976,10 +976,10 @@ fn disabled_vmm_precheck_keeps_other_precheck_hook_progress() {
     assert!(!workbench.session_has_active_run(session_id));
 }
 
-/// Verifies disabled VMM precheck bypasses the recall waiting phase and starts provider preparation directly.
-/// 验证关闭 VMM 前置预注入后会跳过召回等待阶段并直接进入 Provider 准备。
+/// Verifies disabled VMM precheck hides recall waiting text but still runs the VMM hook pipeline.
+/// 验证关闭 VMM 前置预注入后隐藏召回等待文案，但仍执行 VMM hook 管线。
 #[test]
-fn disabled_vmm_precheck_bypasses_recall_waiting_phase() {
+fn disabled_vmm_precheck_hides_recall_label_without_skipping_vmm_hook() {
     let (mut workbench, _task) = VulcanWorkbench::new();
     let session_id = SessionId::from_u128(710024);
     workbench.sessions.clear();
@@ -1004,7 +1004,8 @@ fn disabled_vmm_precheck_bypasses_recall_waiting_phase() {
     );
     drop(task);
 
-    assert!(workbench.session_has_active_run(session_id));
+    assert!(!workbench.session_has_active_run(session_id));
+    assert_eq!(workbench.session_requesting_progress_text(session_id), None);
     assert!(
         workbench
             .session_messages
@@ -1013,6 +1014,43 @@ fn disabled_vmm_precheck_bypasses_recall_waiting_phase() {
                 .iter()
                 .any(|message| message.kind == SessionMessageKind::User
                     && message.body.contains("no precheck")))
+    );
+}
+
+/// Verifies unavailable VMM memory still bypasses the built-in VMM precheck hook entirely.
+/// 验证不可用的 VMM 记忆链路仍会完整跳过内置 VMM precheck hook。
+#[test]
+fn unavailable_vmm_memory_bypasses_builtin_vmm_precheck_hook() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710028);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "关闭 VMM 测试"));
+    workbench.selected_session = session_id;
+    workbench.provider_configuration.vmm = vulcan_vmm::VmmConfigLayer {
+        enabled: Some(true),
+        grpc_target: Some(String::new()),
+        user_id: Some(1),
+        project_id: Some(2),
+        precheck_enabled: Some(true),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+
+    let prompt_entry =
+        test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "disabled vmm");
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("关闭 VMM 测试"),
+        prompt_entry,
+    );
+    drop(task);
+
+    assert!(workbench.session_has_active_run(session_id));
+    assert!(
+        workbench
+            .session_requesting_progress_text(session_id)
+            .is_some_and(|text| text.starts_with("正在请求"))
     );
 }
 
@@ -1096,6 +1134,7 @@ fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
             .expect("payload should serialize"),
             decision: HookDecision::Continue,
             injections: Vec::new(),
+            system_prompt_blocks: Vec::new(),
             diagnostics: Vec::new(),
             metadata: Default::default(),
             completed_hooks: Vec::new(),
@@ -1133,6 +1172,39 @@ fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
             _ => None,
         });
     assert_eq!(canonical_prompt, Some("rewritten prompt"));
+}
+
+/// Verifies project-scope Explore output stays hidden and never becomes a canonical assistant turn.
+/// 验证项目范围 Explore 输出保持隐藏状态，并且不会变成规范助手轮次。
+#[test]
+fn explore_output_remains_hidden_audit_record_only() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(71004);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "探索记录测试"));
+
+    workbench.append_session_explore_output(session_id, None);
+
+    let runtime_state = workbench
+        .session_runtime_state(session_id)
+        .expect("explore output should create one runtime state");
+    assert!(
+        runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .any(|record| {
+                record.record_kind == SessionMessageRecordKind::ExploreOutput
+                    && !record.visible
+                    && !record.record_kind.contributes_to_context()
+            })
+    );
+    assert!(
+        runtime_state.conversation_state.messages.is_empty(),
+        "explore output must not be mirrored into provider-visible canonical messages"
+    );
 }
 
 /// Verifies streamed prompt-compaction output is appended into the visible running boundary row.
@@ -3337,6 +3409,7 @@ async fn conversation_hook_registration_exposes_dispatcher_to_extensions() {
             Some(String::from("project")),
             String::from("D:/workspace"),
             PendingSessionPromptSource::UserFollowup,
+            vulcan_hooks::SystemPromptHookPhase::FirstSession,
             "hello hook",
             &SessionConversationState::default(),
         )

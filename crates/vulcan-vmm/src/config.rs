@@ -38,7 +38,7 @@ pub const DEFAULT_IMPLICIT_MEMORY_TURNS: u32 = 3;
 
 /// Default profile refresh accepted-turn interval.
 /// 默认画像刷新 accepted turn 间隔。
-pub const DEFAULT_PROFILE_REFRESH_TURNS: u32 = 5;
+pub const DEFAULT_PROFILE_REFRESH_TURNS: u32 = 10;
 
 /// Reserved future install-management state.
 /// 预留的未来安装管理状态。

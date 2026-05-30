@@ -2,7 +2,7 @@
 //! 从存储实现模块中抽取的工作区存储回归测试。
 
 use super::*;
-use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
+use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState, VmmProfileSyncState};
 use serde_json::json;
 use vulcan_context_injection::{
     ContextInjectionState, InjectionInsert, InjectionKind, InjectionPanelCard,
@@ -1040,6 +1040,58 @@ fn runtime_state_rows_store_vmm_writeback_outbox_separately() {
     assert_eq!(parsed[0].id, "outbox-1");
     assert_eq!(parsed[0].request.user_content, "user");
     assert_eq!(parsed[0].attempt_count, 2);
+}
+
+/// Verifies that VMM profile sync state persists separately from conversation JSON.
+/// 验证 VMM 画像同步状态会独立于会话正文 JSON 持久化。
+#[test]
+fn runtime_state_rows_store_vmm_profile_sync_separately() {
+    let session_id = SessionId::from_u128(47);
+    let session = SessionSummary::new(
+        session_id,
+        None,
+        String::from("VMM profile sync 测试会话"),
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    );
+    let runtime_state = SessionRuntimeStateEntry {
+        vmm_profile_sync: VmmProfileSyncState {
+            covered_compaction_id: Some(String::from("cp-1")),
+            completed_turns_since_sync: 3,
+            base_profile_content: Some(String::from("profile prompt")),
+            delta_profile_content: Some(String::from("profile delta")),
+            updated_at: Some(String::from("2")),
+            ..VmmProfileSyncState::default()
+        },
+        updated_at: String::from("2"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let mut runtime_states = BTreeMap::new();
+    runtime_states.insert(session_id, runtime_state);
+    let mut rows = Vec::new();
+
+    push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+
+    assert_eq!(rows.len(), 1);
+    assert!(matches!(&rows[0][8], ControllerSqliteValue::Null));
+    let profile_sync_json = match &rows[0][13] {
+        ControllerSqliteValue::String(value) => value,
+        other => panic!("expected VMM profile sync JSON string, got {other:?}"),
+    };
+    let parsed = parse_vmm_profile_sync_from_json(profile_sync_json).expect("profile sync parses");
+    assert_eq!(parsed.covered_compaction_id.as_deref(), Some("cp-1"));
+    assert_eq!(parsed.completed_turns_since_sync, 3);
+    assert_eq!(
+        parsed.base_profile_content.as_deref(),
+        Some("profile prompt")
+    );
+    assert_eq!(
+        parsed.delta_profile_content.as_deref(),
+        Some("profile delta")
+    );
 }
 
 /// Verifies that rebuilding runtime state from recent messages preserves provider continuation.

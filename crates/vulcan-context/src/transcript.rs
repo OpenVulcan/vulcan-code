@@ -101,6 +101,7 @@ impl SessionMessageRecordKind {
             Self::TitleOutput
                 | Self::ThinkingOutput
                 | Self::SummaryOutput
+                | Self::ExploreOutput
                 | Self::CompactionStatus
                 | Self::TurnTerminated
                 | Self::TurnStats
@@ -124,6 +125,18 @@ impl SessionMessageRecordKind {
             "turn-stats" => Self::TurnStats,
             _ => Self::Transcript,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionMessageRecordKind;
+
+    /// Verifies hidden explore records remain audit-only and do not re-enter model context reconstruction.
+    /// 验证隐藏探索记录仅作为审计信息保留，不会重新进入模型上下文重建。
+    #[test]
+    fn explore_output_does_not_contribute_to_context() {
+        assert!(!SessionMessageRecordKind::ExploreOutput.contributes_to_context());
     }
 }
 

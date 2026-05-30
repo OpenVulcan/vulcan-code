@@ -531,6 +531,7 @@ mod tests {
                 reason: ContextFullRequestReason::ProviderContinuationMissing,
             }),
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         };

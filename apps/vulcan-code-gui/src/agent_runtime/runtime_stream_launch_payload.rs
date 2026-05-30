@@ -166,6 +166,7 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         }
@@ -188,6 +189,7 @@ mod tests {
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         }

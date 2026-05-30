@@ -187,6 +187,73 @@ impl Default for HookDecision {
     }
 }
 
+/// Request phase supplied to system-prompt hook contributors.
+/// 提供给系统提示词 hook 贡献方的请求阶段。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SystemPromptHookPhase {
+    /// First provider request of a session or an uninitialized hook state.
+    /// 会话的首次 Provider 请求或未初始化的 hook 状态。
+    #[default]
+    FirstSession,
+    /// First provider request after a context compaction boundary.
+    /// 上下文压缩边界后的首次 Provider 请求。
+    AfterContextCompaction,
+    /// Ordinary provider request after the hook has already initialized.
+    /// hook 已初始化后的普通 Provider 请求。
+    SubsequentSession,
+}
+
+impl SystemPromptHookPhase {
+    /// Returns the stable payload label for this phase.
+    /// 返回该阶段的稳定载荷标签。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FirstSession => "first_session",
+            Self::AfterContextCompaction => "after_context_compaction",
+            Self::SubsequentSession => "subsequent_session",
+        }
+    }
+}
+
+/// System-prompt contribution returned by a hook for the current provider request.
+/// hook 为当前 Provider 请求返回的系统提示词贡献块。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SystemPromptHookBlock {
+    /// Stable XML-like tag used to group this hook block.
+    /// 用于分组该 hook 块的稳定类 XML 标签。
+    pub tag: String,
+    /// Short explanation rendered before the block content.
+    /// 渲染在块内容前的简短说明。
+    #[serde(default)]
+    pub description: String,
+    /// Provider-visible system prompt content.
+    /// Provider 可见的系统提示词内容。
+    pub content: String,
+    /// Optional source label used for diagnostics.
+    /// 用于诊断的可选来源标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Phase observed when this block was generated.
+    /// 生成该块时观察到的阶段。
+    #[serde(default)]
+    pub phase: SystemPromptHookPhase,
+}
+
+impl SystemPromptHookBlock {
+    /// Builds one hook block with required tag and content.
+    /// 使用必需的标签和内容构建一个 hook 块。
+    pub fn new(tag: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            tag: tag.into(),
+            description: String::new(),
+            content: content.into(),
+            source: None,
+            phase: SystemPromptHookPhase::default(),
+        }
+    }
+}
+
 /// Declares one capability a hook may request from the host.
 /// 声明 hook 可向宿主请求的一项能力。
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -439,6 +506,10 @@ pub struct HookResult {
     /// hook 提交的上下文注入操作。
     #[serde(default)]
     pub injections: Vec<InjectionInsert>,
+    /// System-prompt blocks submitted by the hook for the current request.
+    /// hook 为当前请求提交的系统提示词块。
+    #[serde(default)]
+    pub system_prompt_blocks: Vec<SystemPromptHookBlock>,
     /// Diagnostics produced by the hook.
     /// hook 产生的诊断信息。
     #[serde(default)]
@@ -956,6 +1027,10 @@ pub struct HookDispatchReport {
     /// 从处理器收集到的上下文注入操作。
     #[serde(default)]
     pub injections: Vec<InjectionInsert>,
+    /// System-prompt blocks collected from handlers.
+    /// 从处理器收集到的系统提示词块。
+    #[serde(default)]
+    pub system_prompt_blocks: Vec<SystemPromptHookBlock>,
     /// Diagnostics collected from handlers and dispatcher failures.
     /// 从处理器和调度失败中收集的诊断信息。
     #[serde(default)]
@@ -991,6 +1066,7 @@ impl HookDispatchReport {
             payload,
             decision: HookDecision::Continue,
             injections: Vec::new(),
+            system_prompt_blocks: Vec::new(),
             diagnostics: Vec::new(),
             metadata: BTreeMap::new(),
             completed_hooks: Vec::new(),
@@ -1009,6 +1085,8 @@ impl HookDispatchReport {
             self.decision = decision;
         }
         self.injections.extend(result.injections);
+        self.system_prompt_blocks
+            .extend(result.system_prompt_blocks);
         for (key, value) in result.metadata {
             self.metadata.entry(key).or_default().push(value);
         }
@@ -1455,6 +1533,40 @@ mod tests {
 
         assert_eq!(report.payload.value["value"], json!(2));
         assert_eq!(report.completed_hooks, vec!["replace", "read"]);
+    }
+
+    #[tokio::test]
+    async fn dispatcher_collects_system_prompt_hook_blocks() {
+        let mut registry = HookRegistry::new();
+        registry
+            .register(
+                registration("profile", HookMode::Transform),
+                Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                    Ok(HookResult {
+                        system_prompt_blocks: vec![SystemPromptHookBlock {
+                            tag: String::from("vmm_profile"),
+                            description: String::from("Profile details"),
+                            content: String::from("User prefers concise answers."),
+                            source: Some(String::from("test")),
+                            phase: SystemPromptHookPhase::FirstSession,
+                        }],
+                        ..HookResult::default()
+                    })
+                })),
+            )
+            .expect("registration should succeed");
+
+        let report = HookDispatcher::new(registry)
+            .dispatch(request())
+            .await
+            .expect("dispatch should succeed");
+
+        assert_eq!(report.system_prompt_blocks.len(), 1);
+        assert_eq!(report.system_prompt_blocks[0].tag, "vmm_profile");
+        assert_eq!(
+            report.system_prompt_blocks[0].phase,
+            SystemPromptHookPhase::FirstSession
+        );
     }
 
     #[tokio::test]

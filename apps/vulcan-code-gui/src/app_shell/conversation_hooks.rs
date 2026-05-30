@@ -4,7 +4,7 @@
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::question_runtime::QuestionPrompt;
 use crate::conversation_protocol::{SessionConversationPayload, SessionConversationState};
-use crate::model::{PendingSessionPromptSource, SessionId};
+use crate::model::{PendingSessionPromptSource, SessionId, VmmProfileSyncState};
 use iced::futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,13 +13,16 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 use vulcan_hooks::{
     HookActor, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookMode,
-    HookPayload, HookPointDescriptor, HookRegistrationSnapshot, HookScope,
+    HookPayload, HookPointDescriptor, HookRegistrationSnapshot, HookScope, SystemPromptHookPhase,
 };
 use vulcan_vmm::PostActionRequest;
 
 /// Metadata key used by hooks to report VMM writeback side effects.
 /// hook 用于报告 VMM 写回副作用的 metadata 键。
 pub(super) const HOOK_METADATA_VMM_WRITEBACK_EFFECTS: &str = "vmm_writeback_effects";
+/// Metadata key used by hooks to report VMM profile synchronization effects.
+/// hook 用于报告 VMM 画像同步副作用的 metadata 键。
+pub(super) const HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT: &str = "vmm_profile_sync_effect";
 
 /// Hook point fired before a user turn is sent to provider preparation.
 /// 在用户回合发送到 Provider 准备阶段前触发的 hook 点位。
@@ -108,6 +111,15 @@ pub(super) enum VmmWritebackHookEffect {
     },
 }
 
+/// Host-visible VMM profile sync effect returned by hook handlers.
+/// hook 处理器返回给宿主可见的 VMM 画像同步效果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct VmmProfileSyncHookEffect {
+    /// Updated profile sync state for the owning session.
+    /// 拥有会话的已更新画像同步状态。
+    pub state: VmmProfileSyncState,
+}
+
 impl ConversationTimelineItem {
     /// Builds one timeline item.
     /// 构建一条 timeline 项。
@@ -124,6 +136,20 @@ impl ConversationTimelineItem {
             source_id,
         }
     }
+}
+
+/// Extracts VMM profile sync effects from one hook dispatch report.
+/// 从一次 hook 调度报告中提取 VMM 画像同步效果。
+pub(super) fn vmm_profile_sync_effect_from_report(
+    report: &HookDispatchReport,
+) -> Option<VmmProfileSyncHookEffect> {
+    report
+        .metadata
+        .get(HOOK_METADATA_VMM_PROFILE_SYNC_EFFECT)
+        .into_iter()
+        .flat_map(|values| values.iter())
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .last()
 }
 
 /// In-memory state for one logical user-to-assistant turn.
@@ -221,6 +247,7 @@ impl ConversationHookRuntime {
         project_id: Option<String>,
         workspace_path: String,
         source: PendingSessionPromptSource,
+        system_prompt_hook_phase: SystemPromptHookPhase,
         prompt: &str,
         conversation_state: &SessionConversationState,
     ) -> ConversationPrecheckRequest {
@@ -264,6 +291,7 @@ impl ConversationHookRuntime {
             "turn_id": turn_id,
             "event_kind": event_kind,
             "is_new_turn": is_new_turn,
+            "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
             "was_recorded_while_queued": was_recorded_while_queued,
             "user_content": prompt,
             "visible_history_count": visible_history_count(conversation_state),
@@ -1028,6 +1056,7 @@ mod tests {
             Some(String::from("project")),
             String::from("D:/workspace"),
             PendingSessionPromptSource::UserFollowup,
+            SystemPromptHookPhase::FirstSession,
             "first",
             &state,
         );
@@ -1037,6 +1066,7 @@ mod tests {
             Some(String::from("project")),
             String::from("D:/workspace"),
             PendingSessionPromptSource::UserInterrupt,
+            SystemPromptHookPhase::SubsequentSession,
             "supplement",
             &state,
         );
@@ -1107,6 +1137,7 @@ mod tests {
                 None,
                 String::from("D:/workspace"),
                 PendingSessionPromptSource::UserFollowup,
+                SystemPromptHookPhase::FirstSession,
                 "hello",
                 &SessionConversationState::default(),
             )
@@ -1149,6 +1180,7 @@ mod tests {
                 None,
                 String::from("D:/workspace"),
                 PendingSessionPromptSource::UserFollowup,
+                SystemPromptHookPhase::FirstSession,
                 "hello",
                 &SessionConversationState::default(),
             )
@@ -1204,6 +1236,7 @@ mod tests {
             None,
             String::from("D:/workspace"),
             PendingSessionPromptSource::UserFollowup,
+            SystemPromptHookPhase::FirstSession,
             "hello",
             &SessionConversationState::default(),
         );

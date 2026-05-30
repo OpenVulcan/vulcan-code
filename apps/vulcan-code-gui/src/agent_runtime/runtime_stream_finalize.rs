@@ -324,6 +324,7 @@ mod tests {
             context_baseline: None,
             context_request_mode: None,
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         }

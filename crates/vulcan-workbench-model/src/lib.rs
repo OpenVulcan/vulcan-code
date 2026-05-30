@@ -13,7 +13,7 @@ pub use runtime_state::{
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
     PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
     PendingSessionPromptSource, SessionComposerDraftState, SessionRuntimeStateEntry,
-    SessionTranscriptUiState, VmmWritebackOutboxEntry,
+    SessionTranscriptUiState, VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
 pub use session::{SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource};
 pub use turn_stats::{SessionTurnStats, SessionTurnStatsStatus};

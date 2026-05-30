@@ -311,6 +311,12 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE session_runtime_state ADD COLUMN vmm_writeback_outbox_json TEXT;",
     )
     .await?;
+    ensure_optional_runtime_state_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE session_runtime_state ADD COLUMN vmm_profile_sync_json TEXT;",
+    )
+    .await?;
     ensure_optional_session_compaction_column(
         client,
         sqlite_binding_id,
@@ -729,6 +735,7 @@ CREATE TABLE IF NOT EXISTS session_runtime_state (
     context_injection_json TEXT,
     vmm_json TEXT,
     vmm_writeback_outbox_json TEXT,
+    vmm_profile_sync_json TEXT,
     updated_at TEXT NOT NULL
 );
 

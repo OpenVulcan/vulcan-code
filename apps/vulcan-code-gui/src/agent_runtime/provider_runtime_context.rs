@@ -16,6 +16,7 @@ use crate::provider_config::{PersistedPromptConfiguration, load_project_configur
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use vulcan_core::types::ProviderPromptLayers as CoreProviderPromptLayers;
+use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_prompt_composer::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache,
     ProjectPromptSnapshot, ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput,
@@ -95,7 +96,11 @@ impl RuntimePromptLayers {
         output: &PromptAssemblyOutput,
         preparation: &ExecutionPreparation,
     ) -> Self {
-        let provider_layers = render_runtime_prompt_layers(output);
+        let mut provider_layers = render_runtime_prompt_layers(output);
+        append_system_prompt_hook_region(
+            &mut provider_layers,
+            &preparation.system_prompt_hook_blocks,
+        );
         let fallback_text = if provider_layers.is_empty() {
             build_legacy_runtime_system_preamble(preparation, None)
         } else {
@@ -214,6 +219,78 @@ fn render_runtime_prompt_layers(output: &PromptAssemblyOutput) -> CoreProviderPr
         tool_guidance: output.render_tool_metadata_text(),
         runtime_context: output.render_user_text(),
     }
+}
+
+/// Appends request-scoped hook blocks into the system prompt layer.
+/// 将请求级 hook 块追加到系统提示词层。
+fn append_system_prompt_hook_region(
+    provider_layers: &mut CoreProviderPromptLayers,
+    blocks: &[SystemPromptHookBlock],
+) {
+    let region = render_system_prompt_hook_region(blocks);
+    if region.is_empty() {
+        return;
+    }
+    if provider_layers.system.trim().is_empty() {
+        provider_layers.system = region;
+    } else {
+        provider_layers.system = format!("{}\n\n{}", provider_layers.system.trim_end(), region);
+    }
+}
+
+/// Renders request-scoped hook blocks inside one stable system prompt region.
+/// 在稳定系统提示词区域内渲染请求级 hook 块。
+fn render_system_prompt_hook_region(blocks: &[SystemPromptHookBlock]) -> String {
+    let rendered_blocks = blocks
+        .iter()
+        .filter_map(render_system_prompt_hook_block)
+        .collect::<Vec<_>>();
+    if rendered_blocks.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<system_prompt_hooks>\n{}\n</system_prompt_hooks>",
+            rendered_blocks.join("\n\n")
+        )
+    }
+}
+
+/// Renders one sanitized hook block for provider-visible system prompt text.
+/// 将单个清洗后的 hook 块渲染为 Provider 可见系统提示词文本。
+fn render_system_prompt_hook_block(block: &SystemPromptHookBlock) -> Option<String> {
+    let tag = normalize_system_prompt_hook_tag(&block.tag)?;
+    let content = block.content.trim();
+    if content.is_empty() {
+        return None;
+    }
+    let mut lines = Vec::new();
+    let description = block.description.trim();
+    if !description.is_empty() {
+        lines.push(description.to_string());
+    }
+    lines.push(format!("Phase: {}", block.phase.as_str()));
+    if let Some(source) = block
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        lines.push(format!("Source: {source}"));
+    }
+    lines.push(String::new());
+    lines.push(content.to_string());
+    Some(format!("<{tag}>\n{}\n</{tag}>", lines.join("\n")))
+}
+
+/// Normalizes a hook tag so a malformed plugin tag cannot break the surrounding region.
+/// 规范化 hook 标签，避免格式错误的插件标签破坏外围区域。
+fn normalize_system_prompt_hook_tag(tag: &str) -> Option<String> {
+    let normalized = tag
+        .trim()
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .collect::<String>();
+    (!normalized.is_empty()).then_some(normalized)
 }
 
 /// Loads one workspace-level project rules snapshot when `AGENTS.md` exists.
@@ -362,6 +439,10 @@ fn build_legacy_runtime_system_preamble(
         sections.push(format!(
             "Prompt composer fallback: runtime prompt assembly failed: {error}"
         ));
+    }
+    let hook_region = render_system_prompt_hook_region(&preparation.system_prompt_hook_blocks);
+    if !hook_region.is_empty() {
+        sections.push(hook_region);
     }
     sections.join("\n")
 }
@@ -619,6 +700,40 @@ mod tests {
         );
     }
 
+    /// Verifies request-scoped system hook blocks are appended to the system layer.
+    /// 验证请求级系统 hook 块会追加到系统层。
+    #[test]
+    fn runtime_prompt_layers_append_system_prompt_hook_region() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.system_prompt_hook_blocks = vec![SystemPromptHookBlock {
+            tag: String::from("vmm_profile"),
+            description: String::from("Profile details"),
+            content: String::from("User prefers precise answers."),
+            source: Some(String::from("test")),
+            phase: vulcan_hooks::SystemPromptHookPhase::FirstSession,
+        }];
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .provider_layers
+                .system
+                .contains("<system_prompt_hooks>")
+        );
+        assert!(layers.provider_layers.system.contains("<vmm_profile>"));
+        assert!(
+            layers
+                .provider_layers
+                .system
+                .contains("User prefers precise answers.")
+        );
+        assert!(layers.fallback_text.contains("<system_prompt_hooks>"));
+    }
+
     /// Verifies context-compaction prompts use the prompt composer instead of a post-launch system suffix.
     /// 验证上下文压缩提示词会使用提示词组合器，而不是启动后追加系统提示词后缀。
     #[test]
@@ -691,6 +806,7 @@ mod tests {
             context_baseline: Option::<ContextBaseline>::None,
             context_request_mode: None,
             context_injection: None,
+            system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
         }

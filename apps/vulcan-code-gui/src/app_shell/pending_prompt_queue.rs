@@ -906,6 +906,8 @@ impl VulcanWorkbench {
             return Task::none();
         }
         let hook_conversation_state = self.session_conversation_state(session_id);
+        let system_prompt_hook_phase =
+            self.vmm_profile_placement_phase_for_next_user_prompt(session_id, true);
         let precheck_request = self.conversation_hook_runtime.prepare_user_prompt_precheck(
             session_id,
             &prompt_entry.id,
@@ -913,6 +915,7 @@ impl VulcanWorkbench {
             self.workspace_path_for_session_id(session_id)
                 .unwrap_or_else(|| self.workspace_path.clone()),
             prompt_entry.source,
+            system_prompt_hook_phase,
             &prompt_entry.prompt,
             &hook_conversation_state,
         );
@@ -925,7 +928,7 @@ impl VulcanWorkbench {
                 .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
             runtime_state.updated_at = now;
         }
-        let vmm_precheck_enabled = {
+        let effective_vmm_config = {
             let session_layer = self
                 .session_runtime_state(session_id)
                 .map(|state| &state.vmm);
@@ -935,28 +938,26 @@ impl VulcanWorkbench {
                 Some(&project_layer),
                 session_layer,
             )
-            .precheck_enabled
         };
+        let vmm_memory_ready = effective_vmm_config.diagnose_memory_flow(true)
+            == vulcan_vmm::VmmConfigDiagnostic::Ready;
+        let vmm_precheck_enabled = vmm_memory_ready && effective_vmm_config.precheck_enabled;
         let precheck_hook_snapshots = self.conversation_hook_runtime.precheck_hook_snapshots();
-        let should_skip_precheck = !vmm_precheck_enabled
+        let should_skip_precheck = !vmm_memory_ready
             && !precheck_hook_snapshots.is_empty()
             && precheck_hook_snapshots
                 .iter()
                 .all(|snapshot| snapshot.registration.id == super::vmm_hooks::VMM_PRECHECK_HOOK_ID);
-        let precheck_progress_labels = if should_skip_precheck {
-            Vec::new()
-        } else {
-            precheck_hook_snapshots
-                .iter()
-                .filter(|snapshot| {
-                    vmm_precheck_enabled
-                        || snapshot.registration.id != super::vmm_hooks::VMM_PRECHECK_HOOK_ID
-                })
-                .filter_map(|snapshot| snapshot.registration.progress_label.clone())
-                .map(|label| label.trim().to_string())
-                .filter(|label| !label.is_empty())
-                .collect::<Vec<_>>()
-        };
+        let precheck_progress_labels = precheck_hook_snapshots
+            .iter()
+            .filter(|snapshot| {
+                vmm_precheck_enabled
+                    || snapshot.registration.id != super::vmm_hooks::VMM_PRECHECK_HOOK_ID
+            })
+            .filter_map(|snapshot| snapshot.registration.progress_label.clone())
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty())
+            .collect::<Vec<_>>();
         if let (Some(project_id), Some(runtime_state)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
@@ -1080,8 +1081,18 @@ impl VulcanWorkbench {
             return self.persist_workspace_snapshot_task();
         }
 
+        let mut system_prompt_hook_blocks = Vec::new();
         match outcome.report {
             Ok(report) => {
+                if let Some(effect) =
+                    super::conversation_hooks::vmm_profile_sync_effect_from_report(&report)
+                {
+                    let now = current_unix_millis_text();
+                    let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+                    runtime_state.vmm_profile_sync = effect.state;
+                    runtime_state.updated_at = now;
+                    self.refresh_vmm_hook_config_snapshot();
+                }
                 if let Some(rewritten_prompt) = report
                     .payload
                     .value
@@ -1110,6 +1121,7 @@ impl VulcanWorkbench {
                         .apply_inserts_for_turn(report.injections, &now, Some(&outcome.turn_id));
                     runtime_state.updated_at = now;
                 }
+                system_prompt_hook_blocks = report.system_prompt_blocks;
             }
             Err(error) => {
                 self.push_activity(
@@ -1176,6 +1188,7 @@ impl VulcanWorkbench {
                         Some(&outcome.turn_id),
                     )
                 }),
+            system_prompt_hook_blocks: system_prompt_hook_blocks,
             project_vmm: self.current_project_vmm_configuration(session_id),
             session_vmm: self
                 .session_runtime_state(session_id)

@@ -492,7 +492,6 @@ fn assistant_record_can_seed_protocol(record_kind: &SessionMessageRecordKind) ->
     matches!(
         record_kind,
         SessionMessageRecordKind::AssistantOutput
-            | SessionMessageRecordKind::ExploreOutput
             | SessionMessageRecordKind::CompactionSummary
             | SessionMessageRecordKind::Transcript
     )

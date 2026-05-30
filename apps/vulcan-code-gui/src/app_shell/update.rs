@@ -260,6 +260,7 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
+                        self.seed_vmm_hook_profile_cache_from_runtime_state();
                         self.refresh_vmm_hook_config_snapshot();
                         self.startup_lifecycle = StartupLifecycle::Ready;
                         self.status_message =

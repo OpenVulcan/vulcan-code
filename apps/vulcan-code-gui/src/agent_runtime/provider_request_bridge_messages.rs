@@ -148,6 +148,18 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
                 usage,
                 tool_calls,
             } => {
+                if is_legacy_explore_assistant_projection(
+                    text,
+                    reasoning,
+                    provider_message_id,
+                    provider_message_state,
+                    usage.as_ref(),
+                    tool_calls,
+                ) {
+                    index += 1;
+                    continue;
+                }
+
                 if tool_calls.is_empty() {
                     projected.push(CoreConversationMessage {
                         id: message.id.clone(),
@@ -228,6 +240,31 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
     }
 
     projected
+}
+
+/// Detects legacy hidden Explore records that were accidentally mirrored as assistant messages.
+/// 识别曾被错误镜像成助手消息的旧版隐藏 Explore 记录。
+fn is_legacy_explore_assistant_projection(
+    text: &str,
+    reasoning: &str,
+    provider_message_id: &Option<String>,
+    provider_message_state: &Option<serde_json::Value>,
+    usage: Option<&vulcan_core::types::ProviderUsageSnapshot>,
+    tool_calls: &[CoreConversationToolCall],
+) -> bool {
+    if !reasoning.trim().is_empty()
+        || provider_message_id.is_some()
+        || provider_message_state.is_some()
+        || usage.is_some()
+        || !tool_calls.is_empty()
+    {
+        return false;
+    }
+
+    let trimmed = text.trim_start();
+    trimmed.starts_with("This session is bound to project `")
+        || trimmed.starts_with("This session is bound to project id `")
+        || trimmed.starts_with("This session is not bound to an explicit project directory.")
 }
 
 /// Normalizes one user-text payload for the selected provider API family and model capabilities.
@@ -527,6 +564,58 @@ mod tests {
         };
         assert!(attachments.is_empty());
         assert!(text.contains("selected model"));
+    }
+
+    /// Verifies legacy project-scope Explore records are removed from provider-visible history.
+    /// 验证旧版项目范围 Explore 记录会从 Provider 可见历史中移除。
+    #[test]
+    fn provider_visible_history_filters_legacy_explore_assistant_projection() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("介绍下你自己"),
+                    attachments: Vec::new(),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("explore-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from(
+                        "This session is bound to project `test-project` with root directory `D:\\openvulcan\\test-project`. Future explore and triage steps should prioritize that scope.",
+                    ),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("user-2"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 2);
+        assert!(projected.iter().all(|message| message.id != "explore-1"));
+        assert!(matches!(
+            &projected[0].payload,
+            CoreConversationPayload::UserText { text, .. } if text == "介绍下你自己"
+        ));
+        assert!(matches!(
+            &projected[1].payload,
+            CoreConversationPayload::UserText { text, .. } if text == "继续"
+        ));
     }
 
     /// Verifies matched tool results remain protocol tool responses in provider-visible history.

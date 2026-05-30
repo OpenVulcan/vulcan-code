@@ -9,7 +9,7 @@ pub use vulcan_workbench_model::{
     SessionComposerDraftState, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
-    TaskProjectSummary, VmmWritebackOutboxEntry,
+    TaskProjectSummary, VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
 
 /// Execution modes for AI coding tasks.

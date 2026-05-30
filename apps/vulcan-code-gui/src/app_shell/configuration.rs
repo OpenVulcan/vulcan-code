@@ -660,6 +660,7 @@ impl VulcanWorkbench {
             runtime_state.context_start_message_id = None;
             runtime_state.updated_at = current_unix_millis_text();
         }
+        self.refresh_vmm_hook_config_snapshot();
         self.last_execution_preparation = None;
         self.sync_context_usage_from_preparation(None);
         self.replace_session_last_api_request_preview(

@@ -12,7 +12,7 @@ use crate::model::{
     SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
-    VmmWritebackOutboxEntry,
+    VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
 use crate::provider_usage::{parse_provider_usage_from_json, serialize_provider_usage_to_json};
 use crate::tooling::change_set::compact_change_set_host_result;
@@ -678,6 +678,10 @@ struct StoredRuntimeStateRow {
     /// 可选的持久化 VMM 写回 outbox 载荷。
     #[serde(default)]
     vmm_writeback_outbox_json: Option<String>,
+    /// Optional persisted VMM profile sync state payload.
+    /// 可选的持久化 VMM 画像同步状态载荷。
+    #[serde(default)]
+    vmm_profile_sync_json: Option<String>,
     /// Updated-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的更新时间。
     updated_at: String,
@@ -776,6 +780,11 @@ pub async fn load_workspace_snapshot(
                 .vmm_writeback_outbox_json
                 .as_deref()
                 .and_then(parse_vmm_writeback_outbox_from_json)
+                .unwrap_or_default(),
+            vmm_profile_sync: row
+                .vmm_profile_sync_json
+                .as_deref()
+                .and_then(parse_vmm_profile_sync_from_json)
                 .unwrap_or_default(),
             last_compaction_id: row.last_compaction_id,
             context_start_message_id: row.context_start_message_id,
@@ -1254,7 +1263,7 @@ async fn query_session_runtime_state_shell_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.updated_at
+SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.vmm_profile_sync_json, r.updated_at
 FROM session_runtime_state AS r
 INNER JOIN sessions AS s ON s.id = r.session_id
 ORDER BY r.session_id ASC;
@@ -1409,6 +1418,11 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .vmm_writeback_outbox_json
             .as_deref()
             .and_then(parse_vmm_writeback_outbox_from_json)
+            .unwrap_or_default(),
+        vmm_profile_sync: row
+            .vmm_profile_sync_json
+            .as_deref()
+            .and_then(parse_vmm_profile_sync_from_json)
             .unwrap_or_default(),
         last_compaction_id: row.last_compaction_id,
         context_start_message_id: row.context_start_message_id,
@@ -2132,6 +2146,22 @@ fn serialize_vmm_writeback_outbox_to_json(outbox: &[VmmWritebackOutboxEntry]) ->
 /// Parses a persisted VMM writeback outbox JSON payload.
 /// 解析持久化的 VMM 写回 outbox JSON 载荷。
 fn parse_vmm_writeback_outbox_from_json(value: &str) -> Option<Vec<VmmWritebackOutboxEntry>> {
+    serde_json::from_str(value).ok()
+}
+
+/// Serializes the VMM profile sync state into the persisted JSON payload when needed.
+/// 在需要时将 VMM 画像同步状态序列化为持久化 JSON 载荷。
+fn serialize_vmm_profile_sync_to_json(state: &VmmProfileSyncState) -> Option<String> {
+    if state.is_empty() {
+        None
+    } else {
+        serde_json::to_string(state).ok()
+    }
+}
+
+/// Parses a persisted VMM profile sync JSON payload.
+/// 解析持久化的 VMM 画像同步 JSON 载荷。
+fn parse_vmm_profile_sync_from_json(value: &str) -> Option<VmmProfileSyncState> {
     serde_json::from_str(value).ok()
 }
 
