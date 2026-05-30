@@ -5,6 +5,135 @@ use super::*;
 use iced::widget::column;
 
 impl VulcanWorkbench {
+    /// Renders the top-level VulcanMemoryMesh configuration panel.
+    /// 渲染顶层 VulcanMemoryMesh 配置面板。
+    pub(super) fn view_vulcan_memory_mesh_panel(&self) -> Element<'_, Message> {
+        let selected_session = self.selected_session();
+        let selected_session_id = selected_session.map(|session| session.id);
+        let selected_project_id = selected_session.and_then(|session| session.project_id.clone());
+        let selected_project = selected_project_id
+            .as_deref()
+            .and_then(|project_id| self.task_project_by_id(project_id));
+        let session_layer = selected_session_id
+            .and_then(|session_id| self.session_runtime_state.get(&session_id))
+            .map(|state| &state.vmm);
+        let project_layer = self.current_project_vmm_configuration(self.selected_session);
+        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+            &self.provider_configuration.vmm,
+            Some(&project_layer),
+            session_layer,
+        );
+        let diagnostic = effective.diagnose_memory_flow(!effective.grpc_target.trim().is_empty());
+        let project_button: Element<'_, Message> = if let Some(project) = selected_project {
+            button("打开当前项目设置")
+                .style(button::secondary)
+                .on_press(Message::OpenTaskProjectSettings(project.id.clone()))
+                .into()
+        } else {
+            button("打开当前项目设置").style(button::secondary).into()
+        };
+        let effective_card = container(
+            column![
+                row![
+                    column![
+                        text("当前会话有效配置").size(16),
+                        text("这里展示全局、项目和会话覆盖合并后的实际 VMM 状态。").size(12),
+                    ]
+                    .spacing(3)
+                    .width(Fill),
+                    project_button,
+                ]
+                .spacing(10)
+                .align_y(Center),
+                row![
+                    text(format!(
+                        "gRPC：{}",
+                        if effective.grpc_target.trim().is_empty() {
+                            "未配置"
+                        } else {
+                            effective.grpc_target.as_str()
+                        }
+                    ))
+                    .size(12),
+                    text(format!(
+                        "user/project：{}/{}",
+                        effective
+                            .user_id
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| String::from("-")),
+                        effective
+                            .project_id
+                            .map(|value| value.to_string())
+                            .unwrap_or_else(|| String::from("-")),
+                    ))
+                    .size(12),
+                    text(format!(
+                        "记忆：{}",
+                        if effective.enabled {
+                            "启用"
+                        } else {
+                            "关闭"
+                        }
+                    ))
+                    .size(12),
+                    text(format!(
+                        "AI 工具：{}",
+                        if effective.ai_tools_enabled {
+                            "启用"
+                        } else {
+                            "关闭"
+                        }
+                    ))
+                    .size(12),
+                ]
+                .spacing(12)
+                .wrap(),
+                text(format!("诊断：{diagnostic:?}")).size(12),
+                text(format!(
+                    "当前项目：{}",
+                    selected_project
+                        .map(|project| project.title.as_str())
+                        .unwrap_or("未绑定项目")
+                ))
+                .size(12),
+            ]
+            .spacing(10),
+        )
+        .padding(12)
+        .style(container::bordered_box);
+
+        container(
+            column![
+                container(
+                    column![
+                        text(
+                            MainDisplayPanel::VulcanMemoryMesh
+                                .localized_section_title(self.current_locale())
+                        )
+                        .size(22),
+                        text(
+                            MainDisplayPanel::VulcanMemoryMesh
+                                .localized_description(self.current_locale())
+                        )
+                        .size(13),
+                    ]
+                    .spacing(4),
+                )
+                .padding([4, 2]),
+                scrollable(
+                    column![effective_card, self.view_global_vmm_settings_card()].spacing(12)
+                )
+                .height(Fill),
+            ]
+            .spacing(12)
+            .height(Fill),
+        )
+        .padding(16)
+        .height(Fill)
+        .width(Fill)
+        .into()
+    }
+
     /// Renders the global VMM configuration card inside the AI extension settings surface.
     /// 在 AI 扩展设置界面中渲染全局 VMM 配置卡片。
     pub(super) fn view_global_vmm_settings_card(&self) -> Element<'_, Message> {

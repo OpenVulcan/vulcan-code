@@ -1656,9 +1656,7 @@ impl VulcanWorkbench {
             MainDisplayPanel::Plugins => {
                 self.view_placeholder_main_panel(MainDisplayPanel::Plugins)
             }
-            MainDisplayPanel::VulcanMemoryMesh => {
-                self.view_placeholder_main_panel(MainDisplayPanel::VulcanMemoryMesh)
-            }
+            MainDisplayPanel::VulcanMemoryMesh => self.view_vulcan_memory_mesh_panel(),
             MainDisplayPanel::Example => self.view_example_panel(),
             MainDisplayPanel::Settings => self.view_settings_panel(),
         }
