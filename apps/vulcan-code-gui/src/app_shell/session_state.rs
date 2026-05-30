@@ -95,6 +95,41 @@ pub(super) struct ActiveSessionRunState {
     pub(super) handle: task::Handle,
 }
 
+/// Session-scoped precheck progress hints declared by currently active hook handlers.
+/// 当前活动 hook 处理器声明的会话级 precheck 进度提示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SessionPrecheckProgressState {
+    /// Ordered labels rendered while request precheck handlers are still running.
+    /// precheck 处理器仍在运行时按顺序展示的提示标签。
+    labels: Vec<String>,
+}
+
+impl SessionPrecheckProgressState {
+    /// Builds a precheck progress state from hook-declared labels, dropping empty entries.
+    /// 根据 hook 声明的标签构建 precheck 进度状态，并丢弃空白条目。
+    pub(super) fn new(labels: impl IntoIterator<Item = String>) -> Option<Self> {
+        let labels = labels
+            .into_iter()
+            .map(|label| label.trim().to_string())
+            .filter(|label| !label.is_empty())
+            .collect::<Vec<_>>();
+        if labels.is_empty() {
+            None
+        } else {
+            Some(Self { labels })
+        }
+    }
+
+    /// Returns the primary label rendered in compact transcript progress hints.
+    /// 返回紧凑转录进度提示中展示的主标签。
+    pub(super) fn primary_label(&self) -> &str {
+        self.labels
+            .first()
+            .map(String::as_str)
+            .unwrap_or("正在执行前置处理")
+    }
+}
+
 /// Active prompt-compaction task state retained while one internal summary request is still running.
 /// 在单次内部总结请求仍在运行时保留的活动提示词压缩任务状态。
 #[derive(Debug)]

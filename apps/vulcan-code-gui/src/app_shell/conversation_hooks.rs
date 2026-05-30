@@ -5,15 +5,15 @@ use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::question_runtime::QuestionPrompt;
 use crate::conversation_protocol::{SessionConversationPayload, SessionConversationState};
 use crate::model::{PendingSessionPromptSource, SessionId};
+use iced::futures::channel::oneshot;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::time::Duration;
 use tokio::runtime::Handle;
-use vulcan_context_injection::InjectionInsert;
 use vulcan_hooks::{
     HookActor, HookContext, HookDispatchReport, HookDispatchRequest, HookDispatcher, HookMode,
-    HookPayload, HookPointDescriptor, HookScope,
+    HookPayload, HookPointDescriptor, HookRegistrationSnapshot, HookScope,
 };
 use vulcan_vmm::PostActionRequest;
 
@@ -195,6 +195,14 @@ impl ConversationHookRuntime {
         &mut self.dispatcher
     }
 
+    /// Returns deterministic snapshots for handlers registered on the precheck hook point.
+    /// 返回注册在 precheck hook 点位上的确定性处理器快照。
+    pub(super) fn precheck_hook_snapshots(&self) -> Vec<HookRegistrationSnapshot> {
+        self.dispatcher
+            .registry()
+            .registration_snapshots(Some(HOOK_CONVERSATION_TURN_PRECHECK))
+    }
+
     /// Registers every built-in conversation hook point descriptor.
     /// 注册所有内置会话 hook 点位描述。
     fn register_builtin_points(&mut self) {
@@ -206,7 +214,7 @@ impl ConversationHookRuntime {
 
     /// Opens or updates the logical turn for one user prompt and fires precheck/user hooks.
     /// 为一条用户提示打开或更新逻辑回合，并触发 precheck/user hook。
-    pub(super) fn record_user_prompt(
+    pub(super) fn prepare_user_prompt_precheck(
         &mut self,
         session_id: SessionId,
         prompt_entry_id: &str,
@@ -215,7 +223,7 @@ impl ConversationHookRuntime {
         source: PendingSessionPromptSource,
         prompt: &str,
         conversation_state: &SessionConversationState,
-    ) -> Vec<InjectionInsert> {
+    ) -> ConversationPrecheckRequest {
         let event_kind = pending_prompt_source_event_kind(source);
         let was_recorded_while_queued = self
             .active_turns
@@ -262,23 +270,15 @@ impl ConversationHookRuntime {
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
         });
-        let precheck_report = self.dispatch_json_blocking(
-            HOOK_CONVERSATION_TURN_PRECHECK,
-            session_id,
-            payload.clone(),
-            HookScope::Session,
-        );
         if !was_recorded_while_queued {
             self.dispatch_json(
                 HOOK_CONVERSATION_USER_EVENT,
                 session_id,
-                payload,
+                payload.clone(),
                 HookScope::Session,
             );
         }
-        precheck_report
-            .map(|report| report.injections)
-            .unwrap_or_default()
+        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload)
     }
 
     /// Records a queued user prompt as timeline-only input without running precheck.
@@ -675,6 +675,128 @@ impl ConversationHookRuntime {
     }
 }
 
+/// Prepared asynchronous precheck request that can run outside the UI message handler.
+/// 可在 UI 消息处理器之外运行的已准备异步 precheck 请求。
+#[derive(Clone)]
+pub(super) struct ConversationPrecheckRequest {
+    /// Dispatcher snapshot used for this precheck run.
+    /// 当前 precheck 运行使用的调度器快照。
+    dispatcher: HookDispatcher,
+    /// Session that owns the precheck request.
+    /// 拥有该 precheck 请求的会话。
+    session_id: SessionId,
+    /// JSON payload sent to the hook point.
+    /// 发送给 hook 点位的 JSON 载荷。
+    payload: Value,
+}
+
+impl ConversationPrecheckRequest {
+    /// Builds one prepared asynchronous precheck request.
+    /// 构建一条已准备的异步 precheck 请求。
+    fn new(dispatcher: HookDispatcher, session_id: SessionId, payload: Value) -> Self {
+        Self {
+            dispatcher,
+            session_id,
+            payload,
+        }
+    }
+
+    /// Runs the precheck hook dispatch on a worker thread and returns a non-panicking report result.
+    /// 在工作线程执行 precheck hook 调度，并返回不会 panic 的报告结果。
+    pub(super) async fn run(self) -> ConversationPrecheckOutcome {
+        self.run_on_worker_thread().await
+    }
+
+    /// Completes this prepared precheck without dispatching handlers.
+    /// 在不调度处理器的情况下完成这条已准备的 precheck。
+    pub(super) fn skip(self) -> ConversationPrecheckOutcome {
+        ConversationPrecheckOutcome {
+            session_id: self.session_id,
+            report: Ok(HookDispatchReport::empty(HookPayload {
+                value: self.payload,
+            })),
+        }
+    }
+
+    /// Runs the async hook dispatcher inside a private Tokio runtime so the UI executor never blocks.
+    /// 在私有 Tokio 运行时中执行异步 hook 调度，避免阻塞 UI 执行器。
+    async fn run_on_worker_thread(self) -> ConversationPrecheckOutcome {
+        let session_id = self.session_id;
+        let context = HookContext {
+            run_id: format!("{}:{}", HOOK_CONVERSATION_TURN_PRECHECK, session_id),
+            point: HOOK_CONVERSATION_TURN_PRECHECK.to_string(),
+            scope: HookScope::Session,
+            actor: HookActor::new("vulcan-code-gui"),
+            workspace_id: None,
+            project_id: None,
+            session_id: Some(session_id.to_string()),
+            conversation_id: Some(session_id.to_string()),
+            user_id: None,
+            capabilities: Default::default(),
+            metadata: BTreeMap::new(),
+        };
+        let request = HookDispatchRequest::new(
+            context,
+            HookPayload {
+                value: self.payload,
+            },
+        );
+        let (sender, receiver) = oneshot::channel();
+        let spawn_result = std::thread::Builder::new()
+            .name(format!("vulcan-precheck-{session_id}"))
+            .spawn(move || {
+                let result = run_precheck_dispatch_on_private_runtime(self.dispatcher, request);
+                let _ = sender.send(result);
+            });
+        if let Err(error) = spawn_result {
+            return ConversationPrecheckOutcome {
+                session_id,
+                report: Err(format!("precheck hook thread failed to start: {error}")),
+            };
+        }
+        let report = receiver
+            .await
+            .unwrap_or_else(|_| Err(String::from("precheck hook dispatch thread disconnected")));
+        ConversationPrecheckOutcome { session_id, report }
+    }
+}
+
+/// Runs one precheck dispatch inside a private Tokio runtime on the already-created worker thread.
+/// 在已创建的工作线程内使用私有 Tokio 运行时执行一次 precheck 调度。
+fn run_precheck_dispatch_on_private_runtime(
+    dispatcher: HookDispatcher,
+    request: HookDispatchRequest,
+) -> Result<HookDispatchReport, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("precheck hook runtime failed: {error}"))?;
+        runtime.block_on(async move {
+            tokio::time::timeout(
+                Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS),
+                dispatcher.dispatch(request),
+            )
+            .await
+            .map_err(|_| String::from("precheck hook dispatch timed out"))?
+            .map_err(|error| error.to_string())
+        })
+    }))
+    .unwrap_or_else(|_| Err(String::from("precheck hook dispatch thread panicked")))
+}
+
+/// Result produced by one asynchronous conversation precheck dispatch.
+/// 单次异步会话 precheck 调度产生的结果。
+#[derive(Debug, Clone)]
+pub(super) struct ConversationPrecheckOutcome {
+    /// Session that owns the completed precheck.
+    /// 拥有已完成 precheck 的会话。
+    pub(super) session_id: SessionId,
+    /// Hook dispatch report or a non-fatal error message.
+    /// hook 调度报告或非致命错误消息。
+    pub(super) report: Result<HookDispatchReport, String>,
+}
+
 /// Extracts VMM writeback effects from one hook dispatch report.
 /// 从一次 hook 调度报告中提取 VMM 写回效果。
 fn vmm_writeback_effects_from_report(report: &HookDispatchReport) -> Vec<VmmWritebackHookEffect> {
@@ -875,7 +997,7 @@ mod tests {
         let session_id = SessionId::from_u128(42);
         let state = SessionConversationState::default();
 
-        runtime.record_user_prompt(
+        runtime.prepare_user_prompt_precheck(
             session_id,
             "entry-1",
             Some(String::from("project")),
@@ -884,7 +1006,7 @@ mod tests {
             "first",
             &state,
         );
-        runtime.record_user_prompt(
+        runtime.prepare_user_prompt_precheck(
             session_id,
             "entry-2",
             Some(String::from("project")),
@@ -923,8 +1045,8 @@ mod tests {
         assert_eq!(turn.user_content, "latest user");
     }
 
-    #[test]
-    fn precheck_hook_injections_are_returned_to_send_pipeline() {
+    #[tokio::test]
+    async fn precheck_hook_injections_are_returned_to_send_pipeline() {
         use std::sync::Arc;
         use vulcan_context_injection::{InjectionInsert, InjectionKind};
         use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
@@ -953,22 +1075,26 @@ mod tests {
             )
             .expect("hook registration should succeed");
 
-        let injections = runtime.record_user_prompt(
-            SessionId::from_u128(44),
-            "entry-1",
-            None,
-            String::from("D:/workspace"),
-            PendingSessionPromptSource::UserFollowup,
-            "hello",
-            &SessionConversationState::default(),
-        );
+        let outcome = runtime
+            .prepare_user_prompt_precheck(
+                SessionId::from_u128(44),
+                "entry-1",
+                None,
+                String::from("D:/workspace"),
+                PendingSessionPromptSource::UserFollowup,
+                "hello",
+                &SessionConversationState::default(),
+            )
+            .run()
+            .await;
+        let report = outcome.report.expect("precheck hook should complete");
 
-        assert_eq!(injections.len(), 1);
-        assert_eq!(injections[0].tag, "test_inject");
+        assert_eq!(report.injections.len(), 1);
+        assert_eq!(report.injections[0].tag, "test_inject");
     }
 
-    #[test]
-    fn precheck_hook_timeout_returns_no_injections_without_hanging() {
+    #[tokio::test]
+    async fn precheck_hook_timeout_records_failure_without_hanging() {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
         use vulcan_hooks::{FnHookHandler, HookInvocation, HookMode, HookRegistration, HookResult};
@@ -991,17 +1117,24 @@ mod tests {
             .expect("hook registration should succeed");
 
         let started_at = Instant::now();
-        let injections = runtime.record_user_prompt(
-            SessionId::from_u128(45),
-            "entry-1",
-            None,
-            String::from("D:/workspace"),
-            PendingSessionPromptSource::UserFollowup,
-            "hello",
-            &SessionConversationState::default(),
-        );
+        let outcome = runtime
+            .prepare_user_prompt_precheck(
+                SessionId::from_u128(45),
+                "entry-1",
+                None,
+                String::from("D:/workspace"),
+                PendingSessionPromptSource::UserFollowup,
+                "hello",
+                &SessionConversationState::default(),
+            )
+            .run()
+            .await;
 
-        assert!(injections.is_empty());
+        let report = outcome
+            .report
+            .expect("registration-level timeout should still return a dispatch report");
+        assert!(report.injections.is_empty());
+        assert!(!report.failures.is_empty());
         assert!(started_at.elapsed() < Duration::from_millis(TEST_HOOK_TIMEOUT_MS + 1_500));
     }
 
@@ -1040,7 +1173,7 @@ mod tests {
             .expect("hook registration should succeed");
 
         let session_id = SessionId::from_u128(46);
-        runtime.record_user_prompt(
+        runtime.prepare_user_prompt_precheck(
             session_id,
             "entry-1",
             None,

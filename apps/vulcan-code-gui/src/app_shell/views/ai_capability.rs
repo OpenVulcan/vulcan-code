@@ -361,6 +361,9 @@ impl VulcanWorkbench {
         let session_ai_tools_enabled = session_layer
             .and_then(|layer| layer.ai_tools_enabled)
             .unwrap_or(effective.ai_tools_enabled);
+        let session_precheck_enabled = session_layer
+            .and_then(|layer| layer.precheck_enabled)
+            .unwrap_or(effective.precheck_enabled);
         let diagnostic = effective.diagnose_memory_flow(!effective.grpc_target.trim().is_empty());
         let memory_checkbox = checkbox(session_memory_enabled);
         let memory_checkbox: Element<'_, Message> = if toggle_available {
@@ -377,6 +380,14 @@ impl VulcanWorkbench {
                 .into()
         } else {
             ai_tools_checkbox.into()
+        };
+        let precheck_checkbox = checkbox(session_precheck_enabled);
+        let precheck_checkbox: Element<'_, Message> = if toggle_available {
+            precheck_checkbox
+                .on_toggle(Message::SetSessionVmmPrecheckEnabled)
+                .into()
+        } else {
+            precheck_checkbox.into()
         };
         container(
             column![
@@ -404,6 +415,11 @@ impl VulcanWorkbench {
                 row![ai_tools_checkbox, text("本会话启用 AI 专属工具").size(13),]
                     .spacing(8)
                     .align_y(Center),
+                row![precheck_checkbox, text("本会话启用前置预注入").size(13),]
+                    .spacing(8)
+                    .align_y(Center),
+                text("关闭前置预注入后，发送前不会自动召回记忆；AI 仍可通过专属工具主动检索，后置采集保持开启。")
+                    .size(12),
                 text(format!("状态：{diagnostic:?}")).size(12),
                 text(
                     "这里只写入当前会话覆盖；全局地址与项目 ID 请在能力供应商页或项目设置中配置。"

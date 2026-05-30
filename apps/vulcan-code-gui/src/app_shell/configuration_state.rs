@@ -327,6 +327,9 @@ pub(super) struct VmmSettingsDraft {
     /// Whether VMM AI-only tools are exposed.
     /// 是否暴露 VMM AI 专属工具。
     pub(super) ai_tools_enabled: bool,
+    /// Whether automatic VMM precheck recall is enabled.
+    /// 是否启用 VMM 自动前置召回。
+    pub(super) precheck_enabled: bool,
     /// Editable context-injection tag.
     /// 可编辑上下文注入标签。
     pub(super) injection_tag: String,
@@ -403,6 +406,7 @@ impl VmmSettingsDraft {
             visible_memory_injection: false,
             session_compact_recall: true,
             ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(true),
+            precheck_enabled: layer.precheck_enabled.unwrap_or(true),
             injection_tag: layer
                 .injection_tag
                 .clone()
@@ -482,6 +486,7 @@ impl VmmSettingsDraft {
             visible_memory_injection: None,
             session_compact_recall: None,
             ai_tools_enabled: Some(self.ai_tools_enabled),
+            precheck_enabled: Some(self.precheck_enabled),
             injection_tag: optional_trimmed_string(&self.injection_tag),
             injection_description: optional_trimmed_string(&self.injection_description),
             ..VmmConfigLayer::default()

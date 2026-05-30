@@ -95,6 +95,9 @@ impl VulcanWorkbench {
     /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
     pub(super) fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
         self.session_has_active_run(session_id)
+            || (self.session_run_phase_for(session_id) == SessionRunPhase::Preparing
+                && !self.session_has_active_run(session_id)
+                && self.session_precheck_progress.contains_key(&session_id))
             || self.session_has_active_compaction(session_id)
             || !self.session_pending_prompt_queue(session_id).is_empty()
             || self.session_has_running_subagent_tasks(session_id)
@@ -911,7 +914,7 @@ impl VulcanWorkbench {
             runtime_state.updated_at = now;
         }
         let hook_conversation_state = self.session_conversation_state(session_id);
-        let hook_injection_ops = self.conversation_hook_runtime.record_user_prompt(
+        let precheck_request = self.conversation_hook_runtime.prepare_user_prompt_precheck(
             session_id,
             &prompt_entry.id,
             owning_project_id.clone(),
@@ -921,14 +924,38 @@ impl VulcanWorkbench {
             &prompt_entry.prompt,
             &hook_conversation_state,
         );
-        if !hook_injection_ops.is_empty() {
-            let now = current_unix_millis_text();
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state
-                .context_injection_state
-                .apply_inserts(hook_injection_ops, &now);
-            runtime_state.updated_at = now;
-        }
+        let vmm_precheck_enabled = {
+            let session_layer = self
+                .session_runtime_state(session_id)
+                .map(|state| &state.vmm);
+            let project_layer = self.current_project_vmm_configuration(session_id);
+            vulcan_vmm::VmmEffectiveConfig::resolve(
+                &self.provider_configuration.vmm,
+                Some(&project_layer),
+                session_layer,
+            )
+            .precheck_enabled
+        };
+        let precheck_hook_snapshots = self.conversation_hook_runtime.precheck_hook_snapshots();
+        let should_skip_precheck = !vmm_precheck_enabled
+            && !precheck_hook_snapshots.is_empty()
+            && precheck_hook_snapshots
+                .iter()
+                .all(|snapshot| snapshot.registration.id == super::vmm_hooks::VMM_PRECHECK_HOOK_ID);
+        let precheck_progress_labels = if should_skip_precheck {
+            Vec::new()
+        } else {
+            precheck_hook_snapshots
+                .iter()
+                .filter(|snapshot| {
+                    vmm_precheck_enabled
+                        || snapshot.registration.id != super::vmm_hooks::VMM_PRECHECK_HOOK_ID
+                })
+                .filter_map(|snapshot| snapshot.registration.progress_label.clone())
+                .map(|label| label.trim().to_string())
+                .filter(|label| !label.is_empty())
+                .collect::<Vec<_>>()
+        };
         if let (Some(project_id), Some(runtime_state)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
@@ -975,10 +1002,152 @@ impl VulcanWorkbench {
             }
             self.materialize_session_after_first_user_turn(session_id);
         }
+        if should_skip_precheck || precheck_hook_snapshots.is_empty() {
+            return self.continue_session_run_after_precheck(
+                session_id,
+                session_title,
+                prompt_entry,
+                precheck_request.skip(),
+            );
+        }
+        self.replace_session_runtime_events(session_id, Vec::new());
+        self.clear_streaming_message_ids(session_id);
+        self.session_tool_call_message_ids.remove(&session_id);
+        self.last_mcp_discovery_rows.clear();
+        self.last_mcp_discovery_errors.clear();
+        self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
+        self.set_session_precheck_progress(session_id, precheck_progress_labels);
+        if let Some(session) = self
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Running;
+            session.last_updated_label = String::from("刚刚");
+        }
+        let precheck_status_label = self
+            .session_precheck_progress
+            .get(&session_id)
+            .map(SessionPrecheckProgressState::primary_label)
+            .unwrap_or("正在执行前置处理");
+        self.status_message = format!("{precheck_status_label}，请稍候。");
+
+        let precheck_session_id = session_id;
+        let precheck_session_title = session_title.clone();
+        let precheck_prompt_entry = prompt_entry.clone();
+        let precheck_task = Task::perform(precheck_request.run(), move |outcome| {
+            Message::UserPromptPrecheckFinished {
+                session_id: precheck_session_id,
+                session_title: precheck_session_title.clone(),
+                prompt_entry: precheck_prompt_entry.clone(),
+                outcome,
+            }
+        });
+
+        Task::batch([
+            self.persist_workspace_snapshot_task(),
+            self.maybe_follow_selected_session_transcript_tail(session_id),
+            precheck_task,
+        ])
+    }
+
+    /// Continues one already-visible prompt after asynchronous precheck hooks have finished.
+    /// 在异步 precheck hook 完成后，继续处理一条已显示的提示词。
+    pub(super) fn continue_session_run_after_precheck(
+        &mut self,
+        session_id: SessionId,
+        session_title: String,
+        mut prompt_entry: PendingSessionPromptEntry,
+        outcome: super::conversation_hooks::ConversationPrecheckOutcome,
+    ) -> Task<Message> {
+        if outcome.session_id != session_id {
+            self.clear_session_precheck_progress(outcome.session_id);
+            self.clear_session_precheck_progress(session_id);
+            self.push_activity(
+                ActivityLevel::Warning,
+                "Precheck 结果已忽略",
+                format!(
+                    "收到会话 `{}` 的 precheck 结果，但当前等待的是 `{session_id}`。",
+                    outcome.session_id
+                ),
+            );
+            return Task::none();
+        }
+        self.clear_session_precheck_progress(session_id);
+        if self.session_run_phase_for(session_id) == SessionRunPhase::Stopped {
+            self.status_message = String::from("记忆召回结束，但当前会话已停止，未继续发起请求。");
+            return self.persist_workspace_snapshot_task();
+        }
+
+        match outcome.report {
+            Ok(report) => {
+                if let Some(rewritten_prompt) = report
+                    .payload
+                    .value
+                    .get("user_content")
+                    .and_then(Value::as_str)
+                    .filter(|content| *content != prompt_entry.prompt)
+                {
+                    prompt_entry.prompt = rewritten_prompt.to_string();
+                    prompt_entry.preview = pending_prompt_preview_text(
+                        &prompt_entry.prompt,
+                        &prompt_entry.attachments,
+                    );
+                    if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
+                        self.patch_latest_prechecked_user_prompt(
+                            session_id,
+                            &prompt_entry.prompt,
+                            &prompt_entry.attachments,
+                        );
+                    }
+                }
+                if !report.injections.is_empty() {
+                    let now = current_unix_millis_text();
+                    let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+                    runtime_state
+                        .context_injection_state
+                        .apply_inserts(report.injections, &now);
+                    runtime_state.updated_at = now;
+                }
+            }
+            Err(error) => {
+                self.push_activity(
+                    ActivityLevel::Warning,
+                    "Precheck hook 执行失败",
+                    format!("会话 `{session_title}` 的 precheck 未能完成，已继续真实请求：{error}"),
+                );
+            }
+        }
+        let owning_project_id = self
+            .session_by_id(session_id)
+            .and_then(|session| session.project_id.clone())
+            .filter(|project_id| !project_id.trim().is_empty());
+        if let (Some(project_id), Some(runtime_state)) = (
+            owning_project_id.as_deref(),
+            self.session_runtime_state(session_id).cloned(),
+        ) && let Err(error) = crate::workspace_store::persist_session_context_current_document(
+            project_id,
+            session_id,
+            &runtime_state,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "当前上下文持久化失败",
+                format!(
+                    "会话 `{session_title}` 的当前上下文未能立即写入独立文件，但内存态执行仍会继续：{error}"
+                ),
+            );
+        }
         let config_for_run = self.provider_configuration_for_prompt_entry(&prompt_entry);
         let runtime_options = prompt_entry.runtime_options;
         let ai_tool_configuration =
             self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
+        let execution_mode = if self.selected_agent_requires_plan_mode() {
+            ExecutionMode::Plan
+        } else {
+            self.execution_mode
+        };
+        self.execution_mode = execution_mode;
 
         let request = ExecutionPreparationRequest {
             session_id,
@@ -1017,6 +1186,7 @@ impl VulcanWorkbench {
         self.session_tool_call_message_ids.remove(&session_id);
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();
+        self.clear_session_precheck_progress(session_id);
         self.mark_session_pending_provider_response(session_id);
         self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
         if let Some(session) = self
@@ -1062,6 +1232,66 @@ impl VulcanWorkbench {
         ])
     }
 
+    /// Rewrites the latest visible user prompt after a transform hook edits the prompt payload.
+    /// 当 transform hook 修改提示词载荷后，回写最近一条可见用户提示词。
+    fn patch_latest_prechecked_user_prompt(
+        &mut self,
+        session_id: SessionId,
+        prompt: &str,
+        attachments: &[ConversationAttachment],
+    ) {
+        let body = build_user_prompt_transcript_body(prompt, attachments);
+        let metadata = build_user_prompt_transcript_metadata(prompt, attachments);
+        let updated_at = current_unix_millis_text();
+        let patched_record_id = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            if let Some(message) = runtime_state
+                .conversation_state
+                .messages
+                .iter_mut()
+                .rev()
+                .find(|message| {
+                    matches!(message.payload, SessionConversationPayload::UserText { .. })
+                })
+                && let SessionConversationPayload::UserText { text, .. } = &mut message.payload
+            {
+                *text = prompt.to_string();
+            }
+
+            let patched_record_id = runtime_state
+                .conversation_state
+                .records
+                .iter_mut()
+                .rev()
+                .find(|record| {
+                    record.visible
+                        && record.kind == SessionMessageKind::User
+                        && record.record_kind == SessionMessageRecordKind::Transcript
+                        && record.title == "用户指令"
+                })
+                .map(|record| {
+                    record.body = body.clone();
+                    record.metadata = metadata.clone();
+                    record.id.clone()
+                });
+            runtime_state.updated_at = updated_at;
+            patched_record_id
+        };
+
+        self.sync_session_messages_from_conversation_state(session_id);
+        if let Some(message_id) = patched_record_id {
+            self.session_message_raw_buffers
+                .insert(message_id.clone(), text_editor::Content::with_text(&body));
+            let (markdown_content, markdown_buffer) =
+                parse_selectable_markdown_body(&body, &self.app_theme);
+            self.session_message_markdown
+                .insert(message_id.clone(), markdown_content);
+            self.session_message_markdown_buffers
+                .insert(message_id, markdown_buffer);
+        }
+        self.refresh_session_agent_view_buffers(session_id);
+    }
+
     /// Starts the next queued prompt for one session when the session is idle and auto-dispatch is currently allowed.
     /// 当会话空闲且当前允许自动分发时，为该会话启动队列中的下一条提示词。
     pub(super) fn maybe_start_next_pending_prompt(
@@ -1076,6 +1306,9 @@ impl VulcanWorkbench {
             return Task::none();
         }
         if self.session_has_active_run(session_id) {
+            return Task::none();
+        }
+        if self.session_run_phase_for(session_id) == SessionRunPhase::Preparing {
             return Task::none();
         }
         if self.session_has_active_compaction(session_id) {
@@ -1136,15 +1369,18 @@ impl VulcanWorkbench {
         if self.session_has_active_compaction(session_id) {
             return self.stop_session_prompt_compaction_for_session(session_id);
         }
+        let had_pending_precheck =
+            self.session_run_phase_for(session_id) == SessionRunPhase::Preparing;
         let had_running_subagents = self.session_has_running_subagent_tasks(session_id);
         let cleared_system_queue = self.clear_session_pending_prompt_queue(session_id, true);
-        if !had_running_subagents && !cleared_system_queue {
+        if !had_pending_precheck && !had_running_subagents && !cleared_system_queue {
             self.status_message = String::from("当前没有正在执行的 AI 调用。");
             return Task::none();
         }
 
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
+        self.clear_session_precheck_progress(session_id);
         self.mark_running_subagent_tasks_stopped(session_id);
         self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
         if let Some(session) = self
@@ -1210,6 +1446,7 @@ impl VulcanWorkbench {
 
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
+        self.clear_session_precheck_progress(session_id);
         self.mark_running_subagent_tasks_stopped(session_id);
         if !continue_with_next_prompt {
             self.clear_session_pending_prompt_queue(session_id, true);
@@ -1315,6 +1552,7 @@ impl VulcanWorkbench {
 
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
+        self.clear_session_precheck_progress(session_id);
         self.mark_running_subagent_tasks_stopped(session_id);
         self.clear_session_pending_prompt_queue(session_id, true);
         self.set_session_run_phase(session_id, SessionRunPhase::Stopped);

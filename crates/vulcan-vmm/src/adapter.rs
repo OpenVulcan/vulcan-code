@@ -277,15 +277,60 @@ fn dedupe_adjacent_timeline(timeline: Vec<PostActionTimelineItem>) -> Vec<PostAc
 /// Formats one PreCheck context item into provider-visible recall content.
 /// 将一条 PreCheck 上下文项格式化为 Provider 可见召回内容。
 fn format_context_item(item: &ContextItem) -> Option<String> {
-    let text = normalize_text(&item.text);
+    let text = collapse_context_item_text(&item.text);
     if text.is_empty() {
         return None;
     }
-    if item.turn_id > 0 {
-        Some(format!("VMM_ID:{} {}", item.turn_id, text))
+    let turn_label = format_context_turn_label(item);
+    let source_score = format_context_source_score(item.score);
+    let created_time = format_context_created_time(&item.created_datetime)
+        .map(|time| format!("|TIME:{time}"))
+        .unwrap_or_default();
+    Some(format!(
+        "[{turn_label}|SOURCE:{source_score}{created_time}]{text}"
+    ))
+}
+
+/// Builds the dialogue lookup marker for one recalled context item.
+/// 为单条召回上下文构建对话回查标记。
+fn format_context_turn_label(item: &ContextItem) -> String {
+    if item.has_dialogue && item.turn_id > 0 {
+        format!("TURN_ID:{}", item.turn_id)
     } else {
-        Some(text)
+        String::from("NOTURN")
     }
+}
+
+/// Formats one VMM relevance score for provider-visible context.
+/// 为模型可见上下文格式化一个 VMM 相关性分数。
+fn format_context_source_score(score: f64) -> String {
+    if score.is_finite() {
+        format!("{score:.3}")
+    } else {
+        String::from("0.000")
+    }
+}
+
+/// Normalizes one optional VMM creation datetime for inline metadata.
+/// 为行内元数据规范化一个可选的 VMM 创建时间。
+fn format_context_created_time(value: &str) -> Option<String> {
+    let normalized = collapse_context_item_text(value);
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+/// Collapses a recalled context field into one compact inline string.
+/// 将召回上下文字段压缩为一条紧凑的行内字符串。
+fn collapse_context_item_text(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Reads a required string field from JSON.
@@ -424,9 +469,18 @@ mod tests {
             should_inject: true,
             context_items: vec![
                 ContextItem {
-                    text: String::from("memory one"),
+                    text: String::from("memory one\nsecond line"),
+                    score: 0.9986,
                     turn_id: 11,
                     has_dialogue: true,
+                    created_datetime: String::from("2026-05-02 14:20:00"),
+                    ..ContextItem::default()
+                },
+                ContextItem {
+                    text: String::from("detached memory"),
+                    score: 0.25,
+                    turn_id: 22,
+                    has_dialogue: false,
                     ..ContextItem::default()
                 },
                 ContextItem {
@@ -441,8 +495,15 @@ mod tests {
 
         assert_eq!(insert.tag, "vmm_inject");
         assert_eq!(insert.ttl_turns, Some(5));
-        assert_eq!(insert.items.len(), 1);
-        assert_eq!(insert.items[0].content, "VMM_ID:11 memory one");
+        assert_eq!(insert.items.len(), 2);
+        assert_eq!(
+            insert.items[0].content,
+            "[TURN_ID:11|SOURCE:0.999|TIME:2026-05-02 14:20:00]memory one second line"
+        );
+        assert_eq!(
+            insert.items[1].content,
+            "[NOTURN|SOURCE:0.250]detached memory"
+        );
         assert_eq!(insert.items[0].source_display.as_deref(), Some("VMM"));
     }
 }

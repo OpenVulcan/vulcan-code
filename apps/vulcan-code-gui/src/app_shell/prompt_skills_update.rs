@@ -173,6 +173,15 @@ impl VulcanWorkbench {
                 };
                 Task::none()
             }
+            Message::SetSessionVmmPrecheckEnabled(enabled) => {
+                self.set_session_vmm_precheck_enabled(enabled);
+                self.prompt_skills_notice = if enabled {
+                    String::from("当前会话已启用 VMM 前置预注入。")
+                } else {
+                    String::from("当前会话已关闭 VMM 前置预注入；AI 仍可主动检索记忆。")
+                };
+                Task::none()
+            }
             Message::GlobalVmmEnabledChanged(value) => {
                 self.vmm_settings_draft.enabled = value;
                 self.vmm_settings_draft.notice =
@@ -267,6 +276,12 @@ impl VulcanWorkbench {
                 self.vmm_settings_draft.ai_tools_enabled = value;
                 self.vmm_settings_draft.notice =
                     String::from("全局 VMM AI 专属工具开关已修改，点击保存后生效。");
+                Task::none()
+            }
+            Message::GlobalVmmPrecheckChanged(value) => {
+                self.vmm_settings_draft.precheck_enabled = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 前置预注入开关已修改，点击保存后生效。");
                 Task::none()
             }
             Message::GlobalVmmInjectionTagChanged(value) => {
@@ -714,6 +729,7 @@ impl VulcanWorkbench {
                     implicit_memory_turns: Some(effective.implicit_memory_turns),
                     profile_refresh_turns: Some(effective.profile_refresh_turns),
                     session_compact_recall: Some(effective.session_compact_recall),
+                    precheck_enabled: Some(effective.precheck_enabled),
                     ai_tools_enabled: Some(effective.ai_tools_enabled),
                     injection_tag: Some(effective.injection_tag),
                     injection_description: Some(effective.injection_description),
@@ -1330,6 +1346,20 @@ impl VulcanWorkbench {
         let now = current_unix_millis_text();
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         runtime_state.vmm.ai_tools_enabled = Some(enabled);
+        runtime_state.updated_at = now;
+        self.refresh_vmm_hook_config_snapshot();
+    }
+
+    /// Persists the selected session VMM precheck override.
+    /// 持久化当前选中会话的 VMM 前置预注入覆盖。
+    fn set_session_vmm_precheck_enabled(&mut self, enabled: bool) {
+        let session_id = self.selected_session;
+        if session_id.is_nil() {
+            return;
+        }
+        let now = current_unix_millis_text();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.vmm.precheck_enabled = Some(enabled);
         runtime_state.updated_at = now;
         self.refresh_vmm_hook_config_snapshot();
     }

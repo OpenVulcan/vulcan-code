@@ -10,6 +10,26 @@ impl VulcanWorkbench {
         self.session_run_phases.insert(session_id, phase);
     }
 
+    /// Stores the current hook-declared precheck progress labels for one session.
+    /// 保存某个会话当前由 hook 声明的 precheck 进度标签。
+    pub(super) fn set_session_precheck_progress(
+        &mut self,
+        session_id: SessionId,
+        labels: impl IntoIterator<Item = String>,
+    ) {
+        if let Some(progress) = SessionPrecheckProgressState::new(labels) {
+            self.session_precheck_progress.insert(session_id, progress);
+        } else {
+            self.session_precheck_progress.remove(&session_id);
+        }
+    }
+
+    /// Clears hook-declared precheck progress labels for one session.
+    /// 清除某个会话由 hook 声明的 precheck 进度标签。
+    pub(super) fn clear_session_precheck_progress(&mut self, session_id: SessionId) {
+        self.session_precheck_progress.remove(&session_id);
+    }
+
     /// Returns whether one specific session currently owns an active real-AI run.
     /// 返回某个指定会话当前是否拥有活动的真实 AI 运行。
     pub(super) fn session_has_active_run(&self, session_id: SessionId) -> bool {
@@ -33,6 +53,7 @@ impl VulcanWorkbench {
     pub(super) fn has_runtime_progress_animation_work(&self) -> bool {
         !self.pending_provider_response_sessions.is_empty()
             || !self.floating_streaming_thinking_sessions.is_empty()
+            || !self.session_precheck_progress.is_empty()
     }
 
     /// Marks one session as waiting for the next provider-visible response chunk after a request has already been sent.
@@ -60,6 +81,14 @@ impl VulcanWorkbench {
     /// Returns the localized lightweight request-progress hint shown before the first visible provider delta arrives.
     /// 返回在首个可见 Provider 增量到来前展示的本地化轻量请求进度提示。
     pub(super) fn session_requesting_progress_text(&self, session_id: SessionId) -> Option<String> {
+        if self.session_run_phase_for(session_id) == SessionRunPhase::Preparing
+            && !self.session_has_active_run(session_id)
+            && !self.session_has_active_compaction(session_id)
+            && let Some(progress) = self.session_precheck_progress.get(&session_id)
+        {
+            let suffix = self.runtime_progress_ellipsis();
+            return Some(format!("{}{suffix}", progress.primary_label()));
+        }
         if !self
             .pending_provider_response_sessions
             .contains(&session_id)
@@ -100,6 +129,7 @@ impl VulcanWorkbench {
     pub(super) fn clear_active_run_tracking(&mut self, session_id: SessionId) {
         self.active_runs.remove(&session_id);
         self.pending_provider_response_sessions.remove(&session_id);
+        self.session_precheck_progress.remove(&session_id);
     }
 
     /// Removes and returns the active run state tracked for one session.

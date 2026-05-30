@@ -1401,6 +1401,8 @@ impl VulcanWorkbench {
                 space::horizontal(),
                 checkbox(draft.ai_tools_enabled).on_toggle(messages.ai_tools),
                 text("启用 AI 专属工具").size(13),
+                checkbox(draft.precheck_enabled).on_toggle(messages.precheck),
+                text("启用前置预注入").size(13),
             ]
             .spacing(8)
             .align_y(Center),
@@ -1596,6 +1598,7 @@ impl VulcanWorkbench {
             implicit_turns: Message::GlobalVmmImplicitTurnsChanged,
             profile_refresh_turns: Message::GlobalVmmProfileRefreshTurnsChanged,
             ai_tools: Message::GlobalVmmAiToolsChanged,
+            precheck: Message::GlobalVmmPrecheckChanged,
             injection_tag: Message::GlobalVmmInjectionTagChanged,
             injection_description: Message::GlobalVmmInjectionDescriptionChanged,
         }
@@ -1622,6 +1625,7 @@ impl VulcanWorkbench {
             implicit_turns: Message::ProjectVmmImplicitTurnsChanged,
             profile_refresh_turns: Message::ProjectVmmProfileRefreshTurnsChanged,
             ai_tools: Message::ProjectVmmAiToolsChanged,
+            precheck: Message::ProjectVmmPrecheckChanged,
             injection_tag: Message::ProjectVmmInjectionTagChanged,
             injection_description: Message::ProjectVmmInjectionDescriptionChanged,
         }
@@ -1717,6 +1721,9 @@ struct VmmSettingsMessageMap {
     /// AI-tool exposure toggle message constructor.
     /// AI 工具暴露开关消息构造器。
     ai_tools: fn(bool) -> Message,
+    /// Automatic precheck recall toggle message constructor.
+    /// 自动前置召回开关消息构造器。
+    precheck: fn(bool) -> Message,
     /// Injection-tag message constructor.
     /// 注入标签消息构造器。
     injection_tag: fn(String) -> Message,

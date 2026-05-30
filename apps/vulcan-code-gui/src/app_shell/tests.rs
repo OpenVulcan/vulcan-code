@@ -35,8 +35,8 @@ use std::sync::{Arc, Mutex};
 use vulcan_agent_view::AgentViewBlock;
 use vulcan_core::types::{ConversationAttachmentKind, ProviderUsageSnapshot};
 use vulcan_hooks::{
-    FnHookEventListener, FnHookHandler, HookEvent, HookEventKind, HookInvocation, HookMode,
-    HookRegistration, HookResult,
+    FnHookEventListener, FnHookHandler, HookDecision, HookEvent, HookEventKind, HookInvocation,
+    HookMode, HookRegistration, HookResult,
 };
 
 /// Builds a compact session summary for queue-related unit tests.
@@ -822,6 +822,316 @@ fn session_has_blocking_system_prompt_work_includes_active_compaction() {
     );
 
     assert!(workbench.session_has_blocking_system_prompt_work(session_id));
+}
+
+/// Verifies precheck preparation keeps the accepted user prompt visible before hook completion.
+/// 验证 precheck 准备阶段会在 hook 完成前保持已接收用户提示词可见。
+#[test]
+fn begin_session_run_shows_user_prompt_before_precheck_finishes() {
+    use vulcan_hooks::HookPayload;
+
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710021);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "异步 precheck 测试"));
+    workbench.selected_session = session_id;
+    workbench
+        .register_conversation_hook(
+            HookRegistration::new(
+                "rewrite-precheck",
+                super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+                HookMode::Transform,
+            ),
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Ok(HookResult::with_payload(
+                    HookPayload::from_serializable(json!({
+                        "user_content": "rewritten prompt",
+                    }))
+                    .expect("payload should serialize"),
+                ))
+            })),
+        )
+        .expect("hook registration should succeed");
+
+    let prompt_entry =
+        test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "original prompt");
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("异步"),
+        prompt_entry,
+    );
+    drop(task);
+
+    assert!(
+        workbench
+            .session_messages
+            .get(&session_id)
+            .is_some_and(|messages| messages
+                .iter()
+                .any(|message| message.kind == SessionMessageKind::User
+                    && message.body.contains("original prompt")))
+    );
+    assert_eq!(
+        workbench.session_run_phase_for(session_id),
+        SessionRunPhase::Preparing
+    );
+    assert!(workbench.session_has_blocking_system_prompt_work(session_id));
+}
+
+/// Verifies precheck progress hints come from hook registration metadata instead of VMM-specific UI text.
+/// 验证 precheck 进度提示来自 hook 注册元数据，而不是 VMM 专属 UI 文案。
+#[test]
+fn precheck_progress_hint_uses_registered_hook_label() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710026);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "通用 precheck 提示"));
+    workbench.selected_session = session_id;
+
+    let mut registration = HookRegistration::new(
+        "policy-precheck",
+        super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+        HookMode::Observe,
+    );
+    registration.priority = -200;
+    registration.progress_label = Some(String::from("正在执行策略检查"));
+    workbench
+        .register_conversation_hook(
+            registration,
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Ok(HookResult::default())
+            })),
+        )
+        .expect("hook registration should succeed");
+
+    let prompt_entry =
+        test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "policy prompt");
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("通用 precheck 提示"),
+        prompt_entry,
+    );
+    drop(task);
+
+    let hint = workbench
+        .session_requesting_progress_text(session_id)
+        .expect("precheck should expose one progress hint");
+    assert!(hint.starts_with("正在执行策略检查"));
+    assert!(workbench.status_message.contains("请稍候"));
+}
+
+/// Verifies disabled VMM precheck does not suppress another plugin's precheck progress hint.
+/// 验证关闭 VMM precheck 不会压制其他插件的 precheck 进度提示。
+#[test]
+fn disabled_vmm_precheck_keeps_other_precheck_hook_progress() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710027);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "其他 precheck 提示"));
+    workbench.selected_session = session_id;
+    workbench.provider_configuration.vmm = vulcan_vmm::VmmConfigLayer {
+        grpc_target: Some(String::from("127.0.0.1:50051")),
+        user_id: Some(1),
+        project_id: Some(2),
+        precheck_enabled: Some(false),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+
+    let mut registration = HookRegistration::new(
+        "external-precheck",
+        super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+        HookMode::Observe,
+    );
+    registration.progress_label = Some(String::from("正在执行外部检查"));
+    workbench
+        .register_conversation_hook(
+            registration,
+            Arc::new(FnHookHandler::new(|_invocation: HookInvocation| async {
+                Ok(HookResult::default())
+            })),
+        )
+        .expect("hook registration should succeed");
+
+    let prompt_entry = test_pending_prompt_entry(
+        PendingSessionPromptSource::UserFollowup,
+        "external precheck",
+    );
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("其他 precheck 提示"),
+        prompt_entry,
+    );
+    drop(task);
+
+    let hint = workbench
+        .session_requesting_progress_text(session_id)
+        .expect("external precheck should keep one progress hint");
+    assert!(hint.starts_with("正在执行外部检查"));
+    assert!(!workbench.session_has_active_run(session_id));
+}
+
+/// Verifies disabled VMM precheck bypasses the recall waiting phase and starts provider preparation directly.
+/// 验证关闭 VMM 前置预注入后会跳过召回等待阶段并直接进入 Provider 准备。
+#[test]
+fn disabled_vmm_precheck_bypasses_recall_waiting_phase() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710024);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "关闭 precheck 测试"));
+    workbench.selected_session = session_id;
+    workbench.provider_configuration.vmm = vulcan_vmm::VmmConfigLayer {
+        grpc_target: Some(String::from("127.0.0.1:50051")),
+        user_id: Some(1),
+        project_id: Some(2),
+        precheck_enabled: Some(false),
+        ..vulcan_vmm::VmmConfigLayer::default()
+    };
+
+    let prompt_entry =
+        test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "no precheck");
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("关闭 precheck 测试"),
+        prompt_entry,
+    );
+    drop(task);
+
+    assert!(workbench.session_has_active_run(session_id));
+    assert!(
+        workbench
+            .session_messages
+            .get(&session_id)
+            .is_some_and(|messages| messages
+                .iter()
+                .any(|message| message.kind == SessionMessageKind::User
+                    && message.body.contains("no precheck")))
+    );
+}
+
+/// Verifies compaction preparation keeps its own request progress text instead of showing memory recall.
+/// 验证压缩准备阶段保持自己的请求提示，而不会误显示为记忆召回。
+#[test]
+fn compaction_preparing_phase_does_not_show_memory_recall_hint() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710023);
+    let (_task, handle) = Task::perform(async {}, |_| Message::Noop).abortable();
+    workbench.set_session_run_phase(session_id, SessionRunPhase::Preparing);
+    workbench.active_session_compactions.insert(
+        session_id,
+        ActiveSessionCompactionState {
+            run_id: 7,
+            handle,
+            previous_phase: SessionRunPhase::Ready,
+            trigger: SessionPromptCompactionTrigger::BudgetAuto,
+            status_message_id: None,
+            output_message_id: None,
+        },
+    );
+    workbench.mark_session_pending_provider_response(session_id);
+
+    let hint = workbench
+        .session_requesting_progress_text(session_id)
+        .expect("compaction should still show provider request progress");
+    assert!(hint.starts_with("正在请求"));
+}
+
+/// Verifies the built-in VMM precheck registration declares the shared progress label.
+/// 验证内置 VMM precheck 注册项声明了共享进度提示。
+#[test]
+fn vmm_precheck_registration_exposes_progress_label() {
+    let (workbench, _task) = VulcanWorkbench::new();
+    let snapshot = workbench
+        .conversation_hook_dispatcher()
+        .registry()
+        .registration_snapshots(Some(
+            super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
+        ))
+        .into_iter()
+        .find(|snapshot| snapshot.registration.id == super::vmm_hooks::VMM_PRECHECK_HOOK_ID)
+        .expect("built-in VMM precheck hook should be registered");
+
+    assert_eq!(
+        snapshot.registration.progress_label.as_deref(),
+        Some("正在进行记忆召回")
+    );
+}
+
+/// Verifies transform-hook prompt rewrites are mirrored back into transcript and canonical context.
+/// 验证 transform hook 对提示词的改写会同步回写到转录与规范上下文。
+#[test]
+fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
+    use vulcan_hooks::{HookDispatchReport, HookPayload};
+
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(710022);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "precheck 改写测试"));
+    workbench.selected_session = session_id;
+
+    let prompt_entry =
+        test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "original prompt");
+    let task = workbench.begin_session_run_from_prompt_entry(
+        session_id,
+        String::from("precheck 改写测试"),
+        prompt_entry.clone(),
+    );
+    drop(task);
+    let outcome = super::conversation_hooks::ConversationPrecheckOutcome {
+        session_id,
+        report: Ok(HookDispatchReport {
+            payload: HookPayload::from_serializable(json!({
+                "user_content": "rewritten prompt",
+            }))
+            .expect("payload should serialize"),
+            decision: HookDecision::Continue,
+            injections: Vec::new(),
+            diagnostics: Vec::new(),
+            metadata: Default::default(),
+            completed_hooks: Vec::new(),
+            failures: Vec::new(),
+            has_queueable_failure: false,
+        }),
+    };
+
+    let continue_task = workbench.continue_session_run_after_precheck(
+        session_id,
+        String::from("precheck 改写测试"),
+        prompt_entry,
+        outcome,
+    );
+    drop(continue_task);
+
+    assert!(
+        workbench
+            .session_messages
+            .get(&session_id)
+            .is_some_and(|messages| messages
+                .iter()
+                .any(|message| message.kind == SessionMessageKind::User
+                    && message.body.contains("rewritten prompt")))
+    );
+    let canonical_state = workbench.session_conversation_state(session_id);
+    let canonical_prompt = canonical_state
+        .messages
+        .iter()
+        .rev()
+        .find_map(|message| match &message.payload {
+            crate::conversation_protocol::SessionConversationPayload::UserText { text, .. } => {
+                Some(text.as_str())
+            }
+            _ => None,
+        });
+    assert_eq!(canonical_prompt, Some("rewritten prompt"));
 }
 
 /// Verifies streamed prompt-compaction output is appended into the visible running boundary row.
@@ -3018,17 +3328,23 @@ async fn conversation_hook_registration_exposes_dispatcher_to_extensions() {
             .any(|snapshot| snapshot.registration.id == "test-precheck")
     );
 
-    workbench.conversation_hook_runtime.record_user_prompt(
-        SessionId::from_u128(77),
-        "entry-77",
-        Some(String::from("project")),
-        String::from("D:/workspace"),
-        PendingSessionPromptSource::UserFollowup,
-        "hello hook",
-        &SessionConversationState::default(),
-    );
+    let outcome = workbench
+        .conversation_hook_runtime
+        .prepare_user_prompt_precheck(
+            SessionId::from_u128(77),
+            "entry-77",
+            Some(String::from("project")),
+            String::from("D:/workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            "hello hook",
+            &SessionConversationState::default(),
+        )
+        .run()
+        .await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    outcome
+        .report
+        .expect("precheck dispatch should complete successfully");
     assert_eq!(
         *captured
             .lock()

@@ -161,6 +161,12 @@ impl VulcanWorkbench {
                     String::from("项目 VMM AI 专属工具开关已修改，点击保存后生效。");
                 Task::none()
             }
+            Message::ProjectVmmPrecheckChanged(value) => {
+                self.project_vmm_settings_draft.settings.precheck_enabled = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 前置预注入开关已修改，点击保存后生效。");
+                Task::none()
+            }
             Message::ProjectVmmInjectionTagChanged(value) => {
                 self.project_vmm_settings_draft.settings.injection_tag = value;
                 self.project_vmm_settings_draft.settings.notice =
@@ -237,6 +243,7 @@ impl VulcanWorkbench {
                     implicit_memory_turns: Some(effective.implicit_memory_turns),
                     profile_refresh_turns: Some(effective.profile_refresh_turns),
                     session_compact_recall: Some(effective.session_compact_recall),
+                    precheck_enabled: Some(effective.precheck_enabled),
                     ai_tools_enabled: Some(effective.ai_tools_enabled),
                     injection_tag: Some(effective.injection_tag),
                     injection_description: Some(effective.injection_description),

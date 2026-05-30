@@ -872,6 +872,9 @@ pub(super) enum Message {
     /// Updates the selected session VMM AI-tool override.
     /// 更新当前选中会话的 VMM AI 工具覆盖开关。
     SetSessionVmmAiToolsEnabled(bool),
+    /// Updates the selected session automatic VMM precheck override.
+    /// 更新当前选中会话的 VMM 自动前置召回覆盖开关。
+    SetSessionVmmPrecheckEnabled(bool),
     /// Updates one project prompt skill state override.
     /// 更新单个项目级提示词技能状态覆盖。
     SetPromptSkillProjectState { name: String, enabled: bool },
@@ -923,6 +926,9 @@ pub(super) enum Message {
     /// Toggles the global VMM AI-only tool exposure draft flag.
     /// 切换全局 VMM AI 专属工具暴露草稿开关。
     GlobalVmmAiToolsChanged(bool),
+    /// Toggles the global automatic VMM precheck recall draft flag.
+    /// 切换全局 VMM 自动前置召回草稿开关。
+    GlobalVmmPrecheckChanged(bool),
     /// Updates the global VMM injection tag draft.
     /// 更新全局 VMM 注入标签草稿。
     GlobalVmmInjectionTagChanged(String),
@@ -992,6 +998,9 @@ pub(super) enum Message {
     /// Toggles the project VMM AI-only tool exposure draft flag.
     /// 切换项目 VMM AI 专属工具暴露草稿开关。
     ProjectVmmAiToolsChanged(bool),
+    /// Toggles the project automatic VMM precheck recall draft flag.
+    /// 切换项目 VMM 自动前置召回草稿开关。
+    ProjectVmmPrecheckChanged(bool),
     /// Updates the project VMM injection tag draft.
     /// 更新项目 VMM 注入标签草稿。
     ProjectVmmInjectionTagChanged(String),
@@ -1510,6 +1519,22 @@ pub(super) enum Message {
     /// Drives one lightweight animation tick shared by request/thinking progress hints.
     /// 驱动“正在请求/正在思考”等轻量进度提示共用的动画 Tick。
     SessionRuntimeProgressTick,
+    /// Continues a visible user prompt after asynchronous precheck hooks complete.
+    /// 在异步 precheck hook 完成后继续处理一条已显示的用户提示词。
+    UserPromptPrecheckFinished {
+        /// Session that owns the pending prompt.
+        /// 拥有待处理提示词的会话。
+        session_id: SessionId,
+        /// Session title captured when the prompt was accepted.
+        /// 接收提示词时捕获的会话标题。
+        session_title: String,
+        /// Prompt entry that should now continue into the real provider run.
+        /// 现在应继续进入真实 Provider 运行的提示词项。
+        prompt_entry: PendingSessionPromptEntry,
+        /// Completed precheck outcome.
+        /// 已完成的 precheck 结果。
+        outcome: super::conversation_hooks::ConversationPrecheckOutcome,
+    },
     /// Applies one read-only text editor action to one inspector activity-log buffer.
     /// 向某个检查面板活动日志缓冲区应用一次只读文本编辑器动作。
     ActivityLogRawAction(usize, text_editor::Action),

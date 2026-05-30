@@ -123,6 +123,10 @@ pub struct VmmConfigLayer {
     /// 可选压缩感知召回开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_compact_recall: Option<bool>,
+    /// Optional automatic precheck recall switch.
+    /// 可选自动前置召回开关。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precheck_enabled: Option<bool>,
     /// Optional AI-only VMM tool exposure switch.
     /// 可选 AI 专属 VMM 工具暴露开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,6 +227,9 @@ pub struct VmmEffectiveConfig {
     /// Final compact-aware recall switch.
     /// 最终压缩感知召回开关。
     pub session_compact_recall: bool,
+    /// Final automatic precheck recall switch.
+    /// 最终自动前置召回开关。
+    pub precheck_enabled: bool,
     /// Final AI-only VMM tool exposure switch.
     /// 最终 AI 专属 VMM 工具暴露开关。
     pub ai_tools_enabled: bool,
@@ -259,6 +266,7 @@ impl Default for VmmEffectiveConfig {
             implicit_memory_turns: DEFAULT_IMPLICIT_MEMORY_TURNS,
             profile_refresh_turns: DEFAULT_PROFILE_REFRESH_TURNS,
             session_compact_recall: true,
+            precheck_enabled: true,
             ai_tools_enabled: true,
             injection_tag: DEFAULT_VMM_INJECTION_TAG.to_string(),
             injection_description: DEFAULT_VMM_INJECTION_DESCRIPTION.to_string(),
@@ -321,6 +329,15 @@ impl VmmEffectiveConfig {
             return VmmConfigDiagnostic::MissingProjectId;
         }
         VmmConfigDiagnostic::Ready
+    }
+
+    /// Diagnoses whether automatic VMM precheck recall may run now.
+    /// 诊断当前自动 VMM 前置召回是否可运行。
+    pub fn diagnose_precheck_flow(&self, grpc_online: bool) -> VmmConfigDiagnostic {
+        if !self.precheck_enabled {
+            return VmmConfigDiagnostic::DisabledByConfig;
+        }
+        self.diagnose_memory_flow(grpc_online)
     }
 }
 
@@ -396,6 +413,9 @@ fn apply_layer(
     }
     if let Some(profile_refresh_turns) = layer.profile_refresh_turns {
         config.profile_refresh_turns = profile_refresh_turns;
+    }
+    if let Some(precheck_enabled) = layer.precheck_enabled {
+        config.precheck_enabled = precheck_enabled;
     }
     if let Some(ai_tools_enabled) = layer.ai_tools_enabled {
         config.ai_tools_enabled = ai_tools_enabled;
@@ -530,6 +550,29 @@ mod tests {
         assert_eq!(
             missing_target.diagnose_memory_flow(true),
             VmmConfigDiagnostic::MissingGrpcTarget
+        );
+    }
+
+    #[test]
+    fn precheck_enabled_can_be_overridden_by_session_layer() {
+        let global = VmmConfigLayer {
+            precheck_enabled: Some(true),
+            ..base_global_layer()
+        };
+        let session = VmmConfigLayer {
+            precheck_enabled: Some(false),
+            ..VmmConfigLayer::default()
+        };
+        let resolved = VmmEffectiveConfig::resolve(&global, None, Some(&session));
+
+        assert!(!resolved.precheck_enabled);
+        assert_eq!(
+            resolved.diagnose_precheck_flow(true),
+            VmmConfigDiagnostic::DisabledByConfig
+        );
+        assert_eq!(
+            resolved.diagnose_memory_flow(true),
+            VmmConfigDiagnostic::Ready
         );
     }
 }

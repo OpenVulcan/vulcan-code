@@ -24,7 +24,7 @@ use vulcan_vmm::{
 
 /// Stable id used by the built-in VMM precheck hook.
 /// 内置 VMM 预检查 hook 使用的稳定标识。
-const VMM_PRECHECK_HOOK_ID: &str = "builtin.vmm.precheck";
+pub(super) const VMM_PRECHECK_HOOK_ID: &str = "builtin.vmm.precheck";
 /// Stable id used by the built-in VMM post-action hook.
 /// 内置 VMM 回合完成回写 hook 使用的稳定标识。
 const VMM_POST_ACTION_HOOK_ID: &str = "builtin.vmm.post_action";
@@ -242,7 +242,16 @@ fn vmm_hook_registration(id: &str, point: &str, mode: HookMode) -> HookRegistrat
             .insert(HookCapability::InjectionWrite);
     }
     registration.display_name = Some(String::from("VulcanMemoryMesh"));
+    if id == VMM_PRECHECK_HOOK_ID {
+        registration.progress_label = Some(String::from("正在进行记忆召回"));
+    }
     registration
+}
+
+/// Returns whether one effective VMM configuration should run automatic precheck now.
+/// 返回一个最终 VMM 配置当前是否应运行自动 precheck。
+fn should_run_vmm_precheck(config: &VmmEffectiveConfig) -> bool {
+    config.precheck_enabled
 }
 
 /// Runs the VMM precheck request and returns context injections.
@@ -252,6 +261,9 @@ async fn handle_vmm_precheck(
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
     let config = runtime.resolve_effective_config(&invocation);
+    if !should_run_vmm_precheck(&config) {
+        return Ok(HookResult::default());
+    }
     ensure_vmm_ready(&config)?;
     let request = precheck_request_from_payload(&invocation.payload.value, &config)
         .map_err(|error| HookError::handler(error.to_string()))?;
@@ -493,5 +505,32 @@ mod tests {
         assert_eq!(config.grpc_target, "session:3");
         assert_eq!(config.user_id, Some(1));
         assert_eq!(config.project_id, Some(2));
+    }
+
+    /// Verifies the precheck switch disables only automatic recall.
+    /// 验证 precheck 开关只关闭自动前置召回。
+    #[test]
+    fn vmm_precheck_switch_can_disable_only_automatic_recall() {
+        let config = VmmEffectiveConfig::resolve(
+            &VmmConfigLayer {
+                grpc_target: Some(String::from("127.0.0.1:50051")),
+                user_id: Some(1),
+                project_id: Some(2),
+                precheck_enabled: Some(false),
+                ..VmmConfigLayer::default()
+            },
+            None,
+            None,
+        );
+
+        assert!(!should_run_vmm_precheck(&config));
+        assert_eq!(
+            config.diagnose_memory_flow(true),
+            VmmConfigDiagnostic::Ready
+        );
+        assert_eq!(
+            config.diagnose_precheck_flow(true),
+            VmmConfigDiagnostic::DisabledByConfig
+        );
     }
 }

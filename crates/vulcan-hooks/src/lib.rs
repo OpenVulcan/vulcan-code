@@ -506,6 +506,10 @@ pub struct HookRegistration {
     /// 可选的人类可读标签。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    /// Optional short progress text shown while this hook is running in a blocking preflight stage.
+    /// 该 hook 在阻塞式前置阶段运行时展示的可选短进度文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_label: Option<String>,
 }
 
 impl HookRegistration {
@@ -522,6 +526,7 @@ impl HookRegistration {
             failure_policy: HookFailurePolicy::default(),
             requested_capabilities: BTreeSet::new(),
             display_name: None,
+            progress_label: None,
         }
     }
 
@@ -973,6 +978,12 @@ pub struct HookDispatchReport {
 }
 
 impl HookDispatchReport {
+    /// Builds a public empty report initialized from the provided payload.
+    /// 根据给定 payload 构建一个公开的空报告。
+    pub fn empty(payload: HookPayload) -> Self {
+        Self::new(payload)
+    }
+
     /// Builds a report initialized from the starting payload.
     /// 根据起始 payload 构建报告。
     fn new(payload: HookPayload) -> Self {

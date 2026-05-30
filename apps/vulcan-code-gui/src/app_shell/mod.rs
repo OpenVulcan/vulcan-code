@@ -112,8 +112,8 @@ use self::panel_navigation_state::{
 };
 use self::session_state::{
     ActiveSessionCompactionState, ActiveSessionRunState, ActiveTranscriptDragAutoScroll,
-    ContextCompactionStatusPanelState, SelectedSubagentTaskPanel, SessionPromptCompactionTrigger,
-    SubagentTaskPanelState, SubagentTaskRunState,
+    ContextCompactionStatusPanelState, SelectedSubagentTaskPanel, SessionPrecheckProgressState,
+    SessionPromptCompactionTrigger, SubagentTaskPanelState, SubagentTaskRunState,
 };
 use self::task_tree::TaskTreeActionIcon;
 use self::tool_projection::*;
@@ -1662,6 +1662,9 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently waiting for the next provider-visible response chunk after a request has already been sent.
     /// 已经发送请求、但仍在等待下一段 Provider 可见响应块的会话标识集合。
     pending_provider_response_sessions: BTreeSet<SessionId>,
+    /// Session-scoped progress hints for hook-driven precheck work before the provider request starts.
+    /// Provider 请求开始前由 hook 驱动的 precheck 工作会话级进度提示。
+    session_precheck_progress: BTreeMap<SessionId, SessionPrecheckProgressState>,
     /// Shared animation frame used by transient runtime progress labels.
     /// 供瞬时运行进度文案复用的共享动画帧编号。
     runtime_progress_animation_frame: usize,
@@ -2479,6 +2482,7 @@ impl VulcanWorkbench {
             active_runs: BTreeMap::new(),
             active_session_compactions: BTreeMap::new(),
             pending_provider_response_sessions: BTreeSet::new(),
+            session_precheck_progress: BTreeMap::new(),
             runtime_progress_animation_frame: 0,
             next_run_id: 1,
             startup_lifecycle: StartupLifecycle::Bootstrapping {
@@ -3261,6 +3265,7 @@ impl VulcanWorkbench {
             self.session_runtime_state.remove(&session_id);
             self.session_runtime_events.remove(&session_id);
             self.session_run_phases.remove(&session_id);
+            self.session_precheck_progress.remove(&session_id);
             self.hydrated_session_ids.remove(&session_id);
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
@@ -3296,6 +3301,7 @@ impl VulcanWorkbench {
             self.session_runtime_state.remove(&session_id);
             self.session_runtime_events.remove(&session_id);
             self.session_run_phases.remove(&session_id);
+            self.session_precheck_progress.remove(&session_id);
             self.hydrated_session_ids.remove(&session_id);
             self.dirty_session_payload_ids.remove(&session_id);
             self.dirty_session_message_ids.remove(&session_id);
@@ -3658,6 +3664,7 @@ impl VulcanWorkbench {
         self.active_runs.clear();
         self.active_session_compactions.clear();
         self.pending_provider_response_sessions.clear();
+        self.session_precheck_progress.clear();
         self.runtime_progress_animation_frame = 0;
         self.expanded_task_projects = snapshot.expanded_task_projects;
         self.selected_session = snapshot.selected_session;

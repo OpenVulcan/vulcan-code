@@ -97,6 +97,7 @@ impl VulcanWorkbench {
                 self.active_runs.clear();
                 self.active_session_compactions.clear();
                 self.pending_provider_response_sessions.clear();
+                self.session_precheck_progress.clear();
                 self.runtime_progress_animation_frame = 0;
                 self.expanded_task_projects.clear();
                 self.selected_session = SessionId::nil();
@@ -515,6 +516,7 @@ impl VulcanWorkbench {
             | Message::SetPromptSkillSessionState { .. }
             | Message::SetSessionVmmEnabled(_)
             | Message::SetSessionVmmAiToolsEnabled(_)
+            | Message::SetSessionVmmPrecheckEnabled(_)
             | Message::GlobalVmmEnabledChanged(_)
             | Message::GlobalVmmGrpcTargetChanged(_)
             | Message::GlobalVmmApiKeyChanged(_)
@@ -531,6 +533,7 @@ impl VulcanWorkbench {
             | Message::GlobalVmmImplicitTurnsChanged(_)
             | Message::GlobalVmmProfileRefreshTurnsChanged(_)
             | Message::GlobalVmmAiToolsChanged(_)
+            | Message::GlobalVmmPrecheckChanged(_)
             | Message::GlobalVmmInjectionTagChanged(_)
             | Message::GlobalVmmInjectionDescriptionChanged(_)
             | Message::ReloadGlobalVmmConfiguration
@@ -2543,6 +2546,7 @@ impl VulcanWorkbench {
             | Message::ProjectVmmImplicitTurnsChanged(_)
             | Message::ProjectVmmProfileRefreshTurnsChanged(_)
             | Message::ProjectVmmAiToolsChanged(_)
+            | Message::ProjectVmmPrecheckChanged(_)
             | Message::ProjectVmmInjectionTagChanged(_)
             | Message::ProjectVmmInjectionDescriptionChanged(_)
             | Message::ReloadProjectVmmConfiguration
@@ -3861,6 +3865,7 @@ impl VulcanWorkbench {
                         }
                         self.session_runtime_events.remove(session_id);
                         self.session_run_phases.remove(session_id);
+                        self.session_precheck_progress.remove(session_id);
                     }
                     self.archived_task_projects.push(project.clone());
                     self.expanded_task_projects.remove(&project.id);
@@ -3937,6 +3942,7 @@ impl VulcanWorkbench {
                 }
                 self.session_runtime_events.remove(&session_id);
                 self.session_run_phases.remove(&session_id);
+                self.session_precheck_progress.remove(&session_id);
                 for project in &mut self.task_projects {
                     project.session_ids.retain(|id| *id != session_id);
                 }
@@ -4199,6 +4205,17 @@ impl VulcanWorkbench {
                     self.runtime_progress_animation_frame.wrapping_add(1);
                 Task::none()
             }
+            Message::UserPromptPrecheckFinished {
+                session_id,
+                session_title,
+                prompt_entry,
+                outcome,
+            } => self.continue_session_run_after_precheck(
+                session_id,
+                session_title,
+                prompt_entry,
+                outcome,
+            ),
             Message::RunExecutionStreamEvent { run_id, event } => {
                 let Some(session_id) = self.active_run_session_id_for_run_id(run_id) else {
                     return Task::none();
