@@ -58,6 +58,8 @@ impl VulcanWorkbench {
             .session_runtime_state(session_id)
             .map(|state| state.vmm.clone())
             .unwrap_or_default();
+        let removed_legacy_profile_injection =
+            self.remove_legacy_vmm_profile_context_injection_for_session(session_id);
         let project_vmm = self.current_project_vmm_configuration(session_id);
         let effective_vmm_config = vulcan_vmm::VmmEffectiveConfig::resolve(
             &self.provider_configuration.vmm,
@@ -110,7 +112,7 @@ impl VulcanWorkbench {
         let command_session_runtime = self.runtime_foundation.command_session_runtime();
         let token_budget_runtime = self.runtime_foundation.token_budget_runtime();
 
-        Task::perform(
+        let simulation_task = Task::perform(
             async move {
                 let request_json = capture_runtime_provider_wire_request(
                     config_for_run,
@@ -128,7 +130,12 @@ impl VulcanWorkbench {
                     .map_err(|error| format!("模拟请求 JSON 格式化失败：{error}"))
             },
             move |result| Message::SessionApiRequestSimulationFinished { session_id, result },
-        )
+        );
+        if removed_legacy_profile_injection {
+            Task::batch([simulation_task, self.persist_workspace_snapshot_task()])
+        } else {
+            simulation_task
+        }
     }
 }
 

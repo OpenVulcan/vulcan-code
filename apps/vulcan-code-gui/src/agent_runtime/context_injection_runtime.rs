@@ -10,6 +10,9 @@ use vulcan_core::types::ProviderContextInjection as CoreProviderContextInjection
 /// Marker prefix used by the built-in manual test hook inside user prompts.
 /// 用户提示词中内置手动测试 hook 使用的标记前缀。
 const MANUAL_TEST_INJECTION_PREFIX: &str = "@inject ";
+/// Legacy VMM profile tag that used to live in hidden-user injection state.
+/// 旧版曾写入隐藏用户注入态的 VMM 画像标签。
+const LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
 
 /// Converts shared context-injection state into the core overlay for one logical turn.
 /// 将共享上下文注入状态转换为某个逻辑回合的 core 覆盖层。
@@ -22,6 +25,7 @@ pub(crate) fn core_provider_context_injection_from_state_for_turn(
         registry: &registry,
         current_turn_marker,
     };
+    let state = state_without_legacy_vmm_profile_injection(state);
     let view = state.resolve_view_with_options(&options);
     let injection = CoreProviderContextInjection {
         persistent_blocks: view.persistent_blocks,
@@ -31,13 +35,39 @@ pub(crate) fn core_provider_context_injection_from_state_for_turn(
     (!injection.is_empty()).then_some(injection)
 }
 
-/// Returns simplified side-panel cards for currently active context injections.
-/// 返回当前活动上下文注入的简洁侧面板卡片。
-pub(crate) fn context_injection_panel_cards(
+/// Returns simplified side-panel cards filtered by injection kind when requested.
+/// 按需根据注入类型过滤并返回简洁侧面板卡片。
+pub(crate) fn context_injection_panel_cards_for_kind(
     state: &ContextInjectionState,
+    kind: Option<InjectionKind>,
 ) -> Vec<InjectionPanelCard> {
     let registry = context_injection_renderer_registry();
+    let mut state = state_without_legacy_vmm_profile_injection(state);
+    if let Some(kind) = kind {
+        state.groups.retain(|_, group| group.kind == kind);
+    }
     state.panel_cards_with_registry(&registry)
+}
+
+/// Removes legacy VMM profile hidden-user state and reports whether anything changed.
+/// 删除旧版 VMM 画像隐藏用户状态，并返回是否发生变化。
+pub(crate) fn remove_legacy_vmm_profile_context_injection_state(
+    state: &mut ContextInjectionState,
+) -> bool {
+    state
+        .groups
+        .remove(LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG)
+        .is_some()
+}
+
+/// Clones one state and removes hidden-user VMM profile leftovers before rendering.
+/// 克隆一份状态并在渲染前移除隐藏用户 VMM 画像残留。
+fn state_without_legacy_vmm_profile_injection(
+    state: &ContextInjectionState,
+) -> ContextInjectionState {
+    let mut state = state.clone();
+    remove_legacy_vmm_profile_context_injection_state(&mut state);
+    state
 }
 
 /// Builds the renderer registry used by GUI runtime context-injection views.
@@ -87,4 +117,75 @@ pub(crate) fn collect_builtin_manual_injection_ops_and_sanitized_prompt(
         helper.finish(),
         sanitized_lines.join("\n").trim().to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for GUI context-injection runtime adapters.
+    //! GUI 上下文注入运行时适配器测试。
+
+    use super::*;
+
+    /// Builds one persistent injection operation for adapter tests.
+    /// 为适配器测试构建一条持久注入操作。
+    fn persistent_insert(tag: &str, content: &str) -> InjectionInsert {
+        InjectionInsert::single(InjectionKind::Persistent, tag, "test", content, None)
+    }
+
+    #[test]
+    fn provider_overlay_filters_legacy_vmm_profile_hidden_user_state() {
+        let mut state = ContextInjectionState::default();
+        state.apply_inserts(
+            vec![
+                persistent_insert("vmm_profile", "base profile"),
+                persistent_insert("vmm_profile_delta", "delta profile"),
+            ],
+            "1",
+        );
+
+        let overlay = core_provider_context_injection_from_state_for_turn(&state, Some("turn-a"))
+            .expect("overlay");
+
+        assert!(
+            !overlay
+                .persistent_blocks
+                .iter()
+                .any(|block| block.contains("base profile"))
+        );
+        assert!(
+            overlay
+                .persistent_blocks
+                .iter()
+                .any(|block| block.contains("delta profile"))
+        );
+    }
+
+    #[test]
+    fn panel_cards_filter_by_kind_and_remove_legacy_profile_tag() {
+        let mut state = ContextInjectionState::default();
+        state.apply_inserts(
+            vec![
+                persistent_insert("vmm_profile", "base profile"),
+                persistent_insert("vmm_profile_delta", "delta profile"),
+                InjectionInsert::single(
+                    InjectionKind::Transient,
+                    "vmm_inject",
+                    "memory",
+                    "ttl memory",
+                    Some(2),
+                ),
+            ],
+            "1",
+        );
+
+        let dynamic =
+            context_injection_panel_cards_for_kind(&state, Some(InjectionKind::Transient));
+        let static_cards =
+            context_injection_panel_cards_for_kind(&state, Some(InjectionKind::Persistent));
+
+        assert_eq!(dynamic.len(), 1);
+        assert_eq!(dynamic[0].tag, "vmm_inject");
+        assert_eq!(static_cards.len(), 1);
+        assert_eq!(static_cards[0].tag, "vmm_profile_delta");
+    }
 }

@@ -139,7 +139,7 @@ use self::workbench_model_state::{
 };
 use self::workspace_state::{
     AgentTranscriptSurfaceMode, AiCapabilityRouteDropTarget, ArchivedDeleteConfirmationState,
-    ArchivedDeleteOutcome, ArchivedDeleteTarget, PendingPromptDropTarget,
+    ArchivedDeleteOutcome, ArchivedDeleteTarget, ContextInjectionPanelTab, PendingPromptDropTarget,
     PendingWorkspaceHistorySearchNavigation, PromptResourceWatchKind,
     SessionInlineAgentViewDocumentCache, StartupLifecycle, TaskProjectDropTarget,
     WorkspaceHistorySearchPanelState, WorkspaceHistorySearchScope,
@@ -1239,6 +1239,9 @@ pub struct VulcanWorkbench {
     /// Whether the right session feature panel divider is currently hovered.
     /// 右侧会话功能面板分隔柄当前是否处于悬停状态。
     session_feature_panel_resize_handle_hovered: bool,
+    /// Active tab inside the right context-injection side panel.
+    /// 右侧上下文注入侧栏中的当前活动页签。
+    context_injection_panel_tab: ContextInjectionPanelTab,
     /// Pane grid state describing the high-level application layout.
     /// 描述应用高层布局的分栏网格状态。
     panes: pane_grid::State<PaneKind>,
@@ -2339,6 +2342,7 @@ impl VulcanWorkbench {
             session_feature_panel_expanded: false,
             pending_session_feature_panel_resize: None,
             session_feature_panel_resize_handle_hovered: false,
+            context_injection_panel_tab: ContextInjectionPanelTab::default(),
             panes,
             focus,
             workspace_path: String::from(r"D:\openvulcan\vulcan-code"),

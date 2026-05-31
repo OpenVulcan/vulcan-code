@@ -260,6 +260,8 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
+                        let removed_legacy_profile_injections =
+                            self.remove_legacy_vmm_profile_context_injections();
                         self.seed_vmm_hook_profile_cache_from_runtime_state();
                         self.refresh_vmm_hook_config_snapshot();
                         self.startup_lifecycle = StartupLifecycle::Ready;
@@ -281,10 +283,16 @@ impl VulcanWorkbench {
                             .unwrap_or_else(Task::none);
                         let legacy_maintenance_task =
                             self.schedule_next_background_legacy_session_maintenance();
+                        let persist_cleanup_task = if removed_legacy_profile_injections {
+                            self.persist_workspace_snapshot_task()
+                        } else {
+                            Task::none()
+                        };
                         return Task::batch([
                             self.schedule_project_temp_cleanup_for_all_projects(),
                             hydration_task,
                             legacy_maintenance_task,
+                            persist_cleanup_task,
                         ]);
                     }
                     Err(error) => {
@@ -744,6 +752,10 @@ impl VulcanWorkbench {
             }
             Message::SessionFeaturePanelResizeHandleHovered(is_hovered) => {
                 self.session_feature_panel_resize_handle_hovered = is_hovered;
+                Task::none()
+            }
+            Message::ContextInjectionPanelTabSelected(tab) => {
+                self.context_injection_panel_tab = tab;
                 Task::none()
             }
             Message::MainDisplayPanelSelected(panel) => {

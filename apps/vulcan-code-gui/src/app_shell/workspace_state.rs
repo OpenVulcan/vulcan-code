@@ -33,6 +33,26 @@ pub(super) enum AgentTranscriptSurfaceMode {
     ApiRequest,
 }
 
+/// Context-injection side panel tab used to separate expiring and persistent context.
+/// 上下文注入侧栏页签，用于区分时效上下文与静态上下文。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ContextInjectionPanelTab {
+    /// Shows turn-TTL dynamic injections such as recalled memories.
+    /// 显示按回合 TTL 失效的动态注入，例如召回记忆。
+    Dynamic,
+    /// Shows persistent context such as the cached profile baseline and profile deltas.
+    /// 显示持久上下文，例如缓存画像基点与画像增量。
+    Static,
+}
+
+impl Default for ContextInjectionPanelTab {
+    /// Returns the default tab because most live checks focus on expiring context.
+    /// 返回默认页签，因为多数实时检查关注时效上下文。
+    fn default() -> Self {
+        Self::Dynamic
+    }
+}
+
 /// Stable scope selection used by the left-panel workspace-history search.
 /// 左侧面板工作台历史搜索使用的稳定范围选择。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -939,6 +939,8 @@ impl VulcanWorkbench {
                 session_layer,
             )
         };
+        let removed_legacy_profile_injection =
+            self.remove_legacy_vmm_profile_context_injection_for_session(session_id);
         let vmm_memory_ready = effective_vmm_config.diagnose_memory_flow(true)
             == vulcan_vmm::VmmConfigDiagnostic::Ready;
         let vmm_precheck_enabled = vmm_memory_ready && effective_vmm_config.precheck_enabled;
@@ -971,6 +973,15 @@ impl VulcanWorkbench {
                 "当前上下文持久化失败",
                 format!(
                     "会话 `{session_title}` 的当前上下文未能立即写入独立文件，但内存态执行仍会继续：{error}"
+                ),
+            );
+        }
+        if removed_legacy_profile_injection {
+            self.push_activity(
+                ActivityLevel::Success,
+                "已清理旧版画像注入",
+                format!(
+                    "会话 `{session_title}` 的旧版 vmm_profile 隐藏用户注入已移除，画像基点只通过系统提示词 hook 进入请求。"
                 ),
             );
         }

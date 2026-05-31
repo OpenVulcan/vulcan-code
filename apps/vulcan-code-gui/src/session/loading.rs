@@ -127,6 +127,8 @@ impl VulcanWorkbench {
                 self.session_runtime_state.insert(session_id, runtime_state);
             }
         }
+        let removed_legacy_profile_injection =
+            self.remove_legacy_vmm_profile_context_injection_for_session(session_id);
         if let Some(preview_markdown) = persisted_preview_markdown {
             self.session_last_api_request_markdowns
                 .insert(session_id, preview_markdown);
@@ -147,6 +149,10 @@ impl VulcanWorkbench {
             let previous_scope = self.composer_attachment_ref_scope();
             self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
             self.sync_context_usage_from_session_budget(session_id);
+        }
+        if removed_legacy_profile_injection {
+            self.status_message =
+                String::from("已清理旧版 VMM 画像隐藏注入，画像基点将只通过系统提示词复用。");
         }
     }
 

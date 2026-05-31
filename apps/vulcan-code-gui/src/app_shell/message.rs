@@ -103,6 +103,9 @@ pub(super) enum Message {
     /// Updates whether the right session feature panel resize handle is currently hovered.
     /// 更新右侧会话功能面板缩放柄当前是否处于悬停状态。
     SessionFeaturePanelResizeHandleHovered(bool),
+    /// Switches the context-injection side panel tab.
+    /// 切换上下文注入侧栏页签。
+    ContextInjectionPanelTabSelected(ContextInjectionPanelTab),
     /// Reports the latest maximized state of one tracked window.
     /// 回传某个受跟踪窗口当前最新的最大化状态。
     WindowMaximizedStateChanged(window::Id, bool),

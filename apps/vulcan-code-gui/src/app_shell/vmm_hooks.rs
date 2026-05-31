@@ -348,6 +348,74 @@ impl VulcanWorkbench {
         self.vmm_hook_runtime.seed_profile_cache(profile_sync);
     }
 
+    /// Removes legacy hidden-user VMM profile injections from every loaded session runtime state.
+    /// 从全部已加载会话运行态中移除旧版隐藏用户 VMM 画像注入。
+    pub(super) fn remove_legacy_vmm_profile_context_injections(&mut self) -> bool {
+        let now = current_unix_millis_text();
+        let mut changed = false;
+        for runtime_state in self.session_runtime_state.values_mut() {
+            let removed_legacy_profile =
+                crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
+                &mut runtime_state.context_injection_state,
+            );
+            let removed_duplicate_delta =
+                remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
+            if removed_legacy_profile || removed_duplicate_delta {
+                runtime_state.updated_at = now.clone();
+                changed = true;
+            }
+        }
+        for runtime_state in self.archived_session_runtime_state.values_mut() {
+            let removed_legacy_profile =
+                crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
+                &mut runtime_state.context_injection_state,
+            );
+            let removed_duplicate_delta =
+                remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
+            if removed_legacy_profile || removed_duplicate_delta {
+                runtime_state.updated_at = now.clone();
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Removes a legacy hidden-user VMM profile injection from one loaded session.
+    /// 从单个已加载会话中移除旧版隐藏用户 VMM 画像注入。
+    pub(super) fn remove_legacy_vmm_profile_context_injection_for_session(
+        &mut self,
+        session_id: SessionId,
+    ) -> bool {
+        let now = current_unix_millis_text();
+        if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+            let removed_legacy_profile =
+                crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
+                &mut runtime_state.context_injection_state,
+            );
+            let removed_duplicate_delta =
+                remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
+            let changed = removed_legacy_profile || removed_duplicate_delta;
+            if changed {
+                runtime_state.updated_at = now;
+            }
+            return changed;
+        }
+        if let Some(runtime_state) = self.archived_session_runtime_state.get_mut(&session_id) {
+            let removed_legacy_profile =
+                crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
+                &mut runtime_state.context_injection_state,
+            );
+            let removed_duplicate_delta =
+                remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
+            let changed = removed_legacy_profile || removed_duplicate_delta;
+            if changed {
+                runtime_state.updated_at = now;
+            }
+            return changed;
+        }
+        false
+    }
+
     /// Resolves the VMM profile placement phase for the next user prompt in one session.
     /// 解析某个会话下一条用户提示对应的 VMM 画像放置阶段。
     pub(super) fn vmm_profile_placement_phase_for_next_user_prompt(
@@ -411,6 +479,52 @@ impl VulcanWorkbench {
             })),
         );
     }
+}
+
+/// Removes profile-delta items that exactly duplicate the current system baseline.
+/// 移除与当前系统基点完全重复的画像增量项。
+fn remove_duplicate_vmm_profile_delta_matching_base(
+    runtime_state: &mut SessionRuntimeStateEntry,
+) -> bool {
+    let Some(base_profile_content) = runtime_state
+        .vmm_profile_sync
+        .base_profile_content
+        .as_deref()
+        .map(normalize_profile_duplicate_text)
+        .filter(|content| !content.is_empty())
+    else {
+        return false;
+    };
+    let Some(group) = runtime_state
+        .context_injection_state
+        .groups
+        .get_mut(VMM_PROFILE_DELTA_INJECTION_TAG)
+    else {
+        return false;
+    };
+    let before_len = group.items.len();
+    group
+        .items
+        .retain(|_, item| normalize_profile_duplicate_text(&item.content) != base_profile_content);
+    let removed_any = group.items.len() != before_len;
+    if group.items.is_empty() {
+        runtime_state
+            .context_injection_state
+            .groups
+            .remove(VMM_PROFILE_DELTA_INJECTION_TAG);
+    }
+    removed_any
+}
+
+/// Normalizes profile text for duplicate cleanup.
+/// 为画像重复清理规范化文本。
+fn normalize_profile_duplicate_text(content: &str) -> String {
+    content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Builds one built-in VMM hook registration with non-blocking failure behavior.
@@ -1504,6 +1618,33 @@ mod tests {
         assert_eq!(first.tag, VMM_PROFILE_DELTA_INJECTION_TAG);
         assert_eq!(second.tag, VMM_PROFILE_DELTA_INJECTION_TAG);
         assert_ne!(first.items[0].dedupe_key, second.items[0].dedupe_key);
+    }
+
+    /// Verifies duplicate full-profile delta leftovers are removed.
+    /// 验证重复全量画像增量残留会被移除。
+    #[test]
+    fn cleanup_removes_profile_delta_that_duplicates_system_baseline() {
+        let mut runtime_state = SessionRuntimeStateEntry {
+            vmm_profile_sync: VmmProfileSyncState {
+                base_profile_content: Some(String::from("# Profile\nsame")),
+                ..VmmProfileSyncState::default()
+            },
+            ..SessionRuntimeStateEntry::default()
+        };
+        runtime_state.context_injection_state.apply_insert(
+            vmm_profile_delta_injection("# Profile\nsame", "refresh", "1"),
+            "1",
+        );
+
+        assert!(remove_duplicate_vmm_profile_delta_matching_base(
+            &mut runtime_state
+        ));
+        assert!(
+            !runtime_state
+                .context_injection_state
+                .groups
+                .contains_key(VMM_PROFILE_DELTA_INJECTION_TAG)
+        );
     }
 
     /// Verifies text-level profile deltas report added and removed facts.
