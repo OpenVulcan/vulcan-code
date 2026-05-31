@@ -31,3 +31,10 @@ target
 /docs/plan/
 /docs/completed/
 .codex_tmp*
+
+# Generated WebUI dependencies and build outputs.
+# WebUI 生成的依赖与构建产物。
+/apps/vulcan-code-web/node_modules/
+/apps/vulcan-code-web/dist/
+/apps/vulcan-code-web/tsconfig.tsbuildinfo
+/apps/vulcan-code-tauri/gen/

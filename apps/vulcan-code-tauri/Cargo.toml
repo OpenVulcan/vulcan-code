@@ -1,0 +1,33 @@
+[package]
+name = "vulcan-code-tauri"
+description = "Tauri based Vulcan Code desktop shell."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "=2.6.2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+tauri = { version = "=2.11.2", features = [] }
+time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+uuid.workspace = true
+luaskills.workspace = true
+vulcan-mcp-runtime.workspace = true
+vulcan-provider-config.workspace = true
+vulcan-runtime-assets.workspace = true
+vulcan-service-api = { path = "../../crates/vulcan-service-api" }
+vulcan-token-counter.workspace = true
+vulcan-workbench-model.workspace = true
+vulcan-workspace-store.workspace = true
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
+
+[lints]
+workspace = true

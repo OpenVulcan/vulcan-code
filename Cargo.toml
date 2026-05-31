@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "apps/vulcan-code-gui",
+    "apps/vulcan-code-tauri",
+    "crates/vulcan-service-api",
     "crates/vulcan-change-set",
     "crates/vulcan-host-tools",
     "crates/vulcan-provider-config",

@@ -1,0 +1,15 @@
+[package]
+name = "vulcan-service-api"
+description = "Shared API types for the Vulcan Core Service and clients."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Vulcan Code",
+  "version": "0.1.0",
+  "identifier": "ai.vulcan.code",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../vulcan-code-web dev --host 127.0.0.1 --port 5173",
+    "beforeBuildCommand": "pnpm --dir ../vulcan-code-web build",
+    "devUrl": "http://127.0.0.1:5173",
+    "frontendDist": "../vulcan-code-web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Vulcan Code",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": false,
+    "targets": "all"
+  }
+}

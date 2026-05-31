@@ -66,8 +66,9 @@ if ($Release -or ($args.Count -gt 0 -and $args[0] -eq "release")) {
     Write-Host "==> Building debug..."
 }
 
-# Build
-& cargo build @CargoArgs
+# Build legacy iced GUI package only.
+# 仅构建旧版 iced GUI 包，避免 legacy 入口被新 Tauri workspace 成员拖慢。
+& cargo build -p vulcan-code-gui @CargoArgs
 
 # Determine binary path
 $BinExe = "target\$CargoProfile\$BinName.exe"

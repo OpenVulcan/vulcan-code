@@ -43,13 +43,21 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 # ScriptDir 用于保存仓库根目录，确保子脚本始终从稳定的基路径解析。
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-# BuildScriptPath points at the dedicated PowerShell build script to avoid duplicating cargo packaging logic here.
-# BuildScriptPath 用于指向专用的 PowerShell 构建脚本，避免在这里重复 cargo 打包逻辑。
+# BuildScriptPath points at the legacy iced GUI build script.
+# BuildScriptPath 用于指向旧版 iced GUI 构建脚本。
 $BuildScriptPath = Join-Path $ScriptDir "scripts\build.ps1"
 
-# RunScriptPath points at the dedicated PowerShell run script so run behavior stays centralized.
-# RunScriptPath 用于指向专用的 PowerShell 运行脚本，让运行行为保持集中管理。
+# TauriBuildScriptPath points at the new Tauri/WebUI build script.
+# TauriBuildScriptPath 用于指向新版 Tauri/WebUI 构建脚本。
+$TauriBuildScriptPath = Join-Path $ScriptDir "scripts\build_tauri.ps1"
+
+# RunScriptPath points at the legacy iced GUI run script.
+# RunScriptPath 用于指向旧版 iced GUI 运行脚本。
 $RunScriptPath = Join-Path $ScriptDir "scripts\run.ps1"
+
+# TauriRunScriptPath points at the new Tauri/WebUI run script.
+# TauriRunScriptPath 用于指向新版 Tauri/WebUI 运行脚本。
+$TauriRunScriptPath = Join-Path $ScriptDir "scripts\run_tauri.ps1"
 
 # HostDepsScriptPath points at the dedicated PowerShell host-dependency bootstrap script.
 # HostDepsScriptPath 用于指向专用的 PowerShell 宿主依赖初始化脚本。
@@ -105,6 +113,31 @@ function Invoke-Build {
     }
 }
 
+# Invoke-TauriBuild forwards the current mode to scripts/build_tauri.ps1.
+# Invoke-TauriBuild 用于把当前模式转发给 scripts/build_tauri.ps1。
+# IsRelease controls whether the Tauri shell should target Cargo release output.
+# IsRelease 用于控制 Tauri 桌面壳是否构建 Cargo release 产物。
+function Invoke-TauriBuild {
+    param(
+        [bool]$IsRelease
+    )
+
+    if (-not (Test-Path -LiteralPath $TauriBuildScriptPath)) {
+        throw "Missing Tauri build script: $TauriBuildScriptPath"
+    }
+
+    if ($IsRelease) {
+        & $TauriBuildScriptPath -Release
+    }
+    else {
+        & $TauriBuildScriptPath
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+}
+
 # Invoke-Run forwards the current mode to scripts/run.ps1 so Ctrl+C no longer traverses a cmd batch wrapper.
 # Invoke-Run 用于把当前模式转发给 scripts/run.ps1，从而避免 Ctrl+C 再经过 cmd 批处理包装层。
 # IsRelease controls whether the runtime should execute the release binary instead of the debug binary.
@@ -123,6 +156,29 @@ function Invoke-Run {
     }
     else {
         & $RunScriptPath
+    }
+
+    exit $LASTEXITCODE
+}
+
+# Invoke-TauriRun forwards the current mode to scripts/run_tauri.ps1.
+# Invoke-TauriRun 用于把当前模式转发给 scripts/run_tauri.ps1。
+# IsRelease controls whether the runtime should execute a release Tauri shell.
+# IsRelease 用于控制运行时是否执行 release Tauri 桌面壳。
+function Invoke-TauriRun {
+    param(
+        [bool]$IsRelease
+    )
+
+    if (-not (Test-Path -LiteralPath $TauriRunScriptPath)) {
+        throw "Missing Tauri run script: $TauriRunScriptPath"
+    }
+
+    if ($IsRelease) {
+        & $TauriRunScriptPath -Release
+    }
+    else {
+        & $TauriRunScriptPath
     }
 
     exit $LASTEXITCODE
@@ -177,12 +233,16 @@ function Invoke-RustThirdPartyNoticeGeneration {
 # Show-Usage 用于输出支持的命令形式，方便贡献者在输入无效参数后快速恢复。
 function Show-Usage {
     Write-Host "Usage:"
-    Write-Host "  ./make             # debug build"
-    Write-Host "  ./make build       # debug build"
-    Write-Host "  ./make release     # release build"
+    Write-Host "  ./make             # Tauri/WebUI debug build"
+    Write-Host "  ./make build       # Tauri/WebUI debug build"
+    Write-Host "  ./make release     # Tauri/WebUI release build"
+    Write-Host "  ./make build iced  # legacy iced GUI debug build"
+    Write-Host "  ./make run iced    # legacy iced GUI debug run"
+    Write-Host "  ./make build iced release # legacy iced GUI release build"
+    Write-Host "  ./make run iced release   # legacy iced GUI release run"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
-    Write-Host "  ./make run         # run debug build"
-    Write-Host "  ./make run release # run release build"
+    Write-Host "  ./make run         # run Tauri/WebUI debug build"
+    Write-Host "  ./make run release # run Tauri/WebUI release build"
     Write-Host "  ./make deps        # install host + official LuaSkills runtime dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
@@ -198,13 +258,19 @@ $NormalizedVariant = Normalize-Command -Value $CommandVariant
 
 switch ($NormalizedMode) {
     "" {
-        Invoke-Build -IsRelease $false
+        Invoke-TauriBuild -IsRelease $false
     }
     "build" {
-        Invoke-Build -IsRelease ($NormalizedVariant -eq "release")
+        if ($NormalizedVariant -eq "iced") {
+            $IcedRelease = ($RemainingArgs.Count -gt 0 -and (Normalize-Command -Value $RemainingArgs[0]) -eq "release")
+            Invoke-Build -IsRelease $IcedRelease
+        }
+        else {
+            Invoke-TauriBuild -IsRelease ($NormalizedVariant -eq "release")
+        }
     }
     "release" {
-        Invoke-Build -IsRelease $true
+        Invoke-TauriBuild -IsRelease $true
     }
     "licenses" {
         if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {
@@ -215,7 +281,13 @@ switch ($NormalizedMode) {
         Invoke-RustThirdPartyNoticeGeneration
     }
     "run" {
-        Invoke-Run -IsRelease ($NormalizedVariant -eq "release")
+        if ($NormalizedVariant -eq "iced") {
+            $IcedRelease = ($RemainingArgs.Count -gt 0 -and (Normalize-Command -Value $RemainingArgs[0]) -eq "release")
+            Invoke-Run -IsRelease $IcedRelease
+        }
+        else {
+            Invoke-TauriRun -IsRelease ($NormalizedVariant -eq "release")
+        }
     }
     "deps" {
         switch ($NormalizedVariant) {
