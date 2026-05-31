@@ -65,7 +65,7 @@ impl VulcanManagedToolRuntimeBridge {
 
 /// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.
 /// 构建一条控制器可见的错误结果，使宿主管理工具失败能够回传给模型，而不是直接中断整轮执行。
-fn build_tool_failure_invocation_result(
+pub(crate) fn build_tool_failure_invocation_result(
     request: &CoreToolInvocationRequest,
     message: impl Into<String>,
 ) -> CoreToolInvocationResult {
@@ -138,6 +138,10 @@ impl VulcanToolExecutor for VulcanManagedToolRuntimeBridge {
 #[cfg(test)]
 mod tests {
     use super::VulcanManagedToolRuntimeBridge;
+    use crate::agent_runtime::events::RuntimeEventKind;
+    use crate::agent_runtime::provider_stream::ProviderStreamDelta;
+    use crate::agent_runtime::provider_transport_live_delta::ProviderLiveDeltaSender;
+    use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
     use async_trait::async_trait;
     use serde_json::json;
     use std::collections::VecDeque;
@@ -219,6 +223,51 @@ mod tests {
         ]);
         let resolved = manager.resolve_for_execution_mode("Build");
         (manager, resolved.definitions)
+    }
+
+    /// Returns one demo tools manager that contains a tool panicking during asynchronous invocation.
+    /// 返回一份包含异步调用期间 panic 工具的演示工具管理器。
+    fn build_panic_demo_manager() -> (
+        VulcanToolsManager,
+        Vec<vulcan_tools_manager::ResolvedToolDefinition>,
+    ) {
+        let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor {
+                id: String::from("panic_tool"),
+                name: String::from("panic_tool"),
+                description: String::from("Panic demo tool"),
+                help_text: None,
+                source: VulcanToolSourceKind::Native,
+            },
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            invoke: Arc::new(|_args, _session_id| {
+                Box::pin(async move {
+                    panic!("模拟搜索节点 panic");
+                })
+            }),
+        }]);
+        let resolved = manager.resolve_for_execution_mode("Build");
+        (manager, resolved.definitions)
+    }
+
+    /// Drains all live runtime events currently queued by a streaming tool executor.
+    /// 清空流式工具执行器当前已经排队的全部实时运行事件。
+    fn drain_live_events(
+        receiver: &mut tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+    ) -> Vec<ProviderStreamDelta> {
+        let mut events = Vec::new();
+        while let Ok(item) = receiver.try_recv() {
+            events.push(item.expect("live event should not fail"));
+        }
+        events
     }
 
     /// Captures pre-planned provider turn responses and records the built request history for assertions.
@@ -381,7 +430,7 @@ mod tests {
         assert_eq!(result.tool_call_id, "call-error-1");
         assert_eq!(result.tool_name, "failing_tool");
         assert!(result.is_error);
-        assert!(result.model_output.contains("工具 `failing_tool` 调用失败"));
+        assert!(result.model_output.contains("Tool `failing_tool` failed"));
         assert!(
             result
                 .model_output
@@ -547,7 +596,7 @@ mod tests {
         assert!(matches!(
             &controller.snapshot().messages[2].payload,
             ConversationPayload::ToolResult { text, .. }
-                if text.contains("工具 `failing_tool` 调用失败")
+                if text.contains("Tool `failing_tool` failed")
                     && text.contains("LuaSkills 工具解析失败：演示错误")
         ));
         assert!(matches!(
@@ -559,5 +608,59 @@ mod tests {
             Some(ConversationPayload::Assistant { text, .. })
                 if text == "我已收到工具错误原因，接下来会调整策略继续处理。"
         ));
+    }
+
+    /// Verifies the streaming executor turns a panicking host tool into a model-visible tool error instead of crashing the controller task.
+    /// 验证流式执行器会将 panic 的宿主工具转换为模型可见的工具错误，而不是让控制器任务崩溃。
+    #[test]
+    fn streaming_tool_executor_converts_tool_panics_into_error_results() {
+        let (manager, definitions) = build_panic_demo_manager();
+        let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+        ));
+        let (sender, mut receiver): (
+            ProviderLiveDeltaSender,
+            tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+        ) = tokio::sync::mpsc::unbounded_channel();
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("panic-call-1"),
+            tool_name: String::from("panic_tool"),
+            arguments: json!({ "query": "山姆零食" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime
+            .block_on(executor.execute_tool(&request))
+            .expect("panicking tool should still return one controller-visible result");
+        let events = drain_live_events(&mut receiver);
+
+        assert!(result.is_error);
+        assert!(result.model_output.contains("Tool `panic_tool` failed"));
+        assert!(result.model_output.contains("模拟搜索节点 panic"));
+        assert!(matches!(
+            result.host_result,
+            Some(ref value)
+                if value["kind"] == "tool_error"
+                    && value["payload"]["tool_name"] == "panic_tool"
+                    && value["payload"]["error"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("模拟搜索节点 panic"))
+        ));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamDelta::RuntimeEvent(runtime_event)
+                if runtime_event.kind == RuntimeEventKind::ToolStarted
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamDelta::RuntimeEvent(runtime_event)
+                if runtime_event.kind == RuntimeEventKind::ToolFinished
+        )));
     }
 }

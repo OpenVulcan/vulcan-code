@@ -8,9 +8,14 @@ use crate::agent_runtime::provider_protocol_bridge::{
     format_tool_call_runtime_detail,
 };
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
-use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
+use crate::agent_runtime::tool_runtime_bridge::{
+    VulcanManagedToolRuntimeBridge, build_tool_failure_invocation_result,
+};
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use serde_json::json;
+use std::any::Any;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use vulcan_core::tool::VulcanToolExecutor;
 use vulcan_core::types::{
@@ -69,7 +74,20 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 "arguments": request.arguments,
             }))),
         )));
-        let result = self.runtime_bridge.execute_tool(request).await?;
+        let result = match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
+            .catch_unwind()
+            .await
+        {
+            Ok(Ok(result)) => result,
+            Ok(Err(error)) => build_tool_failure_invocation_result(request, error.to_string()),
+            Err(payload) => build_tool_failure_invocation_result(
+                request,
+                format!(
+                    "Tool runtime panicked before returning a normal result: {}",
+                    panic_payload_message(payload.as_ref())
+                ),
+            ),
+        };
         let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
         let event_metadata = attach_tool_name_to_runtime_metadata(
             build_tool_result_runtime_metadata(
@@ -89,4 +107,16 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         )));
         Ok(result)
     }
+}
+
+/// Converts one panic payload into a stable diagnostic string that can be exposed as a tool error.
+/// 将一个 panic 载荷转换为可作为工具错误暴露的稳定诊断字符串。
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_owned();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    String::from("unknown panic payload")
 }
