@@ -11,8 +11,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_vmm::{
     DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, DEFAULT_GRPC_KEEPALIVE_TIME_MS,
     DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS, DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_IMPLICIT_MEMORY_TURNS,
-    DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS, DEFAULT_VMM_INJECTION_DESCRIPTION,
-    DEFAULT_VMM_INJECTION_TAG, VmmConfigLayer,
+    DEFAULT_PROFILE_NODE_LIMIT, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
+    DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, MAX_PROFILE_NODE_LIMIT,
+    VmmConfigLayer,
 };
 
 /// Maximum accepted gRPC keepalive value in milliseconds.
@@ -318,6 +319,9 @@ pub(super) struct VmmSettingsDraft {
     /// Editable profile refresh accepted-turn interval.
     /// 可编辑画像刷新 accepted turn 间隔。
     pub(super) profile_refresh_turns: String,
+    /// Editable per-target profile node fetch limit.
+    /// 可编辑每个目标画像节点拉取上限。
+    pub(super) profile_node_limit: String,
     /// Whether VMM should use visible memory mode.
     /// VMM 是否使用可见记忆模式。
     pub(super) visible_memory_injection: bool,
@@ -403,6 +407,10 @@ impl VmmSettingsDraft {
                 .profile_refresh_turns
                 .unwrap_or(DEFAULT_PROFILE_REFRESH_TURNS)
                 .to_string(),
+            profile_node_limit: layer
+                .profile_node_limit
+                .unwrap_or(DEFAULT_PROFILE_NODE_LIMIT)
+                .to_string(),
             visible_memory_injection: false,
             session_compact_recall: true,
             ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(true),
@@ -469,6 +477,16 @@ impl VmmSettingsDraft {
             "画像刷新间隔",
             DEFAULT_PROFILE_REFRESH_TURNS,
         )?;
+        let profile_node_limit = parse_required_u32(
+            &self.profile_node_limit,
+            "单条目最大画像数量",
+            DEFAULT_PROFILE_NODE_LIMIT,
+        )?;
+        if profile_node_limit > MAX_PROFILE_NODE_LIMIT {
+            return Err(format!(
+                "单条目最大画像数量不能超过 {MAX_PROFILE_NODE_LIMIT}。"
+            ));
+        }
         Ok(VmmConfigLayer {
             enabled: Some(self.enabled),
             grpc_target: optional_trimmed_string(&self.grpc_target),
@@ -483,6 +501,7 @@ impl VmmSettingsDraft {
             project_id,
             implicit_memory_turns: Some(implicit_memory_turns),
             profile_refresh_turns: Some(profile_refresh_turns),
+            profile_node_limit: Some(profile_node_limit),
             visible_memory_injection: None,
             session_compact_recall: None,
             ai_tools_enabled: Some(self.ai_tools_enabled),

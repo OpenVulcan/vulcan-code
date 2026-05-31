@@ -40,6 +40,14 @@ pub const DEFAULT_IMPLICIT_MEMORY_TURNS: u32 = 3;
 /// 默认画像刷新 accepted turn 间隔。
 pub const DEFAULT_PROFILE_REFRESH_TURNS: u32 = 10;
 
+/// Default per-target profile node fetch limit.
+/// 默认每个目标画像节点拉取上限。
+pub const DEFAULT_PROFILE_NODE_LIMIT: u32 = 256;
+
+/// Maximum per-target profile node fetch limit accepted by the host.
+/// 宿主允许的每个目标画像节点拉取最大值。
+pub const MAX_PROFILE_NODE_LIMIT: u32 = 512;
+
 /// Reserved future install-management state.
 /// 预留的未来安装管理状态。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +126,10 @@ pub struct VmmConfigLayer {
     /// 可选画像刷新 accepted turn 间隔。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_refresh_turns: Option<u32>,
+    /// Optional per-target profile node fetch limit.
+    /// 可选每个目标画像节点拉取上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_node_limit: Option<u32>,
     /// Optional compact-aware recall switch.
     /// 可选压缩感知召回开关。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -223,6 +235,9 @@ pub struct VmmEffectiveConfig {
     /// Final profile refresh interval.
     /// 最终画像刷新间隔。
     pub profile_refresh_turns: u32,
+    /// Final per-target profile node fetch limit.
+    /// 最终每个目标画像节点拉取上限。
+    pub profile_node_limit: u32,
     /// Final compact-aware recall switch.
     /// 最终压缩感知召回开关。
     pub session_compact_recall: bool,
@@ -264,6 +279,7 @@ impl Default for VmmEffectiveConfig {
             visible_memory_injection: false,
             implicit_memory_turns: DEFAULT_IMPLICIT_MEMORY_TURNS,
             profile_refresh_turns: DEFAULT_PROFILE_REFRESH_TURNS,
+            profile_node_limit: DEFAULT_PROFILE_NODE_LIMIT,
             session_compact_recall: true,
             precheck_enabled: true,
             ai_tools_enabled: true,
@@ -413,6 +429,9 @@ fn apply_layer(
     if let Some(profile_refresh_turns) = layer.profile_refresh_turns {
         config.profile_refresh_turns = profile_refresh_turns;
     }
+    if let Some(profile_node_limit) = layer.profile_node_limit {
+        config.profile_node_limit = normalize_profile_node_limit(profile_node_limit);
+    }
     if let Some(precheck_enabled) = layer.precheck_enabled {
         config.precheck_enabled = precheck_enabled;
     }
@@ -462,6 +481,18 @@ fn normalize_description_or_default(value: &str) -> String {
         DEFAULT_VMM_INJECTION_DESCRIPTION.to_string()
     } else {
         normalized.to_string()
+    }
+}
+
+/// Normalizes a configured profile-node limit into the accepted host range.
+/// 将配置的画像节点上限规范化到宿主接受范围内。
+const fn normalize_profile_node_limit(value: u32) -> u32 {
+    if value == 0 {
+        DEFAULT_PROFILE_NODE_LIMIT
+    } else if value > MAX_PROFILE_NODE_LIMIT {
+        MAX_PROFILE_NODE_LIMIT
+    } else {
+        value
     }
 }
 
@@ -572,6 +603,27 @@ mod tests {
         assert_eq!(
             resolved.diagnose_memory_flow(true),
             VmmConfigDiagnostic::Ready
+        );
+    }
+
+    #[test]
+    fn profile_node_limit_uses_default_for_zero_and_clamps_maximum() {
+        let zero = VmmConfigLayer {
+            profile_node_limit: Some(0),
+            ..base_global_layer()
+        };
+        let oversized = VmmConfigLayer {
+            profile_node_limit: Some(MAX_PROFILE_NODE_LIMIT + 1),
+            ..base_global_layer()
+        };
+
+        assert_eq!(
+            VmmEffectiveConfig::resolve(&zero, None, None).profile_node_limit,
+            DEFAULT_PROFILE_NODE_LIMIT
+        );
+        assert_eq!(
+            VmmEffectiveConfig::resolve(&oversized, None, None).profile_node_limit,
+            MAX_PROFILE_NODE_LIMIT
         );
     }
 }

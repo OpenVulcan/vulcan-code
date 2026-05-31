@@ -155,6 +155,12 @@ impl VulcanWorkbench {
                     String::from("项目 VMM 画像刷新间隔已修改，点击保存后生效。");
                 Task::none()
             }
+            Message::ProjectVmmProfileNodeLimitChanged(value) => {
+                self.project_vmm_settings_draft.settings.profile_node_limit = value;
+                self.project_vmm_settings_draft.settings.notice =
+                    String::from("项目 VMM 画像节点上限已修改，点击保存后生效。");
+                Task::none()
+            }
             Message::ProjectVmmAiToolsChanged(value) => {
                 self.project_vmm_settings_draft.settings.ai_tools_enabled = value;
                 self.project_vmm_settings_draft.settings.notice =
@@ -242,6 +248,7 @@ impl VulcanWorkbench {
                     visible_memory_injection: Some(effective.visible_memory_injection),
                     implicit_memory_turns: Some(effective.implicit_memory_turns),
                     profile_refresh_turns: Some(effective.profile_refresh_turns),
+                    profile_node_limit: Some(effective.profile_node_limit),
                     session_compact_recall: Some(effective.session_compact_recall),
                     precheck_enabled: Some(effective.precheck_enabled),
                     ai_tools_enabled: Some(effective.ai_tools_enabled),

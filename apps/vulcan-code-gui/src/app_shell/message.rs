@@ -926,6 +926,9 @@ pub(super) enum Message {
     /// Updates the global VMM profile refresh interval draft.
     /// 更新全局 VMM 画像刷新间隔草稿。
     GlobalVmmProfileRefreshTurnsChanged(String),
+    /// Updates the global VMM per-target profile node limit draft.
+    /// 更新全局 VMM 每目标画像节点上限草稿。
+    GlobalVmmProfileNodeLimitChanged(String),
     /// Toggles the global VMM AI-only tool exposure draft flag.
     /// 切换全局 VMM AI 专属工具暴露草稿开关。
     GlobalVmmAiToolsChanged(bool),
@@ -998,6 +1001,9 @@ pub(super) enum Message {
     /// Updates the project VMM profile refresh interval draft.
     /// 更新项目 VMM 画像刷新间隔草稿。
     ProjectVmmProfileRefreshTurnsChanged(String),
+    /// Updates the project VMM per-target profile node limit draft.
+    /// 更新项目 VMM 每目标画像节点上限草稿。
+    ProjectVmmProfileNodeLimitChanged(String),
     /// Toggles the project VMM AI-only tool exposure draft flag.
     /// 切换项目 VMM AI 专属工具暴露草稿开关。
     ProjectVmmAiToolsChanged(bool),

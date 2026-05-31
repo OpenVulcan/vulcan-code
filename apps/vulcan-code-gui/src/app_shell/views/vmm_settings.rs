@@ -1526,6 +1526,12 @@ impl VulcanWorkbench {
                     &draft.profile_refresh_turns,
                     messages.profile_refresh_turns,
                 ),
+                self.view_vmm_text_field(
+                    "画像节点上限",
+                    "256，最大 512",
+                    &draft.profile_node_limit,
+                    messages.profile_node_limit,
+                ),
             ]
             .spacing(10),
         );
@@ -1597,6 +1603,7 @@ impl VulcanWorkbench {
             management_project_ref: Message::GlobalVmmManagementProjectRefChanged,
             implicit_turns: Message::GlobalVmmImplicitTurnsChanged,
             profile_refresh_turns: Message::GlobalVmmProfileRefreshTurnsChanged,
+            profile_node_limit: Message::GlobalVmmProfileNodeLimitChanged,
             ai_tools: Message::GlobalVmmAiToolsChanged,
             precheck: Message::GlobalVmmPrecheckChanged,
             injection_tag: Message::GlobalVmmInjectionTagChanged,
@@ -1624,6 +1631,7 @@ impl VulcanWorkbench {
             management_project_ref: Message::ProjectVmmManagementProjectRefChanged,
             implicit_turns: Message::ProjectVmmImplicitTurnsChanged,
             profile_refresh_turns: Message::ProjectVmmProfileRefreshTurnsChanged,
+            profile_node_limit: Message::ProjectVmmProfileNodeLimitChanged,
             ai_tools: Message::ProjectVmmAiToolsChanged,
             precheck: Message::ProjectVmmPrecheckChanged,
             injection_tag: Message::ProjectVmmInjectionTagChanged,
@@ -1718,6 +1726,9 @@ struct VmmSettingsMessageMap {
     /// Profile refresh interval message constructor.
     /// 画像刷新间隔消息构造器。
     profile_refresh_turns: fn(String) -> Message,
+    /// Profile node limit message constructor.
+    /// 画像节点上限消息构造器。
+    profile_node_limit: fn(String) -> Message,
     /// AI-tool exposure toggle message constructor.
     /// AI 工具暴露开关消息构造器。
     ai_tools: fn(bool) -> Message,

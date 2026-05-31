@@ -23,9 +23,10 @@ pub use client::{VmmClient, VmmClientError};
 pub use config::{
     DEFAULT_GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS, DEFAULT_GRPC_KEEPALIVE_TIME_MS,
     DEFAULT_GRPC_KEEPALIVE_TIMEOUT_MS, DEFAULT_HANDSHAKE_TIMEOUT_MS, DEFAULT_IMPLICIT_MEMORY_TURNS,
-    DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS, DEFAULT_VMM_INJECTION_DESCRIPTION,
-    DEFAULT_VMM_INJECTION_TAG, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig,
-    VmmEffectiveConfigSource, VmmInstallReservation,
+    DEFAULT_PROFILE_NODE_LIMIT, DEFAULT_PROFILE_REFRESH_TURNS, DEFAULT_RECEIVE_TIMEOUT_MS,
+    DEFAULT_VMM_INJECTION_DESCRIPTION, DEFAULT_VMM_INJECTION_TAG, MAX_PROFILE_NODE_LIMIT,
+    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmEffectiveConfigSource,
+    VmmInstallReservation,
 };
 pub use protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,

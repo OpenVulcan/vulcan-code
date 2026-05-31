@@ -272,6 +272,12 @@ impl VulcanWorkbench {
                     String::from("全局 VMM 画像刷新间隔已修改，点击保存后生效。");
                 Task::none()
             }
+            Message::GlobalVmmProfileNodeLimitChanged(value) => {
+                self.vmm_settings_draft.profile_node_limit = value;
+                self.vmm_settings_draft.notice =
+                    String::from("全局 VMM 画像节点上限已修改，点击保存后生效。");
+                Task::none()
+            }
             Message::GlobalVmmAiToolsChanged(value) => {
                 self.vmm_settings_draft.ai_tools_enabled = value;
                 self.vmm_settings_draft.notice =
@@ -728,6 +734,7 @@ impl VulcanWorkbench {
                     visible_memory_injection: Some(effective.visible_memory_injection),
                     implicit_memory_turns: Some(effective.implicit_memory_turns),
                     profile_refresh_turns: Some(effective.profile_refresh_turns),
+                    profile_node_limit: Some(effective.profile_node_limit),
                     session_compact_recall: Some(effective.session_compact_recall),
                     precheck_enabled: Some(effective.precheck_enabled),
                     ai_tools_enabled: Some(effective.ai_tools_enabled),

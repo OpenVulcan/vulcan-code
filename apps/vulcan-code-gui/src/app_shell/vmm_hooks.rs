@@ -21,11 +21,10 @@ use vulcan_hooks::{
     HookRegistration, HookResult, HookScope, SystemPromptHookBlock, SystemPromptHookPhase,
 };
 use vulcan_vmm::{
-    GetProfileBundleRequest, GetProfileNodesRequest, ProfileBundleMode, ProfileNodeEntry,
-    ProfileTarget, TonicVmmClient, VmmClient, VmmConfigDiagnostic, VmmConfigLayer,
-    VmmEffectiveConfig, VmmTransportConfig, chat_compact_request_from_payload,
-    injection_from_precheck_response, post_action_request_from_completed_payload,
-    precheck_request_from_payload,
+    GetProfileNodesRequest, ProfileNodeEntry, ProfileTarget, TonicVmmClient, VmmClient,
+    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
+    chat_compact_request_from_payload, injection_from_precheck_response,
+    post_action_request_from_completed_payload, precheck_request_from_payload,
 };
 
 /// Stable id used by the built-in VMM precheck hook.
@@ -718,10 +717,8 @@ async fn maybe_sync_vmm_profile(
 
     match sync_phase {
         SystemPromptHookPhase::FirstSession | SystemPromptHookPhase::AfterContextCompaction => {
-            let content = fetch_full_profile_content(client, config).await?;
-            let nodes_by_id = fetch_all_profile_nodes(client, config)
-                .await
-                .unwrap_or_default();
+            let nodes_by_id = fetch_all_profile_nodes(client, config).await?;
+            let content = render_profile_system_prompt_from_nodes(&nodes_by_id);
             apply_vmm_profile_base_refresh(
                 &mut state,
                 &content,
@@ -750,19 +747,12 @@ async fn maybe_sync_vmm_profile(
                 }));
             }
 
-            let latest_content = fetch_full_profile_content(client, config).await?;
-            let latest_content = latest_content.trim().to_string();
-            let comparison_base = state
-                .delta_profile_content
-                .as_deref()
-                .or(state.base_profile_content.as_deref())
-                .unwrap_or_default();
-            let delta = render_profile_text_delta(comparison_base, &latest_content);
+            let previous_nodes_by_id = state.nodes_by_id.clone();
+            let latest_nodes_by_id = fetch_all_profile_nodes(client, config).await?;
+            let delta = render_profile_node_diff(&previous_nodes_by_id, &latest_nodes_by_id);
             state.completed_turns_since_sync = 0;
-            state.delta_profile_content = normalized_optional_text(&latest_content);
-            state.nodes_by_id = fetch_all_profile_nodes(client, config)
-                .await
-                .unwrap_or_else(|_| state.nodes_by_id.clone());
+            state.delta_profile_content = normalized_optional_text(&delta);
+            state.nodes_by_id = latest_nodes_by_id;
             state.updated_at = Some(current_unix_millis_text());
             if !delta.trim().is_empty() {
                 injections.push(vmm_profile_delta_injection(
@@ -837,40 +827,6 @@ fn invocation_system_prompt_hook_phase(
     }
 }
 
-/// Fetches one full profile bundle from VMM.
-/// 从 VMM 拉取一份完整画像 bundle。
-async fn fetch_profile_bundle(
-    client: &TonicVmmClient,
-    config: &VmmEffectiveConfig,
-) -> Result<vulcan_vmm::GetProfileBundleResponse, HookError> {
-    client
-        .get_profile_bundle(GetProfileBundleRequest {
-            user_id: config.user_id.unwrap_or_default(),
-            project_id: config.project_id.unwrap_or_default(),
-            mode: ProfileBundleMode::ProfileBundleModeFull,
-            include_explanation: Some(false),
-        })
-        .await
-        .map_err(|error| HookError::handler(error.to_string()))
-}
-
-/// Fetches and renders the latest full profile content with node fallback.
-/// 拉取并渲染最新全量画像内容，并在 bundle 为空时回退到节点快照。
-async fn fetch_full_profile_content(
-    client: &TonicVmmClient,
-    config: &VmmEffectiveConfig,
-) -> Result<String, HookError> {
-    let bundle = fetch_profile_bundle(client, config).await?;
-    let content = render_full_profile_prompt(&bundle);
-    if !content.trim().is_empty() {
-        return Ok(content);
-    }
-    let nodes_by_id = fetch_all_profile_nodes(client, config)
-        .await
-        .unwrap_or_default();
-    Ok(render_profile_node_snapshot(&nodes_by_id))
-}
-
 /// Fetches active profile nodes for every supported VMM target.
 /// 为所有受支持的 VMM 目标拉取 active 画像节点。
 async fn fetch_all_profile_nodes(
@@ -889,7 +845,7 @@ async fn fetch_all_profile_nodes(
                 target,
                 user_id: config.user_id.unwrap_or_default(),
                 project_id: config.project_id.unwrap_or_default(),
-                limit: VMM_PROFILE_SYNC_NODE_LIMIT,
+                limit: effective_profile_node_limit(config),
             })
             .await
             .map_err(|error| HookError::handler(error.to_string()))?;
@@ -900,35 +856,8 @@ async fn fetch_all_profile_nodes(
     Ok(nodes)
 }
 
-/// Renders the full profile bundle into provider-visible system prompt text.
-/// 将完整画像 bundle 渲染为 Provider 可见系统提示词文本。
-fn render_full_profile_prompt(bundle: &vulcan_vmm::GetProfileBundleResponse) -> String {
-    let mut sections = Vec::new();
-    push_non_empty_profile_section(
-        &mut sections,
-        "Environment Priority",
-        &bundle.environment_priority_text,
-    );
-    push_non_empty_profile_section(&mut sections, "Profile Bundle", &bundle.combined_text);
-    push_non_empty_profile_section(&mut sections, "Team Profile", &bundle.team_profile);
-    push_non_empty_profile_section(&mut sections, "Space Profile", &bundle.space_profile);
-    push_non_empty_profile_section(&mut sections, "Project Profile", &bundle.project_profile);
-    push_non_empty_profile_section(&mut sections, "User Profile", &bundle.user_profile);
-    sections.join("\n\n")
-}
-
-/// Appends one non-empty profile section.
-/// 追加一个非空画像段落。
-fn push_non_empty_profile_section(sections: &mut Vec<String>, title: &str, content: &str) {
-    let content = content.trim();
-    if !content.is_empty() {
-        sections.push(format!("# {title}\n{content}"));
-    }
-}
-
 /// Renders local profile node changes into a compact diff prompt.
 /// 将本地画像节点变化渲染为紧凑差量提示词。
-#[cfg(test)]
 fn render_profile_node_diff(
     previous: &BTreeMap<u64, ProfileNodeEntry>,
     next: &BTreeMap<u64, ProfileNodeEntry>,
@@ -965,21 +894,67 @@ fn render_profile_node_diff(
     sections.join("\n\n")
 }
 
-/// Renders active profile nodes as a full snapshot fallback.
-/// 将 active 画像节点渲染为全量快照回退内容。
-fn render_profile_node_snapshot(nodes: &BTreeMap<u64, ProfileNodeEntry>) -> String {
-    if nodes.is_empty() {
+/// Renders active profile nodes into the provider-visible system prompt.
+/// 将 active 画像节点渲染为 Provider 可见系统提示词。
+fn render_profile_system_prompt_from_nodes(nodes: &BTreeMap<u64, ProfileNodeEntry>) -> String {
+    let mut sections = Vec::new();
+    for target in ordered_profile_targets() {
+        if let Some(section) = render_profile_target_section(nodes, target) {
+            sections.push(section);
+        }
+    }
+    if sections.is_empty() {
         return String::new();
     }
-    let lines = nodes
-        .values()
-        .map(|node| render_profile_node_line("ACTIVE", node))
-        .collect::<Vec<_>>();
-    format!("# Active Profile Nodes\n{}", lines.join("\n"))
+    let header = [
+        "# Profile Bundle",
+        "This durable profile bundle summarizes active TEAM, SPACE, PROJECT, and USER constraints or preferences.",
+        "Use TEAM, SPACE, and PROJECT entries as environment constraints; use USER entries as target-user preferences when they do not conflict with environment constraints.",
+        "Environment constraint priority is Project > Space > Team, even though sections are displayed as TEAM, SPACE, PROJECT, USER for stable reading.",
+        "P = Priority: P0 hard constraint, P1 important preference or working agreement, P2 ordinary reference.",
+        "L = Lifetime Level: L0 short-lived context, L1 phase-specific context, L2 stable habit, L3 persistent rule or identity feature.",
+        "W = Refresh Weight: a higher W means the profile was reconfirmed or renewed more often.",
+    ];
+    format!("{}\n\n{}", header.join("\n"), sections.join("\n\n"))
+}
+
+/// Renders one target section grouped by profile date.
+/// 按画像日期分组渲染一个目标段落。
+fn render_profile_target_section(
+    nodes: &BTreeMap<u64, ProfileNodeEntry>,
+    target: ProfileTarget,
+) -> Option<String> {
+    let mut grouped: BTreeMap<String, Vec<&ProfileNodeEntry>> = BTreeMap::new();
+    for node in nodes.values().filter(|node| node.target == target) {
+        if node.content.trim().is_empty() {
+            continue;
+        }
+        grouped
+            .entry(normalized_profile_date(node))
+            .or_default()
+            .push(node);
+    }
+    if grouped.is_empty() {
+        return None;
+    }
+    let mut lines = vec![format!("[{}]", profile_target_label(target))];
+    for (date, mut date_nodes) in grouped {
+        date_nodes.sort_by_key(|node| node.profile_node_id);
+        lines.push(format!("{date}:"));
+        for node in date_nodes {
+            lines.push(render_profile_node_prompt_line(node));
+        }
+        lines.push(String::new());
+    }
+    while lines.last().is_some_and(|line| line.is_empty()) {
+        lines.pop();
+    }
+    Some(lines.join("\n"))
 }
 
 /// Renders a compact text-level delta between two full profile snapshots.
 /// 渲染两个全量画像快照之间的紧凑文本级差量。
+#[cfg(test)]
 fn render_profile_text_delta(previous: &str, next: &str) -> String {
     let previous_lines = normalized_profile_lines(previous);
     let next_lines = normalized_profile_lines(next);
@@ -1008,6 +983,7 @@ fn render_profile_text_delta(previous: &str, next: &str) -> String {
 
 /// Normalizes one full profile snapshot into comparable non-empty lines.
 /// 将一份全量画像快照规范化为可比较的非空行。
+#[cfg(test)]
 fn normalized_profile_lines(content: &str) -> Vec<String> {
     content
         .lines()
@@ -1047,18 +1023,97 @@ fn vmm_profile_refresh_threshold_reached(state: &VmmProfileSyncState, threshold:
     threshold > 0 && state.completed_turns_since_sync >= threshold
 }
 
+/// Returns the effective node fetch limit for profile synchronization.
+/// 返回画像同步实际使用的节点拉取上限。
+fn effective_profile_node_limit(config: &VmmEffectiveConfig) -> u32 {
+    if config.profile_node_limit == 0 {
+        VMM_PROFILE_SYNC_NODE_LIMIT
+    } else {
+        config
+            .profile_node_limit
+            .min(vulcan_vmm::MAX_PROFILE_NODE_LIMIT)
+    }
+}
+
 /// Renders one profile node as a stable compact line.
 /// 将单个画像节点渲染为稳定紧凑行。
 fn render_profile_node_line(prefix: &str, node: &ProfileNodeEntry) -> String {
     format!(
-        "- {prefix} VMM_PROFILE_NODE_ID:{} target={:?} priority={} level={} date={} content={}",
+        "- {prefix} VMM_PROFILE_NODE_ID:{} target={} date={} [{}][{}][{}] {}",
         node.profile_node_id,
-        node.target,
-        node.priority.trim(),
-        node.level.trim(),
-        node.profile_date.trim(),
+        profile_target_label(node.target),
+        normalized_profile_date(node),
+        normalized_profile_marker("P", &node.priority),
+        normalized_profile_marker("L", &node.level),
+        normalized_refresh_weight(node),
         node.content.trim()
     )
+}
+
+/// Renders one active profile node line for the full system prompt.
+/// 为完整系统提示词渲染一条 active 画像节点行。
+fn render_profile_node_prompt_line(node: &ProfileNodeEntry) -> String {
+    format!(
+        "[{}][{}][{}] {}",
+        normalized_profile_marker("P", &node.priority),
+        normalized_profile_marker("L", &node.level),
+        normalized_refresh_weight(node),
+        node.content.trim()
+    )
+}
+
+/// Returns VMM profile targets in stable prompt order.
+/// 按稳定提示词顺序返回 VMM 画像目标。
+fn ordered_profile_targets() -> [ProfileTarget; 4] {
+    [
+        ProfileTarget::ProfileTargetTeam,
+        ProfileTarget::ProfileTargetSpace,
+        ProfileTarget::ProfileTargetProject,
+        ProfileTarget::ProfileTargetUser,
+    ]
+}
+
+/// Converts a profile target into its prompt label.
+/// 将画像目标转换为提示词标签。
+fn profile_target_label(target: ProfileTarget) -> &'static str {
+    match target {
+        ProfileTarget::ProfileTargetTeam => "TEAM",
+        ProfileTarget::ProfileTargetSpace => "SPACE",
+        ProfileTarget::ProfileTargetProject => "PROJECT",
+        ProfileTarget::ProfileTargetUser => "USER",
+        ProfileTarget::ProfileTargetUnspecified => "UNSPECIFIED",
+    }
+}
+
+/// Normalizes one profile priority or lifetime marker.
+/// 规范化一个画像优先级或生命周期标记。
+fn normalized_profile_marker(prefix: &str, value: &str) -> String {
+    let value = value.trim().to_ascii_uppercase();
+    if value.is_empty() {
+        return format!("{prefix}?");
+    }
+    if value.starts_with(prefix) {
+        value
+    } else {
+        format!("{prefix}{value}")
+    }
+}
+
+/// Normalizes one profile refresh weight marker.
+/// 规范化一个画像刷新权重标记。
+fn normalized_refresh_weight(node: &ProfileNodeEntry) -> String {
+    format!("W{}", node.refresh_weight)
+}
+
+/// Normalizes the profile date shown in prompt sections.
+/// 规范化提示词段落中展示的画像日期。
+fn normalized_profile_date(node: &ProfileNodeEntry) -> String {
+    let date = node.profile_date.trim();
+    if date.is_empty() {
+        "unknown-date".to_string()
+    } else {
+        date.to_string()
+    }
 }
 
 /// Builds one VMM profile system prompt hook block.
@@ -1677,18 +1732,26 @@ mod tests {
         assert!(diff.contains("ADDED VMM_PROFILE_NODE_ID:3"));
     }
 
-    /// Verifies active profile nodes can render as a full snapshot fallback.
-    /// 验证 active 画像节点可以渲染为全量快照回退内容。
+    /// Verifies active profile nodes render as grouped full profile prompt sections.
+    /// 验证 active 画像节点会渲染为分组的全量画像提示词段落。
     #[test]
-    fn render_profile_node_snapshot_reports_active_nodes() {
+    fn render_profile_system_prompt_from_nodes_groups_by_target_and_date() {
         let mut nodes = BTreeMap::new();
-        nodes.insert(7, test_profile_node(7, "active profile"));
+        nodes.insert(
+            7,
+            ProfileNodeEntry {
+                target: ProfileTarget::ProfileTargetTeam,
+                profile_date: String::from("2026-05-29"),
+                ..test_profile_node(7, "team profile")
+            },
+        );
+        nodes.insert(8, test_profile_node(8, "user profile"));
 
-        let snapshot = render_profile_node_snapshot(&nodes);
+        let prompt = render_profile_system_prompt_from_nodes(&nodes);
 
-        assert!(snapshot.contains("# Active Profile Nodes"));
-        assert!(snapshot.contains("ACTIVE VMM_PROFILE_NODE_ID:7"));
-        assert!(snapshot.contains("active profile"));
+        assert!(prompt.contains("# Profile Bundle"));
+        assert!(prompt.contains("[TEAM]\n2026-05-29:\n[P1][L2][W0] team profile"));
+        assert!(prompt.contains("[USER]\n2026-05-30:\n[P1][L2][W0] user profile"));
     }
 
     /// Builds a minimal profile node for tests.
@@ -1698,8 +1761,8 @@ mod tests {
             profile_node_id: id,
             target: ProfileTarget::ProfileTargetUser,
             content: content.to_string(),
-            priority: String::from("normal"),
-            level: String::from("user"),
+            priority: String::from("P1"),
+            level: String::from("L2"),
             profile_date: String::from("2026-05-30"),
             ..ProfileNodeEntry::default()
         }
