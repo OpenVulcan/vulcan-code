@@ -210,6 +210,28 @@ function SidebarMenuButton({
   )
 }
 
+// SidebarMenuAction renders a trailing action inside one sidebar menu row.
+// SidebarMenuAction 渲染单个侧栏菜单行内的尾部操作按钮。
+function SidebarMenuAction({
+  className,
+  showOnHover = false,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+  // Whether the action stays hidden until the row is hovered.
+  // 操作按钮是否在行悬停前保持隐藏。
+  showOnHover?: boolean
+}) {
+  return (
+    <button
+      className={cn("vcn-sidebar-menu-action", showOnHover && "show-on-hover", className)}
+      data-sidebar-action-hover={showOnHover ? "true" : "false"}
+      data-slot="sidebar-menu-action"
+      type="button"
+      {...props}
+    />
+  )
+}
+
 export {
   Sidebar,
   SidebarContent,
@@ -218,6 +240,7 @@ export {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,

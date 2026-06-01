@@ -144,12 +144,19 @@ async fn service_session_messages(
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
     let hydration_snapshot =
-        vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
             controller_runtime,
             parsed_session_id,
             SELECTED_SESSION_TURN_LOAD_LIMIT,
         )
-        .await?;
+        .await
+        {
+            Ok(snapshot) => snapshot,
+            Err(error) if is_missing_session_manifest_error(&error) => {
+                return Ok(Vec::new());
+            }
+            Err(error) => return Err(error),
+        };
 
     Ok(conversation_messages_from_session(
         &session_id,
@@ -245,22 +252,11 @@ async fn service_archive_project_conversations(
     state: tauri::State<'_, SharedServiceBridgeState>,
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    controller_runtime
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            controller_runtime.sqlite_binding_id.as_str(),
-            "UPDATE sessions SET archived = 1, updated_at = ?1 WHERE project_id = ?2 AND archived = 0;",
-            vec![vec![
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("归档项目对话失败：{error}"))?;
-    refresh_workbench_snapshot(state)
-    .await
+    let _ = state;
+    let _ = project_id;
+    Err(String::from(
+        "WebUI 归档暂时禁用：当前归档必须经过 iced 工作台的完整会话工件迁移流程。",
+    ))
 }
 
 /// Applies a conversation display name and returns the refreshed workbench snapshot.
@@ -301,25 +297,11 @@ async fn service_archive_conversation(
     state: tauri::State<'_, SharedServiceBridgeState>,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let parsed_session_id = conversation_id
-        .parse::<SessionId>()
-        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    controller_runtime
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            controller_runtime.sqlite_binding_id.as_str(),
-            "UPDATE sessions SET archived = 1, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
-            vec![vec![
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(parsed_session_id.to_string()),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("归档会话失败：{error}"))?;
-    refresh_workbench_snapshot(state)
-    .await
+    let _ = state;
+    let _ = conversation_id;
+    Err(String::from(
+        "WebUI 归档暂时禁用：当前归档必须经过 iced 工作台的完整会话工件迁移流程。",
+    ))
 }
 
 /// Opens one filesystem directory with the host file manager.
@@ -350,6 +332,16 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+/// Normalizes and validates a user-provided display name.
+/// 规范化并校验用户提供的显示名称。
+fn normalize_non_empty_name(name: &str) -> Result<String, String> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() {
+        return Err(String::from("名称不能为空。"));
+    }
+    Ok(normalized_name.to_string())
 }
 
 /// Reads the controller runtime handle from shared service state.
@@ -426,9 +418,16 @@ async fn refresh_workbench_snapshot(
     let refreshed_snapshot =
         vulcan_workspace_store::workspace_store::load_workspace_snapshot(controller_runtime.clone())
             .await?;
-    let hydration_snapshot =
-        load_selected_session_hydration(controller_runtime.clone(), refreshed_snapshot.selected_session)
-            .await?;
+    let hydration_snapshot = match load_selected_session_hydration(
+        controller_runtime.clone(),
+        refreshed_snapshot.selected_session,
+    )
+    .await
+    {
+        Ok(snapshot) => snapshot,
+        Err(error) if is_missing_session_manifest_error(&error) => None,
+        Err(error) => return Err(error),
+    };
     let workbench = workbench_from_runtime(
         &controller_runtime,
         &luaskills_catalog,
@@ -468,14 +467,15 @@ async fn load_selected_session_hydration(
     .map(Some)
 }
 
-/// Normalizes and validates a user-provided display name.
-/// 规范化并校验用户提供的显示名称。
-fn normalize_non_empty_name(name: &str) -> Result<String, String> {
-    let normalized_name = name.trim();
-    if normalized_name.is_empty() {
-        return Err(String::from("名称不能为空。"));
-    }
-    Ok(normalized_name.to_string())
+/// Returns whether a hydration failure is caused by an empty draft row without an event-store manifest.
+/// 判断水合失败是否源自空草稿行缺少事件存储 manifest。
+fn is_missing_session_manifest_error(error: &str) -> bool {
+    error.contains("manifest.json")
+        && (error.contains("os error 3")
+            || error.contains("os error 2")
+            || error.contains("系统找不到指定的路径")
+            || error.contains("The system cannot find the path specified")
+            || error.contains("No such file or directory"))
 }
 
 /// Returns the current Unix timestamp as millisecond text for SQLite metadata rows.
@@ -1009,6 +1009,7 @@ fn workbench_from_runtime(
         conversations: workspace
             .sessions
             .iter()
+            .filter(|session| session_event_manifest_exists(session))
             .map(|session| ConversationSummary {
                 id: session.id.to_string(),
                 title: session.title.clone(),
@@ -1070,6 +1071,35 @@ fn conversation_messages_from_session(
             record_kind: Some(message.record_kind.as_persisted_key().to_string()),
             body: message.body.clone(),
             metadata: message.metadata.clone(),
+        })
+        .collect()
+}
+
+/// Returns whether a persisted session has a readable event-store manifest on disk.
+/// 返回持久化会话在磁盘上是否存在可读取的事件存储 manifest。
+fn session_event_manifest_exists(session: &vulcan_workbench_model::SessionSummary) -> bool {
+    let Some(project_id) = session.project_id.as_deref() else {
+        return false;
+    };
+    user_vulcan_code_sessions_dir()
+        .join(sanitize_session_store_component(project_id))
+        .join(session.id.to_string())
+        .join("manifest.json")
+        .is_file()
+}
+
+/// Sanitizes one session-store path component with the same rules as the workspace event store.
+/// 使用与工作区事件存储一致的规则清洗一个会话存储路径片段。
+fn sanitize_session_store_component(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::from("_");
+    }
+    trimmed
+        .chars()
+        .map(|character| match character {
+            ':' | '\\' | '/' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            _ => character,
         })
         .collect()
 }
@@ -1455,6 +1485,24 @@ fn log_entry(id: &str, level: &str, source: &str, message: &str) -> LogEntrySumm
 /// 返回本地服务桥接层使用的仓库根目录。
 fn workspace_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Returns the user-level Vulcan Code session event-store directory.
+/// 返回用户级 Vulcan Code 会话事件存储目录。
+fn user_vulcan_code_sessions_dir() -> PathBuf {
+    user_home_dir()
+        .join(".vulcan")
+        .join("code")
+        .join("sessions")
+}
+
+/// Returns the current user's home directory using platform environment variables.
+/// 使用平台环境变量返回当前用户主目录。
+fn user_home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Returns the first existing path from a workspace-relative candidate list.

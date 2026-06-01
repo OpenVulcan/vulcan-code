@@ -20,6 +20,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Sidebar,
@@ -29,10 +36,12 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
@@ -77,6 +86,7 @@ import {
   PinOff,
   ScrollText,
   Settings,
+  SquarePen,
   SlidersHorizontal,
   Moon,
   Sun,
@@ -97,6 +107,20 @@ type MainAreaId = "chat" | "projects" | "providers" | "tools" | "plugins" | "mem
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
+
+// DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
+// DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
+interface DraftConversationSelection {
+  // Stable local-only draft identifier.
+  // 稳定的本地草稿标识。
+  id: string;
+  // Owning project identifier.
+  // 所属项目标识。
+  projectId: string;
+  // Owning project display name.
+  // 所属项目展示名称。
+  projectName: string;
+}
 
 // StartupStepSnapshot describes one startup step displayed by the startup panel.
 // StartupStepSnapshot 描述启动面板展示的单个启动步骤。
@@ -845,6 +869,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
     props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null,
   );
+  // draftConversation stores the local-only conversation opened before the first user message is sent.
+  // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
+  const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
   // workbenchState stores local message hydration updates.
   // workbenchState 保存本地会话正文水合更新。
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(props.workbench);
@@ -874,6 +901,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
+  // selectedDraftConversation stores the draft used by the console header and empty state.
+  // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
+  const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
@@ -885,6 +915,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       return;
     }
     setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+    setDraftConversation(null);
     setSelectedConversationId((current) => {
       if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
         return current;
@@ -926,6 +957,20 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
   }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleCreateConversation creates and selects a new empty conversation for a project.
+  // handleCreateConversation 为项目创建并选中一个新的空白会话。
+  const handleCreateConversation = React.useCallback(async (project: ProjectSummary) => {
+    const draftId = `draft-${project.id}-${Date.now()}`;
+    setDraftConversation({
+      id: draftId,
+      projectId: project.id,
+      projectName: project.name,
+    });
+    setSelectedConversationId(draftId);
+    setConversationLoadError(null);
+    setLoadingConversationId(null);
+  }, []);
 
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
@@ -1045,15 +1090,21 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     setWorkbenchState((current) => mergeWorkbenchSnapshot(current, props.workbench));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
     setSelectedConversationId((current) => {
+      if (current && current === draftConversation?.id) {
+        return current;
+      }
       if (current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
         return current;
       }
       return nextSelected;
     });
-  }, [props.workbench]);
+  }, [draftConversation?.id, props.workbench]);
 
   React.useEffect(() => {
     if (!selectedConversationId) {
+      return;
+    }
+    if (selectedConversationId === draftConversation?.id) {
       return;
     }
     const conversationId = selectedConversationId;
@@ -1090,7 +1141,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     return () => {
       cancelled = true;
     };
-  }, [hydratedConversationIds, selectedConversationId]);
+  }, [draftConversation?.id, hydratedConversationIds, selectedConversationId]);
 
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"}`}>
@@ -1113,12 +1164,14 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           <ConsoleShell
             startup={props.startup}
             workbench={workbenchState}
+            selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
+            onCreateConversation={handleCreateConversation}
             onProjectMenuAction={handleProjectMenuAction}
             onSelectConversation={setSelectedConversationId}
           />
@@ -2045,12 +2098,14 @@ function Topbar(props: {
 function ConsoleShell(props: {
   startup: StartupSnapshot;
   workbench: WorkbenchSnapshot;
+  selectedDraftConversation: DraftConversationSelection | null;
   selectedConversation?: ConversationSummary;
   selectedConversationId: string | null;
   loadingConversationId: string | null;
   conversationLoadError: string | null;
   pinnedConversationIds: Set<string>;
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  onCreateConversation: (project: ProjectSummary) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
@@ -2062,14 +2117,16 @@ function ConsoleShell(props: {
         pinnedConversationIds={props.pinnedConversationIds}
         selectedConversationId={props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
+        onCreateConversation={props.onCreateConversation}
         onProjectMenuAction={props.onProjectMenuAction}
         onSelectConversation={props.onSelectConversation}
       />
       <SidebarInset>
-        <ConsoleHeader conversation={props.selectedConversation} />
+        <ConsoleHeader draftConversation={props.selectedDraftConversation} conversation={props.selectedConversation} />
         <ChatArea
           startup={props.startup}
           workbench={props.workbench}
+          selectedDraftConversation={props.selectedDraftConversation}
           selectedConversationId={props.selectedConversationId}
           loadingConversationId={props.loadingConversationId}
           conversationLoadError={props.conversationLoadError}
@@ -2081,13 +2138,16 @@ function ConsoleShell(props: {
 
 // ConsoleHeader renders the inset title bar for the current conversation.
 // ConsoleHeader 渲染当前会话的 inset 标题栏。
-function ConsoleHeader(props: { conversation?: ConversationSummary }) {
+function ConsoleHeader(props: {
+  conversation?: ConversationSummary;
+  draftConversation: DraftConversationSelection | null;
+}) {
   return (
     <header className="console-header">
       <div className="console-header-main">
         <SidebarTrigger />
         <span className="console-header-separator" aria-hidden="true" />
-        <h1>{props.conversation?.title ?? "会话"}</h1>
+        <h1>{props.draftConversation ? "新会话" : props.conversation?.title ?? "会话"}</h1>
       </div>
     </header>
   );
@@ -2101,9 +2161,13 @@ function ProjectSidebar(props: {
   pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  onCreateConversation: (project: ProjectSummary) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
+  // sidebarState selects the expanded tree interaction or the collapsed project pop menu.
+  // sidebarState 选择展开树交互或折叠项目弹出菜单交互。
+  const { state: sidebarState } = useSidebar();
   // openProjectIds stores the project folders currently expanded in the tree.
   // openProjectIds 保存当前在树中展开的项目文件夹。
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
@@ -2168,25 +2232,46 @@ function ProjectSidebar(props: {
               const isOpen = openProjectIds.has(project.id);
               const folderName = projectFolderName(project.path);
               const showOriginalFolderName = folderName.length > 0 && folderName !== project.name;
+              const projectConversations = sortedConversationsByProject[project.id] ?? [];
               return (
                 <SidebarMenuItem className="project-tree-item" key={project.id}>
-                  <ProjectContextMenu project={project} onAction={props.onProjectMenuAction}>
-                    <SidebarMenuButton
-                      aria-expanded={isOpen}
-                      className="project-folder-button"
-                      onClick={() => toggleProjectOpen(project.id)}
-                      tooltip={`${project.name}\n${project.path}`}
-                    >
-                      {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
-                      <span className="vcn-sidebar-label project-folder-label">
-                        <strong>{project.name}</strong>
-                        {showOriginalFolderName ? <small>{folderName}</small> : null}
-                      </span>
-                    </SidebarMenuButton>
-                  </ProjectContextMenu>
-                  {isOpen ? (
+                  {sidebarState === "collapsed" ? (
+                    <CollapsedProjectMenu
+                      conversations={projectConversations}
+                      onCreateConversation={props.onCreateConversation}
+                      onSelectConversation={props.onSelectConversation}
+                      project={project}
+                      selectedConversationId={props.selectedConversationId}
+                    />
+                  ) : (
+                    <ProjectContextMenu project={project} onAction={props.onProjectMenuAction}>
+                      <SidebarMenuButton
+                        aria-expanded={isOpen}
+                        className="project-folder-button"
+                        onClick={() => toggleProjectOpen(project.id)}
+                        tooltip={`${project.name}\n${project.path}`}
+                      >
+                        {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
+                        <span className="vcn-sidebar-label project-folder-label">
+                          <strong>{project.name}</strong>
+                          {showOriginalFolderName ? <small>{folderName}</small> : null}
+                        </span>
+                      </SidebarMenuButton>
+                    </ProjectContextMenu>
+                  )}
+                  <SidebarMenuAction
+                    aria-label={`在 ${project.name} 中创建新会话`}
+                    className="project-create-conversation"
+                    onClick={() => props.onCreateConversation(project)}
+                    showOnHover
+                    title="新建会话"
+                    type="button"
+                  >
+                    <SquarePen size={13} />
+                  </SidebarMenuAction>
+                  {isOpen && sidebarState !== "collapsed" ? (
                     <SidebarMenu className="project-conversation-list">
-                      {(sortedConversationsByProject[project.id] ?? []).map((conversation) => (
+                      {projectConversations.map((conversation) => (
                         <SidebarMenuItem key={conversation.id}>
                           <ConversationContextMenu
                             conversation={conversation}
@@ -2230,6 +2315,65 @@ function ProjectSidebar(props: {
   );
 }
 
+// CollapsedProjectMenu renders project actions as a pop menu while the sidebar is collapsed.
+// CollapsedProjectMenu 在侧栏折叠时以弹出菜单展示项目操作。
+function CollapsedProjectMenu(props: {
+  // Project that owns the collapsed entry.
+  // 折叠入口所属项目。
+  project: ProjectSummary;
+  // Conversations shown below the create command.
+  // 显示在新建命令下方的会话列表。
+  conversations: ConversationSummary[];
+  // Currently selected conversation id.
+  // 当前选中的会话标识。
+  selectedConversationId: string | null;
+  // Opens a new draft conversation for the project.
+  // 为项目打开一个新的草稿会话。
+  onCreateConversation: (project: ProjectSummary) => void;
+  // Selects one existing conversation.
+  // 选择一个已有会话。
+  onSelectConversation: (conversationId: string) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <SidebarMenuButton
+          aria-label={`${props.project.name} 会话菜单`}
+          className="project-folder-button collapsed-project-button"
+          tooltip={props.project.name}
+        >
+          <Folder size={16} />
+          <span className="vcn-sidebar-label project-folder-label">
+            <strong>{props.project.name}</strong>
+          </span>
+        </SidebarMenuButton>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="collapsed-project-menu" side="right" sideOffset={8}>
+        <DropdownMenuItem onSelect={() => props.onCreateConversation(props.project)}>
+          <SquarePen size={15} />
+          <span>新建会话</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        {props.conversations.length > 0 ? (
+          props.conversations.map((conversation) => (
+            <DropdownMenuItem
+              className={cn(props.selectedConversationId === conversation.id && "active")}
+              key={conversation.id}
+              onSelect={() => props.onSelectConversation(conversation.id)}
+            >
+              <span className="collapsed-project-menu-title">{conversation.title}</span>
+            </DropdownMenuItem>
+          ))
+        ) : (
+          <DropdownMenuItem disabled>
+            <span>暂无会话</span>
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 // ProjectContextMenu renders project-level right-click commands.
 // ProjectContextMenu 渲染项目级右键命令。
 function ProjectContextMenu(props: {
@@ -2257,7 +2401,7 @@ function ProjectContextMenu(props: {
           <Pencil size={15} />
           <span>重命名项目</span>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => props.onAction("archive-conversations", props.project)}>
+        <ContextMenuItem disabled onSelect={() => props.onAction("archive-conversations", props.project)}>
           <Archive size={15} />
           <span>归档对话</span>
         </ContextMenuItem>
@@ -2369,7 +2513,7 @@ function ConversationContextMenu(props: {
           <Pencil size={15} />
           <span>重命名对话</span>
         </ContextMenuItem>
-        <ContextMenuItem onSelect={() => props.onAction("archive", props.conversation)}>
+        <ContextMenuItem disabled onSelect={() => props.onAction("archive", props.conversation)}>
           <Archive size={15} />
           <span>归档对话</span>
         </ContextMenuItem>
@@ -2454,6 +2598,7 @@ function AreaContent(props: {
     <ChatArea
       startup={props.startup}
       workbench={props.workbench}
+      selectedDraftConversation={null}
       selectedConversationId={props.selectedConversationId}
       loadingConversationId={props.loadingConversationId}
       conversationLoadError={props.conversationLoadError}
@@ -2466,6 +2611,7 @@ function AreaContent(props: {
 function ChatArea(props: {
   startup: StartupSnapshot;
   workbench: WorkbenchSnapshot;
+  selectedDraftConversation: DraftConversationSelection | null;
   selectedConversationId: string | null;
   loadingConversationId: string | null;
   conversationLoadError: string | null;
@@ -2473,16 +2619,28 @@ function ChatArea(props: {
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
+  const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
+  const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? "当前项目";
+  const isEmptyConversation = Boolean(
+    props.selectedDraftConversation
+      || (selectedConversation && !isLoading && !props.conversationLoadError && messages.length === 0),
+  );
 
   return (
-    <div className="area-grid chat-grid">
-      <ConversationWorkspace
-        conversation={selectedConversation}
-        messages={messages}
-        isLoading={isLoading}
-        error={props.conversationLoadError}
-      />
-      <ComposerPanel />
+    <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid")}>
+      {isEmptyConversation ? (
+        <EmptyConversationCenter projectName={emptyProjectName} />
+      ) : (
+        <>
+          <ConversationWorkspace
+            conversation={selectedConversation}
+            messages={messages}
+            isLoading={isLoading}
+            error={props.conversationLoadError}
+          />
+          <ComposerPanel />
+        </>
+      )}
     </div>
   );
 }
@@ -3088,6 +3246,17 @@ function ComposerPanel() {
       </div>
       <Textarea aria-label="当前会话输入" placeholder="输入当前会话要执行的任务指令" />
       <Button className="send-button" type="button">发送</Button>
+    </section>
+  );
+}
+
+// EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
+// EmptyConversationCenter 渲染空白会话的居中首次输入状态。
+function EmptyConversationCenter(props: { projectName: string }) {
+  return (
+    <section className="empty-conversation-center">
+      <h2>我们应该在 {props.projectName} 中构建什么？</h2>
+      <ComposerPanel />
     </section>
   );
 }
