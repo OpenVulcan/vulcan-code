@@ -353,6 +353,22 @@ button {
   position: relative;
 }
 
+.vcn-sidebar-static-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  padding: 8px;
+  text-align: left;
+  user-select: none;
+}
+
 .vcn-sidebar-menu-button {
   width: 100%;
   min-width: 0;
@@ -381,6 +397,13 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
+  width: 34px;
+  min-height: 34px;
+  justify-content: center;
+  padding: 7px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item {
   width: 34px;
   min-height: 34px;
   justify-content: center;
@@ -416,6 +439,7 @@ button {
 }
 
 .vcn-sidebar-menu-item:hover > .vcn-sidebar-menu-action.show-on-hover,
+.project-folder-row:hover > .vcn-sidebar-menu-action.show-on-hover,
 .vcn-sidebar-menu-action.show-on-hover:focus-visible {
   opacity: 1;
 }
@@ -456,10 +480,15 @@ button {
   gap: 2px;
 }
 
+.project-folder-row {
+  position: relative;
+}
+
 .project-folder-button {
+  position: relative;
   min-height: 34px;
   font-weight: 600;
-  padding-right: 34px;
+  padding-right: 58px;
 }
 
 .project-folder-label {
@@ -473,30 +502,115 @@ button {
 }
 
 .project-create-conversation {
+  right: 28px;
+}
+
+.project-folder-arrow {
+  position: absolute;
+  top: 50%;
   right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button {
-  padding-right: 7px;
+  display: grid;
+  place-items: center;
+  gap: 0;
+  padding: 7px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .project-tree-item {
+  width: 34px;
+  margin-left: 4px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button {
+  width: 34px;
+  min-width: 34px;
+  margin-inline: 0;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .project-create-conversation,
+.vcn-sidebar[data-collapsible="icon"] .project-folder-arrow {
+  display: none;
 }
 
 .collapsed-project-button {
-  cursor: pointer;
+  cursor: default;
 }
 
-.collapsed-project-menu {
+.collapsed-project-hover-root {
+  width: 34px;
+}
+
+.collapsed-project-flyout {
+  position: fixed;
+  z-index: 60;
   width: 240px;
   max-height: min(420px, calc(100vh - 96px));
   overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: 0 18px 45px rgb(0 0 0 / 16%);
+  color: var(--popover-foreground);
+  padding: 5px;
 }
 
-.collapsed-project-menu [data-slot="dropdown-menu-item"] {
+.collapsed-project-flyout-title {
+  overflow: hidden;
+  padding: 7px 9px 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collapsed-project-flyout-item {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  align-items: center;
   gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 6px 8px;
+  text-align: left;
 }
 
-.collapsed-project-menu [data-slot="dropdown-menu-item"].active {
+.collapsed-project-flyout-item:hover,
+.collapsed-project-flyout-item:focus-visible,
+.collapsed-project-flyout-item.active {
   background: var(--accent);
   color: var(--accent-foreground);
+  outline: none;
+}
+
+.collapsed-project-flyout-item.disabled {
+  cursor: default;
+  color: var(--muted-foreground);
+  opacity: 0.72;
+}
+
+.collapsed-project-flyout-item.disabled:hover {
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.collapsed-project-flyout-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
 }
 
 .collapsed-project-menu-title {
@@ -688,7 +802,7 @@ button {
   scrollbar-gutter: stable;
 }
 
-.composer-panel {
+.composer-dock {
   position: absolute;
   right: max(16px, calc((100% - 800px) / 2));
   bottom: 16px;
@@ -696,6 +810,24 @@ button {
   width: 800px;
   max-width: calc(100% - 32px);
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.scroll-to-bottom-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: 0 10px 30px color-mix(in oklch, var(--foreground) 12%, transparent);
+  pointer-events: auto;
+}
+
+.composer-panel {
+  width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
@@ -705,6 +837,7 @@ button {
   background: var(--card);
   box-shadow: 0 16px 40px color-mix(in oklch, var(--foreground) 10%, transparent);
   overflow: hidden;
+  pointer-events: auto;
 }
 
 .composer-toolbar {
@@ -725,7 +858,9 @@ button {
 .composer-panel textarea {
   width: 100%;
   min-height: 58px;
-  resize: vertical;
+  max-height: 300px;
+  overflow-y: auto;
+  resize: none;
   padding: 12px;
   border-width: 0 0 1px;
   border-radius: 0;

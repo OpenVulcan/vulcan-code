@@ -20,13 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Sidebar,
@@ -58,6 +51,7 @@ import {
   Boxes,
   BrainCircuit,
   Archive,
+  ArrowDown,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -2217,10 +2211,10 @@ function ProjectSidebar(props: {
       <SidebarHeader>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton tooltip="控制台">
+            <div aria-current="page" className="vcn-sidebar-static-item">
               <LayoutDashboard size={16} />
               <span className="vcn-sidebar-label strong">控制台</span>
-            </SidebarMenuButton>
+            </div>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
@@ -2244,31 +2238,36 @@ function ProjectSidebar(props: {
                       selectedConversationId={props.selectedConversationId}
                     />
                   ) : (
-                    <ProjectContextMenu project={project} onAction={props.onProjectMenuAction}>
-                      <SidebarMenuButton
-                        aria-expanded={isOpen}
-                        className="project-folder-button"
-                        onClick={() => toggleProjectOpen(project.id)}
-                        tooltip={`${project.name}\n${project.path}`}
+                    <div className="project-folder-row">
+                      <ProjectContextMenu project={project} onAction={props.onProjectMenuAction}>
+                        <SidebarMenuButton
+                          aria-expanded={isOpen}
+                          className="project-folder-button"
+                          onClick={() => toggleProjectOpen(project.id)}
+                          tooltip={`${project.name}\n${project.path}`}
+                        >
+                          {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
+                          <span className="vcn-sidebar-label project-folder-label">
+                            <strong>{project.name}</strong>
+                            {showOriginalFolderName ? <small>{folderName}</small> : null}
+                          </span>
+                          <span className="project-folder-arrow" aria-hidden="true">
+                            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          </span>
+                        </SidebarMenuButton>
+                      </ProjectContextMenu>
+                      <SidebarMenuAction
+                        aria-label={`在 ${project.name} 中创建新会话`}
+                        className="project-create-conversation"
+                        onClick={() => props.onCreateConversation(project)}
+                        showOnHover
+                        title="新建会话"
+                        type="button"
                       >
-                        {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
-                        <span className="vcn-sidebar-label project-folder-label">
-                          <strong>{project.name}</strong>
-                          {showOriginalFolderName ? <small>{folderName}</small> : null}
-                        </span>
-                      </SidebarMenuButton>
-                    </ProjectContextMenu>
+                        <SquarePen size={13} />
+                      </SidebarMenuAction>
+                    </div>
                   )}
-                  <SidebarMenuAction
-                    aria-label={`在 ${project.name} 中创建新会话`}
-                    className="project-create-conversation"
-                    onClick={() => props.onCreateConversation(project)}
-                    showOnHover
-                    title="新建会话"
-                    type="button"
-                  >
-                    <SquarePen size={13} />
-                  </SidebarMenuAction>
                   {isOpen && sidebarState !== "collapsed" ? (
                     <SidebarMenu className="project-conversation-list">
                       {projectConversations.map((conversation) => (
@@ -2315,8 +2314,8 @@ function ProjectSidebar(props: {
   );
 }
 
-// CollapsedProjectMenu renders project actions as a pop menu while the sidebar is collapsed.
-// CollapsedProjectMenu 在侧栏折叠时以弹出菜单展示项目操作。
+// CollapsedProjectMenu renders project actions as a hover flyout while the sidebar is collapsed.
+// CollapsedProjectMenu 在侧栏折叠时以悬停浮层展示项目操作。
 function CollapsedProjectMenu(props: {
   // Project that owns the collapsed entry.
   // 折叠入口所属项目。
@@ -2334,43 +2333,130 @@ function CollapsedProjectMenu(props: {
   // 选择一个已有会话。
   onSelectConversation: (conversationId: string) => void;
 }) {
+  // anchorRef points at the collapsed folder row used to place the hover flyout.
+  // anchorRef 指向折叠后的文件夹行，用于定位悬停浮层。
+  const anchorRef = React.useRef<HTMLDivElement | null>(null);
+  // closeTimerRef keeps the flyout alive while the pointer moves from folder to menu.
+  // closeTimerRef 在指针从文件夹移动到菜单时保持浮层不被立刻关闭。
+  const closeTimerRef = React.useRef<number | null>(null);
+  // flyoutOpen tracks whether the hover flyout is currently visible.
+  // flyoutOpen 跟踪悬停浮层当前是否可见。
+  const [flyoutOpen, setFlyoutOpen] = React.useState(false);
+  // flyoutPosition stores viewport coordinates so the menu is not clipped by sidebar scrolling.
+  // flyoutPosition 保存视口坐标，避免菜单被侧栏滚动容器裁剪。
+  const [flyoutPosition, setFlyoutPosition] = React.useState<{ left: number; top: number } | null>(null);
+
+  // clearCloseTimer cancels a pending delayed close when the pointer returns.
+  // clearCloseTimer 在指针返回时取消等待中的延迟关闭。
+  const clearCloseTimer = React.useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  // openFlyout positions and shows the collapsed project flyout.
+  // openFlyout 定位并显示折叠项目浮层。
+  const openFlyout = React.useCallback(() => {
+    clearCloseTimer();
+    const rect = anchorRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    setFlyoutPosition({
+      left: rect.right + 8,
+      top: rect.top,
+    });
+    setFlyoutOpen(true);
+  }, [clearCloseTimer]);
+
+  // scheduleClose delays closing so pointer travel between folder and menu feels stable.
+  // scheduleClose 延迟关闭浮层，让指针在文件夹与菜单间移动时保持稳定。
+  const scheduleClose = React.useCallback(() => {
+    clearCloseTimer();
+    closeTimerRef.current = window.setTimeout(() => {
+      setFlyoutOpen(false);
+    }, 140);
+  }, [clearCloseTimer]);
+
+  React.useEffect(() => clearCloseTimer, [clearCloseTimer]);
+
+  // selectConversation closes the flyout before switching to a conversation.
+  // selectConversation 在切换会话前关闭浮层。
+  const selectConversation = React.useCallback(
+    (conversationId: string) => {
+      setFlyoutOpen(false);
+      props.onSelectConversation(conversationId);
+    },
+    [props],
+  );
+
+  // createConversation closes the flyout before opening a draft conversation.
+  // createConversation 在打开草稿会话前关闭浮层。
+  const createConversation = React.useCallback(() => {
+    setFlyoutOpen(false);
+    props.onCreateConversation(props.project);
+  }, [props]);
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <>
+      <div
+        className="collapsed-project-hover-root"
+        onMouseEnter={openFlyout}
+        onMouseLeave={scheduleClose}
+        ref={anchorRef}
+      >
         <SidebarMenuButton
           aria-label={`${props.project.name} 会话菜单`}
           className="project-folder-button collapsed-project-button"
-          tooltip={props.project.name}
+          onClick={(event) => event.preventDefault()}
         >
           <Folder size={16} />
           <span className="vcn-sidebar-label project-folder-label">
             <strong>{props.project.name}</strong>
           </span>
         </SidebarMenuButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="collapsed-project-menu" side="right" sideOffset={8}>
-        <DropdownMenuItem onSelect={() => props.onCreateConversation(props.project)}>
-          <SquarePen size={15} />
-          <span>新建会话</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        {props.conversations.length > 0 ? (
-          props.conversations.map((conversation) => (
-            <DropdownMenuItem
-              className={cn(props.selectedConversationId === conversation.id && "active")}
-              key={conversation.id}
-              onSelect={() => props.onSelectConversation(conversation.id)}
-            >
-              <span className="collapsed-project-menu-title">{conversation.title}</span>
-            </DropdownMenuItem>
-          ))
-        ) : (
-          <DropdownMenuItem disabled>
-            <span>暂无会话</span>
-          </DropdownMenuItem>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </div>
+      {flyoutOpen && flyoutPosition ? (
+        <div
+          aria-label={`${props.project.name} 会话`}
+          className="collapsed-project-flyout"
+          onMouseEnter={openFlyout}
+          onMouseLeave={scheduleClose}
+          role="menu"
+          style={{ left: flyoutPosition.left, top: flyoutPosition.top }}
+        >
+          <div className="collapsed-project-flyout-title" role="presentation">
+            {props.project.name}
+          </div>
+          <button className="collapsed-project-flyout-item" onClick={createConversation} role="menuitem" type="button">
+            <SquarePen size={15} />
+            <span>新建会话</span>
+          </button>
+          <div className="collapsed-project-flyout-separator" role="separator" />
+          {props.conversations.length > 0 ? (
+            props.conversations.map((conversation) => (
+              <button
+                className={cn(
+                  "collapsed-project-flyout-item",
+                  props.selectedConversationId === conversation.id && "active",
+                )}
+                key={conversation.id}
+                onClick={() => selectConversation(conversation.id)}
+                role="menuitem"
+                type="button"
+              >
+                <span className="collapsed-project-menu-title">{conversation.title}</span>
+              </button>
+            ))
+          ) : (
+            <div className="collapsed-project-flyout-item disabled" role="presentation">
+              <span>暂无会话</span>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </>
   );
 }
 
@@ -2616,6 +2702,12 @@ function ChatArea(props: {
   loadingConversationId: string | null;
   conversationLoadError: string | null;
 }) {
+  // workspaceRef stores the scrollable conversation timeline element.
+  // workspaceRef 保存可滚动的会话时间线元素。
+  const workspaceRef = React.useRef<HTMLElement | null>(null);
+  // isAtConversationBottom tracks whether the user is viewing the latest conversation content.
+  // isAtConversationBottom 跟踪用户是否正在查看最新的会话内容。
+  const [isAtConversationBottom, setIsAtConversationBottom] = React.useState(true);
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
@@ -2625,6 +2717,32 @@ function ChatArea(props: {
     props.selectedDraftConversation
       || (selectedConversation && !isLoading && !props.conversationLoadError && messages.length === 0),
   );
+
+  // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
+  // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
+  const updateConversationBottomState = React.useCallback(() => {
+    const element = workspaceRef.current;
+    if (!element) {
+      setIsAtConversationBottom(true);
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    setIsAtConversationBottom(distanceFromBottom <= 24);
+  }, []);
+
+  // scrollConversationToBottom moves the timeline to the latest content.
+  // scrollConversationToBottom 将时间线滚动到最新内容。
+  const scrollConversationToBottom = React.useCallback(() => {
+    const element = workspaceRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+  }, []);
+
+  React.useEffect(() => {
+    updateConversationBottomState();
+  }, [messages.length, props.selectedConversationId, updateConversationBottomState]);
 
   return (
     <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid")}>
@@ -2637,8 +2755,10 @@ function ChatArea(props: {
             messages={messages}
             isLoading={isLoading}
             error={props.conversationLoadError}
+            onScrollStateChange={updateConversationBottomState}
+            scrollRef={workspaceRef}
           />
-          <ComposerPanel />
+          <ComposerDock onScrollToBottom={scrollConversationToBottom} showScrollToBottom={!isAtConversationBottom} />
         </>
       )}
     </div>
@@ -2835,6 +2955,8 @@ function ConversationWorkspace(props: {
   messages: ConversationMessage[];
   isLoading: boolean;
   error: string | null;
+  onScrollStateChange: () => void;
+  scrollRef: React.RefObject<HTMLElement | null>;
 }) {
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
@@ -2842,7 +2964,7 @@ function ConversationWorkspace(props: {
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
 
   return (
-    <section className="conversation-panel">
+    <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
       <div className="timeline">
         {props.isLoading ? (
           <article className="message-card system">
@@ -3166,7 +3288,7 @@ function TurnStatsBlock(props: { block: ConversationBlock }) {
           <strong>{props.block.summary || props.block.title}</strong>
         </div>
       </TooltipTrigger>
-      <TooltipContent className="turn-stats-tooltip" side="top" sideOffset={8}>
+      <TooltipContent className="turn-stats-tooltip" showArrow={false} side="right" sideOffset={8}>
         <pre>{props.block.body}</pre>
       </TooltipContent>
     </Tooltip>
@@ -3226,11 +3348,45 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
           {props.detail.kind === "diff" ? (
             <pre className="diff-detail"><code>{props.detail.body}</code></pre>
           ) : (
-            <MarkdownMessage content={props.detail.body} />
+      <MarkdownMessage content={props.detail.body} />
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ComposerDock renders composer-related floating controls.
+// ComposerDock 渲染输入区相关的浮动控件。
+function ComposerDock(props: {
+  // showScrollToBottom controls whether the bottom-jump button is visible.
+  // showScrollToBottom 控制是否显示跳转到底部按钮。
+  showScrollToBottom: boolean;
+  // onScrollToBottom moves the current conversation to its latest content.
+  // onScrollToBottom 将当前会话移动到最新内容。
+  onScrollToBottom: () => void;
+}) {
+  return (
+    <div className="composer-dock">
+      {props.showScrollToBottom ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="滚动到底部"
+              className="scroll-to-bottom-button"
+              onClick={props.onScrollToBottom}
+              size="icon"
+              type="button"
+              variant="outline"
+            >
+              <ArrowDown size={18} />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">滚动到底部</TooltipContent>
+        </Tooltip>
+      ) : null}
+      <ComposerPanel />
+    </div>
   );
 }
 

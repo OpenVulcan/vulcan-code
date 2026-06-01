@@ -30,10 +30,15 @@ function TooltipTrigger({
 
 function TooltipContent({
   className,
+  showArrow = true,
   sideOffset = 0,
   children,
   ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+}: React.ComponentProps<typeof TooltipPrimitive.Content> & {
+  // Whether to render the small tooltip arrow marker.
+  // 是否渲染 tooltip 的小箭头标记。
+  showArrow?: boolean
+}) {
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
@@ -46,7 +51,9 @@ function TooltipContent({
         {...props}
       >
         {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
+        {showArrow ? (
+          <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
+        ) : null}
       </TooltipPrimitive.Content>
     </TooltipPrimitive.Portal>
   )
