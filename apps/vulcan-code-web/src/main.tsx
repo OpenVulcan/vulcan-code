@@ -79,6 +79,7 @@ import {
   LayoutDashboard,
   MailOpen,
   Maximize2,
+  Minimize2,
   MessageSquareText,
   PanelTopOpen,
   Pencil,
@@ -92,7 +93,9 @@ import {
   SquarePen,
   SlidersHorizontal,
   Moon,
+  MinusIcon,
   Sun,
+  SquareIcon,
   TerminalSquare,
   Wrench,
   X,
@@ -521,6 +524,26 @@ type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promi
 // TauriListen 在 Tauri 内运行时订阅后端服务事件。
 type TauriListen = <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
 
+// TauriWindowHandle exposes only the window APIs used by the custom title bar.
+// TauriWindowHandle 仅暴露自定义标题栏使用的窗口 API。
+interface TauriWindowHandle {
+  // Minimizes the current desktop window.
+  // 最小化当前桌面窗口。
+  minimize: () => Promise<void>;
+  // Toggles the current desktop window maximized state.
+  // 切换当前桌面窗口最大化状态。
+  toggleMaximize: () => Promise<void>;
+  // Returns whether the current desktop window is maximized.
+  // 返回当前桌面窗口是否处于最大化状态。
+  isMaximized: () => Promise<boolean>;
+  // Closes the current desktop window.
+  // 关闭当前桌面窗口。
+  close: () => Promise<void>;
+  // Starts native window dragging from a custom header region.
+  // 从自定义标题栏区域开始原生窗口拖拽。
+  startDragging: () => Promise<void>;
+}
+
 // ServiceEvent describes the tagged event emitted by the Tauri service bridge.
 // ServiceEvent 描述 Tauri 服务桥接层发出的带标签事件。
 type ServiceEvent =
@@ -658,10 +681,16 @@ const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   logs: <ScrollText size={17} />,
 };
 
+// isTauriRuntime returns whether the WebUI is hosted by the desktop Tauri shell.
+// isTauriRuntime 返回 WebUI 是否运行在 Tauri 桌面壳中。
+function isTauriRuntime(): boolean {
+  return "__TAURI_INTERNALS__" in window;
+}
+
 // resolveInvoke loads the Tauri invoke function when available.
 // resolveInvoke 在可用时加载 Tauri invoke 函数。
 async function resolveInvoke(): Promise<TauriInvoke | null> {
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!isTauriRuntime()) {
     return null;
   }
 
@@ -672,12 +701,23 @@ async function resolveInvoke(): Promise<TauriInvoke | null> {
 // resolveListen loads the Tauri event listener when available.
 // resolveListen 在可用时加载 Tauri 事件监听器。
 async function resolveListen(): Promise<TauriListen | null> {
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!isTauriRuntime()) {
     return null;
   }
 
   const api = await import("@tauri-apps/api/event");
   return api.listen as TauriListen;
+}
+
+// resolveCurrentWindow loads the Tauri window handle only inside the desktop shell.
+// resolveCurrentWindow 仅在桌面壳内加载 Tauri 当前窗口句柄。
+async function resolveCurrentWindow(): Promise<TauriWindowHandle | null> {
+  if (!isTauriRuntime()) {
+    return null;
+  }
+
+  const api = await import("@tauri-apps/api/window");
+  return api.getCurrentWindow() as TauriWindowHandle;
 }
 
 // loadStartupSnapshot loads startup state from Tauri or fallback data.
@@ -924,6 +964,54 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
+  // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
+  // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
+  const showWindowControls = isTauriRuntime();
+  // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
+  // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
+  const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
+  // refreshWindowMaximizedState synchronizes the local titlebar state with Tauri.
+  // refreshWindowMaximizedState 将本地标题栏状态与 Tauri 同步。
+  const refreshWindowMaximizedState = React.useCallback(async () => {
+    const windowHandle = await resolveCurrentWindow();
+    if (!windowHandle) {
+      return;
+    }
+    setIsWindowMaximized(await windowHandle.isMaximized());
+  }, []);
+  // toggleWindowMaximize toggles native maximize state and refreshes the icon.
+  // toggleWindowMaximize 切换原生最大化状态并刷新图标。
+  const toggleWindowMaximize = React.useCallback(async () => {
+    const windowHandle = await resolveCurrentWindow();
+    if (!windowHandle) {
+      return;
+    }
+    await windowHandle.toggleMaximize();
+    window.setTimeout(() => void refreshWindowMaximizedState(), 40);
+  }, [refreshWindowMaximizedState]);
+  // handleTitlebarPointerDown starts native dragging from non-interactive header space.
+  // handleTitlebarPointerDown 从标题栏非交互区域开始原生拖拽。
+  const handleTitlebarPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (!showWindowControls || event.button !== 0 || isInteractiveTitlebarTarget(event.target)) {
+      return;
+    }
+    void resolveCurrentWindow().then((windowHandle) => windowHandle?.startDragging());
+  }, [showWindowControls]);
+  // handleTitlebarDoubleClick toggles maximize from non-interactive header space.
+  // handleTitlebarDoubleClick 从标题栏非交互区域切换最大化。
+  const handleTitlebarDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!showWindowControls || isInteractiveTitlebarTarget(event.target)) {
+      return;
+    }
+    void toggleWindowMaximize();
+  }, [showWindowControls, toggleWindowMaximize]);
+
+  React.useEffect(() => {
+    if (!showWindowControls) {
+      return;
+    }
+    void refreshWindowMaximizedState();
+  }, [refreshWindowMaximizedState, showWindowControls]);
 
   // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
   // applyProjectActionSnapshot 将项目菜单操作结果合并进本地工作台。
@@ -1161,8 +1249,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   }, [draftConversation?.id, hydratedConversationIds, selectedConversationId]);
 
   return (
-    <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"}`}>
-      <header className="main-menu" aria-label="主菜单">
+    <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
+      <header
+        className="main-menu"
+        aria-label="主菜单"
+        onDoubleClick={showWindowControls ? handleTitlebarDoubleClick : undefined}
+        onPointerDown={showWindowControls ? handleTitlebarPointerDown : undefined}
+      >
         <BrandHeader />
         <FeatureNav
           areas={workbenchState.featureAreas}
@@ -1175,6 +1268,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           onOpenSettings={() => setActiveArea("settings")}
         />
+        {showWindowControls ? (
+          <WindowControls
+            isMaximized={isWindowMaximized}
+            onMaximizeToggle={toggleWindowMaximize}
+            onMaximizeStateRefresh={refreshWindowMaximizedState}
+          />
+        ) : null}
       </header>
       <main className="workspace">
         {showConsoleSidebar ? (
@@ -1233,6 +1333,89 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
 function initialThemeMode(): ThemeMode {
   const stored = window.localStorage.getItem("vulcan-webui-theme");
   return stored === "light" || stored === "dark" ? stored : "dark";
+}
+
+// isInteractiveTitlebarTarget returns whether a pointer target must keep normal click behavior.
+// isInteractiveTitlebarTarget 返回指针目标是否必须保留正常点击行为。
+function isInteractiveTitlebarTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest("button, a, input, textarea, select, [role='button'], [role='menuitem'], [data-no-drag]"));
+}
+
+// WindowControls renders Tauri-only custom minimize, maximize, and close buttons.
+// WindowControls 渲染仅 Tauri 使用的自定义最小化、最大化与关闭按钮。
+function WindowControls(props: {
+  // Whether the current Tauri window is maximized.
+  // 当前 Tauri 窗口是否处于最大化状态。
+  isMaximized: boolean;
+  // Toggles maximize or restore using the shared titlebar behavior.
+  // 使用共享标题栏行为切换最大化或还原。
+  onMaximizeToggle: () => Promise<void>;
+  // Refreshes maximize state after native window actions.
+  // 在原生窗口操作后刷新最大化状态。
+  onMaximizeStateRefresh: () => Promise<void>;
+}) {
+  // runWindowAction invokes one native window command and reports failures as toasts.
+  // runWindowAction 调用单个原生窗口命令，并用 toast 报告失败。
+  const runWindowAction = React.useCallback(async (action: "minimize" | "close") => {
+    const windowHandle = await resolveCurrentWindow();
+    if (!windowHandle) {
+      return;
+    }
+    try {
+      await windowHandle[action]();
+      await props.onMaximizeStateRefresh();
+    } catch (error) {
+      toast.error(`窗口操作失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [props]);
+
+  // handleMaximizeClick shares the same maximize/restore behavior as titlebar double-click.
+  // handleMaximizeClick 与标题栏双击共享同一套最大化/还原行为。
+  const handleMaximizeClick = React.useCallback(async () => {
+    try {
+      await props.onMaximizeToggle();
+    } catch (error) {
+      toast.error(`窗口操作失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+  }, [props]);
+
+  return (
+    <div className="window-controls" data-no-drag>
+      <Button
+        aria-label="最小化窗口"
+        className="window-control-button"
+        onClick={() => void runWindowAction("minimize")}
+        size="icon"
+        type="button"
+        variant="ghost"
+      >
+        <MinusIcon size={16} />
+      </Button>
+      <Button
+        aria-label={props.isMaximized ? "还原窗口" : "最大化窗口"}
+        className="window-control-button"
+        onClick={() => void handleMaximizeClick()}
+        size="icon"
+        type="button"
+        variant="ghost"
+      >
+        {props.isMaximized ? <Minimize2 size={15} /> : <SquareIcon size={13} />}
+      </Button>
+      <Button
+        aria-label="关闭窗口"
+        className="window-control-button close"
+        onClick={() => void runWindowAction("close")}
+        size="icon"
+        type="button"
+        variant="ghost"
+      >
+        <X size={16} />
+      </Button>
+    </div>
+  );
 }
 
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
@@ -2728,9 +2911,6 @@ function ChatArea(props: {
   // workspaceRef stores the scrollable conversation timeline element.
   // workspaceRef 保存可滚动的会话时间线元素。
   const workspaceRef = React.useRef<HTMLElement | null>(null);
-  // autoScrolledConversationIdRef remembers the last conversation opened with an automatic bottom jump.
-  // autoScrolledConversationIdRef 记录最近一次已自动跳到底部的打开会话。
-  const autoScrolledConversationIdRef = React.useRef<string | null>(null);
   // isAtConversationBottom tracks whether the user is viewing the latest conversation content.
   // isAtConversationBottom 跟踪用户是否正在查看最新的会话内容。
   const [isAtConversationBottom, setIsAtConversationBottom] = React.useState(true);
@@ -2763,23 +2943,37 @@ function ChatArea(props: {
     if (!element) {
       return;
     }
-    element.scrollTo({ top: element.scrollHeight, behavior });
+    const safeBehavior = behavior === "auto" || behavior === "instant" || behavior === "smooth" ? behavior : "smooth";
+    element.scrollTo({ top: element.scrollHeight, behavior: safeBehavior });
   }, []);
 
-  React.useEffect(() => {
+  // jumpConversationToBottom immediately pins the timeline to its latest rendered height.
+  // jumpConversationToBottom 立即把时间线固定到最新已渲染高度。
+  const jumpConversationToBottom = React.useCallback(() => {
+    const element = workspaceRef.current;
+    if (!element) {
+      return false;
+    }
+    element.scrollTop = element.scrollHeight;
+    return true;
+  }, []);
+
+  React.useLayoutEffect(() => {
     if (!props.selectedConversationId || isEmptyConversation || isLoading) {
       return;
     }
-    if (autoScrolledConversationIdRef.current === props.selectedConversationId) {
-      return;
-    }
-    autoScrolledConversationIdRef.current = props.selectedConversationId;
 
     let secondFrame: number | null = null;
+    let thirdFrame: number | null = null;
+    jumpConversationToBottom();
     const firstFrame = window.requestAnimationFrame(() => {
-      scrollConversationToBottom("auto");
+      jumpConversationToBottom();
       secondFrame = window.requestAnimationFrame(() => {
-        scrollConversationToBottom("auto");
+        jumpConversationToBottom();
+        thirdFrame = window.requestAnimationFrame(() => {
+          jumpConversationToBottom();
+          updateConversationBottomState();
+        });
         updateConversationBottomState();
       });
     });
@@ -2789,13 +2983,16 @@ function ChatArea(props: {
       if (secondFrame !== null) {
         window.cancelAnimationFrame(secondFrame);
       }
+      if (thirdFrame !== null) {
+        window.cancelAnimationFrame(thirdFrame);
+      }
     };
   }, [
     isEmptyConversation,
     isLoading,
+    jumpConversationToBottom,
     messages.length,
     props.selectedConversationId,
-    scrollConversationToBottom,
     updateConversationBottomState,
   ]);
 
@@ -2817,7 +3014,7 @@ function ChatArea(props: {
             onScrollStateChange={updateConversationBottomState}
             scrollRef={workspaceRef}
           />
-          <ComposerDock onScrollToBottom={scrollConversationToBottom} showScrollToBottom={!isAtConversationBottom} />
+          <ComposerDock onScrollToBottom={() => scrollConversationToBottom()} showScrollToBottom={!isAtConversationBottom} />
         </>
       )}
     </div>

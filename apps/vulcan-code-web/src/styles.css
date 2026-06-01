@@ -119,6 +119,11 @@ button {
   overflow: hidden;
 }
 
+.app-shell.tauri-shell .main-menu {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  user-select: none;
+}
+
 .brand {
   flex: 0 0 auto;
   display: flex;
@@ -179,6 +184,31 @@ button {
 
 .global-actions > * {
   flex: 0 0 auto;
+}
+
+.window-controls {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
+
+.window-control-button {
+  width: 36px;
+  height: 32px;
+  border-radius: 7px;
+  color: var(--muted-foreground);
+}
+
+.window-control-button:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.window-control-button.close:hover {
+  background: var(--destructive);
+  color: white;
 }
 
 .feature-button {
