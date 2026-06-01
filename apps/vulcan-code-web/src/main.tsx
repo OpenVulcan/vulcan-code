@@ -10,6 +10,19 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -561,7 +574,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
 // AreaIconMap maps feature ids to lucide icons.
 // AreaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
-  chat: <MessageSquareText size={17} />,
+  chat: <LayoutDashboard size={17} />,
   projects: <Boxes size={17} />,
   providers: <SlidersHorizontal size={17} />,
   tools: <Hammer size={17} />,
@@ -745,6 +758,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // activeFeature stores the selected feature summary.
   // activeFeature 保存当前选中的功能区域摘要。
   const activeFeature = workbenchState.featureAreas.find((area) => area.id === activeArea) ?? workbenchState.featureAreas[0];
+  // selectedConversation stores the conversation used by the console header.
+  // selectedConversation 保存控制台标题栏使用的当前会话。
+  const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
@@ -815,33 +831,39 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           activeArea={activeArea}
           onSelect={setActiveArea}
         />
-      </header>
-      {showConsoleSidebar && (
-        <aside className="sidebar">
-          <ProjectSidebar
-            projects={props.workbench.projects}
-            conversations={workbenchState.conversations}
-            selectedConversationId={selectedConversationId}
-            onSelectConversation={setSelectedConversationId}
-          />
-        </aside>
-      )}
-      <main className="workspace">
-        <Topbar
+        <GlobalActions
           startup={props.startup}
-          activeFeature={activeFeature}
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           onOpenSettings={() => setActiveArea("settings")}
         />
-        <AreaContent
-          activeArea={activeArea}
-          startup={props.startup}
-          workbench={workbenchState}
-          selectedConversationId={selectedConversationId}
-          loadingConversationId={loadingConversationId}
-          conversationLoadError={conversationLoadError}
-        />
+      </header>
+      <main className="workspace">
+        {showConsoleSidebar ? (
+          <ConsoleShell
+            startup={props.startup}
+            workbench={workbenchState}
+            selectedConversation={selectedConversation}
+            selectedConversationId={selectedConversationId}
+            loadingConversationId={loadingConversationId}
+            conversationLoadError={conversationLoadError}
+            onSelectConversation={setSelectedConversationId}
+          />
+        ) : (
+          <>
+            <Topbar
+              activeFeature={activeFeature}
+            />
+            <AreaContent
+              activeArea={activeArea}
+              startup={props.startup}
+              workbench={workbenchState}
+              selectedConversationId={selectedConversationId}
+              loadingConversationId={loadingConversationId}
+              conversationLoadError={conversationLoadError}
+            />
+          </>
+        )}
       </main>
       <footer className="statusbar">
         <span>版本 {props.workbench.appVersion}</span>
@@ -1517,14 +1539,49 @@ function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId
   );
 }
 
-// Topbar renders active area title and global controls.
-// Topbar 渲染当前区域标题与全局控制。
-function Topbar(props: {
+// GlobalActions renders app-wide controls in the primary menu bar.
+// GlobalActions 渲染主菜单栏中的全局控制。
+function GlobalActions(props: {
   startup: StartupSnapshot;
-  activeFeature?: FeatureAreaSummary;
   theme: ThemeMode;
   onToggleTheme: () => void;
   onOpenSettings: () => void;
+}) {
+  // isPreviewMode detects fallback browser data instead of a live service bridge.
+  // isPreviewMode 检测当前是否为浏览器回退预览数据而非真实服务桥接。
+  const isPreviewMode = props.startup.phase === "browser-preview";
+  // statusLabel translates internal startup phases into compact user-facing labels.
+  // statusLabel 将内部启动阶段转换为面向用户的紧凑显示文案。
+  const statusLabel = isPreviewMode ? "预览" : props.startup.ready ? "在线" : props.startup.phase;
+  // statusKind keeps preview visually distinct from a live ready service.
+  // statusKind 让预览状态与真实在线服务在视觉上保持区分。
+  const statusKind = isPreviewMode ? "warning" : props.startup.ready ? "ready" : "running";
+
+  return (
+    <div className="global-actions">
+      <StatusPill status={statusKind} label={statusLabel} />
+      <Button
+        aria-label={props.theme === "dark" ? "切换为亮色主题" : "切换为暗色主题"}
+        className="theme-toggle"
+        onClick={props.onToggleTheme}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
+        {props.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
+        <span>{props.theme === "dark" ? "Dark" : "Light"}</span>
+      </Button>
+      <Button aria-label="打开设置" className="icon-button" onClick={props.onOpenSettings} size="icon" type="button" variant="outline">
+        <Settings size={18} />
+      </Button>
+    </div>
+  );
+}
+
+// Topbar renders the current feature title for non-console pages.
+// Topbar 渲染非控制台页面的当前功能标题。
+function Topbar(props: {
+  activeFeature?: FeatureAreaSummary;
 }) {
   return (
     <header className="topbar">
@@ -1533,22 +1590,52 @@ function Topbar(props: {
         <h1>{props.activeFeature?.label ?? "工作台"}</h1>
         <span>{props.activeFeature?.description ?? "Core Service 驱动的新工作台"}</span>
       </div>
-      <div className="topbar-actions">
-        <StatusPill status={props.startup.ready ? "ready" : "running"} label={props.startup.phase} />
-        <Button
-          aria-label={props.theme === "dark" ? "切换为亮色主题" : "切换为暗色主题"}
-          className="theme-toggle"
-          onClick={props.onToggleTheme}
-          size="sm"
-          type="button"
-          variant="outline"
-        >
-          {props.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-          <span>{props.theme === "dark" ? "Dark" : "Light"}</span>
-        </Button>
-        <Button aria-label="打开设置" className="icon-button" onClick={props.onOpenSettings} size="icon" type="button" variant="outline">
-          <Settings size={18} />
-        </Button>
+    </header>
+  );
+}
+
+// ConsoleShell renders the shadcn dashboard-like fused sidebar and inset console area.
+// ConsoleShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
+function ConsoleShell(props: {
+  startup: StartupSnapshot;
+  workbench: WorkbenchSnapshot;
+  selectedConversation?: ConversationSummary;
+  selectedConversationId: string | null;
+  loadingConversationId: string | null;
+  conversationLoadError: string | null;
+  onSelectConversation: (conversationId: string) => void;
+}) {
+  return (
+    <SidebarProvider className="console-shell">
+      <ProjectSidebar
+        projects={props.workbench.projects}
+        conversations={props.workbench.conversations}
+        selectedConversationId={props.selectedConversationId}
+        onSelectConversation={props.onSelectConversation}
+      />
+      <SidebarInset>
+        <ConsoleHeader conversation={props.selectedConversation} />
+        <ChatArea
+          startup={props.startup}
+          workbench={props.workbench}
+          selectedConversationId={props.selectedConversationId}
+          loadingConversationId={props.loadingConversationId}
+          conversationLoadError={props.conversationLoadError}
+        />
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+// ConsoleHeader renders the inset title bar for the current conversation.
+// ConsoleHeader 渲染当前会话的 inset 标题栏。
+function ConsoleHeader(props: { conversation?: ConversationSummary }) {
+  return (
+    <header className="console-header">
+      <div className="console-header-main">
+        <SidebarTrigger />
+        <span className="console-header-separator" aria-hidden="true" />
+        <h1>{props.conversation?.title ?? "会话"}</h1>
       </div>
     </header>
   );
@@ -1563,37 +1650,67 @@ function ProjectSidebar(props: {
   onSelectConversation: (conversationId: string) => void;
 }) {
   return (
-    <div className="sidebar-sections">
-      <section>
-        <h2><Boxes size={15} />项目</h2>
-        {props.projects.map((project) => (
-          <article className="nav-card active" key={project.id}>
-            <strong>{project.name}</strong>
-            <span>{project.path}</span>
-          </article>
-        ))}
-      </section>
-      <section>
-        <h2><MessageSquareText size={15} />会话</h2>
-        {props.conversations.length === 0 ? (
-          <article className="nav-card muted">
-            <strong>暂无会话</strong>
-            <span>等待 Workspace 快照载入</span>
-          </article>
-        ) : null}
-        {props.conversations.map((conversation) => (
-          <button
-            className={`nav-card nav-button ${props.selectedConversationId === conversation.id ? "active" : ""}`}
-            key={conversation.id}
-            onClick={() => props.onSelectConversation(conversation.id)}
-            type="button"
-          >
-            <strong>{conversation.title}</strong>
-            <span>{conversation.status}</span>
-          </button>
-        ))}
-      </section>
-    </div>
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton tooltip="控制台">
+              <LayoutDashboard size={16} />
+              <span className="vcn-sidebar-label strong">控制台</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup>
+          <SidebarGroupLabel><Boxes size={15} /><span>项目</span></SidebarGroupLabel>
+          <SidebarMenu>
+            {props.projects.map((project) => (
+              <SidebarMenuItem key={project.id}>
+                <SidebarMenuButton active tooltip={`${project.name}\n${project.path}`}>
+                  <Boxes size={16} />
+                  <span className="vcn-sidebar-label">
+                    <strong>{project.name}</strong>
+                    <small>{project.path}</small>
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel><MessageSquareText size={15} /><span>会话</span></SidebarGroupLabel>
+          <SidebarMenu>
+            {props.conversations.length === 0 ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton className="muted" tooltip="暂无会话">
+                  <MessageSquareText size={16} />
+                  <span className="vcn-sidebar-label">
+                    <strong>暂无会话</strong>
+                    <small>等待 Workspace 快照载入</small>
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
+            {props.conversations.map((conversation) => (
+              <SidebarMenuItem key={conversation.id}>
+                <SidebarMenuButton
+                  active={props.selectedConversationId === conversation.id}
+                  onClick={() => props.onSelectConversation(conversation.id)}
+                  tooltip={`${conversation.title}\n${conversation.status}`}
+                >
+                  <MessageSquareText size={16} />
+                  <span className="vcn-sidebar-label">
+                    <strong>{conversation.title}</strong>
+                    <small>{conversation.status}</small>
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </SidebarGroup>
+      </SidebarContent>
+    </Sidebar>
   );
 }
 
@@ -1639,8 +1756,8 @@ function AreaContent(props: {
   );
 }
 
-// ChatArea renders the conversation workspace and runtime side panels.
-// ChatArea 渲染会话工作区与运行时侧面板。
+// ChatArea renders the conversation workspace and composer.
+// ChatArea 渲染会话工作区与输入区域。
 function ChatArea(props: {
   startup: StartupSnapshot;
   workbench: WorkbenchSnapshot;
@@ -1660,10 +1777,6 @@ function ChatArea(props: {
         isLoading={isLoading}
         error={props.conversationLoadError}
       />
-      <div className="stack">
-        <StartupPanel startup={props.startup} />
-        <RuntimeModulesPanel modules={props.workbench.modules} />
-      </div>
       <ComposerPanel />
     </div>
   );
@@ -1866,8 +1979,7 @@ function ConversationWorkspace(props: {
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
 
   return (
-    <section className="panel conversation-panel">
-      <PanelTitle icon={<Code2 size={17} />} title={props.conversation?.title ?? "会话渲染"} />
+    <section className="conversation-panel">
       <div className="timeline">
         {props.isLoading ? (
           <article className="message-card system">
