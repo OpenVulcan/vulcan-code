@@ -58,6 +58,7 @@ import {
   BrainCircuit,
   Archive,
   ArrowDown,
+  ChevronLeft,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -543,9 +544,9 @@ interface TauriWindowHandle {
   // Closes the current desktop window.
   // 关闭当前桌面窗口。
   close: () => Promise<void>;
-  // Starts native window dragging from a custom header region.
-  // 从自定义标题栏区域开始原生窗口拖拽。
-  startDragging: () => Promise<void>;
+  // Subscribes to native window resize events.
+  // 订阅原生窗口尺寸变化事件。
+  onResized: (handler: () => void) => Promise<() => void>;
 }
 
 // ServiceEvent describes the tagged event emitted by the Tauri service bridge.
@@ -1013,28 +1014,38 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     await windowHandle.toggleMaximize();
     window.setTimeout(() => void refreshWindowMaximizedState(), 40);
   }, [refreshWindowMaximizedState]);
-  // handleTitlebarPointerDown starts native dragging from non-interactive header space.
-  // handleTitlebarPointerDown 从标题栏非交互区域开始原生拖拽。
-  const handleTitlebarPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
-    if (!showWindowControls || event.button !== 0 || isInteractiveTitlebarTarget(event.target)) {
-      return;
-    }
-    void resolveCurrentWindow().then((windowHandle) => windowHandle?.startDragging());
-  }, [showWindowControls]);
-  // handleTitlebarDoubleClick toggles maximize from non-interactive header space.
-  // handleTitlebarDoubleClick 从标题栏非交互区域切换最大化。
-  const handleTitlebarDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
-    if (!showWindowControls || isInteractiveTitlebarTarget(event.target)) {
-      return;
-    }
-    void toggleWindowMaximize();
-  }, [showWindowControls, toggleWindowMaximize]);
-
   React.useEffect(() => {
     if (!showWindowControls) {
       return;
     }
     void refreshWindowMaximizedState();
+  }, [refreshWindowMaximizedState, showWindowControls]);
+
+  React.useEffect(() => {
+    if (!showWindowControls) {
+      return;
+    }
+
+    let cancelled = false;
+    let unlisten: null | (() => void) = null;
+
+    // subscribeWindowResize keeps the restore icon aligned when native drag-region double click changes state.
+    // subscribeWindowResize 在原生拖动区域双击改变窗口状态后同步还原图标。
+    async function subscribeWindowResize() {
+      const windowHandle = await resolveCurrentWindow();
+      if (!windowHandle || cancelled) {
+        return;
+      }
+      unlisten = await windowHandle.onResized(() => {
+        void refreshWindowMaximizedState();
+      });
+    }
+
+    void subscribeWindowResize();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [refreshWindowMaximizedState, showWindowControls]);
 
   // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
@@ -1277,15 +1288,14 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       <header
         className="main-menu"
         aria-label="主菜单"
-        onDoubleClick={showWindowControls ? handleTitlebarDoubleClick : undefined}
-        onPointerDown={showWindowControls ? handleTitlebarPointerDown : undefined}
       >
-        <BrandHeader />
+        <BrandHeader dragRegion={showWindowControls} />
         <FeatureNav
           areas={primaryFeatureAreas}
           activeArea={activeArea}
           onSelect={setActiveArea}
         />
+        {showWindowControls ? <div className="titlebar-drag-region" data-tauri-drag-region /> : null}
         <GlobalActions
           startup={props.startup}
           theme={theme}
@@ -1352,15 +1362,6 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
 function initialThemeMode(): ThemeMode {
   const stored = window.localStorage.getItem("vulcan-webui-theme");
   return stored === "light" || stored === "dark" ? stored : "dark";
-}
-
-// isInteractiveTitlebarTarget returns whether a pointer target must keep normal click behavior.
-// isInteractiveTitlebarTarget 返回指针目标是否必须保留正常点击行为。
-function isInteractiveTitlebarTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof Element)) {
-    return false;
-  }
-  return Boolean(target.closest("button, a, input, textarea, select, [role='button'], [role='menuitem'], [data-no-drag]"));
 }
 
 // WindowControls renders Tauri-only custom minimize, maximize, and close buttons.
@@ -2222,9 +2223,13 @@ async function copyText(text: string): Promise<void> {
 
 // BrandHeader renders the product brand area.
 // BrandHeader 渲染产品品牌区域。
-function BrandHeader() {
+function BrandHeader(props: {
+  // Whether the brand block should behave as a native Tauri drag region.
+  // 品牌块是否应作为 Tauri 原生拖动区域。
+  dragRegion?: boolean;
+}) {
   return (
-    <div className="brand">
+    <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
       <div className="brand-mark">V</div>
       <div>
         <strong>Vulcan Code</strong>
@@ -2237,23 +2242,88 @@ function BrandHeader() {
 // FeatureNav renders the primary workbench navigation.
 // FeatureNav 渲染工作台主导航。
 function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId; onSelect: (area: MainAreaId) => void }) {
+  // scrollRef points to the horizontal navigation viewport.
+  // scrollRef 指向横向导航视口。
+  const scrollRef = React.useRef<HTMLElement | null>(null);
+  // navOverflow stores whether each arrow can move the navigation viewport.
+  // navOverflow 保存左右箭头是否还能移动导航视口。
+  const [navOverflow, setNavOverflow] = React.useState({ left: false, right: false });
+
+  // updateNavOverflow refreshes arrow enabled state from the scroll viewport.
+  // updateNavOverflow 根据滚动视口刷新箭头启用状态。
+  const updateNavOverflow = React.useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      setNavOverflow({ left: false, right: false });
+      return;
+    }
+    const maxScrollLeft = element.scrollWidth - element.clientWidth;
+    setNavOverflow({
+      left: element.scrollLeft > 2,
+      right: element.scrollLeft < maxScrollLeft - 2,
+    });
+  }, []);
+
+  // scrollNav moves the navigation viewport by one compact page.
+  // scrollNav 按一个紧凑页宽移动导航视口。
+  const scrollNav = React.useCallback((direction: -1 | 1) => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollBy({ left: direction * Math.max(120, element.clientWidth * 0.7), behavior: "smooth" });
+    window.setTimeout(updateNavOverflow, 180);
+  }, [updateNavOverflow]);
+
+  React.useEffect(() => {
+    updateNavOverflow();
+    window.addEventListener("resize", updateNavOverflow);
+    return () => window.removeEventListener("resize", updateNavOverflow);
+  }, [props.areas.length, updateNavOverflow]);
+
   return (
-    <nav className="feature-nav" aria-label="主功能">
-      {props.areas.map((area) => (
+    <div className="feature-nav-shell">
+      {navOverflow.left ? (
         <Button
-          className="feature-button"
-          key={area.id}
-          onClick={() => props.onSelect(area.id)}
-          size="sm"
-          title={area.description}
+          aria-label="向左滚动主功能"
+          className="feature-nav-arrow"
+          onClick={() => scrollNav(-1)}
+          size="icon-sm"
           type="button"
-          variant={props.activeArea === area.id ? "secondary" : "ghost"}
+          variant="ghost"
         >
-          {areaIconMap[area.id]}
-          <span>{area.label}</span>
+          <ChevronLeft size={15} />
         </Button>
-      ))}
-    </nav>
+      ) : null}
+      <nav className="feature-nav" aria-label="主功能" onScroll={updateNavOverflow} ref={scrollRef}>
+        {props.areas.map((area) => (
+          <Button
+            className="feature-button"
+            key={area.id}
+            onClick={() => props.onSelect(area.id)}
+            size="sm"
+            title={area.description}
+            type="button"
+            variant={props.activeArea === area.id ? "secondary" : "ghost"}
+          >
+            {areaIconMap[area.id]}
+            <span>{area.label}</span>
+          </Button>
+        ))}
+      </nav>
+      {navOverflow.right ? (
+        <Button
+          aria-label="向右滚动主功能"
+          className="feature-nav-arrow"
+          onClick={() => scrollNav(1)}
+          size="icon-sm"
+          type="button"
+          variant="ghost"
+        >
+          <ChevronRight size={15} />
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

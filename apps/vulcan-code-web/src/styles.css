@@ -120,8 +120,14 @@ button {
 }
 
 .app-shell.tauri-shell .main-menu {
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto minmax(56px, 1fr) auto auto;
   user-select: none;
+}
+
+.titlebar-drag-region {
+  align-self: stretch;
+  min-width: 56px;
+  cursor: default;
 }
 
 .brand {
@@ -131,6 +137,10 @@ button {
   gap: 10px;
   margin-bottom: 0;
   padding: 0 6px;
+}
+
+.brand[data-tauri-drag-region] > * {
+  pointer-events: none;
 }
 
 .brand-mark {
@@ -165,13 +175,36 @@ button {
   color: var(--muted-foreground);
 }
 
+.feature-nav-shell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.app-shell.tauri-shell .feature-nav-shell {
+  max-width: min(58vw, 640px);
+}
+
 .feature-nav {
   min-width: 0;
   display: flex;
   align-items: center;
   gap: 6px;
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.feature-nav::-webkit-scrollbar {
+  display: none;
+}
+
+.feature-nav-arrow {
+  width: 24px;
+  height: 28px;
+  flex: 0 0 24px;
+  color: var(--muted-foreground);
 }
 
 .global-actions {
