@@ -3237,17 +3237,66 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 function ComposerPanel() {
+  // draftInput stores the current unsent composer text.
+  // draftInput 保存当前尚未发送的输入区文本。
+  const [draftInput, setDraftInput] = React.useState("");
+  // placeholder describes the platform-specific send and newline keyboard behavior.
+  // placeholder 描述平台相关的发送与换行键盘行为。
+  const placeholder = React.useMemo(() => {
+    return `输入当前会话要执行的任务指令（${composerShortcutHint()}）`;
+  }, []);
+
+  // handleComposerSend handles the current placeholder-only send action.
+  // handleComposerSend 处理当前仅占位的发送动作。
+  const handleComposerSend = React.useCallback(() => {
+    if (!draftInput.trim()) {
+      toast.info("请输入任务指令。");
+      return;
+    }
+    toast.info("发送已拦截：真实发送链路待接入。");
+  }, [draftInput]);
+
+  // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
+  // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
+  const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
+      return;
+    }
+    event.preventDefault();
+    handleComposerSend();
+  }, [handleComposerSend]);
+
   return (
     <section className="composer-panel">
+      <Textarea
+        aria-label="当前会话输入"
+        onChange={(event) => setDraftInput(event.currentTarget.value)}
+        onKeyDown={handleComposerKeyDown}
+        placeholder={placeholder}
+        value={draftInput}
+      />
       <div className="composer-toolbar">
-        <Button size="sm" type="button" variant="outline">build</Button>
-        <Button size="sm" type="button" variant="outline">模型</Button>
-        <Button size="sm" type="button" variant="outline">工具</Button>
+        <div className="composer-toolbar-left">
+          <Button size="sm" type="button" variant="outline">build</Button>
+          <Button size="sm" type="button" variant="outline">模型</Button>
+          <Button size="sm" type="button" variant="outline">工具</Button>
+        </div>
+        <Button className="send-button" onClick={handleComposerSend} type="button">发送</Button>
       </div>
-      <Textarea aria-label="当前会话输入" placeholder="输入当前会话要执行的任务指令" />
-      <Button className="send-button" type="button">发送</Button>
     </section>
   );
+}
+
+// composerShortcutHint returns a platform-specific keyboard hint for the composer placeholder.
+// composerShortcutHint 返回输入区 placeholder 使用的平台化快捷键提示。
+function composerShortcutHint(): string {
+  const platformText = typeof navigator === "undefined"
+    ? ""
+    : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
+  if (platformText.includes("mac")) {
+    return "⏎ 发送，Shift + ⏎ 换行";
+  }
+  return "⏎ 发送，Shift + ⏎ 换行";
 }
 
 // EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
