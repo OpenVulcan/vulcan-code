@@ -35,6 +35,8 @@ import {
   Activity,
   Boxes,
   BrainCircuit,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
   CircleAlert,
   Clock3,
@@ -42,6 +44,8 @@ import {
   Copy,
   Database,
   FileText,
+  Folder,
+  FolderOpen,
   Hammer,
   History,
   LayoutDashboard,
@@ -148,6 +152,9 @@ interface ConversationSummary {
   // Conversation status.
   // 会话状态。
   status: string;
+  // Optional owning project identifier.
+  // 可选所属项目标识。
+  projectId?: string | null;
 }
 
 // ConversationMessage describes one rendered message in the timeline.
@@ -929,7 +936,7 @@ const directiveKinds: Record<string, ConversationBlockKind> = {
 
 // detailEligibleBlockKinds lists block types that should open a dedicated detail modal.
 // detailEligibleBlockKinds 列出应打开专用详情弹窗的块类型。
-const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "tool-result", "command", "diff", "thinking", "notice"]);
+const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "tool-result", "command", "diff", "notice"]);
 
 // projectConversationRenderItems merges related low-level transcript rows for display.
 // projectConversationRenderItems 合并相关底层转录行以生成最终展示项。
@@ -1332,13 +1339,31 @@ function detectToolBlockKind(source: string): ConversationBlockKind | null {
   if (source.includes("## Tool Result") || normalized.includes("tool_result_id") || normalized.includes("tool result")) {
     return "tool-result";
   }
-  if (normalized.includes("command_session_id") || normalized.includes("command session") || normalized.includes("shell_command")) {
+  if (hasLegacyCommandBlockMarker(source)) {
     return "command";
   }
-  if (normalized.includes("thinking") || source.includes("思考")) {
+  if (hasLegacyThinkingBlockMarker(source)) {
     return "thinking";
   }
   return null;
+}
+
+// hasLegacyCommandBlockMarker detects explicit command-session transcript blocks without matching ordinary tool lists.
+// hasLegacyCommandBlockMarker 检测明确的命令会话转录块，避免误匹配普通工具清单。
+function hasLegacyCommandBlockMarker(source: string): boolean {
+  const normalized = source.toLowerCase();
+  return normalized.includes("command_session_id")
+    || /^#{1,6}\s*(command session|命令会话)\b/im.test(source)
+    || /^(command session|命令会话)\s*[:：]/im.test(source)
+    || /(?:类型|kind|type)\s*[:：=]\s*(?:command_session|command session|命令会话)/i.test(source);
+}
+
+// hasLegacyThinkingBlockMarker detects explicit thinking transcript blocks without matching normal prose.
+// hasLegacyThinkingBlockMarker 检测明确的思考转录块，避免误匹配普通正文。
+function hasLegacyThinkingBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*(thinking|思考过程|思考)\b/im.test(source)
+    || /^(thinking|思考过程|思考)\s*[:：]/im.test(source)
+    || /(?:类型|kind|type)\s*[:：=]\s*(?:thinking|思考过程|思考)/i.test(source);
 }
 
 // detectToolAttributes extracts compact metadata from legacy tool text.
@@ -1649,6 +1674,36 @@ function ProjectSidebar(props: {
   selectedConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
 }) {
+  // openProjectIds stores the project folders currently expanded in the tree.
+  // openProjectIds 保存当前在树中展开的项目文件夹。
+  const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
+    () => new Set(props.projects.map((project) => project.id)),
+  );
+  // conversationsByProject groups conversations beneath their owning project folder.
+  // conversationsByProject 将会话归组到所属项目文件夹下。
+  const conversationsByProject = React.useMemo(() => {
+    const fallbackProjectId = props.projects[0]?.id ?? "default-project";
+    return props.conversations.reduce<Record<string, ConversationSummary[]>>((groups, conversation) => {
+      const projectId = conversation.projectId ?? fallbackProjectId;
+      groups[projectId] = groups[projectId] ?? [];
+      groups[projectId].push(conversation);
+      return groups;
+    }, {});
+  }, [props.conversations, props.projects]);
+  // toggleProjectOpen toggles one project folder without changing the selected conversation.
+  // toggleProjectOpen 切换单个项目文件夹展开状态且不改变当前会话选择。
+  const toggleProjectOpen = React.useCallback((projectId: string) => {
+    setOpenProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
+  }, []);
+
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
@@ -1665,53 +1720,67 @@ function ProjectSidebar(props: {
         <SidebarGroup>
           <SidebarGroupLabel><Boxes size={15} /><span>项目</span></SidebarGroupLabel>
           <SidebarMenu>
-            {props.projects.map((project) => (
-              <SidebarMenuItem key={project.id}>
-                <SidebarMenuButton active tooltip={`${project.name}\n${project.path}`}>
-                  <Boxes size={16} />
-                  <span className="vcn-sidebar-label">
-                    <strong>{project.name}</strong>
-                    <small>{project.path}</small>
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel><MessageSquareText size={15} /><span>会话</span></SidebarGroupLabel>
-          <SidebarMenu>
-            {props.conversations.length === 0 ? (
+            {props.projects.map((project) => {
+              const isOpen = openProjectIds.has(project.id);
+              const folderName = projectFolderName(project.path);
+              const showOriginalFolderName = folderName.length > 0 && folderName !== project.name;
+              return (
+                <SidebarMenuItem className="project-tree-item" key={project.id}>
+                  <SidebarMenuButton
+                    aria-expanded={isOpen}
+                    className="project-folder-button"
+                    onClick={() => toggleProjectOpen(project.id)}
+                    tooltip={`${project.name}\n${project.path}`}
+                  >
+                    {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
+                    <span className="vcn-sidebar-label project-folder-label">
+                      <strong>{project.name}</strong>
+                      {showOriginalFolderName ? <small>{folderName}</small> : null}
+                    </span>
+                  </SidebarMenuButton>
+                  {isOpen ? (
+                    <SidebarMenu className="project-conversation-list">
+                      {(conversationsByProject[project.id] ?? []).map((conversation) => (
+                        <SidebarMenuItem key={conversation.id}>
+                          <SidebarMenuButton
+                            active={props.selectedConversationId === conversation.id}
+                            className="conversation-tree-button"
+                            onClick={() => props.onSelectConversation(conversation.id)}
+                            tooltip={`${conversation.title}\n${conversation.status}`}
+                          >
+                            <span className="vcn-sidebar-label conversation-tree-label">
+                              <strong>{conversation.title}</strong>
+                            </span>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  ) : null}
+                </SidebarMenuItem>
+              );
+            })}
+            {props.projects.length === 0 ? (
               <SidebarMenuItem>
-                <SidebarMenuButton className="muted" tooltip="暂无会话">
-                  <MessageSquareText size={16} />
+                <SidebarMenuButton className="muted" tooltip="暂无项目">
+                  <Folder size={16} />
                   <span className="vcn-sidebar-label">
-                    <strong>暂无会话</strong>
+                    <strong>暂无项目</strong>
                     <small>等待 Workspace 快照载入</small>
                   </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ) : null}
-            {props.conversations.map((conversation) => (
-              <SidebarMenuItem key={conversation.id}>
-                <SidebarMenuButton
-                  active={props.selectedConversationId === conversation.id}
-                  onClick={() => props.onSelectConversation(conversation.id)}
-                  tooltip={`${conversation.title}\n${conversation.status}`}
-                >
-                  <MessageSquareText size={16} />
-                  <span className="vcn-sidebar-label">
-                    <strong>{conversation.title}</strong>
-                    <small>{conversation.status}</small>
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
   );
+}
+
+// projectFolderName extracts the folder name from a platform path.
+// projectFolderName 从平台路径中提取文件夹名称。
+function projectFolderName(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 }
 
 // AreaContent renders the selected workbench feature area.
@@ -2105,6 +2174,9 @@ function SpecialConversationBlock(props: {
   if (isMergeableToolBlock(props.block)) {
     return <ToolExecutionBlock blocks={[props.block]} onOpenDetail={props.onOpenDetail} />;
   }
+  if (props.block.kind === "thinking") {
+    return <ThinkingBlock block={props.block} />;
+  }
 
   const Icon = blockIcon(props.block.kind);
   const canOpen = detailEligibleBlockKinds.has(props.block.kind);
@@ -2138,6 +2210,36 @@ function SpecialConversationBlock(props: {
       {props.block.status ? <StatusPill status={props.block.status} label={props.block.status} /> : null}
       {canOpen ? <Maximize2 size={15} /> : null}
     </button>
+  );
+}
+
+// ThinkingBlock renders an inline collapsible thinking transcript block.
+// ThinkingBlock 渲染可在原地折叠展开的内联思考转录块。
+function ThinkingBlock(props: { block: ConversationBlock }) {
+  // expanded stores whether the thinking body is currently visible.
+  // expanded 保存思考正文当前是否可见。
+  const [expanded, setExpanded] = React.useState(false);
+
+  return (
+    <section className={`thinking-block ${expanded ? "expanded" : "collapsed"}`}>
+      <button
+        aria-expanded={expanded}
+        className="thinking-toggle"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span className="thinking-toggle-label">
+          <BrainCircuit size={15} />
+          <span>思考过程</span>
+        </span>
+        {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+      </button>
+      {expanded ? (
+        <div className="thinking-body">
+          <MarkdownMessage content={props.block.body} />
+        </div>
+      ) : null}
+    </section>
   );
 }
 

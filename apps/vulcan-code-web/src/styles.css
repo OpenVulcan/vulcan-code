@@ -366,7 +366,8 @@ button {
 }
 
 .vcn-sidebar-menu-button:hover,
-.vcn-sidebar-menu-button.active {
+.vcn-sidebar-menu-button.active,
+.vcn-sidebar-menu-button:focus-visible {
   background: var(--sidebar-accent);
   color: var(--sidebar-accent-foreground);
 }
@@ -405,7 +406,72 @@ button {
   white-space: nowrap;
 }
 
+.project-tree-item {
+  display: grid;
+  gap: 2px;
+}
+
+.project-folder-button {
+  min-height: 34px;
+  font-weight: 600;
+}
+
+.project-folder-label {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+}
+
+.project-folder-label small {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+}
+
+.project-conversation-list {
+  gap: 1px;
+}
+
+.conversation-tree-button {
+  --conversation-tree-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
+  min-height: 28px;
+  border-radius: 6px;
+  background: transparent;
+  padding-left: 32px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.conversation-tree-button:not(:hover):not(.active):not(:focus-visible) {
+  background: transparent;
+  color: inherit;
+}
+
+.conversation-tree-button:hover,
+.conversation-tree-button:focus-visible {
+  background: var(--conversation-tree-active-bg);
+  color: var(--sidebar-accent-foreground);
+}
+
+.conversation-tree-button.active {
+  background: var(--conversation-tree-active-bg);
+  color: var(--sidebar-accent-foreground);
+}
+
+.conversation-tree-label {
+  display: block;
+}
+
+.conversation-tree-button .vcn-sidebar-label strong {
+  display: block;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label {
+  display: none;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .project-conversation-list {
   display: none;
 }
 
@@ -869,6 +935,53 @@ button {
 
 .special-block.thinking {
   border-color: var(--border);
+}
+
+.thinking-block {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.thinking-toggle {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 2px 0;
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.thinking-toggle-label {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-toggle:hover,
+.thinking-toggle:focus-visible {
+  color: var(--foreground);
+}
+
+.thinking-toggle-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thinking-body {
+  max-width: min(100%, 920px);
+  border-left: 2px solid var(--border);
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  font-size: 13px;
 }
 
 .tool-execution-row {
