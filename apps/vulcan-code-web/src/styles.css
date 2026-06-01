@@ -849,10 +849,131 @@ button {
 }
 
 .composer-toolbar-left {
+  flex: 1 1 auto;
   min-width: 0;
   display: flex;
+  align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.composer-toolbar-right {
+  flex: 0 0 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.composer-select-trigger {
+  height: 38px;
+  min-width: 0;
+  justify-content: flex-start;
+  gap: 8px;
+  border-color: transparent;
+  border-radius: 10px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 5px 9px;
+  box-shadow: none;
+}
+
+.composer-select-trigger:hover,
+.composer-select-trigger[data-state="open"] {
+  background: var(--accent);
+}
+
+.composer-select-trigger.mode {
+  width: 76px;
+}
+
+.composer-select-trigger.model {
+  width: 200px;
+}
+
+.composer-select-trigger.capability {
+  width: 150px;
+}
+
+.composer-select-trigger.reasoning {
+  width: 112px;
+  padding-left: 14px;
+}
+
+.composer-select-icon {
+  width: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--primary);
+}
+
+.composer-select-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  line-height: 1;
+}
+
+.composer-select-copy.centered {
+  text-align: center;
+}
+
+.composer-select-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-select-subtitle {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-select-content {
+  min-width: var(--radix-select-trigger-width);
+}
+
+.composer-select-item {
+  min-height: 38px;
+}
+
+.composer-select-item-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  line-height: 1.1;
+}
+
+.composer-select-item-copy small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.send-button {
+  width: 38px;
+  height: 38px;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.send-button:hover {
+  background: color-mix(in oklch, var(--foreground) 88%, transparent);
+  color: var(--background);
 }
 
 .composer-panel textarea {

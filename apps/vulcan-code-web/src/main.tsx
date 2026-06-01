@@ -22,6 +22,12 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
+import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
@@ -59,6 +65,7 @@ import {
   Clock3,
   Code2,
   Copy,
+  Cpu,
   Database,
   ExternalLink,
   FileText,
@@ -79,7 +86,9 @@ import {
   PlugZap,
   PinOff,
   ScrollText,
+  Send,
   Settings,
+  Square,
   SquarePen,
   SlidersHorizontal,
   Moon,
@@ -101,6 +110,20 @@ type MainAreaId = "chat" | "projects" | "providers" | "tools" | "plugins" | "mem
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
+
+// ComposerSelectOption describes one local-only composer dropdown choice.
+// ComposerSelectOption 描述一个仅用于输入区本地预览的下拉选项。
+interface ComposerSelectOption {
+  // Stable option value used by the shadcn Select state.
+  // shadcn Select 状态使用的稳定选项值。
+  value: string;
+  // Primary label rendered in the compact trigger.
+  // 紧凑触发器中渲染的主标签。
+  label: string;
+  // Optional secondary line matching the iced dual-line trigger subtitle.
+  // 可选副标题，对齐 iced 双行触发器的第二行。
+  subtitle?: string;
+}
 
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
@@ -2705,6 +2728,9 @@ function ChatArea(props: {
   // workspaceRef stores the scrollable conversation timeline element.
   // workspaceRef 保存可滚动的会话时间线元素。
   const workspaceRef = React.useRef<HTMLElement | null>(null);
+  // autoScrolledConversationIdRef remembers the last conversation opened with an automatic bottom jump.
+  // autoScrolledConversationIdRef 记录最近一次已自动跳到底部的打开会话。
+  const autoScrolledConversationIdRef = React.useRef<string | null>(null);
   // isAtConversationBottom tracks whether the user is viewing the latest conversation content.
   // isAtConversationBottom 跟踪用户是否正在查看最新的会话内容。
   const [isAtConversationBottom, setIsAtConversationBottom] = React.useState(true);
@@ -2732,13 +2758,46 @@ function ChatArea(props: {
 
   // scrollConversationToBottom moves the timeline to the latest content.
   // scrollConversationToBottom 将时间线滚动到最新内容。
-  const scrollConversationToBottom = React.useCallback(() => {
+  const scrollConversationToBottom = React.useCallback((behavior: ScrollBehavior = "smooth") => {
     const element = workspaceRef.current;
     if (!element) {
       return;
     }
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    element.scrollTo({ top: element.scrollHeight, behavior });
   }, []);
+
+  React.useEffect(() => {
+    if (!props.selectedConversationId || isEmptyConversation || isLoading) {
+      return;
+    }
+    if (autoScrolledConversationIdRef.current === props.selectedConversationId) {
+      return;
+    }
+    autoScrolledConversationIdRef.current = props.selectedConversationId;
+
+    let secondFrame: number | null = null;
+    const firstFrame = window.requestAnimationFrame(() => {
+      scrollConversationToBottom("auto");
+      secondFrame = window.requestAnimationFrame(() => {
+        scrollConversationToBottom("auto");
+        updateConversationBottomState();
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, [
+    isEmptyConversation,
+    isLoading,
+    messages.length,
+    props.selectedConversationId,
+    scrollConversationToBottom,
+    updateConversationBottomState,
+  ]);
 
   React.useEffect(() => {
     updateConversationBottomState();
@@ -3390,12 +3449,59 @@ function ComposerDock(props: {
   );
 }
 
+// EXECUTION_MODE_OPTIONS mirrors iced ExecutionMode::ALL.
+// EXECUTION_MODE_OPTIONS 对齐 iced 的 ExecutionMode::ALL。
+const EXECUTION_MODE_OPTIONS: ComposerSelectOption[] = [
+  { value: "build", label: "执行" },
+  { value: "plan", label: "计划" },
+];
+
+// MODEL_SELECT_OPTIONS mirrors the iced model trigger shape while service binding is pending.
+// MODEL_SELECT_OPTIONS 在服务绑定完成前按 iced 模型触发器结构提供预览选项。
+const MODEL_SELECT_OPTIONS: ComposerSelectOption[] = [
+  { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", subtitle: "DeepSeek" },
+  { value: "deepseek-v4", label: "DeepSeek V4", subtitle: "DeepSeek" },
+  { value: "qwen3-coder", label: "Qwen3 Coder", subtitle: "Alibaba" },
+];
+
+// AI_CAPABILITY_OPTIONS mirrors the iced AI capability quick-control trigger.
+// AI_CAPABILITY_OPTIONS 对齐 iced 的 AI 能力快捷控制触发器。
+const AI_CAPABILITY_OPTIONS: ComposerSelectOption[] = [
+  { value: "extended", label: "扩展能力", subtitle: "能力扩展设置" },
+  { value: "basic", label: "基础能力", subtitle: "仅文本与代码" },
+];
+
+// REASONING_EFFORT_OPTIONS mirrors provider-config ReasoningEffortLevel labels plus the DeepSeek Max override.
+// REASONING_EFFORT_OPTIONS 对齐 provider-config 的思考档位标签，并包含 DeepSeek 的 Max 覆盖标签。
+const REASONING_EFFORT_OPTIONS: ComposerSelectOption[] = [
+  { value: "off", label: "关闭", subtitle: "思考级别" },
+  { value: "low", label: "低", subtitle: "思考级别" },
+  { value: "medium", label: "中", subtitle: "思考级别" },
+  { value: "high", label: "高", subtitle: "思考级别" },
+  { value: "x-high", label: "Max", subtitle: "思考级别" },
+];
+
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 function ComposerPanel() {
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState("");
+  // executionMode stores the local preview execution-mode selection.
+  // executionMode 保存本地预览用的执行模式选择。
+  const [executionMode, setExecutionMode] = React.useState("build");
+  // modelChoice stores the local preview model selection.
+  // modelChoice 保存本地预览用的模型选择。
+  const [modelChoice, setModelChoice] = React.useState("deepseek-v4-pro");
+  // aiCapabilityChoice stores the local preview AI capability selection.
+  // aiCapabilityChoice 保存本地预览用的 AI 能力选择。
+  const [aiCapabilityChoice, setAiCapabilityChoice] = React.useState("extended");
+  // reasoningEffort stores the local preview reasoning-effort selection.
+  // reasoningEffort 保存本地预览用的思考档位选择。
+  const [reasoningEffort, setReasoningEffort] = React.useState("x-high");
+  // isComposerRunning stores the local send/stop preview state.
+  // isComposerRunning 保存输入区发送/停止的本地预览状态。
+  const [isComposerRunning, setIsComposerRunning] = React.useState(false);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
@@ -3405,12 +3511,18 @@ function ComposerPanel() {
   // handleComposerSend handles the current placeholder-only send action.
   // handleComposerSend 处理当前仅占位的发送动作。
   const handleComposerSend = React.useCallback(() => {
+    if (isComposerRunning) {
+      setIsComposerRunning(false);
+      toast.info("停止已拦截：真实停止链路待接入。");
+      return;
+    }
     if (!draftInput.trim()) {
       toast.info("请输入任务指令。");
       return;
     }
+    setIsComposerRunning(true);
     toast.info("发送已拦截：真实发送链路待接入。");
-  }, [draftInput]);
+  }, [draftInput, isComposerRunning]);
 
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
@@ -3433,13 +3545,102 @@ function ComposerPanel() {
       />
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">
-          <Button size="sm" type="button" variant="outline">build</Button>
-          <Button size="sm" type="button" variant="outline">模型</Button>
-          <Button size="sm" type="button" variant="outline">工具</Button>
+          <ComposerSelectControl
+            ariaLabel="选择执行模式"
+            className="mode"
+            onValueChange={setExecutionMode}
+            options={EXECUTION_MODE_OPTIONS}
+            value={executionMode}
+          />
+          <ComposerSelectControl
+            ariaLabel="选择模型"
+            className="model"
+            icon={<Cpu size={15} />}
+            onValueChange={setModelChoice}
+            options={MODEL_SELECT_OPTIONS}
+            value={modelChoice}
+          />
+          <ComposerSelectControl
+            ariaLabel="选择扩展能力"
+            className="capability"
+            icon={<SlidersHorizontal size={15} />}
+            onValueChange={setAiCapabilityChoice}
+            options={AI_CAPABILITY_OPTIONS}
+            value={aiCapabilityChoice}
+          />
         </div>
-        <Button className="send-button" onClick={handleComposerSend} type="button">发送</Button>
+        <div className="composer-toolbar-right">
+          <ComposerSelectControl
+            ariaLabel="选择思考级别"
+            className="reasoning"
+            onValueChange={setReasoningEffort}
+            options={REASONING_EFFORT_OPTIONS}
+            value={reasoningEffort}
+          />
+          <Button
+            aria-label={isComposerRunning ? "停止" : "发送"}
+            className={cn("send-button", isComposerRunning && "running")}
+            onClick={handleComposerSend}
+            size="icon"
+            type="button"
+          >
+            {isComposerRunning ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
+          </Button>
+        </div>
       </div>
     </section>
+  );
+}
+
+// ComposerSelectControl renders one iced-aligned compact composer selector.
+// ComposerSelectControl 渲染一个对齐 iced 的紧凑输入区选择器。
+function ComposerSelectControl(props: {
+  // Accessible label for the dropdown trigger.
+  // 下拉触发器的无障碍标签。
+  ariaLabel: string;
+  // Optional visual icon rendered in the left accessory slot.
+  // 渲染在左侧附属槽位中的可选视觉图标。
+  icon?: React.ReactNode;
+  // CSS class suffix controlling the iced-aligned fixed width.
+  // 控制 iced 对齐固定宽度的 CSS 类后缀。
+  className: string;
+  // Available local options for this selector.
+  // 当前选择器可用的本地选项。
+  options: ComposerSelectOption[];
+  // Current selected option value.
+  // 当前选中的选项值。
+  value: string;
+  // Selection change handler.
+  // 选项变更处理函数。
+  onValueChange: (value: string) => void;
+}) {
+  const selectedOption = props.options.find((option) => option.value === props.value) ?? props.options[0];
+
+  return (
+    <Select onValueChange={props.onValueChange} value={props.value}>
+      <SelectTrigger
+        aria-label={props.ariaLabel}
+        className={cn("composer-select-trigger", props.className)}
+      >
+        {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
+        <span className={cn("composer-select-copy", !props.icon && "centered")}>
+          <span className="composer-select-label">{selectedOption?.label ?? "选择"}</span>
+          {selectedOption?.subtitle ? (
+            <span className="composer-select-subtitle">{selectedOption.subtitle}</span>
+          ) : null}
+        </span>
+      </SelectTrigger>
+      <SelectContent align="start" className="composer-select-content" position="popper">
+        {props.options.map((option) => (
+          <SelectItem className="composer-select-item" key={option.value} value={option.value}>
+            <span className="composer-select-item-copy">
+              <span>{option.label}</span>
+              {option.subtitle ? <small>{option.subtitle}</small> : null}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
