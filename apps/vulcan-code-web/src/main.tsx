@@ -106,9 +106,13 @@ import "./styles.css";
 // StartupStepStatus 对齐 Rust service API 的启动状态枚举。
 type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "error";
 
-// MainAreaId describes selectable workbench feature areas.
-// MainAreaId 描述可选择的工作台功能区域。
-type MainAreaId = "chat" | "projects" | "providers" | "tools" | "plugins" | "memory" | "settings" | "logs";
+// MainAreaId describes selectable top-level WebUI areas.
+// MainAreaId 描述 WebUI 顶层可选择区域。
+type MainAreaId = "chat" | "skills" | "automation" | "plugins" | "memory" | "settings";
+
+// SettingsSubAreaId describes secondary settings pages that absorb legacy top-level pages.
+// SettingsSubAreaId 描述承接旧顶层页面的设置二级页面。
+type SettingsSubAreaId = "general" | "projects" | "providers" | "tools" | "diagnostics";
 
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
@@ -625,14 +629,12 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   ],
   toolCalls: [{ id: "preview-tool", name: "service_startup_snapshot", status: "preview", detail: "浏览器模式使用 fallback 数据。" }],
   featureAreas: [
-    { id: "chat", label: "控制台", description: "控制台、消息流与模型输入区", status: "预览" },
-    { id: "projects", label: "项目", description: "工作区项目列表与绑定状态", status: "预览" },
-    { id: "providers", label: "模型", description: "Provider、模型、能力配置", status: "预览" },
-    { id: "tools", label: "工具", description: "工具调用、命令会话与输出", status: "预览" },
-    { id: "plugins", label: "插件", description: "LuaSkills 与高级插件控制面板", status: "预览" },
-    { id: "memory", label: "VMM 记忆", description: "用户、项目、画像与记忆节点", status: "预览" },
-    { id: "settings", label: "设置", description: "运行时、界面、权限与远程访问设置", status: "预览" },
-    { id: "logs", label: "诊断", description: "启动日志、错误与运行时事件", status: "预览" },
+    { id: "chat", label: "控制台", description: "项目会话、消息流与模型输入区", status: "可用" },
+    { id: "skills", label: "技能", description: "LuaSkills、工具能力与技能包", status: "预览" },
+    { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
+    { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
+    { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
+    { id: "settings", label: "设置", description: "项目、模型、工具、诊断与系统设置", status: "预览" },
   ],
   plugins: [
     { id: "vulcan-codekit", name: "Vulcan CodeKit", kind: "LuaSkill", status: "预览", capability: "代码搜索、AST 定位、结构化 patch" },
@@ -672,14 +674,33 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
 // AreaIconMap 将功能区域标识映射到 lucide 图标。
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <LayoutDashboard size={17} />,
-  projects: <Boxes size={17} />,
-  providers: <SlidersHorizontal size={17} />,
-  tools: <Hammer size={17} />,
+  skills: <Hammer size={17} />,
+  automation: <GitBranch size={17} />,
   plugins: <Wrench size={17} />,
   memory: <BrainCircuit size={17} />,
   settings: <Settings size={17} />,
-  logs: <ScrollText size={17} />,
 };
+
+// primaryFeatureAreas is the fixed top navigation requested for the WebUI shell.
+// primaryFeatureAreas 是 WebUI 外壳使用的固定顶部主导航。
+const primaryFeatureAreas: FeatureAreaSummary[] = [
+  { id: "chat", label: "控制台", description: "项目会话、消息流与模型输入区", status: "可用" },
+  { id: "skills", label: "技能", description: "LuaSkills、工具能力与技能包", status: "预览" },
+  { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
+  { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
+  { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
+  { id: "settings", label: "设置", description: "项目、模型、工具、诊断与系统设置", status: "预览" },
+];
+
+// settingsSubAreas lists settings sidebar entries including legacy pages moved under settings.
+// settingsSubAreas 列出设置侧栏入口，并包含迁入设置的旧页面。
+const settingsSubAreas: Array<{ id: SettingsSubAreaId; label: string; icon: React.ReactNode; description: string }> = [
+  { id: "general", label: "通用设置", icon: <Settings size={16} />, description: "运行时、远程访问与界面设置" },
+  { id: "projects", label: "项目", icon: <Boxes size={16} />, description: "工作区项目列表与绑定状态" },
+  { id: "providers", label: "模型", icon: <SlidersHorizontal size={16} />, description: "Provider、模型、推理与工具能力" },
+  { id: "tools", label: "工具", icon: <Hammer size={16} />, description: "工具调用、命令会话与输出" },
+  { id: "diagnostics", label: "诊断", icon: <ScrollText size={16} />, description: "启动日志、错误与运行时事件" },
+];
 
 // isTauriRuntime returns whether the WebUI is hosted by the desktop Tauri shell.
 // isTauriRuntime 返回 WebUI 是否运行在 Tauri 桌面壳中。
@@ -947,6 +968,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // pinnedConversationIds stores the locally pinned conversations until persistence is added.
   // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
   const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
+  // activeSettingsSubArea stores the selected settings sidebar page.
+  // activeSettingsSubArea 保存设置侧栏当前选择的页面。
+  const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("general");
   // hydratedConversationIds stores conversations already requested from the service.
   // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
@@ -954,7 +978,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   );
   // activeFeature stores the selected feature summary.
   // activeFeature 保存当前选中的功能区域摘要。
-  const activeFeature = workbenchState.featureAreas.find((area) => area.id === activeArea) ?? workbenchState.featureAreas[0];
+  const activeFeature = primaryFeatureAreas.find((area) => area.id === activeArea) ?? primaryFeatureAreas[0];
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -1258,7 +1282,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       >
         <BrandHeader />
         <FeatureNav
-          areas={workbenchState.featureAreas}
+          areas={primaryFeatureAreas}
           activeArea={activeArea}
           onSelect={setActiveArea}
         />
@@ -1293,19 +1317,14 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onSelectConversation={setSelectedConversationId}
           />
         ) : (
-          <>
-            <Topbar
-              activeFeature={activeFeature}
-            />
-            <AreaContent
-              activeArea={activeArea}
-              startup={props.startup}
-              workbench={workbenchState}
-              selectedConversationId={selectedConversationId}
-              loadingConversationId={loadingConversationId}
-              conversationLoadError={conversationLoadError}
-            />
-          </>
+          <FeatureShell
+            activeArea={activeArea}
+            activeFeature={activeFeature}
+            activeSettingsSubArea={activeSettingsSubArea}
+            onSelectSettingsSubArea={setActiveSettingsSubArea}
+            startup={props.startup}
+            workbench={workbenchState}
+          />
         )}
       </main>
       <footer className="statusbar">
@@ -2277,22 +2296,6 @@ function GlobalActions(props: {
   );
 }
 
-// Topbar renders the current feature title for non-console pages.
-// Topbar 渲染非控制台页面的当前功能标题。
-function Topbar(props: {
-  activeFeature?: FeatureAreaSummary;
-}) {
-  return (
-    <header className="topbar">
-      <div>
-        <p className="eyebrow">Vulcan Code WebUI</p>
-        <h1>{props.activeFeature?.label ?? "工作台"}</h1>
-        <span>{props.activeFeature?.description ?? "Core Service 驱动的新工作台"}</span>
-      </div>
-    </header>
-  );
-}
-
 // ConsoleShell renders the shadcn dashboard-like fused sidebar and inset console area.
 // ConsoleShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
 function ConsoleShell(props: {
@@ -2334,6 +2337,198 @@ function ConsoleShell(props: {
       </SidebarInset>
     </SidebarProvider>
   );
+}
+
+// FeatureShell renders non-console pages with the same sidebar and inset structure as the console.
+// FeatureShell 使用与控制台一致的侧栏和内容框结构渲染非控制台页面。
+function FeatureShell(props: {
+  // Active top-level area.
+  // 当前顶层区域。
+  activeArea: MainAreaId;
+  // Active top-level feature metadata.
+  // 当前顶层功能元数据。
+  activeFeature?: FeatureAreaSummary;
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId;
+  // Updates the selected settings sub page.
+  // 更新设置二级页面选择。
+  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
+  // Startup snapshot used by diagnostics.
+  // 诊断页面使用的启动快照。
+  startup: StartupSnapshot;
+  // Workbench snapshot used by feature pages.
+  // 功能页面使用的工作台快照。
+  workbench: WorkbenchSnapshot;
+}) {
+  return (
+    <SidebarProvider className="console-shell feature-shell">
+      <FeatureSidebar
+        activeArea={props.activeArea}
+        activeSettingsSubArea={props.activeSettingsSubArea}
+        onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+        workbench={props.workbench}
+      />
+      <SidebarInset>
+        <FeatureHeader feature={props.activeFeature} />
+        <FeatureContent
+          activeArea={props.activeArea}
+          activeSettingsSubArea={props.activeSettingsSubArea}
+          startup={props.startup}
+          workbench={props.workbench}
+        />
+      </SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+// FeatureHeader renders the inset title bar for a non-console page.
+// FeatureHeader 渲染非控制台页面的内容区标题栏。
+function FeatureHeader(props: { feature?: FeatureAreaSummary }) {
+  return (
+    <header className="console-header">
+      <div className="console-header-main">
+        <SidebarTrigger />
+        <span className="console-header-separator" aria-hidden="true" />
+        <h1>{props.feature?.label ?? "工作台"}</h1>
+      </div>
+      <span className="feature-header-description">{props.feature?.description}</span>
+    </header>
+  );
+}
+
+// FeatureSidebar renders the left navigation for one non-console feature area.
+// FeatureSidebar 渲染单个非控制台功能区的左侧导航。
+function FeatureSidebar(props: {
+  // Active top-level area.
+  // 当前顶层区域。
+  activeArea: MainAreaId;
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId;
+  // Updates the selected settings sub page.
+  // 更新设置二级页面选择。
+  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
+  // Workbench snapshot used for sidebar counters.
+  // 侧栏计数使用的工作台快照。
+  workbench: WorkbenchSnapshot;
+}) {
+  const feature = primaryFeatureAreas.find((area) => area.id === props.activeArea);
+
+  return (
+    <Sidebar collapsible="icon" variant="inset">
+      <SidebarHeader>
+        <SidebarMenu>
+          <SidebarMenuItem>
+            <div aria-current="page" className="vcn-sidebar-static-item">
+              {areaIconMap[props.activeArea]}
+              <span className="vcn-sidebar-label strong">{feature?.label ?? "工作台"}</span>
+            </div>
+          </SidebarMenuItem>
+        </SidebarMenu>
+      </SidebarHeader>
+      <SidebarContent>
+        {props.activeArea === "settings" ? (
+          <SettingsSidebarMenu
+            activeSettingsSubArea={props.activeSettingsSubArea}
+            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+          />
+        ) : (
+          <FeatureOverviewMenu activeArea={props.activeArea} workbench={props.workbench} />
+        )}
+      </SidebarContent>
+    </Sidebar>
+  );
+}
+
+// FeatureOverviewMenu renders compact side navigation for non-settings feature pages.
+// FeatureOverviewMenu 为非设置功能页渲染紧凑侧栏导航。
+function FeatureOverviewMenu(props: { activeArea: MainAreaId; workbench: WorkbenchSnapshot }) {
+  const rows = featureSidebarRows(props.activeArea, props.workbench);
+
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel><PanelTopOpen size={15} /><span>概览</span></SidebarGroupLabel>
+      <SidebarMenu>
+        {rows.map((row) => (
+          <SidebarMenuItem key={row.id}>
+            <div className="vcn-sidebar-static-item feature-sidebar-row">
+              {row.icon}
+              <span className="vcn-sidebar-label">
+                <strong>{row.label}</strong>
+                <small>{row.detail}</small>
+              </span>
+            </div>
+          </SidebarMenuItem>
+        ))}
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+}
+
+// SettingsSidebarMenu renders the settings secondary navigation.
+// SettingsSidebarMenu 渲染设置二级导航。
+function SettingsSidebarMenu(props: {
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId;
+  // Updates the selected settings sub page.
+  // 更新设置二级页面选择。
+  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
+}) {
+  return (
+    <SidebarGroup>
+      <SidebarGroupLabel><Settings size={15} /><span>设置分类</span></SidebarGroupLabel>
+      <SidebarMenu>
+        {settingsSubAreas.map((area) => (
+          <SidebarMenuItem key={area.id}>
+            <SidebarMenuButton
+              active={props.activeSettingsSubArea === area.id}
+              className="feature-sidebar-row"
+              onClick={() => props.onSelectSettingsSubArea(area.id)}
+              tooltip={area.description}
+            >
+              {area.icon}
+              <span className="vcn-sidebar-label">
+                <strong>{area.label}</strong>
+                <small>{area.description}</small>
+              </span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ))}
+      </SidebarMenu>
+    </SidebarGroup>
+  );
+}
+
+// featureSidebarRows builds left sidebar rows for the current non-settings feature.
+// featureSidebarRows 为当前非设置功能构建左侧栏条目。
+function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
+  if (activeArea === "skills") {
+    return [
+      { id: "skills-luaskills", label: "LuaSkills", detail: `${workbench.plugins.filter((plugin) => plugin.kind === "LuaSkill").length} 个技能包`, icon: <Hammer size={16} /> },
+      { id: "skills-tools", label: "工具能力", detail: `${workbench.toolCalls.length} 条工具记录`, icon: <Wrench size={16} /> },
+    ];
+  }
+  if (activeArea === "automation") {
+    return [
+      { id: "automation-workflow", label: "工作流", detail: "等待运行时接入", icon: <GitBranch size={16} /> },
+      { id: "automation-sessions", label: "后台任务", detail: `${workbench.commandSessions.length} 条命令会话`, icon: <TerminalSquare size={16} /> },
+    ];
+  }
+  if (activeArea === "plugins") {
+    return [
+      { id: "plugins-installed", label: "已安装插件", detail: `${workbench.plugins.length} 个插件`, icon: <PlugZap size={16} /> },
+      { id: "plugins-webui", label: "WebUI 面板", detail: "高级插件控制入口", icon: <PanelTopOpen size={16} /> },
+    ];
+  }
+  if (activeArea === "memory") {
+    return [
+      { id: "memory-vmm", label: "VMM 记忆", detail: `${workbench.memories.length} 个入口`, icon: <BrainCircuit size={16} /> },
+      { id: "memory-audit", label: "冲突审计", detail: "等待真实节点", icon: <History size={16} /> },
+    ];
+  }
+  return [];
 }
 
 // ConsoleHeader renders the inset title bar for the current conversation.
@@ -2855,47 +3050,95 @@ function projectFolderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 }
 
-// AreaContent renders the selected workbench feature area.
-// AreaContent 渲染选中的工作台功能区域。
-function AreaContent(props: {
+// FeatureContent renders the selected non-console feature area.
+// FeatureContent 渲染当前选中的非控制台功能区域。
+function FeatureContent(props: {
+  // Active top-level feature area.
+  // 当前顶层功能区域。
   activeArea: MainAreaId;
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId;
+  // Startup snapshot used by settings diagnostics.
+  // 设置诊断页面使用的启动快照。
   startup: StartupSnapshot;
+  // Workbench snapshot used by feature pages.
+  // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot;
-  selectedConversationId: string | null;
-  loadingConversationId: string | null;
-  conversationLoadError: string | null;
 }) {
-  if (props.activeArea === "projects") {
-    return <ProjectsArea projects={props.workbench.projects} modules={props.workbench.modules} />;
+  if (props.activeArea === "skills") {
+    return (
+      <div className="feature-content">
+        <SkillsArea
+          commandSessions={props.workbench.commandSessions}
+          plugins={props.workbench.plugins}
+          toolCalls={props.workbench.toolCalls}
+        />
+      </div>
+    );
   }
-  if (props.activeArea === "providers") {
-    return <ProvidersArea providers={props.workbench.providers} modules={props.workbench.modules} />;
-  }
-  if (props.activeArea === "tools") {
-    return <ToolsArea toolCalls={props.workbench.toolCalls} commandSessions={props.workbench.commandSessions} />;
+  if (props.activeArea === "automation") {
+    return (
+      <div className="feature-content">
+        <AutomationArea commandSessions={props.workbench.commandSessions} modules={props.workbench.modules} />
+      </div>
+    );
   }
   if (props.activeArea === "plugins") {
-    return <PluginsArea plugins={props.workbench.plugins} />;
+    return (
+      <div className="feature-content">
+        <PluginsArea plugins={props.workbench.plugins} />
+      </div>
+    );
   }
   if (props.activeArea === "memory") {
-    return <MemoryArea memories={props.workbench.memories} />;
+    return (
+      <div className="feature-content">
+        <MemoryArea memories={props.workbench.memories} />
+      </div>
+    );
   }
   if (props.activeArea === "settings") {
-    return <SettingsArea settings={props.workbench.settings} />;
+    return (
+      <div className="feature-content">
+        <SettingsFeatureContent
+          activeSettingsSubArea={props.activeSettingsSubArea}
+          startup={props.startup}
+          workbench={props.workbench}
+        />
+      </div>
+    );
   }
-  if (props.activeArea === "logs") {
+
+  return null;
+}
+
+// SettingsFeatureContent renders legacy pages that now live under settings.
+// SettingsFeatureContent 渲染已经迁入设置的旧功能页面。
+function SettingsFeatureContent(props: {
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId;
+  // Startup snapshot used by diagnostics.
+  // 诊断页面使用的启动快照。
+  startup: StartupSnapshot;
+  // Workbench snapshot used by settings pages.
+  // 设置页面使用的工作台快照。
+  workbench: WorkbenchSnapshot;
+}) {
+  if (props.activeSettingsSubArea === "projects") {
+    return <ProjectsArea projects={props.workbench.projects} modules={props.workbench.modules} />;
+  }
+  if (props.activeSettingsSubArea === "providers") {
+    return <ProvidersArea providers={props.workbench.providers} modules={props.workbench.modules} />;
+  }
+  if (props.activeSettingsSubArea === "tools") {
+    return <ToolsArea toolCalls={props.workbench.toolCalls} commandSessions={props.workbench.commandSessions} />;
+  }
+  if (props.activeSettingsSubArea === "diagnostics") {
     return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
   }
-  return (
-    <ChatArea
-      startup={props.startup}
-      workbench={props.workbench}
-      selectedDraftConversation={null}
-      selectedConversationId={props.selectedConversationId}
-      loadingConversationId={props.loadingConversationId}
-      conversationLoadError={props.conversationLoadError}
-    />
-  );
+  return <SettingsArea settings={props.workbench.settings} />;
 }
 
 // ChatArea renders the conversation workspace and composer.
@@ -3017,6 +3260,86 @@ function ChatArea(props: {
           <ComposerDock onScrollToBottom={() => scrollConversationToBottom()} showScrollToBottom={!isAtConversationBottom} />
         </>
       )}
+    </div>
+  );
+}
+
+// SkillsArea renders LuaSkills and tool capability status.
+// SkillsArea 渲染 LuaSkills 与工具能力状态。
+function SkillsArea(props: {
+  // Installed plugin summaries used to identify LuaSkills.
+  // 用于识别 LuaSkills 的已安装插件摘要。
+  plugins: PluginSummary[];
+  // Tool call summaries shown as recent capability activity.
+  // 作为近期能力活动展示的工具调用摘要。
+  toolCalls: ToolCallSummary[];
+  // Command sessions shown as long-running skill activity.
+  // 作为长生命周期技能活动展示的命令会话摘要。
+  commandSessions: CommandSessionSummary[];
+}) {
+  const skillPlugins = props.plugins.filter((plugin) => plugin.kind === "LuaSkill");
+
+  return (
+    <div className="area-grid two-columns">
+      <section className="panel">
+        <PanelTitle icon={<Hammer size={17} />} title="技能" />
+        <div className="card-grid">
+          {skillPlugins.map((plugin) => (
+            <article className="data-card" key={plugin.id}>
+              <StatusPill status={plugin.status === "已启用" || plugin.status === "预览" ? "ready" : "warning"} label={plugin.status} />
+              <strong>{plugin.name}</strong>
+              <span>{plugin.kind}</span>
+              <p>{plugin.capability}</p>
+            </article>
+          ))}
+          {skillPlugins.length === 0 ? (
+            <article className="data-card">
+              <StatusPill status="pending" label="pending" />
+              <strong>等待 LuaSkills 目录</strong>
+              <span>Service 接入后会显示真实技能包</span>
+            </article>
+          ) : null}
+        </div>
+      </section>
+      <div className="stack compact-stack">
+        <ToolPanel toolCalls={props.toolCalls} />
+        <CommandSessionsPanel commandSessions={props.commandSessions} />
+      </div>
+    </div>
+  );
+}
+
+// AutomationArea renders workflow and background execution placeholders.
+// AutomationArea 渲染工作流与后台执行的预览入口。
+function AutomationArea(props: {
+  // Command sessions used to preview background execution.
+  // 用于预览后台执行状态的命令会话。
+  commandSessions: CommandSessionSummary[];
+  // Runtime modules used to show automation dependency readiness.
+  // 用于展示自动化依赖就绪情况的运行时模块。
+  modules: RuntimeModuleSnapshot[];
+}) {
+  const automationCards = [
+    { id: "workflow", title: "工作流", status: "规划中", detail: "脚本化任务、插件流程与 WebUI 编排入口" },
+    { id: "queue", title: "后台队列", status: "预览", detail: `${props.commandSessions.length} 条命令会话可作为后续队列数据源` },
+    { id: "schedule", title: "计划任务", status: "待接入", detail: "后续承接定时、监控与远程触发任务" },
+  ];
+
+  return (
+    <div className="area-grid two-columns">
+      <section className="panel">
+        <PanelTitle icon={<GitBranch size={17} />} title="自动" />
+        <div className="card-grid">
+          {automationCards.map((card) => (
+            <article className="data-card" key={card.id}>
+              <StatusPill status={card.status === "预览" ? "ready" : "warning"} label={card.status} />
+              <strong>{card.title}</strong>
+              <span>{card.detail}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+      <RuntimeModulesPanel modules={props.modules.filter((module) => module.id === "core" || module.id === "mcp" || module.id === "luaskills")} />
     </div>
   );
 }

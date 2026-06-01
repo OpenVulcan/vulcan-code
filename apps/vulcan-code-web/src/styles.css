@@ -245,15 +245,11 @@ button {
   grid-column: 1;
   grid-row: 2;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   padding: 0;
   overflow: hidden;
-}
-
-.with-console-sidebar .workspace {
-  grid-template-rows: minmax(0, 1fr);
 }
 
 .without-console-sidebar .workspace {
@@ -726,6 +722,8 @@ button {
   min-height: 58px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
   padding: 0 18px;
@@ -756,6 +754,55 @@ button {
 
 .vcn-sidebar-trigger {
   flex: 0 0 auto;
+}
+
+.feature-header-description {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-sidebar-row .vcn-sidebar-label {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.feature-sidebar-row .vcn-sidebar-label strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-sidebar-row .vcn-sidebar-label small {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-content {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.feature-content > .panel,
+.feature-content > .area-grid {
+  min-height: 0;
+  height: 100%;
+}
+
+.compact-stack {
+  min-height: 0;
+  align-content: stretch;
 }
 
 .vcn-sidebar-inset .chat-grid {
