@@ -3,6 +3,7 @@
 
 use std::{
     path::{Path, PathBuf},
+    process::Command,
     sync::{Arc, Mutex},
 };
 
@@ -15,7 +16,11 @@ use vulcan_service_api::{
     StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{SessionId, SessionMessageEntry, SessionMessageKind};
-use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
+use vulcan_workspace_store::{
+    data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
+    workspace_store::SessionHydrationSnapshot,
+};
+use vldb_controller_client::ControllerSqliteValue;
 
 use crate::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use crate::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
@@ -71,7 +76,14 @@ pub fn run() {
             service_health,
             service_startup_snapshot,
             service_workbench_snapshot,
-            service_session_messages
+            service_session_messages,
+            service_open_project_directory,
+            service_open_project_directory_path,
+            service_toggle_project_pinned,
+            service_rename_project,
+            service_archive_project_conversations,
+            service_rename_conversation,
+            service_archive_conversation
         ])
         .setup(|app| {
             emit_initial_service_events(app.handle());
@@ -143,6 +155,337 @@ async fn service_session_messages(
         &session_id,
         hydration_snapshot.messages.as_slice(),
     ))
+}
+
+/// Opens one project folder in the host system file manager.
+/// 在宿主系统文件管理器中打开单个项目文件夹。
+#[tauri::command]
+fn service_open_project_directory(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<String, String> {
+    let project = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workbench
+        .projects
+        .iter()
+        .find(|project| project.id == project_id)
+        .cloned()
+        .ok_or_else(|| format!("project not found: {project_id}"))?;
+    open_path_in_system_file_manager(&project.path)?;
+    Ok(format!("已请求打开项目目录：{}。", project.name))
+}
+
+/// Opens one arbitrary project directory path in the host system file manager.
+/// 在宿主系统文件管理器中打开任意项目目录路径。
+#[tauri::command]
+fn service_open_project_directory_path(path: String) -> Result<String, String> {
+    open_path_in_system_file_manager(&path)?;
+    Ok(format!("已请求打开目录：{path}。"))
+}
+
+/// Toggles one project pinned state and returns the refreshed workbench snapshot.
+/// 切换单个项目置顶状态并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_toggle_project_pinned(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE projects SET pinned = CASE WHEN pinned = 0 THEN 1 ELSE 0 END, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("切换项目置顶状态失败：{error}"))?;
+    refresh_workbench_snapshot(state)
+    .await
+}
+
+/// Applies a project display name and returns the refreshed workbench snapshot.
+/// 应用项目显示名称并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_rename_project(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+    name: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let normalized_name = normalize_non_empty_name(&name)?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(normalized_name),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("重命名项目失败：{error}"))?;
+    refresh_workbench_snapshot(state)
+    .await
+}
+
+/// Archives all visible conversations under one project and returns the refreshed workbench snapshot.
+/// 归档单个项目下的全部可见对话并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_archive_project_conversations(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE sessions SET archived = 1, updated_at = ?1 WHERE project_id = ?2 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("归档项目对话失败：{error}"))?;
+    refresh_workbench_snapshot(state)
+    .await
+}
+
+/// Applies a conversation display name and returns the refreshed workbench snapshot.
+/// 应用会话显示名称并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_rename_conversation(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    conversation_id: String,
+    name: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let normalized_name = normalize_non_empty_name(&name)?;
+    let parsed_session_id = conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE sessions SET title = ?1, title_source = 'manual', updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(normalized_name),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(parsed_session_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("重命名会话失败：{error}"))?;
+    refresh_workbench_snapshot(state)
+    .await
+}
+
+/// Archives one visible conversation and returns the refreshed workbench snapshot.
+/// 归档单个可见会话并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_archive_conversation(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    conversation_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let parsed_session_id = conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE sessions SET archived = 1, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(parsed_session_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("归档会话失败：{error}"))?;
+    refresh_workbench_snapshot(state)
+    .await
+}
+
+/// Opens one filesystem directory with the host file manager.
+/// 使用宿主文件管理器打开单个文件系统目录。
+fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Reads the controller runtime handle from shared service state.
+/// 从共享服务状态中读取控制器运行时句柄。
+fn controller_runtime_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<ControllerRuntimeHandle, String> {
+    state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .controller_runtime
+        .clone()
+        .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))
+}
+
+/// Refreshes the WebUI workbench after a focused workspace metadata update.
+/// 在一次聚焦的工作区元数据更新后刷新 WebUI 工作台。
+async fn refresh_workbench_snapshot(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+        let luaskills_catalog = guard
+            .luaskills_runtime
+            .as_ref()
+            .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
+            .unwrap_or_else(|| TauriLuaSkillsCatalog {
+                runtime_root: PathBuf::new(),
+                skills: Vec::new(),
+                entry_count: 0,
+            });
+        let token_budget_runtime = guard
+            .token_budget_runtime
+            .clone()
+            .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+        let mcp_catalog = guard
+            .mcp_runtime
+            .as_ref()
+            .map(TauriMcpRuntimeHandle::catalog)
+            .unwrap_or_else(|| TauriMcpRuntimeCatalog {
+                configured_server_count: 0,
+                enabled_server_count: 0,
+                connected_server_count: 0,
+                tool_count: 0,
+                prompt_count: 0,
+                resource_count: 0,
+                summary_rows: Vec::new(),
+            });
+        let logs = guard
+            .startup
+            .recent_logs
+            .clone();
+        (
+            controller_runtime,
+            luaskills_catalog,
+            token_budget_runtime,
+            mcp_catalog,
+            logs,
+        )
+    };
+
+    let refreshed_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_snapshot(controller_runtime.clone())
+            .await?;
+    let hydration_snapshot =
+        load_selected_session_hydration(controller_runtime.clone(), refreshed_snapshot.selected_session)
+            .await?;
+    let workbench = workbench_from_runtime(
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &refreshed_snapshot,
+        hydration_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.messages.as_slice())
+            .unwrap_or(&[]),
+        &logs,
+    );
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench = workbench.clone();
+    }
+    Ok(workbench)
+}
+
+/// Loads the selected session transcript window when a selected session exists.
+/// 在存在选中会话时加载其转录窗口。
+async fn load_selected_session_hydration(
+    controller_runtime: ControllerRuntimeHandle,
+    selected_session_id: SessionId,
+) -> Result<Option<SessionHydrationSnapshot>, String> {
+    if selected_session_id == SessionId::nil() {
+        return Ok(None);
+    }
+    vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+        controller_runtime,
+        selected_session_id,
+        SELECTED_SESSION_TURN_LOAD_LIMIT,
+    )
+    .await
+    .map(Some)
+}
+
+/// Normalizes and validates a user-provided display name.
+/// 规范化并校验用户提供的显示名称。
+fn normalize_non_empty_name(name: &str) -> Result<String, String> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() {
+        return Err(String::from("名称不能为空。"));
+    }
+    Ok(normalized_name.to_string())
+}
+
+/// Returns the current Unix timestamp as millisecond text for SQLite metadata rows.
+/// 返回当前 Unix 毫秒时间戳文本，用于 SQLite 元数据行。
+fn current_unix_millis_text() -> String {
+    OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .checked_div(1_000_000)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Emits initial service events after the WebView is created.
@@ -397,17 +740,10 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         vulcan_workspace_store::workspace_store::load_or_seed_workspace(controller_runtime.clone()),
     )?;
     let selected_session_id = workspace_snapshot.selected_session;
-    let hydration_snapshot = if selected_session_id == SessionId::nil() {
-        None
-    } else {
-        Some(runtime.block_on(
-            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
-                controller_runtime.clone(),
-                selected_session_id,
-                SELECTED_SESSION_TURN_LOAD_LIMIT,
-            ),
-        )?)
-    };
+    let hydration_snapshot = runtime.block_on(load_selected_session_hydration(
+        controller_runtime.clone(),
+        selected_session_id,
+    ))?;
     logs.push(format!(
         "[tauri-service] workspace loaded: projects={} sessions={} selected={}",
         workspace_snapshot.task_projects.len(),
@@ -667,6 +1003,7 @@ fn workbench_from_runtime(
                 id: project.id.clone(),
                 name: project.title.clone(),
                 path: project.path.clone(),
+                pinned: project.pinned,
             })
             .collect(),
         conversations: workspace
@@ -676,6 +1013,7 @@ fn workbench_from_runtime(
                 id: session.id.to_string(),
                 title: session.title.clone(),
                 status: session.status.label().to_string(),
+                project_id: session.project_id.clone(),
             })
             .collect(),
         selected_conversation_id,
@@ -791,6 +1129,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
             id: String::from("current-workspace"),
             name: String::from("vulcan-code"),
             path: workspace_root.display().to_string(),
+            pinned: false,
         }],
         conversations: Vec::new(),
         selected_conversation_id: None,

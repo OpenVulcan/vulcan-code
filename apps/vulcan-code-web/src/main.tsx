@@ -6,10 +6,21 @@ import remarkGfm from "remark-gfm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   Dialog,
+  DialogDescription,
   DialogContent,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Sidebar,
   SidebarContent,
@@ -23,6 +34,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -31,10 +43,12 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import {
   Activity,
   Boxes,
   BrainCircuit,
+  Archive,
   ChevronDown,
   ChevronRight,
   CheckCircle2,
@@ -43,15 +57,24 @@ import {
   Code2,
   Copy,
   Database,
+  ExternalLink,
   FileText,
   Folder,
   FolderOpen,
+  GitBranch,
   Hammer,
   History,
+  Link,
+  Minus,
   LayoutDashboard,
+  MailOpen,
   Maximize2,
   MessageSquareText,
+  PanelTopOpen,
+  Pencil,
+  Pin,
   PlugZap,
+  PinOff,
   ScrollText,
   Settings,
   SlidersHorizontal,
@@ -138,6 +161,9 @@ interface ProjectSummary {
   // Project path.
   // 项目路径。
   path: string;
+  // Whether the project is currently pinned.
+  // 项目当前是否处于置顶状态。
+  pinned?: boolean;
 }
 
 // ConversationSummary describes one conversation shown in the sidebar.
@@ -486,8 +512,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "等待真实状态" },
     { id: "workspace", label: "Workspace", status: "ready", message: "前端布局预览" },
   ],
-  projects: [{ id: "preview", name: "vulcan-code", path: "D:/openvulcan/vulcan-code" }],
-  conversations: [{ id: "preview", title: "Tauri WebUI 迁移预览", status: "前端预览" }],
+  projects: [{ id: "preview", name: "vulcan-code", path: "D:/openvulcan/vulcan-code", pinned: true }],
+  conversations: [{ id: "preview", title: "Tauri WebUI 迁移预览", status: "前端预览", projectId: "preview" }],
   selectedConversationId: "preview",
   messages: [
     { id: "preview-user", conversationId: "preview", role: "user", body: "新 WebUI 需要完整承接当前界面显示。" },
@@ -643,6 +669,76 @@ async function loadConversationMessages(sessionId: string): Promise<Conversation
   return invoke<ConversationMessage[]>("service_session_messages", { sessionId });
 }
 
+// openProjectDirectoryPath asks the desktop shell to reveal one filesystem folder.
+// openProjectDirectoryPath 请求桌面壳打开单个文件系统文件夹。
+async function openProjectDirectoryPath(path: string): Promise<string | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return "浏览器预览模式下无法直接打开资源管理器。";
+  }
+  return invoke<string>("service_open_project_directory_path", { path });
+}
+
+// openProjectDirectory asks the desktop shell to reveal one project folder.
+// openProjectDirectory 请求桌面壳打开单个项目文件夹。
+async function openProjectDirectory(projectId: string): Promise<string | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return "浏览器预览模式下无法直接打开资源管理器。";
+  }
+  return invoke<string>("service_open_project_directory", { projectId });
+}
+
+// toggleProjectPinned asks the desktop shell to toggle one project pinned state.
+// toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
+async function toggleProjectPinned(projectId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_toggle_project_pinned", { projectId });
+}
+
+// renameProject asks the desktop shell to apply a new project display name.
+// renameProject 请求桌面壳应用新的项目显示名称。
+async function renameProject(projectId: string, name: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_rename_project", { projectId, name });
+}
+
+// archiveProjectConversations asks the desktop shell to archive all conversations under one project.
+// archiveProjectConversations 请求桌面壳归档单个项目下的全部会话。
+async function archiveProjectConversations(projectId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_archive_project_conversations", { projectId });
+}
+
+// renameConversation asks the desktop shell to apply a new conversation display name.
+// renameConversation 请求桌面壳应用新的会话显示名称。
+async function renameConversation(conversationId: string, name: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_rename_conversation", { conversationId, name });
+}
+
+// archiveConversation asks the desktop shell to archive one conversation.
+// archiveConversation 请求桌面壳归档单个会话。
+async function archiveConversation(conversationId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
+}
+
 // App renders the Vulcan Code WebUI workbench.
 // App 渲染 Vulcan Code WebUI 工作台。
 function App() {
@@ -708,6 +804,7 @@ function App() {
   return (
     <TooltipProvider>
       <WorkbenchLayout startup={startup} workbench={workbench} />
+      <Toaster />
     </TooltipProvider>
   );
 }
@@ -757,6 +854,15 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // conversationLoadError stores the latest conversation hydration error.
   // conversationLoadError 保存最近一次会话正文水合错误。
   const [conversationLoadError, setConversationLoadError] = React.useState<string | null>(null);
+  // renameTarget stores the project or conversation currently being renamed.
+  // renameTarget 保存当前正在重命名的项目或会话目标。
+  const [renameTarget, setRenameTarget] = React.useState<RenameTarget | null>(null);
+  // archiveProjectTarget stores the project waiting for archive confirmation.
+  // archiveProjectTarget 保存正在等待归档确认的项目。
+  const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
+  // pinnedConversationIds stores the locally pinned conversations until persistence is added.
+  // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
+  const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
   // hydratedConversationIds stores conversations already requested from the service.
   // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
@@ -771,6 +877,163 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
+
+  // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
+  // applyProjectActionSnapshot 将项目菜单操作结果合并进本地工作台。
+  const applyProjectActionSnapshot = React.useCallback((snapshot: WorkbenchSnapshot | null) => {
+    if (!snapshot) {
+      return;
+    }
+    setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+    setSelectedConversationId((current) => {
+      if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
+        return current;
+      }
+      return snapshot.selectedConversationId ?? snapshot.conversations[0]?.id ?? null;
+    });
+  }, []);
+
+  // handleProjectMenuAction executes immediate project-tree context menu commands.
+  // handleProjectMenuAction 执行可立即处理的项目树右键菜单命令。
+  const handleProjectMenuAction = React.useCallback(async (action: ProjectMenuAction, project: ProjectSummary) => {
+    try {
+      if (action === "open-directory") {
+        const message = await openProjectDirectory(project.id);
+        toast.success(message ?? `已请求打开项目目录：${project.name}`);
+        return;
+      }
+
+      if (action === "rename") {
+        setRenameTarget({ kind: "project", id: project.id, name: project.name });
+        return;
+      }
+
+      if (action === "archive-conversations") {
+        setArchiveProjectTarget(project);
+        return;
+      }
+
+      const snapshot = await toggleProjectPinned(project.id);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+        toast.success(project.pinned ? `已取消置顶项目：${project.name}` : `已置顶项目：${project.name}`);
+      } else {
+        const fallback = applyPreviewProjectAction(workbenchState, project.id, action);
+        applyProjectActionSnapshot(fallback.snapshot);
+        toast.success(fallback.message);
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleConversationMenuAction executes conversation-tree context menu commands.
+  // handleConversationMenuAction 执行会话树右键菜单命令。
+  const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
+    try {
+      if (action === "rename") {
+        setRenameTarget({ kind: "conversation", id: conversation.id, name: conversation.title });
+        return;
+      }
+      if (action === "pin") {
+        setPinnedConversationIds((current) => {
+          const next = new Set(current);
+          if (next.has(conversation.id)) {
+            next.delete(conversation.id);
+            toast.success(`已取消置顶对话：${conversation.title}`);
+          } else {
+            next.add(conversation.id);
+            toast.success(`已置顶对话：${conversation.title}`);
+          }
+          return next;
+        });
+        return;
+      }
+      if (action === "archive") {
+        const snapshot = await archiveConversation(conversation.id);
+        if (snapshot) {
+          applyProjectActionSnapshot(snapshot);
+        } else {
+          applyProjectActionSnapshot(applyPreviewConversationAction(workbenchState, conversation.id, action).snapshot);
+        }
+        toast.success(`已归档对话：${conversation.title}`);
+        return;
+      }
+      if (action === "open-directory") {
+        const project = projectForConversation(workbenchState, conversation);
+        if (!project) {
+          toast.error("没有找到这个对话所属的项目。");
+          return;
+        }
+        const message = await openProjectDirectoryPath(project.path);
+        toast.success(message ?? `已请求打开项目目录：${project.name}`);
+        return;
+      }
+      if (action === "copy-workdir") {
+        const project = projectForConversation(workbenchState, conversation);
+        if (!project) {
+          toast.error("没有找到这个对话所属的项目。");
+          return;
+        }
+        await navigator.clipboard.writeText(project.path);
+        toast.success("已复制工作目录。");
+        return;
+      }
+      if (action === "copy-session-id") {
+        await navigator.clipboard.writeText(conversation.id);
+        toast.success("已复制会话 ID。");
+        return;
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleRenameConfirm commits the current rename dialog value.
+  // handleRenameConfirm 提交当前重命名对话框值。
+  const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
+    const normalizedName = name.trim();
+    if (!normalizedName) {
+      toast.error("名称不能为空。");
+      return;
+    }
+    try {
+      const snapshot = target.kind === "project"
+        ? await renameProject(target.id, normalizedName)
+        : await renameConversation(target.id, normalizedName);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+      } else if (target.kind === "project") {
+        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, normalizedName).snapshot);
+      } else {
+        applyProjectActionSnapshot(applyPreviewConversationRename(workbenchState, target.id, normalizedName).snapshot);
+      }
+      setRenameTarget(null);
+      toast.success(target.kind === "project" ? `已重命名项目：${normalizedName}` : `已重命名对话：${normalizedName}`);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleArchiveProjectConfirm archives all conversations under the selected project.
+  // handleArchiveProjectConfirm 归档选定项目下的全部对话。
+  const handleArchiveProjectConfirm = React.useCallback(async () => {
+    if (!archiveProjectTarget) {
+      return;
+    }
+    try {
+      const snapshot = await archiveProjectConversations(archiveProjectTarget.id);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+      } else {
+        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, archiveProjectTarget.id, "archive-conversations").snapshot);
+      }
+      toast.success(`已归档 ${projectConversationCount(workbenchState, archiveProjectTarget.id)} 个对话。`);
+      setArchiveProjectTarget(null);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot, archiveProjectTarget, workbenchState]);
 
   React.useEffect(() => {
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -854,6 +1117,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             selectedConversationId={selectedConversationId}
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
+            pinnedConversationIds={pinnedConversationIds}
+            onConversationMenuAction={handleConversationMenuAction}
+            onProjectMenuAction={handleProjectMenuAction}
             onSelectConversation={setSelectedConversationId}
           />
         ) : (
@@ -877,6 +1143,17 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         <span>Core Service: {props.startup.phase}</span>
         <span>旧 iced GUI 保留为 reference</span>
       </footer>
+      <RenameDialog
+        target={renameTarget}
+        onCancel={() => setRenameTarget(null)}
+        onConfirm={handleRenameConfirm}
+      />
+      <ArchiveProjectDialog
+        conversationCount={archiveProjectTarget ? projectConversationCount(workbenchState, archiveProjectTarget.id) : 0}
+        project={archiveProjectTarget}
+        onCancel={() => setArchiveProjectTarget(null)}
+        onConfirm={handleArchiveProjectConfirm}
+      />
     </div>
   );
 }
@@ -913,6 +1190,150 @@ function mergeConversationMessages(
       ...messages,
     ],
   };
+}
+
+// ProjectMenuAction names project-tree context menu commands.
+// ProjectMenuAction 命名项目树右键菜单命令。
+type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "archive-conversations";
+
+// ConversationMenuAction names conversation-tree context menu commands.
+// ConversationMenuAction 命名会话树右键菜单命令。
+type ConversationMenuAction =
+  | "pin"
+  | "rename"
+  | "archive"
+  | "open-directory"
+  | "copy-workdir"
+  | "copy-session-id";
+
+// RenameTarget describes one pending rename dialog target.
+// RenameTarget 描述一个待处理的重命名对话框目标。
+interface RenameTarget {
+  // Target kind used to route the final rename command.
+  // 用于路由最终重命名命令的目标类型。
+  kind: "project" | "conversation";
+  // Stable target identifier.
+  // 稳定目标标识。
+  id: string;
+  // Current display name.
+  // 当前显示名称。
+  name: string;
+}
+
+// applyPreviewProjectAction simulates project-menu commands for browser-only preview mode.
+// applyPreviewProjectAction 为纯浏览器预览模式模拟项目菜单命令。
+function applyPreviewProjectAction(
+  workbench: WorkbenchSnapshot,
+  projectId: string,
+  action: ProjectMenuAction,
+): { snapshot: WorkbenchSnapshot; message: string } {
+  const project = workbench.projects.find((candidate) => candidate.id === projectId);
+  if (!project) {
+    return { snapshot: workbench, message: "没有找到对应项目。" };
+  }
+
+  if (action === "toggle-pin") {
+    const pinned = !project.pinned;
+    return {
+      snapshot: {
+        ...workbench,
+        projects: workbench.projects.map((candidate) => candidate.id === projectId ? { ...candidate, pinned } : candidate),
+      },
+      message: pinned ? `已将项目 ${project.name} 置顶。` : `已取消项目 ${project.name} 的置顶状态。`,
+    };
+  }
+
+  const archivedConversationIds = new Set(
+    workbench.conversations
+      .filter((conversation) => conversation.projectId === projectId)
+      .map((conversation) => conversation.id),
+  );
+  const conversations = workbench.conversations.filter((conversation) => !archivedConversationIds.has(conversation.id));
+  const selectedConversationId = archivedConversationIds.has(workbench.selectedConversationId ?? "")
+    ? conversations[0]?.id ?? null
+    : workbench.selectedConversationId;
+
+  return {
+    snapshot: {
+      ...workbench,
+      conversations,
+      selectedConversationId,
+      messages: workbench.messages.filter((message) => !archivedConversationIds.has(message.conversationId)),
+    },
+    message: `已归档项目 ${project.name} 下的对话。`,
+  };
+}
+
+// applyPreviewProjectRename simulates project rename for browser-only preview mode.
+// applyPreviewProjectRename 为纯浏览器预览模式模拟项目重命名。
+function applyPreviewProjectRename(
+  workbench: WorkbenchSnapshot,
+  projectId: string,
+  name: string,
+): { snapshot: WorkbenchSnapshot } {
+  return {
+    snapshot: {
+      ...workbench,
+      projects: workbench.projects.map((candidate) => candidate.id === projectId ? { ...candidate, name } : candidate),
+    },
+  };
+}
+
+// applyPreviewConversationRename simulates conversation rename for browser-only preview mode.
+// applyPreviewConversationRename 为纯浏览器预览模式模拟会话重命名。
+function applyPreviewConversationRename(
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+  title: string,
+): { snapshot: WorkbenchSnapshot } {
+  return {
+    snapshot: {
+      ...workbench,
+      conversations: workbench.conversations.map((conversation) => (
+        conversation.id === conversationId ? { ...conversation, title } : conversation
+      )),
+    },
+  };
+}
+
+// applyPreviewConversationAction simulates conversation-menu commands for browser-only preview mode.
+// applyPreviewConversationAction 为纯浏览器预览模式模拟会话菜单命令。
+function applyPreviewConversationAction(
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+  action: ConversationMenuAction,
+): { snapshot: WorkbenchSnapshot } {
+  if (action !== "archive") {
+    return { snapshot: workbench };
+  }
+  const conversations = workbench.conversations.filter((conversation) => conversation.id !== conversationId);
+  const selectedConversationId = workbench.selectedConversationId === conversationId
+    ? conversations[0]?.id ?? null
+    : workbench.selectedConversationId;
+  return {
+    snapshot: {
+      ...workbench,
+      conversations,
+      selectedConversationId,
+      messages: workbench.messages.filter((message) => message.conversationId !== conversationId),
+    },
+  };
+}
+
+// projectForConversation returns the project that owns one conversation.
+// projectForConversation 返回拥有某个会话的项目。
+function projectForConversation(
+  workbench: WorkbenchSnapshot,
+  conversation: ConversationSummary,
+): ProjectSummary | null {
+  const fallbackProject = workbench.projects[0] ?? null;
+  return workbench.projects.find((project) => project.id === conversation.projectId) ?? fallbackProject;
+}
+
+// projectConversationCount returns the visible conversation count under one project.
+// projectConversationCount 返回单个项目下的可见会话数量。
+function projectConversationCount(workbench: WorkbenchSnapshot, projectId: string): number {
+  return workbench.conversations.filter((conversation) => conversation.projectId === projectId).length;
 }
 
 // markdownPlugins stores the Markdown extension set shared by inline and modal renderers.
@@ -1628,6 +2049,9 @@ function ConsoleShell(props: {
   selectedConversationId: string | null;
   loadingConversationId: string | null;
   conversationLoadError: string | null;
+  pinnedConversationIds: Set<string>;
+  onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
   return (
@@ -1635,7 +2059,10 @@ function ConsoleShell(props: {
       <ProjectSidebar
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
+        pinnedConversationIds={props.pinnedConversationIds}
         selectedConversationId={props.selectedConversationId}
+        onConversationMenuAction={props.onConversationMenuAction}
+        onProjectMenuAction={props.onProjectMenuAction}
         onSelectConversation={props.onSelectConversation}
       />
       <SidebarInset>
@@ -1671,7 +2098,10 @@ function ConsoleHeader(props: { conversation?: ConversationSummary }) {
 function ProjectSidebar(props: {
   projects: ProjectSummary[];
   conversations: ConversationSummary[];
+  pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
+  onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
   // openProjectIds stores the project folders currently expanded in the tree.
@@ -1690,6 +2120,20 @@ function ProjectSidebar(props: {
       return groups;
     }, {});
   }, [props.conversations, props.projects]);
+  // sortedConversationsByProject keeps pinned conversations above normal rows.
+  // sortedConversationsByProject 让置顶会话显示在普通行之前。
+  const sortedConversationsByProject = React.useMemo(() => {
+    return Object.fromEntries(
+      Object.entries(conversationsByProject).map(([projectId, conversations]) => [
+        projectId,
+        [...conversations].sort((left, right) => {
+          const leftPinned = props.pinnedConversationIds.has(left.id);
+          const rightPinned = props.pinnedConversationIds.has(right.id);
+          return Number(rightPinned) - Number(leftPinned);
+        }),
+      ]),
+    );
+  }, [conversationsByProject, props.pinnedConversationIds]);
   // toggleProjectOpen toggles one project folder without changing the selected conversation.
   // toggleProjectOpen 切换单个项目文件夹展开状态且不改变当前会话选择。
   const toggleProjectOpen = React.useCallback((projectId: string) => {
@@ -1726,32 +2170,41 @@ function ProjectSidebar(props: {
               const showOriginalFolderName = folderName.length > 0 && folderName !== project.name;
               return (
                 <SidebarMenuItem className="project-tree-item" key={project.id}>
-                  <SidebarMenuButton
-                    aria-expanded={isOpen}
-                    className="project-folder-button"
-                    onClick={() => toggleProjectOpen(project.id)}
-                    tooltip={`${project.name}\n${project.path}`}
-                  >
-                    {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
-                    <span className="vcn-sidebar-label project-folder-label">
-                      <strong>{project.name}</strong>
-                      {showOriginalFolderName ? <small>{folderName}</small> : null}
-                    </span>
-                  </SidebarMenuButton>
+                  <ProjectContextMenu project={project} onAction={props.onProjectMenuAction}>
+                    <SidebarMenuButton
+                      aria-expanded={isOpen}
+                      className="project-folder-button"
+                      onClick={() => toggleProjectOpen(project.id)}
+                      tooltip={`${project.name}\n${project.path}`}
+                    >
+                      {isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
+                      <span className="vcn-sidebar-label project-folder-label">
+                        <strong>{project.name}</strong>
+                        {showOriginalFolderName ? <small>{folderName}</small> : null}
+                      </span>
+                    </SidebarMenuButton>
+                  </ProjectContextMenu>
                   {isOpen ? (
                     <SidebarMenu className="project-conversation-list">
-                      {(conversationsByProject[project.id] ?? []).map((conversation) => (
+                      {(sortedConversationsByProject[project.id] ?? []).map((conversation) => (
                         <SidebarMenuItem key={conversation.id}>
-                          <SidebarMenuButton
-                            active={props.selectedConversationId === conversation.id}
-                            className="conversation-tree-button"
-                            onClick={() => props.onSelectConversation(conversation.id)}
-                            tooltip={`${conversation.title}\n${conversation.status}`}
+                          <ConversationContextMenu
+                            conversation={conversation}
+                            isPinned={props.pinnedConversationIds.has(conversation.id)}
+                            onAction={props.onConversationMenuAction}
                           >
-                            <span className="vcn-sidebar-label conversation-tree-label">
-                              <strong>{conversation.title}</strong>
-                            </span>
-                          </SidebarMenuButton>
+                            <SidebarMenuButton
+                              active={props.selectedConversationId === conversation.id}
+                              className="conversation-tree-button"
+                              onClick={() => props.onSelectConversation(conversation.id)}
+                              tooltip={`${conversation.title}\n${conversation.status}`}
+                            >
+                              <span className="vcn-sidebar-label conversation-tree-label">
+                                <strong>{conversation.title}</strong>
+                              </span>
+                              {props.pinnedConversationIds.has(conversation.id) ? <Pin size={13} /> : null}
+                            </SidebarMenuButton>
+                          </ConversationContextMenu>
                         </SidebarMenuItem>
                       ))}
                     </SidebarMenu>
@@ -1774,6 +2227,189 @@ function ProjectSidebar(props: {
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
+  );
+}
+
+// ProjectContextMenu renders project-level right-click commands.
+// ProjectContextMenu 渲染项目级右键命令。
+function ProjectContextMenu(props: {
+  project: ProjectSummary;
+  children: React.ReactNode;
+  onAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuContent className="project-context-menu">
+        <ContextMenuItem onSelect={() => props.onAction("toggle-pin", props.project)}>
+          <PinOff size={15} />
+          <span>{props.project.pinned ? "取消置顶项目" : "置顶项目"}</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("open-directory", props.project)}>
+          <FolderOpen size={15} />
+          <span>在资源管理器中打开</span>
+        </ContextMenuItem>
+        <ContextMenuItem disabled>
+          <PanelTopOpen size={15} />
+          <span>创建永久工作树</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("rename", props.project)}>
+          <Pencil size={15} />
+          <span>重命名项目</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("archive-conversations", props.project)}>
+          <Archive size={15} />
+          <span>归档对话</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled variant="destructive">
+          <Minus size={15} />
+          <span>移除</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+// RenameDialog renders the controlled project or conversation rename form.
+// RenameDialog 渲染受控的项目或会话重命名表单。
+function RenameDialog(props: {
+  target: RenameTarget | null;
+  onCancel: () => void;
+  onConfirm: (target: RenameTarget, name: string) => void;
+}) {
+  // value stores the pending display name edited by the user.
+  // value 保存用户正在编辑的显示名称。
+  const [value, setValue] = React.useState("");
+
+  React.useEffect(() => {
+    setValue(props.target?.name ?? "");
+  }, [props.target]);
+
+  const title = props.target?.kind === "project" ? "重命名项目" : "重命名对话";
+  const description = props.target?.kind === "project"
+    ? "输入新的项目显示名称。项目路径不会改变。"
+    : "输入新的对话名称。";
+
+  return (
+    <Dialog open={Boolean(props.target)} onOpenChange={(open) => !open && props.onCancel()}>
+      <DialogContent className="rename-dialog">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <form
+          className="dialog-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (props.target) {
+              props.onConfirm(props.target, value);
+            }
+          }}
+        >
+          <Input
+            autoFocus
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            placeholder="输入新的名称"
+          />
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
+            <Button type="submit">确认</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ArchiveProjectDialog confirms bulk conversation archiving for one project.
+// ArchiveProjectDialog 确认单个项目下的对话批量归档。
+function ArchiveProjectDialog(props: {
+  project: ProjectSummary | null;
+  conversationCount: number;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog open={Boolean(props.project)} onOpenChange={(open) => !open && props.onCancel()}>
+      <DialogContent className="archive-dialog">
+        <DialogHeader>
+          <DialogTitle>归档 {props.conversationCount} 个对话？</DialogTitle>
+          <DialogDescription>
+            这会将 {props.project?.name ?? "当前项目"} 中的对话归档。之后你可以在已归档对话中找到它们。
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
+          <Button type="button" variant="destructive" onClick={props.onConfirm}>全部归档</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ConversationContextMenu renders conversation-level right-click commands.
+// ConversationContextMenu 渲染会话级右键命令。
+function ConversationContextMenu(props: {
+  conversation: ConversationSummary;
+  children: React.ReactNode;
+  isPinned: boolean;
+  onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{props.children}</ContextMenuTrigger>
+      <ContextMenuContent className="conversation-context-menu">
+        <ContextMenuItem onSelect={() => props.onAction("pin", props.conversation)}>
+          <Pin size={15} />
+          <span>{props.isPinned ? "取消置顶对话" : "置顶对话"}</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("rename", props.conversation)}>
+          <Pencil size={15} />
+          <span>重命名对话</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("archive", props.conversation)}>
+          <Archive size={15} />
+          <span>归档对话</span>
+        </ContextMenuItem>
+        <ContextMenuItem disabled>
+          <MailOpen size={15} />
+          <span>标记为未读</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => props.onAction("open-directory", props.conversation)}>
+          <FolderOpen size={15} />
+          <span>在资源管理器中打开</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("copy-workdir", props.conversation)}>
+          <Copy size={15} />
+          <span>复制工作目录</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("copy-session-id", props.conversation)}>
+          <FileText size={15} />
+          <span>复制会话 ID</span>
+        </ContextMenuItem>
+        <ContextMenuItem disabled>
+          <Link size={15} />
+          <span>复制深度链接</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled>
+          <GitBranch size={15} />
+          <span>派生到本地</span>
+        </ContextMenuItem>
+        <ContextMenuItem disabled>
+          <GitBranch size={15} />
+          <span>派生到新工作树</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem disabled>
+          <ExternalLink size={15} />
+          <span>在新窗口中打开</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 

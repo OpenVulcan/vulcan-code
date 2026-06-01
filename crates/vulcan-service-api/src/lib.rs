@@ -168,6 +168,10 @@ pub struct ProjectSummary {
     /// Project path shown to users.
     /// 展示给用户的项目路径。
     pub path: String,
+    /// Whether the project is currently pinned.
+    /// 项目当前是否处于置顶状态。
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// Summarizes one conversation in the WebUI sidebar.
@@ -184,6 +188,10 @@ pub struct ConversationSummary {
     /// Conversation status text.
     /// 会话状态文本。
     pub status: String,
+    /// Optional owning project identifier.
+    /// 可选所属项目标识。
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 /// Represents one rendered conversation message.

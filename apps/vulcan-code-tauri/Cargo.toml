@@ -17,6 +17,7 @@ tauri = { version = "=2.11.2", features = [] }
 time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 uuid.workspace = true
+vldb-controller-client.workspace = true
 luaskills.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-provider-config.workspace = true

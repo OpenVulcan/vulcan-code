@@ -632,6 +632,38 @@ button {
   padding: 10px;
 }
 
+.project-context-menu {
+  min-width: 190px;
+}
+
+.conversation-context-menu {
+  min-width: 210px;
+}
+
+.project-context-menu svg,
+.conversation-context-menu svg {
+  color: var(--muted-foreground);
+}
+
+.rename-dialog,
+.archive-dialog {
+  width: min(460px, calc(100vw - 32px));
+}
+
+.archive-dialog [data-slot="dialog-title"] {
+  font-size: 22px;
+}
+
+.archive-dialog [data-slot="dialog-description"] {
+  max-width: 360px;
+  line-height: 1.65;
+}
+
+.dialog-form {
+  display: grid;
+  gap: 16px;
+}
+
 .send-button {
   align-self: end;
   font-weight: 700;

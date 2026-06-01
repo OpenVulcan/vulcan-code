@@ -8535,6 +8535,7 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+ "vldb-controller-client",
  "vulcan-mcp-runtime",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
