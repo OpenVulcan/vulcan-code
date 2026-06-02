@@ -42,6 +42,17 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -115,6 +126,8 @@ import {
   Maximize2,
   Minimize2,
   MessageSquareText,
+  PanelRightClose,
+  PanelRightOpen,
   PanelTopOpen,
   Pencil,
   Pin,
@@ -2282,6 +2295,112 @@ function ConsoleShell(props: {
 }) {
   return (
     <SidebarProvider className="console-shell">
+      <ConsoleShellContent {...props} />
+    </SidebarProvider>
+  );
+}
+
+// ConsoleShellContent renders the workspace shell after sidebar context is available.
+// ConsoleShellContent 在侧栏上下文可用后渲染工作台外壳。
+function ConsoleShellContent(props: {
+  startup: StartupSnapshot;
+  workbench: WorkbenchSnapshot;
+  selectedDraftConversation: DraftConversationSelection | null;
+  selectedConversation?: ConversationSummary;
+  selectedConversationId: string | null;
+  loadingConversationId: string | null;
+  conversationLoadError: string | null;
+  pinnedConversationIds: Set<string>;
+  onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  onCreateConversation: (project: ProjectSummary) => void;
+  onCreateProject: () => void;
+  onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
+  onReorderProjects: (projectIds: string[]) => void;
+  onSelectConversation: (conversationId: string) => void;
+}) {
+  // sidebar controls the left project tree that can collapse automatically.
+  // sidebar 控制可自动折叠的左侧项目树。
+  const sidebar = useSidebar();
+  // shellRef measures the available workspace width for automatic panel collapse.
+  // shellRef 测量工作台可用宽度，用于自动折叠面板。
+  const shellRef = React.useRef<HTMLDivElement | null>(null);
+  // previousShellWidthRef tracks resize direction so auto-restore only runs while width grows.
+  // previousShellWidthRef 跟踪尺寸变化方向，确保自动恢复只在宽度增长时执行。
+  const previousShellWidthRef = React.useRef<number | null>(null);
+  // rightPanelOpen stores whether the review and memory panel is visible.
+  // rightPanelOpen 保存审核与记忆面板是否可见。
+  const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
+  // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
+  // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
+  const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
+  // rightAutoCollapsed records automatic right-panel collapse caused by width pressure.
+  // rightAutoCollapsed 记录宽度压力导致的右侧面板自动折叠。
+  const [rightAutoCollapsed, setRightAutoCollapsed] = React.useState(false);
+  // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
+  // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
+  const handleLeftPanelToggle = React.useCallback(() => {
+    setLeftAutoCollapsed(false);
+  }, []);
+  // handleRightPanelToggle clears automatic restore intent when the user toggles the right panel manually.
+  // handleRightPanelToggle 在用户手动切换右侧面板时清除自动恢复意图。
+  const handleRightPanelToggle = React.useCallback(() => {
+    setRightAutoCollapsed(false);
+    setRightPanelOpen((current) => !current);
+  }, []);
+
+  React.useEffect(() => {
+    const element = shellRef.current;
+    if (!element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      const previousWidth = previousShellWidthRef.current;
+      const isGrowing = previousWidth !== null && width > previousWidth + 1;
+      previousShellWidthRef.current = width;
+      const expandedLeftWidth = 288;
+      const collapsedLeftWidth = 46;
+      const preferredRightWidth = 480;
+      const handleWidth = 9;
+      const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+      const rightWidth = rightPanelOpen ? preferredRightWidth : 0;
+      const shellGaps = rightPanelOpen ? handleWidth : 0;
+      const mainWidth = width - leftWidth - rightWidth - shellGaps;
+      if (mainWidth < 800 && sidebar.open) {
+        sidebar.setOpen(false);
+        setLeftAutoCollapsed(true);
+        return;
+      }
+      if (mainWidth < 800 && rightPanelOpen) {
+        setRightPanelOpen(false);
+        setRightAutoCollapsed(true);
+        return;
+      }
+      if (!isGrowing) {
+        return;
+      }
+      if (leftAutoCollapsed && !sidebar.open) {
+        const restoredMainWidth = width - expandedLeftWidth - rightWidth - shellGaps;
+        if (restoredMainWidth >= 800) {
+          sidebar.setOpen(true);
+          setLeftAutoCollapsed(false);
+          return;
+        }
+      }
+      if (rightAutoCollapsed && !rightPanelOpen) {
+        const restoredMainWidth = width - leftWidth - preferredRightWidth - handleWidth;
+        if (restoredMainWidth >= 800) {
+          setRightPanelOpen(true);
+          setRightAutoCollapsed(false);
+        }
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [leftAutoCollapsed, rightAutoCollapsed, rightPanelOpen, sidebar]);
+
+  return (
+    <div className="workspace-panel-shell" ref={shellRef}>
       <ProjectSidebar
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
@@ -2294,18 +2413,21 @@ function ConsoleShell(props: {
         onReorderProjects={props.onReorderProjects}
         onSelectConversation={props.onSelectConversation}
       />
-      <SidebarInset>
-        <ConsoleHeader draftConversation={props.selectedDraftConversation} conversation={props.selectedConversation} />
-        <ChatArea
+      <SidebarInset className="workspace-inset">
+        <WorkspaceResizableBody
+          rightPanelOpen={rightPanelOpen}
           startup={props.startup}
           workbench={props.workbench}
           selectedDraftConversation={props.selectedDraftConversation}
+          selectedConversation={props.selectedConversation}
           selectedConversationId={props.selectedConversationId}
           loadingConversationId={props.loadingConversationId}
           conversationLoadError={props.conversationLoadError}
+          onToggleLeftPanel={handleLeftPanelToggle}
+          onToggleRightPanel={handleRightPanelToggle}
         />
       </SidebarInset>
-    </SidebarProvider>
+    </div>
   );
 }
 
@@ -2314,19 +2436,151 @@ function ConsoleShell(props: {
 function ConsoleHeader(props: {
   conversation?: ConversationSummary;
   draftConversation: DraftConversationSelection | null;
+  rightPanelOpen: boolean;
+  onToggleLeftPanel: () => void;
+  onToggleRightPanel: () => void;
 }) {
   // t translates stable console chrome labels.
   // t 翻译稳定的控制台外壳标签。
   const { t } = useI18n();
+  // rightPanelLabel describes the current right panel toggle action.
+  // rightPanelLabel 描述当前右侧面板切换动作。
+  const rightPanelLabel = props.rightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
 
   return (
     <header className="console-header">
       <div className="console-header-main">
-        <SidebarTrigger />
+        <SidebarTrigger onClick={props.onToggleLeftPanel} />
         <span className="console-header-separator" aria-hidden="true" />
         <h1>{props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title")}</h1>
       </div>
+      <div className="console-header-actions">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label={rightPanelLabel}
+              aria-pressed={props.rightPanelOpen}
+              className="icon-button"
+              onClick={props.onToggleRightPanel}
+              size="icon-sm"
+              type="button"
+              variant={props.rightPanelOpen ? "secondary" : "ghost"}
+            >
+              {props.rightPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
+        </Tooltip>
+      </div>
     </header>
+  );
+}
+
+// WorkspaceResizableBody renders the main chat area and optional right context panel.
+// WorkspaceResizableBody 渲染主会话区域与可选右侧上下文面板。
+function WorkspaceResizableBody(props: {
+  // Whether the right context panel is visible.
+  // 右侧上下文面板是否可见。
+  rightPanelOpen: boolean;
+  // Startup snapshot forwarded to the chat area.
+  // 转发给会话区域的启动快照。
+  startup: StartupSnapshot;
+  // Workbench snapshot forwarded to the chat area.
+  // 转发给会话区域的工作台快照。
+  workbench: WorkbenchSnapshot;
+  // Current draft conversation selection.
+  // 当前草稿会话选择。
+  selectedDraftConversation: DraftConversationSelection | null;
+  // Current selected conversation summary.
+  // 当前选中会话摘要。
+  selectedConversation?: ConversationSummary;
+  // Current selected conversation id.
+  // 当前选中会话标识。
+  selectedConversationId: string | null;
+  // Conversation id currently loading from service.
+  // 当前正在从服务载入的会话标识。
+  loadingConversationId: string | null;
+  // Conversation load error shown by the chat area.
+  // 会话区域展示的载入错误。
+  conversationLoadError: string | null;
+  // Toggles the right context panel.
+  // 切换右侧上下文面板。
+  onToggleRightPanel: () => void;
+  // Records a manual left sidebar toggle.
+  // 记录一次手动左侧栏切换。
+  onToggleLeftPanel: () => void;
+}) {
+  return (
+    <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
+      <ResizablePanel className="workspace-main-panel" defaultSize={props.rightPanelOpen ? 68 : 100} id="workspaceMain" minSize="800px">
+        <section className="workspace-main-shell">
+          <ConsoleHeader
+            draftConversation={props.selectedDraftConversation}
+            conversation={props.selectedConversation}
+            rightPanelOpen={props.rightPanelOpen}
+            onToggleLeftPanel={props.onToggleLeftPanel}
+            onToggleRightPanel={props.onToggleRightPanel}
+          />
+          <ChatArea
+            startup={props.startup}
+            workbench={props.workbench}
+            selectedDraftConversation={props.selectedDraftConversation}
+            selectedConversationId={props.selectedConversationId}
+            loadingConversationId={props.loadingConversationId}
+            conversationLoadError={props.conversationLoadError}
+          />
+        </section>
+      </ResizablePanel>
+      {props.rightPanelOpen ? (
+        <>
+          <ResizableHandle className="workspace-context-resize-handle" withHandle />
+          <ResizablePanel
+            className="workspace-context-panel"
+            defaultSize={32}
+            groupResizeBehavior="preserve-pixel-size"
+            id="workspaceContext"
+            minSize="320px"
+          >
+            <WorkspaceContextPanel />
+          </ResizablePanel>
+        </>
+      ) : null}
+    </ResizablePanelGroup>
+  );
+}
+
+// WorkspaceContextPanel renders review and memory tabs for the right context rail.
+// WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
+function WorkspaceContextPanel() {
+  // t translates the right context panel shell labels.
+  // t 翻译右侧上下文面板外壳标签。
+  const { t } = useI18n();
+
+  return (
+    <aside className="context-panel-shell">
+      <Tabs className="context-tabs" defaultValue="review">
+        <div className="context-panel-header">
+          <TabsList className="context-tabs-list">
+            <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
+            <TabsTrigger value="memory">{t("contextPanel.memory")}</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent className="context-tab-content" value="review">
+          <div className="context-empty-state">
+            <GitBranch size={20} />
+            <strong>{t("contextPanel.review")}</strong>
+            <span>{t("contextPanel.reviewEmpty")}</span>
+          </div>
+        </TabsContent>
+        <TabsContent className="context-tab-content" value="memory">
+          <div className="context-empty-state">
+            <BrainCircuit size={20} />
+            <strong>{t("contextPanel.memory")}</strong>
+            <span>{t("contextPanel.memoryEmpty")}</span>
+          </div>
+        </TabsContent>
+      </Tabs>
+    </aside>
   );
 }
 

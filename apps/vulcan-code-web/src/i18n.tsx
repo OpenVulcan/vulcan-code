@@ -32,6 +32,12 @@ export type TranslationKey =
   | "console.title"
   | "console.newConversation"
   | "console.emptyPrompt"
+  | "contextPanel.open"
+  | "contextPanel.close"
+  | "contextPanel.review"
+  | "contextPanel.memory"
+  | "contextPanel.reviewEmpty"
+  | "contextPanel.memoryEmpty"
   | "sidebar.console"
   | "sidebar.pinned"
   | "sidebar.projects"
@@ -102,6 +108,12 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "console.title": "会话",
     "console.newConversation": "新会话",
     "console.emptyPrompt": "我们应该在 {projectName} 中构建什么？",
+    "contextPanel.open": "打开右侧面板",
+    "contextPanel.close": "关闭右侧面板",
+    "contextPanel.review": "审核",
+    "contextPanel.memory": "记忆",
+    "contextPanel.reviewEmpty": "Git Diff 审核面板待接入",
+    "contextPanel.memoryEmpty": "记忆注入信息面板待接入",
     "sidebar.console": "工作台",
     "sidebar.pinned": "置顶",
     "sidebar.projects": "项目",
@@ -169,6 +181,12 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "console.title": "Conversation",
     "console.newConversation": "New conversation",
     "console.emptyPrompt": "What should we build in {projectName}?",
+    "contextPanel.open": "Open right panel",
+    "contextPanel.close": "Close right panel",
+    "contextPanel.review": "Review",
+    "contextPanel.memory": "Memory",
+    "contextPanel.reviewEmpty": "Git Diff review panel is pending",
+    "contextPanel.memoryEmpty": "Memory injection panel is pending",
     "sidebar.console": "Workspace",
     "sidebar.pinned": "Pinned",
     "sidebar.projects": "Projects",

@@ -360,6 +360,15 @@ button {
   background: var(--sidebar);
 }
 
+.workspace-panel-shell {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
+
 .vcn-sidebar {
   width: var(--console-sidebar-width);
   min-width: var(--console-sidebar-width);
@@ -806,8 +815,8 @@ button {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  display: grid;
-  grid-template-rows: 58px minmax(0, 1fr);
+  display: flex;
+  align-items: stretch;
   margin: 10px 10px 10px 0;
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -840,6 +849,13 @@ button {
   gap: 14px;
 }
 
+.console-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .console-header h1 {
   margin: 0;
   overflow: hidden;
@@ -858,6 +874,110 @@ button {
 
 .vcn-sidebar-trigger {
   flex: 0 0 auto;
+}
+
+.workspace-inset {
+  display: flex;
+}
+
+.workspace-resizable-body {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+
+.workspace-main-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-main-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.workspace-context-resize-handle {
+  width: 9px;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.workspace-context-resize-handle::before {
+  content: "";
+  width: 1px;
+  height: 100%;
+  background: var(--border);
+}
+
+.workspace-context-panel {
+  min-width: 260px;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--background);
+  overflow: hidden;
+}
+
+.context-panel-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+}
+
+.context-tabs {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  gap: 0;
+}
+
+.context-panel-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.context-tabs-list {
+  width: 100%;
+}
+
+.context-tab-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+}
+
+.context-empty-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.context-empty-state strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.context-empty-state span {
+  max-width: 220px;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .feature-header-description {
