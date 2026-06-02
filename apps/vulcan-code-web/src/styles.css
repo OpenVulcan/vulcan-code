@@ -1100,7 +1100,7 @@ button {
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 48px 13px 260px;
+  padding: 48px 20px 260px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
