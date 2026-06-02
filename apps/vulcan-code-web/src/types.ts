@@ -76,6 +76,12 @@ export interface ProjectSummary {
   // Whether the project is currently pinned.
   // 项目当前是否处于置顶状态。
   pinned?: boolean;
+  // Optional icon pack selected for the project.
+  // 项目选择的可选图标包。
+  iconPack?: string | null;
+  // Optional icon key selected for the project.
+  // 项目选择的可选图标键。
+  iconKey?: string | null;
 }
 
 // ConversationSummary describes one conversation shown in the sidebar.

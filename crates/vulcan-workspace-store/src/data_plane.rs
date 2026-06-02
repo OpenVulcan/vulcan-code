@@ -347,6 +347,18 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE sessions ADD COLUMN latest_event_seq INTEGER NOT NULL DEFAULT -1;",
     )
     .await?;
+    ensure_optional_project_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE projects ADD COLUMN icon_pack TEXT;",
+    )
+    .await?;
+    ensure_optional_project_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE projects ADD COLUMN icon_key TEXT;",
+    )
+    .await?;
     ensure_session_message_chunk_table(client, sqlite_binding_id).await?;
     ensure_workspace_history_search_state_table(client, sqlite_binding_id).await?;
     ensure_session_message_turn_index(client, sqlite_binding_id).await?;
@@ -397,6 +409,16 @@ async fn ensure_optional_session_message_column(
 /// Applies one idempotent session column migration and ignores duplicate-column failures.
 /// 执行一条幂等会话列迁移，并忽略重复列失败。
 async fn ensure_optional_session_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+}
+
+/// Applies one idempotent project column migration and ignores duplicate-column failures.
+/// 执行一条幂等项目列迁移，并忽略重复列失败。
+async fn ensure_optional_project_column(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -672,6 +694,8 @@ CREATE TABLE IF NOT EXISTS projects (
     pinned INTEGER NOT NULL DEFAULT 0,
     archived INTEGER NOT NULL DEFAULT 0,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    icon_pack TEXT,
+    icon_key TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

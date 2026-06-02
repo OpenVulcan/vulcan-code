@@ -95,6 +95,7 @@ import type {
   WorkbenchSnapshot,
 } from "@/types";
 import { toast } from "sonner";
+import * as LucideIcons from "lucide-react";
 import {
   Activity,
   Boxes,
@@ -111,12 +112,15 @@ import {
   Copy,
   Cpu,
   Database,
+  FileCode2,
+  FileJson2,
   ExternalLink,
   FileText,
   Folder,
   FolderPlus,
   FolderOpen,
   GitBranch,
+  Globe,
   Hammer,
   History,
   Link,
@@ -129,6 +133,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   PanelTopOpen,
+  Palette,
   Pencil,
   Pin,
   PlugZap,
@@ -136,6 +141,7 @@ import {
   ScrollText,
   Send,
   Settings,
+  Shield,
   Square,
   SquarePen,
   SlidersHorizontal,
@@ -156,6 +162,113 @@ const GITHUB_REPOSITORY_URL = "https://github.com/OpenVulcan/vulcan-code";
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
+
+// ProjectIconBadgeShape names the badge silhouette used by generated project icons.
+// ProjectIconBadgeShape 命名生成式项目图标使用的徽标轮廓。
+type ProjectIconBadgeShape = "circle" | "square" | "rounded" | "sharp";
+
+// ProjectIconSelection describes one icon override persisted for a project.
+// ProjectIconSelection 描述为项目持久化的单个图标覆盖配置。
+interface ProjectIconSelection {
+  // Icon pack identifier stored in the project row.
+  // 存储在项目行中的图标包标识。
+  pack: string;
+  // Icon key or encoded badge configuration stored in the project row.
+  // 存储在项目行中的图标键或编码后的徽标配置。
+  key: string;
+}
+
+// ProjectIconBadgeConfig stores the generated badge icon appearance.
+// ProjectIconBadgeConfig 保存生成式徽标图标的外观。
+interface ProjectIconBadgeConfig {
+  // Badge shape used by the generated SVG.
+  // 生成 SVG 使用的徽标形状。
+  shape: ProjectIconBadgeShape;
+  // One Chinese character or up to two Latin letters.
+  // 一个中文字符或最多两个英文字母。
+  text: string;
+  // Badge background color.
+  // 徽标背景色。
+  background: string;
+  // Badge border color.
+  // 徽标边框色。
+  border: string;
+  // Badge text color.
+  // 徽标文字色。
+  foreground: string;
+}
+
+// ProjectIconOption describes one selectable lucide project icon.
+// ProjectIconOption 描述一个可选择的 lucide 项目图标。
+interface ProjectIconOption {
+  // Stable icon key persisted in the project row.
+  // 持久化到项目行中的稳定图标键。
+  key: string;
+  // User-facing icon label.
+  // 面向用户显示的图标名称。
+  label: string;
+  // Lucide icon component rendered by the option.
+  // 选项渲染使用的 Lucide 图标组件。
+  Icon: React.ComponentType<{ size?: number; className?: string }>;
+}
+
+// DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
+// DEFAULT_PROJECT_BADGE_CONFIG 提供生成式徽标的初始预览配置。
+const DEFAULT_PROJECT_BADGE_CONFIG: ProjectIconBadgeConfig = {
+  shape: "rounded",
+  text: "VC",
+  background: "#111827",
+  border: "#111827",
+  foreground: "#ffffff",
+};
+
+// PROJECT_BADGE_COLORS lists quick colors for generated project badges.
+// PROJECT_BADGE_COLORS 列出生成式项目徽标的快捷颜色。
+const PROJECT_BADGE_COLORS = ["#111827", "#2563eb", "#0891b2", "#16a34a", "#ca8a04", "#dc2626", "#7c3aed", "#db2777"];
+
+// LUCIDE_ICON_STREAM_BATCH_SIZE controls how many icon cells are mounted per incremental pass.
+// LUCIDE_ICON_STREAM_BATCH_SIZE 控制每次增量挂载多少个图标单元。
+const LUCIDE_ICON_STREAM_BATCH_SIZE = 120;
+
+// LUCIDE_PROJECT_ICON_OPTIONS lists every usable exported Lucide icon for the project picker.
+// LUCIDE_PROJECT_ICON_OPTIONS 列出项目选择器可使用的全部 Lucide 导出图标。
+const LUCIDE_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildLucideProjectIconOptions();
+
+// PROJECT_ICON_MAP resolves persisted lucide icon keys to components.
+// PROJECT_ICON_MAP 将持久化的 lucide 图标键解析为组件。
+const PROJECT_ICON_MAP = new Map<string, ProjectIconOption>(
+  [
+    ...LUCIDE_PROJECT_ICON_OPTIONS.map((icon) => [icon.key, icon] as const),
+    ["folder", { key: "Folder", label: "Folder", Icon: Folder }] as const,
+    ["folder-open", { key: "FolderOpen", label: "FolderOpen", Icon: FolderOpen }] as const,
+    ["folder-plus", { key: "FolderPlus", label: "FolderPlus", Icon: FolderPlus }] as const,
+    ["layout-dashboard", { key: "LayoutDashboard", label: "LayoutDashboard", Icon: LayoutDashboard }] as const,
+    ["scroll-text", { key: "ScrollText", label: "ScrollText", Icon: ScrollText }] as const,
+    ["message-square-text", { key: "MessageSquareText", label: "MessageSquareText", Icon: MessageSquareText }] as const,
+  ],
+);
+
+// buildLucideProjectIconOptions extracts usable icon components from lucide-react exports.
+// buildLucideProjectIconOptions 从 lucide-react 导出中提取可用图标组件。
+function buildLucideProjectIconOptions(): ProjectIconOption[] {
+  return Object.entries(LucideIcons)
+    .filter(([name, value]) => /^[A-Z]/.test(name) && !name.endsWith("Icon") && name !== "Icon" && isLucideIconComponent(value))
+    .map(([name, Icon]) => ({
+      key: name,
+      label: name,
+      Icon: Icon as React.ComponentType<{ size?: number; className?: string }>,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
+
+// isLucideIconComponent accepts both plain components and React.forwardRef icon objects.
+// isLucideIconComponent 同时接受普通组件与 React.forwardRef 图标对象。
+function isLucideIconComponent(value: unknown): boolean {
+  if (typeof value === "function") {
+    return true;
+  }
+  return Boolean(value && typeof value === "object" && "render" in value && typeof (value as { render?: unknown }).render === "function");
+}
 
 // ComposerSelectOption describes one local-only composer dropdown choice.
 // ComposerSelectOption 描述一个仅用于输入区本地预览的下拉选项。
@@ -546,6 +659,30 @@ async function renameProject(projectId: string, name: string): Promise<Workbench
   return invoke<WorkbenchSnapshot>("service_rename_project", { projectId, name });
 }
 
+// setProjectIcon asks the desktop shell to persist one project icon override.
+// setProjectIcon 请求桌面壳持久化单个项目图标覆盖。
+async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_set_project_icon", {
+    projectId,
+    iconPack: icon.pack,
+    iconKey: icon.key,
+  });
+}
+
+// resetProjectIcon asks the desktop shell to clear one project icon override.
+// resetProjectIcon 请求桌面壳清除单个项目图标覆盖。
+async function resetProjectIcon(projectId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_reset_project_icon", { projectId });
+}
+
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.
 // archiveProjectConversations 请求桌面壳归档单个项目下的全部会话。
 async function archiveProjectConversations(projectId: string): Promise<WorkbenchSnapshot | null> {
@@ -712,6 +849,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
+  // draftConversationIdRef keeps the latest draft id without retriggering workbench snapshot hydration.
+  // draftConversationIdRef 保存最新草稿标识，避免重新触发工作台快照水合。
+  const draftConversationIdRef = React.useRef<string | null>(null);
   // workbenchState stores local message hydration updates.
   // workbenchState 保存本地会话正文水合更新。
   const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(props.workbench);
@@ -724,6 +864,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // renameTarget stores the project or conversation currently being renamed.
   // renameTarget 保存当前正在重命名的项目或会话目标。
   const [renameTarget, setRenameTarget] = React.useState<RenameTarget | null>(null);
+  // projectIconTarget stores the project currently editing its sidebar icon.
+  // projectIconTarget 保存当前正在编辑侧栏图标的项目。
+  const [projectIconTarget, setProjectIconTarget] = React.useState<ProjectIconDialogTarget | null>(null);
   // archiveProjectTarget stores the project waiting for archive confirmation.
   // archiveProjectTarget 保存正在等待归档确认的项目。
   const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
@@ -842,6 +985,11 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         return;
       }
 
+      if (action === "set-icon") {
+        setProjectIconTarget({ project });
+        return;
+      }
+
       if (action === "archive-conversations") {
         setArchiveProjectTarget(project);
         return;
@@ -858,6 +1006,43 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleProjectIconConfirm persists the selected project icon override.
+  // handleProjectIconConfirm 持久化选择的项目图标覆盖。
+  const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
+    const normalizedIcon = icon.pack === "badge"
+      ? { pack: icon.pack, key: encodeProjectBadgeKey(decodeProjectBadgeKey(icon.key) ?? DEFAULT_PROJECT_BADGE_CONFIG) }
+      : icon;
+    try {
+      const snapshot = await setProjectIcon(project.id, normalizedIcon);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+      } else {
+        applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
+      }
+      setProjectIconTarget(null);
+      toast.success(`已更新项目图标：${project.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleProjectIconReset clears the selected project icon override.
+  // handleProjectIconReset 清除选择的项目图标覆盖。
+  const handleProjectIconReset = React.useCallback(async (project: ProjectSummary) => {
+    try {
+      const snapshot = await resetProjectIcon(project.id);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+      } else {
+        applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
+      }
+      setProjectIconTarget(null);
+      toast.success(`已还原项目图标：${project.name}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
     }
   }, [applyProjectActionSnapshot, workbenchState]);
 
@@ -1017,10 +1202,14 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   }, [theme]);
 
   React.useEffect(() => {
+    draftConversationIdRef.current = draftConversation?.id ?? null;
+  }, [draftConversation?.id]);
+
+  React.useEffect(() => {
     setWorkbenchState((current) => mergeWorkbenchSnapshot(current, props.workbench));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
     setSelectedConversationId((current) => {
-      if (current && current === draftConversation?.id) {
+      if (current && current === draftConversationIdRef.current) {
         return current;
       }
       if (current && props.workbench.conversations.some((conversation) => conversation.id === current)) {
@@ -1028,7 +1217,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       }
       return nextSelected;
     });
-  }, [draftConversation?.id, props.workbench]);
+  }, [props.workbench]);
 
   React.useEffect(() => {
     if (!selectedConversationId) {
@@ -1141,6 +1330,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         target={renameTarget}
         onCancel={() => setRenameTarget(null)}
         onConfirm={handleRenameConfirm}
+      />
+      <ProjectIconDialog
+        target={projectIconTarget}
+        onCancel={() => setProjectIconTarget(null)}
+        onConfirm={handleProjectIconConfirm}
+        onReset={handleProjectIconReset}
       />
       <ArchiveProjectDialog
         conversationCount={archiveProjectTarget ? projectConversationCount(workbenchState, archiveProjectTarget.id) : 0}
@@ -1307,7 +1502,15 @@ function mergeConversationMessages(
 
 // ProjectMenuAction names project-tree context menu commands.
 // ProjectMenuAction 命名项目树右键菜单命令。
-type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "archive-conversations";
+type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "set-icon" | "archive-conversations";
+
+// ProjectIconDialogTarget stores the project currently editing its icon.
+// ProjectIconDialogTarget 保存当前正在编辑图标的项目。
+interface ProjectIconDialogTarget {
+  // Project being edited by the icon dialog.
+  // 图标弹窗正在编辑的项目。
+  project: ProjectSummary;
+}
 
 // ConversationMenuAction names conversation-tree context menu commands.
 // ConversationMenuAction 命名会话树右键菜单命令。
@@ -1392,6 +1595,25 @@ function applyPreviewProjectRename(
   };
 }
 
+// applyPreviewProjectIcon simulates project icon persistence for browser-only preview mode.
+// applyPreviewProjectIcon 为纯浏览器预览模式模拟项目图标持久化。
+function applyPreviewProjectIcon(
+  workbench: WorkbenchSnapshot,
+  projectId: string,
+  icon: ProjectIconSelection | null,
+): { snapshot: WorkbenchSnapshot } {
+  return {
+    snapshot: {
+      ...workbench,
+      projects: workbench.projects.map((candidate) => candidate.id === projectId ? {
+        ...candidate,
+        iconPack: icon?.pack ?? null,
+        iconKey: icon?.key ?? null,
+      } : candidate),
+    },
+  };
+}
+
 // applyPreviewConversationRename simulates conversation rename for browser-only preview mode.
 // applyPreviewConversationRename 为纯浏览器预览模式模拟会话重命名。
 function applyPreviewConversationRename(
@@ -1468,6 +1690,119 @@ function projectForConversation(
 ): ProjectSummary | null {
   const fallbackProject = workbench.projects[0] ?? null;
   return workbench.projects.find((project) => project.id === conversation.projectId) ?? fallbackProject;
+}
+
+// encodeProjectBadgeKey serializes a generated badge config for project persistence.
+// encodeProjectBadgeKey 将生成式徽标配置序列化用于项目持久化。
+function encodeProjectBadgeKey(config: ProjectIconBadgeConfig): string {
+  return JSON.stringify(config);
+}
+
+// decodeProjectBadgeKey restores a generated badge config from persistence.
+// decodeProjectBadgeKey 从持久化内容还原生成式徽标配置。
+function decodeProjectBadgeKey(value?: string | null): ProjectIconBadgeConfig | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as Partial<ProjectIconBadgeConfig>;
+    const shape = parsed.shape;
+    const text = normalizeProjectBadgeText(parsed.text ?? "");
+    if (!shape || !["circle", "square", "rounded", "sharp"].includes(shape) || !text) {
+      return null;
+    }
+    return {
+      shape,
+      text,
+      background: normalizeCssColor(parsed.background, DEFAULT_PROJECT_BADGE_CONFIG.background),
+      border: normalizeCssColor(parsed.border, DEFAULT_PROJECT_BADGE_CONFIG.border),
+      foreground: normalizeCssColor(parsed.foreground, DEFAULT_PROJECT_BADGE_CONFIG.foreground),
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ProjectIcon renders either a generated badge, a selected icon, or the default folder state.
+// ProjectIcon 渲染生成式徽标、已选图标或默认文件夹状态。
+function ProjectIcon(props: { project: ProjectSummary; isOpen?: boolean; size?: number }) {
+  if (props.project.iconPack === "badge") {
+    const config = decodeProjectBadgeKey(props.project.iconKey) ?? DEFAULT_PROJECT_BADGE_CONFIG;
+    return <ProjectBadgeIcon config={config} size={props.size ?? 16} />;
+  }
+
+  if (props.project.iconPack === "lucide" && props.project.iconKey) {
+    const option = PROJECT_ICON_MAP.get(props.project.iconKey);
+    if (option) {
+      return <option.Icon size={props.size ?? 16} />;
+    }
+  }
+
+  return props.isOpen ? <FolderOpen size={props.size ?? 16} /> : <Folder size={props.size ?? 16} />;
+}
+
+// ProjectBadgeIcon renders the generated project badge as an inline SVG.
+// ProjectBadgeIcon 将生成式项目徽标渲染为内联 SVG。
+function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number }) {
+  const radius = props.config.shape === "circle"
+    ? 50
+    : props.config.shape === "rounded"
+      ? 18
+      : props.config.shape === "square"
+        ? 8
+        : 0;
+  return (
+    <svg
+      aria-hidden="true"
+      className="project-badge-icon"
+      height={props.size}
+      viewBox="0 0 32 32"
+      width={props.size}
+    >
+      <rect
+        fill={props.config.background}
+        height="28"
+        rx={radius}
+        stroke={props.config.border}
+        strokeWidth="2"
+        width="28"
+        x="2"
+        y="2"
+      />
+      <text
+        dominantBaseline="central"
+        fill={props.config.foreground}
+        fontFamily="Inter, Segoe UI, sans-serif"
+        fontSize={props.config.text.length > 1 ? 12 : 15}
+        fontWeight="700"
+        textAnchor="middle"
+        x="16"
+        y="16.5"
+      >
+        {props.config.text}
+      </text>
+    </svg>
+  );
+}
+
+// normalizeProjectBadgeText keeps one Chinese character or two Latin letters.
+// normalizeProjectBadgeText 保留一个中文字符或两个英文字母。
+function normalizeProjectBadgeText(value: string): string {
+  const trimmed = value.trim();
+  const chinese = Array.from(trimmed).find((char) => /\p{Script=Han}/u.test(char));
+  if (chinese) {
+    return chinese;
+  }
+  return trimmed.replace(/[^a-zA-Z]/g, "").slice(0, 2).toUpperCase();
+}
+
+// normalizeCssColor keeps a simple hex color or falls back to a known value.
+// normalizeCssColor 保留简单十六进制颜色，或回退到已知值。
+function normalizeCssColor(value: unknown, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 // projectConversationCount returns the visible conversation count under one project.
@@ -2840,7 +3175,7 @@ function SortableProjectRow(props: {
               onClick={() => props.onToggleOpen(props.project.id)}
               tooltip={`${props.project.name}\n${props.project.path}`}
             >
-              {props.isOpen ? <FolderOpen size={16} /> : <Folder size={16} />}
+              <ProjectIcon isOpen={props.isOpen} project={props.project} size={16} />
               <span className="vcn-sidebar-label project-folder-label">
                 <strong>{props.project.name}</strong>
                 {showOriginalFolderName ? <small>{folderName}</small> : null}
@@ -2992,7 +3327,7 @@ function CollapsedProjectMenu(props: {
           className="project-folder-button collapsed-project-button"
           onClick={(event) => event.preventDefault()}
         >
-          <Folder size={16} />
+          <ProjectIcon project={props.project} size={16} />
           <span className="vcn-sidebar-label project-folder-label">
             <strong>{props.project.name}</strong>
           </span>
@@ -3068,6 +3403,10 @@ function ProjectContextMenu(props: {
           <Pencil size={15} />
           <span>重命名项目</span>
         </ContextMenuItem>
+        <ContextMenuItem onSelect={() => props.onAction("set-icon", props.project)}>
+          <Palette size={15} />
+          <span>设置项目图标</span>
+        </ContextMenuItem>
         <ContextMenuItem disabled onSelect={() => props.onAction("archive-conversations", props.project)}>
           <Archive size={15} />
           <span>归档对话</span>
@@ -3132,6 +3471,274 @@ function RenameDialog(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+// ProjectIconDialog renders the project icon picker and generated badge editor.
+// ProjectIconDialog 渲染项目图标选择器与生成式徽标编辑器。
+function ProjectIconDialog(props: {
+  // Project icon target currently edited by this dialog.
+  // 当前弹窗正在编辑的项目图标目标。
+  target: ProjectIconDialogTarget | null;
+  // Cancels the current icon edit.
+  // 取消当前图标编辑。
+  onCancel: () => void;
+  // Persists the selected icon.
+  // 持久化选中的图标。
+  onConfirm: (project: ProjectSummary, icon: ProjectIconSelection) => void;
+  // Resets the selected project to default folder icons.
+  // 将选中项目还原为默认文件夹图标。
+  onReset: (project: ProjectSummary) => void;
+}) {
+  const project = props.target?.project ?? null;
+  // selectedIcon stores the currently selected built-in icon.
+  // selectedIcon 保存当前选中的内置图标。
+  const [selectedIcon, setSelectedIcon] = React.useState<ProjectIconSelection>({ pack: "lucide", key: "folder" });
+  // badgeConfig stores the generated badge draft.
+  // badgeConfig 保存生成式徽标草稿。
+  const [badgeConfig, setBadgeConfig] = React.useState<ProjectIconBadgeConfig>(DEFAULT_PROJECT_BADGE_CONFIG);
+  // activeTab stores the visible picker tab.
+  // activeTab 保存当前可见的选择器标签。
+  const [activeTab, setActiveTab] = React.useState("lucide");
+  // iconSearch stores the Lucide icon filter text.
+  // iconSearch 保存 Lucide 图标过滤文本。
+  const [iconSearch, setIconSearch] = React.useState("");
+  // visibleLucideLimit stores the streamed Lucide icon render limit.
+  // visibleLucideLimit 保存 Lucide 图标流式渲染上限。
+  const [visibleLucideLimit, setVisibleLucideLimit] = React.useState(LUCIDE_ICON_STREAM_BATCH_SIZE);
+
+  React.useEffect(() => {
+    if (!project) {
+      return;
+    }
+    if (project.iconPack === "badge") {
+      setActiveTab("badge");
+      setBadgeConfig(decodeProjectBadgeKey(project.iconKey) ?? {
+        ...DEFAULT_PROJECT_BADGE_CONFIG,
+        text: normalizeProjectBadgeText(project.name) || DEFAULT_PROJECT_BADGE_CONFIG.text,
+      });
+      return;
+    }
+    const key = project.iconPack === "lucide" && project.iconKey && PROJECT_ICON_MAP.has(project.iconKey)
+      ? project.iconKey
+      : "Folder";
+    setActiveTab("lucide");
+    setSelectedIcon({ pack: "lucide", key });
+    setIconSearch("");
+    setVisibleLucideLimit(LUCIDE_ICON_STREAM_BATCH_SIZE);
+    setBadgeConfig({
+      ...DEFAULT_PROJECT_BADGE_CONFIG,
+      text: normalizeProjectBadgeText(project.name) || DEFAULT_PROJECT_BADGE_CONFIG.text,
+    });
+  }, [project]);
+
+  React.useEffect(() => {
+    setVisibleLucideLimit(LUCIDE_ICON_STREAM_BATCH_SIZE);
+  }, [iconSearch]);
+
+  // updateBadgeText applies the Chinese-one-or-English-two text rule.
+  // updateBadgeText 应用中文一个字或英文两个字母的文字规则。
+  const updateBadgeText = React.useCallback((value: string) => {
+    setBadgeConfig((current) => ({
+      ...current,
+      text: normalizeProjectBadgeText(value),
+    }));
+  }, []);
+
+  if (!project) {
+    return null;
+  }
+
+  const selectedBadgeIcon: ProjectIconSelection = {
+    pack: "badge",
+    key: encodeProjectBadgeKey(badgeConfig),
+  };
+  const finalSelection = activeTab === "badge" ? selectedBadgeIcon : selectedIcon;
+  const normalizedSearch = iconSearch.trim().toLowerCase();
+  const visibleLucideIcons = normalizedSearch.length === 0
+    ? LUCIDE_PROJECT_ICON_OPTIONS
+    : LUCIDE_PROJECT_ICON_OPTIONS.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
+  const streamedLucideIcons = visibleLucideIcons.slice(0, visibleLucideLimit);
+  const hasMoreLucideIcons = streamedLucideIcons.length < visibleLucideIcons.length;
+
+  // handleLucideGridScroll streams the next icon batch when the user reaches the list bottom.
+  // handleLucideGridScroll 在用户滚动到列表底部时流式追加下一批图标。
+  const handleLucideGridScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const element = event.currentTarget;
+    if (!hasMoreLucideIcons) {
+      return;
+    }
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+    if (distanceFromBottom > 96) {
+      return;
+    }
+    setVisibleLucideLimit((current) => Math.min(current + LUCIDE_ICON_STREAM_BATCH_SIZE, visibleLucideIcons.length));
+  };
+
+  return (
+    <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
+      <DialogContent className="project-icon-dialog sm:max-w-[720px]">
+        <DialogHeader>
+          <DialogTitle>设置项目图标</DialogTitle>
+          <DialogDescription>
+            为 {project.name} 选择固定图标，或生成一个字母徽标。还原后会重新使用默认文件夹开关图标。
+          </DialogDescription>
+        </DialogHeader>
+        <div className="project-icon-layout">
+          <div className="project-icon-preview" aria-label="项目图标预览">
+            <ProjectIcon project={{ ...project, iconPack: finalSelection.pack, iconKey: finalSelection.key }} size={42} />
+            <strong>{project.name}</strong>
+          </div>
+          <Tabs className="project-icon-tabs" value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="project-icon-tabs-list">
+              <TabsTrigger value="lucide">Lucide</TabsTrigger>
+              <TabsTrigger value="badge">自定义</TabsTrigger>
+            </TabsList>
+            <TabsContent className="project-icon-tab-content" value="lucide">
+              <div className="lucide-icon-filter">
+                <Input
+                  onChange={(event) => setIconSearch(event.target.value)}
+                  placeholder="过滤 Lucide 图标"
+                  value={iconSearch}
+                />
+                <span>{streamedLucideIcons.length} / {visibleLucideIcons.length} / {LUCIDE_PROJECT_ICON_OPTIONS.length}</span>
+              </div>
+              <div className="project-icon-grid lucide-icon-grid" onScroll={handleLucideGridScroll}>
+                {streamedLucideIcons.map((option) => (
+                  <button
+                    aria-pressed={selectedIcon.pack === "lucide" && selectedIcon.key === option.key}
+                    className={cn(
+                      "project-icon-option",
+                      selectedIcon.pack === "lucide" && selectedIcon.key === option.key && "selected",
+                    )}
+                    key={option.key}
+                    onClick={() => setSelectedIcon({ pack: "lucide", key: option.key })}
+                    title={option.label}
+                    type="button"
+                  >
+                    <option.Icon size={22} />
+                    <span>{option.label}</span>
+                  </button>
+                ))}
+                {hasMoreLucideIcons ? (
+                  <button
+                    className="project-icon-option lucide-load-more"
+                    onClick={() => setVisibleLucideLimit((current) => Math.min(current + LUCIDE_ICON_STREAM_BATCH_SIZE, visibleLucideIcons.length))}
+                    type="button"
+                  >
+                    加载更多
+                  </button>
+                ) : null}
+              </div>
+            </TabsContent>
+            <TabsContent className="project-icon-tab-content badge-tab" value="badge">
+              <div className="badge-editor">
+                <label>
+                  <span>文字</span>
+                  <Input
+                    maxLength={4}
+                    onChange={(event) => updateBadgeText(event.target.value)}
+                    placeholder="中文 1 个或英文 2 个"
+                    value={badgeConfig.text}
+                  />
+                </label>
+                <label>
+                  <span>形状</span>
+                  <Select
+                    value={badgeConfig.shape}
+                    onValueChange={(shape) => setBadgeConfig((current) => ({ ...current, shape: shape as ProjectIconBadgeShape }))}
+                  >
+                    <SelectTrigger className="badge-shape-trigger">
+                      <span>{badgeShapeLabel(badgeConfig.shape)}</span>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="circle">圆形</SelectItem>
+                      <SelectItem value="square">方形</SelectItem>
+                      <SelectItem value="rounded">圆边</SelectItem>
+                      <SelectItem value="sharp">方边</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </label>
+                <ColorPickerRow
+                  label="背景色"
+                  value={badgeConfig.background}
+                  onChange={(background) => setBadgeConfig((current) => ({ ...current, background }))}
+                />
+                <ColorPickerRow
+                  label="边框色"
+                  value={badgeConfig.border}
+                  onChange={(border) => setBadgeConfig((current) => ({ ...current, border }))}
+                />
+                <ColorPickerRow
+                  label="字体色"
+                  value={badgeConfig.foreground}
+                  onChange={(foreground) => setBadgeConfig((current) => ({ ...current, foreground }))}
+                />
+              </div>
+            </TabsContent>
+          </Tabs>
+        </div>
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
+          <Button type="button" variant="outline" onClick={() => props.onReset(project)}>还原默认</Button>
+          <Button type="button" onClick={() => props.onConfirm(project, finalSelection)}>设置</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ColorPickerRow renders one color input with quick color swatches.
+// ColorPickerRow 渲染一个带快捷色块的颜色输入。
+function ColorPickerRow(props: {
+  // User-facing color field label.
+  // 面向用户显示的颜色字段名称。
+  label: string;
+  // Current hex color.
+  // 当前十六进制颜色。
+  value: string;
+  // Updates the current hex color.
+  // 更新当前十六进制颜色。
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="color-picker-row">
+      <span>{props.label}</span>
+      <input
+        aria-label={props.label}
+        className="color-picker-input"
+        onChange={(event) => props.onChange(event.target.value)}
+        type="color"
+        value={props.value}
+      />
+      <div className="color-swatch-row">
+        {PROJECT_BADGE_COLORS.map((color) => (
+          <button
+            aria-label={`${props.label} ${color}`}
+            className="color-swatch"
+            key={color}
+            onClick={() => props.onChange(color)}
+            style={{ backgroundColor: color }}
+            type="button"
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// badgeShapeLabel returns the Chinese label for a generated badge shape.
+// badgeShapeLabel 返回生成式徽标形状的中文标签。
+function badgeShapeLabel(shape: ProjectIconBadgeShape): string {
+  switch (shape) {
+    case "circle":
+      return "圆形";
+    case "square":
+      return "方形";
+    case "rounded":
+      return "圆边";
+    case "sharp":
+      return "方边";
+  }
 }
 
 // ArchiveProjectDialog confirms bulk conversation archiving for one project.

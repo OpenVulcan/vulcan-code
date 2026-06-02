@@ -574,6 +574,8 @@ async fn upsert_projects(
                 ControllerSqliteValue::Int64(i64::from(project.pinned)),
                 ControllerSqliteValue::Int64(i64::from(*archived)),
                 ControllerSqliteValue::Int64(project.order as i64),
+                optional_sqlite_string(&project.icon_pack),
+                optional_sqlite_string(&project.icon_key),
                 ControllerSqliteValue::String(now.clone()),
                 ControllerSqliteValue::String(now.clone()),
             ]
@@ -593,9 +595,11 @@ INSERT INTO projects (
     pinned,
     archived,
     sort_order,
+    icon_pack,
+    icon_key,
     created_at,
     updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
 ON CONFLICT(id) DO UPDATE SET
     name = excluded.name,
     root_path = excluded.root_path,

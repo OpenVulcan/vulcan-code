@@ -383,6 +383,12 @@ struct StoredProjectRow {
     /// Stable section order value.
     /// 稳定的分区顺序值。
     sort_order: i64,
+    /// Optional project icon pack stored in SQLite.
+    /// 存储在 SQLite 中的可选项目图标包。
+    icon_pack: Option<String>,
+    /// Optional project icon key stored in SQLite.
+    /// 存储在 SQLite 中的可选项目图标键。
+    icon_key: Option<String>,
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     archived: i64,
@@ -728,6 +734,8 @@ pub async fn load_workspace_snapshot(
             row.root_path.clone(),
             row.pinned != 0,
             row.sort_order.max(0) as usize,
+            row.icon_pack.clone(),
+            row.icon_key.clone(),
             Vec::new(),
         );
 
@@ -1138,7 +1146,7 @@ async fn query_project_rows(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT id, name, root_path, pinned, sort_order, archived
+SELECT id, name, root_path, pinned, sort_order, icon_pack, icon_key, archived
 FROM projects
 ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
 "#,

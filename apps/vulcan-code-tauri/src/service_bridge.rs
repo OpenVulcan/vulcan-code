@@ -82,6 +82,8 @@ pub fn run() {
             service_toggle_project_pinned,
             service_reorder_projects,
             service_rename_project,
+            service_set_project_icon,
+            service_reset_project_icon,
             service_archive_project_conversations,
             service_rename_conversation,
             service_archive_conversation,
@@ -311,6 +313,60 @@ async fn service_rename_project(
         .map_err(|error| format!("重命名项目失败：{error}"))?;
     refresh_workbench_snapshot(state)
     .await
+}
+
+/// Applies a project icon override and returns the refreshed workbench snapshot.
+/// 应用项目图标覆盖并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_set_project_icon(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+    icon_pack: String,
+    icon_key: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let normalized_icon_pack = normalize_non_empty_name(&icon_pack)?;
+    let normalized_icon_key = normalize_non_empty_name(&icon_key)?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE projects SET icon_pack = ?1, icon_key = ?2, updated_at = ?3 WHERE id = ?4 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(normalized_icon_pack),
+                ControllerSqliteValue::String(normalized_icon_key),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("设置项目图标失败：{error}"))?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Clears a project icon override and returns the refreshed workbench snapshot.
+/// 清除项目图标覆盖并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_reset_project_icon(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE projects SET icon_pack = NULL, icon_key = NULL, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("还原项目图标失败：{error}"))?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Archives all visible conversations under one project and returns the refreshed workbench snapshot.
@@ -1102,6 +1158,8 @@ fn workbench_from_runtime(
                 name: project.title.clone(),
                 path: project.path.clone(),
                 pinned: project.pinned,
+                icon_pack: project.icon_pack.clone(),
+                icon_key: project.icon_key.clone(),
             })
             .collect(),
         conversations: workspace
@@ -1258,6 +1316,8 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
             name: String::from("vulcan-code"),
             path: workspace_root.display().to_string(),
             pinned: false,
+            icon_pack: None,
+            icon_key: None,
         }],
         conversations: Vec::new(),
         selected_conversation_id: None,

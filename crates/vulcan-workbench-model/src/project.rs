@@ -23,6 +23,12 @@ pub struct TaskProjectSummary {
     /// Stable order used inside the current project section.
     /// 当前项目所在分区内部使用的稳定顺序值。
     pub order: usize,
+    /// Optional project icon pack selected by the user.
+    /// 用户选择的可选项目图标包。
+    pub icon_pack: Option<String>,
+    /// Optional project icon key selected by the user.
+    /// 用户选择的可选项目图标键。
+    pub icon_key: Option<String>,
     /// Session identifiers nested under the project node.
     /// 挂载在项目节点下的会话标识集合。
     pub session_ids: Vec<SessionId>,
@@ -37,6 +43,8 @@ impl TaskProjectSummary {
         path: impl Into<String>,
         pinned: bool,
         order: usize,
+        icon_pack: Option<String>,
+        icon_key: Option<String>,
         session_ids: Vec<SessionId>,
     ) -> Self {
         Self {
@@ -45,6 +53,8 @@ impl TaskProjectSummary {
             path: path.into(),
             pinned,
             order,
+            icon_pack,
+            icon_key,
             session_ids,
         }
     }
@@ -59,6 +69,8 @@ impl TaskProjectSummary {
                 r"D:\projects\LuaSkills",
                 false,
                 0,
+                None,
+                None,
                 vec![Uuid::from_u128(1), Uuid::from_u128(2)],
             ),
             Self::new(
@@ -67,6 +79,8 @@ impl TaskProjectSummary {
                 r"D:\projects\VulcanMemoryMesh",
                 false,
                 1,
+                None,
+                None,
                 vec![Uuid::from_u128(3), Uuid::from_u128(4)],
             ),
             Self::new(
@@ -75,6 +89,8 @@ impl TaskProjectSummary {
                 r"D:\projects\vulcan-plugins-opencode",
                 false,
                 2,
+                None,
+                None,
                 vec![],
             ),
         ]

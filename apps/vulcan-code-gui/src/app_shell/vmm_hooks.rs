@@ -1308,6 +1308,8 @@ mod tests {
             r"D:\workspace\vmm",
             false,
             0,
+            None,
+            None,
             vec![session_id],
         ));
         workbench.sessions.push(SessionSummary::new(

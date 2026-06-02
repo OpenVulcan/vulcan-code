@@ -172,6 +172,14 @@ pub struct ProjectSummary {
     /// 项目当前是否处于置顶状态。
     #[serde(default)]
     pub pinned: bool,
+    /// Optional icon pack used to render the project.
+    /// 用于渲染项目的可选图标包。
+    #[serde(default)]
+    pub icon_pack: Option<String>,
+    /// Optional icon key used to render the project.
+    /// 用于渲染项目的可选图标键。
+    #[serde(default)]
+    pub icon_key: Option<String>,
 }
 
 /// Summarizes one conversation in the WebUI sidebar.

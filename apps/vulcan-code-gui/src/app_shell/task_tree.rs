@@ -385,6 +385,8 @@ impl VulcanWorkbench {
             normalized_path_text.clone(),
             false,
             order,
+            None,
+            None,
             vec![],
         ));
         self.normalize_task_project_orders();
@@ -586,6 +588,8 @@ mod tests {
             r"D:\workspace\project-a",
             false,
             0,
+            None,
+            None,
             Vec::new(),
         ));
         workbench.task_projects.push(TaskProjectSummary::new(
@@ -594,6 +598,8 @@ mod tests {
             r"D:\workspace\project-b",
             false,
             1,
+            None,
+            None,
             Vec::new(),
         ));
 
