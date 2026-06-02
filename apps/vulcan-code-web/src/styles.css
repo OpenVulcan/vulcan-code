@@ -355,6 +355,7 @@ button {
   background: var(--sidebar);
   color: var(--sidebar-foreground);
   transition: width 180ms ease, min-width 180ms ease;
+  user-select: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] {
@@ -905,7 +906,7 @@ button {
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 48px 42px 260px;
+  padding: 48px 13px 260px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1102,6 +1103,10 @@ button {
 .composer-panel textarea:focus-visible {
   border-color: var(--ring);
   box-shadow: none;
+}
+
+.composer-panel textarea::placeholder {
+  user-select: none;
 }
 
 .empty-conversation-center {
@@ -1307,14 +1312,32 @@ button {
 }
 
 .user-bubble {
+  position: relative;
   max-width: min(72%, 760px);
   display: grid;
   gap: 7px;
   padding: 10px 13px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 16px;
   background: var(--primary);
   color: var(--primary-foreground);
+}
+
+.user-bubble::after {
+  content: "";
+  position: absolute;
+  right: -7px;
+  bottom: 11px;
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 8px solid var(--primary);
+}
+
+.user-bubble::before {
+  display: none;
 }
 
 .message-role-label {
@@ -1766,6 +1789,7 @@ button {
   border-top: 1px solid var(--border);
   background: var(--background);
   font-size: 12px;
+  user-select: none;
 }
 
 .statusbar span {
@@ -1773,6 +1797,35 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.repository-link {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--muted-foreground);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.repository-link:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+
+.repository-link span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-github-mark {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
 }
 
 @media (max-width: 1040px) {

@@ -115,6 +115,10 @@ type MainAreaId = "chat" | "skills" | "automation" | "plugins" | "memory" | "set
 // SettingsSubAreaId 描述承接旧顶层页面的设置二级页面。
 type SettingsSubAreaId = "general" | "projects" | "providers" | "tools" | "diagnostics";
 
+// GITHUB_REPOSITORY_URL points to the public project repository.
+// GITHUB_REPOSITORY_URL 指向公开项目仓库。
+const GITHUB_REPOSITORY_URL = "https://github.com/OpenVulcan/vulcan-code";
+
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
@@ -690,8 +694,16 @@ const primaryFeatureAreas: FeatureAreaSummary[] = [
   { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
   { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
   { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
-  { id: "settings", label: "设置", description: "项目、模型、工具、诊断与系统设置", status: "预览" },
 ];
+
+// settingsFeatureArea is opened by the global settings button instead of the top navigation.
+// settingsFeatureArea 由全局设置按钮打开，不再显示在顶部主导航中。
+const settingsFeatureArea: FeatureAreaSummary = {
+  id: "settings",
+  label: "设置",
+  description: "项目、模型、工具、诊断与系统设置",
+  status: "预览",
+};
 
 // settingsSubAreas lists settings sidebar entries including legacy pages moved under settings.
 // settingsSubAreas 列出设置侧栏入口，并包含迁入设置的旧页面。
@@ -842,6 +854,17 @@ async function archiveConversation(conversationId: string): Promise<WorkbenchSna
   return invoke<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
 }
 
+// openExternalUrl opens a trusted external URL in the system browser when hosted by Tauri.
+// openExternalUrl 在 Tauri 承载时使用系统默认浏览器打开可信外部链接。
+async function openExternalUrl(url: string): Promise<void> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  await invoke("service_open_external_url", { url });
+}
+
 // App renders the Vulcan Code WebUI workbench.
 // App 渲染 Vulcan Code WebUI 工作台。
 function App() {
@@ -977,9 +1000,11 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
     () => new Set(props.workbench.messages.map((message) => message.conversationId)),
   );
-  // activeFeature stores the selected feature summary.
-  // activeFeature 保存当前选中的功能区域摘要。
-  const activeFeature = primaryFeatureAreas.find((area) => area.id === activeArea) ?? primaryFeatureAreas[0];
+  // activeFeature stores the selected feature summary, including settings opened from the global button.
+  // activeFeature 保存当前选中的功能区域摘要，并包含从全局按钮打开的设置页。
+  const activeFeature = activeArea === "settings"
+    ? settingsFeatureArea
+    : primaryFeatureAreas.find((area) => area.id === activeArea) ?? primaryFeatureAreas[0];
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -1297,6 +1322,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         />
         {showWindowControls ? <div className="titlebar-drag-region" data-tauri-drag-region /> : null}
         <GlobalActions
+          activeArea={activeArea}
           startup={props.startup}
           theme={theme}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
@@ -1340,7 +1366,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       <footer className="statusbar">
         <span>版本 {props.workbench.appVersion}</span>
         <span>Core Service: {props.startup.phase}</span>
-        <span>旧 iced GUI 保留为 reference</span>
+        <RepositoryLink />
       </footer>
       <RenameDialog
         target={renameTarget}
@@ -1435,6 +1461,51 @@ function WindowControls(props: {
         <X size={16} />
       </Button>
     </div>
+  );
+}
+
+// RepositoryLink renders the statusbar GitHub repository link.
+// RepositoryLink 渲染状态栏 GitHub 仓库链接。
+function RepositoryLink() {
+  // handleClick opens the repository externally in Tauri and in a new tab in browsers.
+  // handleClick 在 Tauri 中外部打开仓库，在浏览器中打开新标签。
+  const handleClick = React.useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
+    event.preventDefault();
+    void openExternalUrl(GITHUB_REPOSITORY_URL).catch((error) => {
+      toast.error(`打开 GitHub 失败：${error instanceof Error ? error.message : String(error)}`);
+    });
+  }, []);
+
+  return (
+    <a
+      aria-label="打开 OpenVulcan/vulcan-code GitHub 仓库"
+      className="repository-link"
+      href={GITHUB_REPOSITORY_URL}
+      onClick={handleClick}
+      rel="noreferrer"
+      target="_blank"
+    >
+      <GitHubMark />
+      <span>OpenVulcan/vulcan-code</span>
+    </a>
+  );
+}
+
+// GitHubMark renders the filled GitHub logo mark used in the statusbar.
+// GitHubMark 渲染状态栏使用的填充版 GitHub 标识。
+function GitHubMark() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="repository-github-mark"
+      focusable="false"
+      viewBox="0 0 16 16"
+    >
+      <path
+        fill="currentColor"
+        d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82A7.65 7.65 0 0 1 8 3.87c.68 0 1.36.09 2 .26 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"
+      />
+    </svg>
   );
 }
 
@@ -2233,7 +2304,7 @@ function BrandHeader(props: {
       <div className="brand-mark">V</div>
       <div>
         <strong>Vulcan Code</strong>
-        <span>WebUI</span>
+        <span>Ai Coding</span>
       </div>
     </div>
   );
@@ -2330,9 +2401,20 @@ function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId
 // GlobalActions renders app-wide controls in the primary menu bar.
 // GlobalActions 渲染主菜单栏中的全局控制。
 function GlobalActions(props: {
+  // Active top-level area used to lock the settings button visual state.
+  // 当前顶层区域，用于锁定设置按钮视觉状态。
+  activeArea: MainAreaId;
+  // Startup snapshot used for the compact online indicator.
+  // 紧凑在线状态指示使用的启动快照。
   startup: StartupSnapshot;
+  // Current shadcn theme mode.
+  // 当前 shadcn 主题模式。
   theme: ThemeMode;
+  // Toggles between light and dark theme.
+  // 在亮色与暗色主题之间切换。
   onToggleTheme: () => void;
+  // Opens the settings feature area.
+  // 打开设置功能区域。
   onOpenSettings: () => void;
 }) {
   // isPreviewMode detects fallback browser data instead of a live service bridge.
@@ -2359,7 +2441,15 @@ function GlobalActions(props: {
         {props.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
         <span>{props.theme === "dark" ? "Dark" : "Light"}</span>
       </Button>
-      <Button aria-label="打开设置" className="icon-button" onClick={props.onOpenSettings} size="icon" type="button" variant="outline">
+      <Button
+        aria-pressed={props.activeArea === "settings"}
+        aria-label="打开设置"
+        className="icon-button"
+        onClick={props.onOpenSettings}
+        size="icon"
+        type="button"
+        variant={props.activeArea === "settings" ? "secondary" : "outline"}
+      >
         <Settings size={18} />
       </Button>
     </div>

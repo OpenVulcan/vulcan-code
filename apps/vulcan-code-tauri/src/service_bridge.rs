@@ -83,7 +83,8 @@ pub fn run() {
             service_rename_project,
             service_archive_project_conversations,
             service_rename_conversation,
-            service_archive_conversation
+            service_archive_conversation,
+            service_open_external_url
         ])
         .setup(|app| {
             emit_initial_service_events(app.handle());
@@ -99,6 +100,17 @@ pub fn run() {
 #[tauri::command]
 fn service_health() -> String {
     "ready".to_string()
+}
+
+/// Opens a trusted external URL with the system default browser.
+/// 使用系统默认浏览器打开可信外部链接。
+#[tauri::command]
+fn service_open_external_url(url: String) -> Result<String, String> {
+    if url != "https://github.com/OpenVulcan/vulcan-code" {
+        return Err(String::from("不允许打开未授权的外部链接。"));
+    }
+    open_url_in_system_browser(&url)?;
+    Ok(String::from("已请求使用系统默认浏览器打开 GitHub。"))
 }
 
 /// Returns the current startup snapshot.
@@ -325,6 +337,36 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
     let mut command = {
         let mut command = Command::new("xdg-open");
         command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Opens one URL with the host default browser.
+/// 使用宿主默认浏览器打开单个 URL。
+fn open_url_in_system_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
         command
     };
 
