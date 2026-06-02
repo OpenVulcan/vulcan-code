@@ -395,6 +395,27 @@ button {
   transition: opacity 180ms ease, margin 180ms ease;
 }
 
+.project-group-label {
+  justify-content: space-between;
+}
+
+.project-group-label-main {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-add-button {
+  width: 24px;
+  height: 24px;
+  color: var(--muted-foreground);
+}
+
+.project-add-button:hover {
+  color: var(--foreground);
+}
+
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
   margin-top: -28px;
   opacity: 0;
@@ -452,6 +473,12 @@ button {
   color: var(--sidebar-accent-foreground);
 }
 
+.vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:hover,
+.vcn-sidebar.project-drag-active .vcn-sidebar-menu-button:focus-visible {
+  background: transparent;
+  color: inherit;
+}
+
 .vcn-sidebar-menu-button.muted {
   opacity: 0.68;
 }
@@ -504,6 +531,13 @@ button {
   opacity: 1;
 }
 
+.vcn-sidebar.project-drag-active .vcn-sidebar-menu-action.show-on-hover,
+.vcn-sidebar.project-drag-active .project-folder-row:hover > .vcn-sidebar-menu-action.show-on-hover,
+.vcn-sidebar.project-drag-active .vcn-sidebar-menu-action.show-on-hover:focus-visible {
+  opacity: 0;
+  pointer-events: none;
+}
+
 .vcn-sidebar-menu-action:hover,
 .vcn-sidebar-menu-action:focus-visible {
   background: var(--sidebar-accent);
@@ -538,10 +572,32 @@ button {
 .project-tree-item {
   display: grid;
   gap: 2px;
+  transition: transform 150ms cubic-bezier(0.2, 0, 0.2, 1);
+}
+
+.project-tree-item.drag-source {
+  z-index: 20;
 }
 
 .project-folder-row {
   position: relative;
+  cursor: grab;
+  user-select: none;
+}
+
+.project-folder-row:active {
+  cursor: grabbing;
+}
+
+.project-folder-row.drag-source-row {
+  z-index: 20;
+  transition: none;
+  filter: drop-shadow(0 12px 22px rgba(15, 23, 42, 0.18));
+  will-change: transform;
+}
+
+.dark .project-folder-row.drag-source-row {
+  filter: drop-shadow(0 16px 28px rgba(0, 0, 0, 0.34));
 }
 
 .project-folder-button {

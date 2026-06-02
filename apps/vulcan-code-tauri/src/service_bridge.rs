@@ -80,6 +80,7 @@ pub fn run() {
             service_open_project_directory,
             service_open_project_directory_path,
             service_toggle_project_pinned,
+            service_reorder_projects,
             service_rename_project,
             service_archive_project_conversations,
             service_rename_conversation,
@@ -227,6 +228,61 @@ async fn service_toggle_project_pinned(
         .map_err(|error| format!("切换项目置顶状态失败：{error}"))?;
     refresh_workbench_snapshot(state)
     .await
+}
+
+/// Reorders visible projects inside one pinned or regular section.
+/// 在同一个置顶或普通分区内重排可见项目。
+#[tauri::command]
+async fn service_reorder_projects(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_ids: Vec<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    if project_ids.is_empty() {
+        return refresh_workbench_snapshot(state).await;
+    }
+
+    let snapshot = service_workbench_snapshot(state.clone())?;
+    let first_project = snapshot
+        .projects
+        .iter()
+        .find(|project| project.id == project_ids[0])
+        .ok_or_else(|| String::from("重排项目失败：第一个项目不存在。"))?;
+    let section_pinned = first_project.pinned;
+
+    for project_id in &project_ids {
+        let Some(project) = snapshot.projects.iter().find(|candidate| candidate.id == *project_id)
+        else {
+            return Err(format!("重排项目失败：项目不存在：{project_id}"));
+        };
+        if project.pinned != section_pinned {
+            return Err(String::from("重排项目失败：不能跨置顶与普通分区拖拽。"));
+        }
+    }
+
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let updated_at = current_unix_millis_text();
+    let rows = project_ids
+        .into_iter()
+        .enumerate()
+        .map(|(index, project_id)| {
+            vec![
+                ControllerSqliteValue::Int64(index as i64),
+                ControllerSqliteValue::String(updated_at.clone()),
+                ControllerSqliteValue::String(project_id),
+            ]
+        })
+        .collect();
+    controller_runtime
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            controller_runtime.sqlite_binding_id.as_str(),
+            "UPDATE projects SET sort_order = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            rows,
+        )
+        .await
+        .map_err(|error| format!("重排项目失败：{error}"))?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Applies a project display name and returns the refreshed workbench snapshot.
