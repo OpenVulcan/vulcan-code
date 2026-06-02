@@ -624,10 +624,26 @@ button {
 }
 
 .project-folder-button {
+  --project-folder-active-bg: color-mix(in oklch, var(--sidebar-accent) 78%, var(--foreground) 5%);
   position: relative;
   min-height: 34px;
-  font-weight: 600;
+  font-weight: 400;
   padding-right: 58px;
+}
+
+.project-folder-button.project-folder-active {
+  background: var(--project-folder-active-bg);
+  color: var(--sidebar-accent-foreground);
+}
+
+.project-folder-button.project-folder-active:hover,
+.project-folder-button.project-folder-active:focus-visible {
+  background: color-mix(in oklch, var(--project-folder-active-bg) 82%, var(--foreground) 8%);
+  color: var(--sidebar-accent-foreground);
+}
+
+.project-folder-button .project-folder-label strong {
+  font-weight: 400;
 }
 
 .project-folder-label {
@@ -672,6 +688,11 @@ button {
   width: 34px;
   min-width: 34px;
   margin-inline: 0;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button > svg {
+  width: 19px;
+  height: 19px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-create-conversation,
@@ -762,14 +783,26 @@ button {
   gap: 1px;
 }
 
+.pinned-conversation-list {
+  gap: 1px;
+}
+
 .conversation-tree-button {
   --conversation-tree-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 6px;
   min-height: 28px;
   border-radius: 6px;
   background: transparent;
   padding-left: 32px;
   padding-top: 6px;
   padding-bottom: 6px;
+}
+
+.pinned-conversation-button {
+  padding-left: 22px;
 }
 
 .conversation-tree-button:not(:hover):not(.active):not(:focus-visible) {
@@ -790,13 +823,38 @@ button {
 
 .conversation-tree-label {
   display: block;
+  min-width: 0;
 }
 
 .conversation-tree-button .vcn-sidebar-label strong {
   display: block;
-  font-weight: 600;
+  font-weight: 400;
   font-size: 13px;
   line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-tree-status {
+  color: color-mix(in oklch, var(--sidebar-foreground) 46%, transparent);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.conversation-tree-status.running {
+  display: inline-flex;
+  align-items: center;
+  color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+}
+
+.conversation-tree-unread-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: oklch(0.62 0.2 255);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--sidebar) 75%, transparent);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label {

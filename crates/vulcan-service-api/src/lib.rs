@@ -196,6 +196,14 @@ pub struct ConversationSummary {
     /// Conversation status text.
     /// 会话状态文本。
     pub status: String,
+    /// Relative last-updated label shown in the sidebar.
+    /// 侧栏中展示的相对最后更新时间。
+    #[serde(default)]
+    pub last_updated_label: String,
+    /// Whether the conversation has unread completed activity.
+    /// 会话是否存在未读的已完成活动。
+    #[serde(default)]
+    pub unread: bool,
     /// Optional owning project identifier.
     /// 可选所属项目标识。
     #[serde(default)]

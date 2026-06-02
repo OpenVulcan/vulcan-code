@@ -96,6 +96,12 @@ export interface ConversationSummary {
   // Conversation status.
   // 会话状态。
   status: string;
+  // Relative last-updated label.
+  // 相对最后更新时间标签。
+  lastUpdatedLabel?: string;
+  // Whether the conversation has unread activity.
+  // 会话是否存在未读活动。
+  unread?: boolean;
   // Optional owning project identifier.
   // 可选所属项目标识。
   projectId?: string | null;

@@ -402,13 +402,25 @@ pub async fn persist_single_session_update(
     let mut session_compactions = BTreeMap::new();
     let mut session_runtime_state = BTreeMap::new();
     let retained_compactions;
+    let rebuilt_messages;
+    let effective_messages = if let Some(runtime_state) = runtime_state {
+        rebuilt_messages =
+            conversation_state_to_session_messages(&runtime_state.conversation_state);
+        if rebuilt_messages.is_empty() && !messages.is_empty() {
+            messages
+        } else {
+            rebuilt_messages.as_slice()
+        }
+    } else {
+        messages
+    };
     let effective_compactions = if let Some(compactions) = compactions {
         compactions
     } else {
         retained_compactions = query_session_compaction_entries(&controller, session.id).await?;
         retained_compactions.as_slice()
     };
-    session_messages.insert(session.id, messages.to_vec());
+    session_messages.insert(session.id, effective_messages.to_vec());
     session_compactions.insert(session.id, effective_compactions.to_vec());
     if let Some(runtime_state) = runtime_state {
         session_runtime_state.insert(session.id, runtime_state.clone());

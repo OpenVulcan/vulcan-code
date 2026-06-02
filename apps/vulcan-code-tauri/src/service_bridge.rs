@@ -173,6 +173,7 @@ pub fn run() {
             service_archive_project_conversations,
             service_rename_conversation,
             service_archive_conversation,
+            service_mark_conversation_read,
             service_open_external_url
         ])
         .setup(|app| {
@@ -598,6 +599,41 @@ async fn service_archive_conversation(
     refresh_workbench_snapshot(state).await
 }
 
+/// Marks one conversation as read and returns the refreshed workbench snapshot.
+/// 将单个会话标记为已读并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_mark_conversation_read(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    conversation_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_id = conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let mut workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+        controller_runtime.clone(),
+    )
+    .await?;
+    let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+    else {
+        return refresh_workbench_snapshot(state).await;
+    };
+    if !runtime_state.ui_state.unread {
+        return refresh_workbench_snapshot(state).await;
+    }
+    runtime_state.ui_state.unread = false;
+    runtime_state.updated_at = current_unix_millis_text();
+    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        controller_runtime,
+        session_id,
+        runtime_state,
+    )
+    .await?;
+    refresh_workbench_snapshot(state).await
+}
+
 /// Opens one filesystem directory with the host file manager.
 /// 使用宿主文件管理器打开单个文件系统目录。
 fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
@@ -849,6 +885,7 @@ fn append_prompt_and_build_request(
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
+    runtime_state.ui_state.unread = false;
     if runtime_state.conversation_state.records.is_empty() {
         if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
             runtime_state.conversation_state = conversation_state_from_session_messages(messages);
@@ -946,12 +983,12 @@ async fn persist_workspace_session_update(
     };
     let runtime_state = session_runtime_state.get(&session_id);
     let rebuilt_messages;
-    let messages = if let Some(messages) = session_messages.get(&session_id) {
-        messages.as_slice()
-    } else if let Some(runtime_state) = runtime_state {
+    let messages = if let Some(runtime_state) = runtime_state {
         rebuilt_messages =
             conversation_state_to_session_messages(&runtime_state.conversation_state);
         rebuilt_messages.as_slice()
+    } else if let Some(messages) = session_messages.get(&session_id) {
+        messages.as_slice()
     } else {
         &[]
     };
@@ -1730,6 +1767,9 @@ async fn apply_execution_report(
             };
             session.last_updated_label = String::from("刚刚");
         }
+        if workspace.selected_session != session_id {
+            runtime_state.ui_state.unread = true;
+        }
         workspace.session_run_phases.insert(
             session_id,
             if is_success {
@@ -2060,7 +2100,14 @@ where
 async fn refresh_workbench_snapshot(
     state: tauri::State<'_, SharedServiceBridgeState>,
 ) -> Result<WorkbenchSnapshot, String> {
-    let (controller_runtime, luaskills_catalog, token_budget_runtime, mcp_catalog, logs) = {
+    let (
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+        previous_snapshot,
+    ) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -2093,19 +2140,22 @@ async fn refresh_workbench_snapshot(
                 summary_rows: Vec::new(),
             });
         let logs = guard.startup.recent_logs.clone();
+        let previous_snapshot = guard.workspace_snapshot.clone();
         (
             controller_runtime,
             luaskills_catalog,
             token_budget_runtime,
             mcp_catalog,
             logs,
+            previous_snapshot,
         )
     };
 
-    let refreshed_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+    let mut refreshed_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
         controller_runtime.clone(),
     )
     .await?;
+    preserve_active_session_run_state(previous_snapshot.as_ref(), &mut refreshed_snapshot);
     let hydration_snapshot = match load_selected_session_hydration(
         controller_runtime.clone(),
         refreshed_snapshot.selected_session,
@@ -2136,6 +2186,46 @@ async fn refresh_workbench_snapshot(
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(workbench)
+}
+
+/// Preserves in-memory running session markers across database-backed snapshot refreshes.
+/// 在基于数据库重载快照时保留内存中的会话运行中标记。
+fn preserve_active_session_run_state(
+    previous_snapshot: Option<&WorkspaceSnapshot>,
+    refreshed_snapshot: &mut WorkspaceSnapshot,
+) {
+    let Some(previous_snapshot) = previous_snapshot else {
+        return;
+    };
+    for previous_session in previous_snapshot
+        .sessions
+        .iter()
+        .filter(|session| session.status == SessionState::Running)
+    {
+        if let Some(refreshed_session) = refreshed_snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == previous_session.id)
+        {
+            refreshed_session.status = SessionState::Running;
+            refreshed_session.last_updated_label = previous_session.last_updated_label.clone();
+        }
+        let previous_phase = previous_snapshot
+            .session_run_phases
+            .get(&previous_session.id)
+            .copied()
+            .filter(|phase| is_active_session_run_phase(*phase))
+            .unwrap_or(SessionRunPhase::Preparing);
+        refreshed_snapshot
+            .session_run_phases
+            .insert(previous_session.id, previous_phase);
+    }
+}
+
+/// Returns whether one session phase still represents active work.
+/// 判断单个会话阶段是否仍代表活跃执行。
+fn is_active_session_run_phase(phase: SessionRunPhase) -> bool {
+    matches!(phase, SessionRunPhase::Preparing)
 }
 
 /// Loads the selected session transcript window when a selected session exists.
@@ -2737,11 +2827,28 @@ fn workbench_from_runtime(
             .sessions
             .iter()
             .filter(|session| session_event_manifest_exists(session))
-            .map(|session| ConversationSummary {
-                id: session.id.to_string(),
-                title: session.title.clone(),
-                status: session.status.label().to_string(),
-                project_id: session.project_id.clone(),
+            .map(|session| {
+                let is_running = session.status == SessionState::Running
+                    || workspace
+                        .session_run_phases
+                        .get(&session.id)
+                        .is_some_and(|phase| is_active_session_run_phase(*phase));
+                ConversationSummary {
+                    id: session.id.to_string(),
+                    title: session.title.clone(),
+                    status: if is_running {
+                        SessionState::Running.label()
+                    } else {
+                        session.status.label()
+                    }
+                    .to_string(),
+                    last_updated_label: session.last_updated_label.clone(),
+                    unread: workspace
+                        .session_runtime_state
+                        .get(&session.id)
+                        .is_some_and(|runtime_state| runtime_state.ui_state.unread),
+                    project_id: session.project_id.clone(),
+                }
             })
             .collect(),
         selected_conversation_id,

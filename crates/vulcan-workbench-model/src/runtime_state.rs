@@ -260,6 +260,10 @@ pub struct SessionTranscriptUiState {
     /// 按会话持久化保存的输入框草稿状态，用于在切换会话时恢复独立的输入文本与附件。
     #[serde(default)]
     pub composer_draft: SessionComposerDraftState,
+    /// Whether the session has unread assistant activity for the sidebar.
+    /// 会话是否存在需要侧栏提示的未读助手活动。
+    #[serde(default)]
+    pub unread: bool,
 }
 
 impl SessionTranscriptUiState {
@@ -270,6 +274,7 @@ impl SessionTranscriptUiState {
             && self.pending_prompt_queue.is_empty()
             && self.pending_prompt_panel_queue.is_empty()
             && self.composer_draft.is_empty()
+            && !self.unread
     }
 }
 

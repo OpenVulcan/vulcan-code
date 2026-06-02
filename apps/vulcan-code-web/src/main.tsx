@@ -73,6 +73,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Spinner } from "@/components/ui/spinner";
 import { Toaster } from "@/components/ui/sonner";
 import { ShinyText } from "@/components/ui/shiny-text";
 import { Textarea } from "@/components/ui/textarea";
@@ -457,14 +458,14 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "vulcan-workmem", name: "vulcan-workmem", path: "D:/openvulcan/vulcan-workmem", pinned: false },
   ],
   conversations: [
-    { id: "preview", title: "Tauri WebUI 迁移预览", status: "前端预览", projectId: "preview" },
-    { id: "preview-intro", title: "介绍你自己", status: "刚刚", projectId: "preview" },
-    { id: "calc-curl", title: "排查 lcurl.safe 模块缺失", status: "3 天", projectId: "calc" },
-    { id: "calc-iconv", title: "检查是否缺少 iconv", status: "1 周", projectId: "calc" },
-    { id: "test-tools", title: "你有哪些工具", status: "刚刚", projectId: "test-project" },
-    { id: "test-playwright", title: "添加 Playwright 浏览器支持", status: "1 分", projectId: "test-project" },
-    { id: "luaskills-rust", title: "分析 Rust 插件机制", status: "2 天", projectId: "luaskills-packages" },
-    { id: "workmem-plan", title: "VMM 置顶项目对接方案", status: "5 小时", projectId: "vulcan-workmem" },
+    { id: "preview", title: "Tauri WebUI 迁移预览", status: "Completed", lastUpdatedLabel: "刚刚", projectId: "preview" },
+    { id: "preview-intro", title: "介绍你自己", status: "Completed", lastUpdatedLabel: "刚刚", projectId: "preview" },
+    { id: "calc-curl", title: "排查 lcurl.safe 模块缺失", status: "Completed", lastUpdatedLabel: "3 天", projectId: "calc" },
+    { id: "calc-iconv", title: "检查是否缺少 iconv", status: "Completed", lastUpdatedLabel: "1 周", projectId: "calc" },
+    { id: "test-tools", title: "你有哪些工具", status: "Completed", lastUpdatedLabel: "刚刚", projectId: "test-project", unread: true },
+    { id: "test-playwright", title: "添加 Playwright 浏览器支持", status: "Running", lastUpdatedLabel: "1 分", projectId: "test-project" },
+    { id: "luaskills-rust", title: "分析 Rust 插件机制", status: "Completed", lastUpdatedLabel: "2 天", projectId: "luaskills-packages" },
+    { id: "workmem-plan", title: "VMM 置顶项目对接方案", status: "Completed", lastUpdatedLabel: "5 小时", projectId: "vulcan-workmem" },
   ],
   selectedConversationId: "preview",
   messages: [
@@ -747,6 +748,16 @@ async function archiveConversation(conversationId: string): Promise<WorkbenchSna
     return null;
   }
   return invoke<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
+}
+
+// markConversationRead asks the desktop shell to persist one conversation as read.
+// markConversationRead 请求桌面壳将单个会话持久化标记为已读。
+async function markConversationRead(conversationId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_mark_conversation_read", { conversationId });
 }
 
 // openExternalUrl opens a trusted external URL in the system browser when hosted by Tauri.
@@ -1222,6 +1233,22 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, [applyProjectActionSnapshot, workbenchState]);
 
+  // handleSelectConversation selects a conversation and persists its read marker.
+  // handleSelectConversation 选择会话并持久化它的已读标记。
+  const handleSelectConversation = React.useCallback((conversationId: string) => {
+    setSelectedConversationId(conversationId);
+    setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
+    void markConversationRead(conversationId)
+      .then((snapshot) => {
+        if (snapshot) {
+          setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        }
+      })
+      .catch((error) => {
+        toast.error(error instanceof Error ? error.message : String(error));
+      });
+  }, []);
+
   // handleRenameConfirm commits the current rename dialog value.
   // handleRenameConfirm 提交当前重命名对话框值。
   const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
@@ -1381,7 +1408,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onCreateProject={handleCreateProject}
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
-            onSelectConversation={setSelectedConversationId}
+            onSelectConversation={handleSelectConversation}
             onSubmitPrompt={handleSubmitConversationPrompt}
           />
         ) : (
@@ -1571,6 +1598,17 @@ function mergeConversationMessages(
       ...workbench.messages.filter((message) => message.conversationId !== conversationId),
       ...messages,
     ],
+  };
+}
+
+// markConversationLocallyRead clears the unread dot optimistically in the sidebar.
+// markConversationLocallyRead 在侧栏中乐观清除未读圆点。
+function markConversationLocallyRead(workbench: WorkbenchSnapshot, conversationId: string): WorkbenchSnapshot {
+  return {
+    ...workbench,
+    conversations: workbench.conversations.map((conversation) => (
+      conversation.id === conversationId ? { ...conversation, unread: false } : conversation
+    )),
   };
 }
 
@@ -3047,6 +3085,11 @@ function ProjectSidebar(props: {
   const sortedConversationsByProject = React.useMemo(() => {
     return conversationsByProject;
   }, [conversationsByProject]);
+  // pinnedConversations renders conversation pins in an independent section above pinned projects.
+  // pinnedConversations 将置顶会话渲染到置顶项目上方的独立分区。
+  const pinnedConversations = React.useMemo(() => {
+    return props.conversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
+  }, [props.conversations, props.pinnedConversationIds]);
   // pinnedProjects mirrors the iced task tree section split.
   // pinnedProjects 对齐 iced 任务树中的置顶分区拆分。
   const pinnedProjects = React.useMemo(() => props.projects.filter((project) => project.pinned), [props.projects]);
@@ -3092,16 +3135,20 @@ function ProjectSidebar(props: {
   // renderProjectRows renders one project section while preserving the shared row behavior.
   // renderProjectRows 渲染单个项目分区并保留共享项目行行为。
   const renderProjectRows = (projects: ProjectSummary[]) => projects.map((project) => {
-    const projectConversations = sortedConversationsByProject[project.id] ?? [];
+    const projectConversations = (sortedConversationsByProject[project.id] ?? [])
+      .filter((conversation) => !props.pinnedConversationIds.has(conversation.id));
+    const projectConversationIds = new Set((sortedConversationsByProject[project.id] ?? []).map((conversation) => conversation.id));
     return (
       <SortableProjectRow
         conversations={projectConversations}
+        hasSelectedConversation={props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
         isOpen={openProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
         key={project.id}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onProjectMenuAction={props.onProjectMenuAction}
+        renderConversationRow={renderConversationRow}
         onSelectConversation={props.onSelectConversation}
         onToggleOpen={toggleProjectOpen}
         project={project}
@@ -3125,6 +3172,33 @@ function ProjectSidebar(props: {
       </SortableContext>
     </DndContext>
   );
+  // renderConversationRow renders a sidebar conversation row outside or inside one project folder.
+  // renderConversationRow 渲染项目内外复用的侧栏会话行。
+  const renderConversationRow = (conversation: ConversationSummary, compactPinned = false) => (
+    <SidebarMenuItem key={conversation.id}>
+      <ConversationContextMenu
+        conversation={conversation}
+        isPinned={props.pinnedConversationIds.has(conversation.id)}
+        onAction={props.onConversationMenuAction}
+      >
+        <SidebarMenuButton
+          active={props.selectedConversationId === conversation.id}
+          className={cn("conversation-tree-button", compactPinned && "pinned-conversation-button")}
+          onClick={() => props.onSelectConversation(conversation.id)}
+          tooltip={`${conversation.title}\n${conversation.status}`}
+        >
+          <span className="vcn-sidebar-label conversation-tree-label">
+            <strong>{conversation.title}</strong>
+          </span>
+          <ConversationRowStatus
+            conversation={conversation}
+            isSelected={props.selectedConversationId === conversation.id}
+          />
+          {props.pinnedConversationIds.has(conversation.id) ? <Pin size={13} /> : null}
+        </SidebarMenuButton>
+      </ConversationContextMenu>
+    </SidebarMenuItem>
+  );
 
   return (
     <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
@@ -3139,6 +3213,14 @@ function ProjectSidebar(props: {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
+        {pinnedConversations.length > 0 ? (
+          <SidebarGroup className="project-section pinned-conversation-section">
+            {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
+            <SidebarMenu className="pinned-conversation-list">
+              {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
+            </SidebarMenu>
+          </SidebarGroup>
+        ) : null}
         {pinnedProjects.length > 0 ? (
           <SidebarGroup className="project-section pinned-project-section">
             {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
@@ -3179,6 +3261,34 @@ function ProjectSidebar(props: {
   );
 }
 
+// ConversationRowStatus renders the right-side time, unread dot, or running spinner.
+// ConversationRowStatus 渲染会话行右侧的时间、未读点或运行中指示器。
+function ConversationRowStatus(props: {
+  // Conversation summary used to decide the row status indicator.
+  // 用于决定行状态指示器的会话摘要。
+  conversation: ConversationSummary;
+  // Whether this conversation is currently selected.
+  // 当前会话是否正在被选中。
+  isSelected: boolean;
+}) {
+  const isRunning = props.conversation.status.toLowerCase() === "running";
+  if (isRunning) {
+    return (
+      <span className="conversation-tree-status running" aria-label="会话正在运行">
+        <Spinner className="size-3" />
+      </span>
+    );
+  }
+  if (props.conversation.unread && !props.isSelected) {
+    return <span className="conversation-tree-unread-dot" aria-label="未读" />;
+  }
+  return (
+    <span className="conversation-tree-status">
+      {props.conversation.lastUpdatedLabel || props.conversation.status}
+    </span>
+  );
+}
+
 // SortableProjectRow renders one dnd-kit sortable project folder and its conversations.
 // SortableProjectRow 渲染一个 dnd-kit 可排序项目文件夹及其会话。
 function SortableProjectRow(props: {
@@ -3191,6 +3301,9 @@ function SortableProjectRow(props: {
   // Whether the project folder is expanded.
   // 当前项目文件夹是否展开。
   isOpen: boolean;
+  // Whether the selected conversation belongs to this project.
+  // 当前选中会话是否归属于该项目。
+  hasSelectedConversation: boolean;
   // Current sidebar collapsed or expanded state.
   // 当前侧栏的折叠或展开状态。
   sidebarState: ReturnType<typeof useSidebar>["state"];
@@ -3215,6 +3328,9 @@ function SortableProjectRow(props: {
   // Selects one conversation.
   // 选择一个会话。
   onSelectConversation: (conversationId: string) => void;
+  // Renders one conversation row with the shared sidebar style.
+  // 使用共享侧栏样式渲染单个会话行。
+  renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean) => React.ReactNode;
 }) {
   const {
     attributes,
@@ -3245,6 +3361,7 @@ function SortableProjectRow(props: {
           onCreateConversation={props.onCreateConversation}
           onSelectConversation={props.onSelectConversation}
           project={props.project}
+          hasSelectedConversation={props.hasSelectedConversation}
           selectedConversationId={props.selectedConversationId}
         />
       ) : (
@@ -3252,7 +3369,7 @@ function SortableProjectRow(props: {
           <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
             <SidebarMenuButton
               aria-expanded={props.isOpen}
-              className="project-folder-button"
+              className={cn("project-folder-button", props.hasSelectedConversation && "project-folder-active")}
               onClick={() => props.onToggleOpen(props.project.id)}
               tooltip={`${props.project.name}\n${props.project.path}`}
             >
@@ -3284,27 +3401,7 @@ function SortableProjectRow(props: {
       )}
       {props.isOpen && props.sidebarState !== "collapsed" ? (
         <SidebarMenu className="project-conversation-list">
-          {props.conversations.map((conversation) => (
-            <SidebarMenuItem key={conversation.id}>
-              <ConversationContextMenu
-                conversation={conversation}
-                isPinned={props.isPinnedConversation(conversation.id)}
-                onAction={props.onConversationMenuAction}
-              >
-                <SidebarMenuButton
-                  active={props.selectedConversationId === conversation.id}
-                  className="conversation-tree-button"
-                  onClick={() => props.onSelectConversation(conversation.id)}
-                  tooltip={`${conversation.title}\n${conversation.status}`}
-                >
-                  <span className="vcn-sidebar-label conversation-tree-label">
-                    <strong>{conversation.title}</strong>
-                  </span>
-                  {props.isPinnedConversation(conversation.id) ? <Pin size={13} /> : null}
-                </SidebarMenuButton>
-              </ConversationContextMenu>
-            </SidebarMenuItem>
-          ))}
+          {props.conversations.map((conversation) => props.renderConversationRow(conversation))}
         </SidebarMenu>
       ) : null}
     </SidebarMenuItem>
@@ -3317,6 +3414,9 @@ function CollapsedProjectMenu(props: {
   // Project that owns the collapsed entry.
   // 折叠入口所属项目。
   project: ProjectSummary;
+  // Whether the selected conversation belongs to this project.
+  // 当前选中会话是否归属于该项目。
+  hasSelectedConversation: boolean;
   // Conversations shown below the create command.
   // 显示在新建命令下方的会话列表。
   conversations: ConversationSummary[];
@@ -3405,7 +3505,10 @@ function CollapsedProjectMenu(props: {
       >
         <SidebarMenuButton
           aria-label={`${props.project.name} 会话菜单`}
-          className="project-folder-button collapsed-project-button"
+          className={cn(
+            "project-folder-button collapsed-project-button",
+            props.hasSelectedConversation && "project-folder-active",
+          )}
           onClick={(event) => event.preventDefault()}
         >
           <ProjectIcon project={props.project} size={16} />
