@@ -12,11 +12,15 @@ use futures_util::StreamExt;
 use serde_json::json;
 use tauri::{Emitter, Manager};
 use time::OffsetDateTime;
+use vldb_controller_client::ControllerSqliteValue;
 use vulcan_agent_runtime::{
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
+    ExecutionStreamEvent,
     agent_profile::{AgentProfileCatalog, load_agent_profile_catalog},
     agent_runtime::{
         events::{RuntimeEvent, RuntimeEventKind},
-        question_runtime::QuestionRuntime, task_runtime::TaskRuntime,
+        question_runtime::QuestionRuntime,
+        task_runtime::TaskRuntime,
         token_budget_runtime::TokenBudgetRuntime,
     },
     conversation_protocol::{
@@ -32,8 +36,7 @@ use vulcan_agent_runtime::{
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
     stream_runtime_run,
     tooling::CommandSessionRuntime,
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
-    ExecutionStreamEvent, turn_stats::build_session_turn_stats_from_state,
+    turn_stats::build_session_turn_stats_from_state,
 };
 use vulcan_service_api::{
     CommandSessionSummary, ConversationMessage, ConversationSummary, FeatureAreaSummary,
@@ -50,7 +53,6 @@ use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
     workspace_store::{SessionHydrationSnapshot, WorkspaceSnapshot},
 };
-use vldb_controller_client::ControllerSqliteValue;
 
 use crate::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use crate::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
@@ -308,12 +310,8 @@ async fn service_submit_conversation_prompt(
         reasoning_effort,
     );
 
-    persist_workspace_session_update(
-        controller_runtime.clone(),
-        &workspace_snapshot,
-        session_id,
-    )
-    .await?;
+    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
+        .await?;
     let workbench = store_and_emit_workbench_snapshot(
         &app,
         &state,
@@ -383,8 +381,7 @@ async fn service_toggle_project_pinned(
         )
         .await
         .map_err(|error| format!("切换项目置顶状态失败：{error}"))?;
-    refresh_workbench_snapshot(state)
-    .await
+    refresh_workbench_snapshot(state).await
 }
 
 /// Reorders visible projects inside one pinned or regular section.
@@ -407,7 +404,10 @@ async fn service_reorder_projects(
     let section_pinned = first_project.pinned;
 
     for project_id in &project_ids {
-        let Some(project) = snapshot.projects.iter().find(|candidate| candidate.id == *project_id)
+        let Some(project) = snapshot
+            .projects
+            .iter()
+            .find(|candidate| candidate.id == *project_id)
         else {
             return Err(format!("重排项目失败：项目不存在：{project_id}"));
         };
@@ -466,8 +466,7 @@ async fn service_rename_project(
         )
         .await
         .map_err(|error| format!("重命名项目失败：{error}"))?;
-    refresh_workbench_snapshot(state)
-    .await
+    refresh_workbench_snapshot(state).await
 }
 
 /// Applies a project icon override and returns the refreshed workbench snapshot.
@@ -531,11 +530,26 @@ async fn service_archive_project_conversations(
     state: tauri::State<'_, SharedServiceBridgeState>,
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let _ = state;
-    let _ = project_id;
-    Err(String::from(
-        "WebUI 归档暂时禁用：当前归档必须经过 iced 工作台的完整会话工件迁移流程。",
-    ))
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+        controller_runtime.clone(),
+    )
+    .await?;
+    let Some(project) = workspace_snapshot
+        .task_projects
+        .iter()
+        .find(|project| project.id == project_id)
+    else {
+        return Err(format!("未找到要归档的项目：{project_id}"));
+    };
+
+    vulcan_workspace_store::workspace_store::archive_project_with_sessions(
+        controller_runtime,
+        &project_id,
+        &project.session_ids,
+    )
+    .await?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Applies a conversation display name and returns the refreshed workbench snapshot.
@@ -565,8 +579,7 @@ async fn service_rename_conversation(
         )
         .await
         .map_err(|error| format!("重命名会话失败：{error}"))?;
-    refresh_workbench_snapshot(state)
-    .await
+    refresh_workbench_snapshot(state).await
 }
 
 /// Archives one visible conversation and returns the refreshed workbench snapshot.
@@ -576,11 +589,13 @@ async fn service_archive_conversation(
     state: tauri::State<'_, SharedServiceBridgeState>,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let _ = state;
-    let _ = conversation_id;
-    Err(String::from(
-        "WebUI 归档暂时禁用：当前归档必须经过 iced 工作台的完整会话工件迁移流程。",
-    ))
+    let session_id = conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    vulcan_workspace_store::workspace_store::archive_single_session(controller_runtime, session_id)
+        .await?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Opens one filesystem directory with the host file manager.
@@ -684,10 +699,9 @@ fn runtime_parts_from_state(
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let controller_runtime = guard
-        .controller_runtime
-        .clone()
-        .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+    let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+        String::from("service is still starting; controller runtime is not ready")
+    })?;
     let agent_runtime = guard
         .agent_runtime
         .clone()
@@ -697,10 +711,9 @@ fn runtime_parts_from_state(
         .as_ref()
         .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
         .unwrap_or_else(empty_luaskills_catalog);
-    let token_budget_runtime = guard
-        .token_budget_runtime
-        .clone()
-        .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+    let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
+        String::from("service is still starting; token budget runtime is not ready")
+    })?;
     let mcp_catalog = guard
         .mcp_runtime
         .as_ref()
@@ -722,9 +735,10 @@ async fn load_workspace_for_submission(
     controller_runtime: ControllerRuntimeHandle,
     conversation_id: Option<&str>,
 ) -> Result<WorkspaceSnapshot, String> {
-    let mut workspace_snapshot =
-        vulcan_workspace_store::workspace_store::load_workspace_snapshot(controller_runtime.clone())
-            .await?;
+    let mut workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+        controller_runtime.clone(),
+    )
+    .await?;
     if let Some(session_id) = conversation_id.and_then(parse_session_id) {
         match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
             controller_runtime,
@@ -802,7 +816,9 @@ fn materialize_prompt_session(
     )
     .with_title_source(SessionTitleSource::Generated);
 
-    project.session_ids.retain(|existing| *existing != session_id);
+    project
+        .session_ids
+        .retain(|existing| *existing != session_id);
     project.session_ids.insert(0, session_id);
     let workspace_path = project.path.clone();
     workspace_snapshot.sessions.insert(0, session);
@@ -860,9 +876,10 @@ fn append_prompt_and_build_request(
         },
     );
     runtime_state.updated_at = now;
-    workspace_snapshot
-        .session_messages
-        .insert(session_id, conversation_state_to_session_messages(&runtime_state.conversation_state));
+    workspace_snapshot.session_messages.insert(
+        session_id,
+        conversation_state_to_session_messages(&runtime_state.conversation_state),
+    );
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Preparing);
@@ -932,14 +949,13 @@ async fn persist_workspace_session_update(
     let messages = if let Some(messages) = session_messages.get(&session_id) {
         messages.as_slice()
     } else if let Some(runtime_state) = runtime_state {
-        rebuilt_messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+        rebuilt_messages =
+            conversation_state_to_session_messages(&runtime_state.conversation_state);
         rebuilt_messages.as_slice()
     } else {
         &[]
     };
-    let compactions = session_compactions
-        .get(&session_id)
-        .map(Vec::as_slice);
+    let compactions = session_compactions.get(&session_id).map(Vec::as_slice);
     let task_projects = workspace_snapshot
         .task_projects
         .iter()
@@ -1090,9 +1106,7 @@ fn spawn_agent_stream_task(
         while let Some(event) = stream.next().await {
             match event {
                 ExecutionStreamEvent::Prepared(preparation) => {
-                    if let Err(error) =
-                        apply_execution_preparation(&app, &state, &preparation)
-                    {
+                    if let Err(error) = apply_execution_preparation(&app, &state, &preparation) {
                         eprintln!("[tauri-service] apply preparation failed: {error}");
                     }
                 }
@@ -1139,12 +1153,9 @@ fn spawn_agent_stream_task(
                     }
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
-                    if let Err(error) = append_runtime_event_projection(
-                        &app,
-                        &state,
-                        session_id,
-                        &event,
-                    ) {
+                    if let Err(error) =
+                        append_runtime_event_projection(&app, &state, session_id, &event)
+                    {
                         eprintln!("[tauri-service] append runtime event failed: {error}");
                     }
                 }
@@ -1169,13 +1180,8 @@ fn spawn_agent_stream_task(
                     }
                 }
                 ExecutionStreamEvent::Finished(report) => {
-                    if let Err(error) = apply_execution_report(
-                        &app,
-                        &state,
-                        &controller_runtime,
-                        report,
-                    )
-                    .await
+                    if let Err(error) =
+                        apply_execution_report(&app, &state, &controller_runtime, report).await
                     {
                         eprintln!("[tauri-service] apply final report failed: {error}");
                     }
@@ -1204,8 +1210,10 @@ fn apply_execution_preparation(
         runtime_state.active_agent_id = Some(preparation.agent_id.clone());
         runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
         runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
-        runtime_state.active_openrouter_endpoint_route =
-            preparation.model_blueprint.openrouter_endpoint_route.clone();
+        runtime_state.active_openrouter_endpoint_route = preparation
+            .model_blueprint
+            .openrouter_endpoint_route
+            .clone();
         runtime_state.active_reasoning_effort =
             Some(preparation.model_blueprint.reasoning.requested_effort);
         runtime_state.active_temperature = preparation.temperature;
@@ -1339,8 +1347,12 @@ fn append_runtime_event_projection(
     event: &RuntimeEvent,
 ) -> Result<(), String> {
     match event.kind {
-        RuntimeEventKind::ToolStarted => append_tool_started_projection(app, state, session_id, event),
-        RuntimeEventKind::ToolFinished => append_tool_finished_projection(app, state, session_id, event),
+        RuntimeEventKind::ToolStarted => {
+            append_tool_started_projection(app, state, session_id, event)
+        }
+        RuntimeEventKind::ToolFinished => {
+            append_tool_finished_projection(app, state, session_id, event)
+        }
         _ => Ok(()),
     }
 }
@@ -1638,13 +1650,9 @@ async fn apply_conversation_checkpoint(
         );
         workspace.hydrated_session_ids.insert(session_id);
     })?;
-    persist_workspace_session_update(
-        controller_runtime.clone(),
-        &workspace_snapshot,
-        session_id,
-    )
-    .await
-    .map(|_| ())
+    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
+        .await
+        .map(|_| ())
 }
 
 /// Applies the terminal execution report and persists the final transcript state.
@@ -1732,13 +1740,9 @@ async fn apply_execution_report(
         );
         workspace.hydrated_session_ids.insert(session_id);
     })?;
-    persist_workspace_session_update(
-        controller_runtime.clone(),
-        &workspace_snapshot,
-        session_id,
-    )
-    .await
-    .map(|_| ())
+    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
+        .await
+        .map(|_| ())
 }
 
 /// Ensures a successful terminal report has visible thinking and output records.
@@ -1780,10 +1784,9 @@ fn ensure_terminal_success_records(
             .insert(record_id);
     }
     if !current_turn_has_visible_record(runtime_state, SessionMessageRecordKind::AssistantOutput) {
-        let assistant_output = report
-            .assistant_output
-            .clone()
-            .unwrap_or_else(|| String::from("The model completed the run but did not return visible text output."));
+        let assistant_output = report.assistant_output.clone().unwrap_or_else(|| {
+            String::from("The model completed the run but did not return visible text output.")
+        });
         let record_id = build_session_record_message_id(
             session_id,
             now,
@@ -1813,8 +1816,8 @@ fn append_terminal_summary_record(
     now: &str,
     report: &ExecutionRunReport,
 ) -> String {
-    let derived_record = SessionDerivedSkillChain::default()
-        .run_summary_skill(SummarySkillInput { report });
+    let derived_record =
+        SessionDerivedSkillChain::default().run_summary_skill(SummarySkillInput { report });
     append_derived_record(runtime_state, session_id, now, derived_record)
 }
 
@@ -1992,29 +1995,26 @@ where
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard
-            .controller_runtime
-            .clone()
-            .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
         let luaskills_catalog = guard
             .luaskills_runtime
             .as_ref()
             .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
             .unwrap_or_else(empty_luaskills_catalog);
-        let token_budget_runtime = guard
-            .token_budget_runtime
-            .clone()
-            .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; token budget runtime is not ready")
+        })?;
         let mcp_catalog = guard
             .mcp_runtime
             .as_ref()
             .map(TauriMcpRuntimeHandle::catalog)
             .unwrap_or_else(empty_mcp_catalog);
         let logs = guard.startup.recent_logs.clone();
-        let mut workspace_snapshot = guard
-            .workspace_snapshot
-            .clone()
-            .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+        let mut workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
         mutate(&mut workspace_snapshot);
         let selected_messages = workspace_snapshot
             .session_messages
@@ -2060,20 +2060,13 @@ where
 async fn refresh_workbench_snapshot(
     state: tauri::State<'_, SharedServiceBridgeState>,
 ) -> Result<WorkbenchSnapshot, String> {
-    let (
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-    ) = {
+    let (controller_runtime, luaskills_catalog, token_budget_runtime, mcp_catalog, logs) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard
-            .controller_runtime
-            .clone()
-            .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
         let luaskills_catalog = guard
             .luaskills_runtime
             .as_ref()
@@ -2083,10 +2076,9 @@ async fn refresh_workbench_snapshot(
                 skills: Vec::new(),
                 entry_count: 0,
             });
-        let token_budget_runtime = guard
-            .token_budget_runtime
-            .clone()
-            .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; token budget runtime is not ready")
+        })?;
         let mcp_catalog = guard
             .mcp_runtime
             .as_ref()
@@ -2100,10 +2092,7 @@ async fn refresh_workbench_snapshot(
                 resource_count: 0,
                 summary_rows: Vec::new(),
             });
-        let logs = guard
-            .startup
-            .recent_logs
-            .clone();
+        let logs = guard.startup.recent_logs.clone();
         (
             controller_runtime,
             luaskills_catalog,
@@ -2113,9 +2102,10 @@ async fn refresh_workbench_snapshot(
         )
     };
 
-    let refreshed_snapshot =
-        vulcan_workspace_store::workspace_store::load_workspace_snapshot(controller_runtime.clone())
-            .await?;
+    let refreshed_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+        controller_runtime.clone(),
+    )
+    .await?;
     let hydration_snapshot = match load_selected_session_hydration(
         controller_runtime.clone(),
         refreshed_snapshot.selected_session,
@@ -2251,10 +2241,12 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         )
     });
 
-    let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("创建 Tauri service tokio runtime 失败：{error}"))?);
+    let runtime = Arc::new(
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| format!("创建 Tauri service tokio runtime 失败：{error}"))?,
+    );
 
     let controller_report = runtime.block_on(
         vulcan_workspace_store::data_plane::bootstrap_application_data_plane(
@@ -2922,12 +2914,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
 /// 创建与旧版 GUI 导航面相匹配的功能区域。
 fn feature_areas() -> Vec<FeatureAreaSummary> {
     vec![
-        feature_area(
-            "chat",
-            "控制台",
-            "控制台、消息流与模型输入区",
-            "真实快照",
-        ),
+        feature_area("chat", "控制台", "控制台、消息流与模型输入区", "真实快照"),
         feature_area("projects", "项目", "工作区项目列表与绑定状态", "真实快照"),
         feature_area(
             "providers",

@@ -128,5 +128,4 @@ mod tests {
             "//server/share/openvulcan"
         );
     }
-
 }

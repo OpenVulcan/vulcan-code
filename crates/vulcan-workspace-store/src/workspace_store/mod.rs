@@ -47,8 +47,12 @@ pub use self::event_store::{
 };
 pub use history_search::search_workspace_history;
 pub use persistence::{
-    maintain_legacy_session_storage, permanently_delete_archived_project,
-    permanently_delete_archived_session, persist_single_session_update, persist_workspace_snapshot,
+    archive_project_with_sessions, archive_single_session, maintain_legacy_session_storage,
+    permanently_delete_archived_project, permanently_delete_archived_session, persist_new_project,
+    persist_project_order_update, persist_project_pinned_and_order_update,
+    persist_single_session_runtime_state_update, persist_single_session_update,
+    persist_workspace_snapshot, rename_project, restore_project_with_sessions,
+    restore_single_session, toggle_project_pinned,
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 
@@ -71,11 +75,12 @@ impl WorkspaceSnapshotPersistOutcome {
 
 #[cfg(test)]
 use self::persistence::{
-    assign_session_message_turn_indexes, legacy_inline_message_chunk_count,
-    legacy_inline_message_chunk_migration_script, legacy_oversized_message_candidate_query,
-    prepare_session_message_body_for_storage, push_session_message_rows_for_session,
-    push_session_runtime_state_batch_rows, session_message_chunk_upsert_statement,
-    session_message_is_workspace_history_search_indexable, session_message_upsert_statement,
+    assign_session_message_turn_indexes, build_session_runtime_state_batch_row,
+    legacy_inline_message_chunk_count, legacy_inline_message_chunk_migration_script,
+    legacy_oversized_message_candidate_query, prepare_session_message_body_for_storage,
+    push_session_message_rows_for_session, push_session_runtime_state_batch_rows,
+    session_message_chunk_upsert_statement, session_message_is_workspace_history_search_indexable,
+    session_message_upsert_statement,
 };
 
 /// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.

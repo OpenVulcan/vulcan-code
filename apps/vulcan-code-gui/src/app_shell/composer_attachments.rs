@@ -354,12 +354,14 @@ impl VulcanWorkbench {
         self.composer_attachments = snapshot.attachments;
         self.composer_scroll_offset = snapshot.scroll_offset.max(0.0);
         self.dismiss_workbench_context_menu();
+        let selected_session_id = self.selected_session().map(|session| session.id);
         self.save_selected_session_composer_draft();
 
-        Task::batch([
-            operation::focus(COMPOSER_EDITOR_ID),
-            self.persist_workspace_snapshot_task(),
-        ])
+        let persist_task = selected_session_id
+            .map(|session_id| self.persist_single_session_runtime_state_task(session_id))
+            .unwrap_or_else(Task::none);
+
+        Task::batch([operation::focus(COMPOSER_EDITOR_ID), persist_task])
     }
 
     /// Applies one composer editor action while keeping undo history, focus, and mirrored scroll state in sync.
@@ -421,8 +423,11 @@ impl VulcanWorkbench {
             tasks.push(operation::focus(COMPOSER_EDITOR_ID));
         }
 
+        let selected_session_id = self.selected_session().map(|session| session.id);
         self.save_selected_session_composer_draft();
-        tasks.push(self.persist_workspace_snapshot_task());
+        if let Some(session_id) = selected_session_id {
+            tasks.push(self.persist_single_session_runtime_state_task(session_id));
+        }
 
         Task::batch(tasks)
     }

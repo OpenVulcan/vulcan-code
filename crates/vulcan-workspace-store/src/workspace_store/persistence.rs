@@ -375,7 +375,10 @@ pub async fn persist_single_session_update(
     let mut warnings = Vec::new();
     let session_owner_map = session_owner_map_from_projects(task_projects);
     let Some((project_id, sort_order)) = session_owner_map.get(&session.id) else {
-        return Err(format!("单会话保存失败：未找到会话所属项目：{}", session.id));
+        return Err(format!(
+            "单会话保存失败：未找到会话所属项目：{}",
+            session.id
+        ));
     };
 
     upsert_session_rows(
@@ -445,6 +448,304 @@ pub async fn persist_single_session_update(
     .await?;
 
     Ok(WorkspaceSnapshotPersistOutcome { warnings })
+}
+
+/// Persists only one session runtime-state row without rewriting transcript or project rows.
+/// 仅持久化单个会话运行时状态行，不重写转录或项目行。
+pub async fn persist_single_session_runtime_state_update(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let rewrite_session_ids = vec![session_id.to_string()];
+    delete_session_scoped_rows(
+        &controller,
+        "session_runtime_state",
+        &rewrite_session_ids,
+        "删除单个会话旧运行时状态失败",
+    )
+    .await?;
+
+    insert_session_runtime_state_rows(
+        &controller,
+        vec![build_session_runtime_state_batch_row(
+            session_id,
+            runtime_state,
+        )],
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Marks one visible session as archived without rewriting transcript or runtime-state rows.
+/// 将单个可见会话标记为已归档，不重写转录或运行时状态行。
+pub async fn archive_single_session(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    update_session_archive_flags(controller, &[session_id], true).await
+}
+
+/// Restores one archived session summary into the visible project binding.
+/// 将单个已归档会话摘要恢复到可见项目绑定中。
+pub async fn restore_single_session(
+    controller: ControllerRuntimeHandle,
+    task_projects: &[TaskProjectSummary],
+    session: &SessionSummary,
+) -> Result<(), String> {
+    persist_single_session_summary_update(controller, task_projects, session, false).await
+}
+
+/// Marks one visible project and all of its child sessions as archived.
+/// 将单个可见项目及其全部子会话标记为已归档。
+pub async fn archive_project_with_sessions(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session_ids: &[SessionId],
+) -> Result<(), String> {
+    update_project_archive_flag(&controller, project_id, true).await?;
+    update_session_archive_flags(controller, session_ids, true).await?;
+
+    Ok(())
+}
+
+/// Restores one archived project and its child session summaries into the visible tree.
+/// 将单个已归档项目及其子会话摘要恢复到可见树中。
+pub async fn restore_project_with_sessions(
+    controller: ControllerRuntimeHandle,
+    task_projects: &[TaskProjectSummary],
+    project: &TaskProjectSummary,
+    sessions: &[SessionSummary],
+) -> Result<(), String> {
+    upsert_projects(&controller, &[(project.clone(), false)]).await?;
+    let session_rows = sessions
+        .iter()
+        .cloned()
+        .map(|session| (session, false))
+        .collect::<Vec<_>>();
+    upsert_sessions(&controller, task_projects, &session_rows).await?;
+
+    Ok(())
+}
+
+/// Persists one newly visible project row without rewriting unrelated workspace rows.
+/// 持久化单个新出现的可见项目行，不重写无关工作区行。
+pub async fn persist_new_project(
+    controller: ControllerRuntimeHandle,
+    project: &TaskProjectSummary,
+) -> Result<(), String> {
+    upsert_projects(&controller, &[(project.clone(), false)]).await
+}
+
+/// Persists only one session summary row without touching artifacts owned by that session.
+/// 仅持久化单个会话摘要行，不触碰该会话拥有的运行工件。
+async fn persist_single_session_summary_update(
+    controller: ControllerRuntimeHandle,
+    task_projects: &[TaskProjectSummary],
+    session: &SessionSummary,
+    archived: bool,
+) -> Result<(), String> {
+    let session_owner_map = session_owner_map_from_projects(task_projects);
+    let Some((project_id, sort_order)) = session_owner_map.get(&session.id) else {
+        return Err(format!(
+            "单会话摘要保存失败：未找到会话所属项目：{}",
+            session.id
+        ));
+    };
+
+    upsert_session_rows(
+        &controller,
+        vec![build_session_upsert_row(
+            session,
+            project_id,
+            *sort_order,
+            archived,
+        )],
+    )
+    .await
+}
+
+/// Updates the archived flag for one project row without changing its metadata.
+/// 只更新单个项目行的归档标记，不改变其元数据。
+async fn update_project_archive_flag(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+    archived: bool,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "UPDATE projects SET archived = ?1, updated_at = ?2 WHERE id = ?3;",
+            vec![vec![
+                ControllerSqliteValue::Int64(i64::from(archived)),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("更新项目归档状态失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Updates the archived flag for a batch of session rows without changing their transcript data.
+/// 批量更新会话行的归档标记，不改变其转录数据。
+async fn update_session_archive_flags(
+    controller: ControllerRuntimeHandle,
+    session_ids: &[SessionId],
+    archived: bool,
+) -> Result<(), String> {
+    if session_ids.is_empty() {
+        return Ok(());
+    }
+
+    let updated_at = current_unix_millis_text();
+    let rows = session_ids
+        .iter()
+        .map(|session_id| {
+            vec![
+                ControllerSqliteValue::Int64(i64::from(archived)),
+                ControllerSqliteValue::String(updated_at.clone()),
+                ControllerSqliteValue::String(session_id.to_string()),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "UPDATE sessions SET archived = ?1, updated_at = ?2 WHERE id = ?3;",
+            rows,
+        )
+        .await
+        .map_err(|error| format!("更新会话归档状态失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Toggles one active project's pinned flag without rewriting unrelated workspace rows.
+/// 切换单个活动项目的置顶标记，不重写无关工作区行。
+pub async fn toggle_project_pinned(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "UPDATE projects SET pinned = CASE WHEN pinned = 0 THEN 1 ELSE 0 END, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("切换项目置顶状态失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Persists one project's pinned flag and both project-section orders in a deterministic sequence.
+/// 按确定顺序持久化单个项目的置顶标记以及两个项目分区的顺序。
+pub async fn persist_project_pinned_and_order_update(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    pinned: bool,
+    pinned_project_ids: &[String],
+    regular_project_ids: &[String],
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "UPDATE projects SET pinned = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::Int64(i64::from(pinned)),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("写入项目置顶状态失败：{error}"))?;
+
+    persist_project_order_update(controller.clone(), pinned_project_ids).await?;
+    persist_project_order_update(controller, regular_project_ids).await?;
+
+    Ok(())
+}
+
+/// Persists one active project's display name without touching its sessions.
+/// 持久化单个活动项目的显示名称，不触碰其会话数据。
+pub async fn rename_project(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    name: &str,
+) -> Result<(), String> {
+    let normalized_name = name.trim();
+    if normalized_name.is_empty() {
+        return Err(String::from("项目名称不能为空。"));
+    }
+
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            vec![vec![
+                ControllerSqliteValue::String(normalized_name.to_string()),
+                ControllerSqliteValue::String(current_unix_millis_text()),
+                ControllerSqliteValue::String(project_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("重命名项目失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Persists the project order for one pinned or regular section.
+/// 持久化单个置顶或普通分区内的项目顺序。
+pub async fn persist_project_order_update(
+    controller: ControllerRuntimeHandle,
+    project_ids: &[String],
+) -> Result<(), String> {
+    if project_ids.is_empty() {
+        return Ok(());
+    }
+
+    let updated_at = current_unix_millis_text();
+    let rows = project_ids
+        .iter()
+        .enumerate()
+        .map(|(index, project_id)| {
+            vec![
+                ControllerSqliteValue::Int64(index as i64),
+                ControllerSqliteValue::String(updated_at.clone()),
+                ControllerSqliteValue::String(project_id.clone()),
+            ]
+        })
+        .collect::<Vec<_>>();
+
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(&controller),
+            "UPDATE projects SET sort_order = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
+            rows,
+        )
+        .await
+        .map_err(|error| format!("重排项目失败：{error}"))?;
+
+    Ok(())
 }
 
 /// Queries one persisted session summary row so single-session maintenance can reuse the event-store writer without a full workspace snapshot.
@@ -1553,6 +1854,21 @@ async fn replace_session_runtime_state(
         return Ok(());
     }
 
+    insert_session_runtime_state_rows(controller, batch_params).await?;
+
+    Ok(())
+}
+
+/// Inserts prepared runtime-state batch rows into the session runtime-state table.
+/// 将已准备好的运行时状态批量行插入会话运行时状态表。
+async fn insert_session_runtime_state_rows(
+    controller: &ControllerRuntimeHandle,
+    batch_params: Vec<Vec<ControllerSqliteValue>>,
+) -> Result<(), String> {
+    if batch_params.is_empty() {
+        return Ok(());
+    }
+
     execute_sqlite_batch_safely(
         controller,
         "session_runtime_state",
@@ -2053,38 +2369,45 @@ fn push_session_runtime_state_batch_rows_with_seen(
             if !pushed_session_ids.insert(session.id) {
                 continue;
             }
-            batch_params.push(vec![
-                ControllerSqliteValue::String(session.id.to_string()),
-                optional_sqlite_string(&entry.active_agent_id),
-                optional_sqlite_string(&entry.active_provider_id),
-                optional_sqlite_string(&entry.active_model_id),
-                optional_sqlite_string(&entry.last_compaction_id),
-                optional_sqlite_string(&entry.context_start_message_id),
-                optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
-                optional_sqlite_string(&serialize_provider_usage_to_json(
-                    entry
-                        .last_successful_provider_usage
-                        .as_ref()
-                        .or(entry.last_provider_usage.as_ref()),
-                )),
-                ControllerSqliteValue::Null,
-                optional_sqlite_string(&serialize_session_continuation_to_json(
-                    &entry.conversation_state.continuation,
-                )),
-                optional_sqlite_string(&serialize_context_injection_state_to_json(
-                    &entry.context_injection_state,
-                )),
-                optional_sqlite_string(&serialize_vmm_config_layer_to_json(&entry.vmm)),
-                optional_sqlite_string(&serialize_vmm_writeback_outbox_to_json(
-                    &entry.vmm_writeback_outbox,
-                )),
-                optional_sqlite_string(&serialize_vmm_profile_sync_to_json(
-                    &entry.vmm_profile_sync,
-                )),
-                ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
-            ]);
+            batch_params.push(build_session_runtime_state_batch_row(session.id, entry));
         }
     }
+}
+
+/// Builds one runtime-state SQLite batch row for a single session.
+/// 为单个会话构建一条运行时状态 SQLite 批处理行。
+pub(super) fn build_session_runtime_state_batch_row(
+    session_id: SessionId,
+    entry: &SessionRuntimeStateEntry,
+) -> Vec<ControllerSqliteValue> {
+    vec![
+        ControllerSqliteValue::String(session_id.to_string()),
+        optional_sqlite_string(&entry.active_agent_id),
+        optional_sqlite_string(&entry.active_provider_id),
+        optional_sqlite_string(&entry.active_model_id),
+        optional_sqlite_string(&entry.last_compaction_id),
+        optional_sqlite_string(&entry.context_start_message_id),
+        optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
+        optional_sqlite_string(&serialize_provider_usage_to_json(
+            entry
+                .last_successful_provider_usage
+                .as_ref()
+                .or(entry.last_provider_usage.as_ref()),
+        )),
+        ControllerSqliteValue::Null,
+        optional_sqlite_string(&serialize_session_continuation_to_json(
+            &entry.conversation_state.continuation,
+        )),
+        optional_sqlite_string(&serialize_context_injection_state_to_json(
+            &entry.context_injection_state,
+        )),
+        optional_sqlite_string(&serialize_vmm_config_layer_to_json(&entry.vmm)),
+        optional_sqlite_string(&serialize_vmm_writeback_outbox_to_json(
+            &entry.vmm_writeback_outbox,
+        )),
+        optional_sqlite_string(&serialize_vmm_profile_sync_to_json(&entry.vmm_profile_sync)),
+        ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
+    ]
 }
 
 /// Deletes all rows from one session-scoped table for the provided active session identifiers.

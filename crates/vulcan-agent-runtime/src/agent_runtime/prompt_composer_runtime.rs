@@ -244,9 +244,7 @@ pub fn reload_default_runtime_prompt_composer_engine() -> Result<(), PromptCompo
 
 /// Invalidate reusable prompt-composer cache entries for changed prompt resources.
 /// 为已变化的提示词资源使可复用组合器缓存条目失效。
-pub fn invalidate_runtime_prompt_composer_cache_for_reason(
-    reason: PromptInvalidationReason,
-) {
+pub fn invalidate_runtime_prompt_composer_cache_for_reason(reason: PromptInvalidationReason) {
     let prefixes = runtime_prompt_cache_prefixes_for_reason(&reason);
     let event = PromptInvalidationEvent {
         reason,

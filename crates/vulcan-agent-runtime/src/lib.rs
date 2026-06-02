@@ -34,7 +34,9 @@ pub use vulcan_host_tools::project_temp_maintenance;
 pub use vulcan_host_tools::result_format as tool_result_format;
 pub use vulcan_provider_config::ai_tool_configuration;
 pub use vulcan_provider_config::catalog::ai_capability_provider_catalog;
-pub use vulcan_provider_config::{capabilities as provider_capabilities, config as provider_config};
+pub use vulcan_provider_config::{
+    capabilities as provider_capabilities, config as provider_config,
+};
 pub use vulcan_runtime_assets as runtime_assets;
 pub use vulcan_workbench_model as model;
 pub use vulcan_workspace_store::provider_usage;

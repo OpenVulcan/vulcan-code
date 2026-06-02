@@ -245,10 +245,7 @@ impl McpRuntimeAccess {
 
     /// Returns the current OAuth status label for one configured MCP server when live runtime state is available.
     /// 当实时运行时状态可用时，返回单个已配置 MCP 服务器的当前 OAuth 状态标签。
-    pub async fn server_oauth_status_label(
-        &self,
-        server_id: &str,
-    ) -> Result<String, String> {
+    pub async fn server_oauth_status_label(&self, server_id: &str) -> Result<String, String> {
         let Some(runtime) = self.live_runtime.as_ref() else {
             return Ok(String::from("运行时未就绪"));
         };
@@ -302,9 +299,7 @@ impl McpRuntimeAccess {
 
 /// Builds one stable MCP runtime access surface from provider configuration without a live runtime handle.
 /// 根据供应商配置构建一个不包含实时运行时句柄的稳定 MCP 运行时访问面。
-pub fn configured_mcp_runtime_access(
-    config: &ProviderConfigurationFile,
-) -> McpRuntimeAccess {
+pub fn configured_mcp_runtime_access(config: &ProviderConfigurationFile) -> McpRuntimeAccess {
     McpRuntimeAccess::new(configured_mcp_registry_overview(config), None)
 }
 
@@ -341,10 +336,7 @@ impl McpRuntimeToolBinding {
 
     /// Invokes the bound MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
-    pub async fn invoke(
-        &self,
-        args: serde_json::Value,
-    ) -> Result<serde_json::Value, String> {
+    pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {
         self.runtime
             .call_tool_by_id(self.view.origin_tool_id(), args)
             .await

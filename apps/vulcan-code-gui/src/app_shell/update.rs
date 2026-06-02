@@ -260,7 +260,7 @@ impl VulcanWorkbench {
                 match result {
                     Ok(snapshot) => {
                         self.apply_workspace_snapshot(snapshot);
-                        let removed_legacy_profile_injections =
+                        let legacy_profile_cleanup_session_ids =
                             self.remove_legacy_vmm_profile_context_injections();
                         self.seed_vmm_hook_profile_cache_from_runtime_state();
                         self.refresh_vmm_hook_config_snapshot();
@@ -283,10 +283,18 @@ impl VulcanWorkbench {
                             .unwrap_or_else(Task::none);
                         let legacy_maintenance_task =
                             self.schedule_next_background_legacy_session_maintenance();
-                        let persist_cleanup_task = if removed_legacy_profile_injections {
-                            self.persist_workspace_snapshot_task()
-                        } else {
+                        let persist_cleanup_task = if legacy_profile_cleanup_session_ids.is_empty()
+                        {
                             Task::none()
+                        } else {
+                            Task::batch(
+                                legacy_profile_cleanup_session_ids
+                                    .into_iter()
+                                    .map(|session_id| {
+                                        self.persist_single_session_runtime_state_task(session_id)
+                                    })
+                                    .collect::<Vec<_>>(),
+                            )
                         };
                         return Task::batch([
                             self.schedule_project_temp_cleanup_for_all_projects(),
@@ -519,6 +527,30 @@ impl VulcanWorkbench {
                         self.status_message = format!("会话状态保存失败：{error}");
                         self.push_activity(ActivityLevel::Warning, "会话状态保存失败", error);
                     }
+                }
+
+                Task::none()
+            }
+            Message::SessionRuntimeStatePersisted(result) => {
+                if let Err(error) = result {
+                    self.status_message = format!("会话运行时状态保存失败：{error}");
+                    self.push_activity(ActivityLevel::Warning, "会话运行时状态保存失败", error);
+                }
+
+                Task::none()
+            }
+            Message::ProjectMetadataPersisted(result) => {
+                if let Err(error) = result {
+                    self.status_message = format!("项目状态保存失败：{error}");
+                    self.push_activity(ActivityLevel::Warning, "项目状态保存失败", error);
+                }
+
+                Task::none()
+            }
+            Message::ArchiveStatePersisted(result) => {
+                if let Err(error) = result {
+                    self.status_message = format!("归档状态保存失败：{error}");
+                    self.push_activity(ActivityLevel::Warning, "归档状态保存失败", error);
                 }
 
                 Task::none()
@@ -948,8 +980,9 @@ impl VulcanWorkbench {
             Message::WindowLeftButtonReleased(window_id) => {
                 self.clear_transcript_drag_auto_scrolls();
                 self.composer_scrollbar_drag_grab_offset = None;
-                let mut did_commit_drop = false;
                 let mut did_commit_pending_prompt_drop = false;
+                let mut committed_pending_prompt_session_id = None;
+                let mut tasks = Vec::new();
                 if self.main_window_id == Some(window_id) {
                     if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
                         modal.pan_pointer = None;
@@ -972,7 +1005,10 @@ impl VulcanWorkbench {
 
                     if let Some((dragged_project_id, drop_target)) = committed_drop {
                         self.apply_task_project_drop_target(&dragged_project_id, &drop_target);
-                        did_commit_drop = true;
+                        let section_order_ids = self.project_section_order_ids(&dragged_project_id);
+                        if !section_order_ids.is_empty() {
+                            tasks.push(self.persist_project_order_task(section_order_ids));
+                        }
                     }
 
                     self.dragging_task_project = None;
@@ -995,6 +1031,9 @@ impl VulcanWorkbench {
                             &dragged_entry_id,
                             &drop_target,
                         );
+                        if did_commit_pending_prompt_drop {
+                            committed_pending_prompt_session_id = Some(session_id);
+                        }
                     }
                     self.dragging_pending_prompt_entry_id = None;
                     self.active_pending_prompt_drop_target = None;
@@ -1027,11 +1066,12 @@ impl VulcanWorkbench {
                         self.toggle_task_project_expanded(&project_id);
                     }
                 }
-                if did_commit_drop || did_commit_pending_prompt_drop {
-                    self.persist_workspace_snapshot_task()
-                } else {
-                    Task::none()
+                if did_commit_pending_prompt_drop
+                    && let Some(session_id) = committed_pending_prompt_session_id
+                {
+                    tasks.push(self.persist_single_session_runtime_state_task(session_id));
                 }
+                Task::batch(tasks)
             }
             Message::WindowMaximizedStateChanged(window_id, maximized) => {
                 if self.main_window_id == Some(window_id) {
@@ -1118,8 +1158,11 @@ impl VulcanWorkbench {
             Message::ComposerChanged(value) => {
                 self.composer = value;
                 self.refresh_composer_slash_command_state();
+                let selected_session_id = self.selected_session().map(|session| session.id);
                 self.save_selected_session_composer_draft();
-                self.persist_workspace_snapshot_task()
+                selected_session_id
+                    .map(|session_id| self.persist_single_session_runtime_state_task(session_id))
+                    .unwrap_or_else(Task::none)
             }
             Message::ComposerEditorAction(action) => {
                 let task = self.apply_composer_editor_action(action);
@@ -3073,6 +3116,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::SessionSelected(session_id) => {
+                let previous_session_id = self.selected_session().map(|session| session.id);
                 let previous_workspace_path = self.selected_attachment_workspace_path();
                 let previous_scope = self.composer_attachment_ref_scope();
                 self.save_selected_session_composer_draft();
@@ -3119,7 +3163,11 @@ impl VulcanWorkbench {
                 let projection_task =
                     self.schedule_session_agent_view_projection_refresh_if_needed(session_id);
                 Task::batch([
-                    self.persist_workspace_snapshot_task(),
+                    previous_session_id
+                        .map(|session_id| {
+                            self.persist_single_session_runtime_state_task(session_id)
+                        })
+                        .unwrap_or_else(Task::none),
                     self.schedule_session_hydration(session_id),
                     projection_task,
                     if has_pending_search_navigation {
@@ -3248,7 +3296,8 @@ impl VulcanWorkbench {
                         self.refresh_subagent_navigation_round_visibility(state.parent_session_id);
                         self.status_message = String::from("已停止当前子代理调用。");
                         Task::batch([
-                            self.persist_workspace_snapshot_task(),
+                            self.persist_single_session_update_task(state.parent_session_id),
+                            self.persist_single_session_update_task(state.task_id),
                             self.maybe_follow_selected_session_transcript_tail(state.task_id),
                         ])
                     }
@@ -3697,7 +3746,7 @@ impl VulcanWorkbench {
 
                 if let Some(project_id) = project_id {
                     self.create_task_project_session(&project_id);
-                    return self.persist_workspace_snapshot_task();
+                    return Task::none();
                 } else {
                     self.status_message = String::from("当前没有可承载会话的项目节点。");
                 }
@@ -3821,14 +3870,42 @@ impl VulcanWorkbench {
             }
             Message::CreateTaskProjectSession(project_id) => {
                 self.create_task_project_session(&project_id);
-                self.persist_workspace_snapshot_task()
+                Task::none()
             }
             Message::AddTaskProjectFromFolder => {
                 match pick_task_project_folder(self.workspace_path.trim()) {
                     Ok(Some(selected_path)) => {
+                        let active_project_ids_before = self
+                            .task_projects
+                            .iter()
+                            .map(|project| project.id.clone())
+                            .collect::<BTreeSet<_>>();
+                        let archived_project_ids_before = self
+                            .archived_task_projects
+                            .iter()
+                            .map(|project| project.id.clone())
+                            .collect::<BTreeSet<_>>();
                         self.add_task_project_from_folder(&selected_path);
+                        let added_project_id = self
+                            .task_projects
+                            .iter()
+                            .find(|project| !active_project_ids_before.contains(&project.id))
+                            .map(|project| project.id.clone());
+                        let restored_project_id =
+                            added_project_id.as_ref().and_then(|project_id| {
+                                archived_project_ids_before
+                                    .contains(project_id)
+                                    .then(|| project_id.clone())
+                            });
+                        let persist_task = if let Some(project_id) = restored_project_id {
+                            self.persist_restore_project_task(project_id)
+                        } else if let Some(project_id) = added_project_id {
+                            self.persist_new_project_task(project_id)
+                        } else {
+                            Task::none()
+                        };
                         return Task::batch([
-                            self.persist_workspace_snapshot_task(),
+                            persist_task,
                             self.schedule_project_temp_cleanup_for_paths(vec![
                                 selected_path.clone(),
                             ]),
@@ -3844,20 +3921,30 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::PinTaskProject(project_id) => {
+                let mut persist_task = Task::none();
                 if let Some(project) = self.task_project_by_id_mut(&project_id) {
                     project.pinned = !project.pinned;
                     let title = project.title.clone();
                     let pinned = project.pinned;
                     self.sort_task_projects();
+                    let pinned_project_ids = self.project_order_ids_for_section(true);
+                    let regular_project_ids = self.project_order_ids_for_section(false);
+                    persist_task = self.persist_project_pinned_and_order_task(
+                        project_id.clone(),
+                        pinned,
+                        pinned_project_ids,
+                        regular_project_ids,
+                    );
                     self.status_message = if pinned {
                         format!("已将项目 `{title}` 置顶。")
                     } else {
                         format!("已取消项目 `{title}` 的置顶状态。")
                     };
                 }
-                self.persist_workspace_snapshot_task()
+                persist_task
             }
             Message::RenameTaskProject(project_id) => {
+                let mut persist_task = Task::none();
                 if let Some(project) = self.task_project_by_id_mut(&project_id) {
                     let original_title = project.title.clone();
                     if project.title.ends_with("（重命名）") {
@@ -3866,12 +3953,15 @@ impl VulcanWorkbench {
                         project.title = format!("{}（重命名）", project.title);
                     }
                     let renamed_title = project.title.clone();
+                    persist_task =
+                        self.persist_project_rename_task(project_id.clone(), renamed_title.clone());
                     self.status_message =
                         format!("已示例性重命名项目：`{original_title}` -> `{renamed_title}`。");
                 }
-                self.persist_workspace_snapshot_task()
+                persist_task
             }
             Message::ArchiveTaskProject(project_id) => {
+                let mut persist_task = Task::none();
                 if let Some(index) = self
                     .task_projects
                     .iter()
@@ -3913,13 +4003,19 @@ impl VulcanWorkbench {
                     self.dragging_task_project = None;
                     self.ensure_valid_selected_session();
                     self.status_message = format!("已归档项目 `{}`。", project.title);
+                    persist_task =
+                        self.persist_archive_project_task(project.id.clone(), archived_session_ids);
                 }
-                self.persist_workspace_snapshot_task()
+                persist_task
             }
             Message::RestoreTaskProject(project_id) => {
                 self.pending_archived_delete_confirmation = None;
-                let _ = self.restore_archived_task_project_by_id(&project_id);
-                let mut tasks = vec![self.persist_workspace_snapshot_task()];
+                let restored = self.restore_archived_task_project_by_id(&project_id);
+                let mut tasks = if restored {
+                    vec![self.persist_restore_project_task(project_id.clone())]
+                } else {
+                    Vec::new()
+                };
                 if let Some(project_path) = self
                     .task_project_by_id(&project_id)
                     .map(|project| PathBuf::from(project.path.clone()))
@@ -3944,7 +4040,7 @@ impl VulcanWorkbench {
                     self.status_message =
                         format!("已示例性重命名会话：`{original_title}` -> `{renamed_title}`。");
                 }
-                self.persist_workspace_snapshot_task()
+                self.persist_single_session_update_task(session_id)
             }
             Message::ArchiveTaskSession(session_id) => {
                 let archived_owner_snapshot = self.task_projects.iter().find_map(|project| {
@@ -3998,12 +4094,15 @@ impl VulcanWorkbench {
                 self.suppress_task_session_hover = false;
                 self.ensure_valid_selected_session();
                 self.status_message = format!("已归档会话 `{archived_title}`。");
-                self.persist_workspace_snapshot_task()
+                self.persist_archive_session_task(session_id)
             }
             Message::RestoreTaskSession(session_id) => {
                 self.pending_archived_delete_confirmation = None;
-                let _ = self.restore_archived_task_session(session_id);
-                self.persist_workspace_snapshot_task()
+                if self.restore_archived_task_session(session_id) {
+                    self.persist_restore_session_task(session_id)
+                } else {
+                    Task::none()
+                }
             }
             Message::RequestPermanentDeleteArchivedTaskProject(project_id) => {
                 self.pending_archived_delete_confirmation = self
@@ -4507,7 +4606,7 @@ impl VulcanWorkbench {
                         self.refresh_subagent_navigation_round_visibility(parent_session_id);
                     }
                     Task::batch([
-                        self.persist_workspace_snapshot_task(),
+                        self.persist_single_session_update_task(parent_session_id),
                         self.maybe_follow_selected_session_transcript_tail(parent_session_id),
                         self.maybe_start_next_pending_prompt(parent_session_id, false),
                     ])

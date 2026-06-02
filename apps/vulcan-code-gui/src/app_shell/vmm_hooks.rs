@@ -347,12 +347,12 @@ impl VulcanWorkbench {
         self.vmm_hook_runtime.seed_profile_cache(profile_sync);
     }
 
-    /// Removes legacy hidden-user VMM profile injections from every loaded session runtime state.
-    /// 从全部已加载会话运行态中移除旧版隐藏用户 VMM 画像注入。
-    pub(super) fn remove_legacy_vmm_profile_context_injections(&mut self) -> bool {
+    /// Removes legacy hidden-user VMM profile injections from every loaded session runtime state and returns changed sessions.
+    /// 从全部已加载会话运行态中移除旧版隐藏用户 VMM 画像注入，并返回发生变化的会话。
+    pub(super) fn remove_legacy_vmm_profile_context_injections(&mut self) -> Vec<SessionId> {
         let now = current_unix_millis_text();
-        let mut changed = false;
-        for runtime_state in self.session_runtime_state.values_mut() {
+        let mut changed_session_ids = Vec::new();
+        for (session_id, runtime_state) in self.session_runtime_state.iter_mut() {
             let removed_legacy_profile =
                 crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
                 &mut runtime_state.context_injection_state,
@@ -361,10 +361,10 @@ impl VulcanWorkbench {
                 remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
             if removed_legacy_profile || removed_duplicate_delta {
                 runtime_state.updated_at = now.clone();
-                changed = true;
+                changed_session_ids.push(*session_id);
             }
         }
-        for runtime_state in self.archived_session_runtime_state.values_mut() {
+        for (session_id, runtime_state) in self.archived_session_runtime_state.iter_mut() {
             let removed_legacy_profile =
                 crate::agent_runtime::context_injection_runtime::remove_legacy_vmm_profile_context_injection_state(
                 &mut runtime_state.context_injection_state,
@@ -373,10 +373,10 @@ impl VulcanWorkbench {
                 remove_duplicate_vmm_profile_delta_matching_base(runtime_state);
             if removed_legacy_profile || removed_duplicate_delta {
                 runtime_state.updated_at = now.clone();
-                changed = true;
+                changed_session_ids.push(*session_id);
             }
         }
-        changed
+        changed_session_ids
     }
 
     /// Removes a legacy hidden-user VMM profile injection from one loaded session.

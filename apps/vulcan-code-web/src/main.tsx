@@ -3488,7 +3488,7 @@ function ProjectContextMenu(props: {
           <Palette size={15} />
           <span>设置项目图标</span>
         </ContextMenuItem>
-        <ContextMenuItem disabled onSelect={() => props.onAction("archive-conversations", props.project)}>
+        <ContextMenuItem onSelect={() => props.onAction("archive-conversations", props.project)}>
           <Archive size={15} />
           <span>归档对话</span>
         </ContextMenuItem>
@@ -3868,7 +3868,7 @@ function ConversationContextMenu(props: {
           <Pencil size={15} />
           <span>重命名对话</span>
         </ContextMenuItem>
-        <ContextMenuItem disabled onSelect={() => props.onAction("archive", props.conversation)}>
+        <ContextMenuItem onSelect={() => props.onAction("archive", props.conversation)}>
           <Archive size={15} />
           <span>归档对话</span>
         </ContextMenuItem>

@@ -886,6 +886,39 @@ fn runtime_state_rows_store_full_canonical_conversation_state() {
     assert!(continuation_json.contains("resp-1"));
 }
 
+/// Verifies that the single-row runtime-state writer uses the same row shape as the batch writer.
+/// 验证单行运行时状态写入器与批量写入器使用完全相同的行结构。
+#[test]
+fn single_runtime_state_row_matches_batch_runtime_state_row() {
+    let session_id = SessionId::from_u128(143);
+    let session = SessionSummary::new(
+        session_id,
+        None,
+        String::from("单行运行时状态"),
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    );
+    let runtime_state = SessionRuntimeStateEntry {
+        active_agent_id: Some(String::from("agent-main")),
+        active_provider_id: Some(String::from("provider-main")),
+        active_model_id: Some(String::from("model-main")),
+        context_start_message_id: Some(String::from("message-start")),
+        updated_at: String::from("1234"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let mut runtime_states = BTreeMap::new();
+    runtime_states.insert(session_id, runtime_state.clone());
+    let mut rows = Vec::new();
+
+    push_session_runtime_state_batch_rows(&mut rows, &[session], &runtime_states);
+    let single_row = build_session_runtime_state_batch_row(session_id, &runtime_state);
+
+    assert_eq!(rows, vec![single_row]);
+}
+
 /// Verifies that hidden context-injection state persists in the runtime-state row without touching conversation JSON.
 /// 验证隐藏上下文注入状态会进入运行时状态行，同时不写入会话正文 JSON。
 #[test]

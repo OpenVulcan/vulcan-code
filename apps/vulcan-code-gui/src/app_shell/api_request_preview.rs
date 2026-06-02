@@ -132,7 +132,10 @@ impl VulcanWorkbench {
             move |result| Message::SessionApiRequestSimulationFinished { session_id, result },
         );
         if removed_legacy_profile_injection {
-            Task::batch([simulation_task, self.persist_workspace_snapshot_task()])
+            Task::batch([
+                simulation_task,
+                self.persist_single_session_runtime_state_task(session_id),
+            ])
         } else {
             simulation_task
         }

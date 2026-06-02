@@ -52,6 +52,15 @@ pub(super) enum Message {
     /// Applies the completed single-session persistence result after one session-scoped runtime mutation.
     /// 应用某次会话级运行时变更后完成的单会话持久化结果。
     SessionStatePersisted(Result<WorkspaceSnapshotPersistOutcome, String>),
+    /// Applies the completed single-session runtime-state persistence result.
+    /// 应用单个会话运行时状态持久化完成结果。
+    SessionRuntimeStatePersisted(Result<(), String>),
+    /// Applies the completed project metadata persistence result.
+    /// 应用项目元数据持久化完成结果。
+    ProjectMetadataPersisted(Result<(), String>),
+    /// Applies the completed archive or restore persistence result.
+    /// 应用归档或恢复持久化完成结果。
+    ArchiveStatePersisted(Result<(), String>),
     /// Main workbench window opened successfully.
     /// 主工作台窗口已成功打开。
     MainWindowOpened(window::Id),

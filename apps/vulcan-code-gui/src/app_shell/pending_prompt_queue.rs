@@ -712,7 +712,7 @@ impl VulcanWorkbench {
             String::from("已接入系统会话队列，正在尝试立即插入主会话。")
         };
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_runtime_state_task(session_id),
             self.maybe_start_next_pending_prompt(session_id, true),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             operation::focus(COMPOSER_EDITOR_ID),
@@ -771,7 +771,7 @@ impl VulcanWorkbench {
                 "待发送编辑",
             );
             self.status_message = String::from("未找到要编辑的待发送消息。");
-            return self.persist_workspace_snapshot_task();
+            return self.persist_single_session_runtime_state_task(session_id);
         }
         self.clear_pending_prompt_drag_state();
         self.status_message = String::from("已将待发送消息恢复到输入框，可继续修改。");
@@ -781,7 +781,10 @@ impl VulcanWorkbench {
             &restored_attachments,
             "待发送编辑",
         );
-        Task::batch([self.persist_workspace_snapshot_task(), restore_task])
+        Task::batch([
+            self.persist_single_session_runtime_state_task(session_id),
+            restore_task,
+        ])
     }
 
     /// Removes one queued prompt entry without dispatching it and persists the updated queue order.
@@ -800,7 +803,7 @@ impl VulcanWorkbench {
         }
         self.clear_pending_prompt_drag_state();
         self.status_message = String::from("已移除所选待发送消息。");
-        self.persist_workspace_snapshot_task()
+        self.persist_single_session_runtime_state_task(session_id)
     }
 
     /// Starts one concrete runtime run from the provided prompt entry after it has already been accepted for immediate dispatch.
@@ -1058,7 +1061,7 @@ impl VulcanWorkbench {
         });
 
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             precheck_task,
         ])
@@ -1089,7 +1092,7 @@ impl VulcanWorkbench {
         self.clear_session_precheck_progress(session_id);
         if self.session_run_phase_for(session_id) == SessionRunPhase::Stopped {
             self.status_message = String::from("记忆召回结束，但当前会话已停止，未继续发起请求。");
-            return self.persist_workspace_snapshot_task();
+            return self.persist_single_session_update_task(session_id);
         }
 
         let mut system_prompt_hook_blocks = Vec::new();
@@ -1596,7 +1599,7 @@ impl VulcanWorkbench {
         );
         self.refresh_subagent_navigation_round_visibility(session_id);
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }
@@ -1660,7 +1663,7 @@ impl VulcanWorkbench {
                 "已加入发送队列；当前轮次结束后会自动开始，点击插入可立即接入系统队列并插队。",
             );
             return Task::batch([
-                self.persist_workspace_snapshot_task(),
+                self.persist_single_session_runtime_state_task(session_id),
                 operation::focus(COMPOSER_EDITOR_ID),
             ]);
         }

@@ -2941,6 +2941,7 @@ impl VulcanWorkbench {
     /// Activates one slash command by clearing the composer text first and then dispatching the corresponding workbench action.
     /// 先清空输入框中的 slash 文本，再分发对应工作台动作，以激活某条 slash 指令。
     fn activate_composer_slash_command(&mut self, command: ComposerSlashCommand) -> Task<Message> {
+        let selected_session_id = self.selected_session().map(|session| session.id);
         self.replace_composer_text_preserving_attachments(String::new());
         let command_task = match command {
             ComposerSlashCommand::Model => self.open_workbench_model_picker(),
@@ -2958,7 +2959,9 @@ impl VulcanWorkbench {
                 MainDisplayPanel::PromptSkills,
             )),
         };
-        let persist_task = self.persist_workspace_snapshot_task();
+        let persist_task = selected_session_id
+            .map(|session_id| self.persist_single_session_runtime_state_task(session_id))
+            .unwrap_or_else(Task::none);
 
         Task::batch([command_task, persist_task])
     }
@@ -3228,7 +3231,7 @@ impl VulcanWorkbench {
             format!("会话 `{session_title}` 的正文文件已按新会话状态重建，并保留原标题。");
 
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(session_id),
             self.schedule_session_agent_view_projection_refresh_if_needed(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
@@ -4003,7 +4006,9 @@ impl VulcanWorkbench {
             self.session_compactions.get(&session_id).cloned()
         };
         let runtime_state = if archived {
-            self.archived_session_runtime_state.get(&session_id).cloned()
+            self.archived_session_runtime_state
+                .get(&session_id)
+                .cloned()
         } else {
             self.session_runtime_state.get(&session_id).cloned()
         };
@@ -4023,6 +4028,232 @@ impl VulcanWorkbench {
             },
             Message::SessionStatePersisted,
         )
+    }
+
+    /// Builds one asynchronous persistence task for only a single session runtime-state row.
+    /// 为单个会话运行时状态行构建一次异步持久化任务。
+    fn persist_single_session_runtime_state_task(
+        &mut self,
+        session_id: SessionId,
+    ) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let Some(runtime_state) = self
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .or_else(|| {
+                self.archived_session_runtime_state
+                    .get(&session_id)
+                    .cloned()
+            })
+        else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                workspace_store::persist_single_session_runtime_state_update(
+                    controller_runtime,
+                    session_id,
+                    &runtime_state,
+                )
+                .await
+            },
+            Message::SessionRuntimeStatePersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for one pinned toggle and both project-section orders.
+    /// 为一次项目置顶切换及两个项目分区顺序构建异步持久化任务。
+    fn persist_project_pinned_and_order_task(
+        &mut self,
+        project_id: String,
+        pinned: bool,
+        pinned_project_ids: Vec<String>,
+        regular_project_ids: Vec<String>,
+    ) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                workspace_store::persist_project_pinned_and_order_update(
+                    controller_runtime,
+                    &project_id,
+                    pinned,
+                    &pinned_project_ids,
+                    &regular_project_ids,
+                )
+                .await
+            },
+            Message::ProjectMetadataPersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for renaming a single project.
+    /// 为重命名单个项目构建一次异步持久化任务。
+    fn persist_project_rename_task(&mut self, project_id: String, name: String) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move { workspace_store::rename_project(controller_runtime, &project_id, &name).await },
+            Message::ProjectMetadataPersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for the current order of one project section.
+    /// 为当前单个项目分区顺序构建一次异步持久化任务。
+    fn persist_project_order_task(&mut self, project_ids: Vec<String>) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                workspace_store::persist_project_order_update(controller_runtime, &project_ids)
+                    .await
+            },
+            Message::ProjectMetadataPersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for inserting a newly visible project row.
+    /// 为插入单个新出现的可见项目行构建异步持久化任务。
+    fn persist_new_project_task(&mut self, project_id: String) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let Some(project) = self.task_project_by_id(&project_id).cloned() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move { workspace_store::persist_new_project(controller_runtime, &project).await },
+            Message::ProjectMetadataPersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for archiving a project and its current sessions.
+    /// 为归档单个项目及其当前会话构建一次异步持久化任务。
+    fn persist_archive_project_task(
+        &mut self,
+        project_id: String,
+        session_ids: Vec<SessionId>,
+    ) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move {
+                workspace_store::archive_project_with_sessions(
+                    controller_runtime,
+                    &project_id,
+                    &session_ids,
+                )
+                .await
+            },
+            Message::ArchiveStatePersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for restoring a project and its sessions.
+    /// 为恢复单个项目及其会话构建一次异步持久化任务。
+    fn persist_restore_project_task(&mut self, project_id: String) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let Some(project) = self.task_project_by_id(&project_id).cloned() else {
+            return Task::none();
+        };
+        let task_projects = self.task_projects.clone();
+        let sessions = project
+            .session_ids
+            .iter()
+            .filter_map(|session_id| self.session_by_id(*session_id).cloned())
+            .collect::<Vec<_>>();
+
+        Task::perform(
+            async move {
+                workspace_store::restore_project_with_sessions(
+                    controller_runtime,
+                    &task_projects,
+                    &project,
+                    &sessions,
+                )
+                .await
+            },
+            Message::ArchiveStatePersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for archiving a single session.
+    /// 为归档单个会话构建一次异步持久化任务。
+    fn persist_archive_session_task(&mut self, session_id: SessionId) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+
+        Task::perform(
+            async move { workspace_store::archive_single_session(controller_runtime, session_id).await },
+            Message::ArchiveStatePersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for restoring a single session.
+    /// 为恢复单个会话构建一次异步持久化任务。
+    fn persist_restore_session_task(&mut self, session_id: SessionId) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let Some(session) = self.session_by_id(session_id).cloned() else {
+            return Task::none();
+        };
+        let task_projects = self.task_projects.clone();
+
+        Task::perform(
+            async move {
+                workspace_store::restore_single_session(
+                    controller_runtime,
+                    &task_projects,
+                    &session,
+                )
+                .await
+            },
+            Message::ArchiveStatePersisted,
+        )
+    }
+
+    /// Returns project identifiers in the same pinned or regular section as the target project.
+    /// 返回与目标项目处于同一置顶或普通分区的项目标识顺序。
+    fn project_section_order_ids(&self, project_id: &str) -> Vec<String> {
+        let Some(section_pinned) = self
+            .task_project_by_id(project_id)
+            .map(|project| project.pinned)
+        else {
+            return Vec::new();
+        };
+
+        self.task_projects
+            .iter()
+            .filter(|project| project.pinned == section_pinned)
+            .map(|project| project.id.clone())
+            .collect()
+    }
+
+    /// Returns project identifiers in one pinned or regular section.
+    /// 返回单个置顶或普通分区内的项目标识顺序。
+    fn project_order_ids_for_section(&self, pinned: bool) -> Vec<String> {
+        self.task_projects
+            .iter()
+            .filter(|project| project.pinned == pinned)
+            .map(|project| project.id.clone())
+            .collect()
     }
 
     /// Replaces the runtime-event list for one session with a fresh snapshot.
