@@ -219,6 +219,20 @@ button {
   flex: 0 0 auto;
 }
 
+.theme-toggle {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.language-select-trigger {
+  width: 54px;
+  height: 32px;
+  justify-content: center;
+  padding-inline: 10px;
+  font-size: 12px;
+}
+
 .window-controls {
   height: 100%;
   display: flex;
@@ -924,6 +938,10 @@ button {
   display: none;
 }
 
+.vcn-sidebar-inset .chat-grid.loading-conversation-grid::after {
+  display: none;
+}
+
 .chat-grid {
   display: block;
   grid-template-columns: minmax(0, 1fr);
@@ -967,6 +985,47 @@ button {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+}
+
+.conversation-loading-center {
+  position: absolute;
+  inset: 0;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.shiny-text {
+  display: inline-block;
+  background-image: linear-gradient(
+    120deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 200% auto;
+  background-position: 150% center;
+  background-clip: text;
+  color: transparent;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  user-select: none;
+  animation: shiny-text var(--shiny-text-speed, 2s) linear infinite;
+}
+
+@keyframes shiny-text {
+  from {
+    background-position: 150% center;
+  }
+
+  to {
+    background-position: -50% center;
+  }
 }
 
 .composer-dock {
@@ -1052,7 +1111,7 @@ button {
 }
 
 .composer-select-trigger.mode {
-  width: 76px;
+  width: 84px;
 }
 
 .composer-select-trigger.model {
@@ -1938,8 +1997,7 @@ button {
     flex: 0 0 40px;
   }
 
-  .global-actions .status-pill,
-  .global-actions .theme-toggle span {
+  .global-actions .status-pill {
     display: none;
   }
 

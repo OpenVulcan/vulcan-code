@@ -18,8 +18,13 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { StatusPill } from "@/components/shared/status";
+import {
+  FeatureShell as ExtractedFeatureShell,
+  areaIconMap,
+  primaryFeatureAreas as buildPrimaryFeatureAreas,
+} from "@/components/features/feature-shell";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -58,6 +63,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { ShinyText } from "@/components/ui/shiny-text";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Tooltip,
@@ -66,6 +72,17 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { I18nProvider, useI18n, type LocaleCode } from "@/i18n";
+import type {
+  ConversationMessage,
+  ConversationSummary,
+  FeatureAreaSummary,
+  MainAreaId,
+  ProjectSummary,
+  SettingsSubAreaId,
+  StartupSnapshot,
+  WorkbenchSnapshot,
+} from "@/types";
 import { toast } from "sonner";
 import {
   Activity,
@@ -119,18 +136,6 @@ import {
 } from "lucide-react";
 import "./styles.css";
 
-// StartupStepStatus mirrors the Rust service API startup status enum.
-// StartupStepStatus 对齐 Rust service API 的启动状态枚举。
-type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "error";
-
-// MainAreaId describes selectable top-level WebUI areas.
-// MainAreaId 描述 WebUI 顶层可选择区域。
-type MainAreaId = "chat" | "skills" | "automation" | "plugins" | "memory" | "settings";
-
-// SettingsSubAreaId describes secondary settings pages that absorb legacy top-level pages.
-// SettingsSubAreaId 描述承接旧顶层页面的设置二级页面。
-type SettingsSubAreaId = "general" | "projects" | "providers" | "tools" | "diagnostics";
-
 // GITHUB_REPOSITORY_URL points to the public project repository.
 // GITHUB_REPOSITORY_URL 指向公开项目仓库。
 const GITHUB_REPOSITORY_URL = "https://github.com/OpenVulcan/vulcan-code";
@@ -165,117 +170,6 @@ interface DraftConversationSelection {
   // Owning project display name.
   // 所属项目展示名称。
   projectName: string;
-}
-
-// StartupStepSnapshot describes one startup step displayed by the startup panel.
-// StartupStepSnapshot 描述启动面板展示的单个启动步骤。
-interface StartupStepSnapshot {
-  // Stable startup step identifier.
-  // 稳定启动步骤标识。
-  id: string;
-  // User-facing startup step label.
-  // 面向用户显示的启动步骤名称。
-  label: string;
-  // Current startup step status.
-  // 当前启动步骤状态。
-  status: StartupStepStatus;
-  // Optional startup detail message.
-  // 可选启动详情消息。
-  message?: string | null;
-}
-
-// StartupSnapshot describes the full startup status returned by the service.
-// StartupSnapshot 描述服务返回的完整启动状态。
-interface StartupSnapshot {
-  // Overall readiness flag.
-  // 整体就绪标记。
-  ready: boolean;
-  // Current startup phase.
-  // 当前启动阶段。
-  phase: string;
-  // Ordered startup steps.
-  // 有序启动步骤。
-  steps: StartupStepSnapshot[];
-  // Recent startup log lines.
-  // 最近启动日志行。
-  recentLogs: string[];
-}
-
-// RuntimeModuleSnapshot describes one runtime module card.
-// RuntimeModuleSnapshot 描述单个运行时模块卡片。
-interface RuntimeModuleSnapshot {
-  // Stable module identifier.
-  // 稳定模块标识。
-  id: string;
-  // User-facing module label.
-  // 面向用户显示的模块名称。
-  label: string;
-  // Current module status.
-  // 当前模块状态。
-  status: StartupStepStatus;
-  // Short module message.
-  // 简短模块消息。
-  message: string;
-}
-
-// ProjectSummary describes one project shown in the sidebar.
-// ProjectSummary 描述侧栏中展示的单个项目。
-interface ProjectSummary {
-  // Stable project identifier.
-  // 稳定项目标识。
-  id: string;
-  // Project display name.
-  // 项目显示名称。
-  name: string;
-  // Project path.
-  // 项目路径。
-  path: string;
-  // Whether the project is currently pinned.
-  // 项目当前是否处于置顶状态。
-  pinned?: boolean;
-}
-
-// ConversationSummary describes one conversation shown in the sidebar.
-// ConversationSummary 描述侧栏中展示的单个会话。
-interface ConversationSummary {
-  // Stable conversation identifier.
-  // 稳定会话标识。
-  id: string;
-  // Conversation title.
-  // 会话标题。
-  title: string;
-  // Conversation status.
-  // 会话状态。
-  status: string;
-  // Optional owning project identifier.
-  // 可选所属项目标识。
-  projectId?: string | null;
-}
-
-// ConversationMessage describes one rendered message in the timeline.
-// ConversationMessage 描述时间线中的单条渲染消息。
-interface ConversationMessage {
-  // Stable message identifier.
-  // 稳定消息标识。
-  id: string;
-  // Stable conversation identifier that owns this message.
-  // 拥有该消息的稳定会话标识。
-  conversationId: string;
-  // Message role.
-  // 消息角色。
-  role: "user" | "assistant" | "system";
-  // Optional transcript title from the persisted session entry.
-  // 来自持久化会话项的可选转录标题。
-  title?: string | null;
-  // Optional durable transcript record kind.
-  // 可选持久化转录记录类型。
-  recordKind?: string | null;
-  // Message body.
-  // 消息正文。
-  body: string;
-  // Optional structured transcript metadata.
-  // 可选结构化转录元数据。
-  metadata?: unknown;
 }
 
 // ConversationBlockKind describes one WebUI-renderable conversation block family.
@@ -353,192 +247,6 @@ interface ConversationDetail {
   // Optional detail metadata rows.
   // 可选详情元数据行。
   metadata?: Array<[string, string]>;
-}
-
-// ToolCallSummary describes one tool call block.
-// ToolCallSummary 描述单个工具调用块。
-interface ToolCallSummary {
-  // Stable tool call identifier.
-  // 稳定工具调用标识。
-  id: string;
-  // Tool display name.
-  // 工具显示名称。
-  name: string;
-  // Tool status.
-  // 工具状态。
-  status: string;
-  // Tool detail text.
-  // 工具详情文本。
-  detail: string;
-}
-
-// FeatureAreaSummary describes one primary navigation area.
-// FeatureAreaSummary 描述单个主导航区域。
-interface FeatureAreaSummary {
-  // Stable feature area identifier.
-  // 稳定功能区域标识。
-  id: MainAreaId;
-  // Feature area display label.
-  // 功能区域显示名称。
-  label: string;
-  // Feature area description.
-  // 功能区域描述。
-  description: string;
-  // Feature area status.
-  // 功能区域状态。
-  status: string;
-}
-
-// PluginSummary describes one plugin shown in plugin center.
-// PluginSummary 描述插件中心展示的单个插件。
-interface PluginSummary {
-  // Stable plugin identifier.
-  // 稳定插件标识。
-  id: string;
-  // Plugin display name.
-  // 插件显示名称。
-  name: string;
-  // Plugin kind.
-  // 插件类型。
-  kind: string;
-  // Plugin status.
-  // 插件状态。
-  status: string;
-  // Plugin capability summary.
-  // 插件能力摘要。
-  capability: string;
-}
-
-// SettingSectionSummary describes one settings group.
-// SettingSectionSummary 描述单个设置分组。
-interface SettingSectionSummary {
-  // Stable settings section identifier.
-  // 稳定设置分组标识。
-  id: string;
-  // Settings section display label.
-  // 设置分组显示名称。
-  label: string;
-  // Settings section description.
-  // 设置分组描述。
-  description: string;
-  // Representative setting item names.
-  // 代表性设置项名称。
-  items: string[];
-}
-
-// ProviderSummary describes one provider card.
-// ProviderSummary 描述单个 Provider 卡片。
-interface ProviderSummary {
-  // Stable provider identifier.
-  // 稳定 Provider 标识。
-  id: string;
-  // Provider display name.
-  // Provider 显示名称。
-  name: string;
-  // Provider status.
-  // Provider 状态。
-  status: string;
-  // Enabled model count text.
-  // 已启用模型数量文本。
-  enabledModels: string;
-}
-
-// MemorySummary describes one VMM memory area item.
-// MemorySummary 描述单个 VMM 记忆区域项目。
-interface MemorySummary {
-  // Stable memory identifier.
-  // 稳定记忆标识。
-  id: string;
-  // Memory display title.
-  // 记忆显示标题。
-  title: string;
-  // Memory category.
-  // 记忆分类。
-  category: string;
-  // Memory state.
-  // 记忆状态。
-  state: string;
-}
-
-// CommandSessionSummary describes one command session.
-// CommandSessionSummary 描述单个命令会话。
-interface CommandSessionSummary {
-  // Stable command session identifier.
-  // 稳定命令会话标识。
-  id: string;
-  // Command text.
-  // 命令文本。
-  command: string;
-  // Command status.
-  // 命令状态。
-  status: string;
-  // Recent output preview.
-  // 最近输出预览。
-  preview: string;
-}
-
-// LogEntrySummary describes one diagnostic log entry.
-// LogEntrySummary 描述单条诊断日志。
-interface LogEntrySummary {
-  // Stable log entry identifier.
-  // 稳定日志条目标识。
-  id: string;
-  // Log level.
-  // 日志级别。
-  level: string;
-  // Log source.
-  // 日志来源。
-  source: string;
-  // Log message.
-  // 日志消息。
-  message: string;
-}
-
-// WorkbenchSnapshot describes the first WebUI workbench state.
-// WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
-interface WorkbenchSnapshot {
-  // Application version.
-  // 应用版本。
-  appVersion: string;
-  // Runtime module cards.
-  // 运行时模块卡片。
-  modules: RuntimeModuleSnapshot[];
-  // Project summaries.
-  // 项目摘要。
-  projects: ProjectSummary[];
-  // Conversation summaries.
-  // 会话摘要。
-  conversations: ConversationSummary[];
-  // Currently selected conversation id.
-  // 当前选中的会话标识。
-  selectedConversationId?: string | null;
-  // Conversation messages.
-  // 会话消息。
-  messages: ConversationMessage[];
-  // Tool call summaries.
-  // 工具调用摘要。
-  toolCalls: ToolCallSummary[];
-  // Main feature areas.
-  // 主功能区域。
-  featureAreas: FeatureAreaSummary[];
-  // Plugin summaries.
-  // 插件摘要。
-  plugins: PluginSummary[];
-  // Settings sections.
-  // 设置分组。
-  settings: SettingSectionSummary[];
-  // Provider summaries.
-  // Provider 摘要。
-  providers: ProviderSummary[];
-  // VMM memory summaries.
-  // VMM 记忆摘要。
-  memories: MemorySummary[];
-  // Command session summaries.
-  // 命令会话摘要。
-  commandSessions: CommandSessionSummary[];
-  // Diagnostic log entries.
-  // 诊断日志条目。
-  logs: LogEntrySummary[];
 }
 
 // TauriInvoke invokes a backend command when the app runs inside Tauri.
@@ -625,7 +333,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       id: "preview-assistant",
       conversationId: "preview",
       role: "assistant",
-      body: "当前页面展示控制台、设置、插件、VMM、Provider、工具和诊断区域的第一版布局。\n\n:::tool-call tool_name=service_startup_snapshot tool_call_id=preview-service-startup status=preview\n## Tool Call\n\n`service_startup_snapshot`\n\n## Arguments\n\n```json\n{}\n```\n:::\n\n```diff\ndiff --git a/apps/vulcan-code-web/src/main.tsx b/apps/vulcan-code-web/src/main.tsx\n+ 接入 Markdown 会话渲染\n+ 特殊工具块支持详情窗口\n```\n\n后续真实会话会把工具调用、命令输出和 diff 分块展示。",
+      body: "当前页面展示工作台、设置、插件、VMM、Provider、工具和诊断区域的第一版布局。\n\n:::tool-call tool_name=service_startup_snapshot tool_call_id=preview-service-startup status=preview\n## Tool Call\n\n`service_startup_snapshot`\n\n## Arguments\n\n```json\n{}\n```\n:::\n\n```diff\ndiff --git a/apps/vulcan-code-web/src/main.tsx b/apps/vulcan-code-web/src/main.tsx\n+ 接入 Markdown 会话渲染\n+ 特殊工具块支持详情窗口\n```\n\n后续真实会话会把工具调用、命令输出和 diff 分块展示。",
     },
     {
       id: "preview-turn-stats",
@@ -665,7 +373,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   ],
   toolCalls: [{ id: "preview-tool", name: "service_startup_snapshot", status: "preview", detail: "浏览器模式使用 fallback 数据。" }],
   featureAreas: [
-    { id: "chat", label: "控制台", description: "项目会话、消息流与模型输入区", status: "可用" },
+    { id: "chat", label: "工作台", description: "项目会话、消息流与模型输入区", status: "可用" },
     { id: "skills", label: "技能", description: "LuaSkills、工具能力与技能包", status: "预览" },
     { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
     { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
@@ -705,46 +413,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "preview-legacy", level: "info", source: "iced", message: "旧 iced GUI 保留为 reference 入口" },
   ],
 };
-
-// AreaIconMap maps feature ids to lucide icons.
-// AreaIconMap 将功能区域标识映射到 lucide 图标。
-const areaIconMap: Record<MainAreaId, React.ReactNode> = {
-  chat: <LayoutDashboard size={17} />,
-  skills: <Hammer size={17} />,
-  automation: <GitBranch size={17} />,
-  plugins: <Wrench size={17} />,
-  memory: <BrainCircuit size={17} />,
-  settings: <Settings size={17} />,
-};
-
-// primaryFeatureAreas is the fixed top navigation requested for the WebUI shell.
-// primaryFeatureAreas 是 WebUI 外壳使用的固定顶部主导航。
-const primaryFeatureAreas: FeatureAreaSummary[] = [
-  { id: "chat", label: "控制台", description: "项目会话、消息流与模型输入区", status: "可用" },
-  { id: "skills", label: "技能", description: "LuaSkills、工具能力与技能包", status: "预览" },
-  { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
-  { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
-  { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
-];
-
-// settingsFeatureArea is opened by the global settings button instead of the top navigation.
-// settingsFeatureArea 由全局设置按钮打开，不再显示在顶部主导航中。
-const settingsFeatureArea: FeatureAreaSummary = {
-  id: "settings",
-  label: "设置",
-  description: "项目、模型、工具、诊断与系统设置",
-  status: "预览",
-};
-
-// settingsSubAreas lists settings sidebar entries including legacy pages moved under settings.
-// settingsSubAreas 列出设置侧栏入口，并包含迁入设置的旧页面。
-const settingsSubAreas: Array<{ id: SettingsSubAreaId; label: string; icon: React.ReactNode; description: string }> = [
-  { id: "general", label: "通用设置", icon: <Settings size={16} />, description: "运行时、远程访问与界面设置" },
-  { id: "projects", label: "项目", icon: <Boxes size={16} />, description: "工作区项目列表与绑定状态" },
-  { id: "providers", label: "模型", icon: <SlidersHorizontal size={16} />, description: "Provider、模型、推理与工具能力" },
-  { id: "tools", label: "工具", icon: <Hammer size={16} />, description: "工具调用、命令会话与输出" },
-  { id: "diagnostics", label: "诊断", icon: <ScrollText size={16} />, description: "启动日志、错误与运行时事件" },
-];
 
 // isTauriRuntime returns whether the WebUI is hosted by the desktop Tauri shell.
 // isTauriRuntime 返回 WebUI 是否运行在 Tauri 桌面壳中。
@@ -969,10 +637,12 @@ function App() {
   }
 
   return (
-    <TooltipProvider>
-      <WorkbenchLayout startup={startup} workbench={workbench} />
-      <Toaster />
-    </TooltipProvider>
+    <I18nProvider>
+      <TooltipProvider>
+        <WorkbenchLayout startup={startup} workbench={workbench} />
+        <Toaster />
+      </TooltipProvider>
+    </I18nProvider>
   );
 }
 
@@ -1001,6 +671,20 @@ function ErrorScreen(props: { error: string }) {
 // WorkbenchLayout renders the GUI-like workbench shell.
 // WorkbenchLayout 渲染接近 GUI 的工作台外壳。
 function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: WorkbenchSnapshot }) {
+  // i18n provides localized shell labels and the active language.
+  // i18n 提供本地化外壳标签与当前语言。
+  const i18n = useI18n();
+  // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
+  // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
+  const localizedPrimaryFeatureAreas = React.useMemo(() => buildPrimaryFeatureAreas(i18n.t), [i18n.t]);
+  // localizedSettingsFeatureArea stores the translated settings metadata.
+  // localizedSettingsFeatureArea 保存已翻译的设置元数据。
+  const localizedSettingsFeatureArea = React.useMemo<FeatureAreaSummary>(() => ({
+    id: "settings",
+    label: i18n.t("area.settings"),
+    description: i18n.t("area.settings.description"),
+    status: i18n.t("feature.status.preview"),
+  }), [i18n]);
   // activeArea stores the currently selected feature area.
   // activeArea 保存当前选中的功能区域。
   const [activeArea, setActiveArea] = React.useState<MainAreaId>("chat");
@@ -1044,8 +728,8 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // activeFeature stores the selected feature summary, including settings opened from the global button.
   // activeFeature 保存当前选中的功能区域摘要，并包含从全局按钮打开的设置页。
   const activeFeature = activeArea === "settings"
-    ? settingsFeatureArea
-    : primaryFeatureAreas.find((area) => area.id === activeArea) ?? primaryFeatureAreas[0];
+    ? localizedSettingsFeatureArea
+    : localizedPrimaryFeatureAreas.find((area) => area.id === activeArea) ?? localizedPrimaryFeatureAreas[0];
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -1384,7 +1068,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       >
         <BrandHeader dragRegion={showWindowControls} />
         <FeatureNav
-          areas={primaryFeatureAreas}
+          areas={localizedPrimaryFeatureAreas}
           activeArea={activeArea}
           onSelect={setActiveArea}
         />
@@ -1393,6 +1077,8 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           activeArea={activeArea}
           startup={props.startup}
           theme={theme}
+          locale={i18n.locale}
+          onChangeLocale={i18n.setLocale}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
           onOpenSettings={() => setActiveArea("settings")}
         />
@@ -1423,7 +1109,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onSelectConversation={setSelectedConversationId}
           />
         ) : (
-          <FeatureShell
+          <ExtractedFeatureShell
             activeArea={activeArea}
             activeFeature={activeFeature}
             activeSettingsSubArea={activeSettingsSubArea}
@@ -2396,12 +2082,15 @@ function BrandHeader(props: {
   // 品牌块是否应作为 Tauri 原生拖动区域。
   dragRegion?: boolean;
 }) {
+  // t translates shell labels used by the brand block.
+  // t 翻译品牌区域使用的外壳标签。
+  const { t } = useI18n();
   return (
     <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
       <div className="brand-mark">V</div>
       <div>
         <strong>Vulcan Code</strong>
-        <span>Ai Coding</span>
+        <span>{t("app.subtitle")}</span>
       </div>
     </div>
   );
@@ -2410,6 +2099,9 @@ function BrandHeader(props: {
 // FeatureNav renders the primary workbench navigation.
 // FeatureNav 渲染工作台主导航。
 function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId; onSelect: (area: MainAreaId) => void }) {
+  // t translates navigation accessibility labels.
+  // t 翻译导航无障碍标签。
+  const { t } = useI18n();
   // scrollRef points to the horizontal navigation viewport.
   // scrollRef 指向横向导航视口。
   const scrollRef = React.useRef<HTMLElement | null>(null);
@@ -2453,7 +2145,7 @@ function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId
     <div className="feature-nav-shell">
       {navOverflow.left ? (
         <Button
-          aria-label="向左滚动主功能"
+          aria-label="Scroll main features left"
           className="feature-nav-arrow"
           onClick={() => scrollNav(-1)}
           size="icon-sm"
@@ -2463,7 +2155,7 @@ function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId
           <ChevronLeft size={15} />
         </Button>
       ) : null}
-      <nav className="feature-nav" aria-label="主功能" onScroll={updateNavOverflow} ref={scrollRef}>
+      <nav className="feature-nav" aria-label={t("sidebar.overview")} onScroll={updateNavOverflow} ref={scrollRef}>
         {props.areas.map((area) => (
           <Button
             className="feature-button"
@@ -2481,7 +2173,7 @@ function FeatureNav(props: { areas: FeatureAreaSummary[]; activeArea: MainAreaId
       </nav>
       {navOverflow.right ? (
         <Button
-          aria-label="向右滚动主功能"
+          aria-label="Scroll main features right"
           className="feature-nav-arrow"
           onClick={() => scrollNav(1)}
           size="icon-sm"
@@ -2507,6 +2199,12 @@ function GlobalActions(props: {
   // Current shadcn theme mode.
   // 当前 shadcn 主题模式。
   theme: ThemeMode;
+  // Current UI language.
+  // 当前 UI 语言。
+  locale: LocaleCode;
+  // Updates the current UI language.
+  // 更新当前 UI 语言。
+  onChangeLocale: (locale: LocaleCode) => void;
   // Toggles between light and dark theme.
   // 在亮色与暗色主题之间切换。
   onToggleTheme: () => void;
@@ -2514,33 +2212,44 @@ function GlobalActions(props: {
   // 打开设置功能区域。
   onOpenSettings: () => void;
 }) {
+  // t translates global action labels.
+  // t 翻译全局操作标签。
+  const { t } = useI18n();
   // isPreviewMode detects fallback browser data instead of a live service bridge.
   // isPreviewMode 检测当前是否为浏览器回退预览数据而非真实服务桥接。
   const isPreviewMode = props.startup.phase === "browser-preview";
   // statusLabel translates internal startup phases into compact user-facing labels.
   // statusLabel 将内部启动阶段转换为面向用户的紧凑显示文案。
-  const statusLabel = isPreviewMode ? "预览" : props.startup.ready ? "在线" : props.startup.phase;
+  const statusLabel = isPreviewMode ? t("global.preview") : props.startup.ready ? t("global.online") : props.startup.phase;
   // statusKind keeps preview visually distinct from a live ready service.
   // statusKind 让预览状态与真实在线服务在视觉上保持区分。
   const statusKind = isPreviewMode ? "warning" : props.startup.ready ? "ready" : "running";
 
   return (
-    <div className="global-actions">
+    <div className="global-actions" data-no-drag>
       <StatusPill status={statusKind} label={statusLabel} />
       <Button
-        aria-label={props.theme === "dark" ? "切换为亮色主题" : "切换为暗色主题"}
+        aria-label={props.theme === "dark" ? t("global.toggleLight") : t("global.toggleDark")}
         className="theme-toggle"
         onClick={props.onToggleTheme}
-        size="sm"
+        size="icon"
         type="button"
         variant="outline"
       >
         {props.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-        <span>{props.theme === "dark" ? "Dark" : "Light"}</span>
       </Button>
+      <Select value={props.locale} onValueChange={(value) => props.onChangeLocale(value as LocaleCode)}>
+        <SelectTrigger aria-label={t("global.language")} className="language-select-trigger">
+          <span>{props.locale === "zh-CN" ? "中" : "EN"}</span>
+        </SelectTrigger>
+        <SelectContent align="end" position="popper">
+          <SelectItem value="zh-CN">中</SelectItem>
+          <SelectItem value="en-US">EN</SelectItem>
+        </SelectContent>
+      </Select>
       <Button
         aria-pressed={props.activeArea === "settings"}
-        aria-label="打开设置"
+        aria-label={t("global.openSettings")}
         className="icon-button"
         onClick={props.onOpenSettings}
         size="icon"
@@ -2600,210 +2309,22 @@ function ConsoleShell(props: {
   );
 }
 
-// FeatureShell renders non-console pages with the same sidebar and inset structure as the console.
-// FeatureShell 使用与控制台一致的侧栏和内容框结构渲染非控制台页面。
-function FeatureShell(props: {
-  // Active top-level area.
-  // 当前顶层区域。
-  activeArea: MainAreaId;
-  // Active top-level feature metadata.
-  // 当前顶层功能元数据。
-  activeFeature?: FeatureAreaSummary;
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId;
-  // Updates the selected settings sub page.
-  // 更新设置二级页面选择。
-  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
-  // Startup snapshot used by diagnostics.
-  // 诊断页面使用的启动快照。
-  startup: StartupSnapshot;
-  // Workbench snapshot used by feature pages.
-  // 功能页面使用的工作台快照。
-  workbench: WorkbenchSnapshot;
-}) {
-  return (
-    <SidebarProvider className="console-shell feature-shell">
-      <FeatureSidebar
-        activeArea={props.activeArea}
-        activeSettingsSubArea={props.activeSettingsSubArea}
-        onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-        workbench={props.workbench}
-      />
-      <SidebarInset>
-        <FeatureHeader feature={props.activeFeature} />
-        <FeatureContent
-          activeArea={props.activeArea}
-          activeSettingsSubArea={props.activeSettingsSubArea}
-          startup={props.startup}
-          workbench={props.workbench}
-        />
-      </SidebarInset>
-    </SidebarProvider>
-  );
-}
-
-// FeatureHeader renders the inset title bar for a non-console page.
-// FeatureHeader 渲染非控制台页面的内容区标题栏。
-function FeatureHeader(props: { feature?: FeatureAreaSummary }) {
-  return (
-    <header className="console-header">
-      <div className="console-header-main">
-        <SidebarTrigger />
-        <span className="console-header-separator" aria-hidden="true" />
-        <h1>{props.feature?.label ?? "工作台"}</h1>
-      </div>
-      <span className="feature-header-description">{props.feature?.description}</span>
-    </header>
-  );
-}
-
-// FeatureSidebar renders the left navigation for one non-console feature area.
-// FeatureSidebar 渲染单个非控制台功能区的左侧导航。
-function FeatureSidebar(props: {
-  // Active top-level area.
-  // 当前顶层区域。
-  activeArea: MainAreaId;
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId;
-  // Updates the selected settings sub page.
-  // 更新设置二级页面选择。
-  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
-  // Workbench snapshot used for sidebar counters.
-  // 侧栏计数使用的工作台快照。
-  workbench: WorkbenchSnapshot;
-}) {
-  const feature = primaryFeatureAreas.find((area) => area.id === props.activeArea);
-
-  return (
-    <Sidebar collapsible="icon" variant="inset">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <div aria-current="page" className="vcn-sidebar-static-item">
-              {areaIconMap[props.activeArea]}
-              <span className="vcn-sidebar-label strong">{feature?.label ?? "工作台"}</span>
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        {props.activeArea === "settings" ? (
-          <SettingsSidebarMenu
-            activeSettingsSubArea={props.activeSettingsSubArea}
-            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-          />
-        ) : (
-          <FeatureOverviewMenu activeArea={props.activeArea} workbench={props.workbench} />
-        )}
-      </SidebarContent>
-    </Sidebar>
-  );
-}
-
-// FeatureOverviewMenu renders compact side navigation for non-settings feature pages.
-// FeatureOverviewMenu 为非设置功能页渲染紧凑侧栏导航。
-function FeatureOverviewMenu(props: { activeArea: MainAreaId; workbench: WorkbenchSnapshot }) {
-  const rows = featureSidebarRows(props.activeArea, props.workbench);
-
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel><PanelTopOpen size={15} /><span>概览</span></SidebarGroupLabel>
-      <SidebarMenu>
-        {rows.map((row) => (
-          <SidebarMenuItem key={row.id}>
-            <div className="vcn-sidebar-static-item feature-sidebar-row">
-              {row.icon}
-              <span className="vcn-sidebar-label">
-                <strong>{row.label}</strong>
-                <small>{row.detail}</small>
-              </span>
-            </div>
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu>
-    </SidebarGroup>
-  );
-}
-
-// SettingsSidebarMenu renders the settings secondary navigation.
-// SettingsSidebarMenu 渲染设置二级导航。
-function SettingsSidebarMenu(props: {
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId;
-  // Updates the selected settings sub page.
-  // 更新设置二级页面选择。
-  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void;
-}) {
-  return (
-    <SidebarGroup>
-      <SidebarGroupLabel><Settings size={15} /><span>设置分类</span></SidebarGroupLabel>
-      <SidebarMenu>
-        {settingsSubAreas.map((area) => (
-          <SidebarMenuItem key={area.id}>
-            <SidebarMenuButton
-              active={props.activeSettingsSubArea === area.id}
-              className="feature-sidebar-row"
-              onClick={() => props.onSelectSettingsSubArea(area.id)}
-              tooltip={area.description}
-            >
-              {area.icon}
-              <span className="vcn-sidebar-label">
-                <strong>{area.label}</strong>
-                <small>{area.description}</small>
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        ))}
-      </SidebarMenu>
-    </SidebarGroup>
-  );
-}
-
-// featureSidebarRows builds left sidebar rows for the current non-settings feature.
-// featureSidebarRows 为当前非设置功能构建左侧栏条目。
-function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
-  if (activeArea === "skills") {
-    return [
-      { id: "skills-luaskills", label: "LuaSkills", detail: `${workbench.plugins.filter((plugin) => plugin.kind === "LuaSkill").length} 个技能包`, icon: <Hammer size={16} /> },
-      { id: "skills-tools", label: "工具能力", detail: `${workbench.toolCalls.length} 条工具记录`, icon: <Wrench size={16} /> },
-    ];
-  }
-  if (activeArea === "automation") {
-    return [
-      { id: "automation-workflow", label: "工作流", detail: "等待运行时接入", icon: <GitBranch size={16} /> },
-      { id: "automation-sessions", label: "后台任务", detail: `${workbench.commandSessions.length} 条命令会话`, icon: <TerminalSquare size={16} /> },
-    ];
-  }
-  if (activeArea === "plugins") {
-    return [
-      { id: "plugins-installed", label: "已安装插件", detail: `${workbench.plugins.length} 个插件`, icon: <PlugZap size={16} /> },
-      { id: "plugins-webui", label: "WebUI 面板", detail: "高级插件控制入口", icon: <PanelTopOpen size={16} /> },
-    ];
-  }
-  if (activeArea === "memory") {
-    return [
-      { id: "memory-vmm", label: "VMM 记忆", detail: `${workbench.memories.length} 个入口`, icon: <BrainCircuit size={16} /> },
-      { id: "memory-audit", label: "冲突审计", detail: "等待真实节点", icon: <History size={16} /> },
-    ];
-  }
-  return [];
-}
-
 // ConsoleHeader renders the inset title bar for the current conversation.
 // ConsoleHeader 渲染当前会话的 inset 标题栏。
 function ConsoleHeader(props: {
   conversation?: ConversationSummary;
   draftConversation: DraftConversationSelection | null;
 }) {
+  // t translates stable console chrome labels.
+  // t 翻译稳定的控制台外壳标签。
+  const { t } = useI18n();
+
   return (
     <header className="console-header">
       <div className="console-header-main">
         <SidebarTrigger />
         <span className="console-header-separator" aria-hidden="true" />
-        <h1>{props.draftConversation ? "新会话" : props.conversation?.title ?? "会话"}</h1>
+        <h1>{props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title")}</h1>
       </div>
     </header>
   );
@@ -2823,6 +2344,9 @@ function ProjectSidebar(props: {
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
+  // t translates stable sidebar labels while project names remain user data.
+  // t 翻译稳定侧栏标签，项目名称仍保留为用户数据。
+  const { t } = useI18n();
   // sidebarState selects the expanded tree interaction or the collapsed project pop menu.
   // sidebarState 选择展开树交互或折叠项目弹出菜单交互。
   const { state: sidebarState } = useSidebar();
@@ -2939,7 +2463,7 @@ function ProjectSidebar(props: {
           <SidebarMenuItem>
             <div aria-current="page" className="vcn-sidebar-static-item">
               <LayoutDashboard size={16} />
-              <span className="vcn-sidebar-label strong">控制台</span>
+              <span className="vcn-sidebar-label strong">{t("sidebar.console")}</span>
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
@@ -2947,18 +2471,18 @@ function ProjectSidebar(props: {
       <SidebarContent>
         {pinnedProjects.length > 0 ? (
           <SidebarGroup className="project-section pinned-project-section">
-            {renderProjectGroupLabel("置顶", <Pin size={15} />)}
+            {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
             <SidebarMenu>{renderSortableProjectSection(pinnedProjects)}</SidebarMenu>
           </SidebarGroup>
         ) : null}
         <SidebarGroup>
-            {renderProjectGroupLabel("项目", <Boxes size={15} />, (
+            {renderProjectGroupLabel(t("sidebar.projects"), <Boxes size={15} />, (
               <Button
-                aria-label="添加项目"
+                aria-label={t("sidebar.addProject")}
                 className="project-add-button"
                 onClick={props.onCreateProject}
                 size="icon-sm"
-                title="添加项目"
+                title={t("sidebar.addProject")}
                 type="button"
                 variant="ghost"
               >
@@ -2969,11 +2493,11 @@ function ProjectSidebar(props: {
               {renderSortableProjectSection(regularProjects)}
               {props.projects.length === 0 ? (
                 <SidebarMenuItem>
-                  <SidebarMenuButton className="muted" tooltip="暂无项目">
+                  <SidebarMenuButton className="muted" tooltip={t("sidebar.noProjects")}>
                     <Folder size={16} />
                     <span className="vcn-sidebar-label">
-                      <strong>暂无项目</strong>
-                      <small>等待 Workspace 快照载入</small>
+                      <strong>{t("sidebar.noProjects")}</strong>
+                      <small>{t("sidebar.waitingWorkspace")}</small>
                     </span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
@@ -3452,97 +2976,6 @@ function projectFolderName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
 }
 
-// FeatureContent renders the selected non-console feature area.
-// FeatureContent 渲染当前选中的非控制台功能区域。
-function FeatureContent(props: {
-  // Active top-level feature area.
-  // 当前顶层功能区域。
-  activeArea: MainAreaId;
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId;
-  // Startup snapshot used by settings diagnostics.
-  // 设置诊断页面使用的启动快照。
-  startup: StartupSnapshot;
-  // Workbench snapshot used by feature pages.
-  // 功能页面使用的工作台快照。
-  workbench: WorkbenchSnapshot;
-}) {
-  if (props.activeArea === "skills") {
-    return (
-      <div className="feature-content">
-        <SkillsArea
-          commandSessions={props.workbench.commandSessions}
-          plugins={props.workbench.plugins}
-          toolCalls={props.workbench.toolCalls}
-        />
-      </div>
-    );
-  }
-  if (props.activeArea === "automation") {
-    return (
-      <div className="feature-content">
-        <AutomationArea commandSessions={props.workbench.commandSessions} modules={props.workbench.modules} />
-      </div>
-    );
-  }
-  if (props.activeArea === "plugins") {
-    return (
-      <div className="feature-content">
-        <PluginsArea plugins={props.workbench.plugins} />
-      </div>
-    );
-  }
-  if (props.activeArea === "memory") {
-    return (
-      <div className="feature-content">
-        <MemoryArea memories={props.workbench.memories} />
-      </div>
-    );
-  }
-  if (props.activeArea === "settings") {
-    return (
-      <div className="feature-content">
-        <SettingsFeatureContent
-          activeSettingsSubArea={props.activeSettingsSubArea}
-          startup={props.startup}
-          workbench={props.workbench}
-        />
-      </div>
-    );
-  }
-
-  return null;
-}
-
-// SettingsFeatureContent renders legacy pages that now live under settings.
-// SettingsFeatureContent 渲染已经迁入设置的旧功能页面。
-function SettingsFeatureContent(props: {
-  // Selected settings sub page.
-  // 当前设置二级页面。
-  activeSettingsSubArea: SettingsSubAreaId;
-  // Startup snapshot used by diagnostics.
-  // 诊断页面使用的启动快照。
-  startup: StartupSnapshot;
-  // Workbench snapshot used by settings pages.
-  // 设置页面使用的工作台快照。
-  workbench: WorkbenchSnapshot;
-}) {
-  if (props.activeSettingsSubArea === "projects") {
-    return <ProjectsArea projects={props.workbench.projects} modules={props.workbench.modules} />;
-  }
-  if (props.activeSettingsSubArea === "providers") {
-    return <ProvidersArea providers={props.workbench.providers} modules={props.workbench.modules} />;
-  }
-  if (props.activeSettingsSubArea === "tools") {
-    return <ToolsArea toolCalls={props.workbench.toolCalls} commandSessions={props.workbench.commandSessions} />;
-  }
-  if (props.activeSettingsSubArea === "diagnostics") {
-    return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
-  }
-  return <SettingsArea settings={props.workbench.settings} />;
-}
-
 // ChatArea renders the conversation workspace and composer.
 // ChatArea 渲染会话工作区与输入区域。
 function ChatArea(props: {
@@ -3562,11 +2995,14 @@ function ChatArea(props: {
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
+  // showConversationLoadingOnly is true only when no cached messages can be shown during hydration.
+  // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
+  const showConversationLoadingOnly = isLoading && messages.length === 0 && !props.conversationLoadError;
   const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? "当前项目";
   const isEmptyConversation = Boolean(
     props.selectedDraftConversation
-      || (selectedConversation && !isLoading && !props.conversationLoadError && messages.length === 0),
+      || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
@@ -3604,7 +3040,7 @@ function ChatArea(props: {
   }, []);
 
   React.useLayoutEffect(() => {
-    if (!props.selectedConversationId || isEmptyConversation || isLoading) {
+    if (!props.selectedConversationId || isEmptyConversation || showConversationLoadingOnly) {
       return;
     }
 
@@ -3634,10 +3070,10 @@ function ChatArea(props: {
     };
   }, [
     isEmptyConversation,
-    isLoading,
     jumpConversationToBottom,
     messages.length,
     props.selectedConversationId,
+    showConversationLoadingOnly,
     updateConversationBottomState,
   ]);
 
@@ -3646,15 +3082,16 @@ function ChatArea(props: {
   }, [messages.length, props.selectedConversationId, updateConversationBottomState]);
 
   return (
-    <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid")}>
-      {isEmptyConversation ? (
+    <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}>
+      {showConversationLoadingOnly ? (
+        <ConversationLoadingCenter />
+      ) : isEmptyConversation ? (
         <EmptyConversationCenter projectName={emptyProjectName} />
       ) : (
         <>
           <ConversationWorkspace
             conversation={selectedConversation}
             messages={messages}
-            isLoading={isLoading}
             error={props.conversationLoadError}
             onScrollStateChange={updateConversationBottomState}
             scrollRef={workspaceRef}
@@ -3666,275 +3103,11 @@ function ChatArea(props: {
   );
 }
 
-// SkillsArea renders LuaSkills and tool capability status.
-// SkillsArea 渲染 LuaSkills 与工具能力状态。
-function SkillsArea(props: {
-  // Installed plugin summaries used to identify LuaSkills.
-  // 用于识别 LuaSkills 的已安装插件摘要。
-  plugins: PluginSummary[];
-  // Tool call summaries shown as recent capability activity.
-  // 作为近期能力活动展示的工具调用摘要。
-  toolCalls: ToolCallSummary[];
-  // Command sessions shown as long-running skill activity.
-  // 作为长生命周期技能活动展示的命令会话摘要。
-  commandSessions: CommandSessionSummary[];
-}) {
-  const skillPlugins = props.plugins.filter((plugin) => plugin.kind === "LuaSkill");
-
-  return (
-    <div className="area-grid two-columns">
-      <section className="panel">
-        <PanelTitle icon={<Hammer size={17} />} title="技能" />
-        <div className="card-grid">
-          {skillPlugins.map((plugin) => (
-            <article className="data-card" key={plugin.id}>
-              <StatusPill status={plugin.status === "已启用" || plugin.status === "预览" ? "ready" : "warning"} label={plugin.status} />
-              <strong>{plugin.name}</strong>
-              <span>{plugin.kind}</span>
-              <p>{plugin.capability}</p>
-            </article>
-          ))}
-          {skillPlugins.length === 0 ? (
-            <article className="data-card">
-              <StatusPill status="pending" label="pending" />
-              <strong>等待 LuaSkills 目录</strong>
-              <span>Service 接入后会显示真实技能包</span>
-            </article>
-          ) : null}
-        </div>
-      </section>
-      <div className="stack compact-stack">
-        <ToolPanel toolCalls={props.toolCalls} />
-        <CommandSessionsPanel commandSessions={props.commandSessions} />
-      </div>
-    </div>
-  );
-}
-
-// AutomationArea renders workflow and background execution placeholders.
-// AutomationArea 渲染工作流与后台执行的预览入口。
-function AutomationArea(props: {
-  // Command sessions used to preview background execution.
-  // 用于预览后台执行状态的命令会话。
-  commandSessions: CommandSessionSummary[];
-  // Runtime modules used to show automation dependency readiness.
-  // 用于展示自动化依赖就绪情况的运行时模块。
-  modules: RuntimeModuleSnapshot[];
-}) {
-  const automationCards = [
-    { id: "workflow", title: "工作流", status: "规划中", detail: "脚本化任务、插件流程与 WebUI 编排入口" },
-    { id: "queue", title: "后台队列", status: "预览", detail: `${props.commandSessions.length} 条命令会话可作为后续队列数据源` },
-    { id: "schedule", title: "计划任务", status: "待接入", detail: "后续承接定时、监控与远程触发任务" },
-  ];
-
-  return (
-    <div className="area-grid two-columns">
-      <section className="panel">
-        <PanelTitle icon={<GitBranch size={17} />} title="自动" />
-        <div className="card-grid">
-          {automationCards.map((card) => (
-            <article className="data-card" key={card.id}>
-              <StatusPill status={card.status === "预览" ? "ready" : "warning"} label={card.status} />
-              <strong>{card.title}</strong>
-              <span>{card.detail}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-      <RuntimeModulesPanel modules={props.modules.filter((module) => module.id === "core" || module.id === "mcp" || module.id === "luaskills")} />
-    </div>
-  );
-}
-
-// ProjectsArea renders project and workspace status.
-// ProjectsArea 渲染项目与工作区状态。
-function ProjectsArea(props: { projects: ProjectSummary[]; modules: RuntimeModuleSnapshot[] }) {
-  return (
-    <div className="area-grid two-columns">
-      <section className="panel">
-        <PanelTitle icon={<Boxes size={17} />} title="项目管理" />
-        <div className="card-list">
-          {props.projects.map((project) => (
-            <article className="data-card" key={project.id}>
-              <strong>{project.name}</strong>
-              <span>{project.path}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-      <RuntimeModulesPanel modules={props.modules} />
-    </div>
-  );
-}
-
-// ProvidersArea renders model provider status.
-// ProvidersArea 渲染模型 Provider 状态。
-function ProvidersArea(props: { providers: ProviderSummary[]; modules: RuntimeModuleSnapshot[] }) {
-  return (
-    <div className="area-grid two-columns">
-      <section className="panel">
-        <PanelTitle icon={<SlidersHorizontal size={17} />} title="模型与 Provider" />
-        <div className="card-grid">
-          {props.providers.map((provider) => (
-            <article className="data-card" key={provider.id}>
-              <StatusPill status="ready" label={provider.status} />
-              <strong>{provider.name}</strong>
-              <span>已启用模型：{provider.enabledModels}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-      <RuntimeModulesPanel modules={props.modules.filter((module) => module.id === "providers" || module.id === "core")} />
-    </div>
-  );
-}
-
-// ToolsArea renders tool calls and command sessions.
-// ToolsArea 渲染工具调用与命令会话。
-function ToolsArea(props: { toolCalls: ToolCallSummary[]; commandSessions: CommandSessionSummary[] }) {
-  return (
-    <div className="area-grid two-columns">
-      <ToolPanel toolCalls={props.toolCalls} />
-      <CommandSessionsPanel commandSessions={props.commandSessions} />
-    </div>
-  );
-}
-
-// PluginsArea renders plugin control center.
-// PluginsArea 渲染插件控制中心。
-function PluginsArea(props: { plugins: PluginSummary[] }) {
-  return (
-    <section className="panel full-height">
-      <PanelTitle icon={<Wrench size={17} />} title="插件中心" />
-      <div className="card-grid">
-        {props.plugins.map((plugin) => (
-          <article className="data-card" key={plugin.id}>
-            <StatusPill status={plugin.status === "已启用" ? "ready" : "warning"} label={plugin.status} />
-            <strong>{plugin.name}</strong>
-            <span>{plugin.kind}</span>
-            <p>{plugin.capability}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// MemoryArea renders VMM memory entry points.
-// MemoryArea 渲染 VMM 记忆入口。
-function MemoryArea(props: { memories: MemorySummary[] }) {
-  return (
-    <section className="panel full-height">
-      <PanelTitle icon={<BrainCircuit size={17} />} title="VMM 记忆" />
-      <div className="card-grid">
-        {props.memories.map((memory) => (
-          <article className="data-card" key={memory.id}>
-            <StatusPill status="warning" label={memory.category} />
-            <strong>{memory.title}</strong>
-            <span>{memory.state}</span>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// SettingsArea renders settings sections.
-// SettingsArea 渲染设置分组。
-function SettingsArea(props: { settings: SettingSectionSummary[] }) {
-  return (
-    <section className="panel full-height">
-      <PanelTitle icon={<Settings size={17} />} title="设置" />
-      <div className="settings-grid">
-        {props.settings.map((section) => (
-          <article className="settings-card" key={section.id}>
-            <strong>{section.label}</strong>
-            <p>{section.description}</p>
-            <div className="chip-row">
-              {section.items.map((item) => (
-                <span className="chip" key={item}>{item}</span>
-              ))}
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// LogsArea renders startup and diagnostic logs.
-// LogsArea 渲染启动与诊断日志。
-function LogsArea(props: { startup: StartupSnapshot; logs: LogEntrySummary[] }) {
-  return (
-    <div className="area-grid two-columns">
-      <StartupPanel startup={props.startup} />
-      <section className="panel">
-        <PanelTitle icon={<History size={17} />} title="诊断日志" />
-        <div className="log-list">
-          {props.logs.map((log) => (
-            <article className="log-row" key={log.id}>
-              <StatusPill status={log.level === "info" ? "ready" : "warning"} label={log.level} />
-              <strong>{log.source}</strong>
-              <span>{log.message}</span>
-            </article>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-// StartupPanel renders service startup progress.
-// StartupPanel 渲染服务启动进度。
-function StartupPanel(props: { startup: StartupSnapshot }) {
-  return (
-    <section className="panel startup-panel">
-      <PanelTitle icon={<PlugZap size={17} />} title="启动状态" />
-      <div className="step-list">
-        {props.startup.steps.map((step) => (
-          <div className="step-item" key={step.id}>
-            <StatusIcon status={step.status} />
-            <div>
-              <strong>{step.label}</strong>
-              <span>{step.message ?? "等待状态更新"}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="log-preview">
-        {props.startup.recentLogs.map((line) => (
-          <code key={line}>{line}</code>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// RuntimeModulesPanel renders module status cards.
-// RuntimeModulesPanel 渲染模块状态卡片。
-function RuntimeModulesPanel(props: { modules: RuntimeModuleSnapshot[] }) {
-  return (
-    <section className="panel modules-panel">
-      <PanelTitle icon={<Database size={17} />} title="运行时模块" />
-      <div className="module-grid">
-        {props.modules.map((module) => (
-          <article className="module-card" key={module.id}>
-            <StatusPill status={module.status} label={module.status} />
-            <strong>{module.label}</strong>
-            <span>{module.message}</span>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 // ConversationWorkspace renders the conversation timeline replacement.
 // ConversationWorkspace 渲染会话时间线替代组件。
 function ConversationWorkspace(props: {
   conversation?: ConversationSummary;
   messages: ConversationMessage[];
-  isLoading: boolean;
   error: string | null;
   onScrollStateChange: () => void;
   scrollRef: React.RefObject<HTMLElement | null>;
@@ -3947,12 +3120,6 @@ function ConversationWorkspace(props: {
   return (
     <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
       <div className="timeline">
-        {props.isLoading ? (
-          <article className="message-card system">
-            <span>system</span>
-            <p>正在从 Core Service 加载当前会话正文...</p>
-          </article>
-        ) : null}
         {props.error ? (
           <article className="message-card system error-message">
             <span>system</span>
@@ -4337,6 +3504,16 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
   );
 }
 
+// ConversationLoadingCenter renders the cache-miss conversation hydration placeholder.
+// ConversationLoadingCenter 渲染无缓存会话水合时的居中占位提示。
+function ConversationLoadingCenter() {
+  return (
+    <section className="conversation-loading-center" aria-live="polite" aria-busy="true">
+      <ShinyText text="✨ 正在加载会话信息" />
+    </section>
+  );
+}
+
 // ComposerDock renders composer-related floating controls.
 // ComposerDock 渲染输入区相关的浮动控件。
 function ComposerDock(props: {
@@ -4371,13 +3548,6 @@ function ComposerDock(props: {
   );
 }
 
-// EXECUTION_MODE_OPTIONS mirrors iced ExecutionMode::ALL.
-// EXECUTION_MODE_OPTIONS 对齐 iced 的 ExecutionMode::ALL。
-const EXECUTION_MODE_OPTIONS: ComposerSelectOption[] = [
-  { value: "build", label: "执行" },
-  { value: "plan", label: "计划" },
-];
-
 // MODEL_SELECT_OPTIONS mirrors the iced model trigger shape while service binding is pending.
 // MODEL_SELECT_OPTIONS 在服务绑定完成前按 iced 模型触发器结构提供预览选项。
 const MODEL_SELECT_OPTIONS: ComposerSelectOption[] = [
@@ -4386,26 +3556,12 @@ const MODEL_SELECT_OPTIONS: ComposerSelectOption[] = [
   { value: "qwen3-coder", label: "Qwen3 Coder", subtitle: "Alibaba" },
 ];
 
-// AI_CAPABILITY_OPTIONS mirrors the iced AI capability quick-control trigger.
-// AI_CAPABILITY_OPTIONS 对齐 iced 的 AI 能力快捷控制触发器。
-const AI_CAPABILITY_OPTIONS: ComposerSelectOption[] = [
-  { value: "extended", label: "扩展能力", subtitle: "能力扩展设置" },
-  { value: "basic", label: "基础能力", subtitle: "仅文本与代码" },
-];
-
-// REASONING_EFFORT_OPTIONS mirrors provider-config ReasoningEffortLevel labels plus the DeepSeek Max override.
-// REASONING_EFFORT_OPTIONS 对齐 provider-config 的思考档位标签，并包含 DeepSeek 的 Max 覆盖标签。
-const REASONING_EFFORT_OPTIONS: ComposerSelectOption[] = [
-  { value: "off", label: "关闭", subtitle: "思考级别" },
-  { value: "low", label: "低", subtitle: "思考级别" },
-  { value: "medium", label: "中", subtitle: "思考级别" },
-  { value: "high", label: "高", subtitle: "思考级别" },
-  { value: "x-high", label: "Max", subtitle: "思考级别" },
-];
-
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 function ComposerPanel() {
+  // t translates stable composer labels while model names remain provider data.
+  // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
+  const { t } = useI18n();
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState("");
@@ -4424,11 +3580,32 @@ function ComposerPanel() {
   // isComposerRunning stores the local send/stop preview state.
   // isComposerRunning 保存输入区发送/停止的本地预览状态。
   const [isComposerRunning, setIsComposerRunning] = React.useState(false);
+  // executionModeOptions mirrors iced ExecutionMode::ALL using current language labels.
+  // executionModeOptions 使用当前语言标签对齐 iced 的 ExecutionMode::ALL。
+  const executionModeOptions = React.useMemo<ComposerSelectOption[]>(() => [
+    { value: "build", label: t("composer.mode.execute") },
+    { value: "plan", label: t("composer.mode.plan") },
+  ], [t]);
+  // aiCapabilityOptions mirrors the iced AI capability quick-control trigger.
+  // aiCapabilityOptions 对齐 iced 的 AI 能力快捷控制触发器。
+  const aiCapabilityOptions = React.useMemo<ComposerSelectOption[]>(() => [
+    { value: "extended", label: t("composer.capability.extended"), subtitle: t("composer.capability.extended.subtitle") },
+    { value: "basic", label: t("composer.capability.basic"), subtitle: t("composer.capability.basic.subtitle") },
+  ], [t]);
+  // reasoningEffortOptions mirrors provider-config ReasoningEffortLevel labels plus the DeepSeek Max override.
+  // reasoningEffortOptions 对齐 provider-config 的思考档位标签，并包含 DeepSeek 的 Max 覆盖标签。
+  const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
+    { value: "off", label: t("composer.reasoning.off"), subtitle: t("composer.reasoning.subtitle") },
+    { value: "low", label: t("composer.reasoning.low"), subtitle: t("composer.reasoning.subtitle") },
+    { value: "medium", label: t("composer.reasoning.medium"), subtitle: t("composer.reasoning.subtitle") },
+    { value: "high", label: t("composer.reasoning.high"), subtitle: t("composer.reasoning.subtitle") },
+    { value: "x-high", label: t("composer.reasoning.max"), subtitle: t("composer.reasoning.subtitle") },
+  ], [t]);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
-    return `输入当前会话要执行的任务指令（${composerShortcutHint()}）`;
-  }, []);
+    return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
+  }, [t]);
 
   // handleComposerSend handles the current placeholder-only send action.
   // handleComposerSend 处理当前仅占位的发送动作。
@@ -4459,7 +3636,7 @@ function ComposerPanel() {
   return (
     <section className="composer-panel">
       <Textarea
-        aria-label="当前会话输入"
+        aria-label={t("composer.aria.input")}
         onChange={(event) => setDraftInput(event.currentTarget.value)}
         onKeyDown={handleComposerKeyDown}
         placeholder={placeholder}
@@ -4468,39 +3645,43 @@ function ComposerPanel() {
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">
           <ComposerSelectControl
-            ariaLabel="选择执行模式"
+            ariaLabel={t("composer.aria.mode")}
             className="mode"
+            fallbackLabel={t("composer.selectFallback")}
             onValueChange={setExecutionMode}
-            options={EXECUTION_MODE_OPTIONS}
+            options={executionModeOptions}
             value={executionMode}
           />
           <ComposerSelectControl
-            ariaLabel="选择模型"
+            ariaLabel={t("composer.aria.model")}
             className="model"
+            fallbackLabel={t("composer.selectFallback")}
             icon={<Cpu size={15} />}
             onValueChange={setModelChoice}
             options={MODEL_SELECT_OPTIONS}
             value={modelChoice}
           />
           <ComposerSelectControl
-            ariaLabel="选择扩展能力"
+            ariaLabel={t("composer.aria.capability")}
             className="capability"
+            fallbackLabel={t("composer.selectFallback")}
             icon={<SlidersHorizontal size={15} />}
             onValueChange={setAiCapabilityChoice}
-            options={AI_CAPABILITY_OPTIONS}
+            options={aiCapabilityOptions}
             value={aiCapabilityChoice}
           />
         </div>
         <div className="composer-toolbar-right">
           <ComposerSelectControl
-            ariaLabel="选择思考级别"
+            ariaLabel={t("composer.aria.reasoning")}
             className="reasoning"
+            fallbackLabel={t("composer.selectFallback")}
             onValueChange={setReasoningEffort}
-            options={REASONING_EFFORT_OPTIONS}
+            options={reasoningEffortOptions}
             value={reasoningEffort}
           />
           <Button
-            aria-label={isComposerRunning ? "停止" : "发送"}
+            aria-label={isComposerRunning ? t("composer.aria.stop") : t("composer.aria.send")}
             className={cn("send-button", isComposerRunning && "running")}
             onClick={handleComposerSend}
             size="icon"
@@ -4520,6 +3701,9 @@ function ComposerSelectControl(props: {
   // Accessible label for the dropdown trigger.
   // 下拉触发器的无障碍标签。
   ariaLabel: string;
+  // Localized fallback label shown when the current value is missing.
+  // 当前值缺失时显示的本地化回退标签。
+  fallbackLabel: string;
   // Optional visual icon rendered in the left accessory slot.
   // 渲染在左侧附属槽位中的可选视觉图标。
   icon?: React.ReactNode;
@@ -4546,7 +3730,7 @@ function ComposerSelectControl(props: {
       >
         {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
         <span className={cn("composer-select-copy", !props.icon && "centered")}>
-          <span className="composer-select-label">{selectedOption?.label ?? "选择"}</span>
+          <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
           {selectedOption?.subtitle ? (
             <span className="composer-select-subtitle">{selectedOption.subtitle}</span>
           ) : null}
@@ -4568,98 +3752,32 @@ function ComposerSelectControl(props: {
 
 // composerShortcutHint returns a platform-specific keyboard hint for the composer placeholder.
 // composerShortcutHint 返回输入区 placeholder 使用的平台化快捷键提示。
-function composerShortcutHint(): string {
+function composerShortcutHint(baseHint: string): string {
   const platformText = typeof navigator === "undefined"
     ? ""
     : `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
   if (platformText.includes("mac")) {
-    return "⏎ 发送，Shift + ⏎ 换行";
+    return baseHint;
   }
-  return "⏎ 发送，Shift + ⏎ 换行";
+  return baseHint;
 }
 
 // EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
 // EmptyConversationCenter 渲染空白会话的居中首次输入状态。
 function EmptyConversationCenter(props: { projectName: string }) {
+  // t translates the empty conversation prompt while projectName remains user data.
+  // t 翻译空会话引导语，projectName 仍保留为用户数据。
+  const { t } = useI18n();
+  // promptText inserts the selected project name into the localized empty prompt.
+  // promptText 将当前项目名称插入本地化空会话提示。
+  const promptText = t("console.emptyPrompt").replace("{projectName}", props.projectName);
+
   return (
     <section className="empty-conversation-center">
-      <h2>我们应该在 {props.projectName} 中构建什么？</h2>
+      <h2>{promptText}</h2>
       <ComposerPanel />
     </section>
   );
-}
-
-// ToolPanel renders tool call blocks.
-// ToolPanel 渲染工具调用块。
-function ToolPanel(props: { toolCalls: ToolCallSummary[] }) {
-  return (
-    <section className="panel tool-panel">
-      <PanelTitle icon={<Hammer size={17} />} title="工具调用" />
-      <div className="tool-list">
-        {props.toolCalls.map((toolCall) => (
-          <article className="tool-card" key={toolCall.id}>
-            <div>
-              <TerminalSquare size={16} />
-              <strong>{toolCall.name}</strong>
-            </div>
-            <StatusPill status={toolCall.status === "ready" ? "ready" : "warning"} label={toolCall.status} />
-            <p>{toolCall.detail}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// CommandSessionsPanel renders command session summaries.
-// CommandSessionsPanel 渲染命令会话摘要。
-function CommandSessionsPanel(props: { commandSessions: CommandSessionSummary[] }) {
-  return (
-    <section className="panel">
-      <PanelTitle icon={<TerminalSquare size={17} />} title="命令会话" />
-      <div className="tool-list">
-        {props.commandSessions.map((session) => (
-          <article className="tool-card" key={session.id}>
-            <div>
-              <TerminalSquare size={16} />
-              <strong>{session.command}</strong>
-            </div>
-            <StatusPill status={session.status === "passed" ? "ready" : "warning"} label={session.status} />
-            <p>{session.preview}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-// PanelTitle renders a section title with an icon.
-// PanelTitle 渲染带图标的区域标题。
-function PanelTitle(props: { icon: React.ReactNode; title: string }) {
-  return (
-    <div className="panel-title">
-      {props.icon}
-      <h2>{props.title}</h2>
-    </div>
-  );
-}
-
-// StatusIcon renders an icon for a startup status.
-// StatusIcon 渲染启动状态图标。
-function StatusIcon(props: { status: StartupStepStatus }) {
-  if (props.status === "ready") {
-    return <CheckCircle2 className="status-icon ready" size={18} />;
-  }
-  if (props.status === "warning" || props.status === "error") {
-    return <CircleAlert className={`status-icon ${props.status}`} size={18} />;
-  }
-  return <Clock3 className="status-icon pending" size={18} />;
-}
-
-// StatusPill renders a compact text status badge.
-// StatusPill 渲染紧凑文本状态徽标。
-function StatusPill(props: { status: StartupStepStatus | string; label: string }) {
-  return <Badge className={cn("status-pill", props.status)} variant="outline">{props.label}</Badge>;
 }
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
