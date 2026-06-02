@@ -11,7 +11,7 @@ use futures_util::{Stream, StreamExt};
 
 /// Drives one prepared runtime-stream launch payload and yields all start, delta, and terminal events in order.
 /// 驱动一份已准备完成的运行时流启动载荷，并按顺序产出全部启动、增量与终态事件。
-pub(crate) fn drive_runtime_stream_launch(
+pub fn drive_runtime_stream_launch(
     config: ProviderConfigurationFile,
     launch: RuntimeStreamLaunch,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {

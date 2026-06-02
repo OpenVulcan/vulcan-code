@@ -2,23 +2,53 @@
 //! Tauri WebUI 使用的本地服务桥接层。
 
 use std::{
+    collections::VecDeque,
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
 };
 
+use futures_util::StreamExt;
+use serde_json::json;
 use tauri::{Emitter, Manager};
 use time::OffsetDateTime;
+use vulcan_agent_runtime::{
+    agent_profile::{AgentProfileCatalog, load_agent_profile_catalog},
+    agent_runtime::{
+        events::{RuntimeEvent, RuntimeEventKind},
+        question_runtime::QuestionRuntime, task_runtime::TaskRuntime,
+        token_budget_runtime::TokenBudgetRuntime,
+    },
+    conversation_protocol::{
+        SessionConversationRecord, append_record, append_record_body_delta,
+        append_user_text_message, conversation_state_from_session_messages,
+        conversation_state_to_session_messages,
+    },
+    luaskills_runtime::LuaSkillsRuntimeHandle,
+    mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
+    provider_config::{
+        ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
+    },
+    skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
+    stream_runtime_run,
+    tooling::CommandSessionRuntime,
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
+    ExecutionStreamEvent, turn_stats::build_session_turn_stats_from_state,
+};
 use vulcan_service_api::{
     CommandSessionSummary, ConversationMessage, ConversationSummary, FeatureAreaSummary,
     LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary, ProviderSummary,
     RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary, StartupSnapshot,
     StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
 };
-use vulcan_workbench_model::{SessionId, SessionMessageEntry, SessionMessageKind};
+use vulcan_workbench_model::{
+    SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource,
+    SessionTurnStatsStatus,
+};
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
-    workspace_store::SessionHydrationSnapshot,
+    workspace_store::{SessionHydrationSnapshot, WorkspaceSnapshot},
 };
 use vldb_controller_client::ControllerSqliteValue;
 
@@ -26,13 +56,54 @@ use crate::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use crate::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
 use crate::token_budget_bridge::TauriTokenBudgetRuntime;
 
+/// Shared runtime handles used to execute real conversation turns.
+/// 用于执行真实会话轮次的共享运行时句柄集合。
+#[derive(Clone)]
+struct AgentRuntimeBridge {
+    /// Provider configuration captured during service startup.
+    /// 服务启动期间捕获的 Provider 配置。
+    provider_configuration: ProviderConfigurationFile,
+    /// Agent profile catalog reused by runtime preparation.
+    /// 运行时准备阶段复用的 Agent 画像目录。
+    agent_profile_catalog: AgentProfileCatalog,
+    /// LuaSkills runtime handle reused by provider-visible tool execution.
+    /// Provider 可见工具执行复用的 LuaSkills 运行时句柄。
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    /// MCP runtime access reused by provider-visible MCP tools.
+    /// Provider 可见 MCP 工具复用的 MCP 运行时访问面。
+    mcp_runtime: Option<McpRuntimeAccess>,
+    /// Shared task runtime used by nested task tools.
+    /// 嵌套任务工具使用的共享任务运行时。
+    task_runtime: Arc<TaskRuntime>,
+    /// Shared ask-question runtime used by the ask tool.
+    /// ask 工具使用的共享提问运行时。
+    question_runtime: Arc<QuestionRuntime>,
+    /// Shared command-session runtime used by shell session tools.
+    /// shell 会话工具使用的共享命令会话运行时。
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    /// Shared token-budget runtime used by context assembly.
+    /// 上下文装配使用的共享 Token 预算运行时。
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+}
+
+/// Local identifiers for records created while one streaming run is active.
+/// 单次流式运行活跃期间创建的本地记录标识。
+#[derive(Debug, Clone, Default)]
+struct StreamingRecordIds {
+    /// Collapsed thinking record that receives thinking deltas.
+    /// 接收思考增量的默认折叠思考记录。
+    thinking_record_id: Option<String>,
+    /// Visible assistant output record that receives final-output deltas.
+    /// 接收正式输出增量的可见助手输出记录。
+    output_record_id: Option<String>,
+}
+
 /// Number of recent turns loaded for the selected conversation.
 /// 为当前选中会话加载的最近轮次数量。
 const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 24;
 
 /// Shared service state exposed to Tauri commands.
 /// 暴露给 Tauri 命令的共享服务状态。
-#[derive(Debug)]
 struct ServiceBridgeState {
     /// Latest startup snapshot.
     /// 最近一次启动快照。
@@ -40,6 +111,15 @@ struct ServiceBridgeState {
     /// Latest workbench snapshot.
     /// 最近一次工作台快照。
     workbench: WorkbenchSnapshot,
+    /// Latest workspace snapshot retained for streaming turn updates.
+    /// 为流式会话轮次更新保留的最近工作区快照。
+    workspace_snapshot: Option<WorkspaceSnapshot>,
+    /// Long-lived shared agent runtime bridge.
+    /// 长生命周期共享 Agent 运行时桥接。
+    agent_runtime: Option<AgentRuntimeBridge>,
+    /// Tokio runtime that owns bootstrap-spawned background tasks such as shared MCP access.
+    /// 持有引导期后台任务的 Tokio 运行时，例如共享 MCP 访问任务。
+    service_runtime: Option<Arc<tokio::runtime::Runtime>>,
     /// Long-lived controller runtime handle.
     /// 长生命周期控制器运行时句柄。
     controller_runtime: Option<ControllerRuntimeHandle>,
@@ -64,6 +144,9 @@ pub fn run() {
     let state = Arc::new(Mutex::new(ServiceBridgeState {
         startup: startup_snapshot_with_phase("pending", Vec::new(), &[]),
         workbench: fallback_workbench_snapshot(&[]),
+        workspace_snapshot: None,
+        agent_runtime: None,
+        service_runtime: None,
         controller_runtime: None,
         luaskills_runtime: None,
         token_budget_runtime: None,
@@ -77,6 +160,7 @@ pub fn run() {
             service_startup_snapshot,
             service_workbench_snapshot,
             service_session_messages,
+            service_submit_conversation_prompt,
             service_open_project_directory,
             service_open_project_directory_path,
             service_toggle_project_pinned,
@@ -177,6 +261,77 @@ async fn service_session_messages(
         &session_id,
         hydration_snapshot.messages.as_slice(),
     ))
+}
+
+/// Submits one user prompt through the shared agent runtime and returns the immediate workbench snapshot.
+/// 通过共享 Agent 运行时提交一条用户提示词，并返回即时工作台快照。
+#[tauri::command]
+async fn service_submit_conversation_prompt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    prompt: String,
+    execution_mode: Option<String>,
+    reasoning_effort: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(String::from("请输入任务指令。"));
+    }
+
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let mut workspace_snapshot =
+        load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
+            .await?;
+    let (session_id, session_title, workspace_path) = materialize_prompt_session(
+        &mut workspace_snapshot,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        &prompt,
+    )?;
+    let request = append_prompt_and_build_request(
+        &mut workspace_snapshot,
+        &agent_runtime,
+        session_id,
+        &session_title,
+        &workspace_path,
+        &prompt,
+        execution_mode,
+        reasoning_effort,
+    );
+
+    persist_workspace_session_update(
+        controller_runtime.clone(),
+        &workspace_snapshot,
+        session_id,
+    )
+    .await?;
+    let workbench = store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        workspace_snapshot.clone(),
+        &logs,
+    )?;
+    spawn_agent_stream_task(
+        app,
+        state.inner().clone(),
+        controller_runtime,
+        agent_runtime,
+        request,
+    );
+    Ok(workbench)
 }
 
 /// Opens one project folder in the host system file manager.
@@ -511,6 +666,1395 @@ fn controller_runtime_from_state(
         .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))
 }
 
+/// Reads all long-lived runtime handles required by a WebUI prompt submission.
+/// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
+fn runtime_parts_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<
+    (
+        ControllerRuntimeHandle,
+        AgentRuntimeBridge,
+        TauriLuaSkillsCatalog,
+        Arc<TauriTokenBudgetRuntime>,
+        TauriMcpRuntimeCatalog,
+        Vec<String>,
+    ),
+    String,
+> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let controller_runtime = guard
+        .controller_runtime
+        .clone()
+        .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+    let agent_runtime = guard
+        .agent_runtime
+        .clone()
+        .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+    let luaskills_catalog = guard
+        .luaskills_runtime
+        .as_ref()
+        .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
+        .unwrap_or_else(empty_luaskills_catalog);
+    let token_budget_runtime = guard
+        .token_budget_runtime
+        .clone()
+        .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+    let mcp_catalog = guard
+        .mcp_runtime
+        .as_ref()
+        .map(TauriMcpRuntimeHandle::catalog)
+        .unwrap_or_else(empty_mcp_catalog);
+    Ok((
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        guard.startup.recent_logs.clone(),
+    ))
+}
+
+/// Loads the workspace snapshot and hydrates the selected submitted session when it already exists.
+/// 加载工作区快照，并在提交目标会话已存在时水合该会话。
+async fn load_workspace_for_submission(
+    controller_runtime: ControllerRuntimeHandle,
+    conversation_id: Option<&str>,
+) -> Result<WorkspaceSnapshot, String> {
+    let mut workspace_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_snapshot(controller_runtime.clone())
+            .await?;
+    if let Some(session_id) = conversation_id.and_then(parse_session_id) {
+        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+            controller_runtime,
+            session_id,
+            SELECTED_SESSION_TURN_LOAD_LIMIT,
+        )
+        .await
+        {
+            Ok(hydration) => {
+                workspace_snapshot
+                    .session_messages
+                    .insert(session_id, hydration.messages);
+                if let Some(runtime_state) = hydration.runtime_state {
+                    workspace_snapshot
+                        .session_runtime_state
+                        .insert(session_id, runtime_state);
+                }
+                workspace_snapshot.hydrated_session_ids.insert(session_id);
+            }
+            Err(error) if is_missing_session_manifest_error(&error) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(workspace_snapshot)
+}
+
+/// Resolves or creates the session that should receive the submitted prompt.
+/// 解析或创建应该接收本次提示词的会话。
+fn materialize_prompt_session(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+    prompt: &str,
+) -> Result<(SessionId, String, String), String> {
+    if let Some(session_id) = conversation_id.and_then(parse_session_id)
+        && let Some(session) = workspace_snapshot
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session_id)
+    {
+        session.status = SessionState::Running;
+        session.last_updated_label = String::from("刚刚");
+        workspace_snapshot.selected_session = session_id;
+        let workspace_path = session
+            .project_id
+            .as_deref()
+            .and_then(|owner_id| {
+                workspace_snapshot
+                    .task_projects
+                    .iter()
+                    .find(|project| project.id == owner_id)
+            })
+            .map(|project| project.path.clone())
+            .unwrap_or_default();
+        return Ok((session_id, session.title.clone(), workspace_path));
+    }
+
+    let project_id = project_id.ok_or_else(|| String::from("新建会话需要提供项目标识。"))?;
+    let project = workspace_snapshot
+        .task_projects
+        .iter_mut()
+        .find(|candidate| candidate.id == project_id)
+        .ok_or_else(|| format!("未找到项目：{project_id}"))?;
+    let session_id = SessionId::new_v4();
+    let session_title = prompt_to_session_title(prompt);
+    let session = SessionSummary::new(
+        session_id,
+        Some(project.id.clone()),
+        session_title.clone(),
+        "正在执行 WebUI 提交的任务",
+        SessionState::Running,
+        0,
+        0,
+        "刚刚",
+    )
+    .with_title_source(SessionTitleSource::Generated);
+
+    project.session_ids.retain(|existing| *existing != session_id);
+    project.session_ids.insert(0, session_id);
+    let workspace_path = project.path.clone();
+    workspace_snapshot.sessions.insert(0, session);
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    workspace_snapshot.selected_session = session_id;
+    Ok((session_id, session_title, workspace_path))
+}
+
+/// Appends the visible user prompt and builds the shared runtime execution request.
+/// 追加可见用户提示词，并构建共享运行时执行请求。
+fn append_prompt_and_build_request(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    session_title: &str,
+    workspace_path: &str,
+    prompt: &str,
+    execution_mode: Option<String>,
+    reasoning_effort: Option<String>,
+) -> ExecutionPreparationRequest {
+    let now = current_unix_millis_text();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    if runtime_state.conversation_state.records.is_empty() {
+        if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
+            runtime_state.conversation_state = conversation_state_from_session_messages(messages);
+        }
+    }
+    let record_count = runtime_state.conversation_state.records.len();
+    let message_id = build_session_record_message_id(session_id, &now, record_count);
+    append_user_text_message(
+        &mut runtime_state.conversation_state,
+        message_id.clone(),
+        prompt.to_string(),
+        Vec::new(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: message_id,
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::new(),
+            body: prompt.to_string(),
+            metadata: Some(json!({ "canonical_text": prompt })),
+            created_at: now.clone(),
+        },
+    );
+    runtime_state.updated_at = now;
+    workspace_snapshot
+        .session_messages
+        .insert(session_id, conversation_state_to_session_messages(&runtime_state.conversation_state));
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
+
+    ExecutionPreparationRequest {
+        session_id,
+        session_title: session_title.to_string(),
+        workspace_path: workspace_path.to_string(),
+        prompt: prompt.to_string(),
+        conversation_state: runtime_state.conversation_state.clone(),
+        execution_mode: execution_mode.unwrap_or_else(|| String::from("build")),
+        temperature: runtime_state.active_temperature,
+        reasoning_effort: reasoning_effort
+            .as_deref()
+            .and_then(parse_reasoning_effort)
+            .or(runtime_state.active_reasoning_effort)
+            .unwrap_or(ReasoningEffortLevel::XHigh),
+        ai_tool_configuration: agent_runtime.provider_configuration.ai_tools.clone(),
+        prompt_purpose: ExecutionPromptPurpose::UserTurn,
+        project_prompt_skills: ProjectPromptSkillsConfiguration::default(),
+        session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
+        context_injection: None,
+        system_prompt_hook_blocks: Vec::new(),
+        project_vmm: Default::default(),
+        session_vmm: runtime_state.vmm.clone(),
+    }
+}
+
+/// Persists only the changed session after a WebUI runtime mutation.
+/// 在 WebUI 运行时变更后仅持久化被修改的单个会话。
+async fn persist_workspace_session_update(
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let (session, archived) = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|candidate| candidate.id == session_id)
+        .map(|session| (session, false))
+        .or_else(|| {
+            workspace_snapshot
+                .archived_sessions
+                .iter()
+                .find(|candidate| candidate.id == session_id)
+                .map(|session| (session, true))
+        })
+        .ok_or_else(|| format!("单会话保存失败：未找到会话：{session_id}"))?;
+    let session_messages = if archived {
+        &workspace_snapshot.archived_session_messages
+    } else {
+        &workspace_snapshot.session_messages
+    };
+    let session_compactions = if archived {
+        &workspace_snapshot.archived_session_compactions
+    } else {
+        &workspace_snapshot.session_compactions
+    };
+    let session_runtime_state = if archived {
+        &workspace_snapshot.archived_session_runtime_state
+    } else {
+        &workspace_snapshot.session_runtime_state
+    };
+    let runtime_state = session_runtime_state.get(&session_id);
+    let rebuilt_messages;
+    let messages = if let Some(messages) = session_messages.get(&session_id) {
+        messages.as_slice()
+    } else if let Some(runtime_state) = runtime_state {
+        rebuilt_messages = conversation_state_to_session_messages(&runtime_state.conversation_state);
+        rebuilt_messages.as_slice()
+    } else {
+        &[]
+    };
+    let compactions = session_compactions
+        .get(&session_id)
+        .map(Vec::as_slice);
+    let task_projects = workspace_snapshot
+        .task_projects
+        .iter()
+        .cloned()
+        .chain(workspace_snapshot.archived_task_projects.iter().cloned())
+        .collect::<Vec<_>>();
+
+    vulcan_workspace_store::workspace_store::persist_single_session_update(
+        controller_runtime,
+        &task_projects,
+        session,
+        archived,
+        messages,
+        compactions,
+        runtime_state,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Builds an empty LuaSkills catalog for degraded snapshot rendering.
+/// 为降级快照渲染构建空 LuaSkills 目录。
+fn empty_luaskills_catalog() -> TauriLuaSkillsCatalog {
+    TauriLuaSkillsCatalog {
+        runtime_root: PathBuf::new(),
+        skills: Vec::new(),
+        entry_count: 0,
+    }
+}
+
+/// Builds an empty MCP catalog for degraded snapshot rendering.
+/// 为降级快照渲染构建空 MCP 目录。
+fn empty_mcp_catalog() -> TauriMcpRuntimeCatalog {
+    TauriMcpRuntimeCatalog {
+        configured_server_count: 0,
+        enabled_server_count: 0,
+        connected_server_count: 0,
+        tool_count: 0,
+        prompt_count: 0,
+        resource_count: 0,
+        summary_rows: Vec::new(),
+    }
+}
+
+/// Parses a user-facing optional session identifier and ignores local draft identifiers.
+/// 解析用户界面传入的可选会话标识，并忽略本地草稿标识。
+fn parse_session_id(value: &str) -> Option<SessionId> {
+    value.parse::<SessionId>().ok()
+}
+
+/// Converts the composer reasoning string into the shared provider-config enum.
+/// 将输入区思考档位字符串转换为共享 provider-config 枚举。
+fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffortLevel> {
+    match value {
+        "off" => Some(ReasoningEffortLevel::Off),
+        "low" => Some(ReasoningEffortLevel::Low),
+        "medium" => Some(ReasoningEffortLevel::Medium),
+        "high" => Some(ReasoningEffortLevel::High),
+        "x-high" | "max" => Some(ReasoningEffortLevel::XHigh),
+        _ => None,
+    }
+}
+
+/// Creates a readable generated session title from the submitted prompt.
+/// 根据提交提示词创建可读的自动会话标题。
+fn prompt_to_session_title(prompt: &str) -> String {
+    let title = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("新会话");
+    title.chars().take(48).collect()
+}
+
+/// Builds the stable transcript record id used by the legacy session projection.
+/// 构建旧会话投影使用的稳定转录记录标识。
+fn build_session_record_message_id(
+    session_id: SessionId,
+    created_at: &str,
+    record_index: usize,
+) -> String {
+    format!("{session_id}-{created_at}-{record_index}")
+}
+
+/// Stores and emits one rebuilt workbench snapshot after a workspace mutation.
+/// 在工作区发生变更后存储并发出一份重建后的工作台快照。
+fn store_and_emit_workbench_snapshot(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    controller_runtime: &ControllerRuntimeHandle,
+    luaskills_catalog: &TauriLuaSkillsCatalog,
+    token_budget_runtime: &TauriTokenBudgetRuntime,
+    mcp_catalog: &TauriMcpRuntimeCatalog,
+    workspace_snapshot: WorkspaceSnapshot,
+    logs: &[String],
+) -> Result<WorkbenchSnapshot, String> {
+    let selected_messages = workspace_snapshot
+        .session_messages
+        .get(&workspace_snapshot.selected_session)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let workbench = workbench_from_runtime(
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        &workspace_snapshot,
+        selected_messages,
+        logs,
+    );
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workspace_snapshot = Some(workspace_snapshot);
+        guard.workbench = workbench.clone();
+    }
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+    Ok(workbench)
+}
+
+/// Spawns one background task that forwards agent runtime stream events into the WebUI state.
+/// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
+fn spawn_agent_stream_task(
+    app: tauri::AppHandle,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    request: ExecutionPreparationRequest,
+) {
+    tauri::async_runtime::spawn(async move {
+        let mut record_ids = StreamingRecordIds::default();
+        let mut stream = Box::pin(stream_runtime_run(
+            agent_runtime.provider_configuration.clone(),
+            agent_runtime.agent_profile_catalog.clone(),
+            agent_runtime.luaskills_runtime.clone(),
+            agent_runtime.mcp_runtime.clone(),
+            Arc::clone(&agent_runtime.task_runtime),
+            Arc::clone(&agent_runtime.question_runtime),
+            Arc::clone(&agent_runtime.command_session_runtime),
+            Arc::clone(&agent_runtime.token_budget_runtime),
+            request,
+        ));
+
+        while let Some(event) = stream.next().await {
+            match event {
+                ExecutionStreamEvent::Prepared(preparation) => {
+                    if let Err(error) =
+                        apply_execution_preparation(&app, &state, &preparation)
+                    {
+                        eprintln!("[tauri-service] apply preparation failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::RequestStarted { session_id } => {
+                    if let Err(error) =
+                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Preparing)
+                    {
+                        eprintln!("[tauri-service] apply request-started failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                    if let Err(error) = append_stream_delta_record(
+                        &app,
+                        &state,
+                        session_id,
+                        &mut record_ids.thinking_record_id,
+                        SessionMessageRecordKind::ThinkingOutput,
+                        "思考",
+                        &delta,
+                        true,
+                    ) {
+                        eprintln!("[tauri-service] append thinking delta failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::ThinkingCompleted { session_id } => {
+                    if let Err(error) =
+                        collapse_streaming_thinking(&app, &state, session_id, &record_ids)
+                    {
+                        eprintln!("[tauri-service] complete thinking failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                    if let Err(error) = append_stream_delta_record(
+                        &app,
+                        &state,
+                        session_id,
+                        &mut record_ids.output_record_id,
+                        SessionMessageRecordKind::AssistantOutput,
+                        "输出",
+                        &delta,
+                        false,
+                    ) {
+                        eprintln!("[tauri-service] append output delta failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
+                    if let Err(error) = append_runtime_event_projection(
+                        &app,
+                        &state,
+                        session_id,
+                        &event,
+                    ) {
+                        eprintln!("[tauri-service] append runtime event failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::ConversationCheckpoint {
+                    session_id,
+                    conversation_state,
+                    last_successful_provider_usage,
+                    provider_request_count,
+                } => {
+                    if let Err(error) = apply_conversation_checkpoint(
+                        &app,
+                        &state,
+                        &controller_runtime,
+                        session_id,
+                        conversation_state,
+                        last_successful_provider_usage,
+                        provider_request_count,
+                    )
+                    .await
+                    {
+                        eprintln!("[tauri-service] apply checkpoint failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::Finished(report) => {
+                    if let Err(error) = apply_execution_report(
+                        &app,
+                        &state,
+                        &controller_runtime,
+                        report,
+                    )
+                    .await
+                    {
+                        eprintln!("[tauri-service] apply final report failed: {error}");
+                    }
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// Applies execution preparation identity fields to the target session runtime state.
+/// 将执行准备得到的身份字段应用到目标会话运行时状态。
+fn apply_execution_preparation(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    preparation: &ExecutionPreparation,
+) -> Result<(), String> {
+    with_workspace_mutation(app, state, |workspace| {
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(preparation.session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        runtime_state.active_agent_id = Some(preparation.agent_id.clone());
+        runtime_state.active_provider_id = Some(preparation.model_blueprint.provider_id.clone());
+        runtime_state.active_model_id = Some(preparation.model_blueprint.model_id.clone());
+        runtime_state.active_openrouter_endpoint_route =
+            preparation.model_blueprint.openrouter_endpoint_route.clone();
+        runtime_state.active_reasoning_effort =
+            Some(preparation.model_blueprint.reasoning.requested_effort);
+        runtime_state.active_temperature = preparation.temperature;
+        runtime_state.live_context_budget_fingerprint = preparation
+            .context_budget
+            .as_ref()
+            .map(|budget| budget.fingerprint.clone());
+        runtime_state.live_context_assembly_fingerprint = preparation
+            .context_baseline
+            .as_ref()
+            .map(|baseline| baseline.fingerprint.clone());
+        runtime_state.updated_at = current_unix_millis_text();
+        workspace
+            .session_run_phases
+            .insert(preparation.session_id, SessionRunPhase::Preparing);
+    })
+    .map(|_| ())
+}
+
+/// Updates one session phase in the retained workspace snapshot.
+/// 更新保留工作区快照中的单个会话阶段。
+fn apply_session_phase(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    phase: SessionRunPhase,
+) -> Result<(), String> {
+    with_workspace_mutation(app, state, |workspace| {
+        workspace.session_run_phases.insert(session_id, phase);
+    })
+    .map(|_| ())
+}
+
+/// Appends or extends one streaming transcript record.
+/// 追加或扩展单条流式转录记录。
+fn append_stream_delta_record(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_id_slot: &mut Option<String>,
+    record_kind: SessionMessageRecordKind,
+    title: &str,
+    delta: &str,
+    collapsed_by_default: bool,
+) -> Result<(), String> {
+    if delta.is_empty() {
+        return Ok(());
+    }
+    with_workspace_mutation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        if let Some(record_id) = record_id_slot.as_deref() {
+            if !append_record_body_delta(&mut runtime_state.conversation_state, record_id, delta) {
+                *record_id_slot = None;
+            }
+        }
+        if record_id_slot.is_none() {
+            let record_id = build_session_record_message_id(
+                session_id,
+                &now,
+                runtime_state.conversation_state.records.len(),
+            );
+            append_record(
+                &mut runtime_state.conversation_state,
+                SessionConversationRecord {
+                    id: record_id.clone(),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind,
+                    visible: true,
+                    title: title.to_string(),
+                    body: delta.to_string(),
+                    metadata: collapsed_by_default.then(|| json!({ "collapsed_by_default": true })),
+                    created_at: now.clone(),
+                },
+            );
+            *record_id_slot = Some(record_id);
+        }
+        runtime_state.updated_at = now;
+        workspace.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+        workspace
+            .session_run_phases
+            .insert(session_id, SessionRunPhase::Preparing);
+        workspace.hydrated_session_ids.insert(session_id);
+    })
+    .map(|_| ())
+}
+
+/// Keeps the thinking row collapsed after its streaming phase completes.
+/// 在思考流阶段完成后保持思考行折叠。
+fn collapse_streaming_thinking(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    record_ids: &StreamingRecordIds,
+) -> Result<(), String> {
+    let Some(thinking_record_id) = record_ids.thinking_record_id.as_deref() else {
+        return Ok(());
+    };
+    with_workspace_mutation(app, state, |workspace| {
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: current_unix_millis_text(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        runtime_state
+            .ui_state
+            .collapsed_message_ids
+            .insert(thinking_record_id.to_string());
+        runtime_state.updated_at = current_unix_millis_text();
+    })
+    .map(|_| ())
+}
+
+/// Projects runtime events that have user-facing transcript cards into the retained session state.
+/// 将具备用户可见转录卡片的运行时事件投影到保留的会话状态中。
+fn append_runtime_event_projection(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    match event.kind {
+        RuntimeEventKind::ToolStarted => append_tool_started_projection(app, state, session_id, event),
+        RuntimeEventKind::ToolFinished => append_tool_finished_projection(app, state, session_id, event),
+        _ => Ok(()),
+    }
+}
+
+/// Appends the same visible tool-call card that the iced runtime creates for a tool-start event.
+/// 为工具开始事件追加 iced 运行时创建的同款可见工具调用卡片。
+fn append_tool_started_projection(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    let Some((tool_call_id, tool_name)) = parse_tool_started_runtime_event_title(&event.title)
+    else {
+        return Ok(());
+    };
+
+    with_workspace_mutation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        let record_id = build_session_record_message_id(
+            session_id,
+            &now,
+            runtime_state.conversation_state.records.len(),
+        );
+        append_record(
+            &mut runtime_state.conversation_state,
+            SessionConversationRecord {
+                id: record_id,
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolCallOutput,
+                visible: true,
+                title: human_tool_display_title(&tool_name, "running"),
+                body: event.detail.clone(),
+                metadata: Some(normalize_tool_event_metadata(
+                    event.metadata.clone(),
+                    &tool_call_id,
+                    Some(&tool_name),
+                    "running",
+                )),
+                created_at: now.clone(),
+            },
+        );
+        runtime_state.updated_at = now;
+        workspace.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+        workspace.hydrated_session_ids.insert(session_id);
+    })
+    .map(|_| ())
+}
+
+/// Appends the same visible tool-result card that the iced runtime creates for a tool-finish event.
+/// 为工具结束事件追加 iced 运行时创建的同款可见工具返回卡片。
+fn append_tool_finished_projection(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    event: &RuntimeEvent,
+) -> Result<(), String> {
+    let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title) else {
+        return Ok(());
+    };
+
+    with_workspace_mutation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        let display_state = tool_display_state_for_event(
+            SessionMessageRecordKind::ToolResultOutput,
+            event.metadata.as_ref(),
+        );
+        let tool_name = event
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_name"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                runtime_state
+                    .conversation_state
+                    .records
+                    .iter()
+                    .rev()
+                    .find_map(|record| tool_record_name_for_call_id(record, &tool_call_id))
+            });
+        let title = tool_name
+            .as_deref()
+            .map(|name| human_tool_display_title(name, display_state))
+            .unwrap_or_else(|| human_tool_display_title(&tool_call_id, display_state));
+        let record_id = build_session_record_message_id(
+            session_id,
+            &now,
+            runtime_state.conversation_state.records.len(),
+        );
+        append_record(
+            &mut runtime_state.conversation_state,
+            SessionConversationRecord {
+                id: record_id,
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ToolResultOutput,
+                visible: true,
+                title,
+                body: event.detail.clone(),
+                metadata: Some(normalize_tool_event_metadata(
+                    event.metadata.clone(),
+                    &tool_call_id,
+                    tool_name.as_deref(),
+                    display_state,
+                )),
+                created_at: now.clone(),
+            },
+        );
+        runtime_state.updated_at = now;
+        workspace.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+        workspace.hydrated_session_ids.insert(session_id);
+    })
+    .map(|_| ())
+}
+
+/// Parses one tool-start runtime headline into its stable tool-call identifier and visible tool name.
+/// 将一条工具开始运行时标题解析为稳定工具调用标识及可见工具名称。
+fn parse_tool_started_runtime_event_title(title: &str) -> Option<(String, String)> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some("工具调用"), Some(tool_call_id), Some(tool_name))
+            if !tool_call_id.trim().is_empty() && !tool_name.trim().is_empty() =>
+        {
+            Some((
+                tool_call_id.trim().to_string(),
+                tool_name.trim().to_string(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Parses one tool-finish runtime headline into its stable tool-call identifier.
+/// 将一条工具结束运行时标题解析为稳定工具调用标识。
+fn parse_tool_finished_runtime_event_title(title: &str) -> Option<String> {
+    let mut segments = title.split(" · ");
+    match (segments.next(), segments.next()) {
+        (Some("工具返回"), Some(tool_call_id)) if !tool_call_id.trim().is_empty() => {
+            Some(tool_call_id.trim().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Builds one stable human-facing title for a tool execution card from the tool name and display state.
+/// 根据工具名称与显示状态构建一条稳定的人类可读工具执行卡片标题。
+fn human_tool_display_title(tool_name: &str, display_state: &str) -> String {
+    let status_label = match display_state {
+        "failed" => "失败",
+        "completed" => "已完成",
+        _ => "进行中",
+    };
+    format!("调用 {tool_name} 工具 {status_label}")
+}
+
+/// Returns the stable display state used by one human-facing tool execution card.
+/// 返回单张面向人类的工具执行卡片所使用的稳定显示状态。
+fn tool_display_state_for_event(
+    record_kind: SessionMessageRecordKind,
+    metadata: Option<&serde_json::Value>,
+) -> &'static str {
+    if metadata.is_some_and(tool_metadata_represents_failed_result) {
+        return "failed";
+    }
+
+    match record_kind {
+        SessionMessageRecordKind::ToolResultOutput => "completed",
+        _ => "running",
+    }
+}
+
+/// Returns whether the provided tool metadata semantically describes one failed host-side tool result.
+/// 返回提供的工具元数据是否在语义上描述了一条失败的宿主侧工具结果。
+fn tool_metadata_represents_failed_result(metadata: &serde_json::Value) -> bool {
+    metadata
+        .get("host_result")
+        .and_then(|host_result| host_result.get("kind"))
+        .and_then(serde_json::Value::as_str)
+        == Some("tool_error")
+        || metadata
+            .get("payload")
+            .and_then(|payload| payload.get("status"))
+            .and_then(serde_json::Value::as_str)
+            == Some("failed")
+        || metadata.get("status").and_then(serde_json::Value::as_str) == Some("failed")
+}
+
+/// Normalizes tool event metadata so the WebUI can merge and open detail cards consistently.
+/// 规范化工具事件元数据，使 WebUI 能稳定合并并打开详情卡片。
+fn normalize_tool_event_metadata(
+    metadata: Option<serde_json::Value>,
+    tool_call_id: &str,
+    tool_name: Option<&str>,
+    display_state: &str,
+) -> serde_json::Value {
+    let mut object = match metadata {
+        Some(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+    object.insert(
+        String::from("tool_call_id"),
+        serde_json::Value::String(tool_call_id.to_string()),
+    );
+    if let Some(tool_name) = tool_name.filter(|value| !value.trim().is_empty()) {
+        object.insert(
+            String::from("tool_name"),
+            serde_json::Value::String(tool_name.to_string()),
+        );
+    }
+    object.insert(
+        String::from("display_state"),
+        serde_json::Value::String(display_state.to_string()),
+    );
+    serde_json::Value::Object(object)
+}
+
+/// Finds the tool name stored on an earlier tool-call card for the same call identifier.
+/// 查找同一调用标识早前工具调用卡片中保存的工具名称。
+fn tool_record_name_for_call_id(
+    record: &SessionConversationRecord,
+    tool_call_id: &str,
+) -> Option<String> {
+    if record.record_kind != SessionMessageRecordKind::ToolCallOutput {
+        return None;
+    }
+    let metadata = record.metadata.as_ref()?;
+    let record_call_id = metadata
+        .get("tool_call_id")
+        .and_then(serde_json::Value::as_str)?;
+    if record_call_id != tool_call_id {
+        return None;
+    }
+    metadata
+        .get("tool_name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+/// Applies one safe canonical conversation checkpoint and persists it through the shared store.
+/// 应用一份安全规范会话检查点，并通过共享存储持久化。
+async fn apply_conversation_checkpoint(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    conversation_state: vulcan_agent_runtime::conversation_protocol::SessionConversationState,
+    last_successful_provider_usage: Option<vulcan_core::types::ProviderUsageSnapshot>,
+    provider_request_count: usize,
+) -> Result<(), String> {
+    let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        let preserved_records = runtime_state.conversation_state.records.clone();
+        runtime_state.conversation_state = conversation_state;
+        runtime_state.conversation_state.records = preserved_records;
+        if let Some(usage) = last_successful_provider_usage {
+            runtime_state.last_provider_usage = Some(usage.clone());
+            runtime_state.last_successful_provider_usage = Some(usage);
+        }
+        if provider_request_count > 0 {
+            runtime_state.last_safe_provider_request_count = Some(provider_request_count);
+        }
+        runtime_state.updated_at = now;
+        workspace.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+        workspace.hydrated_session_ids.insert(session_id);
+    })?;
+    persist_workspace_session_update(
+        controller_runtime.clone(),
+        &workspace_snapshot,
+        session_id,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Applies the terminal execution report and persists the final transcript state.
+/// 应用终态执行报告，并持久化最终转录状态。
+async fn apply_execution_report(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    report: ExecutionRunReport,
+) -> Result<(), String> {
+    let session_id = report.session_id;
+    let is_success = report.error.is_none();
+    let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        if let Some(conversation_state) = report.conversation_state.clone() {
+            let preserved_records = runtime_state.conversation_state.records.clone();
+            runtime_state.conversation_state = conversation_state;
+            runtime_state.conversation_state.records = preserved_records;
+        }
+        if let Some(usage) = report.last_successful_provider_usage.clone() {
+            runtime_state.last_provider_usage = Some(usage.clone());
+            runtime_state.last_successful_provider_usage = Some(usage);
+        }
+        if report.provider_request_count > 0 {
+            runtime_state.last_safe_provider_request_count = Some(report.provider_request_count);
+        }
+        let closing_record_id = if is_success {
+            ensure_terminal_success_records(runtime_state, session_id, &now, &report);
+            append_terminal_summary_record(runtime_state, session_id, &now, &report)
+        } else {
+            append_terminal_error_record(runtime_state, session_id, &now, &report);
+            append_terminal_terminated_record(
+                runtime_state,
+                session_id,
+                &now,
+                report
+                    .error
+                    .as_deref()
+                    .unwrap_or("真实执行失败，但未返回具体错误信息。"),
+            )
+        };
+        append_terminal_turn_stats_record(
+            runtime_state,
+            session_id,
+            &now,
+            &closing_record_id,
+            if is_success {
+                SessionTurnStatsStatus::Completed
+            } else {
+                SessionTurnStatsStatus::Failed
+            },
+            Some(report.provider_request_count),
+        );
+        runtime_state.updated_at = now;
+        workspace.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+        if let Some(session) = workspace
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session_id)
+        {
+            session.status = if is_success {
+                SessionState::Completed
+            } else {
+                SessionState::Blocked
+            };
+            session.last_updated_label = String::from("刚刚");
+        }
+        workspace.session_run_phases.insert(
+            session_id,
+            if is_success {
+                SessionRunPhase::Ready
+            } else {
+                SessionRunPhase::Failed
+            },
+        );
+        workspace.hydrated_session_ids.insert(session_id);
+    })?;
+    persist_workspace_session_update(
+        controller_runtime.clone(),
+        &workspace_snapshot,
+        session_id,
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Ensures a successful terminal report has visible thinking and output records.
+/// 确保成功终态报告拥有可见的思考与输出记录。
+fn ensure_terminal_success_records(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) {
+    if !current_turn_has_visible_record(runtime_state, SessionMessageRecordKind::ThinkingOutput)
+        && let Some(thinking_output) = report
+            .thinking_output
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    {
+        let record_id = build_session_record_message_id(
+            session_id,
+            now,
+            runtime_state.conversation_state.records.len(),
+        );
+        append_record(
+            &mut runtime_state.conversation_state,
+            SessionConversationRecord {
+                id: record_id.clone(),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::ThinkingOutput,
+                visible: true,
+                title: String::from("思考"),
+                body: thinking_output.to_string(),
+                metadata: Some(json!({ "collapsed_by_default": true })),
+                created_at: now.to_string(),
+            },
+        );
+        runtime_state
+            .ui_state
+            .collapsed_message_ids
+            .insert(record_id);
+    }
+    if !current_turn_has_visible_record(runtime_state, SessionMessageRecordKind::AssistantOutput) {
+        let assistant_output = report
+            .assistant_output
+            .clone()
+            .unwrap_or_else(|| String::from("The model completed the run but did not return visible text output."));
+        let record_id = build_session_record_message_id(
+            session_id,
+            now,
+            runtime_state.conversation_state.records.len(),
+        );
+        append_record(
+            &mut runtime_state.conversation_state,
+            SessionConversationRecord {
+                id: record_id,
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: assistant_output,
+                metadata: None,
+                created_at: now.to_string(),
+            },
+        );
+    }
+}
+
+/// Appends the same hidden summary record produced by the shared session-derived skill chain.
+/// 追加与共享会话派生技能链一致的隐藏摘要记录。
+fn append_terminal_summary_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) -> String {
+    let derived_record = SessionDerivedSkillChain::default()
+        .run_summary_skill(SummarySkillInput { report });
+    append_derived_record(runtime_state, session_id, now, derived_record)
+}
+
+/// Appends a visible terminal error row for a failed execution report.
+/// 为失败的执行报告追加一条可见终态错误行。
+fn append_terminal_error_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) {
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id,
+            kind: SessionMessageKind::Error,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("执行失败"),
+            body: report
+                .error
+                .clone()
+                .unwrap_or_else(|| String::from("真实执行失败，但未返回具体错误信息。")),
+            metadata: None,
+            created_at: now.to_string(),
+        },
+    );
+}
+
+/// Appends the hidden terminal marker used to close failed or stopped turns.
+/// 追加用于闭合失败或中止轮次的隐藏终止标记。
+fn append_terminal_terminated_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    error: &str,
+) -> String {
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnTerminated,
+            visible: false,
+            title: String::from("Turn Terminated"),
+            body: format!("The run terminated without a summary. Error detail: {error}"),
+            metadata: Some(json!({ "preview": "" })),
+            created_at: now.to_string(),
+        },
+    );
+    record_id
+}
+
+/// Appends one visible turn-statistics row using the shared statistics builder.
+/// 使用共享统计构建器追加一条可见轮次统计行。
+fn append_terminal_turn_stats_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    closing_record_id: &str,
+    status: SessionTurnStatsStatus,
+    provider_request_count_override: Option<usize>,
+) -> Option<String> {
+    let turn_stats = build_session_turn_stats_from_state(
+        &runtime_state.conversation_state,
+        closing_record_id,
+        status,
+        provider_request_count_override,
+    )?;
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnStats,
+            visible: true,
+            title: format!("Turn Stats · {}", turn_stats.status.label()),
+            body: turn_stats.detail_body(),
+            metadata: Some(json!({
+                "turn_stats": turn_stats,
+                "turn_closing_record_id": closing_record_id,
+            })),
+            created_at: now.to_string(),
+        },
+    );
+    Some(record_id)
+}
+
+/// Appends one hidden derived session record with the same metadata shape used by iced.
+/// 以 iced 使用的相同元数据结构追加一条隐藏派生会话记录。
+fn append_derived_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    record: SessionDerivedRecord,
+) -> String {
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        runtime_state.conversation_state.records.len(),
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id.clone(),
+            kind: record.kind,
+            record_kind: record.record_kind,
+            visible: false,
+            title: record.title,
+            body: record.body,
+            metadata: Some(json!({ "preview": record.preview })),
+            created_at: now.to_string(),
+        },
+    );
+    record_id
+}
+
+/// Returns whether the current logical turn already has a visible record of the requested kind.
+/// 返回当前逻辑轮次是否已经拥有指定类型的可见记录。
+fn current_turn_has_visible_record(
+    runtime_state: &SessionRuntimeStateEntry,
+    record_kind: SessionMessageRecordKind,
+) -> bool {
+    let records = &runtime_state.conversation_state.records;
+    let boundary_index = records
+        .iter()
+        .rposition(|record| {
+            matches!(
+                record.record_kind,
+                SessionMessageRecordKind::SummaryOutput
+                    | SessionMessageRecordKind::TurnTerminated
+                    | SessionMessageRecordKind::TurnStats
+            )
+        })
+        .map(|index| index + 1)
+        .unwrap_or(0);
+    records[boundary_index..]
+        .iter()
+        .any(|record| record.visible && record.record_kind == record_kind)
+}
+
+/// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
+/// 修改保留的工作区快照并发出重建后的工作台快照。
+fn with_workspace_mutation<F>(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    mutate: F,
+) -> Result<WorkspaceSnapshot, String>
+where
+    F: FnOnce(&mut WorkspaceSnapshot),
+{
+    let (
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+        workspace_snapshot,
+    ) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))?;
+        let luaskills_catalog = guard
+            .luaskills_runtime
+            .as_ref()
+            .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
+            .unwrap_or_else(empty_luaskills_catalog);
+        let token_budget_runtime = guard
+            .token_budget_runtime
+            .clone()
+            .ok_or_else(|| String::from("service is still starting; token budget runtime is not ready"))?;
+        let mcp_catalog = guard
+            .mcp_runtime
+            .as_ref()
+            .map(TauriMcpRuntimeHandle::catalog)
+            .unwrap_or_else(empty_mcp_catalog);
+        let logs = guard.startup.recent_logs.clone();
+        let mut workspace_snapshot = guard
+            .workspace_snapshot
+            .clone()
+            .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+        mutate(&mut workspace_snapshot);
+        let selected_messages = workspace_snapshot
+            .session_messages
+            .get(&workspace_snapshot.selected_session)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let workbench = workbench_from_runtime(
+            &controller_runtime,
+            &luaskills_catalog,
+            &token_budget_runtime,
+            &mcp_catalog,
+            &workspace_snapshot,
+            selected_messages,
+            &logs,
+        );
+        guard.workspace_snapshot = Some(workspace_snapshot.clone());
+        guard.workbench = workbench.clone();
+        let _ = app.emit(
+            "vulcan://service-event",
+            ServiceEvent::Workbench(Box::new(workbench)),
+        );
+        (
+            controller_runtime,
+            luaskills_catalog,
+            token_budget_runtime,
+            mcp_catalog,
+            logs,
+            workspace_snapshot,
+        )
+    };
+    let _ = (
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    );
+    Ok(workspace_snapshot)
+}
+
 /// Refreshes the WebUI workbench after a focused workspace metadata update.
 /// 在一次聚焦的工作区元数据更新后刷新 WebUI 工作台。
 async fn refresh_workbench_snapshot(
@@ -599,6 +2143,7 @@ async fn refresh_workbench_snapshot(
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workbench = workbench.clone();
+        guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(workbench)
 }
@@ -706,10 +2251,10 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         )
     });
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Arc::new(tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .map_err(|error| format!("创建 Tauri service tokio runtime 失败：{error}"))?;
+        .map_err(|error| format!("创建 Tauri service tokio runtime 失败：{error}"))?);
 
     let controller_report = runtime.block_on(
         vulcan_workspace_store::data_plane::bootstrap_application_data_plane(
@@ -855,6 +2400,37 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         mcp_catalog.prompt_count,
         mcp_catalog.resource_count
     ));
+    let agent_profile_catalog = load_agent_profile_catalog()?;
+    let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
+        engine: Arc::clone(&luaskills_runtime.engine),
+        runtime_root: luaskills_runtime.runtime_root.clone(),
+        system_lua_lib_dir: luaskills_runtime.runtime_root.join("system_lua_lib"),
+        skill_roots: luaskills_runtime.skill_roots.clone(),
+        entry_count: luaskills_catalog.entry_count,
+        operation_progress_events: Arc::new(Mutex::new(VecDeque::new())),
+    };
+    let agent_mcp_runtime = runtime
+        .block_on(bootstrap_mcp_runtime_access(provider_configuration.clone()))
+        .map_err(|error| format!("Agent MCP Runtime 初始化失败：{error}"))?;
+    let agent_token_budget_runtime = Arc::new(
+        TokenBudgetRuntime::initialize_from_resource_directory_with_backend(
+            token_budget_runtime.resource_directory().to_path_buf(),
+            token_budget_runtime.backend(),
+        ),
+    );
+    let agent_runtime = AgentRuntimeBridge {
+        provider_configuration: provider_configuration.clone(),
+        agent_profile_catalog,
+        luaskills_runtime: Some(agent_luaskills_runtime),
+        mcp_runtime: Some(agent_mcp_runtime),
+        task_runtime: Arc::new(TaskRuntime::new()),
+        question_runtime: Arc::new(QuestionRuntime::new()),
+        command_session_runtime: Arc::new(CommandSessionRuntime::new()),
+        token_budget_runtime: agent_token_budget_runtime,
+    };
+    logs.push(String::from(
+        "[tauri-service] agent runtime bridge ready: provider/LuaSkills/MCP/token-budget handles are mounted",
+    ));
 
     update_startup(app, "loading-workspace", &logs, |now| {
         startup_steps_with_status(
@@ -958,6 +2534,9 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
     {
         guard.startup = startup.clone();
         guard.workbench = workbench.clone();
+        guard.workspace_snapshot = Some(workspace_snapshot);
+        guard.agent_runtime = Some(agent_runtime);
+        guard.service_runtime = Some(runtime);
         guard.controller_runtime = Some(controller_runtime);
         guard.luaskills_runtime = Some(luaskills_runtime);
         guard.token_budget_runtime = Some(token_budget_runtime);

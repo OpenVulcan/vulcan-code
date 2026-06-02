@@ -27,6 +27,7 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 rfd = "0.15.4"
 rodio = "0.20.1"
 vulcan-agent-view.workspace = true
+vulcan-agent-runtime.workspace = true
 vulcan-change-set.workspace = true
 vulcan-host-tools.workspace = true
 vulcan-markdown.workspace = true

@@ -1252,7 +1252,7 @@ impl VulcanWorkbench {
         );
 
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(request.session_id),
             self.maybe_follow_selected_session_transcript_tail(request.session_id),
             run_task,
         ])
@@ -1442,7 +1442,7 @@ impl VulcanWorkbench {
         );
         self.refresh_subagent_navigation_round_visibility(session_id);
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }
@@ -1520,7 +1520,7 @@ impl VulcanWorkbench {
             Task::none()
         };
         Task::batch([
-            self.persist_workspace_snapshot_task(),
+            self.persist_single_session_update_task(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
             next_prompt_task,
         ])

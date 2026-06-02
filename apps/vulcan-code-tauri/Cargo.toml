@@ -10,6 +10,7 @@ license.workspace = true
 tauri-build = { version = "=2.6.2", features = [] }
 
 [dependencies]
+futures-util = "0.3.31"
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
@@ -19,6 +20,8 @@ tokio = { workspace = true, features = ["rt-multi-thread"] }
 uuid.workspace = true
 vldb-controller-client.workspace = true
 luaskills.workspace = true
+vulcan-agent-runtime.workspace = true
+vulcan-core.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true

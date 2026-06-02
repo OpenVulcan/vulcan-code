@@ -306,7 +306,7 @@ fn load_workspace_project_rules_snapshot(workspace_path: &str) -> Option<Project
 
 /// Invalidate the cached workspace-local project prompt snapshot.
 /// 使缓存中的工作区本地项目提示词快照失效。
-pub(crate) fn invalidate_workspace_project_user_prompt_cache(
+pub fn invalidate_workspace_project_user_prompt_cache(
     workspace_path: &str,
     project_prompt_path: &str,
 ) {
@@ -325,7 +325,7 @@ pub(crate) fn invalidate_workspace_project_user_prompt_cache(
 
 /// Invalidate the cached workspace-level project rules snapshot.
 /// 使缓存中的工作区级项目规则快照失效。
-pub(crate) fn invalidate_workspace_project_rules_prompt_cache(workspace_path: &str) {
+pub fn invalidate_workspace_project_rules_prompt_cache(workspace_path: &str) {
     let Some(workspace) = workspace_project_rules_path(workspace_path) else {
         return;
     };

@@ -212,6 +212,20 @@ interface ProjectIconOption {
   Icon: React.ComponentType<{ size?: number; className?: string }>;
 }
 
+// ComposerSubmission contains the user prompt and runtime quick-control values.
+// ComposerSubmission 包含用户提示词与运行时快捷控制取值。
+interface ComposerSubmission {
+  // User-entered prompt text to append into the active conversation.
+  // 需要追加到当前会话中的用户输入提示词。
+  prompt: string;
+  // Composer execution mode selected by the user.
+  // 用户选择的输入区执行模式。
+  executionMode: string;
+  // Reasoning effort selected by the user.
+  // 用户选择的思考档位。
+  reasoningEffort: string;
+}
+
 // DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
 // DEFAULT_PROJECT_BADGE_CONFIG 提供生成式徽标的初始预览配置。
 const DEFAULT_PROJECT_BADGE_CONFIG: ProjectIconBadgeConfig = {
@@ -607,6 +621,28 @@ async function loadConversationMessages(sessionId: string): Promise<Conversation
     return browserFallbackWorkbench.messages.filter((message) => message.conversationId === sessionId);
   }
   return invoke<ConversationMessage[]>("service_session_messages", { sessionId });
+}
+
+// submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
+// submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
+async function submitConversationPrompt(
+  projectId: string | null,
+  conversationId: string | null,
+  prompt: string,
+  executionMode: string,
+  reasoningEffort: string,
+): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_submit_conversation_prompt", {
+    projectId,
+    conversationId,
+    prompt,
+    executionMode,
+    reasoningEffort,
+  });
 }
 
 // openProjectDirectoryPath asks the desktop shell to reveal one filesystem folder.
@@ -1087,6 +1123,43 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, [applyProjectActionSnapshot]);
 
+  // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
+  // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
+  const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
+    const activeProjectId =
+      selectedDraftConversation?.projectId
+      ?? selectedConversation?.projectId
+      ?? workbenchState.projects[0]?.id
+      ?? null;
+    const activeConversationId = selectedDraftConversation
+      ? null
+      : selectedConversation?.id ?? null;
+    try {
+      const snapshot = await submitConversationPrompt(
+        activeProjectId,
+        activeConversationId,
+        submission.prompt,
+        submission.executionMode,
+        submission.reasoningEffort,
+      );
+      if (!snapshot) {
+        toast.info("浏览器预览模式下无法发送真实会话。");
+        return false;
+      }
+      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      setDraftConversation(null);
+      const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
+      if (nextConversationId) {
+        setSelectedConversationId(nextConversationId);
+        setHydratedConversationIds((current) => new Set(current).add(nextConversationId));
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [selectedConversation, selectedDraftConversation, workbenchState.projects]);
+
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
   const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
@@ -1309,6 +1382,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
             onSelectConversation={setSelectedConversationId}
+            onSubmitPrompt={handleSubmitConversationPrompt}
           />
         ) : (
           <ExtractedFeatureShell
@@ -2627,6 +2701,7 @@ function ConsoleShell(props: {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
     <SidebarProvider className="console-shell">
@@ -2652,6 +2727,7 @@ function ConsoleShellContent(props: {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // sidebar controls the left project tree that can collapse automatically.
   // sidebar 控制可自动折叠的左侧项目树。
@@ -2760,6 +2836,7 @@ function ConsoleShellContent(props: {
           conversationLoadError={props.conversationLoadError}
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
+          onSubmitPrompt={props.onSubmitPrompt}
         />
       </SidebarInset>
     </div>
@@ -2844,6 +2921,9 @@ function WorkspaceResizableBody(props: {
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
+  // Sends one composer prompt through the backend runtime.
+  // 通过后端运行时发送一条输入区提示词。
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
     <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
@@ -2863,6 +2943,7 @@ function WorkspaceResizableBody(props: {
             selectedConversationId={props.selectedConversationId}
             loadingConversationId={props.loadingConversationId}
             conversationLoadError={props.conversationLoadError}
+            onSubmitPrompt={props.onSubmitPrompt}
           />
         </section>
       </ResizablePanel>
@@ -3846,6 +3927,7 @@ function ChatArea(props: {
   selectedConversationId: string | null;
   loadingConversationId: string | null;
   conversationLoadError: string | null;
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // workspaceRef stores the scrollable conversation timeline element.
   // workspaceRef 保存可滚动的会话时间线元素。
@@ -3947,7 +4029,7 @@ function ChatArea(props: {
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
       ) : isEmptyConversation ? (
-        <EmptyConversationCenter projectName={emptyProjectName} />
+        <EmptyConversationCenter projectName={emptyProjectName} onSubmitPrompt={props.onSubmitPrompt} />
       ) : (
         <>
           <ConversationWorkspace
@@ -3957,7 +4039,11 @@ function ChatArea(props: {
             onScrollStateChange={updateConversationBottomState}
             scrollRef={workspaceRef}
           />
-          <ComposerDock onScrollToBottom={() => scrollConversationToBottom()} showScrollToBottom={!isAtConversationBottom} />
+          <ComposerDock
+            onScrollToBottom={() => scrollConversationToBottom()}
+            onSubmitPrompt={props.onSubmitPrompt}
+            showScrollToBottom={!isAtConversationBottom}
+          />
         </>
       )}
     </div>
@@ -4384,6 +4470,9 @@ function ComposerDock(props: {
   // onScrollToBottom moves the current conversation to its latest content.
   // onScrollToBottom 将当前会话移动到最新内容。
   onScrollToBottom: () => void;
+  // onSubmitPrompt sends one composer prompt through the workbench runtime.
+  // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
     <div className="composer-dock">
@@ -4404,7 +4493,7 @@ function ComposerDock(props: {
           <TooltipContent side="top">滚动到底部</TooltipContent>
         </Tooltip>
       ) : null}
-      <ComposerPanel />
+      <ComposerPanel onSubmitPrompt={props.onSubmitPrompt} />
     </div>
   );
 }
@@ -4419,7 +4508,11 @@ const MODEL_SELECT_OPTIONS: ComposerSelectOption[] = [
 
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
-function ComposerPanel() {
+function ComposerPanel(props: {
+  // Sends one validated composer submission through the caller runtime.
+  // 通过调用方运行时发送一条已校验输入区提交。
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+}) {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
   const { t } = useI18n();
@@ -4468,21 +4561,33 @@ function ComposerPanel() {
     return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
   }, [t]);
 
-  // handleComposerSend handles the current placeholder-only send action.
-  // handleComposerSend 处理当前仅占位的发送动作。
-  const handleComposerSend = React.useCallback(() => {
+  // handleComposerSend validates input and forwards it to the real backend runtime.
+  // handleComposerSend 校验输入并转发到真实后端运行时。
+  const handleComposerSend = React.useCallback(async () => {
     if (isComposerRunning) {
       setIsComposerRunning(false);
       toast.info("停止已拦截：真实停止链路待接入。");
       return;
     }
-    if (!draftInput.trim()) {
+    const prompt = draftInput.trim();
+    if (!prompt) {
       toast.info("请输入任务指令。");
       return;
     }
     setIsComposerRunning(true);
-    toast.info("发送已拦截：真实发送链路待接入。");
-  }, [draftInput, isComposerRunning]);
+    try {
+      const sent = await props.onSubmitPrompt({
+        prompt,
+        executionMode,
+        reasoningEffort,
+      });
+      if (sent) {
+        setDraftInput("");
+      }
+    } finally {
+      setIsComposerRunning(false);
+    }
+  }, [draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
 
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
@@ -4491,7 +4596,7 @@ function ComposerPanel() {
       return;
     }
     event.preventDefault();
-    handleComposerSend();
+    void handleComposerSend();
   }, [handleComposerSend]);
 
   return (
@@ -4544,7 +4649,7 @@ function ComposerPanel() {
           <Button
             aria-label={isComposerRunning ? t("composer.aria.stop") : t("composer.aria.send")}
             className={cn("send-button", isComposerRunning && "running")}
-            onClick={handleComposerSend}
+            onClick={() => void handleComposerSend()}
             size="icon"
             type="button"
           >
@@ -4625,7 +4730,14 @@ function composerShortcutHint(baseHint: string): string {
 
 // EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
 // EmptyConversationCenter 渲染空白会话的居中首次输入状态。
-function EmptyConversationCenter(props: { projectName: string }) {
+function EmptyConversationCenter(props: {
+  // Project name used by the empty-state prompt.
+  // 空状态提示使用的项目名称。
+  projectName: string;
+  // Sends the first prompt that materializes this draft conversation.
+  // 发送用于实体化当前草稿会话的第一条提示词。
+  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+}) {
   // t translates the empty conversation prompt while projectName remains user data.
   // t 翻译空会话引导语，projectName 仍保留为用户数据。
   const { t } = useI18n();
@@ -4636,7 +4748,7 @@ function EmptyConversationCenter(props: { projectName: string }) {
   return (
     <section className="empty-conversation-center">
       <h2>{promptText}</h2>
-      <ComposerPanel />
+      <ComposerPanel onSubmitPrompt={props.onSubmitPrompt} />
     </section>
   );
 }

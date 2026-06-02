@@ -39,7 +39,7 @@ static LATEST_RUNTIME_PROMPT_COMPOSER_REPORT: OnceLock<
 /// Prompt-composer report displayed by runtime diagnostics.
 /// 运行时诊断展示的提示词组合报告。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimePromptComposerReport {
+pub struct RuntimePromptComposerReport {
     /// Session identifier that produced the report.
     /// 产生报告的会话标识。
     pub session_id: String,
@@ -93,7 +93,7 @@ pub(crate) struct RuntimePromptComposerReport {
 /// One prompt layer summary displayed in diagnostics.
 /// 诊断中展示的一条提示词分层摘要。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimePromptComposerLayerReport {
+pub struct RuntimePromptComposerLayerReport {
     /// Layer debug label.
     /// 分层调试标签。
     pub target_label: String,
@@ -123,7 +123,7 @@ pub(crate) struct RuntimePromptComposerLayerReport {
 /// One cache event row displayed in diagnostics.
 /// 诊断中展示的一条缓存事件记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimePromptComposerCacheEventReport {
+pub struct RuntimePromptComposerCacheEventReport {
     /// Cache scope label.
     /// 缓存作用域标签。
     pub scope: String,
@@ -138,7 +138,7 @@ pub(crate) struct RuntimePromptComposerCacheEventReport {
 /// One prompt segment row displayed in diagnostics.
 /// 诊断中展示的一条提示词片段记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RuntimePromptComposerSegmentReport {
+pub struct RuntimePromptComposerSegmentReport {
     /// Segment node identifier.
     /// 片段节点标识。
     pub node_id: String,
@@ -176,7 +176,7 @@ pub(crate) struct RuntimePromptComposerSegmentReport {
 
 /// Return the shared runtime prompt composer engine.
 /// 返回共享运行时提示词组合器引擎。
-pub(crate) fn runtime_prompt_composer_engine() -> Arc<PromptComposerEngine> {
+pub fn runtime_prompt_composer_engine() -> Arc<PromptComposerEngine> {
     let slot = RUNTIME_PROMPT_COMPOSER_ENGINE
         .get_or_init(|| RwLock::new(Arc::new(build_default_runtime_prompt_composer_engine())));
     let guard = slot
@@ -210,7 +210,7 @@ fn default_prompt_composer_resource_config() -> Option<PromptComposerResourceCon
 /// Reload the shared runtime prompt composer from resource directories.
 /// 根据资源目录重载共享运行时提示词组合器。
 #[allow(dead_code)]
-pub(crate) fn reload_runtime_prompt_composer_engine(
+pub fn reload_runtime_prompt_composer_engine(
     resources: &PromptComposerResourceConfig,
 ) -> Result<(), PromptComposerError> {
     let slot = RUNTIME_PROMPT_COMPOSER_ENGINE
@@ -234,7 +234,7 @@ pub(crate) fn reload_runtime_prompt_composer_engine(
 
 /// Reload the shared runtime prompt composer from default user resource directories.
 /// 从默认用户资源目录重载共享运行时提示词组合器。
-pub(crate) fn reload_default_runtime_prompt_composer_engine() -> Result<(), PromptComposerError> {
+pub fn reload_default_runtime_prompt_composer_engine() -> Result<(), PromptComposerError> {
     if let Some(resources) = default_prompt_composer_resource_config() {
         reload_runtime_prompt_composer_engine(&resources)
     } else {
@@ -244,7 +244,7 @@ pub(crate) fn reload_default_runtime_prompt_composer_engine() -> Result<(), Prom
 
 /// Invalidate reusable prompt-composer cache entries for changed prompt resources.
 /// 为已变化的提示词资源使可复用组合器缓存条目失效。
-pub(crate) fn invalidate_runtime_prompt_composer_cache_for_reason(
+pub fn invalidate_runtime_prompt_composer_cache_for_reason(
     reason: PromptInvalidationReason,
 ) {
     let prefixes = runtime_prompt_cache_prefixes_for_reason(&reason);
@@ -324,7 +324,7 @@ pub(crate) fn record_runtime_prompt_composer_report(
 
 /// Return the latest prompt-composer report, if any.
 /// 返回最近一次提示词组合报告（如果存在）。
-pub(crate) fn latest_runtime_prompt_composer_report() -> Option<RuntimePromptComposerReport> {
+pub fn latest_runtime_prompt_composer_report() -> Option<RuntimePromptComposerReport> {
     let slot = LATEST_RUNTIME_PROMPT_COMPOSER_REPORT.get_or_init(|| RwLock::new(None));
     let guard = slot
         .read()

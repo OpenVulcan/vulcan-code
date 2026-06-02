@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 /// Builds one fully prepared runtime-stream launch payload or one terminal preparation-failure report.
 /// 构建一份完全就绪的运行时流启动载荷，或者生成一份终态准备失败报告。
-pub(crate) async fn prepare_runtime_stream_launch(
+pub async fn prepare_runtime_stream_launch(
     config: &ProviderConfigurationFile,
     agent_profile_catalog: &AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,

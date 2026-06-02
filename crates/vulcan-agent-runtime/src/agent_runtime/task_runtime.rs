@@ -1139,7 +1139,7 @@ fn current_unix_millis_text() -> String {
 
 /// Builds one backend handler that can execute a concrete task session using the provided host execution context.
 /// 根据给定宿主执行上下文构建一条可执行具体任务会话的后端处理器。
-pub fn build_task_execution_handler<A>(
+pub(crate) fn build_task_execution_handler<A>(
     task_runtime: Arc<TaskRuntime>,
     provider_factory: Arc<impl Fn(ProviderLiveDeltaSender) -> A + Send + Sync + 'static>,
     base_controller_config: CoreControllerConfig,

@@ -9,19 +9,19 @@ use serde_json::{Value, json};
 /// Resolved provider reasoning controls attached to one runtime blueprint after the shared fallback chain has been applied.
 /// 在共享回退链应用完成后附着到单个运行时蓝图上的已解析 Provider 推理控制结果。
 #[derive(Debug, Clone)]
-pub(crate) struct ProviderRuntimeReasoningResolution {
+pub struct ProviderRuntimeReasoningResolution {
     /// Shared reasoning-effort preset requested by the workbench run controls.
     /// 工作台运行控制区请求的共享推理档位预设。
-    pub(crate) requested_effort: ReasoningEffortLevel,
+    pub requested_effort: ReasoningEffortLevel,
     /// Human-readable source label describing which layer produced the effective request patch.
     /// 描述哪一层产出了生效请求 Patch 的人类可读来源标签。
-    pub(crate) source_label: String,
+    pub source_label: String,
     /// Provider-specific request patch that should be merged into the final additional-params payload.
     /// 需要合并进最终附加参数载荷中的 Provider 专属请求 Patch。
-    pub(crate) additional_params: Option<Value>,
+    pub additional_params: Option<Value>,
     /// Optional diagnostics note that explains one capability downgrade or ignored preset.
     /// 用于解释能力降级或忽略预设的可选诊断说明。
-    pub(crate) note: Option<String>,
+    pub note: Option<String>,
 }
 
 impl Default for ProviderRuntimeReasoningResolution {
@@ -40,7 +40,7 @@ impl Default for ProviderRuntimeReasoningResolution {
 impl ProviderRuntimeReasoningResolution {
     /// Returns one compact human-readable summary row used by runtime diagnostics and request previews.
     /// 返回运行时诊断与请求预览使用的一条紧凑人类可读摘要行。
-    pub(crate) fn summary_label(&self) -> String {
+    pub fn summary_label(&self) -> String {
         format!(
             "推理：{} · 来源 {}",
             self.requested_effort, self.source_label
@@ -50,7 +50,7 @@ impl ProviderRuntimeReasoningResolution {
 
 /// Resolves the effective provider reasoning controls from the shared workbench preset plus model, provider, and runtime defaults.
 /// 根据共享工作台预设、模型覆盖、供应商覆盖与运行时默认值解析生效中的 Provider 推理控制。
-pub(crate) fn resolve_provider_runtime_reasoning(
+pub fn resolve_provider_runtime_reasoning(
     runtime_kind: ProviderRuntimeKind,
     provider_id: &str,
     model_id: &str,

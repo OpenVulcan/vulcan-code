@@ -8443,6 +8443,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "base64 0.22.1",
+ "dirs",
+ "encoding_rs",
+ "filetime",
+ "futures-channel",
+ "futures-util",
+ "luaskills",
+ "png 0.17.16",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "time",
+ "tokio",
+ "uuid",
+ "vldb-controller-client",
+ "vulcan-change-set",
+ "vulcan-context",
+ "vulcan-context-compaction",
+ "vulcan-context-injection",
+ "vulcan-core",
+ "vulcan-hooks",
+ "vulcan-host-tools",
+ "vulcan-luaskills-prompt",
+ "vulcan-mcp-runtime",
+ "vulcan-prompt-composer",
+ "vulcan-prompt-skills",
+ "vulcan-provider-config",
+ "vulcan-runtime-assets",
+ "vulcan-token-counter",
+ "vulcan-tools-luaskills-call",
+ "vulcan-tools-manager",
+ "vulcan-vmm",
+ "vulcan-workbench-model",
+ "vulcan-workspace-store",
+]
+
+[[package]]
 name = "vulcan-agent-view"
 version = "0.1.0"
 dependencies = [
@@ -8498,6 +8541,7 @@ dependencies = [
  "unicode-segmentation",
  "uuid",
  "vldb-controller-client",
+ "vulcan-agent-runtime",
  "vulcan-agent-view",
  "vulcan-change-set",
  "vulcan-context",
@@ -8526,6 +8570,7 @@ dependencies = [
 name = "vulcan-code-tauri"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "luaskills",
  "serde",
  "serde_json",
@@ -8536,6 +8581,8 @@ dependencies = [
  "tokio",
  "uuid",
  "vldb-controller-client",
+ "vulcan-agent-runtime",
+ "vulcan-core",
  "vulcan-mcp-runtime",
  "vulcan-provider-config",
  "vulcan-runtime-assets",

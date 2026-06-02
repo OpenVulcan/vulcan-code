@@ -84,7 +84,7 @@ pub(crate) fn inject_previous_response_id_into_additional_params(
 
 /// Attaches one tool name to runtime-event metadata so display-layer fallbacks can still recover the semantic tool title.
 /// 将工具名称附着到运行时事件元数据中，以便显示层在回退路径下仍能恢复语义化工具标题。
-pub(crate) fn attach_tool_name_to_runtime_metadata(
+pub fn attach_tool_name_to_runtime_metadata(
     metadata: Option<Value>,
     tool_name: &str,
 ) -> Option<Value> {
@@ -191,7 +191,7 @@ pub(crate) fn format_tool_call_runtime_detail(tool_name: &str, arguments: &Value
 
 /// Builds one structured runtime-event metadata payload for a completed tool result while preserving host-side metadata fields.
 /// 在保留宿主侧元数据字段的前提下，为已完成工具结果构建一份结构化运行时事件元数据载荷。
-pub(crate) fn build_tool_result_runtime_metadata(
+pub fn build_tool_result_runtime_metadata(
     tool_call_id: &str,
     tool_result_id: &str,
     host_metadata: Option<&Value>,

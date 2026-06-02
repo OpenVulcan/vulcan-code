@@ -45,7 +45,7 @@ use std::sync::Arc;
 /// 返回值
 /// The captured provider-specific HTTP request JSON.
 /// 捕获到的 Provider 专用 HTTP 请求 JSON。
-pub(crate) async fn capture_runtime_provider_wire_request(
+pub async fn capture_runtime_provider_wire_request(
     config: ProviderConfigurationFile,
     agent_profile_catalog: AgentProfileCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,

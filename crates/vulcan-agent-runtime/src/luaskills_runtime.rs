@@ -12,7 +12,7 @@ use crate::tool_result_format::{
 use crate::tooling::change_set::{
     change_set_host_verification_notice, luaskills_change_set_host_result_capabilities,
 };
-use iced::futures::channel::oneshot;
+use futures_channel::oneshot;
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaInvocationContext, LuaRuntimeDatabaseProviderMode,

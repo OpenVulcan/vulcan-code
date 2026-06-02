@@ -435,7 +435,7 @@ fn validate_question_prompts(questions: &[QuestionPrompt]) -> Result<(), String>
 
 /// Builds one compact Markdown summary of the final ask answers that will be returned back to the model.
 /// 构建一份紧凑 Markdown 形式的 ask 最终答案摘要，并将其回传给模型。
-pub(crate) fn build_question_reply_markdown(
+pub fn build_question_reply_markdown(
     questions: &[QuestionPrompt],
     answers: &[Vec<String>],
 ) -> String {

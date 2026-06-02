@@ -1,43 +1,27 @@
 //! Application entry module for the Rust + iced desktop prototype.
 //! Rust + iced 桌面原型的应用入口模块。
 
-mod agent_runtime;
 mod app_shell;
-mod attachments;
-mod compat;
 mod context_compaction;
-mod context_management;
 mod i18n;
-mod mcp;
-mod profiles;
-mod provider;
-mod runtime_support;
 mod session;
 mod shared;
-mod skills;
-mod tooling;
 mod ui;
 
 pub(crate) use app_shell as app;
 pub(crate) use app_shell::model;
-pub(crate) use attachments::{asset_index as attachment_asset_index, assets as attachment_assets};
-pub(crate) use compat::{
-    image_understanding as image_understanding_compat, media_generation as media_generation_compat,
-    web_search as web_search_compat,
-};
-pub(crate) use context_management::{budget as context_budget, protocol as conversation_protocol};
 pub(crate) use i18n::{
     AppLocale, I18nArg, I18nKey, LanguageManager, format_for_locale, text_for_locale,
 };
-pub(crate) use profiles::agent_profile;
-pub(crate) use provider::{input_normalizer as provider_input_normalizer, usage as provider_usage};
-pub(crate) use runtime_support::{luaskills_runtime, project_temp_maintenance};
 pub(crate) use session::agent_view;
 pub(crate) use shared::{code_view, composer_parts, data_plane, diff, workspace_path};
-pub(crate) use tooling::bridge as vulcan_tools_bridge;
-pub(crate) use tooling::result_format as tool_result_format;
 pub(crate) use ui::widgets::{selectable_transcript, wheel_passthrough};
 pub(crate) use ui::{style, theme};
+pub(crate) use vulcan_agent_runtime::{
+    agent_profile, agent_runtime, attachment_asset_index, attachment_assets, context_budget,
+    conversation_protocol, luaskills_runtime, mcp, project_temp_maintenance, provider_usage, skills,
+    tooling,
+};
 pub(crate) use vulcan_provider_config::ai_tool_configuration;
 pub(crate) use vulcan_provider_config::catalog::ai_capability_provider_catalog;
 pub(crate) use vulcan_provider_config::{

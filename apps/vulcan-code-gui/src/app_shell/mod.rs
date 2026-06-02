@@ -3960,6 +3960,71 @@ impl VulcanWorkbench {
         )
     }
 
+    /// Builds one asynchronous persistence task for a single active or archived session.
+    /// 为单个活动或归档会话构建一次异步持久化任务。
+    fn persist_single_session_update_task(&mut self, session_id: SessionId) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        let Some((session, archived)) = self
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| (session.clone(), false))
+            .or_else(|| {
+                self.archived_sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| (session.clone(), true))
+            })
+        else {
+            return Task::none();
+        };
+        let task_projects = self
+            .task_projects
+            .iter()
+            .cloned()
+            .chain(self.archived_task_projects.iter().cloned())
+            .collect::<Vec<_>>();
+        let messages = if archived {
+            self.archived_session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            self.session_messages
+                .get(&session_id)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let compactions = if archived {
+            self.archived_session_compactions.get(&session_id).cloned()
+        } else {
+            self.session_compactions.get(&session_id).cloned()
+        };
+        let runtime_state = if archived {
+            self.archived_session_runtime_state.get(&session_id).cloned()
+        } else {
+            self.session_runtime_state.get(&session_id).cloned()
+        };
+
+        Task::perform(
+            async move {
+                workspace_store::persist_single_session_update(
+                    controller_runtime,
+                    &task_projects,
+                    &session,
+                    archived,
+                    &messages,
+                    compactions.as_deref(),
+                    runtime_state.as_ref(),
+                )
+                .await
+            },
+            Message::SessionStatePersisted,
+        )
+    }
+
     /// Replaces the runtime-event list for one session with a fresh snapshot.
     /// 使用新的快照替换某个会话的运行时事件列表。
     fn replace_session_runtime_events(&mut self, session_id: SessionId, events: Vec<RuntimeEvent>) {

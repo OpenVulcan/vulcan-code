@@ -49,6 +49,9 @@ pub(super) enum Message {
     /// Applies the completed workspace-state persistence result after one user-visible mutation.
     /// 应用某次用户可见变更后已完成的工作台状态持久化结果。
     WorkspaceStatePersisted(Result<WorkspaceSnapshotPersistOutcome, String>),
+    /// Applies the completed single-session persistence result after one session-scoped runtime mutation.
+    /// 应用某次会话级运行时变更后完成的单会话持久化结果。
+    SessionStatePersisted(Result<WorkspaceSnapshotPersistOutcome, String>),
     /// Main workbench window opened successfully.
     /// 主工作台窗口已成功打开。
     MainWindowOpened(window::Id),

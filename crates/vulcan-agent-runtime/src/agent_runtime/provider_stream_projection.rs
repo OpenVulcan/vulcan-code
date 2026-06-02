@@ -9,7 +9,7 @@ use vulcan_core::types::{
 
 /// Returns whether one provider runtime event represents a real tool boundary that should seal the current floating thinking phase.
 /// 返回某条 Provider 运行时事件是否代表真实工具边界，从而应封口当前浮动思考阶段。
-pub(crate) fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
+pub fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
     match event.kind {
         RuntimeEventKind::ToolStarted => event.title.starts_with("工具调用 · "),
         RuntimeEventKind::ToolFinished => event.title.starts_with("工具返回 · "),
@@ -179,7 +179,7 @@ pub(crate) fn normalize_synthetic_thinking_preamble_character(character: char) -
 
 /// Truncates one preview string while preserving a readable Unicode-safe suffix.
 /// 在保留可读 Unicode 后缀的前提下截断一段预览文本。
-pub(crate) fn truncate_preview(value: &str, max_chars: usize) -> String {
+pub fn truncate_preview(value: &str, max_chars: usize) -> String {
     let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
     if compact.chars().count() <= max_chars {
         compact

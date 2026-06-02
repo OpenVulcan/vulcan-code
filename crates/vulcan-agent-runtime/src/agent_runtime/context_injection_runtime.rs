@@ -16,7 +16,7 @@ const LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG: &str = "vmm_profile";
 
 /// Converts shared context-injection state into the core overlay for one logical turn.
 /// 将共享上下文注入状态转换为某个逻辑回合的 core 覆盖层。
-pub(crate) fn core_provider_context_injection_from_state_for_turn(
+pub fn core_provider_context_injection_from_state_for_turn(
     state: &ContextInjectionState,
     current_turn_marker: Option<&str>,
 ) -> Option<CoreProviderContextInjection> {
@@ -37,7 +37,7 @@ pub(crate) fn core_provider_context_injection_from_state_for_turn(
 
 /// Returns simplified side-panel cards filtered by injection kind when requested.
 /// 按需根据注入类型过滤并返回简洁侧面板卡片。
-pub(crate) fn context_injection_panel_cards_for_kind(
+pub fn context_injection_panel_cards_for_kind(
     state: &ContextInjectionState,
     kind: Option<InjectionKind>,
 ) -> Vec<InjectionPanelCard> {
@@ -51,7 +51,7 @@ pub(crate) fn context_injection_panel_cards_for_kind(
 
 /// Removes legacy VMM profile hidden-user state and reports whether anything changed.
 /// 删除旧版 VMM 画像隐藏用户状态，并返回是否发生变化。
-pub(crate) fn remove_legacy_vmm_profile_context_injection_state(
+pub fn remove_legacy_vmm_profile_context_injection_state(
     state: &mut ContextInjectionState,
 ) -> bool {
     state
@@ -81,7 +81,7 @@ fn context_injection_renderer_registry() -> InjectionRendererRegistry {
 
 /// Runs the built-in manual test hook and returns collected injections plus the cleaned user prompt.
 /// 运行内置手动测试 hook，并返回已收集注入以及清理后的用户提示词。
-pub(crate) fn collect_builtin_manual_injection_ops_and_sanitized_prompt(
+pub fn collect_builtin_manual_injection_ops_and_sanitized_prompt(
     prompt: &str,
 ) -> (Vec<InjectionInsert>, String) {
     let mut helper = InjectionHelper::new();

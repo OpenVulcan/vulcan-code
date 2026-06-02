@@ -501,6 +501,28 @@ impl VulcanWorkbench {
 
                 next_persist_task
             }
+            Message::SessionStatePersisted(result) => {
+                match result {
+                    Ok(outcome) if !outcome.is_clean() => {
+                        self.status_message =
+                            String::from("会话状态已保存，但历史搜索索引同步被延后。");
+                        for warning in outcome.warnings {
+                            self.push_activity(
+                                ActivityLevel::Warning,
+                                "会话历史搜索延后同步",
+                                warning,
+                            );
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        self.status_message = format!("会话状态保存失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "会话状态保存失败", error);
+                    }
+                }
+
+                Task::none()
+            }
             luaskills_message @ (Message::LuaSkillsCatalogLoaded(_)
             | Message::PollLuaSkillsOperationProgressTick
             | Message::RefreshLuaSkillsCatalog

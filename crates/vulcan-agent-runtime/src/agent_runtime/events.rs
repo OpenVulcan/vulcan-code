@@ -87,26 +87,46 @@ pub enum ExecutionStreamEvent {
     Prepared(ExecutionPreparation),
     /// One real provider request snapshot has just been sent and the GUI should show a lightweight waiting hint until visible output arrives.
     /// 一次真实 Provider 请求快照刚刚发出，图形界面应显示轻量等待提示，直到出现可见输出为止。
-    RequestStarted { session_id: SessionId },
+    RequestStarted {
+        /// Session identifier owning the provider request.
+        /// 拥有该 Provider 请求的会话标识。
+        session_id: SessionId,
+    },
     /// Visible assistant thinking delta that should stay outside future context.
     /// 应保持在未来上下文之外的可见思考增量。
     ThinkingDelta {
+        /// Session identifier receiving the thinking delta.
+        /// 接收该思考增量的会话标识。
         session_id: SessionId,
+        /// Incremental thinking text emitted by the provider.
+        /// Provider 发出的增量思考文本。
         delta: String,
     },
     /// Visible assistant thinking phase completed and should dock back into the main transcript immediately.
     /// 可见助手思考阶段已完成，并应立即收回主转录正文中。
-    ThinkingCompleted { session_id: SessionId },
+    ThinkingCompleted {
+        /// Session identifier whose thinking phase completed.
+        /// 思考阶段已经完成的会话标识。
+        session_id: SessionId,
+    },
     /// Visible assistant final-output delta that should stay inside future context.
     /// 应保留在未来上下文之内的可见正式输出增量。
     OutputDelta {
+        /// Session identifier receiving the output delta.
+        /// 接收该输出增量的会话标识。
         session_id: SessionId,
+        /// Incremental assistant output text emitted by the provider.
+        /// Provider 发出的助手正式输出增量文本。
         delta: String,
     },
     /// Runtime event emitted while the run is still in progress.
     /// 在运行仍进行中时发出的运行时事件。
     RuntimeEvent {
+        /// Session identifier owning the runtime event.
+        /// 拥有该运行时事件的会话标识。
         session_id: SessionId,
+        /// Structured runtime event payload to project into host UI.
+        /// 需要投影到宿主界面的结构化运行时事件载荷。
         event: RuntimeEvent,
     },
     /// Safe canonical context checkpoint emitted after one provider/tool cycle becomes replayable.

@@ -48,7 +48,7 @@ pub use self::event_store::{
 pub use history_search::search_workspace_history;
 pub use persistence::{
     maintain_legacy_session_storage, permanently_delete_archived_project,
-    permanently_delete_archived_session, persist_workspace_snapshot,
+    permanently_delete_archived_session, persist_single_session_update, persist_workspace_snapshot,
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 

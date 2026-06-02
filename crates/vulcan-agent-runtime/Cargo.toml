@@ -1,0 +1,49 @@
+[package]
+name = "vulcan-agent-runtime"
+description = "Shared agent execution runtime extracted from the desktop workbench."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-stream = "0.3.6"
+async-trait.workspace = true
+base64 = "0.22.1"
+dirs.workspace = true
+encoding_rs = "0.8.35"
+filetime = "0.2.26"
+futures-channel = "0.3.31"
+futures-util = "0.3.31"
+luaskills.workspace = true
+png = "0.17.16"
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "parsing"] }
+tokio = { version = "1.52.2", features = ["rt", "sync", "time", "net", "io-util"] }
+uuid.workspace = true
+vldb-controller-client.workspace = true
+vulcan-context.workspace = true
+vulcan-context-compaction.workspace = true
+vulcan-context-injection.workspace = true
+vulcan-core.workspace = true
+vulcan-change-set.workspace = true
+vulcan-host-tools.workspace = true
+vulcan-hooks.workspace = true
+vulcan-luaskills-prompt.workspace = true
+vulcan-mcp-runtime.workspace = true
+vulcan-prompt-composer.workspace = true
+vulcan-prompt-skills.workspace = true
+vulcan-provider-config.workspace = true
+vulcan-runtime-assets.workspace = true
+vulcan-token-counter.workspace = true
+vulcan-tools-luaskills-call.workspace = true
+vulcan-tools-manager.workspace = true
+vulcan-vmm.workspace = true
+vulcan-workbench-model.workspace = true
+vulcan-workspace-store.workspace = true

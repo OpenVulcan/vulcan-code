@@ -16,12 +16,6 @@ pub(crate) fn normalized_workspace_path_text_from_path(path: &Path) -> String {
     normalize_workspace_path_text(&path.to_string_lossy())
 }
 
-/// Converts one filesystem path buffer into the native host path text used for host-managed runtime injections.
-/// 将一个文件系统路径缓冲区转换为用于宿主管理运行时注入的宿主原生路径文本。
-pub(crate) fn native_workspace_path_text_from_path(path: &Path) -> String {
-    native_workspace_path_text(&canonicalize_workspace_path(path).to_string_lossy())
-}
-
 /// Converts one raw workspace path string into a stable human-readable text form without Windows verbatim prefixes.
 /// 将一个原始工作区路径字符串转换为稳定且可读的文本形式，并去除 Windows verbatim 前缀。
 pub(crate) fn normalize_workspace_path_text(path: &str) -> String {
@@ -82,8 +76,7 @@ mod tests {
     //! Focused workspace-path normalization tests.
     //! 聚焦工作区路径规范化的定向测试。
 
-    use super::{native_workspace_path_text_from_path, normalize_workspace_path_text};
-    use std::path::Path;
+    use super::normalize_workspace_path_text;
 
     /// Verifies Windows verbatim drive paths are rewritten into the standard backslash drive form used by host-visible path text.
     /// 验证 Windows verbatim 盘符路径会被改写成宿主可见路径文本使用的标准反斜杠盘符形式。
@@ -136,25 +129,4 @@ mod tests {
         );
     }
 
-    /// Verifies native workspace-path formatting keeps slash paths unchanged on Unix-like hosts.
-    /// 验证宿主原生工作区路径格式化在类 Unix 宿主上会保持斜杠路径不变。
-    #[cfg(not(windows))]
-    #[test]
-    fn native_workspace_path_preserves_unix_style_text() {
-        assert_eq!(
-            native_workspace_path_text_from_path(Path::new("/Users/demo/openvulcan/vulcan-code")),
-            "/Users/demo/openvulcan/vulcan-code"
-        );
-    }
-
-    /// Verifies native workspace-path formatting restores Windows separators for host-managed runtime injections.
-    /// 验证宿主原生工作区路径格式化会为宿主管理运行时注入恢复 Windows 分隔符。
-    #[cfg(windows)]
-    #[test]
-    fn native_workspace_path_restores_windows_separators() {
-        assert_eq!(
-            native_workspace_path_text_from_path(Path::new("C:/openvulcan/vulcan-code")),
-            r"C:\openvulcan\vulcan-code"
-        );
-    }
 }

@@ -361,6 +361,92 @@ pub async fn persist_workspace_snapshot(
     Ok(WorkspaceSnapshotPersistOutcome { warnings })
 }
 
+/// Persists one session and its runtime artifacts without rewriting unrelated workspace sessions.
+/// 仅持久化单个会话及其运行时工件，不重写无关工作区会话。
+pub async fn persist_single_session_update(
+    controller: ControllerRuntimeHandle,
+    task_projects: &[TaskProjectSummary],
+    session: &SessionSummary,
+    archived: bool,
+    messages: &[SessionMessageEntry],
+    compactions: Option<&[SessionCompactionEntry]>,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> Result<WorkspaceSnapshotPersistOutcome, String> {
+    let mut warnings = Vec::new();
+    let session_owner_map = session_owner_map_from_projects(task_projects);
+    let Some((project_id, sort_order)) = session_owner_map.get(&session.id) else {
+        return Err(format!("单会话保存失败：未找到会话所属项目：{}", session.id));
+    };
+
+    upsert_session_rows(
+        &controller,
+        vec![build_session_upsert_row(
+            session,
+            project_id,
+            *sort_order,
+            archived,
+        )],
+    )
+    .await?;
+
+    let sessions = std::slice::from_ref(session);
+    let archived_sessions = Vec::<SessionSummary>::new();
+    let archived_session_messages = BTreeMap::<SessionId, Vec<SessionMessageEntry>>::new();
+    let archived_session_compactions = BTreeMap::<SessionId, Vec<SessionCompactionEntry>>::new();
+    let archived_session_runtime_state = BTreeMap::<SessionId, SessionRuntimeStateEntry>::new();
+    let hydrated_session_ids = BTreeSet::<SessionId>::new();
+    let mut session_messages = BTreeMap::new();
+    let mut session_compactions = BTreeMap::new();
+    let mut session_runtime_state = BTreeMap::new();
+    let retained_compactions;
+    let effective_compactions = if let Some(compactions) = compactions {
+        compactions
+    } else {
+        retained_compactions = query_session_compaction_entries(&controller, session.id).await?;
+        retained_compactions.as_slice()
+    };
+    session_messages.insert(session.id, messages.to_vec());
+    session_compactions.insert(session.id, effective_compactions.to_vec());
+    if let Some(runtime_state) = runtime_state {
+        session_runtime_state.insert(session.id, runtime_state.clone());
+    }
+
+    replace_session_event_stores(
+        &controller,
+        sessions,
+        &session_messages,
+        &session_compactions,
+        &session_runtime_state,
+        &archived_sessions,
+        &archived_session_messages,
+        &archived_session_compactions,
+        &archived_session_runtime_state,
+        &mut warnings,
+    )
+    .await?;
+    if compactions.is_some() {
+        replace_session_compactions(
+            &controller,
+            sessions,
+            &session_compactions,
+            &archived_sessions,
+            &archived_session_compactions,
+        )
+        .await?;
+    }
+    replace_session_runtime_state(
+        &controller,
+        sessions,
+        &session_runtime_state,
+        &archived_sessions,
+        &archived_session_runtime_state,
+        &hydrated_session_ids,
+    )
+    .await?;
+
+    Ok(WorkspaceSnapshotPersistOutcome { warnings })
+}
+
 /// Queries one persisted session summary row so single-session maintenance can reuse the event-store writer without a full workspace snapshot.
 /// 查询单条持久化会话摘要行，使单会话维护无需完整工作台快照也能复用事件存储写入器。
 async fn query_persisted_session_summary(
@@ -669,7 +755,29 @@ async fn upsert_sessions(
         return Ok(());
     }
 
-    let session_owner_map = task_projects
+    let session_owner_map = session_owner_map_from_projects(task_projects);
+    let mut batch_params = Vec::new();
+
+    for (session, archived) in sessions {
+        if let Some((project_id, sort_order)) = session_owner_map.get(&session.id) {
+            batch_params.push(build_session_upsert_row(
+                session,
+                project_id,
+                *sort_order,
+                *archived,
+            ));
+        }
+    }
+
+    upsert_session_rows(controller, batch_params).await
+}
+
+/// Builds a map from session id to owning project id and project-local sort order.
+/// 构建从会话标识到所属项目标识及项目内排序位置的映射。
+fn session_owner_map_from_projects(
+    task_projects: &[TaskProjectSummary],
+) -> BTreeMap<SessionId, (String, usize)> {
+    task_projects
         .iter()
         .flat_map(|project| {
             project
@@ -678,33 +786,42 @@ async fn upsert_sessions(
                 .enumerate()
                 .map(move |(index, session_id)| (*session_id, (project.id.clone(), index)))
         })
-        .collect::<BTreeMap<SessionId, (String, usize)>>();
+        .collect()
+}
+
+/// Builds one SQLite parameter row for upserting a single session summary.
+/// 构建一条用于上写单个会话摘要的 SQLite 参数行。
+fn build_session_upsert_row(
+    session: &SessionSummary,
+    project_id: &str,
+    sort_order: usize,
+    archived: bool,
+) -> Vec<ControllerSqliteValue> {
     let now = current_unix_millis();
-    let mut batch_params = Vec::new();
+    let updated_at = approximate_unix_millis_from_relative_label(&session.last_updated_label)
+        .unwrap_or(now)
+        .to_string();
+    vec![
+        ControllerSqliteValue::String(session.id.to_string()),
+        ControllerSqliteValue::String(project_id.to_string()),
+        ControllerSqliteValue::String(session.title.clone()),
+        ControllerSqliteValue::String(session.title_source.as_persisted_key().to_string()),
+        ControllerSqliteValue::Int64(i64::from(archived)),
+        ControllerSqliteValue::Int64(sort_order as i64),
+        ControllerSqliteValue::String(now.to_string()),
+        ControllerSqliteValue::String(updated_at),
+    ]
+}
 
-    for (session, archived) in sessions {
-        if let Some((project_id, sort_order)) = session_owner_map.get(&session.id) {
-            let updated_at =
-                approximate_unix_millis_from_relative_label(&session.last_updated_label)
-                    .unwrap_or(now)
-                    .to_string();
-            batch_params.push(vec![
-                ControllerSqliteValue::String(session.id.to_string()),
-                ControllerSqliteValue::String(project_id.clone()),
-                ControllerSqliteValue::String(session.title.clone()),
-                ControllerSqliteValue::String(session.title_source.as_persisted_key().to_string()),
-                ControllerSqliteValue::Int64(i64::from(*archived)),
-                ControllerSqliteValue::Int64(*sort_order as i64),
-                ControllerSqliteValue::String(now.to_string()),
-                ControllerSqliteValue::String(updated_at),
-            ]);
-        }
-    }
-
+/// Executes the shared session-summary upsert statement for prebuilt rows.
+/// 对预构建参数行执行共享会话摘要上写语句。
+async fn upsert_session_rows(
+    controller: &ControllerRuntimeHandle,
+    batch_params: Vec<Vec<ControllerSqliteValue>>,
+) -> Result<(), String> {
     if batch_params.is_empty() {
         return Ok(());
     }
-
     controller
         .client
         .execute_sqlite_batch_typed(
@@ -1403,30 +1520,34 @@ async fn replace_session_runtime_state(
     session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     archived_sessions: &[SessionSummary],
     archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    hydrated_session_ids: &BTreeSet<SessionId>,
+    _hydrated_session_ids: &BTreeSet<SessionId>,
 ) -> Result<(), String> {
-    let active_session_ids = sessions
-        .iter()
-        .chain(archived_sessions.iter())
-        .filter(|session| hydrated_session_ids.contains(&session.id))
-        .map(|session| session.id.to_string())
-        .collect::<Vec<_>>();
-
-    delete_session_scoped_rows(
-        controller,
-        "session_runtime_state",
-        &active_session_ids,
-        "删除当前可见会话的旧运行时状态失败",
-    )
-    .await?;
-
     let mut batch_params = Vec::new();
-    push_session_runtime_state_batch_rows(&mut batch_params, sessions, session_runtime_state);
-    push_session_runtime_state_batch_rows(
+    let mut pushed_session_ids = BTreeSet::new();
+    push_session_runtime_state_batch_rows_with_seen(
+        &mut batch_params,
+        sessions,
+        session_runtime_state,
+        &mut pushed_session_ids,
+    );
+    push_session_runtime_state_batch_rows_with_seen(
         &mut batch_params,
         archived_sessions,
         archived_session_runtime_state,
+        &mut pushed_session_ids,
     );
+
+    let rewrite_session_ids = pushed_session_ids
+        .iter()
+        .map(SessionId::to_string)
+        .collect::<Vec<_>>();
+    delete_session_scoped_rows(
+        controller,
+        "session_runtime_state",
+        &rewrite_session_ids,
+        "删除当前可见会话的旧运行时状态失败",
+    )
+    .await?;
 
     if batch_params.is_empty() {
         return Ok(());
@@ -1910,8 +2031,28 @@ pub(super) fn push_session_runtime_state_batch_rows(
     sessions: &[SessionSummary],
     session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
 ) {
+    let mut pushed_session_ids = BTreeSet::new();
+    push_session_runtime_state_batch_rows_with_seen(
+        batch_params,
+        sessions,
+        session_runtime_state,
+        &mut pushed_session_ids,
+    );
+}
+
+/// Pushes runtime-state batch rows while skipping session ids that have already been emitted by an earlier slice.
+/// 在推入运行时状态批量行时跳过早前切片已经写出的会话标识。
+fn push_session_runtime_state_batch_rows_with_seen(
+    batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
+    sessions: &[SessionSummary],
+    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    pushed_session_ids: &mut BTreeSet<SessionId>,
+) {
     for session in sessions {
         if let Some(entry) = session_runtime_state.get(&session.id) {
+            if !pushed_session_ids.insert(session.id) {
+                continue;
+            }
             batch_params.push(vec![
                 ControllerSqliteValue::String(session.id.to_string()),
                 optional_sqlite_string(&entry.active_agent_id),
@@ -2471,5 +2612,81 @@ mod tests {
 
         assert!(rewrite_ids.contains(&session_a.id));
         assert!(!rewrite_ids.contains(&session_b.id));
+    }
+
+    /// Verifies duplicate runtime-state ids are skipped across active and archived slices while preserving the first emitted row.
+    /// 验证活动与归档切片之间重复的运行时状态标识会被跳过，并保留第一条已发出的行。
+    #[test]
+    fn runtime_state_batch_rows_skip_duplicate_session_ids_across_slices() {
+        let session_id = SessionId::from_u128(303);
+        let session = test_session_summary(session_id, "project-a", "重复会话");
+        let mut active_runtime_states = BTreeMap::new();
+        active_runtime_states.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_agent_id: Some(String::from("active-agent")),
+                updated_at: String::from("1"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+        let mut archived_runtime_states = BTreeMap::new();
+        archived_runtime_states.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_agent_id: Some(String::from("archived-agent")),
+                updated_at: String::from("2"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+        let mut rows = Vec::new();
+        let mut pushed_session_ids = BTreeSet::new();
+
+        push_session_runtime_state_batch_rows_with_seen(
+            &mut rows,
+            std::slice::from_ref(&session),
+            &active_runtime_states,
+            &mut pushed_session_ids,
+        );
+        push_session_runtime_state_batch_rows_with_seen(
+            &mut rows,
+            &[session],
+            &archived_runtime_states,
+            &mut pushed_session_ids,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(
+            &rows[0][1],
+            ControllerSqliteValue::String(value) if value == "active-agent"
+        ));
+    }
+
+    /// Verifies runtime-state rewrite ids are derived from emitted batch rows rather than the hydration set.
+    /// 验证运行时状态重写标识来自实际发出的批量行，而不是来自水合会话集合。
+    #[test]
+    fn runtime_state_rewrite_ids_follow_emitted_rows_without_hydration() {
+        let session_id = SessionId::from_u128(404);
+        let session = test_session_summary(session_id, "project-a", "未水合会话");
+        let mut runtime_states = BTreeMap::new();
+        runtime_states.insert(
+            session_id,
+            SessionRuntimeStateEntry {
+                active_agent_id: Some(String::from("runtime-agent")),
+                updated_at: String::from("1"),
+                ..SessionRuntimeStateEntry::default()
+            },
+        );
+        let mut rows = Vec::new();
+        let mut pushed_session_ids = BTreeSet::new();
+
+        push_session_runtime_state_batch_rows_with_seen(
+            &mut rows,
+            &[session],
+            &runtime_states,
+            &mut pushed_session_ids,
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert!(pushed_session_ids.contains(&session_id));
     }
 }
