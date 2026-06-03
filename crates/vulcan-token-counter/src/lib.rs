@@ -2,8 +2,10 @@
 //! 面向 Vulcan 上下文控制的独立模型感知 Token 预算基础能力。
 
 use std::{
+    any::Any,
     collections::HashMap,
     fmt,
+    panic::{AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -526,9 +528,60 @@ impl LoadedOpenAiTokenizer {
                     encoding,
                     message: error.to_string(),
                 }),
-            Self::Tokie(tokenizer) => Ok(tokenizer.count_tokens(text)),
+            Self::Tokie(tokenizer) => safe_count_tokie_tokens(tokenizer, text).map_err(|message| {
+                TokenCounterError::NativeOpenAi {
+                    backend,
+                    encoding,
+                    message,
+                }
+            }),
         }
     }
+}
+
+/// Counts text with `tokie` while containing tokenizer-internal panics.
+/// 在隔离 tokenizer 内部 panic 的情况下使用 `tokie` 统计文本。
+///
+/// # Parameters
+/// 参数
+/// `tokenizer` is the already loaded `tokie` tokenizer.
+/// `tokenizer` 是已经加载完成的 `tokie` tokenizer。
+/// `text` is the plain text payload to count.
+/// `text` 是需要统计的纯文本载荷。
+///
+/// # Returns
+/// 返回值
+/// The token count, or a diagnostic string when `tokie` panics during counting.
+/// Token 数；当 `tokie` 在统计期间 panic 时返回诊断字符串。
+fn safe_count_tokie_tokens(tokenizer: &TokieTokenizer, text: &str) -> Result<usize, String> {
+    catch_unwind(AssertUnwindSafe(|| tokenizer.count_tokens(text))).map_err(|payload| {
+        format!(
+            "tokie tokenizer panicked: {}",
+            panic_payload_message(&payload)
+        )
+    })
+}
+
+/// Converts one panic payload into a compact diagnostic string.
+/// 将单个 panic 载荷转换为紧凑诊断字符串。
+///
+/// # Parameters
+/// 参数
+/// `payload` is the panic payload captured by `catch_unwind`.
+/// `payload` 是 `catch_unwind` 捕获到的 panic 载荷。
+///
+/// # Returns
+/// 返回值
+/// A readable panic message when available, otherwise a stable fallback label.
+/// 可读 panic 消息；无法读取时返回稳定回退标签。
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        return (*message).to_string();
+    }
+    if let Some(message) = payload.downcast_ref::<String>() {
+        return message.clone();
+    }
+    String::from("unknown panic payload")
 }
 
 /// Fast token counter optimized for startup latency and conservative context budgeting.
@@ -1109,7 +1162,7 @@ impl TokenCounter {
     /// 精确 tokenizer 可用时返回 `Some(tokens)`，否则返回 `None`。
     fn count_exact_tokie_tokens(&self, key: ExactTokenizerKey, text: &str) -> Option<usize> {
         self.exact_tokenizer(key)
-            .map(|tokenizer| tokenizer.count_tokens(text))
+            .and_then(|tokenizer| safe_count_tokie_tokens(&tokenizer, text).ok())
     }
 
     /// Returns one lazily initialized exact `.tkz` tokenizer.

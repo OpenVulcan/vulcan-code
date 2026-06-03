@@ -8588,6 +8588,7 @@ dependencies = [
  "vulcan-runtime-assets",
  "vulcan-service-api",
  "vulcan-token-counter",
+ "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
 ]

@@ -5,6 +5,7 @@ pub mod ai_tool_router;
 pub mod config;
 pub mod context_injection_runtime;
 pub mod context_request_mode;
+pub mod conversation_hooks;
 pub mod events;
 pub mod execution_models;
 pub mod execution_preparation;
@@ -93,6 +94,7 @@ pub mod runtime_stream_setup;
 pub mod task_runtime;
 pub mod token_budget_runtime;
 pub mod tool_runtime_bridge;
+pub mod vmm_hooks;
 
 pub use config::{RuntimeSkillKind, ensure_runtime_defaults};
 pub use events::ExecutionStreamEvent;

@@ -166,7 +166,7 @@ type ThemeMode = "light" | "dark";
 
 // ProjectIconBadgeShape names the badge silhouette used by generated project icons.
 // ProjectIconBadgeShape 命名生成式项目图标使用的徽标轮廓。
-type ProjectIconBadgeShape = "circle" | "square" | "rounded" | "sharp";
+type ProjectIconBadgeShape = "circle" | "square";
 
 // ProjectIconSelection describes one icon override persisted for a project.
 // ProjectIconSelection 描述为项目持久化的单个图标覆盖配置。
@@ -230,7 +230,7 @@ interface ComposerSubmission {
 // DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
 // DEFAULT_PROJECT_BADGE_CONFIG 提供生成式徽标的初始预览配置。
 const DEFAULT_PROJECT_BADGE_CONFIG: ProjectIconBadgeConfig = {
-  shape: "rounded",
+  shape: "square",
   text: "VC",
   background: "#111827",
   border: "#111827",
@@ -760,6 +760,16 @@ async function markConversationRead(conversationId: string): Promise<WorkbenchSn
   return invoke<WorkbenchSnapshot>("service_mark_conversation_read", { conversationId });
 }
 
+// selectConversation asks the desktop shell to update its active conversation marker.
+// selectConversation 请求桌面壳同步当前活跃会话标记。
+async function selectConversation(conversationId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_select_conversation", { conversationId });
+}
+
 // openExternalUrl opens a trusted external URL in the system browser when hosted by Tauri.
 // openExternalUrl 在 Tauri 承载时使用系统默认浏览器打开可信外部链接。
 async function openExternalUrl(url: string): Promise<void> {
@@ -1238,7 +1248,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const handleSelectConversation = React.useCallback((conversationId: string) => {
     setSelectedConversationId(conversationId);
     setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
-    void markConversationRead(conversationId)
+    void selectConversation(conversationId)
+      .then((snapshot) => {
+        if (snapshot) {
+          setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        }
+        return markConversationRead(conversationId);
+      })
       .then((snapshot) => {
         if (snapshot) {
           setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
@@ -1577,12 +1593,40 @@ function GitHubMark() {
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
 // mergeWorkbenchSnapshot 合并后端工作台更新且不丢弃已懒加载的会话正文。
 function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchSnapshot): WorkbenchSnapshot {
-  const incomingIds = new Set(incoming.messages.map((message) => message.id));
-  const retainedMessages = current.messages.filter((message) => !incomingIds.has(message.id));
+  const incomingConversationIds = new Set(incoming.messages.map((message) => message.conversationId));
+  const incomingMessageIds = new Set(incoming.messages.map((message) => message.id));
+  const retainedMessages = current.messages.filter((message) => (
+    !incomingConversationIds.has(message.conversationId) && !incomingMessageIds.has(message.id)
+  ));
+  const selectedConversationId = current.selectedConversationId;
   return {
     ...incoming,
+    selectedConversationId,
+    conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...incoming.messages],
   };
+}
+
+// mergeConversationSummaries preserves only optimistic local read state while trusting backend lifecycle state.
+// mergeConversationSummaries 仅保留本地乐观已读状态，同时信任后端生命周期状态。
+function mergeConversationSummaries(
+  current: ConversationSummary[],
+  incoming: ConversationSummary[],
+  selectedConversationId: string | null | undefined,
+): ConversationSummary[] {
+  const currentById = new Map(current.map((conversation) => [conversation.id, conversation]));
+  return incoming.map((conversation) => {
+    const currentConversation = currentById.get(conversation.id);
+    if (!currentConversation) {
+      return conversation;
+    }
+    const keepUnread = conversation.id !== selectedConversationId
+      && (conversation.unread || currentConversation.unread);
+    return {
+      ...conversation,
+      unread: keepUnread,
+    };
+  });
 }
 
 // mergeConversationMessages replaces one conversation message window in the local workbench state.
@@ -1818,9 +1862,9 @@ function decodeProjectBadgeKey(value?: string | null): ProjectIconBadgeConfig | 
   }
   try {
     const parsed = JSON.parse(value) as Partial<ProjectIconBadgeConfig>;
-    const shape = parsed.shape;
+    const shape = normalizeProjectBadgeShape(parsed.shape);
     const text = normalizeProjectBadgeText(parsed.text ?? "");
-    if (!shape || !["circle", "square", "rounded", "sharp"].includes(shape) || !text) {
+    if (!shape || !text) {
       return null;
     }
     return {
@@ -1833,6 +1877,18 @@ function decodeProjectBadgeKey(value?: string | null): ProjectIconBadgeConfig | 
   } catch {
     return null;
   }
+}
+
+// normalizeProjectBadgeShape keeps new badges on the simplified circle/square model.
+// normalizeProjectBadgeShape 将新徽标限制在简化后的圆形/方形模型。
+function normalizeProjectBadgeShape(value: unknown): ProjectIconBadgeShape | null {
+  if (value === "circle") {
+    return "circle";
+  }
+  if (value === "square" || value === "rounded" || value === "sharp") {
+    return "square";
+  }
+  return null;
 }
 
 // ProjectIcon renders either a generated badge, a selected icon, or the default folder state.
@@ -1856,13 +1912,8 @@ function ProjectIcon(props: { project: ProjectSummary; isOpen?: boolean; size?: 
 // ProjectBadgeIcon renders the generated project badge as an inline SVG.
 // ProjectBadgeIcon 将生成式项目徽标渲染为内联 SVG。
 function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number }) {
-  const radius = props.config.shape === "circle"
-    ? 50
-    : props.config.shape === "rounded"
-      ? 18
-      : props.config.shape === "square"
-        ? 8
-        : 0;
+  const isCircle = props.config.shape === "circle";
+  const fontSize = props.config.text.length > 1 ? 14.5 : 18;
   return (
     <svg
       aria-hidden="true"
@@ -1871,25 +1922,38 @@ function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number 
       viewBox="0 0 32 32"
       width={props.size}
     >
-      <rect
-        fill={props.config.background}
-        height="28"
-        rx={radius}
-        stroke={props.config.border}
-        strokeWidth="2"
-        width="28"
-        x="2"
-        y="2"
-      />
+      {isCircle ? (
+        <circle
+          cx="16"
+          cy="16"
+          fill={props.config.background}
+          r="13.5"
+          stroke={props.config.border}
+          strokeWidth="2"
+        />
+      ) : (
+        <rect
+          fill={props.config.background}
+          height="27"
+          rx="4"
+          stroke={props.config.border}
+          strokeWidth="2"
+          width="27"
+          x="2.5"
+          y="2.5"
+        />
+      )}
       <text
-        dominantBaseline="central"
+        dominantBaseline="middle"
         fill={props.config.foreground}
         fontFamily="Inter, Segoe UI, sans-serif"
-        fontSize={props.config.text.length > 1 ? 12 : 15}
+        fontSize={fontSize}
         fontWeight="700"
+        lengthAdjust={props.config.text.length > 1 ? "spacingAndGlyphs" : undefined}
         textAnchor="middle"
+        textLength={props.config.text.length > 1 ? 16 : undefined}
         x="16"
-        y="16.5"
+        y="16"
       >
         {props.config.text}
       </text>
@@ -3837,8 +3901,6 @@ function ProjectIconDialog(props: {
                     <SelectContent>
                       <SelectItem value="circle">圆形</SelectItem>
                       <SelectItem value="square">方形</SelectItem>
-                      <SelectItem value="rounded">圆边</SelectItem>
-                      <SelectItem value="sharp">方边</SelectItem>
                     </SelectContent>
                   </Select>
                 </label>
@@ -3918,10 +3980,6 @@ function badgeShapeLabel(shape: ProjectIconBadgeShape): string {
       return "圆形";
     case "square":
       return "方形";
-    case "rounded":
-      return "圆边";
-    case "sharp":
-      return "方边";
   }
 }
 

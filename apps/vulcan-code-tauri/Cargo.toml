@@ -27,6 +27,7 @@ vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api = { path = "../../crates/vulcan-service-api" }
 vulcan-token-counter.workspace = true
+vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
 
