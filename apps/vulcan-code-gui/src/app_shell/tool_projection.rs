@@ -1238,12 +1238,9 @@ pub(super) fn tool_display_state_for_message(
     record_kind: SessionMessageRecordKind,
     metadata: Option<&Value>,
 ) -> &'static str {
-    if metadata.is_some_and(tool_metadata_represents_failed_result) {
-        return "failed";
-    }
-
     match record_kind {
         SessionMessageRecordKind::ToolResultOutput => "completed",
+        _ if metadata.is_some_and(tool_metadata_represents_failed_result) => "failed",
         _ => "running",
     }
 }

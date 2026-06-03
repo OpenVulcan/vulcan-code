@@ -2,16 +2,27 @@
 //! Tauri WebUI 使用的本地服务桥接层。
 
 use std::{
-    collections::{BTreeSet, VecDeque},
-    fs,
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    fs::{self, File},
     hash::{Hash, Hasher},
-    path::{Path, PathBuf},
+    io::{Read, Seek, SeekFrom},
+    path::{Component, Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
 };
 
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
 use futures_util::StreamExt;
+use http_range::HttpRange;
 use serde_json::Value;
+use tauri::http::{
+    Method, Response, StatusCode,
+    header::{
+        ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
+        CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+    },
+};
 use tauri::{Emitter, Manager};
 use time::OffsetDateTime;
 use vldb_controller_client::ControllerSqliteValue;
@@ -42,7 +53,9 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
-    provider_config::{self, ProviderConfigurationFile, ReasoningEffortLevel},
+    provider_config::{
+        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
+    },
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, append_user_prompt_record,
@@ -51,12 +64,16 @@ use vulcan_agent_runtime::{
     },
     stream_runtime_run,
     tooling::CommandSessionRuntime,
+    workbench_ai_capability_router::{
+        WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
+        effective_workbench_disabled_ai_capability_kinds,
+    },
 };
 use vulcan_service_api::{
-    CommandSessionSummary, ConversationMessage, ConversationSummary, FeatureAreaSummary,
-    LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary,
-    ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot, ServiceEvent,
-    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary, ConversationMessage,
+    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole,
+    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot,
+    ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
     ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{
@@ -80,6 +97,9 @@ struct AgentRuntimeBridge {
     /// Provider configuration captured during service startup.
     /// 服务启动期间捕获的 Provider 配置。
     provider_configuration: ProviderConfigurationFile,
+    /// Standalone AI capability configuration captured during service startup.
+    /// 服务启动期间捕获的独立 AI 能力配置。
+    ai_tool_configuration: PersistedAiToolConfiguration,
     /// Agent profile catalog reused by runtime preparation.
     /// 运行时准备阶段复用的 Agent 画像目录。
     agent_profile_catalog: AgentProfileCatalog,
@@ -112,6 +132,14 @@ struct AgentRuntimeBridge {
 /// Number of recent turns loaded for the selected conversation.
 /// 为当前选中会话加载的最近轮次数量。
 const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 24;
+
+/// Maximum media bytes returned for one range response.
+/// 单次范围响应返回的最大媒体字节数。
+const MEDIA_ASSET_RANGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Route prefix used by the generated media custom protocol.
+/// 生成媒体自定义协议使用的路由前缀。
+const MEDIA_ASSET_ROUTE_PREFIX: &str = "/asset/";
 
 /// Shared service state exposed to Tauri commands.
 /// 暴露给 Tauri 命令的共享服务状态。
@@ -165,6 +193,9 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
+        .register_uri_scheme_protocol("vulcan-media", |_context, request| {
+            vulcan_media_protocol_response(request)
+        })
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             service_health,
@@ -214,6 +245,185 @@ fn service_open_external_url(url: String) -> Result<String, String> {
     }
     open_url_in_system_browser(&url)?;
     Ok(String::from("已请求使用系统默认浏览器打开 GitHub。"))
+}
+
+/// Serves generated media files through a local custom protocol with HTTP range support.
+/// 通过带 HTTP Range 支持的本地自定义协议提供生成媒体文件。
+fn vulcan_media_protocol_response(request: tauri::http::Request<Vec<u8>>) -> Response<Vec<u8>> {
+    match build_vulcan_media_protocol_response(request) {
+        Ok(response) => response,
+        Err(error) => vulcan_media_error_response(StatusCode::INTERNAL_SERVER_ERROR, &error),
+    }
+}
+
+/// Builds one generated media protocol response for images, audio, and video.
+/// 为图片、音频和视频构建单个生成媒体协议响应。
+fn build_vulcan_media_protocol_response(
+    request: tauri::http::Request<Vec<u8>>,
+) -> Result<Response<Vec<u8>>, String> {
+    let media_path = media_path_from_protocol_request(&request)?;
+    if !is_allowed_generated_media_path(&media_path) {
+        return Ok(vulcan_media_error_response(
+            StatusCode::FORBIDDEN,
+            "媒体路径不在生成附件目录中。",
+        ));
+    }
+
+    let mut file = match File::open(&media_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(vulcan_media_error_response(
+                StatusCode::NOT_FOUND,
+                "媒体文件不存在。",
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(vulcan_media_error_response(
+                StatusCode::FORBIDDEN,
+                "没有权限读取媒体文件。",
+            ));
+        }
+        Err(error) => return Err(format!("无法打开媒体文件：{error}")),
+    };
+    let file_len = file
+        .metadata()
+        .map_err(|error| format!("无法读取媒体文件元数据：{error}"))?
+        .len();
+    let mime_type = infer_media_asset_mime_type(&media_path);
+    let response = Response::builder()
+        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(ACCESS_CONTROL_EXPOSE_HEADERS, "content-range")
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CACHE_CONTROL, "no-store")
+        .header(CONTENT_TYPE, mime_type);
+
+    if request.method() == Method::HEAD {
+        return response
+            .header(CONTENT_LENGTH, file_len)
+            .body(Vec::new())
+            .map_err(|error| format!("无法构建媒体 HEAD 响应：{error}"));
+    }
+
+    if let Some(range_header) = request
+        .headers()
+        .get("range")
+        .and_then(|value| value.to_str().ok())
+    {
+        let range = single_media_http_range(range_header, file_len)?;
+        let range_start = range.start;
+        let range_end = range.start + range.length - 1;
+        let mut body = Vec::with_capacity(range.length as usize);
+        file.seek(SeekFrom::Start(range_start))
+            .map_err(|error| format!("无法定位媒体范围：{error}"))?;
+        file.take(range.length)
+            .read_to_end(&mut body)
+            .map_err(|error| format!("无法读取媒体范围：{error}"))?;
+        return response
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(
+                CONTENT_RANGE,
+                format!("bytes {range_start}-{range_end}/{file_len}"),
+            )
+            .header(CONTENT_LENGTH, body.len())
+            .body(body)
+            .map_err(|error| format!("无法构建媒体范围响应：{error}"));
+    }
+
+    let mut body = Vec::with_capacity(file_len.min(MEDIA_ASSET_RANGE_MAX_BYTES) as usize);
+    file.read_to_end(&mut body)
+        .map_err(|error| format!("无法读取媒体文件：{error}"))?;
+    response
+        .header(CONTENT_LENGTH, file_len)
+        .body(body)
+        .map_err(|error| format!("无法构建媒体响应：{error}"))
+}
+
+/// Extracts the local media path encoded inside a custom protocol request.
+/// 提取自定义协议请求中编码的本地媒体路径。
+fn media_path_from_protocol_request(
+    request: &tauri::http::Request<Vec<u8>>,
+) -> Result<PathBuf, String> {
+    let request_path = request.uri().path();
+    let encoded_path = request_path
+        .strip_prefix(MEDIA_ASSET_ROUTE_PREFIX)
+        .ok_or_else(|| String::from("媒体路由格式无效。"))?;
+    let path_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(encoded_path)
+        .map_err(|error| format!("媒体路径解码失败：{error}"))?;
+    let path_text = String::from_utf8(path_bytes)
+        .map_err(|error| format!("媒体路径不是有效 UTF-8：{error}"))?;
+    Ok(PathBuf::from(path_text))
+}
+
+/// Returns whether a media path belongs to the generated attachment storage tree.
+/// 返回媒体路径是否属于生成附件存储树。
+fn is_allowed_generated_media_path(path: &Path) -> bool {
+    let normalized_components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str().map(|text| text.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    normalized_components
+        .windows(3)
+        .any(|window| window == [".vulcan", "code", "attachments"])
+}
+
+/// Parses one bounded HTTP range for media playback.
+/// 解析一个有上限的媒体播放 HTTP 范围。
+fn single_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
+    let mut ranges = HttpRange::parse(range_header, file_len)
+        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
+    let Some(mut range) = ranges.drain(..).next() else {
+        return Err(String::from("媒体 Range 请求为空。"));
+    };
+    if range.start >= file_len || range.length == 0 {
+        return Err(String::from("媒体 Range 请求越界。"));
+    }
+    range.length = range.length.min(MEDIA_ASSET_RANGE_MAX_BYTES);
+    Ok(range)
+}
+
+/// Builds one plain text error response for the generated media protocol.
+/// 为生成媒体协议构建一个纯文本错误响应。
+fn vulcan_media_error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
+    Response::builder()
+        .status(status)
+        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(message.as_bytes().to_vec())
+        .unwrap_or_else(|_| Response::new(Vec::new()))
+}
+
+/// Infers a conservative MIME type from a generated media path extension.
+/// 根据生成媒体路径扩展名推断保守 MIME 类型。
+fn infer_media_asset_mime_type(path: &Path) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => String::from("image/png"),
+        Some("jpg") | Some("jpeg") => String::from("image/jpeg"),
+        Some("webp") => String::from("image/webp"),
+        Some("gif") => String::from("image/gif"),
+        Some("bmp") => String::from("image/bmp"),
+        Some("svg") => String::from("image/svg+xml"),
+        Some("mp4") => String::from("video/mp4"),
+        Some("webm") => String::from("video/webm"),
+        Some("mov") => String::from("video/quicktime"),
+        Some("mkv") => String::from("video/x-matroska"),
+        Some("mp3") => String::from("audio/mpeg"),
+        Some("wav") => String::from("audio/wav"),
+        Some("m4a") => String::from("audio/mp4"),
+        Some("aac") => String::from("audio/aac"),
+        Some("flac") => String::from("audio/flac"),
+        Some("ogg") => String::from("audio/ogg"),
+        Some("pdf") => String::from("application/pdf"),
+        _ => String::from("application/octet-stream"),
+    }
 }
 
 /// Returns the current startup snapshot.
@@ -317,6 +527,9 @@ async fn service_submit_conversation_prompt(
     prompt: String,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
+    disabled_ai_capability_kinds: Option<Vec<String>>,
+    disabled_ai_capability_target_selectors: Option<Vec<String>>,
+    ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
 ) -> Result<WorkbenchSnapshot, String> {
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
@@ -349,6 +562,9 @@ async fn service_submit_conversation_prompt(
         &prompt,
         execution_mode,
         reasoning_effort,
+        disabled_ai_capability_kinds,
+        disabled_ai_capability_target_selectors,
+        ai_capability_target_order_overrides,
         |visible_prompt_snapshot| {
             store_and_emit_workbench_snapshot(
                 &app,
@@ -358,6 +574,7 @@ async fn service_submit_conversation_prompt(
                 &token_budget_runtime,
                 &mcp_catalog,
                 &agent_runtime.provider_configuration,
+                &agent_runtime.ai_tool_configuration,
                 visible_prompt_snapshot.clone(),
                 &logs,
             )
@@ -376,6 +593,7 @@ async fn service_submit_conversation_prompt(
         &token_budget_runtime,
         &mcp_catalog,
         &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
         workspace_snapshot.clone(),
         &logs,
     )?;
@@ -866,6 +1084,7 @@ async fn service_select_conversation(
         mcp_catalog,
         logs,
         provider_configuration,
+        ai_tool_configuration,
         mut workspace_snapshot,
     ) = {
         let guard = state
@@ -896,6 +1115,11 @@ async fn service_select_conversation(
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         (
             controller_runtime,
             luaskills_catalog,
@@ -903,6 +1127,7 @@ async fn service_select_conversation(
             mcp_catalog,
             logs,
             provider_configuration,
+            ai_tool_configuration,
             workspace_snapshot,
         )
     };
@@ -923,6 +1148,7 @@ async fn service_select_conversation(
         &token_budget_runtime,
         &mcp_catalog,
         &provider_configuration,
+        &ai_tool_configuration,
         &workspace_snapshot,
         selected_messages.as_slice(),
         &logs,
@@ -1179,6 +1405,9 @@ async fn append_prompt_and_build_request(
     prompt: &str,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
+    disabled_ai_capability_kinds: Option<Vec<String>>,
+    disabled_ai_capability_target_selectors: Option<Vec<String>>,
+    ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
     emit_visible_prompt_snapshot: impl FnOnce(&WorkspaceSnapshot) -> Result<(), String>,
 ) -> Result<ExecutionPreparationRequest, String> {
     let now = current_unix_millis_text();
@@ -1344,6 +1573,25 @@ async fn append_prompt_and_build_request(
         .cloned()
         .unwrap_or_default();
 
+    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
+        &agent_runtime.ai_tool_configuration,
+        disabled_ai_capability_kinds.as_deref(),
+    )?;
+    let disabled_ai_capability_target_selectors = disabled_ai_capability_target_selectors
+        .unwrap_or_default()
+        .into_iter()
+        .map(|selector| selector.trim().to_string())
+        .filter(|selector| !selector.is_empty())
+        .collect::<BTreeSet<_>>();
+    let ai_capability_target_order_overrides =
+        parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
+    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
+        &agent_runtime.ai_tool_configuration,
+        &disabled_ai_capability_kinds,
+        &disabled_ai_capability_target_selectors,
+        &ai_capability_target_order_overrides,
+    );
+
     Ok(ExecutionPreparationRequest {
         session_id,
         session_title: session_title.to_string(),
@@ -1357,7 +1605,7 @@ async fn append_prompt_and_build_request(
             .and_then(parse_reasoning_effort)
             .or(runtime_state.active_reasoning_effort)
             .unwrap_or(ReasoningEffortLevel::XHigh),
-        ai_tool_configuration: agent_runtime.provider_configuration.ai_tools.clone(),
+        ai_tool_configuration,
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: project_configuration.prompt_skills,
         session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
@@ -1369,6 +1617,42 @@ async fn append_prompt_and_build_request(
         project_vmm: project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
     })
+}
+
+/// Parses prompt-level AI capability target order overrides from the WebUI payload.
+/// 从 WebUI 载荷中解析提示词级 AI 能力目标顺序覆盖。
+///
+/// # Parameters
+/// 参数
+/// `raw_overrides` contains capability-keyed target selector arrays.
+/// `raw_overrides` 包含按能力键分组的目标选择器数组。
+///
+/// # Returns
+/// 返回值
+/// A semantic capability keyed map accepted by the shared runtime router.
+/// 共享运行时路由器可接受的语义能力映射。
+fn parse_ai_capability_target_order_overrides(
+    raw_overrides: Option<BTreeMap<String, Vec<String>>>,
+) -> Result<BTreeMap<vulcan_provider_config::config::AiToolKind, Vec<String>>, String> {
+    let mut overrides = BTreeMap::new();
+    for (raw_kind, selectors) in raw_overrides.unwrap_or_default() {
+        let Some(kind) =
+            vulcan_agent_runtime::workbench_ai_capability_router::parse_workbench_ai_tool_kind(
+                &raw_kind,
+            )
+        else {
+            return Err(format!("未知的扩展能力排序类型：{raw_kind}"));
+        };
+        let cleaned_selectors = selectors
+            .into_iter()
+            .map(|selector| selector.trim().to_string())
+            .filter(|selector| !selector.is_empty())
+            .collect::<Vec<_>>();
+        if !cleaned_selectors.is_empty() {
+            overrides.insert(kind, cleaned_selectors);
+        }
+    }
+    Ok(overrides)
 }
 
 /// Loads project-local Vulcan Code configuration for one WebUI execution workspace.
@@ -1637,6 +1921,7 @@ fn store_and_emit_workbench_snapshot(
     token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
     provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
     workspace_snapshot: WorkspaceSnapshot,
     logs: &[String],
 ) -> Result<WorkbenchSnapshot, String> {
@@ -1648,6 +1933,7 @@ fn store_and_emit_workbench_snapshot(
         token_budget_runtime,
         mcp_catalog,
         provider_configuration,
+        ai_tool_configuration,
         &workspace_snapshot,
         selected_messages.as_slice(),
         logs,
@@ -2269,6 +2555,7 @@ where
         token_budget_runtime,
         mcp_catalog,
         logs,
+        ai_tool_configuration,
         workspace_snapshot,
     ) = {
         let mut guard = state
@@ -2299,6 +2586,11 @@ where
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         mutate(&mut workspace_snapshot);
         let selected_messages =
             selected_session_messages_from_workspace(&workspace_snapshot).unwrap_or_default();
@@ -2308,6 +2600,7 @@ where
             &token_budget_runtime,
             &mcp_catalog,
             &provider_configuration,
+            &ai_tool_configuration,
             &workspace_snapshot,
             selected_messages.as_slice(),
             &logs,
@@ -2324,6 +2617,7 @@ where
             token_budget_runtime,
             mcp_catalog,
             logs,
+            ai_tool_configuration,
             workspace_snapshot,
         )
     };
@@ -2333,6 +2627,7 @@ where
         token_budget_runtime,
         mcp_catalog,
         logs,
+        ai_tool_configuration,
     );
     Ok(workspace_snapshot)
 }
@@ -2361,6 +2656,7 @@ async fn refresh_workbench_snapshot(
         logs,
         previous_snapshot,
         provider_configuration,
+        ai_tool_configuration,
     ) = {
         let guard = state
             .lock()
@@ -2400,6 +2696,11 @@ async fn refresh_workbench_snapshot(
             .as_ref()
             .map(|runtime| runtime.provider_configuration.clone())
             .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         (
             controller_runtime,
             luaskills_catalog,
@@ -2408,6 +2709,7 @@ async fn refresh_workbench_snapshot(
             logs,
             previous_snapshot,
             provider_configuration,
+            ai_tool_configuration,
         )
     };
 
@@ -2440,6 +2742,7 @@ async fn refresh_workbench_snapshot(
         &token_budget_runtime,
         &mcp_catalog,
         &provider_configuration,
+        &ai_tool_configuration,
         &refreshed_snapshot,
         selected_messages.as_slice(),
         &logs,
@@ -2598,6 +2901,62 @@ fn spawn_service_bootstrap(app: tauri::AppHandle) {
         .expect("failed to spawn Vulcan service bootstrap thread");
 }
 
+/// Loads the same standalone AI capability configuration used by the iced workbench.
+/// 加载与 iced 工作台一致的独立 AI 能力配置。
+fn load_service_ai_tool_configuration(
+    provider_configuration: &ProviderConfigurationFile,
+    logs: &mut Vec<String>,
+) -> PersistedAiToolConfiguration {
+    match vulcan_agent_runtime::ai_tool_configuration::load_ai_tool_configuration_file(
+        provider_configuration,
+    ) {
+        Ok(loaded) => {
+            if loaded.normalized {
+                if let Err(error) =
+                    vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+                        &loaded.configuration,
+                    )
+                {
+                    logs.push(format!(
+                        "[tauri-service] ai capability configuration normalization save failed: {error}"
+                    ));
+                }
+            }
+            match loaded.source {
+                vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::DedicatedFile => logs.push(String::from(
+                    "[tauri-service] ai capability configuration loaded from ~/.vulcan/vulcan-ai-capabilities.json",
+                )),
+                vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::LegacyProviderFile => {
+                    match vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+                        &loaded.configuration,
+                    ) {
+                        Ok(()) => logs.push(String::from(
+                            "[tauri-service] legacy embedded ai capability configuration migrated to ~/.vulcan/vulcan-ai-capabilities.json",
+                        )),
+                        Err(error) => logs.push(format!(
+                            "[tauri-service] legacy ai capability configuration migration failed: {error}"
+                        )),
+                    }
+                }
+                vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::Default => logs.push(String::from(
+                    "[tauri-service] ai capability configuration uses built-in defaults",
+                )),
+            }
+            loaded.configuration
+        }
+        Err(error) => {
+            logs.push(format!(
+                "[tauri-service] ai capability configuration load failed, falling back: {error}"
+            ));
+            if provider_configuration.ai_tools.is_default() {
+                PersistedAiToolConfiguration::default()
+            } else {
+                provider_configuration.ai_tools.clone()
+            }
+        }
+    }
+}
+
 /// Runs the real startup sequence shared with the legacy GUI.
 /// 运行与旧版 GUI 共享的真实启动顺序。
 fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
@@ -2608,6 +2967,8 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
     let controller_configuration =
         vulcan_provider_config::config::load_controller_configuration_file()?;
     let provider_configuration = vulcan_provider_config::config::load_configuration_file()?;
+    let ai_tool_configuration =
+        load_service_ai_tool_configuration(&provider_configuration, &mut logs);
 
     update_startup(app, "bootstrapping-vldb", &logs, |now| {
         startup_steps_with_status(
@@ -2819,6 +3180,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
     .map_err(|error| format!("VMM hook 注册失败：{error}"))?;
     let agent_runtime = AgentRuntimeBridge {
         provider_configuration: provider_configuration.clone(),
+        ai_tool_configuration: ai_tool_configuration.clone(),
         agent_profile_catalog,
         luaskills_runtime: Some(agent_luaskills_runtime),
         mcp_runtime: Some(agent_mcp_runtime),
@@ -2931,6 +3293,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         &token_budget_runtime,
         &mcp_catalog,
         &provider_configuration,
+        &ai_tool_configuration,
         &workspace_snapshot,
         hydration_snapshot
             .as_ref()
@@ -3150,6 +3513,7 @@ fn workbench_from_runtime(
     token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
     provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     selected_messages: &[SessionMessageEntry],
     logs: &[String],
@@ -3226,6 +3590,7 @@ fn workbench_from_runtime(
         plugins: plugins_from_luaskills(luaskills_catalog),
         settings: settings(),
         providers: providers(provider_configuration),
+        ai_capabilities: ai_capabilities(ai_tool_configuration),
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
         logs: logs
@@ -3374,6 +3739,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         plugins: Vec::new(),
         settings: settings(),
         providers: providers(&ProviderConfigurationFile::default()),
+        ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
         memories: Vec::new(),
         command_sessions: Vec::new(),
         logs: logs
@@ -3569,6 +3935,49 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
         active: false,
         models: Vec::new(),
     }]
+}
+
+/// Creates composer AI capability summaries from the shared provider configuration.
+/// 从共享 Provider 配置创建输入区 AI 能力摘要。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the persisted AI tool configuration.
+/// `configuration` 是持久化的 AI 工具配置。
+///
+/// # Returns
+/// 返回值
+/// Ordered AI capability summaries matching the iced workbench quick-toggle surface.
+/// 与 iced 工作台快捷开关界面顺序一致的 AI 能力摘要。
+fn ai_capabilities(
+    configuration: &vulcan_provider_config::config::PersistedAiToolConfiguration,
+) -> Vec<AiCapabilitySummary> {
+    WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS
+        .into_iter()
+        .map(|kind| {
+            let targets = configuration
+                .resolved_configured_targets_for_kind(kind)
+                .into_iter()
+                .map(|target| AiCapabilityTargetSummary {
+                    target_selector: target.target_selector,
+                    vendor_id: target.vendor_id,
+                    vendor_name: target.vendor_name,
+                    target_alias: target.target_alias,
+                    target_name: target.target_name,
+                    model_id: target.model_id,
+                    enabled: target.enabled,
+                })
+                .collect::<Vec<_>>();
+            let available = configuration.has_usable_targets_for_kind(kind);
+            AiCapabilitySummary {
+                kind: kind.key().to_string(),
+                label: kind.label().to_string(),
+                available,
+                enabled: available && !configuration.disabled_capability_kinds.contains(&kind),
+                targets,
+            }
+        })
+        .collect()
 }
 
 /// Creates VMM memory summaries from restored workspace state.

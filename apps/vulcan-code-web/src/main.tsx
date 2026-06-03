@@ -48,6 +48,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -95,6 +96,8 @@ import {
 import { cn } from "@/lib/utils";
 import { I18nProvider, useI18n, type LocaleCode } from "@/i18n";
 import type {
+  AiCapabilitySummary,
+  AiCapabilityTargetSummary,
   ConversationMessage,
   ConversationSummary,
   FeatureAreaSummary,
@@ -114,6 +117,7 @@ import {
   BrainCircuit,
   Archive,
   ArrowDown,
+  ArrowUp,
   ChevronLeft,
   ChevronDown,
   ChevronRight,
@@ -134,6 +138,8 @@ import {
   Globe,
   Hammer,
   History,
+  Image as ImageIcon,
+  ImagePlus,
   Link,
   Minus,
   LayoutDashboard,
@@ -141,6 +147,7 @@ import {
   Maximize2,
   Minimize2,
   MessageSquareText,
+  Music2,
   PanelRightClose,
   PanelRightOpen,
   PanelTopOpen,
@@ -153,6 +160,8 @@ import {
   Send,
   Settings,
   Shield,
+  Video,
+  Volume2,
   Square,
   SquarePen,
   SlidersHorizontal,
@@ -249,6 +258,15 @@ interface ComposerSubmission {
   // Reasoning effort selected by the user.
   // 用户选择的思考档位。
   reasoningEffort: string;
+  // Runtime-disabled AI capability keys for the current prompt.
+  // 当前提示词运行时禁用的 AI 能力键。
+  disabledAiCapabilityKinds: AiCapabilityKind[];
+  // Runtime-disabled AI capability route selectors for the current prompt.
+  // 当前提示词运行时禁用的 AI 能力路由选择器。
+  disabledAiCapabilityTargetSelectors: string[];
+  // Runtime target order overrides grouped by AI capability key.
+  // 按 AI 能力键分组的运行时目标顺序覆盖。
+  aiCapabilityTargetOrderOverrides: Record<string, string[]>;
 }
 
 // DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
@@ -348,6 +366,190 @@ interface ComposerSelectOption {
   subtitle?: string;
 }
 
+// AiCapabilityKind mirrors provider-config AiToolKind snake_case keys supported by iced quick toggles.
+// AiCapabilityKind 对齐 iced 快捷开关支持的 provider-config AiToolKind snake_case 键。
+type AiCapabilityKind =
+  | "web_search"
+  | "understand_image"
+  | "image_generation"
+  | "video_generation"
+  | "speech_synthesis"
+  | "music_generation"
+  | "music_cover";
+
+// ComposerAiCapabilityOption describes one quick-toggle row in the composer capability menu.
+// ComposerAiCapabilityOption 描述输入区能力菜单中的单个快捷开关行。
+interface ComposerAiCapabilityOption {
+  // Stable provider-config capability key sent to the desktop service when disabled.
+  // 禁用时发送给桌面服务的稳定 provider-config 能力键。
+  value: AiCapabilityKind;
+  // Icon shown in the compact menu row.
+  // 显示在紧凑菜单行中的图标。
+  Icon: React.ComponentType<{ size?: number; className?: string }>;
+  // Chinese user-facing label.
+  // 中文用户可见标签。
+  labelZh: string;
+  // English user-facing label.
+  // 英文用户可见标签。
+  labelEn: string;
+  // Chinese short route hint.
+  // 中文短路由提示。
+  subtitleZh: string;
+  // English short route hint.
+  // 英文短路由提示。
+  subtitleEn: string;
+}
+
+// COMPOSER_AI_CAPABILITY_OPTIONS keeps the WebUI quick menu in the same semantic order as the iced workbench.
+// COMPOSER_AI_CAPABILITY_OPTIONS 保持 WebUI 快捷菜单与 iced 工作台相同的语义顺序。
+const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
+  {
+    value: "web_search",
+    Icon: Globe,
+    labelZh: "联网搜索",
+    labelEn: "Web search",
+    subtitleZh: "网页搜索与检索增强",
+    subtitleEn: "Browsing-grounded retrieval",
+  },
+  {
+    value: "understand_image",
+    Icon: ImageIcon,
+    labelZh: "图像理解",
+    labelEn: "Image understanding",
+    subtitleZh: "外部视觉能力路由",
+    subtitleEn: "Vision capability routing",
+  },
+  {
+    value: "image_generation",
+    Icon: ImagePlus,
+    labelZh: "图像生成",
+    labelEn: "Image generation",
+    subtitleZh: "图片生成或编辑",
+    subtitleEn: "Image generation or editing",
+  },
+  {
+    value: "video_generation",
+    Icon: Video,
+    labelZh: "视频生成",
+    labelEn: "Video generation",
+    subtitleZh: "视频生成能力",
+    subtitleEn: "Video generation capability",
+  },
+  {
+    value: "speech_synthesis",
+    Icon: Volume2,
+    labelZh: "语音合成",
+    labelEn: "Speech synthesis",
+    subtitleZh: "文本转语音生成",
+    subtitleEn: "Text-to-speech generation",
+  },
+  {
+    value: "music_generation",
+    Icon: Music2,
+    labelZh: "音乐生成",
+    labelEn: "Music generation",
+    subtitleZh: "音乐生成能力",
+    subtitleEn: "Music generation capability",
+  },
+  {
+    value: "music_cover",
+    Icon: Music2,
+    labelZh: "音乐翻唱",
+    labelEn: "Music cover",
+    subtitleZh: "基于参考音频翻唱",
+    subtitleEn: "Reference-audio cover generation",
+  },
+];
+
+// defaultDisabledAiCapabilityKinds derives prompt-level capability disables from the service snapshot.
+// defaultDisabledAiCapabilityKinds 从服务快照推导提示词级能力禁用集合。
+function defaultDisabledAiCapabilityKinds(capabilities: AiCapabilitySummary[]): Set<AiCapabilityKind> {
+  const disabled = new Set<AiCapabilityKind>();
+  for (const capability of capabilities) {
+    if (isComposerAiCapabilityKind(capability.kind) && (!capability.available || !capability.enabled)) {
+      disabled.add(capability.kind);
+    }
+  }
+  return disabled;
+}
+
+// defaultDisabledAiCapabilityTargetSelectors derives prompt-level target disables from the service snapshot.
+// defaultDisabledAiCapabilityTargetSelectors 从服务快照推导提示词级目标禁用集合。
+function defaultDisabledAiCapabilityTargetSelectors(capabilities: AiCapabilitySummary[]): Set<string> {
+  const disabled = new Set<string>();
+  for (const capability of capabilities) {
+    for (const target of capability.targets) {
+      if (!target.enabled) {
+        disabled.add(target.targetSelector);
+      }
+    }
+  }
+  return disabled;
+}
+
+// defaultAiCapabilityTargetOrder derives prompt-level target order from the service snapshot.
+// defaultAiCapabilityTargetOrder 从服务快照推导提示词级目标顺序。
+function defaultAiCapabilityTargetOrder(capabilities: AiCapabilitySummary[]): Map<AiCapabilityKind, string[]> {
+  const order = new Map<AiCapabilityKind, string[]>();
+  for (const capability of capabilities) {
+    if (isComposerAiCapabilityKind(capability.kind)) {
+      order.set(capability.kind, capability.targets.map((target) => target.targetSelector));
+    }
+  }
+  return order;
+}
+
+// serializeAiCapabilityTargetOrder converts local target order into the Tauri command payload shape.
+// serializeAiCapabilityTargetOrder 将本地目标顺序转换为 Tauri 命令载荷形态。
+function serializeAiCapabilityTargetOrder(order: Map<AiCapabilityKind, string[]>): Record<string, string[]> {
+  return Object.fromEntries(Array.from(order.entries()).map(([kind, selectors]) => [kind, selectors]));
+}
+
+// orderedAiCapabilityTargets returns targets in the current prompt-level display order.
+// orderedAiCapabilityTargets 按当前提示词级显示顺序返回目标列表。
+function orderedAiCapabilityTargets(
+  capability: AiCapabilitySummary | undefined,
+  order: Map<AiCapabilityKind, string[]>,
+): AiCapabilityTargetSummary[] {
+  if (!capability || !isComposerAiCapabilityKind(capability.kind)) {
+    return [];
+  }
+  const currentOrder = order.get(capability.kind) ?? [];
+  const bySelector = new Map(capability.targets.map((target) => [target.targetSelector, target]));
+  const ordered = currentOrder
+    .map((selector) => bySelector.get(selector))
+    .filter((target): target is AiCapabilityTargetSummary => Boolean(target));
+  for (const target of capability.targets) {
+    if (!ordered.some((existing) => existing.targetSelector === target.targetSelector)) {
+      ordered.push(target);
+    }
+  }
+  return ordered;
+}
+
+// aiCapabilitySignature returns a stable signature for composer-relevant capability route state.
+// aiCapabilitySignature 返回输入区相关能力路由状态的稳定签名。
+function aiCapabilitySignature(capabilities: AiCapabilitySummary[]): string {
+  return capabilities
+    .map((capability) => [
+      capability.kind,
+      capability.available ? "1" : "0",
+      capability.enabled ? "1" : "0",
+      ...capability.targets.map((target) => [
+        target.targetSelector,
+        target.enabled ? "1" : "0",
+        target.modelId,
+      ].join(":")),
+    ].join("|"))
+    .join("||");
+}
+
+// isComposerAiCapabilityKind narrows arbitrary service keys to composer-supported quick-toggle keys.
+// isComposerAiCapabilityKind 将任意服务键收窄为输入区支持的快捷能力键。
+function isComposerAiCapabilityKind(value: string): value is AiCapabilityKind {
+  return COMPOSER_AI_CAPABILITY_OPTIONS.some((option) => option.value === value);
+}
+
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
 interface DraftConversationSelection {
@@ -365,6 +567,30 @@ interface DraftConversationSelection {
 // ConversationBlockKind describes one WebUI-renderable conversation block family.
 // ConversationBlockKind 描述 WebUI 可渲染的单个会话块族。
 type ConversationBlockKind = "markdown" | "tool-call" | "tool-result" | "command" | "diff" | "thinking" | "notice" | "turn-stats";
+
+// GeneratedMediaKind describes host-generated media families that can be rendered inline.
+// GeneratedMediaKind 描述可内联渲染的宿主生成媒体族。
+type GeneratedMediaKind = "image" | "audio" | "video" | "document";
+
+// GeneratedMediaAttachment describes one generated media output carried by tool metadata.
+// GeneratedMediaAttachment 描述工具元数据携带的一条生成媒体输出。
+interface GeneratedMediaAttachment {
+  // Stable media family used to select the preview control.
+  // 用于选择预览控件的稳定媒体族。
+  kind: GeneratedMediaKind;
+  // Human-readable file name displayed in the media card.
+  // 媒体卡片中显示的人类可读文件名。
+  fileName: string;
+  // Preferred local path for preview and opening.
+  // 用于预览和打开的首选本地路径。
+  localPath: string;
+  // Optional preview path, usually a generated video thumbnail.
+  // 可选预览路径，通常是生成视频缩略图。
+  previewLocalPath?: string;
+  // Optional MIME type persisted by the host.
+  // 宿主持久化的可选 MIME 类型。
+  mimeType?: string;
+}
 
 // ConversationRenderItemKind describes the projected transcript item family.
 // ConversationRenderItemKind 描述投影后的转录展示项族。
@@ -403,6 +629,12 @@ interface ConversationBlock {
   // Optional command-session identifier for command-like tool rows.
   // 命令类工具行使用的可选命令会话标识。
   commandSessionId?: string;
+  // Optional raw metadata used for generated media and future plugin-specific renderers.
+  // 可选原始元数据，用于生成媒体与未来插件专属渲染器。
+  rawMetadata?: unknown;
+  // Generated media outputs resolved from host tool metadata.
+  // 从宿主工具元数据解析出的生成媒体输出。
+  mediaAttachments?: GeneratedMediaAttachment[];
 }
 
 // ConversationRenderItem describes one row rendered after transcript projection.
@@ -437,6 +669,9 @@ interface ConversationDetail {
   // Optional detail metadata rows.
   // 可选详情元数据行。
   metadata?: Array<[string, string]>;
+  // Optional generated media outputs rendered by the detail modal.
+  // 可选生成媒体输出，由详情弹窗渲染。
+  mediaAttachments?: GeneratedMediaAttachment[];
 }
 
 // TauriInvoke invokes a backend command when the app runs inside Tauri.
@@ -604,6 +839,39 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
     { id: "local", name: "本地模型", status: "待接入", enabledModels: "0", models: [] },
   ],
+  aiCapabilities: [
+    {
+      kind: "web_search",
+      label: "网页搜索",
+      available: true,
+      enabled: true,
+      targets: [
+        {
+          targetSelector: "builtin/web-search",
+          vendorId: "builtin",
+          vendorName: "Builtin",
+          targetAlias: "web-search",
+          targetName: "Web Search",
+          modelId: "native",
+          enabled: true,
+        },
+      ],
+    },
+    {
+      kind: "understand_image",
+      label: "图片理解",
+      available: false,
+      enabled: false,
+      targets: [],
+    },
+    {
+      kind: "image_generation",
+      label: "图片生成",
+      available: false,
+      enabled: false,
+      targets: [],
+    },
+  ],
   memories: [
     { id: "user-profile", title: "用户画像", category: "Profile", state: "等待真实 VMM 节点接入" },
     { id: "project-memory", title: "项目记忆", category: "Project", state: "等待真实 VMM 节点接入" },
@@ -697,6 +965,9 @@ async function submitConversationPrompt(
   prompt: string,
   executionMode: string,
   reasoningEffort: string,
+  disabledAiCapabilityKinds: AiCapabilityKind[],
+  disabledAiCapabilityTargetSelectors: string[],
+  aiCapabilityTargetOrderOverrides: Record<string, string[]>,
 ): Promise<WorkbenchSnapshot | null> {
   const invoke = await resolveInvoke();
   if (!invoke) {
@@ -708,6 +979,9 @@ async function submitConversationPrompt(
     prompt,
     executionMode,
     reasoningEffort,
+    disabledAiCapabilityKinds,
+    disabledAiCapabilityTargetSelectors,
+    aiCapabilityTargetOrderOverrides,
   });
 }
 
@@ -1380,6 +1654,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         submission.prompt,
         submission.executionMode,
         submission.reasoningEffort,
+        submission.disabledAiCapabilityKinds,
+        submission.disabledAiCapabilityTargetSelectors,
+        submission.aiCapabilityTargetOrderOverrides,
       );
       if (!snapshot) {
         toast.info("浏览器预览模式下无法发送真实会话。");
@@ -2319,7 +2596,7 @@ const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "t
 // projectConversationRenderItems 合并相关底层转录行以生成最终展示项。
 function projectConversationRenderItems(messages: ConversationMessage[]): ConversationRenderItem[] {
   const items: ConversationRenderItem[] = [];
-  const pendingToolItems = new Map<string, ConversationRenderItem>();
+  const toolCallItems = new Map<string, ConversationRenderItem>();
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -2336,7 +2613,7 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
     for (const block of blocks) {
       if (isMergeableToolBlock(block)) {
         const key = toolMergeKey(block);
-        const existing = key ? pendingToolItems.get(key) : undefined;
+        const existing = key && block.kind !== "tool-call" ? toolCallItems.get(key) : undefined;
         if (existing) {
           existing.blocks = mergeToolBlocks(existing.blocks, block);
           continue;
@@ -2348,8 +2625,8 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
           blocks: [block],
         };
         items.push(item);
-        if (key) {
-          pendingToolItems.set(key, item);
+        if (key && block.kind === "tool-call") {
+          toolCallItems.set(key, item);
         }
         continue;
       }
@@ -2402,7 +2679,7 @@ function parseConversationBlocks(message: ConversationMessage): ConversationBloc
 
   const structuredKind = structuredMessageBlockKind(message);
   if (structuredKind) {
-    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, structuredMessageAttributes(message))];
+    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, structuredMessageAttributes(message), message.metadata)];
   }
 
   const source = message.body.replace(/\r\n/g, "\n");
@@ -2479,9 +2756,13 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
       "host_result.status",
       "hostResult.status",
     ]);
-  const status = explicitStatus
-    ?? metadataToolFailureStatus(message.metadata)
-    ?? turnStatsStatus(message.metadata);
+  const hasReturnedToolPayload = message.recordKind === "tool-result-output"
+    && toolMetadataContainsReturnPayload(message.metadata, message.body);
+  const status = hasReturnedToolPayload
+    ? "completed"
+    : explicitStatus
+      ?? metadataToolFailureStatus(message.metadata)
+      ?? turnStatsStatus(message.metadata);
   const summary = turnStatsSummary(message.metadata);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
@@ -2498,17 +2779,29 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
 // metadataString 从未知 JSON 元数据中读取点分路径字符串。
 function metadataString(metadata: unknown, paths: string[]): string | null {
   for (const path of paths) {
+    const value = metadataValue(metadata, [path]);
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+// metadataValue reads a dotted path value from unknown JSON metadata.
+// metadataValue 从未知 JSON 元数据中读取点分路径值。
+function metadataValue(metadata: unknown, paths: string[]): unknown {
+  for (const path of paths) {
     const value = path.split(".").reduce<unknown>((current, segment) => {
       if (current && typeof current === "object" && segment in current) {
         return (current as Record<string, unknown>)[segment];
       }
       return undefined;
     }, metadata);
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
+    if (value !== undefined && value !== null) {
+      return value;
     }
   }
-  return null;
+  return undefined;
 }
 
 // metadataToolFailureStatus detects host-side tool failures that are stored as structured metadata.
@@ -2826,10 +3119,14 @@ function conversationSpecialBlock(
   kind: ConversationBlockKind,
   body: string,
   attributes: Record<string, string>,
+  rawMetadata?: unknown,
 ): ConversationBlock {
   const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "") ?? extractToolNameFromText(body);
   const title = attributes.title ?? blockTitle(kind, toolName);
-  const status = normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
+  const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
+  const status = mediaAttachments.length > 0
+    ? "completed"
+    : normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
   return {
     id: `${messageId}-${kind}-${index}`,
     kind,
@@ -2841,6 +3138,8 @@ function conversationSpecialBlock(
     toolCallId: attributes.tool_call_id,
     toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
+    rawMetadata,
+    mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,
   };
 }
 
@@ -3117,6 +3416,113 @@ function ConsoleShell(props: {
     <SidebarProvider className="console-shell">
       <ConsoleShellContent {...props} />
     </SidebarProvider>
+  );
+}
+
+// generatedMediaAttachmentsFromMetadata extracts host-generated media outputs from nested or flattened tool metadata.
+// generatedMediaAttachmentsFromMetadata 从嵌套或扁平工具元数据中提取宿主生成媒体输出。
+function generatedMediaAttachmentsFromMetadata(metadata: unknown): GeneratedMediaAttachment[] {
+  const hostResult = resolvedHostResult(metadata);
+  if (!hostResult || hostResult.kind !== "generated_attachments") {
+    return [];
+  }
+  const outputs = Array.isArray(hostResult.payload?.outputs) ? hostResult.payload.outputs : [];
+  return outputs
+    .map((output): GeneratedMediaAttachment | null => {
+      if (!output || typeof output !== "object") {
+        return null;
+      }
+      const object = output as Record<string, unknown>;
+      const rawKind = typeof object.kind === "string" ? object.kind.trim().toLowerCase() : "";
+      const kind = normalizeGeneratedMediaKind(rawKind);
+      const localPath = stringValue(object.local_path) || stringValue(object.source_path);
+      if (!kind || !localPath) {
+        return null;
+      }
+      return {
+        kind,
+        fileName: stringValue(object.file_name) || localPath.split(/[\\/]/).pop() || localPath,
+        localPath,
+        previewLocalPath: stringValue(object.preview_local_path) || undefined,
+        mimeType: stringValue(object.mime_type) || undefined,
+      };
+    })
+    .filter((output): output is GeneratedMediaAttachment => output !== null);
+}
+
+// resolvedHostResult returns a normalized generated/tool host-result object from known runtime metadata shapes.
+// resolvedHostResult 从已知运行时元数据形态中返回规范化的工具宿主结果对象。
+function resolvedHostResult(metadata: unknown): { kind?: string; payload?: Record<string, unknown> } | null {
+  const candidate = metadataValue(metadata, ["host_result", "hostResult"]) ?? metadata;
+  if (!candidate || typeof candidate !== "object") {
+    return null;
+  }
+  const object = candidate as Record<string, unknown>;
+  const kind = stringValue(object.kind);
+  const payload = object.payload && typeof object.payload === "object"
+    ? object.payload as Record<string, unknown>
+    : undefined;
+  if (!kind || !payload) {
+    return null;
+  }
+  return { kind, payload };
+}
+
+// normalizeGeneratedMediaKind maps stored attachment kind labels to WebUI media controls.
+// normalizeGeneratedMediaKind 将已存储附件类型标签映射为 WebUI 媒体控件。
+function normalizeGeneratedMediaKind(kind: string): GeneratedMediaKind | null {
+  if (kind === "image") return "image";
+  if (kind === "audio") return "audio";
+  if (kind === "video") return "video";
+  if (kind === "pdf" || kind === "document") return "document";
+  return null;
+}
+
+// stringValue returns one trimmed string from an unknown JSON value.
+// stringValue 从未知 JSON 值中返回一条清理后的字符串。
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+// mediaSourceUrl converts local media paths into URLs usable by either Tauri or browser preview mode.
+// mediaSourceUrl 将本地媒体路径转换为 Tauri 或浏览器预览模式可用的 URL。
+function mediaSourceUrl(path: string): string {
+  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(path)) {
+    return path;
+  }
+  if (isTauriRuntime()) {
+    return `http://vulcan-media.localhost/asset/${base64UrlEncodeUtf8(path)}`;
+  }
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.startsWith("/") ? `file://${normalized}` : `file:///${normalized}`;
+}
+
+// base64UrlEncodeUtf8 encodes a local media path into a URL-safe route segment.
+// base64UrlEncodeUtf8 将本地媒体路径编码为 URL 安全的路由片段。
+function base64UrlEncodeUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
+}
+
+// useGeneratedMediaSource resolves a generated local media path into a WebUI-renderable source URL.
+// useGeneratedMediaSource 将生成的本地媒体路径解析为 WebUI 可渲染的源 URL。
+function useGeneratedMediaSource(path: string, _mimeType?: string): string {
+  return React.useMemo(() => (path ? mediaSourceUrl(path) : ""), [path]);
+}
+
+// toolMetadataContainsReturnPayload returns whether a tool result carries an API-level returned payload.
+// toolMetadataContainsReturnPayload 返回工具结果是否携带 API 层已返回载荷。
+function toolMetadataContainsReturnPayload(metadata: unknown, body?: string): boolean {
+  if (typeof body === "string" && body.trim()) {
+    return true;
+  }
+  return Boolean(
+    metadataString(metadata, ["tool_result_id", "toolResultId", "payload.tool_result_id", "payload.toolResultId"])
+      ?? metadataValue(metadata, ["host_result", "hostResult", "payload"]),
   );
 }
 
@@ -4990,11 +5396,12 @@ function ChatArea(props: {
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
       ) : isEmptyConversation ? (
-        <EmptyConversationCenter
-          projectName={emptyProjectName}
-          providers={props.workbench.providers}
-          onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-          onSubmitPrompt={props.onSubmitPrompt}
+          <EmptyConversationCenter
+            projectName={emptyProjectName}
+            aiCapabilities={props.workbench.aiCapabilities ?? []}
+            providers={props.workbench.providers}
+            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+            onSubmitPrompt={props.onSubmitPrompt}
         />
       ) : (
         <>
@@ -5007,6 +5414,7 @@ function ChatArea(props: {
           />
           {streamingThinkingBlock ? <StreamingThinkingOverlay block={streamingThinkingBlock} /> : null}
           <ComposerDock
+            aiCapabilities={props.workbench.aiCapabilities ?? []}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSubmitPrompt={props.onSubmitPrompt}
@@ -5243,6 +5651,7 @@ function ToolExecutionBlock(props: {
   const summary = toolExecutionSummary(props.blocks);
   const toolName = toolExecutionName(props.blocks);
   const displayState = toolExecutionDisplayState(props.blocks);
+  const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
   const detailBody = props.blocks
     .map((block) => `## ${blockTitle(block.kind, block.toolName)}\n\n${block.body}`)
     .join("\n\n---\n\n");
@@ -5253,20 +5662,28 @@ function ToolExecutionBlock(props: {
     ...(resultBlock ? [["结果", "已返回"] as [string, string]] : []),
   ];
 
+  const openDetail = () => props.onOpenDetail({
+    title: summary,
+    kind: primaryBlock.kind,
+    body: detailBody,
+    metadata,
+    mediaAttachments,
+  });
+
   return (
-    <button
-      className="tool-execution-row"
-      onClick={() => props.onOpenDetail({
-        title: summary,
-        kind: primaryBlock.kind,
-        body: detailBody,
-        metadata,
-      })}
-      type="button"
-    >
-      <Wrench size={15} />
-      <span>{summary}</span>
-    </button>
+    <div className="tool-execution-stack">
+      <button
+        className="tool-execution-row"
+        onClick={openDetail}
+        type="button"
+      >
+        <Wrench size={15} />
+        <span>{summary}</span>
+      </button>
+      {mediaAttachments.length > 0 ? (
+        <GeneratedMediaStrip attachments={mediaAttachments} onOpenDetail={openDetail} />
+      ) : null}
+    </div>
   );
 }
 
@@ -5319,6 +5736,9 @@ function toolExecutionName(blocks: ConversationBlock[]): string | null {
 // toolExecutionDisplayState resolves the stable compact display state for one tool execution row.
 // toolExecutionDisplayState 解析单条工具执行行使用的稳定紧凑显示状态。
 function toolExecutionDisplayState(blocks: ConversationBlock[]): "failed" | "completed" | "running" {
+  if (blocks.some((block) => block.kind === "tool-result" && toolMetadataContainsReturnPayload(block.rawMetadata, block.body))) {
+    return "completed";
+  }
   const source = blocks.map((block) => `${block.status ?? ""}\n${block.title}\n${block.body}`).join("\n");
   const textState = normalizeToolDisplayState(extractToolStatusFromText(source));
   if (textState === "failed") {
@@ -5334,6 +5754,104 @@ function toolExecutionDisplayState(blocks: ConversationBlock[]): "failed" | "com
     return "completed";
   }
   return "running";
+}
+
+// toolExecutionMediaAttachments resolves generated media outputs across merged tool call/result rows.
+// toolExecutionMediaAttachments 从合并后的工具调用/返回行中解析生成媒体输出。
+function toolExecutionMediaAttachments(blocks: ConversationBlock[]): GeneratedMediaAttachment[] {
+  const seen = new Set<string>();
+  const attachments: GeneratedMediaAttachment[] = [];
+  for (const block of blocks) {
+    for (const attachment of block.mediaAttachments ?? []) {
+      const key = `${attachment.kind}:${attachment.localPath}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      attachments.push(attachment);
+    }
+  }
+  return attachments;
+}
+
+// GeneratedMediaStrip renders generated image, audio, and video outputs directly under their tool row.
+// GeneratedMediaStrip 在工具行下直接渲染生成图片、音频和视频输出。
+function GeneratedMediaStrip(props: {
+  // attachments are the generated media outputs for one tool execution.
+  // attachments 是单次工具执行的生成媒体输出。
+  attachments: GeneratedMediaAttachment[];
+  // onOpenDetail opens the full tool detail modal.
+  // onOpenDetail 打开完整工具详情弹窗。
+  onOpenDetail: () => void;
+}) {
+  return (
+    <div className="generated-media-strip">
+      {props.attachments.map((attachment) => (
+        <GeneratedMediaInlineCard
+          attachment={attachment}
+          key={`${attachment.kind}:${attachment.localPath}`}
+          onOpenDetail={props.onOpenDetail}
+        />
+      ))}
+    </div>
+  );
+}
+
+// GeneratedMediaInlineCard renders one compact media preview inside the transcript.
+// GeneratedMediaInlineCard 在转录中渲染单条紧凑媒体预览。
+function GeneratedMediaInlineCard(props: {
+  // attachment describes the generated file to preview.
+  // attachment 描述需要预览的生成文件。
+  attachment: GeneratedMediaAttachment;
+  // onOpenDetail opens the parent tool detail modal.
+  // onOpenDetail 打开父级工具详情弹窗。
+  onOpenDetail: () => void;
+}) {
+  const source = useGeneratedMediaSource(
+    props.attachment.previewLocalPath ?? props.attachment.localPath,
+    props.attachment.mimeType,
+  );
+  const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
+  const MediaIcon = generatedMediaIcon(props.attachment.kind);
+  if (props.attachment.kind === "image") {
+    return (
+      <button className="generated-media-card image" onClick={props.onOpenDetail} type="button">
+        <img alt={props.attachment.fileName} src={source} />
+        <span>{props.attachment.fileName}</span>
+      </button>
+    );
+  }
+  if (props.attachment.kind === "video") {
+    return (
+      <div className="generated-media-card player">
+        <video controls preload="metadata" src={mediaSource} />
+        <span>{props.attachment.fileName}</span>
+      </div>
+    );
+  }
+  if (props.attachment.kind === "audio") {
+    return (
+      <div className="generated-media-card audio">
+        <span className="generated-media-icon"><MediaIcon size={18} /></span>
+        <audio controls preload="metadata" src={mediaSource} />
+      </div>
+    );
+  }
+  return (
+    <button className="generated-media-card document" onClick={props.onOpenDetail} type="button">
+      <MediaIcon size={18} />
+      <span>{props.attachment.fileName}</span>
+    </button>
+  );
+}
+
+// generatedMediaIcon returns the icon used by generated media cards and modals.
+// generatedMediaIcon 返回生成媒体卡片与弹窗使用的图标。
+function generatedMediaIcon(kind: GeneratedMediaKind) {
+  if (kind === "image") return ImageIcon;
+  if (kind === "video") return Video;
+  if (kind === "audio") return Volume2;
+  return FileText;
 }
 
 // toolDisplayStateLabel returns the localized label used inside compact tool rows.
@@ -5412,6 +5930,9 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
           </div>
         </header>
         <div className="detail-modal-body">
+          {props.detail.mediaAttachments?.length ? (
+            <GeneratedMediaDetail attachments={props.detail.mediaAttachments} />
+          ) : null}
           {props.detail.kind === "diff" ? (
             <pre className="diff-detail"><code>{props.detail.body}</code></pre>
           ) : (
@@ -5429,6 +5950,54 @@ function ConversationLoadingCenter() {
   return (
     <section className="conversation-loading-center" aria-live="polite" aria-busy="true">
       <ShinyText text="✨ 正在加载会话信息" />
+    </section>
+  );
+}
+
+// GeneratedMediaDetail renders media outputs in a zoomable/player-capable detail modal section.
+// GeneratedMediaDetail 在详情弹窗中渲染可缩放或可播放的媒体输出区域。
+function GeneratedMediaDetail(props: {
+  // attachments are generated media outputs carried by the opened tool detail.
+  // attachments 是当前工具详情携带的生成媒体输出。
+  attachments: GeneratedMediaAttachment[];
+}) {
+  const [zoom, setZoom] = React.useState(1);
+  const primary = props.attachments[0];
+  const primarySource = useGeneratedMediaSource(primary?.localPath ?? "", primary?.mimeType);
+  if (!primary) {
+    return null;
+  }
+  const MediaIcon = generatedMediaIcon(primary.kind);
+  return (
+    <section className="generated-media-detail">
+      <header className="generated-media-detail-header">
+        <span><MediaIcon size={17} />{primary.fileName}</span>
+        {primary.kind === "image" ? (
+          <span className="generated-media-zoom-controls">
+            <Button onClick={() => setZoom((value) => Math.max(0.25, value - 0.25))} size="sm" type="button" variant="outline">-</Button>
+            <strong>{Math.round(zoom * 100)}%</strong>
+            <Button onClick={() => setZoom((value) => Math.min(4, value + 0.25))} size="sm" type="button" variant="outline">+</Button>
+          </span>
+        ) : null}
+      </header>
+      {primary.kind === "image" ? (
+        <div className="generated-media-image-preview">
+          <img
+            alt={primary.fileName}
+            src={primarySource}
+            style={{ transform: `scale(${zoom})` }}
+          />
+        </div>
+      ) : primary.kind === "video" ? (
+        <video className="generated-media-video-preview" controls src={primarySource} />
+      ) : primary.kind === "audio" ? (
+        <audio className="generated-media-audio-preview" controls src={primarySource} />
+      ) : (
+        <a className="generated-media-document-link" href={primarySource} rel="noreferrer" target="_blank">
+          <FileText size={18} />
+          {primary.fileName}
+        </a>
+      )}
     </section>
   );
 }
@@ -5574,6 +6143,9 @@ function blockLooksLikeMemoryRecall(block: ConversationBlock): boolean {
 // ComposerDock renders composer-related floating controls.
 // ComposerDock 渲染输入区相关的浮动控件。
 function ComposerDock(props: {
+  // AI capability route summaries used by the composer capability tree.
+  // 输入区能力树使用的 AI 能力路由摘要。
+  aiCapabilities: AiCapabilitySummary[];
   // showScrollToBottom controls whether the bottom-jump button is visible.
   // showScrollToBottom 控制是否显示跳转到底部按钮。
   showScrollToBottom: boolean;
@@ -5618,6 +6190,7 @@ function ComposerDock(props: {
         </div>
       ) : null}
       <ComposerPanel
+        aiCapabilities={props.aiCapabilities}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSubmitPrompt={props.onSubmitPrompt}
@@ -5629,6 +6202,9 @@ function ComposerDock(props: {
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 function ComposerPanel(props: {
+  // AI capability route summaries used by the quick capability tree.
+  // 快捷能力树使用的 AI 能力路由摘要。
+  aiCapabilities: AiCapabilitySummary[];
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
@@ -5641,7 +6217,7 @@ function ComposerPanel(props: {
 }) {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState("");
@@ -5651,9 +6227,15 @@ function ComposerPanel(props: {
   // modelChoice stores the selected provider/model key shown by the shared model picker.
   // modelChoice 保存共享模型筛选器展示的 provider/model 选择键。
   const [modelChoice, setModelChoice] = React.useState("");
-  // aiCapabilityChoice stores the local preview AI capability selection.
-  // aiCapabilityChoice 保存本地预览用的 AI 能力选择。
-  const [aiCapabilityChoice, setAiCapabilityChoice] = React.useState("extended");
+  // disabledAiCapabilityKinds stores current-message quick-toggle disables.
+  // disabledAiCapabilityKinds 保存当前消息级快捷开关禁用项。
+  const [disabledAiCapabilityKinds, setDisabledAiCapabilityKinds] = React.useState<Set<AiCapabilityKind>>(() => new Set());
+  // disabledAiCapabilityTargetSelectors stores current-message target-route disables.
+  // disabledAiCapabilityTargetSelectors 保存当前消息级目标路由禁用项。
+  const [disabledAiCapabilityTargetSelectors, setDisabledAiCapabilityTargetSelectors] = React.useState<Set<string>>(() => new Set());
+  // aiCapabilityTargetOrder stores current-message target route ordering.
+  // aiCapabilityTargetOrder 保存当前消息级目标路由顺序。
+  const [aiCapabilityTargetOrder, setAiCapabilityTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
   // reasoningEffort stores the local preview reasoning-effort selection.
   // reasoningEffort 保存本地预览用的思考档位选择。
   const [reasoningEffort, setReasoningEffort] = React.useState("x-high");
@@ -5672,6 +6254,12 @@ function ComposerPanel(props: {
     const activeChoice = availableModelChoices.find((choice) => choice.active) ?? availableModelChoices[0];
     return modelPickerChoiceKey(activeChoice);
   }, [availableModelChoices]);
+  // capabilitySignature prevents unrelated workbench streaming snapshots from resetting prompt overrides.
+  // capabilitySignature 防止无关的工作台流式快照重置提示词级能力覆盖。
+  const capabilitySignature = React.useMemo(
+    () => aiCapabilitySignature(props.aiCapabilities),
+    [props.aiCapabilities],
+  );
 
   React.useEffect(() => {
     if (!activeModelChoiceKey) {
@@ -5684,17 +6272,17 @@ function ComposerPanel(props: {
       setModelChoice(activeModelChoiceKey);
     }
   }, [activeModelChoiceKey, availableModelChoices, modelChoice]);
+
+  React.useEffect(() => {
+    setDisabledAiCapabilityKinds(defaultDisabledAiCapabilityKinds(props.aiCapabilities));
+    setDisabledAiCapabilityTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(props.aiCapabilities));
+    setAiCapabilityTargetOrder(defaultAiCapabilityTargetOrder(props.aiCapabilities));
+  }, [capabilitySignature]);
   // executionModeOptions mirrors iced ExecutionMode::ALL using current language labels.
   // executionModeOptions 使用当前语言标签对齐 iced 的 ExecutionMode::ALL。
   const executionModeOptions = React.useMemo<ComposerSelectOption[]>(() => [
     { value: "build", label: t("composer.mode.execute") },
     { value: "plan", label: t("composer.mode.plan") },
-  ], [t]);
-  // aiCapabilityOptions mirrors the iced AI capability quick-control trigger.
-  // aiCapabilityOptions 对齐 iced 的 AI 能力快捷控制触发器。
-  const aiCapabilityOptions = React.useMemo<ComposerSelectOption[]>(() => [
-    { value: "extended", label: t("composer.capability.extended"), subtitle: t("composer.capability.extended.subtitle") },
-    { value: "basic", label: t("composer.capability.basic"), subtitle: t("composer.capability.basic.subtitle") },
   ], [t]);
   // reasoningEffortOptions mirrors provider-config ReasoningEffortLevel labels plus the DeepSeek Max override.
   // reasoningEffortOptions 对齐 provider-config 的思考档位标签，并包含 DeepSeek 的 Max 覆盖标签。
@@ -5734,6 +6322,9 @@ function ComposerPanel(props: {
         prompt,
         executionMode,
         reasoningEffort,
+        disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
+        disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
+        aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
       });
       if (!sent) {
         setDraftInput((current) => current || submittedInput);
@@ -5741,7 +6332,52 @@ function ComposerPanel(props: {
     } finally {
       setIsComposerRunning(false);
     }
-  }, [draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+
+  // handleAiCapabilityToggle updates the current-message disabled capability set.
+  // handleAiCapabilityToggle 更新当前消息级禁用能力集合。
+  const handleAiCapabilityToggle = React.useCallback((kind: AiCapabilityKind, enabled: boolean) => {
+    setDisabledAiCapabilityKinds((current) => {
+      const next = new Set(current);
+      if (enabled) {
+        next.delete(kind);
+      } else {
+        next.add(kind);
+      }
+      return next;
+    });
+  }, []);
+
+  // handleAiCapabilityTargetToggle updates the current-message disabled target selector set.
+  // handleAiCapabilityTargetToggle 更新当前消息级禁用目标选择器集合。
+  const handleAiCapabilityTargetToggle = React.useCallback((targetSelector: string, enabled: boolean) => {
+    setDisabledAiCapabilityTargetSelectors((current) => {
+      const next = new Set(current);
+      if (enabled) {
+        next.delete(targetSelector);
+      } else {
+        next.add(targetSelector);
+      }
+      return next;
+    });
+  }, []);
+
+  // handleAiCapabilityTargetMove changes the prompt-level target order for one capability.
+  // handleAiCapabilityTargetMove 调整单个能力的提示词级目标顺序。
+  const handleAiCapabilityTargetMove = React.useCallback((kind: AiCapabilityKind, targetSelector: string, direction: -1 | 1) => {
+    setAiCapabilityTargetOrder((current) => {
+      const next = new Map(current);
+      const currentOrder = [...(next.get(kind) ?? [])];
+      const currentIndex = currentOrder.indexOf(targetSelector);
+      const targetIndex = currentIndex + direction;
+      if (currentIndex < 0 || targetIndex < 0 || targetIndex >= currentOrder.length) {
+        return current;
+      }
+      [currentOrder[currentIndex], currentOrder[targetIndex]] = [currentOrder[targetIndex], currentOrder[currentIndex]];
+      next.set(kind, currentOrder);
+      return next;
+    });
+  }, []);
 
   // handleModelChoiceChange applies one model choice locally and through the shared backend.
   // handleModelChoiceChange 在本地与共享后端应用单个模型选择。
@@ -5793,14 +6429,16 @@ function ComposerPanel(props: {
             providers={props.providers}
             value={modelChoice}
           />
-          <ComposerSelectControl
+          <ComposerAiCapabilityControl
             ariaLabel={t("composer.aria.capability")}
-            className="capability"
-            fallbackLabel={t("composer.selectFallback")}
-            icon={<SlidersHorizontal size={15} />}
-            onValueChange={setAiCapabilityChoice}
-            options={aiCapabilityOptions}
-            value={aiCapabilityChoice}
+            capabilities={props.aiCapabilities}
+            disabledKinds={disabledAiCapabilityKinds}
+            disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
+            targetOrder={aiCapabilityTargetOrder}
+            locale={locale}
+            onToggle={handleAiCapabilityToggle}
+            onTargetMove={handleAiCapabilityTargetMove}
+            onTargetToggle={handleAiCapabilityTargetToggle}
           />
         </div>
         <div className="composer-toolbar-right">
@@ -5824,6 +6462,205 @@ function ComposerPanel(props: {
         </div>
       </div>
     </section>
+  );
+}
+
+// ComposerAiCapabilityControl renders the iced-aligned capability dialog.
+// ComposerAiCapabilityControl 渲染对齐 iced 的能力设置对话框。
+function ComposerAiCapabilityControl(props: {
+  // Accessible label for the dialog trigger.
+  // 对话框触发器的无障碍标签。
+  ariaLabel: string;
+  // Service-projected capability tree for the composer.
+  // 服务投影给输入区的能力树。
+  capabilities: AiCapabilitySummary[];
+  // Current WebUI locale used for menu labels.
+  // 菜单标签使用的当前 WebUI 语言。
+  locale: LocaleCode;
+  // Runtime-disabled capability keys for the current prompt.
+  // 当前提示词运行时禁用的能力键。
+  disabledKinds: Set<AiCapabilityKind>;
+  // Runtime-disabled target selectors for the current prompt.
+  // 当前提示词运行时禁用的目标选择器。
+  disabledTargetSelectors: Set<string>;
+  // Runtime target order grouped by capability kind.
+  // 按能力类型分组的运行时目标顺序。
+  targetOrder: Map<AiCapabilityKind, string[]>;
+  // Toggles one capability on or off.
+  // 开关单个能力。
+  onToggle: (kind: AiCapabilityKind, enabled: boolean) => void;
+  // Moves one target route up or down within one capability.
+  // 在单个能力中上移或下移一个目标路由。
+  onTargetMove: (kind: AiCapabilityKind, targetSelector: string, direction: -1 | 1) => void;
+  // Toggles one capability target on or off.
+  // 开关单个能力目标。
+  onTargetToggle: (targetSelector: string, enabled: boolean) => void;
+}) {
+  // open tracks whether the full capability dialog is visible.
+  // open 跟踪完整能力对话框是否可见。
+  const [open, setOpen] = React.useState(false);
+  // selectedKind stores the capability currently shown in the right pane.
+  // selectedKind 保存右侧面板当前展示的能力。
+  const [selectedKind, setSelectedKind] = React.useState<AiCapabilityKind>("web_search");
+  const capabilityByKind = React.useMemo(() => {
+    return new Map(props.capabilities.map((capability) => [capability.kind, capability]));
+  }, [props.capabilities]);
+  const visibleCapabilities = React.useMemo(() => {
+    return COMPOSER_AI_CAPABILITY_OPTIONS.map((option) => ({
+      option,
+      capability: capabilityByKind.get(option.value),
+    }));
+  }, [capabilityByKind]);
+  const enabledCount = visibleCapabilities.filter(({ option, capability }) => {
+    return Boolean(capability?.available) && !props.disabledKinds.has(option.value);
+  }).length;
+  const triggerSubtitle = props.locale === "zh-CN"
+    ? `${enabledCount}/${visibleCapabilities.length} 已启用`
+    : `${enabledCount}/${visibleCapabilities.length} enabled`;
+  const selectedEntry = visibleCapabilities.find(({ option }) => option.value === selectedKind) ?? visibleCapabilities[0];
+  const selectedCapability = selectedEntry?.capability;
+  const selectedTargets = orderedAiCapabilityTargets(selectedCapability, props.targetOrder);
+  const selectedEnabled = Boolean(selectedCapability?.available) && !props.disabledKinds.has(selectedEntry.option.value);
+  const SelectedIcon = selectedEntry.option.Icon;
+
+  React.useEffect(() => {
+    if (visibleCapabilities.some(({ option }) => option.value === selectedKind)) {
+      return;
+    }
+    const firstCapability = visibleCapabilities[0]?.option.value;
+    if (firstCapability) {
+      setSelectedKind(firstCapability);
+    }
+  }, [selectedKind, visibleCapabilities]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <button
+          aria-label={props.ariaLabel}
+          className="composer-capability-trigger composer-select-trigger capability"
+          type="button"
+        >
+          <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
+          <span className="composer-select-copy">
+            <span className="composer-select-label">{props.locale === "zh-CN" ? "扩展能力" : "Extended Capability"}</span>
+            <span className="composer-select-subtitle">{triggerSubtitle}</span>
+          </span>
+        </button>
+      </DialogTrigger>
+      <DialogContent className="composer-capability-dialog">
+        <DialogHeader>
+          <DialogTitle>{props.locale === "zh-CN" ? "当前消息能力设置" : "Current-message capabilities"}</DialogTitle>
+          <DialogDescription>
+            {props.locale === "zh-CN"
+              ? "左侧选择能力类型，右侧勾选目标并调整本次请求的路由顺序。"
+              : "Choose a capability on the left, then enable targets and order routes for this request."}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="composer-capability-dialog-grid">
+          <aside className="composer-capability-dialog-left">
+            {visibleCapabilities.map(({ option, capability }) => {
+              const available = Boolean(capability?.available);
+              const enabled = available && !props.disabledKinds.has(option.value);
+              const Icon = option.Icon;
+              const targetCount = capability?.targets.length ?? 0;
+              return (
+                <div
+                  className={cn(
+                    "composer-capability-kind-row",
+                    selectedKind === option.value && "selected",
+                    !available && "unavailable",
+                  )}
+                  key={option.value}
+                >
+                  <input
+                    checked={enabled}
+                    disabled={!available}
+                    onChange={(event) => props.onToggle(option.value, event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  <button
+                    className="composer-capability-kind-select"
+                    onClick={() => setSelectedKind(option.value)}
+                    type="button"
+                  >
+                    <Icon size={16} />
+                    <span className="composer-capability-kind-copy">
+                      <span>{props.locale === "zh-CN" ? option.labelZh : option.labelEn}</span>
+                      <small>
+                        {available
+                          ? props.locale === "zh-CN"
+                            ? `${targetCount} 个目标`
+                            : `${targetCount} targets`
+                          : props.locale === "zh-CN"
+                            ? "暂无可用目标"
+                            : "No targets"}
+                      </small>
+                    </span>
+                  </button>
+                </div>
+              );
+            })}
+          </aside>
+          <section className="composer-capability-dialog-right">
+            <div className="composer-capability-detail-header">
+              <span className="composer-capability-detail-icon"><SelectedIcon size={18} /></span>
+              <span className="composer-capability-detail-copy">
+                <strong>{props.locale === "zh-CN" ? selectedEntry.option.labelZh : selectedEntry.option.labelEn}</strong>
+                <small>{props.locale === "zh-CN" ? selectedEntry.option.subtitleZh : selectedEntry.option.subtitleEn}</small>
+              </span>
+            </div>
+            {selectedTargets.length > 0 ? (
+              <div className="composer-capability-target-table">
+                {selectedTargets.map((target, index) => {
+                  const targetEnabled = selectedEnabled && target.enabled && !props.disabledTargetSelectors.has(target.targetSelector);
+                  return (
+                    <div className={cn("composer-capability-target-row", !target.enabled && "disabled")} key={target.targetSelector}>
+                      <input
+                        checked={targetEnabled}
+                        disabled={!selectedEnabled || !target.enabled}
+                        onChange={(event) => props.onTargetToggle(target.targetSelector, event.currentTarget.checked)}
+                        type="checkbox"
+                      />
+                      <span className="composer-capability-target-copy">
+                        <span>{target.targetName || target.targetAlias}</span>
+                        <small>{target.vendorName} · {target.modelId || target.targetAlias}</small>
+                      </span>
+                      <span className="composer-capability-target-actions">
+                        <Button
+                          aria-label={props.locale === "zh-CN" ? "上移目标" : "Move target up"}
+                          disabled={index === 0}
+                          onClick={() => props.onTargetMove(selectedEntry.option.value, target.targetSelector, -1)}
+                          size="icon"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <ArrowUp size={14} />
+                        </Button>
+                        <Button
+                          aria-label={props.locale === "zh-CN" ? "下移目标" : "Move target down"}
+                          disabled={index === selectedTargets.length - 1}
+                          onClick={() => props.onTargetMove(selectedEntry.option.value, target.targetSelector, 1)}
+                          size="icon"
+                          type="button"
+                          variant="ghost"
+                        >
+                          <ArrowDown size={14} />
+                        </Button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="composer-capability-dialog-empty">
+                {props.locale === "zh-CN" ? "当前能力暂无已配置目标。" : "This capability has no configured targets."}
+              </div>
+            )}
+          </section>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -5897,6 +6734,9 @@ function composerShortcutHint(baseHint: string): string {
 // EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
 // EmptyConversationCenter 渲染空白会话的居中首次输入状态。
 function EmptyConversationCenter(props: {
+  // AI capability route summaries used by the composer capability tree.
+  // 输入区能力树使用的 AI 能力路由摘要。
+  aiCapabilities: AiCapabilitySummary[];
   // Project name used by the empty-state prompt.
   // 空状态提示使用的项目名称。
   projectName: string;
@@ -5921,6 +6761,7 @@ function EmptyConversationCenter(props: {
     <section className="empty-conversation-center">
       <h2>{promptText}</h2>
       <ComposerPanel
+        aiCapabilities={props.aiCapabilities}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSubmitPrompt={props.onSubmitPrompt}

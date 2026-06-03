@@ -61,6 +61,52 @@ export interface RuntimeModuleSnapshot {
   message: string;
 }
 
+// AiCapabilityTargetSummary describes one configured AI capability route target.
+// AiCapabilityTargetSummary 描述单个已配置的 AI 能力路由目标。
+export interface AiCapabilityTargetSummary {
+  // Stable vendor/target selector used by prompt-level overrides.
+  // 提示词级覆盖使用的稳定 vendor/target 选择器。
+  targetSelector: string;
+  // Provider or capability vendor identifier.
+  // Provider 或能力供应商标识。
+  vendorId: string;
+  // User-facing vendor name.
+  // 面向用户显示的供应商名称。
+  vendorName: string;
+  // Route target alias exposed to the runtime.
+  // 暴露给运行时的路由目标别名。
+  targetAlias: string;
+  // User-facing target name.
+  // 面向用户显示的目标名称。
+  targetName: string;
+  // Provider model identifier used by this target.
+  // 当前目标使用的 Provider 模型标识。
+  modelId: string;
+  // Whether this target is globally enabled.
+  // 当前目标是否全局启用。
+  enabled: boolean;
+}
+
+// AiCapabilitySummary describes one semantic AI capability exposed by the composer.
+// AiCapabilitySummary 描述输入区暴露的单个语义 AI 能力。
+export interface AiCapabilitySummary {
+  // Stable semantic capability key.
+  // 稳定语义能力键。
+  kind: string;
+  // User-facing capability label.
+  // 面向用户显示的能力名称。
+  label: string;
+  // Whether the capability has at least one usable route.
+  // 当前能力是否至少拥有一条可用路由。
+  available: boolean;
+  // Whether the capability is globally enabled.
+  // 当前能力是否全局启用。
+  enabled: boolean;
+  // Configured targets under this capability.
+  // 当前能力下已配置的目标。
+  targets: AiCapabilityTargetSummary[];
+}
+
 // ProjectSummary describes one project shown in the sidebar.
 // ProjectSummary 描述侧栏中展示的单个项目。
 export interface ProjectSummary {
@@ -337,6 +383,9 @@ export interface WorkbenchSnapshot {
   // Provider summaries.
   // Provider 摘要。
   providers: ProviderSummary[];
+  // AI capability route summaries for the composer quick controls.
+  // 输入区快捷控制使用的 AI 能力路由摘要。
+  aiCapabilities?: AiCapabilitySummary[];
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

@@ -128,6 +128,10 @@ pub struct WorkbenchSnapshot {
     /// Provider summaries shown in the provider area.
     /// Provider 区域展示的供应商摘要。
     pub providers: Vec<ProviderSummary>,
+    /// AI capability route summaries shown by the composer quick controls.
+    /// 输入区快捷控制展示的 AI 能力路由摘要。
+    #[serde(default)]
+    pub ai_capabilities: Vec<AiCapabilitySummary>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -137,6 +141,56 @@ pub struct WorkbenchSnapshot {
     /// Log entries shown in the diagnostics area.
     /// 诊断区域展示的日志条目。
     pub logs: Vec<LogEntrySummary>,
+}
+
+/// Summarizes one semantic AI capability for the WebUI composer.
+/// 汇总 WebUI 输入区中的单个语义 AI 能力。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilitySummary {
+    /// Stable semantic capability key.
+    /// 稳定语义能力键。
+    pub kind: String,
+    /// User-facing semantic capability label.
+    /// 面向用户显示的语义能力名称。
+    pub label: String,
+    /// Whether the capability has at least one usable route.
+    /// 当前能力是否至少拥有一条可用路由。
+    pub available: bool,
+    /// Whether the capability is globally enabled in the workbench configuration.
+    /// 当前能力是否在工作台配置中全局启用。
+    pub enabled: bool,
+    /// Configured route targets under this semantic capability.
+    /// 当前语义能力下已配置的路由目标。
+    pub targets: Vec<AiCapabilityTargetSummary>,
+}
+
+/// Summarizes one configured AI capability route target.
+/// 汇总单个已配置的 AI 能力路由目标。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilityTargetSummary {
+    /// Stable `vendor/target` selector used by runtime prompt overrides.
+    /// 运行时提示词覆盖使用的稳定 `vendor/target` 选择器。
+    pub target_selector: String,
+    /// Provider or capability vendor identifier.
+    /// Provider 或能力供应商标识。
+    pub vendor_id: String,
+    /// User-facing vendor name.
+    /// 面向用户显示的供应商名称。
+    pub vendor_name: String,
+    /// Route target alias exposed to the runtime.
+    /// 暴露给运行时的路由目标别名。
+    pub target_alias: String,
+    /// User-facing route target name.
+    /// 面向用户显示的路由目标名称。
+    pub target_name: String,
+    /// Provider model identifier used by this target.
+    /// 当前目标使用的 Provider 模型标识。
+    pub model_id: String,
+    /// Whether this target is globally enabled.
+    /// 当前目标是否全局启用。
+    pub enabled: bool,
 }
 
 /// Summarizes one primary workbench feature area.

@@ -207,7 +207,8 @@ fn append_tool_finished_projection_to_state(
     let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title) else {
         return false;
     };
-    let display_state = tool_display_state_for_event(event.metadata.as_ref());
+    let display_state =
+        tool_display_state_for_finished_event(event.metadata.as_ref(), !event.detail.trim().is_empty());
     let tool_name = event
         .metadata
         .as_ref()
@@ -247,14 +248,10 @@ fn append_tool_finished_projection_to_state(
         )),
         created_at: now.to_string(),
     };
-    let insert_index =
-        matching_tool_call_record_index(&runtime_state.conversation_state.records, &tool_call_id)
-            .map(|index| index + 1)
-            .unwrap_or(runtime_state.conversation_state.records.len());
     runtime_state
         .conversation_state
         .records
-        .insert(insert_index, record);
+        .push(record);
     runtime_state.updated_at = now.to_string();
     true
 }
@@ -301,7 +298,13 @@ fn human_tool_display_title(tool_name: &str, display_state: &str) -> String {
 
 /// Returns the stable display state used by one human-facing tool execution card.
 /// 返回单张面向人类的工具执行卡片所使用的稳定显示状态。
-fn tool_display_state_for_event(metadata: Option<&serde_json::Value>) -> &'static str {
+fn tool_display_state_for_finished_event(
+    metadata: Option<&serde_json::Value>,
+    has_return_body: bool,
+) -> &'static str {
+    if has_return_body || metadata.is_some_and(tool_metadata_contains_return_payload) {
+        return "completed";
+    }
     if let Some(display_state) = metadata
         .and_then(|metadata| metadata.get("display_state"))
         .and_then(serde_json::Value::as_str)
@@ -317,6 +320,21 @@ fn tool_display_state_for_event(metadata: Option<&serde_json::Value>) -> &'stati
         return "failed";
     }
     "completed"
+}
+
+/// Returns whether a tool-finish event carries an API-level returned payload even when the payload itself reports a semantic failure.
+/// 返回工具结束事件是否携带 API 层已返回载荷，即使该载荷自身描述了语义失败。
+fn tool_metadata_contains_return_payload(metadata: &serde_json::Value) -> bool {
+    metadata
+        .get("tool_result_id")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty())
+        || metadata
+            .get("host_result")
+            .is_some_and(|host_result| !host_result.is_null())
+        || metadata
+            .get("payload")
+            .is_some_and(|payload| !payload.is_null())
 }
 
 /// Returns whether the provided tool metadata semantically describes one failed host-side tool result.
@@ -385,25 +403,6 @@ fn tool_record_name_for_call_id(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
-}
-
-/// Finds the visible tool-call record that owns one tool-result event.
-/// 查找拥有某条工具返回事件的可见工具调用记录。
-fn matching_tool_call_record_index(
-    records: &[SessionConversationRecord],
-    tool_call_id: &str,
-) -> Option<usize> {
-    records.iter().rposition(|record| {
-        if record.record_kind != SessionMessageRecordKind::ToolCallOutput {
-            return false;
-        }
-        record
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("tool_call_id"))
-            .and_then(serde_json::Value::as_str)
-            == Some(tool_call_id)
-    })
 }
 
 /// Replaces canonical context fields while preserving locally projected visible records.
@@ -849,10 +848,10 @@ mod tests {
         assert!(!visible_bodies.contains(&"报告中的完整输出不应覆盖已流式记录。"));
     }
 
-    /// Verifies a tool result is inserted beside its matching call instead of being appended after later output.
-    /// 验证工具返回会插入到匹配调用旁边，而不是追加到后续输出之后。
+    /// Verifies a tool result projection preserves runtime event order instead of mutating the stored transcript order.
+    /// 验证工具返回投影保留运行时事件顺序，而不是改写已存储转录顺序。
     #[test]
-    fn tool_result_projection_stays_with_matching_call() {
+    fn tool_result_projection_preserves_runtime_event_order() {
         let session_id = test_session_id();
         let mut runtime_state = SessionRuntimeStateEntry::default();
         append_user_prompt_record(&mut runtime_state, session_id, "3000", "调用工具");
@@ -912,18 +911,18 @@ mod tests {
             vec![
                 SessionMessageRecordKind::Transcript,
                 SessionMessageRecordKind::ToolCallOutput,
-                SessionMessageRecordKind::ToolResultOutput,
                 SessionMessageRecordKind::AssistantOutput,
+                SessionMessageRecordKind::ToolResultOutput,
             ]
         );
     }
 
-    /// Verifies explicit completed display state wins over legacy host-result failure hints.
-    /// 验证明示完成态优先于旧宿主结果里的失败提示。
+    /// Verifies returned tool payloads are displayed as completed even when legacy host-result hints describe a semantic failure.
+    /// 验证已返回工具载荷会显示为完成，即使旧宿主结果提示描述了语义失败。
     #[test]
-    fn explicit_completed_tool_display_state_wins_over_host_failure_hint() {
+    fn returned_tool_payload_wins_over_host_failure_hint() {
         let metadata = json!({
-            "display_state": "completed",
+            "tool_result_id": "tool-result-call-1",
             "host_result": {
                 "kind": "tool_error",
                 "payload": {
@@ -931,7 +930,10 @@ mod tests {
                 },
             },
         });
-        assert_eq!(tool_display_state_for_event(Some(&metadata)), "completed");
+        assert_eq!(
+            tool_display_state_for_finished_event(Some(&metadata), false),
+            "completed"
+        );
     }
 
     /// Projects visible records into comparable test tuples.

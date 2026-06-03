@@ -23,6 +23,7 @@ pub mod skills;
 pub mod tooling;
 pub mod turn_stats;
 pub mod web_search_compat;
+pub mod workbench_ai_capability_router;
 pub mod workspace_path;
 
 pub use agent_runtime::{
