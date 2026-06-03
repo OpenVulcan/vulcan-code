@@ -3,6 +3,8 @@
 
 use std::{
     collections::{BTreeSet, VecDeque},
+    fs,
+    hash::{Hash, Hasher},
     path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex},
@@ -60,7 +62,7 @@ use vulcan_service_api::{
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource,
+    SessionSummary, SessionTitleSource, TaskProjectSummary,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
@@ -173,6 +175,7 @@ pub fn run() {
             service_select_workbench_model,
             service_open_project_directory,
             service_open_project_directory_path,
+            service_add_project_from_folder,
             service_toggle_project_pinned,
             service_reorder_projects,
             service_rename_project,
@@ -463,6 +466,100 @@ fn service_open_project_directory(
 fn service_open_project_directory_path(path: String) -> Result<String, String> {
     open_path_in_system_file_manager(&path)?;
     Ok(format!("已请求打开目录：{path}。"))
+}
+
+/// Opens the host folder picker and adds or restores the selected project.
+/// 打开宿主文件夹选择器，并新增或恢复选中的项目。
+#[tauri::command]
+async fn service_add_project_from_folder(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    let initial_directory = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workbench
+        .projects
+        .first()
+        .map(|project| project.path.clone())
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
+    let Some(selected_path) = pick_task_project_folder(&initial_directory)? else {
+        return Ok(None);
+    };
+    let normalized_path = normalize_task_project_path(&selected_path);
+    let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let workspace_snapshot = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+
+    if workspace_snapshot
+        .task_projects
+        .iter()
+        .any(|project| task_project_matches_path(project, &normalized_path_text))
+    {
+        return refresh_workbench_snapshot(state).await.map(Some);
+    }
+
+    if let Some(project) = workspace_snapshot
+        .archived_task_projects
+        .iter()
+        .find(|project| task_project_matches_path(project, &normalized_path_text))
+        .cloned()
+    {
+        let restored_sessions = project
+            .session_ids
+            .iter()
+            .filter_map(|session_id| {
+                workspace_snapshot
+                    .archived_sessions
+                    .iter()
+                    .find(|session| session.id == *session_id)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        vulcan_workspace_store::workspace_store::restore_project_with_sessions(
+            controller_runtime,
+            &workspace_snapshot.task_projects,
+            &project,
+            &restored_sessions,
+        )
+        .await?;
+        return refresh_workbench_snapshot(state).await.map(Some);
+    }
+
+    let title = normalized_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| normalized_path_text.clone());
+    let order = workspace_snapshot
+        .task_projects
+        .iter()
+        .filter(|project| !project.pinned)
+        .map(|project| project.order)
+        .max()
+        .map(|order| order + 1)
+        .unwrap_or(0);
+    let project_id = build_task_project_id(&workspace_snapshot, &title, &normalized_path_text);
+    let project = TaskProjectSummary::new(
+        project_id,
+        title,
+        normalized_path_text,
+        false,
+        order,
+        None,
+        None,
+        Vec::new(),
+    );
+    vulcan_workspace_store::workspace_store::persist_new_project(controller_runtime, &project)
+        .await?;
+    refresh_workbench_snapshot(state).await.map(Some)
 }
 
 /// Toggles one project pinned state and returns the refreshed workbench snapshot.
@@ -3606,6 +3703,142 @@ fn log_entry(id: &str, level: &str, source: &str, message: &str) -> LogEntrySumm
 /// 返回本地服务桥接层使用的仓库根目录。
 fn workspace_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Opens one native folder-picker dialog and returns the selected path when confirmed.
+/// 打开一个原生文件夹选择器，并在确认后返回选中的路径。
+fn pick_task_project_folder(initial_directory: &str) -> Result<Option<PathBuf>, String> {
+    let mut dialog = rfd::FileDialog::new().set_title("选择要添加的项目文件夹");
+    let initial_path = Path::new(initial_directory);
+    if initial_path.exists() {
+        dialog = dialog.set_directory(initial_path);
+    }
+    Ok(dialog.pick_folder())
+}
+
+/// Normalizes one project path by resolving it when the host filesystem allows it.
+/// 在宿主文件系统允许时解析并规范化单个项目路径。
+fn normalize_task_project_path(path: &Path) -> PathBuf {
+    fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// Converts one filesystem path into a stable native display and persistence string.
+/// 将单个文件系统路径转换成稳定的原生展示与持久化字符串。
+fn normalized_workspace_path_text_from_path(path: &Path) -> String {
+    normalize_workspace_path_text(&path.to_string_lossy())
+}
+
+/// Normalizes one raw workspace path string and strips Windows verbatim prefixes.
+/// 规范化单个原始工作区路径字符串，并移除 Windows verbatim 前缀。
+fn normalize_workspace_path_text(path: &str) -> String {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return String::new();
+    }
+    let path_without_verbatim_prefix = strip_windows_verbatim_prefix(trimmed_path);
+    if looks_like_windows_path(trimmed_path, &path_without_verbatim_prefix) {
+        path_without_verbatim_prefix.replace('/', "\\")
+    } else {
+        path_without_verbatim_prefix
+    }
+}
+
+/// Returns whether one path should be displayed with Windows separators.
+/// 返回单个路径是否应使用 Windows 分隔符显示。
+fn looks_like_windows_path(original_path: &str, normalized_path: &str) -> bool {
+    let bytes = normalized_path.as_bytes();
+    bytes.len() >= 3
+        && bytes[1] == b':'
+        && bytes[0].is_ascii_alphabetic()
+        && matches!(bytes[2], b'/' | b'\\')
+        || normalized_path.starts_with(r"\\")
+        || original_path.starts_with(r"\\?\UNC\")
+        || original_path.starts_with("//?/UNC/")
+        || (cfg!(windows) && normalized_path.starts_with("//"))
+}
+
+/// Removes Windows verbatim path prefixes while preserving normal addressing semantics.
+/// 移除 Windows verbatim 路径前缀，同时保留普通寻址语义。
+fn strip_windows_verbatim_prefix(path: &str) -> String {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{rest}");
+    }
+    if let Some(rest) = path.strip_prefix("//?/UNC/") {
+        return format!("//{rest}");
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    if let Some(rest) = path.strip_prefix("//?/") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
+/// Checks whether one project points to the normalized selected path.
+/// 检查单个项目是否指向已规范化的选中路径。
+fn task_project_matches_path(project: &TaskProjectSummary, normalized_path_text: &str) -> bool {
+    normalized_workspace_path_text_from_path(&normalize_task_project_path(Path::new(&project.path)))
+        == normalized_path_text
+}
+
+/// Builds a stable project id from the title and normalized path while avoiding collisions.
+/// 根据标题与规范化路径构建稳定项目标识，并避免冲突。
+fn build_task_project_id(
+    workspace_snapshot: &WorkspaceSnapshot,
+    title: &str,
+    normalized_path_text: &str,
+) -> String {
+    let base_slug = slugify_identifier(title);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    normalized_path_text.hash(&mut hasher);
+    let path_suffix = format!("{:x}", hasher.finish());
+    let path_suffix = &path_suffix[..path_suffix.len().min(8)];
+    let candidate = if base_slug.is_empty() {
+        format!("project-{path_suffix}")
+    } else {
+        format!("{base_slug}-{path_suffix}")
+    };
+
+    if !workspace_snapshot
+        .task_projects
+        .iter()
+        .chain(workspace_snapshot.archived_task_projects.iter())
+        .any(|project| project.id == candidate)
+    {
+        return candidate;
+    }
+
+    let mut counter = 2usize;
+    loop {
+        let next_candidate = format!("{candidate}-{counter}");
+        if !workspace_snapshot
+            .task_projects
+            .iter()
+            .chain(workspace_snapshot.archived_task_projects.iter())
+            .any(|project| project.id == next_candidate)
+        {
+            return next_candidate;
+        }
+        counter += 1;
+    }
+}
+
+/// Converts one label into a compact ASCII identifier component.
+/// 将单个标签转换为紧凑的 ASCII 标识片段。
+fn slugify_identifier(value: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_dash = false;
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            slug.push(character.to_ascii_lowercase());
+            last_was_dash = false;
+        } else if !last_was_dash && !slug.is_empty() {
+            slug.push('-');
+            last_was_dash = true;
+        }
+    }
+    slug.trim_matches('-').to_string()
 }
 
 /// Returns the user-level Vulcan Code session event-store directory.

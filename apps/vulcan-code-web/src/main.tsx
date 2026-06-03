@@ -743,6 +743,16 @@ async function openProjectDirectory(projectId: string): Promise<string | null> {
   return invoke<string>("service_open_project_directory", { projectId });
 }
 
+// addProjectFromFolder asks the desktop shell to pick a folder and register it as a project.
+// addProjectFromFolder 请求桌面壳选择一个文件夹并注册为项目。
+async function addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    throw new Error("浏览器预览模式下无法添加本地项目，请在桌面壳中使用此功能。");
+  }
+  return invoke<WorkbenchSnapshot | null>("service_add_project_from_folder");
+}
+
 // toggleProjectPinned asks the desktop shell to toggle one project pinned state.
 // toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
 async function toggleProjectPinned(projectId: string): Promise<WorkbenchSnapshot | null> {
@@ -1213,11 +1223,21 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     setLoadingConversationId(null);
   }, []);
 
-  // handleCreateProject opens the future add-project flow from the sidebar heading.
-  // handleCreateProject 从侧栏标题入口打开未来的添加项目流程。
-  const handleCreateProject = React.useCallback(() => {
-    toast.info("添加项目入口已预留，后续接入项目选择与工作区注册流程。");
-  }, []);
+  // handleCreateProject opens the native folder picker and merges the registered project snapshot.
+  // handleCreateProject 打开原生文件夹选择器，并合并注册项目后的工作台快照。
+  const handleCreateProject = React.useCallback(async () => {
+    try {
+      const snapshot = await addProjectFromFolder();
+      if (!snapshot) {
+        toast.info("已取消添加项目。");
+        return;
+      }
+      applyProjectActionSnapshot(snapshot);
+      toast.success("项目列表已更新。");
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, [applyProjectActionSnapshot]);
 
   // handleReorderProjects persists a same-section project order using the existing order model.
   // handleReorderProjects 使用现有顺序模型持久化同一分区内的项目排序。
@@ -3385,6 +3405,9 @@ function ProjectSidebar(props: {
   // activeProjectDragId records when project sorting is active so hover-only UI can pause.
   // activeProjectDragId 记录项目排序激活状态，以便暂停仅悬停显示的界面。
   const [activeProjectDragId, setActiveProjectDragId] = React.useState<string | null>(null);
+  // expandedConversationProjectIds stores project ids whose conversation list is fully expanded.
+  // expandedConversationProjectIds 保存会话列表已完整展开的项目标识。
+  const [expandedConversationProjectIds, setExpandedConversationProjectIds] = React.useState<Set<string>>(() => new Set());
   // projectDragSensors enables pointer dragging only after a small movement threshold.
   // projectDragSensors 仅在达到小幅移动阈值后启用指针拖拽。
   const projectDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
@@ -3430,6 +3453,13 @@ function ProjectSidebar(props: {
   React.useEffect(() => {
     setOpenProjectIds(initialExpandedProjectIdSet(props.projects, props.expandedProjectIds));
   }, [props.expandedProjectIds, props.projects]);
+  React.useEffect(() => {
+    const visibleProjectIds = new Set(props.projects.map((project) => project.id));
+    setExpandedConversationProjectIds((current) => {
+      const next = new Set([...current].filter((projectId) => visibleProjectIds.has(projectId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [props.projects]);
   // handleProjectDragEnd persists one dnd-kit same-section reorder result.
   // handleProjectDragEnd 持久化一次 dnd-kit 同分区项目排序结果。
   const handleProjectDragEnd = React.useCallback((sectionProjects: ProjectSummary[], event: DragEndEvent) => {
@@ -3459,6 +3489,19 @@ function ProjectSidebar(props: {
       return next;
     });
   }, [props]);
+  // toggleProjectConversations toggles whether one project shows every conversation row.
+  // toggleProjectConversations 切换单个项目是否显示全部会话行。
+  const toggleProjectConversations = React.useCallback((projectId: string) => {
+    setExpandedConversationProjectIds((current) => {
+      const next = new Set(current);
+      if (next.has(projectId)) {
+        next.delete(projectId);
+      } else {
+        next.add(projectId);
+      }
+      return next;
+    });
+  }, []);
   // renderProjectGroupLabel renders the pinned/project heading with optional actions.
   // renderProjectGroupLabel 渲染置顶/项目标题，并按需显示操作入口。
   const renderProjectGroupLabel = (label: string, icon: React.ReactNode, action?: React.ReactNode) => (
@@ -3478,6 +3521,7 @@ function ProjectSidebar(props: {
         conversations={projectConversations}
         hasSelectedConversation={props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
         isOpen={openProjectIds.has(project.id)}
+        isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
         key={project.id}
         locale={locale}
@@ -3486,6 +3530,7 @@ function ProjectSidebar(props: {
         onProjectMenuAction={props.onProjectMenuAction}
         renderConversationRow={renderConversationRow}
         onSelectConversation={props.onSelectConversation}
+        onToggleConversationList={toggleProjectConversations}
         onToggleOpen={toggleProjectOpen}
         project={project}
         selectedConversationId={props.selectedConversationId}
@@ -3900,6 +3945,9 @@ function SortableProjectRow(props: {
   // Whether the project folder is expanded.
   // 当前项目文件夹是否展开。
   isOpen: boolean;
+  // Whether every conversation under this project should be displayed.
+  // 当前项目下是否显示全部会话。
+  isConversationListExpanded: boolean;
   // Whether the selected conversation belongs to this project.
   // 当前选中会话是否归属于该项目。
   hasSelectedConversation: boolean;
@@ -3918,6 +3966,9 @@ function SortableProjectRow(props: {
   // Toggles the project folder expansion.
   // 切换项目文件夹展开状态。
   onToggleOpen: (projectId: string) => void;
+  // Toggles the conversation list overflow rows for this project.
+  // 切换当前项目会话列表的溢出行。
+  onToggleConversationList: (projectId: string) => void;
   // Opens a new draft conversation for the project.
   // 为项目打开一个新的草稿会话。
   onCreateConversation: (project: ProjectSummary) => void;
@@ -3944,6 +3995,14 @@ function SortableProjectRow(props: {
   } = useSortable({ id: props.project.id });
   const folderName = projectFolderName(props.project.path);
   const showOriginalFolderName = folderName.length > 0 && folderName !== props.project.name;
+  const conversationPreviewLimit = 5;
+  const hasConversationOverflow = props.conversations.length > conversationPreviewLimit;
+  const visibleConversations = hasConversationOverflow && !props.isConversationListExpanded
+    ? props.conversations.slice(0, conversationPreviewLimit)
+    : props.conversations;
+  const conversationOverflowLabel = props.isConversationListExpanded
+    ? props.locale === "zh-CN" ? "折叠显示" : "Collapse"
+    : props.locale === "zh-CN" ? "展开显示" : "Show more";
   // sortableTransform keeps dnd-kit movement vertical-only and prevents size-based text scaling.
   // sortableTransform 将 dnd-kit 移动限制为仅纵向，并阻止基于尺寸差异的文字缩放。
   const sortableTransform = transform ? { ...transform, x: 0, scaleX: 1, scaleY: 1 } : null;
@@ -4004,7 +4063,23 @@ function SortableProjectRow(props: {
       {props.isOpen && props.sidebarState !== "collapsed" ? (
         <SidebarMenu className="project-conversation-list">
           {props.conversations.length > 0 ? (
-            props.conversations.map((conversation) => props.renderConversationRow(conversation))
+            <>
+              {visibleConversations.map((conversation) => props.renderConversationRow(conversation))}
+              {hasConversationOverflow ? (
+                <SidebarMenuItem>
+                  <button
+                    className="conversation-list-toggle"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      props.onToggleConversationList(props.project.id);
+                    }}
+                    type="button"
+                  >
+                    {conversationOverflowLabel}
+                  </button>
+                </SidebarMenuItem>
+              ) : null}
+            </>
           ) : (
             <SidebarMenuItem>
               <div className="conversation-empty-row">{props.locale === "zh-CN" ? "暂无对话" : "No conversations"}</div>
