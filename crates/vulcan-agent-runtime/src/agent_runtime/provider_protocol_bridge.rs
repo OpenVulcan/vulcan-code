@@ -195,6 +195,7 @@ pub fn build_tool_result_runtime_metadata(
     tool_call_id: &str,
     tool_result_id: &str,
     host_metadata: Option<&Value>,
+    display_state: &str,
 ) -> Option<Value> {
     let mut metadata = JsonMap::new();
     metadata.insert(
@@ -204,6 +205,10 @@ pub fn build_tool_result_runtime_metadata(
     metadata.insert(
         String::from("tool_result_id"),
         Value::String(tool_result_id.to_string()),
+    );
+    metadata.insert(
+        String::from("display_state"),
+        Value::String(display_state.to_string()),
     );
 
     if let Some(Value::Object(object)) = host_metadata {
@@ -263,6 +268,7 @@ mod tests {
                     }],
                 },
             })),
+            "completed",
         )
         .expect("metadata should exist");
 

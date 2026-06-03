@@ -972,7 +972,17 @@ button {
 .conversation-tree-status.running {
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
   color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+}
+
+.conversation-tree-status-mark {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  margin-right: 0;
+  align-items: center;
+  justify-content: center;
 }
 
 .conversation-tree-unread-dot {
@@ -996,8 +1006,12 @@ button {
   visibility: hidden;
 }
 
-.conversation-tree-button:hover .conversation-tree-status:not(.running),
-.conversation-tree-button:focus-visible .conversation-tree-status:not(.running) {
+.conversation-tree-quick-actions.running {
+  gap: 0;
+}
+
+.conversation-tree-button:hover .conversation-tree-status,
+.conversation-tree-button:focus-visible .conversation-tree-status {
   opacity: 0;
   visibility: hidden;
 }

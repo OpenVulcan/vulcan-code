@@ -74,26 +74,34 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 "arguments": request.arguments,
             }))),
         )));
-        let result = match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
-            .catch_unwind()
-            .await
-        {
-            Ok(Ok(result)) => result,
-            Ok(Err(error)) => build_tool_failure_invocation_result(request, error.to_string()),
-            Err(payload) => build_tool_failure_invocation_result(
-                request,
-                format!(
-                    "Tool runtime panicked before returning a normal result: {}",
-                    panic_payload_message(payload.as_ref())
+        let (result, display_state) =
+            match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
+                .catch_unwind()
+                .await
+            {
+                Ok(Ok(result)) => (result, "completed"),
+                Ok(Err(error)) => (
+                    build_tool_failure_invocation_result(request, error.to_string()),
+                    "failed",
                 ),
-            ),
-        };
+                Err(payload) => (
+                    build_tool_failure_invocation_result(
+                        request,
+                        format!(
+                            "Tool runtime panicked before returning a normal result: {}",
+                            panic_payload_message(payload.as_ref())
+                        ),
+                    ),
+                    "failed",
+                ),
+            };
         let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
         let event_metadata = attach_tool_name_to_runtime_metadata(
             build_tool_result_runtime_metadata(
                 &request.tool_call_id,
                 &tool_result_id,
                 result.host_result.as_ref(),
+                display_state,
             ),
             &request.tool_name,
         );

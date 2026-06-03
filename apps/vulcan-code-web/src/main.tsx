@@ -948,6 +948,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const [selectedConversationId, setSelectedConversationId] = React.useState<string | null>(
     props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null,
   );
+  // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
+  // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
+  const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
@@ -994,6 +997,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
+
+  // Keeps the async selection guard aligned with the latest sidebar choice.
+  // 保持异步选中保护与最新侧栏选择一致。
+  React.useEffect(() => {
+    selectedConversationIdRef.current = selectedConversationId;
+  }, [selectedConversationId]);
   // showConsoleSidebar limits project and conversation context to the console view.
   // showConsoleSidebar 将项目与会话上下文限定在控制台页面内。
   const showConsoleSidebar = activeArea === "chat";
@@ -1206,6 +1215,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
   // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
   const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
+    // submittedSelectionId captures the sidebar choice that owned this submission.
+    // submittedSelectionId 捕获发起本次提交时所属的侧栏选择。
+    const submittedSelectionId = selectedConversationId;
     const activeProjectId =
       selectedDraftConversation?.projectId
       ?? selectedConversation?.projectId
@@ -1230,15 +1242,17 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       setDraftConversation(null);
       const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
       if (nextConversationId) {
-        setSelectedConversationId(nextConversationId);
         setHydratedConversationIds((current) => new Set(current).add(nextConversationId));
+        if (selectedConversationIdRef.current === submittedSelectionId) {
+          setSelectedConversationId(nextConversationId);
+        }
       }
       return true;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       return false;
     }
-  }, [selectedConversation, selectedDraftConversation, workbenchState.projects]);
+  }, [selectedConversation, selectedConversationId, selectedDraftConversation, workbenchState.projects]);
 
   // handleSelectWorkbenchModel persists one model picker choice through the shared service.
   // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
@@ -2248,8 +2262,7 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "payload.command_session_id",
     "payload.commandSessionId",
   ]);
-  const status = metadataToolFailureStatus(message.metadata)
-    ?? metadataString(message.metadata, [
+  const explicitStatus = metadataString(message.metadata, [
       "tool_display_state",
       "toolDisplayState",
       "display_state",
@@ -2259,7 +2272,9 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
       "payload.status",
       "host_result.status",
       "hostResult.status",
-    ])
+    ]);
+  const status = explicitStatus
+    ?? metadataToolFailureStatus(message.metadata)
     ?? turnStatsStatus(message.metadata);
   const summary = turnStatsSummary(message.metadata);
   if (message.title) attributes.title = message.title;
@@ -3597,8 +3612,26 @@ function ConversationRowStatus(props: {
   const isRunning = props.conversation.status.toLowerCase() === "running";
   if (isRunning) {
     return (
-      <span className="conversation-tree-status running" aria-label="会话正在运行">
-        <Spinner className="size-3" />
+      <span className="conversation-tree-trailing running">
+        <span className="conversation-tree-status running">
+          <span className="conversation-tree-status-mark" aria-label="会话正在运行">
+            <Spinner className="size-3" />
+          </span>
+        </span>
+        <span className="conversation-tree-quick-actions running" aria-hidden="false">
+          <span
+            aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
+            className="conversation-tree-quick-action"
+            onClick={(event) => {
+              event.stopPropagation();
+              props.onAction("pin", props.conversation);
+            }}
+            onMouseDown={(event) => event.preventDefault()}
+            role="button"
+          >
+            {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+          </span>
+        </span>
       </span>
     );
   }
@@ -3627,7 +3660,9 @@ function ConversationRowStatus(props: {
     <span className="conversation-tree-trailing">
       <span className="conversation-tree-status">
         {props.conversation.unread && !props.isSelected ? (
-          <span className="conversation-tree-unread-dot" aria-label="未读" />
+          <span className="conversation-tree-status-mark">
+            <span className="conversation-tree-unread-dot" aria-label="未读" />
+          </span>
         ) : (
           formatConversationRelativeTime(props.conversation, props.nowMs, props.locale)
         )}
@@ -4526,6 +4561,12 @@ function ChatArea(props: {
   // workspaceRef stores the scrollable conversation timeline element.
   // workspaceRef 保存可滚动的会话时间线元素。
   const workspaceRef = React.useRef<HTMLElement | null>(null);
+  // shouldFollowConversationTailRef remembers the pre-update tail-follow decision across streaming renders.
+  // shouldFollowConversationTailRef 在流式渲染之间记住更新前是否应追随尾部。
+  const shouldFollowConversationTailRef = React.useRef(true);
+  // selectedConversationTailRef tracks conversation switches so opening a session can jump directly to the bottom.
+  // selectedConversationTailRef 跟踪会话切换，使打开会话时可直接跳到底部。
+  const selectedConversationTailRef = React.useRef<string | null>(null);
   // isAtConversationBottom tracks whether the user is viewing the latest conversation content.
   // isAtConversationBottom 跟踪用户是否正在查看最新的会话内容。
   const [isAtConversationBottom, setIsAtConversationBottom] = React.useState(true);
@@ -4545,17 +4586,25 @@ function ChatArea(props: {
   // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
   const streamingThinkingBlock = activeStreamingThinkingBlock(selectedConversation, messages);
   const runtimeCueText = streamingThinkingBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
+  // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
+  // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
+  const conversationStreamSignature = React.useMemo(
+    () => buildConversationStreamSignature(messages),
+    [messages],
+  );
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
   const updateConversationBottomState = React.useCallback(() => {
     const element = workspaceRef.current;
     if (!element) {
+      shouldFollowConversationTailRef.current = true;
       setIsAtConversationBottom(true);
       return;
     }
-    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
-    setIsAtConversationBottom(distanceFromBottom <= 24);
+    const shouldFollow = conversationViewportAllowsTailFollow(element);
+    shouldFollowConversationTailRef.current = shouldFollow;
+    setIsAtConversationBottom(shouldFollow);
   }, []);
 
   // scrollConversationToBottom moves the timeline to the latest content.
@@ -4585,6 +4634,19 @@ function ChatArea(props: {
       return;
     }
 
+    const element = workspaceRef.current;
+    const selectedChanged = selectedConversationTailRef.current !== props.selectedConversationId;
+    selectedConversationTailRef.current = props.selectedConversationId;
+    const shouldFollowTail = selectedChanged
+      || !element
+      || shouldFollowConversationTailRef.current
+      || conversationViewportAllowsTailFollow(element);
+    if (!shouldFollowTail) {
+      updateConversationBottomState();
+      return;
+    }
+
+    shouldFollowConversationTailRef.current = true;
     let secondFrame: number | null = null;
     let thirdFrame: number | null = null;
     jumpConversationToBottom();
@@ -4610,9 +4672,9 @@ function ChatArea(props: {
       }
     };
   }, [
+    conversationStreamSignature,
     isEmptyConversation,
     jumpConversationToBottom,
-    messages.length,
     props.selectedConversationId,
     showConversationLoadingOnly,
     updateConversationBottomState,
@@ -4620,7 +4682,7 @@ function ChatArea(props: {
 
   React.useEffect(() => {
     updateConversationBottomState();
-  }, [messages.length, props.selectedConversationId, updateConversationBottomState]);
+  }, [conversationStreamSignature, props.selectedConversationId, updateConversationBottomState]);
 
   return (
     <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}>
@@ -5172,6 +5234,24 @@ function sessionRunPhaseCueText(
   return t("runtime.requesting");
 }
 
+// buildConversationStreamSignature returns a compact content signature for tail-follow decisions.
+// buildConversationStreamSignature 返回用于尾部追随判定的紧凑内容签名。
+function buildConversationStreamSignature(messages: ConversationMessage[]): string {
+  return messages
+    .map((message) => {
+      const bodyTail = message.body.slice(-48);
+      return `${message.id}:${message.recordKind ?? ""}:${message.body.length}:${bodyTail}`;
+    })
+    .join("|");
+}
+
+// conversationViewportAllowsTailFollow returns whether the timeline is at or near the bottom.
+// conversationViewportAllowsTailFollow 返回时间线是否位于底部或接近底部。
+function conversationViewportAllowsTailFollow(element: HTMLElement): boolean {
+  const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+  return element.scrollHeight <= element.clientHeight + 24 || distanceFromBottom <= 24;
+}
+
 // normalizedSessionRunPhase normalizes backend enum text and future route-style phase keys.
 // normalizedSessionRunPhase 规范化后端枚举文本以及未来路由式阶段键。
 function normalizedSessionRunPhase(runPhase?: string | null): string | null {
@@ -5343,6 +5423,10 @@ function ComposerPanel(props: {
       toast.info("请输入任务指令。");
       return;
     }
+    // submittedInput preserves the exact textarea content for a failure-only restore.
+    // submittedInput 保存精确输入内容，仅在发送失败时用于恢复。
+    const submittedInput = draftInput;
+    setDraftInput("");
     setIsComposerRunning(true);
     try {
       const sent = await props.onSubmitPrompt({
@@ -5350,8 +5434,8 @@ function ComposerPanel(props: {
         executionMode,
         reasoningEffort,
       });
-      if (sent) {
-        setDraftInput("");
+      if (!sent) {
+        setDraftInput((current) => current || submittedInput);
       }
     } finally {
       setIsComposerRunning(false);

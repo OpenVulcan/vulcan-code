@@ -232,24 +232,29 @@ fn append_tool_finished_projection_to_state(
         now,
         runtime_state.conversation_state.records.len(),
     );
-    append_record(
-        &mut runtime_state.conversation_state,
-        SessionConversationRecord {
-            id: record_id,
-            kind: SessionMessageKind::Assistant,
-            record_kind: SessionMessageRecordKind::ToolResultOutput,
-            visible: true,
-            title,
-            body: event.detail.clone(),
-            metadata: Some(normalize_tool_event_metadata(
-                event.metadata.clone(),
-                &tool_call_id,
-                tool_name.as_deref(),
-                display_state,
-            )),
-            created_at: now.to_string(),
-        },
-    );
+    let record = SessionConversationRecord {
+        id: record_id,
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::ToolResultOutput,
+        visible: true,
+        title,
+        body: event.detail.clone(),
+        metadata: Some(normalize_tool_event_metadata(
+            event.metadata.clone(),
+            &tool_call_id,
+            tool_name.as_deref(),
+            display_state,
+        )),
+        created_at: now.to_string(),
+    };
+    let insert_index =
+        matching_tool_call_record_index(&runtime_state.conversation_state.records, &tool_call_id)
+            .map(|index| index + 1)
+            .unwrap_or(runtime_state.conversation_state.records.len());
+    runtime_state
+        .conversation_state
+        .records
+        .insert(insert_index, record);
     runtime_state.updated_at = now.to_string();
     true
 }
@@ -297,6 +302,17 @@ fn human_tool_display_title(tool_name: &str, display_state: &str) -> String {
 /// Returns the stable display state used by one human-facing tool execution card.
 /// 返回单张面向人类的工具执行卡片所使用的稳定显示状态。
 fn tool_display_state_for_event(metadata: Option<&serde_json::Value>) -> &'static str {
+    if let Some(display_state) = metadata
+        .and_then(|metadata| metadata.get("display_state"))
+        .and_then(serde_json::Value::as_str)
+    {
+        return match display_state {
+            "failed" | "error" => "failed",
+            "running" => "running",
+            "completed" | "success" | "succeeded" => "completed",
+            _ => "completed",
+        };
+    }
     if metadata.is_some_and(tool_metadata_represents_failed_result) {
         return "failed";
     }
@@ -369,6 +385,25 @@ fn tool_record_name_for_call_id(
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(str::to_string)
+}
+
+/// Finds the visible tool-call record that owns one tool-result event.
+/// 查找拥有某条工具返回事件的可见工具调用记录。
+fn matching_tool_call_record_index(
+    records: &[SessionConversationRecord],
+    tool_call_id: &str,
+) -> Option<usize> {
+    records.iter().rposition(|record| {
+        if record.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            return false;
+        }
+        record
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("tool_call_id"))
+            .and_then(serde_json::Value::as_str)
+            == Some(tool_call_id)
+    })
 }
 
 /// Replaces canonical context fields while preserving locally projected visible records.
@@ -711,6 +746,7 @@ fn current_turn_first_visible_record_index(
 mod tests {
     use super::*;
     use crate::conversation_protocol::SessionConversationState;
+    use serde_json::json;
 
     /// Builds one deterministic test session identifier.
     /// 构建一个确定性的测试会话标识。
@@ -811,6 +847,91 @@ mod tests {
         assert!(visible_bodies.contains(&"我需要先判断可用工具。"));
         assert!(visible_bodies.contains(&"已完成，两个工具均正常。"));
         assert!(!visible_bodies.contains(&"报告中的完整输出不应覆盖已流式记录。"));
+    }
+
+    /// Verifies a tool result is inserted beside its matching call instead of being appended after later output.
+    /// 验证工具返回会插入到匹配调用旁边，而不是追加到后续输出之后。
+    #[test]
+    fn tool_result_projection_stays_with_matching_call() {
+        let session_id = test_session_id();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_prompt_record(&mut runtime_state, session_id, "3000", "调用工具");
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-1 · vulcan_file_list",
+            "## Tool Call",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-1",
+            "tool_name": "vulcan_file_list",
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3001",
+            &started,
+        ));
+        let mut output_record_id = None;
+        append_stream_delta_record_to_state(
+            &mut runtime_state,
+            session_id,
+            "3002",
+            &mut output_record_id,
+            SessionMessageRecordKind::AssistantOutput,
+            "输出",
+            "工具调用后继续输出。",
+            false,
+        );
+        let finished = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · call-1",
+            "## Tool Result",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-1",
+            "tool_result_id": "tool-result-call-1",
+            "tool_name": "vulcan_file_list",
+            "display_state": "completed",
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3003",
+            &finished,
+        ));
+
+        let visible_kinds = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .filter(|record| record.visible)
+            .map(|record| record.record_kind)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible_kinds,
+            vec![
+                SessionMessageRecordKind::Transcript,
+                SessionMessageRecordKind::ToolCallOutput,
+                SessionMessageRecordKind::ToolResultOutput,
+                SessionMessageRecordKind::AssistantOutput,
+            ]
+        );
+    }
+
+    /// Verifies explicit completed display state wins over legacy host-result failure hints.
+    /// 验证明示完成态优先于旧宿主结果里的失败提示。
+    #[test]
+    fn explicit_completed_tool_display_state_wins_over_host_failure_hint() {
+        let metadata = json!({
+            "display_state": "completed",
+            "host_result": {
+                "kind": "tool_error",
+                "payload": {
+                    "status": "failed",
+                },
+            },
+        });
+        assert_eq!(tool_display_state_for_event(Some(&metadata)), "completed");
     }
 
     /// Projects visible records into comparable test tuples.

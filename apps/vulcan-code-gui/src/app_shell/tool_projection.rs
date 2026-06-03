@@ -1357,7 +1357,12 @@ pub(super) fn build_command_session_stop_result_metadata(
         },
     });
     attach_tool_name_to_runtime_metadata(
-        build_tool_result_runtime_metadata(tool_call_id, &tool_result_id, Some(&host_metadata)),
+        build_tool_result_runtime_metadata(
+            tool_call_id,
+            &tool_result_id,
+            Some(&host_metadata),
+            "completed",
+        ),
         "shell_session",
     )
 }

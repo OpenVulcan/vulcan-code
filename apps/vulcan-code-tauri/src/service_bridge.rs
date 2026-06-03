@@ -1661,17 +1661,25 @@ fn spawn_agent_stream_task(
                         record_ids.thinking_record_id = None;
                     }
                     if matches!(event.kind, RuntimeEventKind::ToolStarted) {
-                        if let Err(error) =
-                            apply_session_phase(&app, &state, session_id, SessionRunPhase::ToolRunning)
-                        {
+                        if let Err(error) = apply_session_phase(
+                            &app,
+                            &state,
+                            session_id,
+                            SessionRunPhase::ToolRunning,
+                        ) {
                             eprintln!("[tauri-service] apply tool phase failed: {error}");
                         }
                     }
                     if matches!(event.kind, RuntimeEventKind::ToolFinished) {
-                        if let Err(error) =
-                            apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
-                        {
-                            eprintln!("[tauri-service] restore request phase after tool failed: {error}");
+                        if let Err(error) = apply_session_phase(
+                            &app,
+                            &state,
+                            session_id,
+                            SessionRunPhase::Requesting,
+                        ) {
+                            eprintln!(
+                                "[tauri-service] restore request phase after tool failed: {error}"
+                            );
                         }
                     }
                     if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
@@ -1815,15 +1823,13 @@ fn append_stream_delta_record(
             session_id,
             conversation_state_to_session_messages(&runtime_state.conversation_state),
         );
-        workspace
-            .session_run_phases
-            .insert(
-                session_id,
-                match record_kind {
-                    SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
-                    _ => SessionRunPhase::Requesting,
-                },
-            );
+        workspace.session_run_phases.insert(
+            session_id,
+            match record_kind {
+                SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
+                _ => SessionRunPhase::Requesting,
+            },
+        );
         workspace.hydrated_session_ids.insert(session_id);
     })
     .map(|_| ())

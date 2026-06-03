@@ -661,6 +661,56 @@ mod tests {
             event,
             ProviderStreamDelta::RuntimeEvent(runtime_event)
                 if runtime_event.kind == RuntimeEventKind::ToolFinished
+                    && runtime_event
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("display_state"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("failed")
+        )));
+    }
+
+    /// Verifies a model-visible tool error still displays as completed when the host invocation returned normally.
+    /// 验证宿主调用正常返回时，即使工具结果对模型可见为错误，界面仍显示为已完成。
+    #[test]
+    fn streaming_tool_executor_marks_normal_error_results_completed() {
+        let (manager, definitions) = build_demo_manager();
+        let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+        ));
+        let (sender, mut receiver): (
+            ProviderLiveDeltaSender,
+            tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+        ) = tokio::sync::mpsc::unbounded_channel();
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("failing-call-1"),
+            tool_name: String::from("failing_tool"),
+            arguments: json!({ "query": "演示错误" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime
+            .block_on(executor.execute_tool(&request))
+            .expect("managed tool failure should still return a normal controller-visible result");
+        let events = drain_live_events(&mut receiver);
+
+        assert!(result.is_error);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamDelta::RuntimeEvent(runtime_event)
+                if runtime_event.kind == RuntimeEventKind::ToolFinished
+                    && runtime_event
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("display_state"))
+                        .and_then(serde_json::Value::as_str)
+                        == Some("completed")
         )));
     }
 }
