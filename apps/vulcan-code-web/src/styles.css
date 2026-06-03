@@ -1346,14 +1346,14 @@ button {
 .project-icon-tabs-list {
   width: fit-content;
   max-width: 100%;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .project-icon-tab-content {
   margin: 0;
 }
 
-.lucide-icon-filter {
+.project-icon-filter {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
@@ -1361,7 +1361,7 @@ button {
   margin-bottom: 10px;
 }
 
-.lucide-icon-filter span {
+.project-icon-filter span {
   color: var(--muted-foreground);
   font-size: 12px;
   white-space: nowrap;
@@ -1374,7 +1374,7 @@ button {
   gap: 8px;
 }
 
-.lucide-icon-grid {
+.picker-icon-grid {
   max-height: min(48vh, 420px);
   grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
   overflow: auto;
@@ -1394,14 +1394,19 @@ button {
   color: var(--foreground);
 }
 
-.lucide-icon-grid .project-icon-option {
+.picker-icon-grid .project-icon-option {
   height: 70px;
 }
 
-.lucide-icon-grid .lucide-load-more {
+.picker-icon-grid .icon-load-more {
   font-size: 12px;
   color: var(--muted-foreground);
   background: var(--muted);
+}
+
+.color-icon-option svg {
+  width: 28px;
+  height: 28px;
 }
 
 .project-icon-option:hover,
@@ -1431,6 +1436,7 @@ button {
 }
 
 .badge-editor label,
+.badge-editor-field,
 .color-picker-row {
   min-width: 0;
   display: grid;
@@ -1438,6 +1444,7 @@ button {
 }
 
 .badge-editor label > span,
+.badge-editor-field > span,
 .color-picker-row > span {
   color: var(--muted-foreground);
   font-size: 12px;

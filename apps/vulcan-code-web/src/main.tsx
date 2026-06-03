@@ -16,6 +16,9 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { Icon as IconifyIcon, addCollection } from "@iconify/react";
+import { icons as materialIconThemeIconSet } from "@iconify-json/material-icon-theme";
+import { icons as skillIconSet } from "@iconify-json/skill-icons";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
@@ -174,6 +177,14 @@ type ThemeMode = "light" | "dark";
 // ProjectIconBadgeShape 命名生成式项目图标使用的徽标轮廓。
 type ProjectIconBadgeShape = "circle" | "square";
 
+// ProjectIconPack names every project icon source supported by the picker.
+// ProjectIconPack 命名项目图标选择器支持的每一种图标来源。
+type ProjectIconPack = "skill-icons" | "material-icon-theme" | "lucide";
+
+// ProjectIconTab names the selectable tabs inside the project icon dialog.
+// ProjectIconTab 命名项目图标弹窗中的可选择标签页。
+type ProjectIconTab = ProjectIconPack | "badge";
+
 // ProjectIconSelection describes one icon override persisted for a project.
 // ProjectIconSelection 描述为项目持久化的单个图标覆盖配置。
 interface ProjectIconSelection {
@@ -208,15 +219,21 @@ interface ProjectIconBadgeConfig {
 // ProjectIconOption describes one selectable lucide project icon.
 // ProjectIconOption 描述一个可选择的 lucide 项目图标。
 interface ProjectIconOption {
+  // Icon pack that owns this option.
+  // 拥有该选项的图标包。
+  pack: ProjectIconPack;
   // Stable icon key persisted in the project row.
   // 持久化到项目行中的稳定图标键。
   key: string;
   // User-facing icon label.
   // 面向用户显示的图标名称。
   label: string;
-  // Lucide icon component rendered by the option.
-  // 选项渲染使用的 Lucide 图标组件。
-  Icon: React.ComponentType<{ size?: number; className?: string }>;
+  // Lucide icon component rendered by outline icon options.
+  // 线性图标选项渲染使用的 Lucide 图标组件。
+  Icon?: React.ComponentType<{ size?: number; className?: string }>;
+  // Iconify full icon name for colored icon options.
+  // 彩色图标选项使用的 Iconify 完整图标名。
+  iconName?: string;
 }
 
 // ComposerSubmission contains the user prompt and runtime quick-control values.
@@ -247,9 +264,20 @@ const DEFAULT_PROJECT_BADGE_CONFIG: ProjectIconBadgeConfig = {
 // PROJECT_BADGE_COLORS 列出生成式项目徽标的快捷颜色。
 const PROJECT_BADGE_COLORS = ["#111827", "#2563eb", "#0891b2", "#16a34a", "#ca8a04", "#dc2626", "#7c3aed", "#db2777"];
 
-// LUCIDE_ICON_STREAM_BATCH_SIZE controls how many icon cells are mounted per incremental pass.
-// LUCIDE_ICON_STREAM_BATCH_SIZE 控制每次增量挂载多少个图标单元。
-const LUCIDE_ICON_STREAM_BATCH_SIZE = 120;
+// PROJECT_ICON_STREAM_BATCH_SIZE controls how many icon cells are mounted per incremental pass.
+// PROJECT_ICON_STREAM_BATCH_SIZE 控制每次增量挂载多少个图标单元。
+const PROJECT_ICON_STREAM_BATCH_SIZE = 120;
+
+addCollection(skillIconSet);
+addCollection(materialIconThemeIconSet);
+
+// SKILL_PROJECT_ICON_OPTIONS lists colored Skill Icons for the project picker.
+// SKILL_PROJECT_ICON_OPTIONS 列出项目选择器使用的彩色 Skill Icons 图标。
+const SKILL_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildIconifyProjectIconOptions("skill-icons", Object.keys(skillIconSet.icons));
+
+// MATERIAL_PROJECT_ICON_OPTIONS lists colored Material Icon Theme icons for the project picker.
+// MATERIAL_PROJECT_ICON_OPTIONS 列出项目选择器使用的彩色 Material Icon Theme 图标。
+const MATERIAL_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildIconifyProjectIconOptions("material-icon-theme", Object.keys(materialIconThemeIconSet.icons));
 
 // LUCIDE_PROJECT_ICON_OPTIONS lists every usable exported Lucide icon for the project picker.
 // LUCIDE_PROJECT_ICON_OPTIONS 列出项目选择器可使用的全部 Lucide 导出图标。
@@ -260,14 +288,27 @@ const LUCIDE_PROJECT_ICON_OPTIONS: ProjectIconOption[] = buildLucideProjectIconO
 const PROJECT_ICON_MAP = new Map<string, ProjectIconOption>(
   [
     ...LUCIDE_PROJECT_ICON_OPTIONS.map((icon) => [icon.key, icon] as const),
-    ["folder", { key: "Folder", label: "Folder", Icon: Folder }] as const,
-    ["folder-open", { key: "FolderOpen", label: "FolderOpen", Icon: FolderOpen }] as const,
-    ["folder-plus", { key: "FolderPlus", label: "FolderPlus", Icon: FolderPlus }] as const,
-    ["layout-dashboard", { key: "LayoutDashboard", label: "LayoutDashboard", Icon: LayoutDashboard }] as const,
-    ["scroll-text", { key: "ScrollText", label: "ScrollText", Icon: ScrollText }] as const,
-    ["message-square-text", { key: "MessageSquareText", label: "MessageSquareText", Icon: MessageSquareText }] as const,
+    ["folder", { pack: "lucide", key: "Folder", label: "Folder", Icon: Folder }] as const,
+    ["folder-open", { pack: "lucide", key: "FolderOpen", label: "FolderOpen", Icon: FolderOpen }] as const,
+    ["folder-plus", { pack: "lucide", key: "FolderPlus", label: "FolderPlus", Icon: FolderPlus }] as const,
+    ["layout-dashboard", { pack: "lucide", key: "LayoutDashboard", label: "LayoutDashboard", Icon: LayoutDashboard }] as const,
+    ["scroll-text", { pack: "lucide", key: "ScrollText", label: "ScrollText", Icon: ScrollText }] as const,
+    ["message-square-text", { pack: "lucide", key: "MessageSquareText", label: "MessageSquareText", Icon: MessageSquareText }] as const,
   ],
 );
+
+// buildIconifyProjectIconOptions converts one Iconify icon set into selectable colored project icons.
+// buildIconifyProjectIconOptions 将一个 Iconify 图标集转换为可选择的彩色项目图标。
+function buildIconifyProjectIconOptions(pack: Extract<ProjectIconPack, "skill-icons" | "material-icon-theme">, keys: string[]): ProjectIconOption[] {
+  return keys
+    .map((key) => ({
+      pack,
+      key,
+      label: key,
+      iconName: `${pack}:${key}`,
+    }))
+    .sort((left, right) => left.label.localeCompare(right.label));
+}
 
 // buildLucideProjectIconOptions extracts usable icon components from lucide-react exports.
 // buildLucideProjectIconOptions 从 lucide-react 导出中提取可用图标组件。
@@ -275,6 +316,7 @@ function buildLucideProjectIconOptions(): ProjectIconOption[] {
   return Object.entries(LucideIcons)
     .filter(([name, value]) => /^[A-Z]/.test(name) && !name.endsWith("Icon") && name !== "Icon" && isLucideIconComponent(value))
     .map(([name, Icon]) => ({
+      pack: "lucide" as const,
       key: name,
       label: name,
       Icon: Icon as React.ComponentType<{ size?: number; className?: string }>,
@@ -1998,9 +2040,21 @@ function ProjectIcon(props: { project: ProjectSummary; isOpen?: boolean; size?: 
     return <ProjectBadgeIcon config={config} size={props.size ?? 16} />;
   }
 
+  if (isIconifyProjectIconPack(props.project.iconPack) && props.project.iconKey) {
+    return (
+      <IconifyIcon
+        aria-hidden="true"
+        className="project-iconify-icon"
+        height={props.size ?? 16}
+        icon={`${props.project.iconPack}:${props.project.iconKey}`}
+        width={props.size ?? 16}
+      />
+    );
+  }
+
   if (props.project.iconPack === "lucide" && props.project.iconKey) {
     const option = PROJECT_ICON_MAP.get(props.project.iconKey);
-    if (option) {
+    if (option?.Icon) {
       return <option.Icon size={props.size ?? 16} />;
     }
   }
@@ -2008,51 +2062,97 @@ function ProjectIcon(props: { project: ProjectSummary; isOpen?: boolean; size?: 
   return props.isOpen ? <FolderOpen size={props.size ?? 16} /> : <Folder size={props.size ?? 16} />;
 }
 
+// isIconifyProjectIconPack checks whether a persisted project icon pack belongs to Iconify color sets.
+// isIconifyProjectIconPack 检查持久化的项目图标包是否属于 Iconify 彩色图标集。
+function isIconifyProjectIconPack(value: string | null | undefined): value is Extract<ProjectIconPack, "skill-icons" | "material-icon-theme"> {
+  return value === "skill-icons" || value === "material-icon-theme";
+}
+
+// projectIconOptionsForTab returns the icon option list owned by one picker tab.
+// projectIconOptionsForTab 返回某个选择器标签页拥有的图标选项列表。
+function projectIconOptionsForTab(tab: ProjectIconTab): ProjectIconOption[] {
+  if (tab === "skill-icons") {
+    return SKILL_PROJECT_ICON_OPTIONS;
+  }
+  if (tab === "material-icon-theme") {
+    return MATERIAL_PROJECT_ICON_OPTIONS;
+  }
+  if (tab === "lucide") {
+    return LUCIDE_PROJECT_ICON_OPTIONS;
+  }
+  return [];
+}
+
+// projectIconPackLabel returns the user-facing name for one project icon pack.
+// projectIconPackLabel 返回单个项目图标包的面向用户名称。
+function projectIconPackLabel(pack: ProjectIconPack): string {
+  if (pack === "skill-icons") {
+    return "Skill Icons";
+  }
+  if (pack === "material-icon-theme") {
+    return "Material Icon Theme";
+  }
+  return "Lucide";
+}
+
 // ProjectBadgeIcon renders the generated project badge as an inline SVG.
 // ProjectBadgeIcon 将生成式项目徽标渲染为内联 SVG。
 function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number }) {
   const isCircle = props.config.shape === "circle";
-  const fontSize = props.config.text.length > 1 ? 14.5 : 18;
+  // fontSize uses the 64px badge template scale, matching the visual density of the reference SVG.
+  // fontSize 使用 64px 徽标模板比例，匹配参考 SVG 的视觉密度。
+  const fontSize = props.config.text.length > 1 ? 36 : 38;
+  // labelY follows the reference badge baseline so Latin and CJK glyphs sit at the optical center.
+  // labelY 采用参考徽标的文字基线，让拉丁与中文字符落在视觉中心。
+  const labelY = props.config.text.length > 1 ? 36 : 35.5;
   return (
     <svg
       aria-hidden="true"
       className="project-badge-icon"
       height={props.size}
-      viewBox="0 0 32 32"
+      viewBox="0 0 64 64"
       width={props.size}
     >
       {isCircle ? (
-        <circle
-          cx="16"
-          cy="16"
-          fill={props.config.background}
-          r="13.5"
-          stroke={props.config.border}
-          strokeWidth="2"
-        />
+        <>
+          <circle
+            cx="32"
+            cy="32"
+            fill={props.config.background}
+            r="32"
+          />
+          <circle
+            cx="32"
+            cy="32"
+            fill="none"
+            r="29.5"
+            stroke={props.config.border}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="5"
+          />
+        </>
       ) : (
         <rect
           fill={props.config.background}
-          height="27"
-          rx="4"
+          height="59"
+          rx="6"
           stroke={props.config.border}
-          strokeWidth="2"
-          width="27"
+          strokeWidth="5"
+          width="59"
           x="2.5"
           y="2.5"
         />
       )}
       <text
-        dominantBaseline="central"
+        dominantBaseline="middle"
         fill={props.config.foreground}
-        fontFamily="Inter, Segoe UI, sans-serif"
+        fontFamily="system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Microsoft YaHei, Noto Sans CJK SC, sans-serif"
         fontSize={fontSize}
-        fontWeight="700"
-        lengthAdjust={props.config.text.length > 1 ? "spacingAndGlyphs" : undefined}
+        fontWeight="600"
         textAnchor="middle"
-        textLength={props.config.text.length > 1 ? 16 : undefined}
-        x="16"
-        y="16.5"
+        x="32"
+        y={labelY}
       >
         {props.config.text}
       </text>
@@ -4190,13 +4290,13 @@ function ProjectIconDialog(props: {
   const [badgeConfig, setBadgeConfig] = React.useState<ProjectIconBadgeConfig>(DEFAULT_PROJECT_BADGE_CONFIG);
   // activeTab stores the visible picker tab.
   // activeTab 保存当前可见的选择器标签。
-  const [activeTab, setActiveTab] = React.useState("lucide");
+  const [activeTab, setActiveTab] = React.useState<ProjectIconTab>("skill-icons");
   // iconSearch stores the Lucide icon filter text.
-  // iconSearch 保存 Lucide 图标过滤文本。
+  // iconSearch 保存当前图标包的过滤文本。
   const [iconSearch, setIconSearch] = React.useState("");
-  // visibleLucideLimit stores the streamed Lucide icon render limit.
-  // visibleLucideLimit 保存 Lucide 图标流式渲染上限。
-  const [visibleLucideLimit, setVisibleLucideLimit] = React.useState(LUCIDE_ICON_STREAM_BATCH_SIZE);
+  // visibleIconLimit stores the streamed icon render limit.
+  // visibleIconLimit 保存图标流式渲染上限。
+  const [visibleIconLimit, setVisibleIconLimit] = React.useState(PROJECT_ICON_STREAM_BATCH_SIZE);
 
   React.useEffect(() => {
     if (!project) {
@@ -4210,13 +4310,24 @@ function ProjectIconDialog(props: {
       });
       return;
     }
+    if (isIconifyProjectIconPack(project.iconPack) && project.iconKey) {
+      setActiveTab(project.iconPack);
+      setSelectedIcon({ pack: project.iconPack, key: project.iconKey });
+      setIconSearch("");
+      setVisibleIconLimit(PROJECT_ICON_STREAM_BATCH_SIZE);
+      setBadgeConfig({
+        ...DEFAULT_PROJECT_BADGE_CONFIG,
+        text: normalizeProjectBadgeText(project.name) || DEFAULT_PROJECT_BADGE_CONFIG.text,
+      });
+      return;
+    }
     const key = project.iconPack === "lucide" && project.iconKey && PROJECT_ICON_MAP.has(project.iconKey)
       ? project.iconKey
       : "Folder";
     setActiveTab("lucide");
     setSelectedIcon({ pack: "lucide", key });
     setIconSearch("");
-    setVisibleLucideLimit(LUCIDE_ICON_STREAM_BATCH_SIZE);
+    setVisibleIconLimit(PROJECT_ICON_STREAM_BATCH_SIZE);
     setBadgeConfig({
       ...DEFAULT_PROJECT_BADGE_CONFIG,
       text: normalizeProjectBadgeText(project.name) || DEFAULT_PROJECT_BADGE_CONFIG.text,
@@ -4224,8 +4335,8 @@ function ProjectIconDialog(props: {
   }, [project]);
 
   React.useEffect(() => {
-    setVisibleLucideLimit(LUCIDE_ICON_STREAM_BATCH_SIZE);
-  }, [iconSearch]);
+    setVisibleIconLimit(PROJECT_ICON_STREAM_BATCH_SIZE);
+  }, [activeTab, iconSearch]);
 
   // updateBadgeText applies the Chinese-one-or-English-two text rule.
   // updateBadgeText 应用中文一个字或英文两个字母的文字规则。
@@ -4234,6 +4345,18 @@ function ProjectIconDialog(props: {
       ...current,
       text: normalizeProjectBadgeText(value),
     }));
+  }, []);
+
+  // handleDialogInteractOutside keeps nested Radix select popovers from closing this dialog.
+  // handleDialogInteractOutside 避免嵌套的 Radix 选择器浮层被弹窗误判为外部点击而关闭。
+  const handleDialogInteractOutside = React.useCallback((event: Event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null;
+    if (!target) {
+      return;
+    }
+    if (target.closest("[data-slot='select-content'], [data-slot='select-trigger']")) {
+      event.preventDefault();
+    }
   }, []);
 
   if (!project) {
@@ -4246,29 +4369,33 @@ function ProjectIconDialog(props: {
   };
   const finalSelection = activeTab === "badge" ? selectedBadgeIcon : selectedIcon;
   const normalizedSearch = iconSearch.trim().toLowerCase();
-  const visibleLucideIcons = normalizedSearch.length === 0
-    ? LUCIDE_PROJECT_ICON_OPTIONS
-    : LUCIDE_PROJECT_ICON_OPTIONS.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
-  const streamedLucideIcons = visibleLucideIcons.slice(0, visibleLucideLimit);
-  const hasMoreLucideIcons = streamedLucideIcons.length < visibleLucideIcons.length;
+  const activeIconOptions = projectIconOptionsForTab(activeTab);
+  const visibleIconOptions = normalizedSearch.length === 0
+    ? activeIconOptions
+    : activeIconOptions.filter((option) => option.label.toLowerCase().includes(normalizedSearch));
+  const streamedIconOptions = visibleIconOptions.slice(0, visibleIconLimit);
+  const hasMoreIcons = streamedIconOptions.length < visibleIconOptions.length;
 
-  // handleLucideGridScroll streams the next icon batch when the user reaches the list bottom.
-  // handleLucideGridScroll 在用户滚动到列表底部时流式追加下一批图标。
-  const handleLucideGridScroll = (event: React.UIEvent<HTMLDivElement>) => {
+  // handleIconGridScroll streams the next icon batch when the user reaches the list bottom.
+  // handleIconGridScroll 在用户滚动到列表底部时流式追加下一批图标。
+  const handleIconGridScroll = (event: React.UIEvent<HTMLDivElement>) => {
     const element = event.currentTarget;
-    if (!hasMoreLucideIcons) {
+    if (!hasMoreIcons) {
       return;
     }
     const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
     if (distanceFromBottom > 96) {
       return;
     }
-    setVisibleLucideLimit((current) => Math.min(current + LUCIDE_ICON_STREAM_BATCH_SIZE, visibleLucideIcons.length));
+    setVisibleIconLimit((current) => Math.min(current + PROJECT_ICON_STREAM_BATCH_SIZE, visibleIconOptions.length));
   };
 
   return (
     <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
-      <DialogContent className="project-icon-dialog sm:max-w-[720px]">
+      <DialogContent
+        className="project-icon-dialog sm:max-w-[720px]"
+        onInteractOutside={handleDialogInteractOutside}
+      >
         <DialogHeader>
           <DialogTitle>设置项目图标</DialogTitle>
           <DialogDescription>
@@ -4280,48 +4407,61 @@ function ProjectIconDialog(props: {
             <ProjectIcon project={{ ...project, iconPack: finalSelection.pack, iconKey: finalSelection.key }} size={42} />
             <strong>{project.name}</strong>
           </div>
-          <Tabs className="project-icon-tabs" value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="project-icon-tabs-list">
-              <TabsTrigger value="lucide">Lucide</TabsTrigger>
-              <TabsTrigger value="badge">自定义</TabsTrigger>
-            </TabsList>
-            <TabsContent className="project-icon-tab-content" value="lucide">
-              <div className="lucide-icon-filter">
-                <Input
-                  onChange={(event) => setIconSearch(event.target.value)}
-                  placeholder="过滤 Lucide 图标"
-                  value={iconSearch}
-                />
-                <span>{streamedLucideIcons.length} / {visibleLucideIcons.length} / {LUCIDE_PROJECT_ICON_OPTIONS.length}</span>
-              </div>
-              <div className="project-icon-grid lucide-icon-grid" onScroll={handleLucideGridScroll}>
-                {streamedLucideIcons.map((option) => (
-                  <button
-                    aria-pressed={selectedIcon.pack === "lucide" && selectedIcon.key === option.key}
-                    className={cn(
-                      "project-icon-option",
-                      selectedIcon.pack === "lucide" && selectedIcon.key === option.key && "selected",
-                    )}
-                    key={option.key}
-                    onClick={() => setSelectedIcon({ pack: "lucide", key: option.key })}
-                    title={option.label}
-                    type="button"
-                  >
-                    <option.Icon size={22} />
-                    <span>{option.label}</span>
-                  </button>
-                ))}
-                {hasMoreLucideIcons ? (
-                  <button
-                    className="project-icon-option lucide-load-more"
-                    onClick={() => setVisibleLucideLimit((current) => Math.min(current + LUCIDE_ICON_STREAM_BATCH_SIZE, visibleLucideIcons.length))}
-                    type="button"
-                  >
-                    加载更多
-                  </button>
-                ) : null}
-              </div>
-            </TabsContent>
+            <Tabs className="project-icon-tabs" value={activeTab} onValueChange={(value) => setActiveTab(value as ProjectIconTab)}>
+              <TabsList className="project-icon-tabs-list">
+                <TabsTrigger value="skill-icons">Skill Icons</TabsTrigger>
+                <TabsTrigger value="material-icon-theme">Material Icon Theme</TabsTrigger>
+                <TabsTrigger value="lucide">Lucide</TabsTrigger>
+                <TabsTrigger value="badge">自定义</TabsTrigger>
+              </TabsList>
+              {(["skill-icons", "material-icon-theme", "lucide"] as ProjectIconPack[]).map((pack) => (
+                <TabsContent className="project-icon-tab-content" key={pack} value={pack}>
+                  {activeTab === pack ? (
+                    <>
+                      <div className="project-icon-filter">
+                        <Input
+                          onChange={(event) => setIconSearch(event.target.value)}
+                          placeholder={`过滤 ${projectIconPackLabel(pack)} 图标`}
+                          value={iconSearch}
+                        />
+                        <span>{streamedIconOptions.length} / {visibleIconOptions.length} / {activeIconOptions.length}</span>
+                      </div>
+                      <div className="project-icon-grid picker-icon-grid" onScroll={handleIconGridScroll}>
+                        {streamedIconOptions.map((option) => (
+                          <button
+                            aria-pressed={selectedIcon.pack === option.pack && selectedIcon.key === option.key}
+                            className={cn(
+                              "project-icon-option",
+                              option.pack !== "lucide" && "color-icon-option",
+                              selectedIcon.pack === option.pack && selectedIcon.key === option.key && "selected",
+                            )}
+                            key={`${option.pack}:${option.key}`}
+                            onClick={() => setSelectedIcon({ pack: option.pack, key: option.key })}
+                            title={option.label}
+                            type="button"
+                          >
+                            {option.iconName ? (
+                              <IconifyIcon aria-hidden="true" height={26} icon={option.iconName} width={26} />
+                            ) : option.Icon ? (
+                              <option.Icon size={22} />
+                            ) : null}
+                            <span>{option.label}</span>
+                          </button>
+                        ))}
+                        {hasMoreIcons ? (
+                          <button
+                            className="project-icon-option icon-load-more"
+                            onClick={() => setVisibleIconLimit((current) => Math.min(current + PROJECT_ICON_STREAM_BATCH_SIZE, visibleIconOptions.length))}
+                            type="button"
+                          >
+                            加载更多
+                          </button>
+                        ) : null}
+                      </div>
+                    </>
+                  ) : null}
+                </TabsContent>
+              ))}
             <TabsContent className="project-icon-tab-content badge-tab" value="badge">
               <div className="badge-editor">
                 <label>
@@ -4333,7 +4473,7 @@ function ProjectIconDialog(props: {
                     value={badgeConfig.text}
                   />
                 </label>
-                <label>
+                <div className="badge-editor-field">
                   <span>形状</span>
                   <Select
                     value={badgeConfig.shape}
@@ -4342,12 +4482,12 @@ function ProjectIconDialog(props: {
                     <SelectTrigger className="badge-shape-trigger">
                       <span>{badgeShapeLabel(badgeConfig.shape)}</span>
                     </SelectTrigger>
-                    <SelectContent>
+                    <SelectContent className="project-icon-select-content" position="popper">
                       <SelectItem value="circle">圆形</SelectItem>
                       <SelectItem value="square">方形</SelectItem>
                     </SelectContent>
                   </Select>
-                </label>
+                </div>
                 <ColorPickerRow
                   label="背景色"
                   value={badgeConfig.background}
