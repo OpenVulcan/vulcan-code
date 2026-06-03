@@ -2691,8 +2691,10 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         )
     });
 
-    let luaskills_runtime =
-        crate::luaskills_bridge::bootstrap_luaskills(controller_configuration.clone())?;
+    let luaskills_runtime = crate::luaskills_bridge::bootstrap_luaskills(
+        controller_configuration.clone(),
+        |message| update_luaskills_bootstrap_progress(app, &logs, message),
+    )?;
     let luaskills_catalog = crate::luaskills_bridge::load_luaskills_catalog(&luaskills_runtime)?;
     logs.push(format!(
         "[tauri-service] luaskills ready: root={} skills={} entries={}",
@@ -2970,6 +2972,40 @@ where
         "vulcan://service-event",
         ServiceEvent::Startup(Box::new(startup)),
     );
+}
+
+/// Emits a LuaSkills-specific startup progress snapshot.
+/// 发出 LuaSkills 专用启动进度快照。
+fn update_luaskills_bootstrap_progress(app: &tauri::AppHandle, logs: &[String], message: &str) {
+    update_startup(app, "bootstrapping-luaskills", logs, |now| {
+        startup_steps_with_status(
+            now,
+            &[
+                (
+                    "service-process",
+                    StartupStepStatus::Ready,
+                    "Tauri 本地服务桥接已启动",
+                ),
+                (
+                    "vldb",
+                    StartupStepStatus::Ready,
+                    "VLDB/controller 数据平面已就绪",
+                ),
+                ("luaskills", StartupStepStatus::Running, message),
+                (
+                    "token-budget",
+                    StartupStepStatus::Pending,
+                    "等待 LuaSkills 就绪",
+                ),
+                ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                (
+                    "workspace",
+                    StartupStepStatus::Pending,
+                    "等待工作区数据库载入",
+                ),
+            ],
+        )
+    });
 }
 
 /// Updates the shared service state after a startup failure.

@@ -77,6 +77,7 @@ button {
   place-content: center;
   gap: 12px;
   color: var(--muted-foreground);
+  padding: 24px;
 }
 
 .loading-screen.error {
@@ -289,6 +290,7 @@ button {
 }
 
 .workspace {
+  position: relative;
   grid-column: 1;
   grid-row: 2;
   display: grid;
@@ -297,6 +299,88 @@ button {
   min-height: 0;
   padding: 0;
   overflow: hidden;
+}
+
+.startup-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in oklch, var(--background) 78%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.startup-progress-card {
+  width: min(520px, calc(100vw - 48px));
+  display: grid;
+  gap: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--card) 96%, transparent);
+  color: var(--foreground);
+  padding: 20px;
+  box-shadow: 0 24px 72px color-mix(in oklch, var(--foreground) 14%, transparent);
+}
+
+.startup-progress-heading {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.startup-progress-heading > div,
+.startup-progress-step > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.startup-progress-heading strong {
+  font-size: 16px;
+}
+
+.startup-progress-heading span,
+.startup-progress-step span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.startup-progress-steps {
+  display: grid;
+  gap: 8px;
+}
+
+.startup-progress-step {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--muted);
+  padding: 10px 11px;
+}
+
+.startup-progress-step.running {
+  border-color: color-mix(in oklch, var(--primary) 42%, var(--border));
+  background: color-mix(in oklch, var(--primary) 8%, var(--muted));
+}
+
+.startup-progress-step.ready {
+  background: color-mix(in oklch, oklch(0.72 0.15 150) 7%, var(--muted));
+}
+
+.startup-progress-step.warning,
+.startup-progress-step.error {
+  background: color-mix(in oklch, var(--destructive) 8%, var(--muted));
+}
+
+.startup-progress-step strong {
+  font-size: 13px;
 }
 
 .without-console-sidebar .workspace {

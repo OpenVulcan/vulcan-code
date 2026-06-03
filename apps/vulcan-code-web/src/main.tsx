@@ -22,7 +22,7 @@ import { icons as skillIconSet } from "@iconify-json/skill-icons";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
-import { StatusPill } from "@/components/shared/status";
+import { StatusIcon, StatusPill } from "@/components/shared/status";
 import {
   FeatureShell as ExtractedFeatureShell,
   areaIconMap,
@@ -102,6 +102,7 @@ import type {
   ProjectSummary,
   ProviderSummary,
   SettingsSubAreaId,
+  StartupStepSnapshot,
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
@@ -937,7 +938,12 @@ function App() {
   }
 
   if (!startup || !workbench) {
-    return <LoadingScreen />;
+    return (
+      <I18nProvider>
+        <LoadingScreen startup={startup} />
+        <Toaster />
+      </I18nProvider>
+    );
   }
 
   return (
@@ -952,13 +958,89 @@ function App() {
 
 // LoadingScreen renders the earliest frontend loading state.
 // LoadingScreen 渲染最早期的前端加载状态。
-function LoadingScreen() {
+function LoadingScreen(props: {
+  // Startup snapshot received before the workbench snapshot is ready.
+  // 在工作台快照就绪前已经收到的启动快照。
+  startup?: StartupSnapshot | null;
+}) {
   return (
     <main className="loading-screen">
-      <Activity className="spin" size={28} />
-      <span>正在连接 Vulcan Core Service...</span>
+      {props.startup ? (
+        <StartupProgressCard startup={props.startup} />
+      ) : (
+        <>
+          <Activity className="spin" size={28} />
+          <span>正在连接 Vulcan Core Service...</span>
+        </>
+      )}
     </main>
   );
+}
+
+// StartupOverlay renders the in-shell bootstrap blocker below the main header.
+// StartupOverlay 渲染位于主标题栏下方的壳内启动阻塞层。
+function StartupOverlay(props: {
+  // Latest service startup snapshot.
+  // 最近一次服务启动快照。
+  startup: StartupSnapshot;
+}) {
+  return (
+    <div className="startup-overlay" role="status" aria-live="polite" aria-busy="true">
+      <StartupProgressCard startup={props.startup} />
+    </div>
+  );
+}
+
+// StartupProgressCard renders the blocking runtime bootstrap progress.
+// StartupProgressCard 渲染阻塞式运行时启动进度。
+function StartupProgressCard(props: {
+  // Latest service startup snapshot.
+  // 最近一次服务启动快照。
+  startup: StartupSnapshot;
+}) {
+  const activeStep = activeStartupStep(props.startup.steps);
+  return (
+    <section className="startup-progress-card" aria-live="polite" aria-busy={!props.startup.ready}>
+      <div className="startup-progress-heading">
+        <Spinner className="size-5" />
+        <div>
+          <strong>{activeStep ? `正在加载 ${activeStep.label}` : "正在加载 Vulcan 运行时"}</strong>
+          <span>{activeStep?.message ?? "正在加载 VLDB、LuaSkills 与 Token 预算运行时。"}</span>
+        </div>
+      </div>
+      <div className="startup-progress-steps">
+        {props.startup.steps.map((step) => (
+          <StartupProgressStep key={step.id} step={step} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// StartupProgressStep renders one runtime bootstrap row.
+// StartupProgressStep 渲染单个运行时启动步骤行。
+function StartupProgressStep(props: {
+  // Step snapshot displayed by this row.
+  // 此行展示的步骤快照。
+  step: StartupStepSnapshot;
+}) {
+  return (
+    <div className={cn("startup-progress-step", props.step.status)}>
+      {props.step.status === "running" ? <Spinner className="size-4" /> : <StatusIcon status={props.step.status} />}
+      <div>
+        <strong>{props.step.label}</strong>
+        <span>{props.step.message ?? "等待状态更新"}</span>
+      </div>
+    </div>
+  );
+}
+
+// activeStartupStep returns the first in-progress or pending startup step for the headline.
+// activeStartupStep 返回首个进行中或待处理启动步骤，用于标题显示。
+function activeStartupStep(steps: StartupStepSnapshot[]): StartupStepSnapshot | null {
+  return steps.find((step) => step.status === "running")
+    ?? steps.find((step) => step.status === "pending")
+    ?? null;
 }
 
 // ErrorScreen renders a startup failure.
@@ -1049,6 +1131,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
+  // showStartupOverlay blocks workspace interaction until the real service bootstrap completes.
+  // showStartupOverlay 在真实服务启动完成前阻塞工作区交互。
+  const showStartupOverlay = !props.startup.ready && props.startup.phase !== "browser-preview";
 
   // Keeps the async selection guard aligned with the latest sidebar choice.
   // 保持异步选中保护与最新侧栏选择一致。
@@ -1598,6 +1683,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             workbench={workbenchState}
           />
         )}
+        {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
       <footer className="statusbar">
         <span>版本 {props.workbench.appVersion}</span>

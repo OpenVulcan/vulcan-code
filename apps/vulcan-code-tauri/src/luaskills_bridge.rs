@@ -136,15 +136,20 @@ pub struct TauriLuaSkillSummary {
 
 /// Bootstraps LuaSkills using the same controller-backed database mode as the iced GUI.
 /// 使用与 iced GUI 相同的控制器数据库模式引导 LuaSkills。
-pub fn bootstrap_luaskills(
+pub fn bootstrap_luaskills<F>(
     controller: PersistedControllerConfiguration,
-) -> Result<TauriLuaSkillsHandle, String> {
+    mut progress: F,
+) -> Result<TauriLuaSkillsHandle, String>
+where
+    F: FnMut(&str),
+{
     let runtime_root =
         vulcan_runtime_assets::resolve_luaskills_runtime_root().ok_or_else(|| {
             String::from(
                 "未找到 LuaSkills 运行时根目录，请先执行 make build 生成 output/lua_runtime。",
             )
         })?;
+    progress("正在准备 LuaSkills 运行时目录");
     let skill_roots = ensure_runtime_root_layout(&runtime_root)?;
     let host_options = build_host_options(&runtime_root, controller);
     let pool_config = LuaVmPoolConfig {
@@ -154,7 +159,13 @@ pub fn bootstrap_luaskills(
     };
     let mut engine = LuaEngine::new(LuaEngineOptions::new(pool_config, host_options))
         .map_err(|error| format!("创建 LuaSkills 引擎失败：{error}"))?;
-    ensure_configured_root_skills_installed(&runtime_root, &skill_roots, &mut engine)?;
+    ensure_configured_root_skills_installed(
+        &runtime_root,
+        &skill_roots,
+        &mut engine,
+        &mut progress,
+    )?;
+    progress("正在加载 LuaSkills 技能目录");
     engine
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
@@ -284,10 +295,12 @@ fn ensure_configured_root_skills_installed(
     runtime_root: &Path,
     skill_roots: &[RuntimeSkillRoot],
     engine: &mut LuaEngine,
+    progress: &mut impl FnMut(&str),
 ) -> Result<(), String> {
     let root_target = resolve_named_skill_root(skill_roots, "ROOT")?;
     let configured_skills = load_root_skill_bootstrap_entries(runtime_root)?;
     if configured_skills.is_empty() {
+        progress("未配置需要自动安装的 LuaSkills ROOT 技能");
         return Ok(());
     }
 
@@ -304,6 +317,8 @@ fn ensure_configured_root_skills_installed(
             continue;
         }
 
+        let install_message = format!("正在安装 LuaSkills 技能：{}", configured_skill.skill_id);
+        progress(&install_message);
         let install_request = SkillInstallRequest {
             skill_id: Some(configured_skill.skill_id.clone()),
             source: Some(configured_skill.source.clone()),
@@ -322,13 +337,18 @@ fn ensure_configured_root_skills_installed(
                     configured_skill.skill_id
                 )
             })?;
+        let installed_message = format!("已安装 LuaSkills 技能：{}", configured_skill.skill_id);
+        progress(&installed_message);
         installed_any_skill = true;
     }
 
     if installed_any_skill {
+        progress("正在刷新 LuaSkills 技能根");
         engine
             .reload_from_roots(skill_roots)
             .map_err(|error| format!("刷新 LuaSkills 技能根失败：{error}"))?;
+    } else {
+        progress("LuaSkills 默认技能已存在，正在加载目录");
     }
 
     Ok(())
