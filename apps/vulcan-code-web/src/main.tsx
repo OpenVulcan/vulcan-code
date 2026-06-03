@@ -4520,6 +4520,9 @@ function ChatArea(props: {
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
+  // t resolves localized runtime labels for conversation overlays and cues.
+  // t 解析会话浮层与提示使用的本地化运行文案。
+  const { t } = useI18n();
   // workspaceRef stores the scrollable conversation timeline element.
   // workspaceRef 保存可滚动的会话时间线元素。
   const workspaceRef = React.useRef<HTMLElement | null>(null);
@@ -4538,6 +4541,10 @@ function ChatArea(props: {
     props.selectedDraftConversation
       || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
+  // runtimeCueText stores the compact in-progress label shown above the composer.
+  // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
+  const streamingThinkingBlock = activeStreamingThinkingBlock(selectedConversation, messages);
+  const runtimeCueText = streamingThinkingBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
@@ -4635,11 +4642,13 @@ function ChatArea(props: {
             onScrollStateChange={updateConversationBottomState}
             scrollRef={workspaceRef}
           />
+          {streamingThinkingBlock ? <StreamingThinkingOverlay block={streamingThinkingBlock} /> : null}
           <ComposerDock
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSubmitPrompt={props.onSubmitPrompt}
             providers={props.workbench.providers}
+            runtimeCueText={runtimeCueText}
             showScrollToBottom={!isAtConversationBottom}
           />
         </>
@@ -4784,7 +4793,7 @@ function SpecialConversationBlock(props: {
     return <ToolExecutionBlock blocks={[props.block]} onOpenDetail={props.onOpenDetail} />;
   }
   if (props.block.kind === "thinking") {
-    return <ThinkingBlock block={props.block} />;
+    return <ThinkingBlock block={props.block} onOpenDetail={props.onOpenDetail} />;
   }
 
   const Icon = blockIcon(props.block.kind);
@@ -4822,32 +4831,34 @@ function SpecialConversationBlock(props: {
   );
 }
 
-// ThinkingBlock renders an inline collapsible thinking transcript block.
-// ThinkingBlock 渲染可在原地折叠展开的内联思考转录块。
-function ThinkingBlock(props: { block: ConversationBlock }) {
-  // expanded stores whether the thinking body is currently visible.
-  // expanded 保存思考正文当前是否可见。
-  const [expanded, setExpanded] = React.useState(false);
-
+// ThinkingBlock renders a compact thinking row that opens the dedicated detail modal.
+// ThinkingBlock 渲染打开独立详情弹窗的紧凑思考行。
+function ThinkingBlock(props: {
+  // block contains the thinking transcript payload.
+  // block 包含思考转录载荷。
+  block: ConversationBlock;
+  // onOpenDetail opens the shared transcript detail dialog.
+  // onOpenDetail 打开共享转录详情弹窗。
+  onOpenDetail: (detail: ConversationDetail) => void;
+}) {
   return (
-    <section className={`thinking-block ${expanded ? "expanded" : "collapsed"}`}>
+    <section className="thinking-block collapsed">
       <button
-        aria-expanded={expanded}
         className="thinking-toggle"
-        onClick={() => setExpanded((current) => !current)}
+        onClick={() => props.onOpenDetail({
+          title: "思考过程",
+          kind: "thinking",
+          body: props.block.body,
+          metadata: [["类型", "思考过程"]],
+        })}
         type="button"
       >
         <span className="thinking-toggle-label">
           <BrainCircuit size={15} />
           <span>思考过程</span>
         </span>
-        {expanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        <Maximize2 size={13} />
       </button>
-      {expanded ? (
-        <div className="thinking-body">
-          <MarkdownMessage content={props.block.body} />
-        </div>
-      ) : null}
     </section>
   );
 }
@@ -5016,7 +5027,7 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
     .join(" · ");
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="detail-modal sm:max-w-[min(1080px,96vw)]" showCloseButton={false}>
+      <DialogContent className={cn("detail-modal sm:max-w-[min(1080px,96vw)]", props.detail.kind === "thinking" && "thinking-detail-modal")} showCloseButton={false}>
         <header className="detail-modal-header">
           <div className="detail-title-row">
             <div className="detail-title-icon">
@@ -5059,6 +5070,126 @@ function ConversationLoadingCenter() {
   );
 }
 
+// activeStreamingThinkingBlock returns the selected session thinking block that should float while streaming.
+// activeStreamingThinkingBlock 返回当前选中会话在流式思考时应浮动展示的思考块。
+function activeStreamingThinkingBlock(
+  conversation: ConversationSummary | undefined,
+  messages: ConversationMessage[],
+): ConversationBlock | null {
+  if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
+    return null;
+  }
+  const blocks = projectConversationRenderItems(messages)
+    .filter((item) => item.role !== "user")
+    .flatMap((item) => item.blocks);
+  return [...blocks].reverse().find((block) => block.kind === "thinking") ?? null;
+}
+
+// StreamingThinkingOverlay renders the active thinking stream as a floating session-local surface.
+// StreamingThinkingOverlay 将活动思考流渲染为当前会话内的浮动面板。
+function StreamingThinkingOverlay(props: {
+  // block contains the currently streaming thinking transcript.
+  // block 包含当前正在流式输出的思考转录。
+  block: ConversationBlock;
+}) {
+  // t resolves localized labels for the floating thinking surface.
+  // t 解析浮动思考面板使用的本地化文案。
+  const { t } = useI18n();
+  // bodyRef stores the scrollable thinking body for tail following.
+  // bodyRef 保存可滚动思考正文，用于追随最新尾部。
+  const bodyRef = React.useRef<HTMLDivElement | null>(null);
+
+  React.useLayoutEffect(() => {
+    const element = bodyRef.current;
+    if (!element) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+  }, [props.block.body]);
+
+  return (
+    <section className="streaming-thinking-overlay" aria-live="polite" aria-busy="true">
+      <header className="streaming-thinking-header">
+        <span className="streaming-thinking-title">
+          <BrainCircuit size={16} />
+          <ShinyText text={t("runtime.thinking")} />
+        </span>
+        <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
+      </header>
+      <div className="streaming-thinking-body" ref={bodyRef}>
+        <MarkdownMessage content={props.block.body || t("runtime.thinking")} />
+      </div>
+    </section>
+  );
+}
+
+// conversationRuntimeCueText resolves the compact active-state cue shown above the composer.
+// conversationRuntimeCueText 解析显示在输入区上方的紧凑运行状态提示。
+function conversationRuntimeCueText(
+  conversation: ConversationSummary | undefined,
+  messages: ConversationMessage[],
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  if (!conversation || conversation.status.toLowerCase() !== "running") {
+    return null;
+  }
+  const phaseCue = sessionRunPhaseCueText(conversation.runPhase, t);
+  if (phaseCue) {
+    return phaseCue;
+  }
+  const blocks = projectConversationRenderItems(messages)
+    .filter((item) => item.role !== "user")
+    .flatMap((item) => item.blocks);
+  const lastMeaningfulBlock = [...blocks].reverse().find((block) => block.kind !== "turn-stats");
+  if (!lastMeaningfulBlock) {
+    return t("runtime.memoryRecall");
+  }
+  if (blockLooksLikeMemoryRecall(lastMeaningfulBlock)) {
+    return t("runtime.memoryRecall");
+  }
+  return t("runtime.requesting");
+}
+
+// sessionRunPhaseCueText maps the backend per-session phase to a reusable active cue.
+// sessionRunPhaseCueText 将后端会话级阶段映射为可复用的活动提示。
+function sessionRunPhaseCueText(
+  runPhase: string | null | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  const normalized = normalizedSessionRunPhase(runPhase);
+  if (!normalized || normalized === "idle" || normalized === "ready" || normalized === "failed" || normalized === "stopped") {
+    return null;
+  }
+  if (normalized === "memoryrecall") {
+    return t("runtime.memoryRecall");
+  }
+  if (normalized === "thinking") {
+    return t("runtime.thinking");
+  }
+  if (normalized === "toolrunning") {
+    return t("runtime.toolRunning");
+  }
+  return t("runtime.requesting");
+}
+
+// normalizedSessionRunPhase normalizes backend enum text and future route-style phase keys.
+// normalizedSessionRunPhase 规范化后端枚举文本以及未来路由式阶段键。
+function normalizedSessionRunPhase(runPhase?: string | null): string | null {
+  const normalized = runPhase?.trim().toLowerCase().replace(/[-_]/g, "");
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+// blockLooksLikeMemoryRecall detects VMM and memory-oriented runtime blocks.
+// blockLooksLikeMemoryRecall 检测 VMM 与记忆相关的运行时块。
+function blockLooksLikeMemoryRecall(block: ConversationBlock): boolean {
+  const source = `${block.title}\n${block.summary}\n${block.toolName ?? ""}\n${block.body}`.toLowerCase();
+  return source.includes("vmm")
+    || source.includes("memory")
+    || source.includes("记忆")
+    || source.includes("画像")
+    || source.includes("recall");
+}
+
 // ComposerDock renders composer-related floating controls.
 // ComposerDock 渲染输入区相关的浮动控件。
 function ComposerDock(props: {
@@ -5077,6 +5208,9 @@ function ComposerDock(props: {
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // runtimeCueText shows the current session in-progress activity near the composer.
+  // runtimeCueText 在输入区附近显示当前会话的进行中活动。
+  runtimeCueText: string | null;
 }) {
   return (
     <div className="composer-dock">
@@ -5096,6 +5230,11 @@ function ComposerDock(props: {
           </TooltipTrigger>
           <TooltipContent side="top">滚动到底部</TooltipContent>
         </Tooltip>
+      ) : null}
+      {props.runtimeCueText ? (
+        <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
+          <ShinyText text={props.runtimeCueText} />
+        </div>
       ) : null}
       <ComposerPanel
         providers={props.providers}

@@ -346,6 +346,20 @@ async fn service_submit_conversation_prompt(
         &prompt,
         execution_mode,
         reasoning_effort,
+        |visible_prompt_snapshot| {
+            store_and_emit_workbench_snapshot(
+                &app,
+                &state,
+                &controller_runtime,
+                &luaskills_catalog,
+                &token_budget_runtime,
+                &mcp_catalog,
+                &agent_runtime.provider_configuration,
+                visible_prompt_snapshot.clone(),
+                &logs,
+            )
+            .map(|_| ())
+        },
     )
     .await?;
 
@@ -1052,7 +1066,7 @@ fn materialize_prompt_session(
     workspace_snapshot.sessions.insert(0, session);
     workspace_snapshot
         .session_run_phases
-        .insert(session_id, SessionRunPhase::Preparing);
+        .insert(session_id, SessionRunPhase::MemoryRecall);
     workspace_snapshot.selected_session = session_id;
     Ok((session_id, session_title, workspace_path))
 }
@@ -1068,6 +1082,7 @@ async fn append_prompt_and_build_request(
     prompt: &str,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
+    emit_visible_prompt_snapshot: impl FnOnce(&WorkspaceSnapshot) -> Result<(), String>,
 ) -> Result<ExecutionPreparationRequest, String> {
     let now = current_unix_millis_text();
     let prompt_entry_id = format!("webui-prompt-{session_id}-{now}");
@@ -1102,8 +1117,9 @@ async fn append_prompt_and_build_request(
     );
     workspace_snapshot
         .session_run_phases
-        .insert(session_id, SessionRunPhase::Preparing);
+        .insert(session_id, SessionRunPhase::MemoryRecall);
     workspace_snapshot.hydrated_session_ids.insert(session_id);
+    emit_visible_prompt_snapshot(workspace_snapshot)?;
 
     agent_runtime
         .vmm_hook_runtime
@@ -1585,12 +1601,17 @@ fn spawn_agent_stream_task(
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
                     if let Err(error) =
-                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Preparing)
+                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
                     {
                         eprintln!("[tauri-service] apply request-started failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
+                    if let Err(error) =
+                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Thinking)
+                    {
+                        eprintln!("[tauri-service] apply thinking phase failed: {error}");
+                    }
                     if let Err(error) = append_stream_delta_record(
                         &app,
                         &state,
@@ -1610,8 +1631,18 @@ fn spawn_agent_stream_task(
                     {
                         eprintln!("[tauri-service] complete thinking failed: {error}");
                     }
+                    if let Err(error) =
+                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
+                    {
+                        eprintln!("[tauri-service] restore request phase failed: {error}");
+                    }
                 }
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
+                    if let Err(error) =
+                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
+                    {
+                        eprintln!("[tauri-service] apply output phase failed: {error}");
+                    }
                     if let Err(error) = append_stream_delta_record(
                         &app,
                         &state,
@@ -1628,6 +1659,20 @@ fn spawn_agent_stream_task(
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                     if is_provider_tool_boundary_runtime_event(&event) {
                         record_ids.thinking_record_id = None;
+                    }
+                    if matches!(event.kind, RuntimeEventKind::ToolStarted) {
+                        if let Err(error) =
+                            apply_session_phase(&app, &state, session_id, SessionRunPhase::ToolRunning)
+                        {
+                            eprintln!("[tauri-service] apply tool phase failed: {error}");
+                        }
+                    }
+                    if matches!(event.kind, RuntimeEventKind::ToolFinished) {
+                        if let Err(error) =
+                            apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
+                        {
+                            eprintln!("[tauri-service] restore request phase after tool failed: {error}");
+                        }
                     }
                     if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
                         hook_runtime.record_tool_runtime_event(session_id, &event);
@@ -1772,7 +1817,13 @@ fn append_stream_delta_record(
         );
         workspace
             .session_run_phases
-            .insert(session_id, SessionRunPhase::Preparing);
+            .insert(
+                session_id,
+                match record_kind {
+                    SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
+                    _ => SessionRunPhase::Requesting,
+                },
+            );
         workspace.hydrated_session_ids.insert(session_id);
     })
     .map(|_| ())
@@ -2363,7 +2414,14 @@ fn preserve_active_session_run_state(
 /// Returns whether one session phase still represents active work.
 /// 判断单个会话阶段是否仍代表活跃执行。
 fn is_active_session_run_phase(phase: SessionRunPhase) -> bool {
-    matches!(phase, SessionRunPhase::Preparing)
+    matches!(
+        phase,
+        SessionRunPhase::Preparing
+            | SessionRunPhase::MemoryRecall
+            | SessionRunPhase::Requesting
+            | SessionRunPhase::Thinking
+            | SessionRunPhase::ToolRunning
+    )
 }
 
 /// Returns whether a runtime event closes the current streamed thinking segment.
@@ -2995,11 +3053,13 @@ fn workbench_from_runtime(
             .iter()
             .filter(|session| session_event_manifest_exists(session))
             .map(|session| {
+                let run_phase = workspace
+                    .session_run_phases
+                    .get(&session.id)
+                    .copied()
+                    .unwrap_or(SessionRunPhase::Idle);
                 let is_running = session.status == SessionState::Running
-                    || workspace
-                        .session_run_phases
-                        .get(&session.id)
-                        .is_some_and(|phase| is_active_session_run_phase(*phase));
+                    || is_active_session_run_phase(run_phase);
                 ConversationSummary {
                     id: session.id.to_string(),
                     title: session.title.clone(),
@@ -3009,6 +3069,7 @@ fn workbench_from_runtime(
                         session.status.label()
                     }
                     .to_string(),
+                    run_phase: run_phase.to_string(),
                     last_updated_label: session.last_updated_label.clone(),
                     last_updated_at: session.updated_at.clone(),
                     unread: workspace

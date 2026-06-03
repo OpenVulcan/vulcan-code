@@ -215,6 +215,18 @@ pub enum SessionRunPhase {
     /// Execution preparation or streaming is in progress.
     /// 执行准备或流式输出进行中。
     Preparing,
+    /// Conversation hooks and memory recall are preparing context for the next request.
+    /// 会话 hook 与记忆召回正在为下一次请求准备上下文。
+    MemoryRecall,
+    /// Provider request is in flight.
+    /// Provider 请求正在进行。
+    Requesting,
+    /// Provider reasoning output is streaming.
+    /// Provider 思考输出正在流式返回。
+    Thinking,
+    /// A provider-visible tool is currently running.
+    /// Provider 可见工具当前正在运行。
+    ToolRunning,
     /// The latest execution finished and produced output.
     /// 最近一次执行已完成并产生输出。
     Ready,
@@ -233,6 +245,10 @@ impl fmt::Display for SessionRunPhase {
         let label = match self {
             Self::Idle => "Idle",
             Self::Preparing => "Preparing",
+            Self::MemoryRecall => "MemoryRecall",
+            Self::Requesting => "Requesting",
+            Self::Thinking => "Thinking",
+            Self::ToolRunning => "ToolRunning",
             Self::Ready => "Ready",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",

@@ -70,6 +70,11 @@ export type TranslationKey =
   | "composer.aria.stop"
   | "composer.modelPicker.filter"
   | "composer.modelPicker.noMatches"
+  | "runtime.memoryRecall"
+  | "runtime.requesting"
+  | "runtime.thinking"
+  | "runtime.toolRunning"
+  | "runtime.thinkingOverlayHint"
   | "settings.general"
   | "settings.projects"
   | "settings.providers"
@@ -148,6 +153,11 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "composer.aria.stop": "停止",
     "composer.modelPicker.filter": "输入模型名称、ID 或 Provider 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
+    "runtime.memoryRecall": "✨ 正在记忆召回",
+    "runtime.requesting": "✨ 正在请求",
+    "runtime.thinking": "✨ 正在思考",
+    "runtime.toolRunning": "✨ 正在调用工具",
+    "runtime.thinkingOverlayHint": "模型正在流式输出思考过程",
     "settings.general": "通用设置",
     "settings.projects": "项目",
     "settings.providers": "模型",
@@ -223,6 +233,11 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "composer.aria.stop": "Stop",
     "composer.modelPicker.filter": "Filter by model name, id, or provider",
     "composer.modelPicker.noMatches": "No models match the current filter.",
+    "runtime.memoryRecall": "✨ Recalling memory",
+    "runtime.requesting": "✨ Requesting",
+    "runtime.thinking": "✨ Thinking",
+    "runtime.toolRunning": "✨ Running tools",
+    "runtime.thinkingOverlayHint": "The model is streaming its thinking process",
     "settings.general": "General",
     "settings.projects": "Projects",
     "settings.providers": "Models",

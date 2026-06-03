@@ -96,6 +96,9 @@ export interface ConversationSummary {
   // Conversation status.
   // 会话状态。
   status: string;
+  // Current per-session runtime phase.
+  // 当前会话级运行阶段。
+  runPhase?: string;
   // Relative last-updated label.
   // 相对最后更新时间标签。
   lastUpdatedLabel?: string;

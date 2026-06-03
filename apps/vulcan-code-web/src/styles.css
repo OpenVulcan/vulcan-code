@@ -1564,6 +1564,71 @@ button {
   padding: 24px;
 }
 
+.streaming-thinking-overlay {
+  position: absolute;
+  left: 50%;
+  bottom: 158px;
+  z-index: 4;
+  width: min(760px, calc(100% - 64px));
+  max-height: min(360px, calc(100% - 230px));
+  min-height: 126px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  transform: translateX(-50%);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--card) 94%, transparent);
+  box-shadow: 0 24px 70px color-mix(in oklch, var(--foreground) 14%, transparent);
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.streaming-thinking-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.streaming-thinking-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--foreground);
+}
+
+.streaming-thinking-title .shiny-text {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.streaming-thinking-caption {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streaming-thinking-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 14px;
+  color: var(--muted-foreground);
+}
+
+.streaming-thinking-body .markdown-message {
+  max-width: none;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
 .shiny-text {
   display: inline-block;
   background-image: linear-gradient(
@@ -1617,6 +1682,24 @@ button {
   background: var(--card);
   box-shadow: 0 10px 30px color-mix(in oklch, var(--foreground) 12%, transparent);
   pointer-events: auto;
+}
+
+.composer-runtime-cue {
+  max-width: min(100%, 520px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+  box-shadow: 0 10px 30px color-mix(in oklch, var(--foreground) 8%, transparent);
+  pointer-events: none;
+}
+
+.composer-runtime-cue .shiny-text {
+  font-size: 13px;
+  font-weight: 600;
 }
 
 .composer-panel {
@@ -2287,7 +2370,7 @@ button {
   max-width: 100%;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   border: 0;
   background: transparent;
   color: var(--muted-foreground);
@@ -2321,6 +2404,20 @@ button {
   padding-left: 12px;
   color: var(--muted-foreground);
   font-size: 13px;
+}
+
+.thinking-detail-modal .detail-title-icon {
+  background: color-mix(in oklch, var(--accent) 82%, transparent);
+}
+
+.thinking-detail-modal .detail-modal-body {
+  padding: 18px 20px;
+}
+
+.thinking-detail-modal .markdown-message {
+  max-width: none;
+  color: var(--popover-foreground);
+  font-size: 14px;
 }
 
 .tool-execution-row {
