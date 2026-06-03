@@ -178,6 +178,7 @@ pub fn run() {
             service_rename_project,
             service_set_project_icon,
             service_reset_project_icon,
+            service_set_expanded_task_projects,
             service_archive_project_conversations,
             service_rename_conversation,
             service_archive_conversation,
@@ -540,22 +541,9 @@ async fn service_rename_project(
     project_id: String,
     name: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let normalized_name = normalize_non_empty_name(&name)?;
     let controller_runtime = controller_runtime_from_state(&state)?;
-    controller_runtime
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            controller_runtime.sqlite_binding_id.as_str(),
-            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3 AND archived = 0;",
-            vec![vec![
-                ControllerSqliteValue::String(normalized_name),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id),
-            ]],
-        )
-        .await
-        .map_err(|error| format!("重命名项目失败：{error}"))?;
+    vulcan_workspace_store::workspace_store::rename_project(controller_runtime, &project_id, &name)
+        .await?;
     refresh_workbench_snapshot(state).await
 }
 
@@ -610,6 +598,33 @@ async fn service_reset_project_icon(
         )
         .await
         .map_err(|error| format!("还原项目图标失败：{error}"))?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Persists the expanded project identifiers and returns the refreshed workbench snapshot.
+/// 持久化展开项目标识集合并返回刷新后的工作台快照。
+#[tauri::command]
+async fn service_set_expanded_task_projects(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_ids: Vec<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let controller_runtime = controller_runtime_from_state(&state)?;
+    let workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
+        controller_runtime.clone(),
+    )
+    .await?;
+    let expanded_project_ids = project_ids.into_iter().collect::<BTreeSet<_>>();
+    let collapsed_project_ids = workspace_snapshot
+        .task_projects
+        .iter()
+        .filter(|project| !expanded_project_ids.contains(&project.id))
+        .map(|project| project.id.clone())
+        .collect::<Vec<_>>();
+    vulcan_workspace_store::workspace_store::persist_collapsed_task_project_ids(
+        controller_runtime,
+        &collapsed_project_ids,
+    )
+    .await?;
     refresh_workbench_snapshot(state).await
 }
 
@@ -2974,6 +2989,7 @@ fn workbench_from_runtime(
                 icon_key: project.icon_key.clone(),
             })
             .collect(),
+        expanded_project_ids: workspace.expanded_task_projects.iter().cloned().collect(),
         conversations: workspace
             .sessions
             .iter()
@@ -2994,6 +3010,7 @@ fn workbench_from_runtime(
                     }
                     .to_string(),
                     last_updated_label: session.last_updated_label.clone(),
+                    last_updated_at: session.updated_at.clone(),
                     unread: workspace
                         .session_runtime_state
                         .get(&session.id)
@@ -3148,6 +3165,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
             icon_pack: None,
             icon_key: None,
         }],
+        expanded_project_ids: vec![String::from("current-workspace")],
         conversations: Vec::new(),
         selected_conversation_id: None,
         messages: Vec::new(),
@@ -3292,7 +3310,11 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
         .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()));
     let mut configured_providers = provider_config::supported_provider_choices()
         .into_iter()
-        .filter(|provider_choice| provider_configuration.provider.contains_key(&provider_choice.id))
+        .filter(|provider_choice| {
+            provider_configuration
+                .provider
+                .contains_key(&provider_choice.id)
+        })
         .map(|provider_choice| {
             let models = provider_config::effective_model_choices(
                 &provider_choice.id,
@@ -3300,11 +3322,12 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
             )
             .into_iter()
             .map(|model_choice| {
-                let active = active_model_reference
-                    .as_ref()
-                    .is_some_and(|(provider_id, model_id)| {
-                        provider_id == &provider_choice.id && model_id == &model_choice.id
-                    });
+                let active =
+                    active_model_reference
+                        .as_ref()
+                        .is_some_and(|(provider_id, model_id)| {
+                            provider_id == &provider_choice.id && model_id == &model_choice.id
+                        });
                 ProviderModelSummary {
                     id: model_choice.id,
                     name: model_choice.name,

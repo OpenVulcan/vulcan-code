@@ -463,6 +463,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "luaskills-packages", name: "luaskills-packages", path: "D:/openvulcan/luaskills-packages", pinned: false },
     { id: "vulcan-workmem", name: "vulcan-workmem", path: "D:/openvulcan/vulcan-workmem", pinned: false },
   ],
+  expandedProjectIds: ["preview", "calc", "test-project", "luaskills-packages", "vulcan-workmem"],
   conversations: [
     { id: "preview", title: "Tauri WebUI 迁移预览", status: "Completed", lastUpdatedLabel: "刚刚", projectId: "preview" },
     { id: "preview-intro", title: "介绍你自己", status: "Completed", lastUpdatedLabel: "刚刚", projectId: "preview" },
@@ -752,6 +753,16 @@ async function resetProjectIcon(projectId: string): Promise<WorkbenchSnapshot | 
     return null;
   }
   return invoke<WorkbenchSnapshot>("service_reset_project_icon", { projectId });
+}
+
+// setExpandedTaskProjects asks the desktop shell to persist expanded project rows.
+// setExpandedTaskProjects 请求桌面壳持久化已展开的项目行。
+async function setExpandedTaskProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.
@@ -1178,6 +1189,20 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, [applyProjectActionSnapshot]);
 
+  // handleExpandedProjectIdsChange silently persists project folder expansion state.
+  // handleExpandedProjectIdsChange 静默持久化项目文件夹展开状态。
+  const handleExpandedProjectIdsChange = React.useCallback(async (projectIds: string[]) => {
+    setWorkbenchState((current) => ({ ...current, expandedProjectIds: projectIds }));
+    try {
+      const snapshot = await setExpandedTaskProjects(projectIds);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      console.warn("persist expanded projects failed", nextError);
+    }
+  }, []);
+
   // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
   // handleSubmitConversationPrompt 通过共享后端运行时发送输入区文本。
   const handleSubmitConversationPrompt = React.useCallback(async (submission: ComposerSubmission): Promise<boolean> => {
@@ -1319,23 +1344,31 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleRenameConfirm 提交当前重命名对话框值。
   const handleRenameConfirm = React.useCallback(async (target: RenameTarget, name: string) => {
     const normalizedName = name.trim();
-    if (!normalizedName) {
+    if (!normalizedName && target.kind !== "project") {
       toast.error("名称不能为空。");
       return;
     }
+    const project = target.kind === "project"
+      ? workbenchState.projects.find((candidate) => candidate.id === target.id) ?? null
+      : null;
+    const effectiveProjectName = normalizedName || restoreProjectDisplayName(project, target);
     try {
       const snapshot = target.kind === "project"
-        ? await renameProject(target.id, normalizedName)
+        ? await renameProject(target.id, effectiveProjectName)
         : await renameConversation(target.id, normalizedName);
       if (snapshot) {
         applyProjectActionSnapshot(snapshot);
       } else if (target.kind === "project") {
-        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, normalizedName).snapshot);
+        applyProjectActionSnapshot(applyPreviewProjectRename(workbenchState, target.id, effectiveProjectName).snapshot);
       } else {
         applyProjectActionSnapshot(applyPreviewConversationRename(workbenchState, target.id, normalizedName).snapshot);
       }
       setRenameTarget(null);
-      toast.success(target.kind === "project" ? `已重命名项目：${normalizedName}` : `已重命名对话：${normalizedName}`);
+      toast.success(target.kind === "project"
+        ? normalizedName
+          ? `已重命名项目：${effectiveProjectName}`
+          : `已还原项目名称：${effectiveProjectName}`
+        : `已重命名对话：${normalizedName}`);
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
@@ -1472,6 +1505,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
+            onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
@@ -1995,7 +2029,7 @@ function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number 
         />
       )}
       <text
-        dominantBaseline="middle"
+        dominantBaseline="central"
         fill={props.config.foreground}
         fontFamily="Inter, Segoe UI, sans-serif"
         fontSize={fontSize}
@@ -2004,7 +2038,7 @@ function ProjectBadgeIcon(props: { config: ProjectIconBadgeConfig; size: number 
         textAnchor="middle"
         textLength={props.config.text.length > 1 ? 16 : undefined}
         x="16"
-        y="16"
+        y="16.5"
       >
         {props.config.text}
       </text>
@@ -2851,6 +2885,7 @@ function ConsoleShell(props: {
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
+  onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
@@ -2878,6 +2913,7 @@ function ConsoleShellContent(props: {
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
+  onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
@@ -2896,12 +2932,12 @@ function ConsoleShellContent(props: {
   // rightPanelOpen stores whether the review and memory panel is visible.
   // rightPanelOpen 保存审核与记忆面板是否可见。
   const [rightPanelOpen, setRightPanelOpen] = React.useState(false);
+  // rightPanelFloating stores whether the right panel overlays instead of resizing the chat area.
+  // rightPanelFloating 保存右侧面板是否以浮动方式覆盖而不是压缩会话区。
+  const [rightPanelFloating, setRightPanelFloating] = React.useState(false);
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
-  // rightAutoCollapsed records automatic right-panel collapse caused by width pressure.
-  // rightAutoCollapsed 记录宽度压力导致的右侧面板自动折叠。
-  const [rightAutoCollapsed, setRightAutoCollapsed] = React.useState(false);
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -2910,9 +2946,21 @@ function ConsoleShellContent(props: {
   // handleRightPanelToggle clears automatic restore intent when the user toggles the right panel manually.
   // handleRightPanelToggle 在用户手动切换右侧面板时清除自动恢复意图。
   const handleRightPanelToggle = React.useCallback(() => {
-    setRightAutoCollapsed(false);
-    setRightPanelOpen((current) => !current);
-  }, []);
+    const nextOpen = !rightPanelOpen;
+    if (!nextOpen) {
+      setRightPanelFloating(false);
+      setRightPanelOpen(false);
+      return;
+    }
+    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
+    const expandedLeftWidth = 288;
+    const collapsedLeftWidth = 46;
+    const preferredRightWidth = 480;
+    const handleWidth = 9;
+    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
+    setRightPanelOpen(true);
+  }, [rightPanelOpen, sidebar.open]);
 
   React.useEffect(() => {
     const element = shellRef.current;
@@ -2929,58 +2977,56 @@ function ConsoleShellContent(props: {
       const preferredRightWidth = 480;
       const handleWidth = 9;
       const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
-      const rightWidth = rightPanelOpen ? preferredRightWidth : 0;
-      const shellGaps = rightPanelOpen ? handleWidth : 0;
-      const mainWidth = width - leftWidth - rightWidth - shellGaps;
+      const dockedPanelFits = width - leftWidth - preferredRightWidth - handleWidth >= 800;
+      const shouldFloatRightPanel = rightPanelOpen && !dockedPanelFits;
+      const dockedRightWidth = rightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
+      const shellGaps = rightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+      const mainWidth = width - leftWidth - dockedRightWidth - shellGaps;
+      if (rightPanelOpen) {
+        setRightPanelFloating(shouldFloatRightPanel);
+      }
       if (mainWidth < 800 && sidebar.open) {
         sidebar.setOpen(false);
         setLeftAutoCollapsed(true);
-        return;
-      }
-      if (mainWidth < 800 && rightPanelOpen) {
-        setRightPanelOpen(false);
-        setRightAutoCollapsed(true);
         return;
       }
       if (!isGrowing) {
         return;
       }
       if (leftAutoCollapsed && !sidebar.open) {
-        const restoredMainWidth = width - expandedLeftWidth - rightWidth - shellGaps;
+        const restoredRightWidth = rightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
+        const restoredShellGaps = rightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+        const restoredMainWidth = width - expandedLeftWidth - restoredRightWidth - restoredShellGaps;
         if (restoredMainWidth >= 800) {
           sidebar.setOpen(true);
           setLeftAutoCollapsed(false);
           return;
         }
       }
-      if (rightAutoCollapsed && !rightPanelOpen) {
-        const restoredMainWidth = width - leftWidth - preferredRightWidth - handleWidth;
-        if (restoredMainWidth >= 800) {
-          setRightPanelOpen(true);
-          setRightAutoCollapsed(false);
-        }
-      }
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [leftAutoCollapsed, rightAutoCollapsed, rightPanelOpen, sidebar]);
+  }, [leftAutoCollapsed, rightPanelFloating, rightPanelOpen, sidebar]);
 
   return (
     <div className="workspace-panel-shell" ref={shellRef}>
       <ProjectSidebar
         projects={props.workbench.projects}
         conversations={props.workbench.conversations}
+        expandedProjectIds={props.workbench.expandedProjectIds}
         pinnedConversationIds={props.pinnedConversationIds}
         selectedConversationId={props.selectedConversationId}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
+        onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
         onReorderProjects={props.onReorderProjects}
         onSelectConversation={props.onSelectConversation}
       />
       <SidebarInset className="workspace-inset">
         <WorkspaceResizableBody
+          rightPanelFloating={rightPanelFloating}
           rightPanelOpen={rightPanelOpen}
           startup={props.startup}
           workbench={props.workbench}
@@ -3050,6 +3096,9 @@ function WorkspaceResizableBody(props: {
   // Whether the right context panel is visible.
   // 右侧上下文面板是否可见。
   rightPanelOpen: boolean;
+  // Whether the right context panel floats over the main area.
+  // 右侧上下文面板是否浮动覆盖主区域。
+  rightPanelFloating: boolean;
   // Startup snapshot forwarded to the chat area.
   // 转发给会话区域的启动快照。
   startup: StartupSnapshot;
@@ -3085,61 +3134,92 @@ function WorkspaceResizableBody(props: {
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
-    <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
-      <ResizablePanel className="workspace-main-panel" defaultSize={props.rightPanelOpen ? 68 : 100} id="workspaceMain" minSize="800px">
-        <section className="workspace-main-shell">
-          <ConsoleHeader
-            draftConversation={props.selectedDraftConversation}
-            conversation={props.selectedConversation}
-            rightPanelOpen={props.rightPanelOpen}
-            onToggleLeftPanel={props.onToggleLeftPanel}
-            onToggleRightPanel={props.onToggleRightPanel}
-          />
-          <ChatArea
-            startup={props.startup}
-            workbench={props.workbench}
-            selectedDraftConversation={props.selectedDraftConversation}
-            selectedConversationId={props.selectedConversationId}
-            loadingConversationId={props.loadingConversationId}
-            conversationLoadError={props.conversationLoadError}
-            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-            onSubmitPrompt={props.onSubmitPrompt}
-          />
-        </section>
-      </ResizablePanel>
-      {props.rightPanelOpen ? (
-        <>
-          <ResizableHandle className="workspace-context-resize-handle" withHandle />
-          <ResizablePanel
-            className="workspace-context-panel"
-            defaultSize={32}
-            groupResizeBehavior="preserve-pixel-size"
-            id="workspaceContext"
-            minSize="320px"
-          >
-            <WorkspaceContextPanel />
-          </ResizablePanel>
-        </>
+    <div className={cn("workspace-resizable-body-shell", props.rightPanelFloating && "has-floating-context")}>
+      <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
+        <ResizablePanel
+          className="workspace-main-panel"
+          defaultSize={props.rightPanelOpen && !props.rightPanelFloating ? 68 : 100}
+          id="workspaceMain"
+          minSize="800px"
+        >
+          <section className="workspace-main-shell">
+            <ConsoleHeader
+              draftConversation={props.selectedDraftConversation}
+              conversation={props.selectedConversation}
+              rightPanelOpen={props.rightPanelOpen}
+              onToggleLeftPanel={props.onToggleLeftPanel}
+              onToggleRightPanel={props.onToggleRightPanel}
+            />
+            <ChatArea
+              startup={props.startup}
+              workbench={props.workbench}
+              selectedDraftConversation={props.selectedDraftConversation}
+              selectedConversationId={props.selectedConversationId}
+              loadingConversationId={props.loadingConversationId}
+              conversationLoadError={props.conversationLoadError}
+              onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+              onSubmitPrompt={props.onSubmitPrompt}
+            />
+          </section>
+        </ResizablePanel>
+        {props.rightPanelOpen && !props.rightPanelFloating ? (
+          <>
+            <ResizableHandle className="workspace-context-resize-handle" withHandle />
+            <ResizablePanel
+              className="workspace-context-panel"
+              defaultSize={32}
+              groupResizeBehavior="preserve-pixel-size"
+              id="workspaceContext"
+              minSize="320px"
+            >
+              <WorkspaceContextPanel onClose={props.onToggleRightPanel} />
+            </ResizablePanel>
+          </>
+        ) : null}
+      </ResizablePanelGroup>
+      {props.rightPanelOpen && props.rightPanelFloating ? (
+        <div className="workspace-context-floating-panel">
+          <WorkspaceContextPanel floating onClose={props.onToggleRightPanel} />
+        </div>
       ) : null}
-    </ResizablePanelGroup>
+    </div>
   );
 }
 
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
 // WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
-function WorkspaceContextPanel() {
+function WorkspaceContextPanel(props: {
+  // Whether the panel is rendered as a floating overlay.
+  // 面板是否以浮动覆盖层方式渲染。
+  floating?: boolean;
+  // Closes the right context panel.
+  // 关闭右侧上下文面板。
+  onClose?: () => void;
+}) {
   // t translates the right context panel shell labels.
   // t 翻译右侧上下文面板外壳标签。
   const { t } = useI18n();
 
   return (
-    <aside className="context-panel-shell">
+    <aside className={cn("context-panel-shell", props.floating && "floating")}>
       <Tabs className="context-tabs" defaultValue="review">
         <div className="context-panel-header">
           <TabsList className="context-tabs-list">
             <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
             <TabsTrigger value="memory">{t("contextPanel.memory")}</TabsTrigger>
           </TabsList>
+          {props.floating && props.onClose ? (
+            <Button
+              aria-label={t("contextPanel.close")}
+              className="context-panel-close-button"
+              onClick={props.onClose}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            >
+              <PanelRightClose size={16} />
+            </Button>
+          ) : null}
         </div>
         <TabsContent className="context-tab-content" value="review">
           <div className="context-empty-state">
@@ -3165,25 +3245,27 @@ function WorkspaceContextPanel() {
 function ProjectSidebar(props: {
   projects: ProjectSummary[];
   conversations: ConversationSummary[];
+  expandedProjectIds?: string[];
   pinnedConversationIds: Set<string>;
   selectedConversationId: string | null;
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
+  onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
 }) {
   // t translates stable sidebar labels while project names remain user data.
   // t 翻译稳定侧栏标签，项目名称仍保留为用户数据。
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   // sidebarState selects the expanded tree interaction or the collapsed project pop menu.
   // sidebarState 选择展开树交互或折叠项目弹出菜单交互。
   const { state: sidebarState } = useSidebar();
   // openProjectIds stores the project folders currently expanded in the tree.
   // openProjectIds 保存当前在树中展开的项目文件夹。
   const [openProjectIds, setOpenProjectIds] = React.useState<Set<string>>(
-    () => new Set(props.projects.map((project) => project.id)),
+    () => initialExpandedProjectIdSet(props.projects, props.expandedProjectIds),
   );
   // activeProjectDragId records when project sorting is active so hover-only UI can pause.
   // activeProjectDragId 记录项目排序激活状态，以便暂停仅悬停显示的界面。
@@ -3212,12 +3294,27 @@ function ProjectSidebar(props: {
   const pinnedConversations = React.useMemo(() => {
     return props.conversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
   }, [props.conversations, props.pinnedConversationIds]);
+  // projectsById resolves pinned conversation project icons without changing conversation data.
+  // projectsById 在不改变会话数据的情况下解析置顶会话所属项目图标。
+  const projectsById = React.useMemo(() => {
+    return new Map(props.projects.map((project) => [project.id, project]));
+  }, [props.projects]);
   // pinnedProjects mirrors the iced task tree section split.
   // pinnedProjects 对齐 iced 任务树中的置顶分区拆分。
   const pinnedProjects = React.useMemo(() => props.projects.filter((project) => project.pinned), [props.projects]);
   // regularProjects keeps non-pinned projects in their service-provided order.
   // regularProjects 保留普通项目在服务端快照中的原始顺序。
   const regularProjects = React.useMemo(() => props.projects.filter((project) => !project.pinned), [props.projects]);
+  // nowMs refreshes relative time labels without touching hover or confirmation state.
+  // nowMs 刷新相对时间标签且不触碰悬停或确认状态。
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 60_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+  React.useEffect(() => {
+    setOpenProjectIds(initialExpandedProjectIdSet(props.projects, props.expandedProjectIds));
+  }, [props.expandedProjectIds, props.projects]);
   // handleProjectDragEnd persists one dnd-kit same-section reorder result.
   // handleProjectDragEnd 持久化一次 dnd-kit 同分区项目排序结果。
   const handleProjectDragEnd = React.useCallback((sectionProjects: ProjectSummary[], event: DragEndEvent) => {
@@ -3243,14 +3340,15 @@ function ProjectSidebar(props: {
       } else {
         next.add(projectId);
       }
+      props.onExpandedProjectIdsChange(expandedProjectIdsInProjectOrder(props.projects, next));
       return next;
     });
-  }, []);
+  }, [props]);
   // renderProjectGroupLabel renders the pinned/project heading with optional actions.
   // renderProjectGroupLabel 渲染置顶/项目标题，并按需显示操作入口。
   const renderProjectGroupLabel = (label: string, icon: React.ReactNode, action?: React.ReactNode) => (
     <SidebarGroupLabel className="project-group-label">
-      <span className="project-group-label-main">{icon}<span>{label}</span></span>
+      <span className="project-group-label-main">{icon}<span className="project-group-label-text">{label}</span></span>
       {action}
     </SidebarGroupLabel>
   );
@@ -3267,6 +3365,7 @@ function ProjectSidebar(props: {
         isOpen={openProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
         key={project.id}
+        locale={locale}
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onProjectMenuAction={props.onProjectMenuAction}
@@ -3297,29 +3396,18 @@ function ProjectSidebar(props: {
   // renderConversationRow renders a sidebar conversation row outside or inside one project folder.
   // renderConversationRow 渲染项目内外复用的侧栏会话行。
   const renderConversationRow = (conversation: ConversationSummary, compactPinned = false) => (
-    <SidebarMenuItem key={conversation.id}>
-      <ConversationContextMenu
-        conversation={conversation}
-        isPinned={props.pinnedConversationIds.has(conversation.id)}
-        onAction={props.onConversationMenuAction}
-      >
-        <SidebarMenuButton
-          active={props.selectedConversationId === conversation.id}
-          className={cn("conversation-tree-button", compactPinned && "pinned-conversation-button")}
-          onClick={() => props.onSelectConversation(conversation.id)}
-          tooltip={`${conversation.title}\n${conversation.status}`}
-        >
-          <span className="vcn-sidebar-label conversation-tree-label">
-            <strong>{conversation.title}</strong>
-          </span>
-          <ConversationRowStatus
-            conversation={conversation}
-            isSelected={props.selectedConversationId === conversation.id}
-          />
-          {props.pinnedConversationIds.has(conversation.id) ? <Pin size={13} /> : null}
-        </SidebarMenuButton>
-      </ConversationContextMenu>
-    </SidebarMenuItem>
+    <ConversationTreeRow
+      compactPinned={compactPinned}
+      conversation={conversation}
+      isPinned={props.pinnedConversationIds.has(conversation.id)}
+      isSelected={props.selectedConversationId === conversation.id}
+      key={conversation.id}
+      locale={locale}
+      nowMs={nowMs}
+      onAction={props.onConversationMenuAction}
+      onSelectConversation={props.onSelectConversation}
+      project={conversation.projectId ? projectsById.get(conversation.projectId) : undefined}
+    />
   );
 
   return (
@@ -3335,18 +3423,13 @@ function ProjectSidebar(props: {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {pinnedConversations.length > 0 ? (
-          <SidebarGroup className="project-section pinned-conversation-section">
-            {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
-            <SidebarMenu className="pinned-conversation-list">
-              {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
-            </SidebarMenu>
-          </SidebarGroup>
-        ) : null}
-        {pinnedProjects.length > 0 ? (
+        {pinnedConversations.length > 0 || pinnedProjects.length > 0 ? (
           <SidebarGroup className="project-section pinned-project-section">
             {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
-            <SidebarMenu>{renderSortableProjectSection(pinnedProjects)}</SidebarMenu>
+            <SidebarMenu className="pinned-tree-list">
+              {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
+              {pinnedProjects.length > 0 ? renderSortableProjectSection(pinnedProjects) : null}
+            </SidebarMenu>
           </SidebarGroup>
         ) : null}
         <SidebarGroup>
@@ -3383,15 +3466,133 @@ function ProjectSidebar(props: {
   );
 }
 
-// ConversationRowStatus renders the right-side time, unread dot, or running spinner.
-// ConversationRowStatus 渲染会话行右侧的时间、未读点或运行中指示器。
+// initialExpandedProjectIdSet restores project expansion, defaulting missing state to fully expanded.
+// initialExpandedProjectIdSet 恢复项目展开状态，并在缺少状态时默认全部展开。
+function initialExpandedProjectIdSet(
+  projects: ProjectSummary[],
+  expandedProjectIds: string[] | undefined,
+): Set<string> {
+  if (!expandedProjectIds) {
+    return new Set(projects.map((project) => project.id));
+  }
+  const projectIds = new Set(projects.map((project) => project.id));
+  return new Set(expandedProjectIds.filter((projectId) => projectIds.has(projectId)));
+}
+
+// expandedProjectIdsInProjectOrder serializes expanded project ids in the visible project order.
+// expandedProjectIdsInProjectOrder 按可见项目顺序序列化已展开项目标识。
+function expandedProjectIdsInProjectOrder(
+  projects: ProjectSummary[],
+  openProjectIds: Set<string>,
+): string[] {
+  return projects
+    .filter((project) => openProjectIds.has(project.id))
+    .map((project) => project.id);
+}
+
+// ConversationTreeRow renders one interactive conversation row with inline quick actions.
+// ConversationTreeRow 渲染带行内快捷操作的单个交互式会话行。
+function ConversationTreeRow(props: {
+  // Conversation summary shown by the row.
+  // 当前行展示的会话摘要。
+  conversation: ConversationSummary;
+  // Whether the row belongs to the pinned section.
+  // 当前行是否属于置顶分区。
+  compactPinned: boolean;
+  // Whether the conversation is pinned.
+  // 当前会话是否已置顶。
+  isPinned: boolean;
+  // Whether the conversation is currently selected.
+  // 当前会话是否被选中。
+  isSelected: boolean;
+  // Active locale used for compact time labels.
+  // 用于紧凑时间标签的当前语言。
+  locale: LocaleCode;
+  // Current timestamp used for relative time rendering.
+  // 用于渲染相对时间的当前时间戳。
+  nowMs: number;
+  // Handles row-level menu and quick actions.
+  // 处理行级菜单和快捷操作。
+  onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  // Selects this conversation.
+  // 选择当前会话。
+  onSelectConversation: (conversationId: string) => void;
+  // Optional owning project used by pinned conversation rows.
+  // 置顶会话行使用的可选所属项目。
+  project?: ProjectSummary;
+}) {
+  // archiveConfirming tracks the inline archive confirmation state.
+  // archiveConfirming 跟踪行内归档确认状态。
+  const [archiveConfirming, setArchiveConfirming] = React.useState(false);
+  const resetArchiveConfirming = React.useCallback(() => setArchiveConfirming(false), []);
+  return (
+    <SidebarMenuItem key={props.conversation.id} onMouseLeave={resetArchiveConfirming}>
+      <ConversationContextMenu
+        conversation={props.conversation}
+        isPinned={props.isPinned}
+        onAction={props.onAction}
+      >
+        <SidebarMenuButton
+          active={props.isSelected}
+          className={cn(
+            "conversation-tree-button",
+            props.compactPinned && "pinned-conversation-button",
+            props.compactPinned && "with-pinned-icon",
+          )}
+          onClick={() => props.onSelectConversation(props.conversation.id)}
+          tooltip={`${props.conversation.title}\n${props.conversation.status}`}
+        >
+          {props.compactPinned ? (
+            <span className="conversation-tree-project-icon">
+              <MessageSquareText size={14} />
+            </span>
+          ) : null}
+          <span className="vcn-sidebar-label conversation-tree-label">
+            <strong>{props.conversation.title}</strong>
+          </span>
+          <ConversationRowStatus
+            archiveConfirming={archiveConfirming}
+            conversation={props.conversation}
+            isPinned={props.isPinned}
+            isSelected={props.isSelected}
+            locale={props.locale}
+            nowMs={props.nowMs}
+            onAction={props.onAction}
+            onRequestArchiveConfirm={() => setArchiveConfirming(true)}
+          />
+        </SidebarMenuButton>
+      </ConversationContextMenu>
+    </SidebarMenuItem>
+  );
+}
+
+// ConversationRowStatus renders time, unread, running state, and hover quick actions.
+// ConversationRowStatus 渲染时间、未读、运行状态与悬停快捷操作。
 function ConversationRowStatus(props: {
+  // Whether inline archive confirmation is active.
+  // 行内归档确认是否激活。
+  archiveConfirming: boolean;
   // Conversation summary used to decide the row status indicator.
   // 用于决定行状态指示器的会话摘要。
   conversation: ConversationSummary;
+  // Whether the conversation is pinned.
+  // 当前会话是否置顶。
+  isPinned: boolean;
   // Whether this conversation is currently selected.
   // 当前会话是否正在被选中。
   isSelected: boolean;
+  // Active locale used for compact time labels.
+  // 用于紧凑时间标签的当前语言。
+  locale: LocaleCode;
+  // Current timestamp used for relative time rendering.
+  // 用于渲染相对时间的当前时间戳。
+  nowMs: number;
+  // Handles row-level quick actions.
+  // 处理行级快捷操作。
+  onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+  // Enters inline archive confirmation mode.
+  // 进入行内归档确认模式。
+  onRequestArchiveConfirm: () => void;
 }) {
   const isRunning = props.conversation.status.toLowerCase() === "running";
   if (isRunning) {
@@ -3401,14 +3602,155 @@ function ConversationRowStatus(props: {
       </span>
     );
   }
-  if (props.conversation.unread && !props.isSelected) {
-    return <span className="conversation-tree-unread-dot" aria-label="未读" />;
+  if (props.archiveConfirming) {
+    return (
+      <span
+        className="conversation-tree-trailing confirming"
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        <span
+          aria-label="确认归档对话"
+          className="conversation-tree-confirm-action"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onAction("archive", props.conversation);
+          }}
+          role="button"
+        >
+          确认
+        </span>
+      </span>
+    );
   }
   return (
-    <span className="conversation-tree-status">
-      {props.conversation.lastUpdatedLabel || props.conversation.status}
+    <span className="conversation-tree-trailing">
+      <span className="conversation-tree-status">
+        {props.conversation.unread && !props.isSelected ? (
+          <span className="conversation-tree-unread-dot" aria-label="未读" />
+        ) : (
+          formatConversationRelativeTime(props.conversation, props.nowMs, props.locale)
+        )}
+      </span>
+      <span className="conversation-tree-quick-actions" aria-hidden="false">
+        <span
+          aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
+          className="conversation-tree-quick-action"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onAction("pin", props.conversation);
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          role="button"
+        >
+          {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </span>
+        <span
+          aria-label="归档对话"
+          className="conversation-tree-quick-action"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onRequestArchiveConfirm();
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          role="button"
+        >
+          <Archive size={13} />
+        </span>
+      </span>
     </span>
   );
+}
+
+// formatConversationRelativeTime returns compact dynamic time text for sidebar rows.
+// formatConversationRelativeTime 为侧栏行返回紧凑的动态时间文本。
+function formatConversationRelativeTime(
+  conversation: ConversationSummary,
+  nowMs: number,
+  locale: LocaleCode,
+): string {
+  const updatedAtMs = Number.parseInt(conversation.lastUpdatedAt ?? "", 10);
+  if (Number.isFinite(updatedAtMs) && updatedAtMs > 0) {
+    return formatCompactRelativeTime(nowMs - updatedAtMs, locale);
+  }
+  return compactPersistedRelativeLabel(conversation.lastUpdatedLabel || conversation.status, locale);
+}
+
+// formatCompactRelativeTime converts one elapsed duration into the compact tree label.
+// formatCompactRelativeTime 将经过时长转换为紧凑树标签。
+function formatCompactRelativeTime(elapsedMs: number, locale: LocaleCode): string {
+  const safeElapsedMs = Math.max(0, elapsedMs);
+  const minuteMs = 60_000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  const weekMs = 7 * dayMs;
+  const monthMs = 30 * dayMs;
+  const yearMs = 365 * dayMs;
+  const chinese = locale === "zh-CN";
+  if (safeElapsedMs < minuteMs) {
+    return chinese ? "刚刚" : "now";
+  }
+  if (safeElapsedMs < hourMs) {
+    const value = Math.max(1, Math.floor(safeElapsedMs / minuteMs));
+    return chinese ? `${value}分` : `${value}m`;
+  }
+  if (safeElapsedMs < dayMs) {
+    const value = Math.max(1, Math.floor(safeElapsedMs / hourMs));
+    return chinese ? `${value}时` : `${value}h`;
+  }
+  if (safeElapsedMs < weekMs) {
+    const value = Math.max(1, Math.floor(safeElapsedMs / dayMs));
+    return chinese ? `${value}天` : `${value}d`;
+  }
+  if (safeElapsedMs < monthMs) {
+    const value = Math.max(1, Math.floor(safeElapsedMs / weekMs));
+    return chinese ? `${value}周` : `${value}w`;
+  }
+  if (safeElapsedMs < yearMs) {
+    const value = Math.max(1, Math.floor(safeElapsedMs / monthMs));
+    return `${value}M`;
+  }
+  const value = Math.max(1, Math.floor(safeElapsedMs / yearMs));
+  return `${value}Y`;
+}
+
+// compactPersistedRelativeLabel compresses older static labels when no raw timestamp exists.
+// compactPersistedRelativeLabel 在没有原始时间戳时压缩旧的静态标签。
+function compactPersistedRelativeLabel(label: string, locale: LocaleCode): string {
+  const trimmed = label.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^(刚刚|now)$/i.test(trimmed)) {
+    return locale === "zh-CN" ? "刚刚" : "now";
+  }
+  const match = trimmed.match(/(\d+)\s*(分|分钟|minute|minutes|min|m|时|小时|hour|hours|h|天|日|day|days|d|周|星期|week|weeks|w|月|month|months|M|年|year|years|Y)/i);
+  if (!match) {
+    return trimmed;
+  }
+  const value = Number.parseInt(match[1], 10);
+  const rawUnit = match[2];
+  const unit = rawUnit.toLowerCase();
+  const chinese = locale === "zh-CN";
+  if (rawUnit === "M" || unit === "月" || unit === "month" || unit === "months") {
+    return `${value}M`;
+  }
+  if (rawUnit === "Y" || unit === "年" || unit === "year" || unit === "years" || unit === "y") {
+    return `${value}Y`;
+  }
+  if (unit === "分" || unit === "分钟" || unit === "minute" || unit === "minutes" || unit === "min" || unit === "m") {
+    return chinese ? `${value}分` : `${value}m`;
+  }
+  if (unit === "时" || unit === "小时" || unit === "hour" || unit === "hours" || unit === "h") {
+    return chinese ? `${value}时` : `${value}h`;
+  }
+  if (unit === "天" || unit === "日" || unit === "day" || unit === "days" || unit === "d") {
+    return chinese ? `${value}天` : `${value}d`;
+  }
+  if (unit === "周" || unit === "星期" || unit === "week" || unit === "weeks" || unit === "w") {
+    return chinese ? `${value}周` : `${value}w`;
+  }
+  return trimmed;
 }
 
 // SortableProjectRow renders one dnd-kit sortable project folder and its conversations.
@@ -3432,6 +3774,9 @@ function SortableProjectRow(props: {
   // Currently selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId: string | null;
+  // Active locale used for empty labels.
+  // 用于空状态标签的当前语言。
+  locale: LocaleCode;
   // Checks whether a conversation is pinned.
   // 检查某个会话是否置顶。
   isPinnedConversation: (conversationId: string) => boolean;
@@ -3523,7 +3868,13 @@ function SortableProjectRow(props: {
       )}
       {props.isOpen && props.sidebarState !== "collapsed" ? (
         <SidebarMenu className="project-conversation-list">
-          {props.conversations.map((conversation) => props.renderConversationRow(conversation))}
+          {props.conversations.length > 0 ? (
+            props.conversations.map((conversation) => props.renderConversationRow(conversation))
+          ) : (
+            <SidebarMenuItem>
+              <div className="conversation-empty-row">{props.locale === "zh-CN" ? "暂无对话" : "No conversations"}</div>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       ) : null}
     </SidebarMenuItem>
@@ -3744,7 +4095,7 @@ function RenameDialog(props: {
 
   const title = props.target?.kind === "project" ? "重命名项目" : "重命名对话";
   const description = props.target?.kind === "project"
-    ? "输入新的项目显示名称。项目路径不会改变。"
+    ? "输入新的项目显示名称。项目路径不会改变；留空确认会还原为项目文件夹名。"
     : "输入新的对话名称。";
 
   return (
@@ -4134,7 +4485,27 @@ function ConversationContextMenu(props: {
 // projectFolderName extracts the folder name from a platform path.
 // projectFolderName 从平台路径中提取文件夹名称。
 function projectFolderName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? "";
+  return path.split(/[\\/]/).map((segment) => segment.trim()).filter(Boolean).pop() ?? "";
+}
+
+// restoreProjectDisplayName resolves the default project name used when rename input is empty.
+// restoreProjectDisplayName 解析重命名输入为空时使用的默认项目名称。
+function restoreProjectDisplayName(project: ProjectSummary | null, target: RenameTarget): string {
+  const folderName = project ? projectFolderName(project.path) : "";
+  if (folderName) {
+    return folderName;
+  }
+  const currentName = target.name.trim();
+  if (currentName && !isPathSeparatorOnlyName(currentName)) {
+    return currentName;
+  }
+  return target.id;
+}
+
+// isPathSeparatorOnlyName detects invalid slash-only names from older reset attempts.
+// isPathSeparatorOnlyName 检测旧还原尝试产生的仅路径分隔符名称。
+function isPathSeparatorOnlyName(name: string): boolean {
+  return name.length > 0 && /^[\\/]+$/.test(name);
 }
 
 // ChatArea renders the conversation workspace and composer.

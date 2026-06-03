@@ -48,11 +48,11 @@ pub use self::event_store::{
 pub use history_search::search_workspace_history;
 pub use persistence::{
     archive_project_with_sessions, archive_single_session, maintain_legacy_session_storage,
-    permanently_delete_archived_project, permanently_delete_archived_session, persist_new_project,
-    persist_project_order_update, persist_project_pinned_and_order_update,
-    persist_single_session_runtime_state_update, persist_single_session_update,
-    persist_workspace_snapshot, rename_project, restore_project_with_sessions,
-    restore_single_session, toggle_project_pinned,
+    permanently_delete_archived_project, permanently_delete_archived_session,
+    persist_collapsed_task_project_ids, persist_new_project, persist_project_order_update,
+    persist_project_pinned_and_order_update, persist_single_session_runtime_state_update,
+    persist_single_session_update, persist_workspace_snapshot, rename_project,
+    restore_project_with_sessions, restore_single_session, toggle_project_pinned,
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 
@@ -161,6 +161,9 @@ const SESSION_MESSAGE_CHUNK_PREVIEW_CHARS: usize = 2048;
 /// Maximum characters returned for one lightweight history-search preview.
 /// 单条轻量历史搜索预览允许返回的最大字符数。
 const SESSION_HISTORY_SEARCH_PREVIEW_CHARS: usize = 240;
+/// App metadata key used to persist collapsed task-project identifiers.
+/// 用于持久化已折叠任务项目标识的应用元数据键。
+const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";
 
 /// Stable in-memory snapshot hydrated from the controller-backed workspace database.
 /// 从控制器承载的工作台数据库中还原出的稳定内存快照。
@@ -397,6 +400,15 @@ struct StoredProjectRow {
     /// SQLite numeric archived flag.
     /// SQLite 数值型归档标记。
     archived: i64,
+}
+
+/// Raw application metadata row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的原始应用元数据行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredAppMetadataRow {
+    /// Persisted metadata value.
+    /// 持久化元数据值。
+    value: String,
 }
 
 /// Raw session row decoded from the controller SQLite query payload.
@@ -843,7 +855,8 @@ pub async fn load_workspace_snapshot(
             0,
             relative_time_label_from_unix_millis_text(&row.updated_at),
         )
-        .with_title_source(SessionTitleSource::from_persisted_key(&row.title_source));
+        .with_title_source(SessionTitleSource::from_persisted_key(&row.title_source))
+        .with_updated_at(row.updated_at.clone());
 
         if row.archived != 0 {
             if let Some(project) = archived_task_projects
@@ -902,8 +915,12 @@ pub async fn load_workspace_snapshot(
             .unwrap_or(i64::MIN)
     });
 
+    let collapsed_task_projects = query_collapsed_task_project_ids(&controller)
+        .await?
+        .unwrap_or_default();
     let expanded_task_projects = task_projects
         .iter()
+        .filter(|project| !collapsed_task_projects.contains(&project.id))
         .map(|project| project.id.clone())
         .collect::<BTreeSet<_>>();
     let selected_session = visible_sessions
@@ -1009,6 +1026,7 @@ DELETE FROM session_message_chunks;
 DELETE FROM session_messages;
 DELETE FROM sessions;
 DELETE FROM projects;
+DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
 "#,
             Vec::<ControllerSqliteValue>::new(),
         )
@@ -1161,6 +1179,33 @@ ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
         .map_err(|error| format!("查询工作台项目列表失败：{error}"))?;
 
     decode_query_rows::<StoredProjectRow>(&result.json_data)
+}
+
+/// Queries the persisted collapsed project identifiers, if a workspace UI state row exists.
+/// 查询已持久化的折叠项目标识集合；若工作台 UI 状态行不存在则返回空。
+async fn query_collapsed_task_project_ids(
+    controller: &ControllerRuntimeHandle,
+) -> Result<Option<BTreeSet<String>>, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "SELECT value FROM app_metadata WHERE key = ?1;",
+            vec![ControllerSqliteValue::String(
+                COLLAPSED_TASK_PROJECTS_METADATA_KEY.to_string(),
+            )],
+        )
+        .await
+        .map_err(|error| format!("查询工作台项目展开状态失败：{error}"))?;
+
+    let rows = decode_query_rows::<StoredAppMetadataRow>(&result.json_data)?;
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let parsed = serde_json::from_str::<Vec<String>>(&row.value)
+        .map_err(|error| format!("解析工作台项目展开状态失败：{error}"))?;
+    Ok(Some(parsed.into_iter().collect()))
 }
 
 /// Queries active project identifiers used for soft-archive reconciliation.

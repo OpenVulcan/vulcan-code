@@ -99,6 +99,9 @@ export interface ConversationSummary {
   // Relative last-updated label.
   // 相对最后更新时间标签。
   lastUpdatedLabel?: string;
+  // Raw last-updated timestamp as Unix milliseconds text.
+  // 以 Unix 毫秒文本表示的原始最近更新时间。
+  lastUpdatedAt?: string;
   // Whether the conversation has unread activity.
   // 会话是否存在未读活动。
   unread?: boolean;
@@ -304,6 +307,9 @@ export interface WorkbenchSnapshot {
   // Project summaries.
   // 项目摘要。
   projects: ProjectSummary[];
+  // Expanded project identifiers shown in the workspace sidebar.
+  // 工作台侧栏中当前展开的项目标识集合。
+  expandedProjectIds?: string[];
   // Conversation summaries.
   // 会话摘要。
   conversations: ConversationSummary[];

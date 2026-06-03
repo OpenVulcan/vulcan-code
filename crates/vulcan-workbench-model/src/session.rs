@@ -70,6 +70,9 @@ pub struct SessionSummary {
     /// Relative last-updated label shown in compact tree views.
     /// 展示在紧凑树视图中的相对更新时间标签。
     pub last_updated_label: String,
+    /// Raw last-updated timestamp as Unix milliseconds text.
+    /// 以 Unix 毫秒文本保存的原始最近更新时间。
+    pub updated_at: String,
 }
 
 impl SessionSummary {
@@ -95,6 +98,7 @@ impl SessionSummary {
             changed_files,
             queued_steps,
             last_updated_label: last_updated_label.into(),
+            updated_at: String::new(),
         }
     }
 
@@ -102,6 +106,13 @@ impl SessionSummary {
     /// 覆盖附着在会话摘要上的标题来源。
     pub fn with_title_source(mut self, title_source: SessionTitleSource) -> Self {
         self.title_source = title_source;
+        self
+    }
+
+    /// Overrides the raw last-updated timestamp used by dynamic clients.
+    /// 覆盖动态客户端使用的原始最近更新时间。
+    pub fn with_updated_at(mut self, updated_at: impl Into<String>) -> Self {
+        self.updated_at = updated_at.into();
         self
     }
 

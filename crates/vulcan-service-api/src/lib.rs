@@ -100,6 +100,10 @@ pub struct WorkbenchSnapshot {
     /// Project summaries shown in the sidebar.
     /// 侧栏展示的项目摘要。
     pub projects: Vec<ProjectSummary>,
+    /// Expanded project identifiers shown in the sidebar tree.
+    /// 侧栏树中当前展开的项目标识集合。
+    #[serde(default)]
+    pub expanded_project_ids: Vec<String>,
     /// Conversation summaries shown in the sidebar.
     /// 侧栏展示的会话摘要。
     pub conversations: Vec<ConversationSummary>,
@@ -200,6 +204,10 @@ pub struct ConversationSummary {
     /// 侧栏中展示的相对最后更新时间。
     #[serde(default)]
     pub last_updated_label: String,
+    /// Raw last-updated timestamp as Unix milliseconds text.
+    /// 以 Unix 毫秒文本表示的原始最近更新时间。
+    #[serde(default)]
+    pub last_updated_at: String,
     /// Whether the conversation has unread completed activity.
     /// 会话是否存在未读的已完成活动。
     #[serde(default)]
