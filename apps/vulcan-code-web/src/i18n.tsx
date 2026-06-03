@@ -68,6 +68,8 @@ export type TranslationKey =
   | "composer.aria.reasoning"
   | "composer.aria.send"
   | "composer.aria.stop"
+  | "composer.modelPicker.filter"
+  | "composer.modelPicker.noMatches"
   | "settings.general"
   | "settings.projects"
   | "settings.providers"
@@ -144,6 +146,8 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "composer.aria.reasoning": "选择思考级别",
     "composer.aria.send": "发送",
     "composer.aria.stop": "停止",
+    "composer.modelPicker.filter": "输入模型名称、ID 或 Provider 过滤",
+    "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
     "settings.general": "通用设置",
     "settings.projects": "项目",
     "settings.providers": "模型",
@@ -217,6 +221,8 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "composer.aria.reasoning": "Select reasoning level",
     "composer.aria.send": "Send",
     "composer.aria.stop": "Stop",
+    "composer.modelPicker.filter": "Filter by model name, id, or provider",
+    "composer.modelPicker.noMatches": "No models match the current filter.",
     "settings.general": "General",
     "settings.projects": "Projects",
     "settings.providers": "Models",

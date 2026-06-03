@@ -40,7 +40,7 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
-    provider_config::{ProviderConfigurationFile, ReasoningEffortLevel},
+    provider_config::{self, ProviderConfigurationFile, ReasoningEffortLevel},
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, append_user_prompt_record,
@@ -52,9 +52,10 @@ use vulcan_agent_runtime::{
 };
 use vulcan_service_api::{
     CommandSessionSummary, ConversationMessage, ConversationSummary, FeatureAreaSummary,
-    LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary, ProviderSummary,
-    RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary, StartupSnapshot,
-    StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
+    LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary,
+    ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot, ServiceEvent,
+    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
@@ -169,6 +170,7 @@ pub fn run() {
             service_workbench_snapshot,
             service_session_messages,
             service_submit_conversation_prompt,
+            service_select_workbench_model,
             service_open_project_directory,
             service_open_project_directory_path,
             service_toggle_project_pinned,
@@ -355,6 +357,7 @@ async fn service_submit_conversation_prompt(
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
+        &agent_runtime.provider_configuration,
         workspace_snapshot.clone(),
         &logs,
     )?;
@@ -364,6 +367,57 @@ async fn service_submit_conversation_prompt(
         controller_runtime,
         agent_runtime,
         request,
+    );
+    Ok(workbench)
+}
+
+/// Selects and persists the active workbench provider/model pair.
+/// 选择并持久化当前工作台使用的供应商与模型组合。
+#[tauri::command]
+async fn service_select_workbench_model(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    provider_id: String,
+    model_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = provider_id.trim().to_string();
+    let model_id = model_id.trim().to_string();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return Err(String::from("模型选择缺少 Provider 或模型标识。"));
+    }
+
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let has_model = provider_config::effective_model_choices(
+            &provider_id,
+            &agent_runtime.provider_configuration,
+        )
+        .into_iter()
+        .any(|choice| choice.id == model_id);
+        if !has_model {
+            return Err(format!(
+                "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
+            ));
+        }
+
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.model = Some(format!("{provider_id}/{model_id}"));
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存模型选择失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        guard.workbench.providers = providers(&next_configuration);
+        guard.workbench.clone()
+    };
+
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
     Ok(workbench)
 }
@@ -685,6 +739,7 @@ async fn service_select_conversation(
         token_budget_runtime,
         mcp_catalog,
         logs,
+        provider_configuration,
         mut workspace_snapshot,
     ) = {
         let guard = state
@@ -710,12 +765,18 @@ async fn service_select_conversation(
         let workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
         (
             controller_runtime,
             luaskills_catalog,
             token_budget_runtime,
             mcp_catalog,
             logs,
+            provider_configuration,
             workspace_snapshot,
         )
     };
@@ -735,6 +796,7 @@ async fn service_select_conversation(
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
+        &provider_configuration,
         &workspace_snapshot,
         selected_messages.as_slice(),
         &logs,
@@ -1446,6 +1508,7 @@ fn store_and_emit_workbench_snapshot(
     luaskills_catalog: &TauriLuaSkillsCatalog,
     token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
+    provider_configuration: &ProviderConfigurationFile,
     workspace_snapshot: WorkspaceSnapshot,
     logs: &[String],
 ) -> Result<WorkbenchSnapshot, String> {
@@ -1456,6 +1519,7 @@ fn store_and_emit_workbench_snapshot(
         luaskills_catalog,
         token_budget_runtime,
         mcp_catalog,
+        provider_configuration,
         &workspace_snapshot,
         selected_messages.as_slice(),
         logs,
@@ -2061,6 +2125,11 @@ where
         let mut workspace_snapshot = guard.workspace_snapshot.clone().ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
         mutate(&mut workspace_snapshot);
         let selected_messages =
             selected_session_messages_from_workspace(&workspace_snapshot).unwrap_or_default();
@@ -2069,6 +2138,7 @@ where
             &luaskills_catalog,
             &token_budget_runtime,
             &mcp_catalog,
+            &provider_configuration,
             &workspace_snapshot,
             selected_messages.as_slice(),
             &logs,
@@ -2121,6 +2191,7 @@ async fn refresh_workbench_snapshot(
         mcp_catalog,
         logs,
         previous_snapshot,
+        provider_configuration,
     ) = {
         let guard = state
             .lock()
@@ -2155,6 +2226,11 @@ async fn refresh_workbench_snapshot(
             });
         let logs = guard.startup.recent_logs.clone();
         let previous_snapshot = guard.workspace_snapshot.clone();
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
         (
             controller_runtime,
             luaskills_catalog,
@@ -2162,6 +2238,7 @@ async fn refresh_workbench_snapshot(
             mcp_catalog,
             logs,
             previous_snapshot,
+            provider_configuration,
         )
     };
 
@@ -2193,6 +2270,7 @@ async fn refresh_workbench_snapshot(
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
+        &provider_configuration,
         &refreshed_snapshot,
         selected_messages.as_slice(),
         &logs,
@@ -2674,6 +2752,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
+        &provider_configuration,
         &workspace_snapshot,
         hydration_snapshot
             .as_ref()
@@ -2858,6 +2937,7 @@ fn workbench_from_runtime(
     luaskills_catalog: &TauriLuaSkillsCatalog,
     token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
+    provider_configuration: &ProviderConfigurationFile,
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     selected_messages: &[SessionMessageEntry],
     logs: &[String],
@@ -2928,7 +3008,7 @@ fn workbench_from_runtime(
         feature_areas: feature_areas(),
         plugins: plugins_from_luaskills(luaskills_catalog),
         settings: settings(),
-        providers: providers(),
+        providers: providers(provider_configuration),
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
         logs: logs
@@ -3075,7 +3155,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         feature_areas: feature_areas(),
         plugins: Vec::new(),
         settings: settings(),
-        providers: providers(),
+        providers: providers(&ProviderConfigurationFile::default()),
         memories: Vec::new(),
         command_sessions: Vec::new(),
         logs: logs
@@ -3204,7 +3284,54 @@ fn setting_section(
 
 /// Creates provider summaries from the local catalog surface.
 /// 从本地目录面创建 Provider 摘要。
-fn providers() -> Vec<ProviderSummary> {
+fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<ProviderSummary> {
+    let active_model_reference = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)
+        .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()));
+    let mut configured_providers = provider_config::supported_provider_choices()
+        .into_iter()
+        .filter(|provider_choice| provider_configuration.provider.contains_key(&provider_choice.id))
+        .map(|provider_choice| {
+            let models = provider_config::effective_model_choices(
+                &provider_choice.id,
+                provider_configuration,
+            )
+            .into_iter()
+            .map(|model_choice| {
+                let active = active_model_reference
+                    .as_ref()
+                    .is_some_and(|(provider_id, model_id)| {
+                        provider_id == &provider_choice.id && model_id == &model_choice.id
+                    });
+                ProviderModelSummary {
+                    id: model_choice.id,
+                    name: model_choice.name,
+                    active,
+                }
+            })
+            .collect::<Vec<_>>();
+            let active = models.iter().any(|model| model.active);
+            ProviderSummary {
+                id: provider_choice.id,
+                name: provider_choice.name,
+                status: String::from("已配置"),
+                enabled_models: format!("{} 个已启用模型", models.len()),
+                active,
+                models,
+            }
+        })
+        .collect::<Vec<_>>();
+    configured_providers.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    if !configured_providers.is_empty() {
+        return configured_providers;
+    }
+
     let provider_root = vulcan_runtime_assets::resolve_provider_catalog_directory();
     vec![ProviderSummary {
         id: String::from("provider-catalog"),
@@ -3216,6 +3343,8 @@ fn providers() -> Vec<ProviderSummary> {
         }
         .to_string(),
         enabled_models: provider_root.display().to_string(),
+        active: false,
+        models: Vec::new(),
     }]
 }
 

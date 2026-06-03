@@ -219,6 +219,26 @@ export interface ProviderSummary {
   // Enabled model count text.
   // 已启用模型数量文本。
   enabledModels: string;
+  // Whether this provider owns the active workbench model.
+  // 该 Provider 是否拥有当前激活的工作台模型。
+  active?: boolean;
+  // Enabled models exposed to the model picker.
+  // 暴露给模型选择器的已启用模型。
+  models?: ProviderModelSummary[];
+}
+
+// ProviderModelSummary describes one enabled model under a provider.
+// ProviderModelSummary 描述 Provider 下的单个已启用模型。
+export interface ProviderModelSummary {
+  // Stable model identifier persisted with provider id.
+  // 与 Provider 标识一起持久化的稳定模型标识。
+  id: string;
+  // Model display name.
+  // 模型显示名称。
+  name: string;
+  // Whether this model is currently active.
+  // 该模型当前是否处于激活状态。
+  active?: boolean;
 }
 
 // MemorySummary describes one VMM memory area item.

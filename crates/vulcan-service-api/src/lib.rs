@@ -331,6 +331,31 @@ pub struct ProviderSummary {
     /// Enabled model count text.
     /// 已启用模型数量文本。
     pub enabled_models: String,
+    /// Whether this provider owns the currently active workbench model.
+    /// 该供应商是否拥有当前激活的工作台模型。
+    #[serde(default)]
+    pub active: bool,
+    /// Enabled model summaries exposed to the WebUI model picker.
+    /// 暴露给 WebUI 模型选择器的已启用模型摘要。
+    #[serde(default)]
+    pub models: Vec<ProviderModelSummary>,
+}
+
+/// Summarizes one enabled model under a provider.
+/// 汇总某个供应商下的单个已启用模型。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelSummary {
+    /// Stable model identifier persisted with the provider id.
+    /// 与供应商标识一起持久化的稳定模型标识。
+    pub id: String,
+    /// Human-readable model display name.
+    /// 人类可读的模型显示名称。
+    pub name: String,
+    /// Whether this model is the current workbench model.
+    /// 该模型是否为当前工作台模型。
+    #[serde(default)]
+    pub active: bool,
 }
 
 /// Summarizes one VMM memory bundle or node group.

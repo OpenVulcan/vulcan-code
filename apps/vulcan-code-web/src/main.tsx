@@ -26,6 +26,12 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import {
+  ModelPickerControl,
+  modelPickerChoiceKey,
+  modelPickerChoicesFromProviders,
+  type ModelPickerChoice,
+} from "@/components/composer/model-picker-control";
+import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -91,6 +97,7 @@ import type {
   FeatureAreaSummary,
   MainAreaId,
   ProjectSummary,
+  ProviderSummary,
   SettingsSubAreaId,
   StartupSnapshot,
   WorkbenchSnapshot,
@@ -111,7 +118,6 @@ import {
   Clock3,
   Code2,
   Copy,
-  Cpu,
   Database,
   FileCode2,
   FileJson2,
@@ -534,10 +540,25 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "remote", label: "远程访问", description: "未来浏览器、手机、远程客户端访问 Core Service 的设置", items: ["监听地址", "访问令牌", "远程开关", "审计日志"] },
   ],
   providers: [
-    { id: "openai", name: "OpenAI Compatible", status: "预览", enabledModels: "按本地配置" },
-    { id: "openrouter", name: "OpenRouter", status: "预览", enabledModels: "按本地配置" },
-    { id: "alibaba-cn", name: "Alibaba CN", status: "预览", enabledModels: "按本地配置" },
-    { id: "local", name: "本地模型", status: "待接入", enabledModels: "0" },
+    {
+      id: "deepseek",
+      name: "DeepSeek",
+      status: "预览",
+      enabledModels: "2 个已启用模型",
+      active: true,
+      models: [
+        { id: "deepseek-v4-pro", name: "DeepSeek V4 Pro", active: true },
+        { id: "deepseek-v4", name: "DeepSeek V4" },
+      ],
+    },
+    {
+      id: "alibaba-cn",
+      name: "Alibaba CN",
+      status: "预览",
+      enabledModels: "1 个已启用模型",
+      models: [{ id: "qwen3-coder", name: "Qwen3 Coder" }],
+    },
+    { id: "local", name: "本地模型", status: "待接入", enabledModels: "0", models: [] },
   ],
   memories: [
     { id: "user-profile", title: "用户画像", category: "Profile", state: "等待真实 VMM 节点接入" },
@@ -643,6 +664,19 @@ async function submitConversationPrompt(
     prompt,
     executionMode,
     reasoningEffort,
+  });
+}
+
+// selectWorkbenchModel persists the active provider/model pair through the desktop service.
+// selectWorkbenchModel 通过桌面服务持久化当前激活的 Provider/模型组合。
+async function selectWorkbenchModel(choice: ModelPickerChoice): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_select_workbench_model", {
+    providerId: choice.providerId,
+    modelId: choice.modelId,
   });
 }
 
@@ -1181,6 +1215,22 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, [selectedConversation, selectedDraftConversation, workbenchState.projects]);
 
+  // handleSelectWorkbenchModel persists one model picker choice through the shared service.
+  // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
+  const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerChoice): Promise<boolean> => {
+    try {
+      const snapshot = await selectWorkbenchModel(choice);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        toast.success(`当前模型已切换为 ${choice.modelName}（${choice.providerName}）。`);
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
   const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
@@ -1425,6 +1475,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
+            onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onSubmitPrompt={handleSubmitConversationPrompt}
           />
         ) : (
@@ -2803,6 +2854,7 @@ function ConsoleShell(props: {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
@@ -2829,6 +2881,7 @@ function ConsoleShellContent(props: {
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // sidebar controls the left project tree that can collapse automatically.
@@ -2938,6 +2991,7 @@ function ConsoleShellContent(props: {
           conversationLoadError={props.conversationLoadError}
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
+          onSelectWorkbenchModel={props.onSelectWorkbenchModel}
           onSubmitPrompt={props.onSubmitPrompt}
         />
       </SidebarInset>
@@ -3023,6 +3077,9 @@ function WorkspaceResizableBody(props: {
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
+  // Persists one workbench model selection through the backend runtime.
+  // 通过后端运行时持久化单个工作台模型选择。
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   // Sends one composer prompt through the backend runtime.
   // 通过后端运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -3045,6 +3102,7 @@ function WorkspaceResizableBody(props: {
             selectedConversationId={props.selectedConversationId}
             loadingConversationId={props.loadingConversationId}
             conversationLoadError={props.conversationLoadError}
+            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSubmitPrompt={props.onSubmitPrompt}
           />
         </section>
@@ -4088,6 +4146,7 @@ function ChatArea(props: {
   selectedConversationId: string | null;
   loadingConversationId: string | null;
   conversationLoadError: string | null;
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // workspaceRef stores the scrollable conversation timeline element.
@@ -4190,7 +4249,12 @@ function ChatArea(props: {
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
       ) : isEmptyConversation ? (
-        <EmptyConversationCenter projectName={emptyProjectName} onSubmitPrompt={props.onSubmitPrompt} />
+        <EmptyConversationCenter
+          projectName={emptyProjectName}
+          providers={props.workbench.providers}
+          onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+          onSubmitPrompt={props.onSubmitPrompt}
+        />
       ) : (
         <>
           <ConversationWorkspace
@@ -4202,7 +4266,9 @@ function ChatArea(props: {
           />
           <ComposerDock
             onScrollToBottom={() => scrollConversationToBottom()}
+            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSubmitPrompt={props.onSubmitPrompt}
+            providers={props.workbench.providers}
             showScrollToBottom={!isAtConversationBottom}
           />
         </>
@@ -4633,6 +4699,12 @@ function ComposerDock(props: {
   onScrollToBottom: () => void;
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
+  providers: ProviderSummary[];
+  // onSelectWorkbenchModel persists a selected workbench model.
+  // onSelectWorkbenchModel 持久化选中的工作台模型。
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // onSubmitPrompt sends one composer prompt through the workbench runtime.
+  // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
@@ -4654,22 +4726,24 @@ function ComposerDock(props: {
           <TooltipContent side="top">滚动到底部</TooltipContent>
         </Tooltip>
       ) : null}
-      <ComposerPanel onSubmitPrompt={props.onSubmitPrompt} />
+      <ComposerPanel
+        providers={props.providers}
+        onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onSubmitPrompt={props.onSubmitPrompt}
+      />
     </div>
   );
 }
 
-// MODEL_SELECT_OPTIONS mirrors the iced model trigger shape while service binding is pending.
-// MODEL_SELECT_OPTIONS 在服务绑定完成前按 iced 模型触发器结构提供预览选项。
-const MODEL_SELECT_OPTIONS: ComposerSelectOption[] = [
-  { value: "deepseek-v4-pro", label: "DeepSeek V4 Pro", subtitle: "DeepSeek" },
-  { value: "deepseek-v4", label: "DeepSeek V4", subtitle: "DeepSeek" },
-  { value: "qwen3-coder", label: "Qwen3 Coder", subtitle: "Alibaba" },
-];
-
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 function ComposerPanel(props: {
+  // Providers exposed by the shared service API for model picking.
+  // 共享 service API 暴露给模型选择器的 Provider 列表。
+  providers: ProviderSummary[];
+  // Persists one selected workbench model.
+  // 持久化单个选中的工作台模型。
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -4683,9 +4757,9 @@ function ComposerPanel(props: {
   // executionMode stores the local preview execution-mode selection.
   // executionMode 保存本地预览用的执行模式选择。
   const [executionMode, setExecutionMode] = React.useState("build");
-  // modelChoice stores the local preview model selection.
-  // modelChoice 保存本地预览用的模型选择。
-  const [modelChoice, setModelChoice] = React.useState("deepseek-v4-pro");
+  // modelChoice stores the selected provider/model key shown by the shared model picker.
+  // modelChoice 保存共享模型筛选器展示的 provider/model 选择键。
+  const [modelChoice, setModelChoice] = React.useState("");
   // aiCapabilityChoice stores the local preview AI capability selection.
   // aiCapabilityChoice 保存本地预览用的 AI 能力选择。
   const [aiCapabilityChoice, setAiCapabilityChoice] = React.useState("extended");
@@ -4695,6 +4769,30 @@ function ComposerPanel(props: {
   // isComposerRunning stores the local send/stop preview state.
   // isComposerRunning 保存输入区发送/停止的本地预览状态。
   const [isComposerRunning, setIsComposerRunning] = React.useState(false);
+  // availableModelChoices flattens provider data into selectable workbench models.
+  // availableModelChoices 将 Provider 数据扁平化为可选择的工作台模型。
+  const availableModelChoices = React.useMemo(
+    () => modelPickerChoicesFromProviders(props.providers),
+    [props.providers],
+  );
+  // activeModelChoiceKey follows the service-reported active model when available.
+  // activeModelChoiceKey 在可用时跟随 service 上报的激活模型。
+  const activeModelChoiceKey = React.useMemo(() => {
+    const activeChoice = availableModelChoices.find((choice) => choice.active) ?? availableModelChoices[0];
+    return modelPickerChoiceKey(activeChoice);
+  }, [availableModelChoices]);
+
+  React.useEffect(() => {
+    if (!activeModelChoiceKey) {
+      return;
+    }
+    const currentStillAvailable = availableModelChoices.some(
+      (choice) => modelPickerChoiceKey(choice) === modelChoice,
+    );
+    if (!modelChoice || !currentStillAvailable) {
+      setModelChoice(activeModelChoiceKey);
+    }
+  }, [activeModelChoiceKey, availableModelChoices, modelChoice]);
   // executionModeOptions mirrors iced ExecutionMode::ALL using current language labels.
   // executionModeOptions 使用当前语言标签对齐 iced 的 ExecutionMode::ALL。
   const executionModeOptions = React.useMemo<ComposerSelectOption[]>(() => [
@@ -4750,6 +4848,18 @@ function ComposerPanel(props: {
     }
   }, [draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
 
+  // handleModelChoiceChange applies one model choice locally and through the shared backend.
+  // handleModelChoiceChange 在本地与共享后端应用单个模型选择。
+  const handleModelChoiceChange = React.useCallback(async (choice: ModelPickerChoice) => {
+    const previousChoice = modelChoice;
+    const nextChoice = modelPickerChoiceKey(choice);
+    setModelChoice(nextChoice);
+    const ok = await props.onSelectWorkbenchModel(choice);
+    if (!ok) {
+      setModelChoice(previousChoice);
+    }
+  }, [modelChoice, props]);
+
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
   const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -4779,13 +4889,13 @@ function ComposerPanel(props: {
             options={executionModeOptions}
             value={executionMode}
           />
-          <ComposerSelectControl
+          <ModelPickerControl
             ariaLabel={t("composer.aria.model")}
-            className="model"
             fallbackLabel={t("composer.selectFallback")}
-            icon={<Cpu size={15} />}
-            onValueChange={setModelChoice}
-            options={MODEL_SELECT_OPTIONS}
+            filterPlaceholder={t("composer.modelPicker.filter")}
+            noMatchesLabel={t("composer.modelPicker.noMatches")}
+            onValueChange={(choice) => void handleModelChoiceChange(choice)}
+            providers={props.providers}
             value={modelChoice}
           />
           <ComposerSelectControl
@@ -4895,6 +5005,12 @@ function EmptyConversationCenter(props: {
   // Project name used by the empty-state prompt.
   // 空状态提示使用的项目名称。
   projectName: string;
+  // Providers exposed by the shared service API for model picking.
+  // 共享 service API 暴露给模型选择器的 Provider 列表。
+  providers: ProviderSummary[];
+  // Persists one selected workbench model.
+  // 持久化单个选中的工作台模型。
+  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   // Sends the first prompt that materializes this draft conversation.
   // 发送用于实体化当前草稿会话的第一条提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -4909,7 +5025,11 @@ function EmptyConversationCenter(props: {
   return (
     <section className="empty-conversation-center">
       <h2>{promptText}</h2>
-      <ComposerPanel onSubmitPrompt={props.onSubmitPrompt} />
+      <ComposerPanel
+        providers={props.providers}
+        onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onSubmitPrompt={props.onSubmitPrompt}
+      />
     </section>
   );
 }
