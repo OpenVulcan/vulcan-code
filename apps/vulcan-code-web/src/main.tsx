@@ -154,6 +154,7 @@ import {
   Palette,
   Pencil,
   Pin,
+  Play,
   PlugZap,
   PinOff,
   ScrollText,
@@ -5440,6 +5441,9 @@ function ConversationWorkspace(props: {
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
   const [detail, setDetail] = React.useState<ConversationDetail | null>(null);
+  // mediaPlayer stores the generated media currently opened in the independent player window.
+  // mediaPlayer 保存当前在独立播放窗口中打开的生成媒体。
+  const [mediaPlayer, setMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
 
   return (
@@ -5458,10 +5462,24 @@ function ConversationWorkspace(props: {
           </article>
         ) : null}
         {renderItems.map((item) => (
-          <ConversationRenderItemView item={item} key={item.id} onOpenDetail={setDetail} />
+          <ConversationRenderItemView
+            item={item}
+            key={item.id}
+            onOpenDetail={setDetail}
+            onOpenMedia={setMediaPlayer}
+          />
         ))}
       </div>
-      {detail ? <ConversationDetailModal detail={detail} onClose={() => setDetail(null)} /> : null}
+      {detail ? (
+        <ConversationDetailModal
+          detail={detail}
+          onClose={() => setDetail(null)}
+          onOpenMedia={setMediaPlayer}
+        />
+      ) : null}
+      {mediaPlayer ? (
+        <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
+      ) : null}
     </section>
   );
 }
@@ -5471,6 +5489,7 @@ function ConversationWorkspace(props: {
 function ConversationRenderItemView(props: {
   item: ConversationRenderItem;
   onOpenDetail: (detail: ConversationDetail) => void;
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const userBody = React.useMemo(
     () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
@@ -5490,7 +5509,11 @@ function ConversationRenderItemView(props: {
     <article className={`message-row ${props.item.role}`}>
       <div className="assistant-flow">
         {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
-        <ConversationBlocksView blocks={props.item.blocks} onOpenDetail={props.onOpenDetail} />
+        <ConversationBlocksView
+          blocks={props.item.blocks}
+          onOpenDetail={props.onOpenDetail}
+          onOpenMedia={props.onOpenMedia}
+        />
       </div>
     </article>
   );
@@ -5509,9 +5532,16 @@ function stripUserPromptHeading(body: string): string {
 function ConversationBlocksView(props: {
   blocks: ConversationBlock[];
   onOpenDetail: (detail: ConversationDetail) => void;
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   if (props.blocks.length > 1 && props.blocks.every(isMergeableToolBlock)) {
-    return <ToolExecutionBlock blocks={props.blocks} onOpenDetail={props.onOpenDetail} />;
+    return (
+      <ToolExecutionBlock
+        blocks={props.blocks}
+        onOpenDetail={props.onOpenDetail}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
   }
 
   const [block] = props.blocks;
@@ -5521,7 +5551,13 @@ function ConversationBlocksView(props: {
   if (block.kind === "markdown") {
     return <MarkdownMessage content={block.body} />;
   }
-  return <SpecialConversationBlock block={block} onOpenDetail={props.onOpenDetail} />;
+  return (
+    <SpecialConversationBlock
+      block={block}
+      onOpenDetail={props.onOpenDetail}
+      onOpenMedia={props.onOpenMedia}
+    />
+  );
 }
 
 // MarkdownMessage renders assistant Markdown with Vulcan-specific component styling.
@@ -5555,13 +5591,20 @@ function MarkdownMessage(props: { content: string }) {
 function SpecialConversationBlock(props: {
   block: ConversationBlock;
   onOpenDetail: (detail: ConversationDetail) => void;
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   if (props.block.kind === "turn-stats") {
     return <TurnStatsBlock block={props.block} />;
   }
 
   if (isMergeableToolBlock(props.block)) {
-    return <ToolExecutionBlock blocks={[props.block]} onOpenDetail={props.onOpenDetail} />;
+    return (
+      <ToolExecutionBlock
+        blocks={[props.block]}
+        onOpenDetail={props.onOpenDetail}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
   }
   if (props.block.kind === "thinking") {
     return <ThinkingBlock block={props.block} onOpenDetail={props.onOpenDetail} />;
@@ -5639,6 +5682,7 @@ function ThinkingBlock(props: {
 function ToolExecutionBlock(props: {
   blocks: ConversationBlock[];
   onOpenDetail: (detail: ConversationDetail) => void;
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const callBlock = props.blocks.find((block) => block.kind === "tool-call");
   const resultBlock = props.blocks.find((block) => block.kind === "tool-result");
@@ -5681,7 +5725,11 @@ function ToolExecutionBlock(props: {
         <span>{summary}</span>
       </button>
       {mediaAttachments.length > 0 ? (
-        <GeneratedMediaStrip attachments={mediaAttachments} onOpenDetail={openDetail} />
+        <GeneratedMediaStrip
+          attachments={mediaAttachments}
+          onOpenDetail={openDetail}
+          onOpenMedia={props.onOpenMedia}
+        />
       ) : null}
     </div>
   );
@@ -5783,6 +5831,9 @@ function GeneratedMediaStrip(props: {
   // onOpenDetail opens the full tool detail modal.
   // onOpenDetail 打开完整工具详情弹窗。
   onOpenDetail: () => void;
+  // onOpenMedia opens the independent media playback window.
+  // onOpenMedia 打开独立媒体播放窗口。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   return (
     <div className="generated-media-strip">
@@ -5791,6 +5842,7 @@ function GeneratedMediaStrip(props: {
           attachment={attachment}
           key={`${attachment.kind}:${attachment.localPath}`}
           onOpenDetail={props.onOpenDetail}
+          onOpenMedia={props.onOpenMedia}
         />
       ))}
     </div>
@@ -5806,12 +5858,14 @@ function GeneratedMediaInlineCard(props: {
   // onOpenDetail opens the parent tool detail modal.
   // onOpenDetail 打开父级工具详情弹窗。
   onOpenDetail: () => void;
+  // onOpenMedia opens the independent media playback window.
+  // onOpenMedia 打开独立媒体播放窗口。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const source = useGeneratedMediaSource(
     props.attachment.previewLocalPath ?? props.attachment.localPath,
     props.attachment.mimeType,
   );
-  const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
   if (props.attachment.kind === "image") {
     return (
@@ -5822,14 +5876,33 @@ function GeneratedMediaInlineCard(props: {
     );
   }
   if (props.attachment.kind === "video") {
+    const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
-      <div className="generated-media-card player">
-        <video controls preload="metadata" src={mediaSource} />
+      <button
+        className="generated-media-card video"
+        onClick={() => props.onOpenMedia(props.attachment)}
+        type="button"
+      >
+        <span className="generated-media-video-thumb">
+          {props.attachment.previewLocalPath ? (
+            <img alt={props.attachment.fileName} src={source} />
+          ) : (
+            <video
+              aria-label={props.attachment.fileName}
+              muted
+              playsInline
+              preload="metadata"
+              src={mediaSource}
+            />
+          )}
+          <span className="generated-media-play-mark"><Play size={18} fill="currentColor" /></span>
+        </span>
         <span>{props.attachment.fileName}</span>
-      </div>
+      </button>
     );
   }
   if (props.attachment.kind === "audio") {
+    const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
       <div className="generated-media-card audio">
         <span className="generated-media-icon"><MediaIcon size={18} /></span>
@@ -5900,7 +5973,11 @@ function blockIcon(kind: ConversationBlockKind) {
 
 // ConversationDetailModal renders the enlarged detail surface for special transcript blocks.
 // ConversationDetailModal 渲染特殊转录块的放大详情界面。
-function ConversationDetailModal(props: { detail: ConversationDetail; onClose: () => void }) {
+function ConversationDetailModal(props: {
+  detail: ConversationDetail;
+  onClose: () => void;
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+}) {
   const DetailIcon = blockIcon(props.detail.kind);
   const detailType = blockTitle(props.detail.kind);
   const detailSubtitle = props.detail.metadata
@@ -5931,7 +6008,10 @@ function ConversationDetailModal(props: { detail: ConversationDetail; onClose: (
         </header>
         <div className="detail-modal-body">
           {props.detail.mediaAttachments?.length ? (
-            <GeneratedMediaDetail attachments={props.detail.mediaAttachments} />
+            <GeneratedMediaDetail
+              attachments={props.detail.mediaAttachments}
+              onOpenMedia={props.onOpenMedia}
+            />
           ) : null}
           {props.detail.kind === "diff" ? (
             <pre className="diff-detail"><code>{props.detail.body}</code></pre>
@@ -5960,6 +6040,9 @@ function GeneratedMediaDetail(props: {
   // attachments are generated media outputs carried by the opened tool detail.
   // attachments 是当前工具详情携带的生成媒体输出。
   attachments: GeneratedMediaAttachment[];
+  // onOpenMedia opens the independent media playback window.
+  // onOpenMedia 打开独立媒体播放窗口。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const [zoom, setZoom] = React.useState(1);
   const primary = props.attachments[0];
@@ -5989,7 +6072,19 @@ function GeneratedMediaDetail(props: {
           />
         </div>
       ) : primary.kind === "video" ? (
-        <video className="generated-media-video-preview" controls src={primarySource} />
+        <button
+          className="generated-media-open-player"
+          onClick={() => props.onOpenMedia(primary)}
+          type="button"
+        >
+          <span className="generated-media-open-player-icon">
+            <Play size={22} fill="currentColor" />
+          </span>
+          <span>
+            <strong>打开视频播放器</strong>
+            <small>{primary.fileName}</small>
+          </span>
+        </button>
       ) : primary.kind === "audio" ? (
         <audio className="generated-media-audio-preview" controls src={primarySource} />
       ) : (
@@ -5999,6 +6094,58 @@ function GeneratedMediaDetail(props: {
         </a>
       )}
     </section>
+  );
+}
+
+// GeneratedMediaPlayerWindow renders an independent player window for generated audio/video assets.
+// GeneratedMediaPlayerWindow 为生成的音频/视频资源渲染独立播放窗口。
+function GeneratedMediaPlayerWindow(props: {
+  // attachment describes the generated media file to play.
+  // attachment 描述需要播放的生成媒体文件。
+  attachment: GeneratedMediaAttachment;
+  // onClose closes the independent player window.
+  // onClose 关闭独立播放窗口。
+  onClose: () => void;
+}) {
+  const source = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
+  const MediaIcon = generatedMediaIcon(props.attachment.kind);
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && props.onClose()}>
+      <DialogContent className="generated-media-player-window sm:max-w-[min(1120px,96vw)]" showCloseButton={false}>
+        <header className="generated-media-player-header">
+          <span className="generated-media-player-title">
+            <MediaIcon size={18} />
+            <DialogTitle>{props.attachment.fileName}</DialogTitle>
+          </span>
+          <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
+            <X size={17} />
+          </Button>
+        </header>
+        <div className="generated-media-player-body">
+          {props.attachment.kind === "video" ? (
+            <video
+              className="generated-media-player-video"
+              controls
+              preload="metadata"
+              src={source}
+            />
+          ) : props.attachment.kind === "audio" ? (
+            <audio
+              className="generated-media-player-audio"
+              controls
+              preload="metadata"
+              src={source}
+            />
+          ) : (
+            <a className="generated-media-document-link" href={source} rel="noreferrer" target="_blank">
+              <FileText size={18} />
+              {props.attachment.fileName}
+            </a>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
