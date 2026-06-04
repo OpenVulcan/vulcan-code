@@ -344,6 +344,71 @@ export interface LogEntrySummary {
   message: string;
 }
 
+// ContextInjectionItemSummary describes one visible injected context item.
+// ContextInjectionItemSummary 描述单条可见注入上下文条目。
+export interface ContextInjectionItemSummary {
+  // Compact content preview displayed in the side panel.
+  // 侧面板展示的紧凑内容预览。
+  content: string;
+  // Full detail text displayed as expanded context information.
+  // 展开上下文信息时展示的完整详情文本。
+  detail: string;
+  // Optional turn label that owns this injection.
+  // 拥有该注入的可选轮次标签。
+  turnLabel?: string | null;
+  // TTL or persistence label.
+  // TTL 或持久化状态标签。
+  ttlLabel: string;
+  // Optional source display label.
+  // 可选来源显示标签。
+  sourceDisplay?: string | null;
+}
+
+// ContextInjectionCardSummary describes one context injection source group.
+// ContextInjectionCardSummary 描述单个上下文注入来源分组。
+export interface ContextInjectionCardSummary {
+  // Stable context injection tag.
+  // 稳定上下文注入标记。
+  tag: string;
+  // Human-readable card description.
+  // 面向用户的卡片说明。
+  description: string;
+  // Items emitted by this injection source.
+  // 当前注入来源产生的条目。
+  items: ContextInjectionItemSummary[];
+}
+
+// ContextInjectionSnapshot describes dynamic and static context injection panels.
+// ContextInjectionSnapshot 描述动态与静态上下文注入面板数据。
+export interface ContextInjectionSnapshot {
+  // Dynamic per-turn injection cards.
+  // 按轮次生效的动态注入卡片。
+  dynamicCards: ContextInjectionCardSummary[];
+  // Static persistent injection cards.
+  // 持续生效的静态注入卡片。
+  staticCards: ContextInjectionCardSummary[];
+}
+
+// ContextUsageSnapshot describes the composer context usage orb state.
+// ContextUsageSnapshot 描述输入区上下文占用圆盘状态。
+export interface ContextUsageSnapshot {
+  // Rounded usage percent shown inside the orb.
+  // 圆盘中显示的四舍五入占用百分比。
+  percent: number;
+  // Severity key used by WebUI styling.
+  // WebUI 样式使用的严重级别键。
+  severity: string;
+  // Whether the active runtime still matches the accepted baseline.
+  // 当前运行时是否仍匹配已接受的基线。
+  baselineMatchesActiveRuntime: boolean;
+  // Tooltip title.
+  // 提示浮层标题。
+  tooltipTitle: string;
+  // Tooltip diagnostic rows.
+  // 提示浮层诊断行。
+  tooltipRows: string[];
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -395,4 +460,10 @@ export interface WorkbenchSnapshot {
   // Diagnostic log entries.
   // 诊断日志条目。
   logs: LogEntrySummary[];
+  // Context injection cards projected from the selected session runtime state.
+  // 从当前选中会话运行态投影出的上下文注入卡片。
+  contextInjection?: ContextInjectionSnapshot | null;
+  // Context token usage snapshot projected from the latest execution preparation.
+  // 从最近一次执行准备投影出的上下文 Token 占用快照。
+  contextUsage?: ContextUsageSnapshot | null;
 }

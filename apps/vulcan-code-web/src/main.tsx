@@ -98,6 +98,9 @@ import { I18nProvider, useI18n, type LocaleCode } from "@/i18n";
 import type {
   AiCapabilitySummary,
   AiCapabilityTargetSummary,
+  ContextInjectionCardSummary,
+  ContextInjectionSnapshot,
+  ContextUsageSnapshot,
   ConversationMessage,
   ConversationSummary,
   FeatureAreaSummary,
@@ -3800,14 +3803,14 @@ function WorkspaceResizableBody(props: {
               id="workspaceContext"
               minSize="320px"
             >
-              <WorkspaceContextPanel onClose={props.onToggleRightPanel} />
+              <WorkspaceContextPanel workbench={props.workbench} onClose={props.onToggleRightPanel} />
             </ResizablePanel>
           </>
         ) : null}
       </ResizablePanelGroup>
       {props.rightPanelOpen && props.rightPanelFloating ? (
         <div className="workspace-context-floating-panel">
-          <WorkspaceContextPanel floating onClose={props.onToggleRightPanel} />
+          <WorkspaceContextPanel floating workbench={props.workbench} onClose={props.onToggleRightPanel} />
         </div>
       ) : null}
     </div>
@@ -3817,6 +3820,9 @@ function WorkspaceResizableBody(props: {
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
 // WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
 function WorkspaceContextPanel(props: {
+  // Workbench snapshot carrying selected-session side-panel projections.
+  // 携带当前选中会话侧面板投影的工作台快照。
+  workbench: WorkbenchSnapshot;
   // Whether the panel is rendered as a floating overlay.
   // 面板是否以浮动覆盖层方式渲染。
   floating?: boolean;
@@ -3857,14 +3863,116 @@ function WorkspaceContextPanel(props: {
           </div>
         </TabsContent>
         <TabsContent className="context-tab-content" value="memory">
-          <div className="context-empty-state">
-            <BrainCircuit size={20} />
-            <strong>{t("contextPanel.memory")}</strong>
-            <span>{t("contextPanel.memoryEmpty")}</span>
-          </div>
+          <ContextInjectionTabs snapshot={props.workbench.contextInjection ?? null} />
         </TabsContent>
       </Tabs>
     </aside>
+  );
+}
+
+// ContextInjectionTabs renders iced-aligned dynamic and static injection lists.
+// ContextInjectionTabs 渲染对齐 iced 的动态与静态注入列表。
+function ContextInjectionTabs(props: {
+  // Selected-session context injection snapshot from the service.
+  // 来自服务的当前选中会话上下文注入快照。
+  snapshot: ContextInjectionSnapshot | null;
+}) {
+  // t translates stable side-panel labels.
+  // t 翻译稳定侧面板标签。
+  const { t } = useI18n();
+  const dynamicCards = props.snapshot?.dynamicCards ?? [];
+  const staticCards = props.snapshot?.staticCards ?? [];
+
+  return (
+    <Tabs className="context-injection-tabs" defaultValue="dynamic">
+      <TabsList className="context-injection-tabs-list">
+        <TabsTrigger value="dynamic">{t("contextPanel.dynamic")}</TabsTrigger>
+        <TabsTrigger value="static">{t("contextPanel.static")}</TabsTrigger>
+      </TabsList>
+      <TabsContent className="context-injection-tab-content" value="dynamic">
+        <ContextInjectionCardList
+          cards={dynamicCards}
+          emptyIcon={<BrainCircuit size={20} />}
+          emptyText={t("contextPanel.dynamicEmpty")}
+          title={t("contextPanel.dynamic")}
+        />
+      </TabsContent>
+      <TabsContent className="context-injection-tab-content" value="static">
+        <ContextInjectionCardList
+          cards={staticCards}
+          emptyIcon={<Database size={20} />}
+          emptyText={t("contextPanel.staticEmpty")}
+          title={t("contextPanel.static")}
+        />
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+// ContextInjectionCardList renders one injection card collection or its empty state.
+// ContextInjectionCardList 渲染一组注入卡片或其空状态。
+function ContextInjectionCardList(props: {
+  // Injection cards to display.
+  // 需要展示的注入卡片。
+  cards: ContextInjectionCardSummary[];
+  // Empty state icon.
+  // 空状态图标。
+  emptyIcon: React.ReactNode;
+  // Empty state title.
+  // 空状态标题。
+  title: string;
+  // Empty state message.
+  // 空状态消息。
+  emptyText: string;
+}) {
+  if (props.cards.length === 0) {
+    return (
+      <div className="context-empty-state">
+        {props.emptyIcon}
+        <strong>{props.title}</strong>
+        <span>{props.emptyText}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="context-injection-card-list">
+      {props.cards.map((card) => (
+        <ContextInjectionCardView card={card} key={card.tag} />
+      ))}
+    </div>
+  );
+}
+
+// ContextInjectionCardView renders one injection source group and its items.
+// ContextInjectionCardView 渲染单个注入来源分组及其条目。
+function ContextInjectionCardView(props: {
+  // Injection source card to render.
+  // 要渲染的注入来源卡片。
+  card: ContextInjectionCardSummary;
+}) {
+  return (
+    <article className="context-injection-card">
+      <header className="context-injection-card-header">
+        <span className="context-injection-tag">{props.card.tag}</span>
+        <p>{props.card.description}</p>
+      </header>
+      <div className="context-injection-item-list">
+        {props.card.items.map((item, index) => (
+          <details className="context-injection-item" key={`${props.card.tag}-${index}`}>
+            <summary>
+              <span className="context-injection-item-content">{item.content}</span>
+              <span className="context-injection-item-meta">
+                {item.turnLabel ? <span>{item.turnLabel}</span> : null}
+                <span>{item.ttlLabel}</span>
+                {item.sourceDisplay ? <span>{item.sourceDisplay}</span> : null}
+              </span>
+            </summary>
+            <pre>{item.detail}</pre>
+          </details>
+        ))}
+      </div>
+    </article>
   );
 }
 
@@ -5416,6 +5524,7 @@ function ChatArea(props: {
           {streamingThinkingBlock ? <StreamingThinkingOverlay block={streamingThinkingBlock} /> : null}
           <ComposerDock
             aiCapabilities={props.workbench.aiCapabilities ?? []}
+            contextUsage={props.workbench.contextUsage ?? null}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSubmitPrompt={props.onSubmitPrompt}
@@ -6293,6 +6402,9 @@ function ComposerDock(props: {
   // AI capability route summaries used by the composer capability tree.
   // 输入区能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Context usage snapshot shown by the composer orb.
+  // 输入区圆盘展示的上下文占用快照。
+  contextUsage: ContextUsageSnapshot | null;
   // showScrollToBottom controls whether the bottom-jump button is visible.
   // showScrollToBottom 控制是否显示跳转到底部按钮。
   showScrollToBottom: boolean;
@@ -6338,6 +6450,7 @@ function ComposerDock(props: {
       ) : null}
       <ComposerPanel
         aiCapabilities={props.aiCapabilities}
+        contextUsage={props.contextUsage}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSubmitPrompt={props.onSubmitPrompt}
@@ -6352,6 +6465,9 @@ function ComposerPanel(props: {
   // AI capability route summaries used by the quick capability tree.
   // 快捷能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Context usage snapshot shown by the composer orb.
+  // 输入区圆盘展示的上下文占用快照。
+  contextUsage: ContextUsageSnapshot | null;
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
@@ -6597,6 +6713,7 @@ function ComposerPanel(props: {
             options={reasoningEffortOptions}
             value={reasoningEffort}
           />
+          <ContextUsageOrb snapshot={props.contextUsage} />
           <Button
             aria-label={isComposerRunning ? t("composer.aria.stop") : t("composer.aria.send")}
             className={cn("send-button", isComposerRunning && "running")}
@@ -6609,6 +6726,46 @@ function ComposerPanel(props: {
         </div>
       </div>
     </section>
+  );
+}
+
+// ContextUsageOrb renders the iced-style context usage diagnostic control.
+// ContextUsageOrb 渲染 iced 风格的上下文占用诊断控件。
+function ContextUsageOrb(props: {
+  // Context usage snapshot projected by the service.
+  // 服务投影出的上下文占用快照。
+  snapshot: ContextUsageSnapshot | null;
+}) {
+  // t translates fallback labels when the runtime has not prepared a budget yet.
+  // t 在运行时尚未准备预算时翻译回退标签。
+  const { t } = useI18n();
+  const percent = Math.max(0, Math.min(100, Math.round(props.snapshot?.percent ?? 0)));
+  const severity = props.snapshot?.severity ?? "unknown";
+  const title = props.snapshot?.tooltipTitle || t("contextUsage.title");
+  const rows = props.snapshot?.tooltipRows.length ? props.snapshot.tooltipRows : [t("contextUsage.waiting")];
+  const style = {
+    "--context-usage-progress": `${percent * 3.6}deg`,
+  } as React.CSSProperties;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          aria-label={title}
+          className={cn("context-usage-orb", `severity-${severity}`)}
+          style={style}
+          type="button"
+        >
+          <span className="context-usage-orb-label">{percent}%</span>
+        </button>
+      </TooltipTrigger>
+      <TooltipContent align="end" className="context-usage-tooltip" side="top">
+        <strong>{title}</strong>
+        {rows.map((row, index) => (
+          <span key={`${row}-${index}`}>{row}</span>
+        ))}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -6909,6 +7066,7 @@ function EmptyConversationCenter(props: {
       <h2>{promptText}</h2>
       <ComposerPanel
         aiCapabilities={props.aiCapabilities}
+        contextUsage={null}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSubmitPrompt={props.onSubmitPrompt}

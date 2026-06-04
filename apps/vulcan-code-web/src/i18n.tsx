@@ -36,8 +36,14 @@ export type TranslationKey =
   | "contextPanel.close"
   | "contextPanel.review"
   | "contextPanel.memory"
+  | "contextPanel.dynamic"
+  | "contextPanel.static"
   | "contextPanel.reviewEmpty"
   | "contextPanel.memoryEmpty"
+  | "contextPanel.dynamicEmpty"
+  | "contextPanel.staticEmpty"
+  | "contextUsage.title"
+  | "contextUsage.waiting"
   | "sidebar.console"
   | "sidebar.pinned"
   | "sidebar.projects"
@@ -119,8 +125,14 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "contextPanel.close": "关闭右侧面板",
     "contextPanel.review": "审核",
     "contextPanel.memory": "记忆",
+    "contextPanel.dynamic": "动态",
+    "contextPanel.static": "静态",
     "contextPanel.reviewEmpty": "Git Diff 审核面板待接入",
     "contextPanel.memoryEmpty": "记忆注入信息面板待接入",
+    "contextPanel.dynamicEmpty": "当前会话没有有效的动态 TTL 注入。",
+    "contextPanel.staticEmpty": "当前会话没有有效的静态上下文。",
+    "contextUsage.title": "上下文占用",
+    "contextUsage.waiting": "请求拆分：等待预算引擎计算",
     "sidebar.console": "工作台",
     "sidebar.pinned": "置顶",
     "sidebar.projects": "项目",
@@ -199,8 +211,14 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "contextPanel.close": "Close right panel",
     "contextPanel.review": "Review",
     "contextPanel.memory": "Memory",
+    "contextPanel.dynamic": "Dynamic",
+    "contextPanel.static": "Static",
     "contextPanel.reviewEmpty": "Git Diff review panel is pending",
     "contextPanel.memoryEmpty": "Memory injection panel is pending",
+    "contextPanel.dynamicEmpty": "This conversation has no active dynamic TTL injection.",
+    "contextPanel.staticEmpty": "This conversation has no active static context.",
+    "contextUsage.title": "Context usage",
+    "contextUsage.waiting": "Request split: waiting for budget engine",
     "sidebar.console": "Workspace",
     "sidebar.pinned": "Pinned",
     "sidebar.projects": "Projects",

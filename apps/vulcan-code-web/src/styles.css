@@ -1382,6 +1382,133 @@ button {
   line-height: 1.45;
 }
 
+.context-injection-tabs {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.context-injection-tabs-list {
+  width: 100%;
+}
+
+.context-injection-tab-content {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+}
+
+.context-injection-card-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.context-injection-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px;
+  background: var(--card);
+}
+
+.context-injection-card-header {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.context-injection-tag {
+  width: fit-content;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 999px;
+  padding: 2px 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.context-injection-card-header p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.context-injection-item-list {
+  display: grid;
+  gap: 8px;
+}
+
+.context-injection-item {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--muted) 42%, transparent);
+  overflow: hidden;
+}
+
+.context-injection-item summary {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 8px 9px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.context-injection-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-injection-item-content {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.context-injection-item-meta {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.context-injection-item-meta span {
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.context-injection-item pre {
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 9px;
+  color: var(--foreground);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
 .feature-header-description {
   overflow: hidden;
   color: var(--muted-foreground);
@@ -1869,6 +1996,65 @@ button {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.context-usage-orb {
+  --context-usage-accent: #64748b;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 0;
+  background:
+    radial-gradient(circle at center, var(--card) 0 54%, transparent 55%),
+    conic-gradient(var(--context-usage-accent) var(--context-usage-progress), color-mix(in oklch, var(--muted) 82%, transparent) 0);
+  color: var(--foreground);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--context-usage-accent) 42%, transparent);
+  cursor: default;
+}
+
+.context-usage-orb.severity-healthy {
+  --context-usage-accent: #38bdf8;
+}
+
+.context-usage-orb.severity-warning {
+  --context-usage-accent: #fde68a;
+}
+
+.context-usage-orb.severity-compact-soon,
+.context-usage-orb.severity-baseline-mismatch {
+  --context-usage-accent: #fdba74;
+}
+
+.context-usage-orb.severity-overflow {
+  --context-usage-accent: #fda29b;
+}
+
+.context-usage-orb-label {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  user-select: none;
+}
+
+.context-usage-tooltip {
+  display: grid;
+  gap: 4px;
+  max-width: 360px;
+}
+
+.context-usage-tooltip strong {
+  font-size: 12px;
+}
+
+.context-usage-tooltip span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .composer-select-trigger {

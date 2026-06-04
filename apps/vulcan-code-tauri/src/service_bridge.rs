@@ -33,7 +33,7 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         context_injection_runtime::{
             collect_builtin_manual_injection_ops_and_sanitized_prompt,
-            core_provider_context_injection_from_state_for_turn,
+            context_injection_panel_cards_for_kind, core_provider_context_injection_from_state_for_turn,
         },
         conversation_hooks::{
             ConversationHookRuntime, VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
@@ -70,12 +70,15 @@ use vulcan_agent_runtime::{
     },
 };
 use vulcan_service_api::{
-    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary, ConversationMessage,
-    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole,
-    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot,
-    ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    ToolCallSummary, WorkbenchSnapshot,
+    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary, ContextInjectionCardSummary,
+    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage,
+    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole, PluginSummary,
+    ProjectSummary, ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot, ServiceEvent,
+    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus, ToolCallSummary,
+    WorkbenchSnapshot,
 };
+use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
+use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
@@ -171,6 +174,9 @@ struct ServiceBridgeState {
     /// Long-lived MCP runtime handle.
     /// 长生命周期 MCP 运行时句柄。
     mcp_runtime: Option<TauriMcpRuntimeHandle>,
+    /// Latest context-budget snapshots keyed by session id.
+    /// 按会话标识索引的最近上下文预算快照。
+    live_context_budgets: BTreeMap<SessionId, ContextBudgetSnapshot>,
 }
 
 /// Thread-safe service state handle.
@@ -190,6 +196,7 @@ pub fn run() {
         luaskills_runtime: None,
         token_budget_runtime: None,
         mcp_runtime: None,
+        live_context_budgets: BTreeMap::new(),
     }));
 
     tauri::Builder::default()
@@ -1085,6 +1092,7 @@ async fn service_select_conversation(
         logs,
         provider_configuration,
         ai_tool_configuration,
+        live_context_budgets,
         mut workspace_snapshot,
     ) = {
         let guard = state
@@ -1120,6 +1128,7 @@ async fn service_select_conversation(
             .as_ref()
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
+        let live_context_budgets = guard.live_context_budgets.clone();
         (
             controller_runtime,
             luaskills_catalog,
@@ -1128,6 +1137,7 @@ async fn service_select_conversation(
             logs,
             provider_configuration,
             ai_tool_configuration,
+            live_context_budgets,
             workspace_snapshot,
         )
     };
@@ -1152,6 +1162,7 @@ async fn service_select_conversation(
         &workspace_snapshot,
         selected_messages.as_slice(),
         &logs,
+        &live_context_budgets,
     );
     {
         let mut guard = state
@@ -1927,6 +1938,11 @@ fn store_and_emit_workbench_snapshot(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_messages =
         selected_session_messages_from_workspace(&workspace_snapshot).unwrap_or_default();
+    let live_context_budgets = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .live_context_budgets
+        .clone();
     let workbench = workbench_from_runtime(
         controller_runtime,
         luaskills_catalog,
@@ -1937,6 +1953,7 @@ fn store_and_emit_workbench_snapshot(
         &workspace_snapshot,
         selected_messages.as_slice(),
         logs,
+        &live_context_budgets,
     );
     {
         let mut guard = state
@@ -2120,6 +2137,13 @@ fn apply_execution_preparation(
     state: &SharedServiceBridgeState,
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
+    if let Some(context_budget) = preparation.context_budget.clone() {
+        state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .live_context_budgets
+            .insert(preparation.session_id, context_budget);
+    }
     with_workspace_mutation(app, state, |workspace| {
         let runtime_state = workspace
             .session_runtime_state
@@ -2591,6 +2615,7 @@ where
             .as_ref()
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
+        let live_context_budgets = guard.live_context_budgets.clone();
         mutate(&mut workspace_snapshot);
         let selected_messages =
             selected_session_messages_from_workspace(&workspace_snapshot).unwrap_or_default();
@@ -2604,6 +2629,7 @@ where
             &workspace_snapshot,
             selected_messages.as_slice(),
             &logs,
+            &live_context_budgets,
         );
         guard.workspace_snapshot = Some(workspace_snapshot.clone());
         guard.workbench = workbench.clone();
@@ -2657,6 +2683,7 @@ async fn refresh_workbench_snapshot(
         previous_snapshot,
         provider_configuration,
         ai_tool_configuration,
+        live_context_budgets,
     ) = {
         let guard = state
             .lock()
@@ -2701,6 +2728,7 @@ async fn refresh_workbench_snapshot(
             .as_ref()
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
+        let live_context_budgets = guard.live_context_budgets.clone();
         (
             controller_runtime,
             luaskills_catalog,
@@ -2710,6 +2738,7 @@ async fn refresh_workbench_snapshot(
             previous_snapshot,
             provider_configuration,
             ai_tool_configuration,
+            live_context_budgets,
         )
     };
 
@@ -2746,6 +2775,7 @@ async fn refresh_workbench_snapshot(
         &refreshed_snapshot,
         selected_messages.as_slice(),
         &logs,
+        &live_context_budgets,
     );
     {
         let mut guard = state
@@ -3300,6 +3330,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
             .map(|snapshot| snapshot.messages.as_slice())
             .unwrap_or(&[]),
         &logs,
+        &BTreeMap::new(),
     );
 
     if let Some(state) = app.try_state::<SharedServiceBridgeState>()
@@ -3517,6 +3548,7 @@ fn workbench_from_runtime(
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     selected_messages: &[SessionMessageEntry],
     logs: &[String],
+    live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
 ) -> WorkbenchSnapshot {
     let selected_conversation_id = if workspace.selected_session == SessionId::nil() {
         None
@@ -3529,6 +3561,9 @@ fn workbench_from_runtime(
             conversation_messages_from_session(conversation_id, selected_messages)
         })
         .unwrap_or_default();
+    let selected_runtime_state = workspace
+        .session_runtime_state
+        .get(&workspace.selected_session);
 
     WorkbenchSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -3609,6 +3644,273 @@ fn workbench_from_runtime(
                     }),
             )
             .collect(),
+        context_injection: context_injection_snapshot_from_runtime_state(selected_runtime_state),
+        context_usage: context_usage_snapshot_from_runtime_state(
+            workspace.selected_session,
+            selected_runtime_state,
+            live_context_budgets,
+        ),
+    }
+}
+
+/// Builds the selected-session context injection side-panel snapshot.
+/// 构建当前选中会话的上下文注入侧面板快照。
+fn context_injection_snapshot_from_runtime_state(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> Option<ContextInjectionSnapshot> {
+    let runtime_state = runtime_state?;
+    let dynamic_cards = context_injection_cards_to_summary(context_injection_panel_cards_for_kind(
+        &runtime_state.context_injection_state,
+        Some(InjectionKind::Transient),
+    ));
+    let mut static_cards = Vec::new();
+    if let Some(profile_card) = static_vmm_profile_panel_card(
+        runtime_state.vmm_profile_sync.base_profile_content.as_deref(),
+        runtime_state.vmm_profile_sync.updated_at.as_deref(),
+    ) {
+        static_cards.push(profile_card);
+    }
+    static_cards.extend(context_injection_cards_to_summary(
+        context_injection_panel_cards_for_kind(
+            &runtime_state.context_injection_state,
+            Some(InjectionKind::Persistent),
+        ),
+    ));
+
+    Some(ContextInjectionSnapshot {
+        dynamic_cards,
+        static_cards,
+    })
+}
+
+/// Converts shared injection panel cards into service API DTOs.
+/// 将共享注入面板卡片转换为 service API DTO。
+fn context_injection_cards_to_summary(
+    cards: Vec<InjectionPanelCard>,
+) -> Vec<ContextInjectionCardSummary> {
+    cards
+        .into_iter()
+        .map(|card| ContextInjectionCardSummary {
+            tag: card.tag,
+            description: card.description,
+            items: card
+                .items
+                .into_iter()
+                .map(|item| ContextInjectionItemSummary {
+                    content: item.content,
+                    detail: item.detail,
+                    turn_label: item.turn_label,
+                    ttl_label: item.ttl_label,
+                    source_display: item.source_display,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Builds the static VMM profile card aligned with the iced side panel.
+/// 构建与 iced 侧面板一致的静态 VMM 画像卡片。
+fn static_vmm_profile_panel_card(
+    content: Option<&str>,
+    updated_at: Option<&str>,
+) -> Option<ContextInjectionCardSummary> {
+    let content = content.map(str::trim).filter(|content| !content.is_empty())?;
+    let mut detail_lines = Vec::new();
+    if let Some(updated_at) = updated_at.map(str::trim).filter(|value| !value.is_empty()) {
+        detail_lines.push(format!("更新时间：{updated_at}"));
+    }
+    detail_lines.push(String::from("来源：VMM profile system hook"));
+    detail_lines.push(String::from("内容："));
+    detail_lines.push(content.to_string());
+
+    Some(ContextInjectionCardSummary {
+        tag: String::from("vmm_profile"),
+        description: String::from(
+            "VMM 画像基点。该静态上下文由系统提示词 hook 持续复用，面板仅用于查看。",
+        ),
+        items: vec![ContextInjectionItemSummary {
+            content: compact_panel_preview(content),
+            detail: detail_lines.join("\n"),
+            turn_label: None,
+            ttl_label: String::from("静态"),
+            source_display: Some(String::from("VMM profile")),
+        }],
+    })
+}
+
+/// Builds the same compact multi-line preview used by the iced panel.
+/// 构建与 iced 面板一致的多行紧凑预览。
+fn compact_panel_preview(content: &str) -> String {
+    let mut lines = content
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(7)
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if lines.len() > 6 {
+        lines.truncate(6);
+        lines.push(String::from("..."));
+    }
+    lines.join("\n")
+}
+
+/// Builds the selected-session context usage orb snapshot.
+/// 构建当前选中会话的上下文占用圆盘快照。
+fn context_usage_snapshot_from_runtime_state(
+    session_id: SessionId,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+    live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
+) -> Option<ContextUsageSnapshot> {
+    let runtime_state = runtime_state?;
+    let context_budget = live_context_budgets.get(&session_id);
+    let mut tooltip_rows = Vec::new();
+    if let Some(context_budget) = context_budget {
+        tooltip_rows.push(format!(
+            "输入占用：{:.0}% · {}",
+            context_budget.usage_percent(),
+            context_budget_severity_label(context_budget.severity),
+        ));
+        tooltip_rows.push(format!(
+            "输入窗口（API实测/本地估算）：{}",
+            context_budget.usage_label()
+        ));
+        tooltip_rows.extend(context_budget_breakdown_rows(context_budget));
+        tooltip_rows.push(format!(
+            "预留：输出 {} · 推理 {} · 压缩 {}",
+            context_budget.reserved_output_tokens,
+            context_budget.reserved_reasoning_tokens,
+            context_budget.reserved_compaction_tokens
+        ));
+        if !context_budget.baseline_matches_active_runtime {
+            let reason = context_budget
+                .baseline_mismatch_reason
+                .as_deref()
+                .unwrap_or("当前运行时上下文与压缩锚点不一致");
+            tooltip_rows.push(format!("恢复：基线失配（{reason}），已回退完整上下文。"));
+        }
+        if let Some(usage) = context_budget.observed_usage.as_ref() {
+            tooltip_rows.push(format!("最近 API：{}", provider_usage_label(usage)));
+        }
+    } else {
+        tooltip_rows.push(String::from("请求拆分：等待预算引擎计算"));
+    }
+
+    tooltip_rows.push(if runtime_state.last_compaction_id.is_some() {
+        String::from("压缩状态：已使用摘要前文")
+    } else {
+        String::from("压缩状态：尚未触发")
+    });
+
+    Some(ContextUsageSnapshot {
+        percent: context_budget
+            .map(|budget| budget.usage_percent().round().clamp(0.0, 100.0) as u8)
+            .unwrap_or(0),
+        severity: context_budget
+            .map(context_budget_severity_key)
+            .unwrap_or_else(|| String::from("unknown")),
+        baseline_matches_active_runtime: context_budget
+            .map(|budget| budget.baseline_matches_active_runtime)
+            .unwrap_or(true),
+        tooltip_title: String::from("上下文占用"),
+        tooltip_rows,
+    })
+}
+
+/// Builds the context-budget token breakdown rows used by the tooltip.
+/// 构建提示浮层使用的上下文预算 Token 拆分行。
+fn context_budget_breakdown_rows(context_budget: &ContextBudgetSnapshot) -> Vec<String> {
+    let raw_parts = [
+        ("系统", context_budget.estimated_system_tokens),
+        ("历史", context_budget.estimated_history_tokens),
+        ("当前", context_budget.estimated_prompt_tokens),
+        ("工具", context_budget.estimated_tool_tokens),
+    ];
+    let raw_total: usize = raw_parts.iter().map(|(_, value)| *value).sum();
+    let prediction_row = format!(
+        "预测拆分（预算器）：{}",
+        raw_parts
+            .iter()
+            .map(|(label, value)| format!("{label} {value}"))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    );
+
+    let Some(observed_input) =
+        vulcan_context::observed_input_tokens_from_usage(context_budget.observed_usage.as_ref())
+    else {
+        return vec![prediction_row];
+    };
+    if raw_total == 0 {
+        return vec![prediction_row];
+    }
+    let calibrated = raw_parts
+        .iter()
+        .map(|(label, value)| {
+            let scaled = ((*value as f64 / raw_total as f64) * observed_input as f64).round();
+            format!("{label} {}", scaled as usize)
+        })
+        .collect::<Vec<_>>()
+        .join(" / ");
+    vec![
+        String::from("说明：API实测为准；拆分已按实测输入比例校准。"),
+        prediction_row,
+        format!("校准拆分（实测）：{calibrated}"),
+    ]
+}
+
+/// Returns the stable context-budget severity key consumed by WebUI CSS.
+/// 返回 WebUI CSS 消费的稳定上下文预算严重级别键。
+fn context_budget_severity_key(context_budget: &ContextBudgetSnapshot) -> String {
+    if !context_budget.baseline_matches_active_runtime {
+        return String::from("baseline-mismatch");
+    }
+    match context_budget.severity {
+        ContextBudgetSeverity::Healthy => "healthy",
+        ContextBudgetSeverity::Warning => "warning",
+        ContextBudgetSeverity::CompactSoon => "compact-soon",
+        ContextBudgetSeverity::Overflow => "overflow",
+    }
+    .to_string()
+}
+
+/// Returns the user-facing context-budget severity label.
+/// 返回面向用户的上下文预算严重级别标签。
+fn context_budget_severity_label(severity: ContextBudgetSeverity) -> &'static str {
+    match severity {
+        ContextBudgetSeverity::Healthy => "正常",
+        ContextBudgetSeverity::Warning => "预警",
+        ContextBudgetSeverity::CompactSoon => "建议压缩",
+        ContextBudgetSeverity::Overflow => "预算溢出",
+    }
+}
+
+/// Formats one provider usage row for the context usage tooltip.
+/// 为上下文占用提示浮层格式化单条 Provider 用量行。
+fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnapshot) -> String {
+    let mut parts = Vec::new();
+    if let Some(input) = usage.input_tokens {
+        parts.push(format!("输入 {input}"));
+    }
+    if let Some(output) = usage.output_tokens {
+        parts.push(format!("输出 {output}"));
+    }
+    if let Some(reasoning) = usage.reasoning_tokens {
+        parts.push(format!("推理 {reasoning}"));
+    }
+    if let Some(total) = usage.total_tokens {
+        parts.push(format!("总计 {total}"));
+    }
+    if let Some(cached) = usage.cached_input_tokens {
+        parts.push(format!("缓存命中 {cached}"));
+    }
+    if let Some(created) = usage.cache_creation_input_tokens {
+        parts.push(format!("缓存写入 {created}"));
+    }
+    if parts.is_empty() {
+        String::from("无可用 Token 数据")
+    } else {
+        parts.join(" / ")
     }
 }
 
@@ -3749,6 +4051,8 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
                 log_entry(&format!("fallback-{index}"), "info", "service", message)
             })
             .collect(),
+        context_injection: None,
+        context_usage: None,
     }
 }
 

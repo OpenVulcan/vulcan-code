@@ -141,6 +141,87 @@ pub struct WorkbenchSnapshot {
     /// Log entries shown in the diagnostics area.
     /// 诊断区域展示的日志条目。
     pub logs: Vec<LogEntrySummary>,
+    /// Context injection cards projected from the selected session runtime state.
+    /// 从当前选中会话运行态投影出的上下文注入卡片。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_injection: Option<ContextInjectionSnapshot>,
+    /// Context token usage snapshot projected from the latest execution preparation.
+    /// 从最近一次执行准备投影出的上下文 Token 占用快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Summarizes the dynamic and static context injected into the selected session.
+/// 汇总当前选中会话中的动态与静态上下文注入信息。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextInjectionSnapshot {
+    /// Dynamic per-turn injection cards.
+    /// 按轮次生效的动态注入卡片。
+    pub dynamic_cards: Vec<ContextInjectionCardSummary>,
+    /// Static persistent injection cards.
+    /// 持续生效的静态注入卡片。
+    pub static_cards: Vec<ContextInjectionCardSummary>,
+}
+
+/// Summarizes one context injection source group.
+/// 汇总单个上下文注入来源分组。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextInjectionCardSummary {
+    /// Stable context injection tag.
+    /// 稳定的上下文注入标记。
+    pub tag: String,
+    /// Human-readable card description.
+    /// 面向用户的卡片说明。
+    pub description: String,
+    /// Items emitted by this injection source.
+    /// 当前注入来源产生的条目。
+    pub items: Vec<ContextInjectionItemSummary>,
+}
+
+/// Summarizes one visible context injection item.
+/// 汇总单条可见上下文注入内容。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextInjectionItemSummary {
+    /// Compact content preview displayed in the side panel.
+    /// 侧面板展示的紧凑内容预览。
+    pub content: String,
+    /// Full detail text shown on hover or expansion.
+    /// 悬停或展开时展示的完整详情文本。
+    pub detail: String,
+    /// Optional turn label that owns this injection.
+    /// 拥有该注入的可选轮次标签。
+    pub turn_label: Option<String>,
+    /// TTL or persistence label.
+    /// TTL 或持久化状态标签。
+    pub ttl_label: String,
+    /// Optional source display label.
+    /// 可选来源显示标签。
+    pub source_display: Option<String>,
+}
+
+/// Summarizes context token usage for the selected session composer.
+/// 汇总当前选中会话输入区的上下文 Token 占用。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ContextUsageSnapshot {
+    /// Rounded usage percent shown inside the orb.
+    /// 圆盘中显示的四舍五入占用百分比。
+    pub percent: u8,
+    /// Severity key used by WebUI styling.
+    /// WebUI 样式使用的严重级别键。
+    pub severity: String,
+    /// Whether the active runtime still matches the accepted baseline.
+    /// 当前运行时是否仍匹配已接受的基线。
+    pub baseline_matches_active_runtime: bool,
+    /// Tooltip title.
+    /// 提示浮层标题。
+    pub tooltip_title: String,
+    /// Tooltip diagnostic rows.
+    /// 提示浮层诊断行。
+    pub tooltip_rows: Vec<String>,
 }
 
 /// Summarizes one semantic AI capability for the WebUI composer.
