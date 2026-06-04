@@ -1,6 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import Lightbox from "yet-another-react-lightbox";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import ReactMarkdown from "react-markdown";
+import "yet-another-react-lightbox/styles.css";
 import {
   closestCenter,
   DndContext,
@@ -6616,17 +6619,57 @@ function GeneratedMediaPlayerWindow(props: {
 }) {
   const source = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
-  // imageZoom stores the transient zoom ratio used only by the image viewer.
-  // imageZoom 保存仅用于图片查看器的临时缩放比例。
-  const [imageZoom, setImageZoom] = React.useState(1);
+  if (props.attachment.kind === "image") {
+    return (
+      <Lightbox
+        carousel={{
+          finite: true,
+          imageFit: "contain",
+        }}
+        close={() => props.onClose()}
+        index={0}
+        labels={{
+          Close: "关闭",
+          Next: "下一张",
+          Previous: "上一张",
+          "Zoom in": "放大",
+          "Zoom out": "缩小",
+        }}
+        open
+        plugins={[Zoom]}
+        portal={{
+          container: {
+            style: {
+              top: "var(--app-header-height)",
+            },
+          },
+        }}
+        slides={[{
+          alt: props.attachment.fileName,
+          src: source,
+        }]}
+        styles={{
+          container: {
+            backgroundColor: "color-mix(in oklch, var(--background) 72%, transparent)",
+            backdropFilter: "blur(18px)",
+            WebkitBackdropFilter: "blur(18px)",
+          },
+        }}
+        zoom={{
+          maxZoomPixelRatio: 1,
+          minZoom: 0.25,
+          scrollToZoom: true,
+          wheelZoomDistanceFactor: 90,
+          zoomInMultiplier: 1.5,
+        }}
+      />
+    );
+  }
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
-        className={cn(
-          "generated-media-player-window sm:max-w-[min(1120px,96vw)]",
-          props.attachment.kind === "image" && "image-player-window",
-        )}
+        className="generated-media-player-window sm:max-w-[min(1120px,96vw)]"
         showCloseButton={false}
       >
         <header className="generated-media-player-header">
@@ -6635,29 +6678,13 @@ function GeneratedMediaPlayerWindow(props: {
             <DialogTitle>{props.attachment.fileName}</DialogTitle>
           </span>
           <span className="generated-media-player-actions">
-            {props.attachment.kind === "image" ? (
-              <span className="generated-media-zoom-controls">
-                <Button onClick={() => setImageZoom((value) => Math.max(0.25, value - 0.25))} size="sm" type="button" variant="outline">-</Button>
-                <strong>{Math.round(imageZoom * 100)}%</strong>
-                <Button onClick={() => setImageZoom((value) => Math.min(4, value + 0.25))} size="sm" type="button" variant="outline">+</Button>
-              </span>
-            ) : null}
             <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
               <X size={17} />
             </Button>
           </span>
         </header>
         <div className="generated-media-player-body">
-          {props.attachment.kind === "image" ? (
-            <div className="generated-media-player-image-wrap">
-              <img
-                alt={props.attachment.fileName}
-                className="generated-media-player-image"
-                src={source}
-                style={{ transform: `scale(${imageZoom})` }}
-              />
-            </div>
-          ) : props.attachment.kind === "video" ? (
+          {props.attachment.kind === "video" ? (
             <video
               className="generated-media-player-video"
               controls
