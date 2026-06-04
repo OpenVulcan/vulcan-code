@@ -140,6 +140,14 @@ pub struct WorkbenchSnapshot {
     /// 由共享运行时解析出的输入区附件能力门控。
     #[serde(default)]
     pub composer_attachment_capabilities: Vec<ComposerAttachmentCapabilitySummary>,
+    /// Composer slash commands projected from the shared command catalog.
+    /// 从共享指令目录投影出的输入区 slash 指令。
+    #[serde(default)]
+    pub composer_slash_commands: Vec<ComposerSlashCommandSummary>,
+    /// Visible pending prompts retained for the selected conversation.
+    /// 当前选中会话保留的可见待发送提示词。
+    #[serde(default)]
+    pub pending_prompts: Vec<PendingPromptSummary>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -157,6 +165,88 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes one visible pending prompt retained above the composer.
+/// 描述输入区上方保留的单条可见待发送提示词。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingPromptSummary {
+    /// Stable entry identifier used for editing, removal and drag sorting.
+    /// 用于编辑、移除与拖拽排序的稳定条目标识。
+    pub id: String,
+    /// Full prompt text restored when the entry is edited.
+    /// 编辑条目时恢复的完整提示词文本。
+    pub prompt: String,
+    /// Compact preview rendered in the queue strip.
+    /// 渲染在队列条中的紧凑预览。
+    pub preview: String,
+    /// Attachments that will be replayed with the queued prompt.
+    /// 将随排队提示词一起回放的附件。
+    #[serde(default)]
+    pub attachments: Vec<ComposerAttachmentSummary>,
+    /// Stable queue state key.
+    /// 稳定队列状态键。
+    pub state: String,
+    /// Unix-millis creation timestamp text.
+    /// Unix 毫秒格式的创建时间文本。
+    pub created_at: String,
+}
+
+/// Describes one slash command visible to composer clients.
+/// 描述输入区客户端可见的单个 slash 指令。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposerSlashCommandSummary {
+    /// Stable command identifier used by routers.
+    /// 路由使用的稳定指令标识。
+    pub id: String,
+    /// Canonical English slash trigger shown to users.
+    /// 展示给用户的规范英文 slash 触发词。
+    pub command: String,
+    /// Chinese command description.
+    /// 中文指令说明。
+    pub description_zh: String,
+    /// English command description.
+    /// 英文指令说明。
+    pub description_en: String,
+}
+
+/// Returns every composer slash command in the same stable order as the native workbench.
+/// 按原生工作台相同的稳定顺序返回全部输入区 slash 指令。
+pub fn composer_slash_command_catalog() -> Vec<ComposerSlashCommandSummary> {
+    vec![
+        ComposerSlashCommandSummary {
+            id: String::from("model"),
+            command: String::from("/model"),
+            description_zh: String::from("选择当前模型"),
+            description_en: String::from("Choose the current model"),
+        },
+        ComposerSlashCommandSummary {
+            id: String::from("compact"),
+            command: String::from("/compact"),
+            description_zh: String::from("立即压缩当前会话上下文"),
+            description_en: String::from("Compact the current conversation context"),
+        },
+        ComposerSlashCommandSummary {
+            id: String::from("reasoning"),
+            command: String::from("/reasoning"),
+            description_zh: String::from("选择当前思考级别"),
+            description_en: String::from("Choose the current reasoning effort"),
+        },
+        ComposerSlashCommandSummary {
+            id: String::from("skill"),
+            command: String::from("/skill"),
+            description_zh: String::from("插入提示词技能加载指令"),
+            description_en: String::from("Insert a prompt-skill loading instruction"),
+        },
+        ComposerSlashCommandSummary {
+            id: String::from("skills"),
+            command: String::from("/skills"),
+            description_zh: String::from("打开提示词技能面板"),
+            description_en: String::from("Open the prompt skills panel"),
+        },
+    ]
 }
 
 /// Summarizes the dynamic and static context injected into the selected session.

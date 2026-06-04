@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::runtime_stream_driver_loop::drive_runtime_stream_provider_loop;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch;
 use crate::agent_runtime::runtime_stream_setup::build_runtime_start_events;
 use crate::provider_config::ProviderConfigurationFile;
@@ -14,6 +15,7 @@ use futures_util::{Stream, StreamExt};
 pub fn drive_runtime_stream_launch(
     config: ProviderConfigurationFile,
     launch: RuntimeStreamLaunch,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
         let session_id = launch.session_id;
@@ -24,7 +26,7 @@ pub fn drive_runtime_stream_launch(
             yield event;
         }
 
-        let provider_events = drive_runtime_stream_provider_loop(config, launch);
+        let provider_events = drive_runtime_stream_provider_loop(config, launch, prompt_intervention);
         futures_util::pin_mut!(provider_events);
         while let Some(event) = provider_events.next().await {
             yield event;

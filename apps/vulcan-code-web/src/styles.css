@@ -1824,10 +1824,10 @@ button {
 .streaming-thinking-overlay {
   position: absolute;
   left: 50%;
-  bottom: 158px;
+  bottom: calc(var(--composer-dock-height, 132px) + 28px);
   z-index: 4;
   width: min(760px, calc(100% - 64px));
-  max-height: min(360px, calc(100% - 230px));
+  max-height: min(360px, calc(100% - var(--composer-dock-height, 132px) - 96px));
   min-height: 126px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -1978,6 +1978,176 @@ button {
   box-shadow:
     0 0 0 2px color-mix(in oklch, var(--ring) 30%, transparent),
     0 16px 40px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.composer-slash-panel {
+  max-height: 270px;
+  display: grid;
+  gap: 2px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--card) 96%, var(--muted));
+}
+
+.composer-slash-row {
+  width: 100%;
+  height: 34px;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--foreground);
+  cursor: default;
+  font: inherit;
+  text-align: left;
+}
+
+.composer-slash-row:hover,
+.composer-slash-row.active {
+  background: var(--muted);
+}
+
+.composer-slash-command {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-slash-description {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-prompt-strip {
+  padding: 8px 12px 0;
+  background: var(--card);
+}
+
+.pending-prompt-list {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in oklch, var(--card) 96%, var(--muted));
+}
+
+.pending-prompt-row {
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 8px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.pending-prompt-row + .pending-prompt-row {
+  border-top: 1px solid color-mix(in oklch, var(--border) 74%, transparent);
+}
+
+.pending-prompt-row:hover,
+.pending-prompt-row:focus-within {
+  background: color-mix(in oklch, var(--muted) 56%, transparent);
+}
+
+.pending-prompt-row.dragging {
+  z-index: 20;
+  transition: none;
+  filter: drop-shadow(0 12px 22px rgba(15, 23, 42, 0.18));
+  will-change: transform;
+}
+
+.dark .pending-prompt-row.dragging {
+  filter: drop-shadow(0 16px 28px rgba(0, 0, 0, 0.34));
+}
+
+.pending-prompt-row.inserted {
+  color: var(--muted-foreground);
+}
+
+.pending-prompt-row-handle {
+  width: 22px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted-foreground);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.pending-prompt-row-handle:hover {
+  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  color: var(--foreground);
+}
+
+.pending-prompt-row-handle:active {
+  cursor: grabbing;
+}
+
+.pending-prompt-row.inserted .pending-prompt-row-handle {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.pending-prompt-row-main {
+  min-width: 0;
+  user-select: text;
+}
+
+.pending-prompt-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.35;
+  letter-spacing: 0;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.pending-prompt-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 3px;
+}
+
+.pending-prompt-row-actions [data-slot="button"] {
+  color: var(--muted-foreground);
+}
+
+.pending-prompt-row-actions [data-slot="button"]:hover {
+  color: var(--foreground);
+}
+
+.pending-prompt-guide-button {
+  min-width: 56px;
+  padding-inline: 8px;
+  border-radius: 999px;
+}
+
+.pending-prompt-guide-button:hover {
+  background: color-mix(in oklch, var(--muted) 78%, transparent);
+}
+
+.pending-prompt-guide-button.inserted,
+.pending-prompt-guide-button.inserted:disabled {
+  opacity: 1;
+  color: var(--muted-foreground);
+  background: color-mix(in oklch, var(--muted) 64%, transparent);
 }
 
 .composer-attachment-input {

@@ -38,6 +38,7 @@ pub(crate) fn execute_provider_transport_stream(
             request.context_injection,
             request.request_budget_guard,
             request.retry_policy,
+            request.prompt_intervention,
         ),
         ProviderApiFamily::OpenAiChatCompatible => match request.runtime_kind {
             ProviderRuntimeKind::AzureOpenAi => execute_azure_openai_stream(
@@ -61,6 +62,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.interleaved_reasoning,
                 request.request_budget_guard,
                 request.retry_policy,
+                request.prompt_intervention,
             ),
             ProviderRuntimeKind::OpenRouter => execute_openrouter_stream(
                 &request.provider_id,
@@ -82,6 +84,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.interleaved_reasoning,
                 request.request_budget_guard,
                 request.retry_policy,
+                request.prompt_intervention,
             ),
             _ => execute_openai_compatible_stream(
                 &request.provider_id,
@@ -105,6 +108,7 @@ pub(crate) fn execute_provider_transport_stream(
                 request.interleaved_reasoning,
                 request.request_budget_guard,
                 request.retry_policy,
+                request.prompt_intervention,
             ),
         },
         ProviderApiFamily::GoogleGeminiGenerateContent => execute_google_gemini_stream(
@@ -127,6 +131,7 @@ pub(crate) fn execute_provider_transport_stream(
             request.context_injection,
             request.request_budget_guard,
             request.retry_policy,
+            request.prompt_intervention,
         ),
         ProviderApiFamily::CohereChat => execute_cohere_stream(
             &request.provider_id,
@@ -148,6 +153,7 @@ pub(crate) fn execute_provider_transport_stream(
             request.context_injection,
             request.request_budget_guard,
             request.retry_policy,
+            request.prompt_intervention,
         ),
         ProviderApiFamily::AnthropicMessages => execute_anthropic_stream(
             &request.provider_id,
@@ -169,6 +175,7 @@ pub(crate) fn execute_provider_transport_stream(
             request.context_injection,
             request.request_budget_guard,
             request.retry_policy,
+            request.prompt_intervention,
         ),
         ProviderApiFamily::BedrockConverse => Box::pin(futures_util::stream::once(async {
             Err(String::from(

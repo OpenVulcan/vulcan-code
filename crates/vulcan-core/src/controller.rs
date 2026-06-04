@@ -6,10 +6,10 @@ use crate::provider::{
 };
 use crate::tool::{VulcanToolExecutor, VulcanToolPolicy};
 use crate::types::{
-    ControllerConfig, ControllerRunResult, ConversationMessage, ConversationPayload,
-    ConversationRecord, ConversationSnapshot, CoreError, CoreEvent, CoreEventKind,
-    ProviderTurnDelta, ProviderTurnResponse, ProviderUsageSnapshot, ToolInvocationRequest,
-    ToolInvocationResult, TranscriptRecordKind, TranscriptRole,
+    ControllerConfig, ControllerRunResult, ConversationAttachment, ConversationMessage,
+    ConversationPayload, ConversationRecord, ConversationSnapshot, CoreError, CoreEvent,
+    CoreEventKind, ProviderTurnDelta, ProviderTurnResponse, ProviderUsageSnapshot,
+    ToolInvocationRequest, ToolInvocationResult, TranscriptRecordKind, TranscriptRole,
 };
 use serde_json::{Map as JsonMap, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -338,7 +338,7 @@ impl VulcanCoreController {
         }
 
         if self.should_append_user_turn(trimmed_prompt) {
-            self.append_user_turn(trimmed_prompt);
+            self.append_user_turn(trimmed_prompt, Vec::new());
         }
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
@@ -437,13 +437,42 @@ impl VulcanCoreController {
         executor: &E,
         policy: &P,
         user_prompt: impl Into<String>,
-        mut on_safe_checkpoint: F,
+        on_safe_checkpoint: F,
     ) -> Result<ControllerRunResult, CoreError>
     where
         A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
         E: VulcanToolExecutor,
         P: VulcanToolPolicy,
         F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+    {
+        self.run_user_turn_streaming_with_checkpoints_and_interventions(
+            adapter,
+            executor,
+            policy,
+            user_prompt,
+            on_safe_checkpoint,
+            |_| false,
+        )
+        .await
+    }
+
+    /// Runs one streaming user turn and lets the host append guidance at replay-safe tool boundaries.
+    /// 运行一次流式用户回合，并允许宿主在可回放安全的工具边界追加引导。
+    pub async fn run_user_turn_streaming_with_checkpoints_and_interventions<A, E, P, F, I>(
+        &mut self,
+        adapter: &A,
+        executor: &E,
+        policy: &P,
+        user_prompt: impl Into<String>,
+        mut on_safe_checkpoint: F,
+        mut on_before_next_provider_turn: I,
+    ) -> Result<ControllerRunResult, CoreError>
+    where
+        A: VulcanStreamingProviderAdapter<Response = ProviderTurnResponse>,
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+        F: FnMut(&ConversationSnapshot, Option<&ProviderUsageSnapshot>) + Send,
+        I: FnMut(&mut Self) -> bool + Send,
     {
         let user_prompt = user_prompt.into();
         let trimmed_prompt = user_prompt.trim();
@@ -456,7 +485,7 @@ impl VulcanCoreController {
         }
 
         if self.should_append_user_turn(trimmed_prompt) {
-            self.append_user_turn(trimmed_prompt);
+            self.append_user_turn(trimmed_prompt, Vec::new());
         }
         let mut provider_turns_executed = 0usize;
         let mut tool_calls_processed = 0usize;
@@ -514,6 +543,12 @@ impl VulcanCoreController {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
                 on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
+                if on_before_next_provider_turn(self) {
+                    on_safe_checkpoint(
+                        &self.snapshot,
+                        self.last_successful_provider_usage.as_ref(),
+                    );
+                }
             }
         }
     }
@@ -598,7 +633,11 @@ impl VulcanCoreController {
 
     /// Appends one user-authored prompt into the canonical message window and durable record stream.
     /// 将一条用户输入追加到规范消息窗口与持久化记录流中。
-    fn append_user_turn(&mut self, prompt: &str) -> String {
+    fn append_user_turn(
+        &mut self,
+        prompt: &str,
+        attachments: Vec<ConversationAttachment>,
+    ) -> String {
         let message_id = self.next_local_id("user-message");
         let record_id = self.next_local_id("user-record");
         let timestamp = current_unix_millis_text();
@@ -606,7 +645,7 @@ impl VulcanCoreController {
             id: message_id.clone(),
             payload: ConversationPayload::UserText {
                 text: prompt.to_string(),
-                attachments: Vec::new(),
+                attachments: attachments.clone(),
             },
         });
         self.snapshot.records.push(ConversationRecord {
@@ -614,12 +653,54 @@ impl VulcanCoreController {
             role: TranscriptRole::User,
             record_kind: TranscriptRecordKind::Visible,
             visible: true,
-            title: String::from("用户输入"),
+            title: String::from("用户指令"),
             body: prompt.to_string(),
-            metadata: None,
+            metadata: user_turn_record_metadata(prompt, &attachments),
             created_at: timestamp,
         });
         message_id
+    }
+
+    /// Appends a host-guidance user turn that should be visible to the next provider request.
+    /// 追加一条应对下一次 Provider 请求可见的宿主引导用户回合。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `prompt` is the guidance text that entered the shared pending prompt queue.
+    /// `prompt` 是已经进入共享待发送队列的引导文本。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended message id, or `None` when the guidance is blank.
+    /// 返回追加后的消息标识；若引导为空白则返回 `None`。
+    pub fn append_interjected_user_turn(&mut self, prompt: &str) -> Option<String> {
+        self.append_interjected_user_turn_with_attachments(prompt, Vec::new())
+    }
+
+    /// Appends a host-guidance user turn with attachments before the next provider request.
+    /// 在下一次 Provider 请求前追加一条带附件的宿主引导用户回合。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `prompt` is the guidance text that entered the shared pending prompt queue.
+    /// `prompt` 是已经进入共享待发送队列的引导文本。
+    /// `attachments` are the structured attachments captured with the queued prompt.
+    /// `attachments` 是随排队提示词一起捕获的结构化附件。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The appended message id, or `None` when both guidance and attachments are empty.
+    /// 返回追加后的消息标识；若引导与附件均为空则返回 `None`。
+    pub fn append_interjected_user_turn_with_attachments(
+        &mut self,
+        prompt: &str,
+        attachments: Vec<ConversationAttachment>,
+    ) -> Option<String> {
+        let trimmed_prompt = prompt.trim();
+        if trimmed_prompt.is_empty() && attachments.is_empty() {
+            return None;
+        }
+        Some(self.append_user_turn(trimmed_prompt, attachments))
     }
 
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
@@ -783,6 +864,36 @@ impl VulcanCoreController {
     }
 }
 
+/// Builds transcript metadata for one controller-owned visible user turn.
+/// 为控制器持有的可见用户回合构建转录元数据。
+///
+/// # Parameters
+/// 参数
+/// `prompt` is the canonical user text stored in the provider-visible message.
+/// `prompt` 是存入 Provider 可见消息中的规范用户文本。
+/// `attachments` are the structured attachments attached to the same user turn.
+/// `attachments` 是附着到同一用户回合的结构化附件。
+///
+/// # Returns
+/// 返回值
+/// Metadata matching the session event reducer shape, or `None` when no attachments exist.
+/// 返回与会话事件归约器一致的元数据形态；无附件时返回 `None`。
+fn user_turn_record_metadata(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> Option<Value> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let serialized_attachments = serde_json::to_value(attachments).ok()?;
+    Some(json!({
+        "canonical_text": prompt,
+        "canonical_user_text": prompt,
+        "attachments": serialized_attachments.clone(),
+        "transcript_attachments": serialized_attachments,
+    }))
+}
+
 /// Derives the starting local identifier counter from the current snapshot sizes.
 /// 根据当前快照大小推导本地标识计数器的起始值。
 fn derive_initial_local_id_counter(snapshot: &ConversationSnapshot) -> u64 {
@@ -934,6 +1045,15 @@ mod tests {
                 planned_turns: Arc::new(Mutex::new(VecDeque::from(planned_turns))),
                 built_requests: Arc::new(Mutex::new(Vec::new())),
             }
+        }
+
+        /// Returns the built request snapshots captured by the streaming adapter so far.
+        /// 返回流式适配器截至当前捕获到的请求快照集合。
+        fn built_requests(&self) -> Vec<ProviderRequestSnapshot> {
+            self.built_requests
+                .lock()
+                .expect("lock streaming built requests")
+                .clone()
         }
     }
 
@@ -1191,6 +1311,7 @@ mod tests {
             temperature: Some(0.1),
             max_turns,
             additional_params: Some(json!({"reasoning_effort":"medium"})),
+            context_injection: None,
         }
     }
 
@@ -1466,6 +1587,134 @@ mod tests {
                 ConversationPayload::ToolResult { tool_call_id, .. }
                     if tool_call_id.as_deref() == Some("call-2")
             )));
+        });
+    }
+
+    /// Interjects host guidance after one streaming tool result before building the next provider request.
+    /// 在一次流式工具结果之后、构建下一次 Provider 请求之前插入宿主引导。
+    #[test]
+    fn run_user_turn_streaming_intervention_reaches_next_provider_request() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![
+                (
+                    vec![ProviderTurnDelta::Thinking {
+                        delta: String::from("先生成素材。"),
+                    }],
+                    ProviderTurnResponse {
+                        assistant_text: String::new(),
+                        assistant_reasoning: String::from("先生成素材。"),
+                        provider_message_id: Some(String::from("resp-intervention-1")),
+                        provider_message_state: None,
+                        tool_calls: vec![ConversationToolCall {
+                            id: String::from("tool-item-image"),
+                            tool_call_id: Some(String::from("call-image")),
+                            tool_name: String::from("image_generation"),
+                            arguments: json!({"prompt": "wanderer cover"}),
+                        }],
+                        continuation: Some(ProviderContinuation {
+                            provider_id: Some(String::from("mock-openai-streaming")),
+                            model_id: Some(String::from("mock-model")),
+                            last_provider_message_id: Some(String::from("resp-intervention-1")),
+                            updated_at: Some(String::from("4001")),
+                        }),
+                        usage: None,
+                    },
+                ),
+                (
+                    vec![ProviderTurnDelta::Output {
+                        delta: String::from("已遵循引导。"),
+                    }],
+                    ProviderTurnResponse {
+                        assistant_text: String::from("已遵循引导。"),
+                        assistant_reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-intervention-2")),
+                        provider_message_state: None,
+                        tool_calls: Vec::new(),
+                        continuation: Some(ProviderContinuation {
+                            provider_id: Some(String::from("mock-openai-streaming")),
+                            model_id: Some(String::from("mock-model")),
+                            last_provider_message_id: Some(String::from("resp-intervention-2")),
+                            updated_at: Some(String::from("4002")),
+                        }),
+                        usage: None,
+                    },
+                ),
+            ]);
+            let executor = MockToolExecutor::new().with_outcome(
+                "image_generation",
+                "图片已生成。",
+                Some(json!({"file": "wanderer_cover.jpg"})),
+                false,
+            );
+            let mut controller =
+                VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            let mut checkpoints = Vec::<ConversationSnapshot>::new();
+            let mut injected = false;
+            let guided_attachment = ConversationAttachment {
+                kind: crate::types::ConversationAttachmentKind::Image,
+                file_name: String::from("reference.png"),
+                local_path: String::from("D:/tmp/reference.png"),
+                source_path: None,
+                asset_id: Some(String::from("asset-reference")),
+                byte_len: Some(42),
+                preview_local_path: None,
+                mime_type: String::from("image/png"),
+            };
+
+            let result = controller
+                .run_user_turn_streaming_with_checkpoints_and_interventions(
+                    &adapter,
+                    &executor,
+                    &AllowAllToolPolicy,
+                    "生成一张图",
+                    |snapshot, _| checkpoints.push(snapshot.clone()),
+                    |controller| {
+                        if injected {
+                            return false;
+                        }
+                        injected = true;
+                        controller
+                            .append_interjected_user_turn_with_attachments(
+                                "不需要配图了",
+                                vec![guided_attachment.clone()],
+                            )
+                            .is_some()
+                    },
+                )
+                .await
+                .expect("run guided streaming user turn");
+
+            assert_eq!(result.provider_turns_executed, 2);
+            assert_eq!(result.tool_calls_processed, 1);
+            assert_eq!(checkpoints.len(), 2);
+            assert!(matches!(
+                checkpoints[1].messages.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::UserText { text, attachments },
+                    ..
+                }) if text == "不需要配图了" && attachments == &vec![guided_attachment.clone()]
+            ));
+            assert!(matches!(
+                checkpoints[1].records.last(),
+                Some(ConversationRecord {
+                    title,
+                    metadata: Some(metadata),
+                    ..
+                }) if title == "用户指令"
+                    && metadata.get("canonical_user_text").and_then(Value::as_str) == Some("不需要配图了")
+                    && metadata.get("transcript_attachments").is_some()
+            ));
+
+            let built_requests = adapter.built_requests();
+            assert_eq!(built_requests.len(), 2);
+            assert!(matches!(
+                built_requests[1].history.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::UserText { text, attachments },
+                    ..
+                }) if text == "不需要配图了" && attachments == &vec![guided_attachment]
+            ));
         });
     }
 

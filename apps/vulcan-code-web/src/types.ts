@@ -240,6 +240,29 @@ export interface ComposerAttachmentSummary {
   mimeType: string;
 }
 
+// PendingPromptSummary describes one visible queued prompt above the composer.
+// PendingPromptSummary 描述输入区上方单条可见排队提示词。
+export interface PendingPromptSummary {
+  // Stable entry identifier.
+  // 稳定条目标识。
+  id: string;
+  // Full prompt text restored during editing.
+  // 编辑时恢复的完整提示词文本。
+  prompt: string;
+  // Compact queue preview.
+  // 紧凑队列预览。
+  preview: string;
+  // Attachments replayed with the prompt.
+  // 随提示词回放的附件。
+  attachments: ComposerAttachmentSummary[];
+  // Stable queue state key.
+  // 稳定队列状态键。
+  state: "ready" | "inserted" | string;
+  // Unix-millis creation timestamp text.
+  // Unix 毫秒格式创建时间文本。
+  createdAt: string;
+}
+
 // ToolCallSummary describes one tool call block.
 // ToolCallSummary 描述单个工具调用块。
 export interface ToolCallSummary {
@@ -489,6 +512,23 @@ export interface ContextUsageSnapshot {
   tooltipRows: string[];
 }
 
+// ComposerSlashCommandSummary describes one slash command routed by the shared workbench service.
+// ComposerSlashCommandSummary 描述由共享工作台服务路由的单个 slash 指令。
+export interface ComposerSlashCommandSummary {
+  // Stable command identifier used by WebUI routing.
+  // WebUI 路由使用的稳定指令标识。
+  id: string;
+  // Canonical English slash trigger shown in the composer.
+  // 输入区展示的规范英文 slash 触发词。
+  command: string;
+  // Chinese command description.
+  // 中文指令说明。
+  descriptionZh: string;
+  // English command description.
+  // 英文指令说明。
+  descriptionEn: string;
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -537,6 +577,12 @@ export interface WorkbenchSnapshot {
   // Attachment capability gates for the composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];
+  // Composer slash commands projected by the shared service command catalog.
+  // 共享服务指令目录投影出的输入区 slash 指令。
+  composerSlashCommands?: ComposerSlashCommandSummary[];
+  // Visible pending prompts retained for the selected conversation.
+  // 当前选中会话保留的可见待发送提示词。
+  pendingPrompts?: PendingPromptSummary[];
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

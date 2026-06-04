@@ -8,6 +8,7 @@ use crate::agent_runtime::provider_transport_entry_inputs::{
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
 use crate::agent_runtime::provider_transport_stream_runtime::execute_host_controlled_stream_with_prepared_inputs;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use crate::provider_config::ModelInterleavedCapability;
@@ -44,6 +45,7 @@ pub(crate) fn execute_azure_openai_stream(
     interleaved_reasoning: Option<ModelInterleavedCapability>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let base_url = normalize_optional_base_url(base_url);
@@ -78,5 +80,6 @@ pub(crate) fn execute_azure_openai_stream(
             )
         },
         "Azure OpenAI",
+        prompt_intervention,
     )
 }

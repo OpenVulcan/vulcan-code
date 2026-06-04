@@ -2,6 +2,10 @@
 //! 从主工作台模块中抽取的待发送提示词队列与派发辅助实现。
 
 use super::*;
+use vulcan_workbench_model::{
+    PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason, PendingPromptDispatchContext,
+    pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
+};
 
 impl VulcanWorkbench {
     /// Returns the persisted pending prompt queue attached to the provided session runtime state.
@@ -79,6 +83,21 @@ impl VulcanWorkbench {
             .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic)
     }
 
+    /// Builds the shared pending-prompt dispatch context for this iced session.
+    /// 为当前 iced 会话构建共享待发送提示词分发上下文。
+    fn pending_prompt_dispatch_context(
+        &self,
+        session_id: SessionId,
+    ) -> PendingPromptDispatchContext {
+        PendingPromptDispatchContext {
+            uses_anthropic_runtime: self.session_uses_anthropic_runtime(session_id),
+            has_running_subagents: self.session_has_running_subagent_tasks(session_id),
+            has_active_run: self.session_has_active_run(session_id),
+            run_phase: Some(self.session_run_phase_for(session_id)),
+            has_active_compaction: self.session_has_active_compaction(session_id),
+        }
+    }
+
     /// Collapses and hides the subagent navigation round once the parent run, child tasks, and delegated callbacks have all settled.
     /// 当父运行、子任务与委派回调全部收敛后，折叠并隐藏子代理导航轮次。
     pub(super) fn refresh_subagent_navigation_round_visibility(&mut self, session_id: SessionId) {
@@ -94,13 +113,18 @@ impl VulcanWorkbench {
     /// Returns whether the internal system execution lane is still busy for the provided session, including active runs, internal queued callbacks, and running subagents.
     /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
     pub(super) fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
-        self.session_has_active_run(session_id)
-            || (self.session_run_phase_for(session_id) == SessionRunPhase::Preparing
-                && !self.session_has_active_run(session_id)
-                && self.session_precheck_progress.contains_key(&session_id))
-            || self.session_has_active_compaction(session_id)
-            || !self.session_pending_prompt_queue(session_id).is_empty()
-            || self.session_has_running_subagent_tasks(session_id)
+        let Some(runtime_state) = self.session_runtime_state(session_id) else {
+            return self.session_has_active_run(session_id)
+                || self.session_has_active_compaction(session_id)
+                || self.session_has_running_subagent_tasks(session_id);
+        };
+        pending_prompt_lane_is_busy(
+            &runtime_state.ui_state,
+            PendingPromptBusyLaneContext {
+                dispatch: self.pending_prompt_dispatch_context(session_id),
+                has_precheck_progress: self.session_precheck_progress.contains_key(&session_id),
+            },
+        )
     }
 
     /// Returns whether the selected root session should currently render the pending-prompt queue panel above the floating composer controls.
@@ -695,15 +719,18 @@ impl VulcanWorkbench {
         );
         prompt_entry.model_reference = panel_entry.model_reference.clone();
         prompt_entry.runtime_options = panel_entry.runtime_options.clone();
-        if let Err(error) = self.enqueue_session_pending_prompt(session_id, prompt_entry, true) {
+        if let Err(error) = self.enqueue_session_pending_prompt(session_id, prompt_entry, false) {
             self.status_message = error;
             return Task::none();
         }
         let _ = self.mark_session_pending_prompt_entry_inserted(session_id, entry_id);
         self.mark_session_waiting_for_inserted_prompt_dispatch(session_id);
-        self.status_message = if anthropic_pending_prompt_dispatch_is_blocked(
-            self.session_uses_anthropic_runtime(session_id),
-            self.session_has_running_subagent_tasks(session_id),
+        self.status_message = if matches!(
+            pending_prompt_dispatch_block_reason(
+                self.pending_prompt_dispatch_context(session_id),
+                true
+            ),
+            Some(PendingPromptDispatchBlockReason::AnthropicRunningSubagents)
         ) {
             String::from(
                 "已接入系统会话队列；Anthropic 协议下需等待当前子代理全部完成后，才能继续插入主会话。",
@@ -1328,23 +1355,11 @@ impl VulcanWorkbench {
         session_id: SessionId,
         allow_from_stopped_phase: bool,
     ) -> Task<Message> {
-        if anthropic_pending_prompt_dispatch_is_blocked(
-            self.session_uses_anthropic_runtime(session_id),
-            self.session_has_running_subagent_tasks(session_id),
-        ) {
-            return Task::none();
-        }
-        if self.session_has_active_run(session_id) {
-            return Task::none();
-        }
-        if self.session_run_phase_for(session_id) == SessionRunPhase::Preparing {
-            return Task::none();
-        }
-        if self.session_has_active_compaction(session_id) {
-            return Task::none();
-        }
-        if !allow_from_stopped_phase
-            && self.session_run_phase_for(session_id) == SessionRunPhase::Stopped
+        if pending_prompt_dispatch_block_reason(
+            self.pending_prompt_dispatch_context(session_id),
+            allow_from_stopped_phase,
+        )
+        .is_some()
         {
             return Task::none();
         }

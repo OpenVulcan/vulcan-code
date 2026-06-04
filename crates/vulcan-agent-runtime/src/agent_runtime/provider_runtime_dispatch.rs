@@ -13,6 +13,7 @@ use crate::agent_runtime::provider_transport::{
 };
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::provider_transport_wire_capture::{
     PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY, provider_request_dry_run_enabled,
 };
@@ -57,6 +58,7 @@ pub(crate) fn execute_provider_prompt_stream(
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
     execute_provider_prompt_stream_with_capture_mode(
         config,
@@ -71,6 +73,7 @@ pub(crate) fn execute_provider_prompt_stream(
         tools_manager,
         resolved_tools,
         false,
+        prompt_intervention,
     )
 }
 
@@ -102,6 +105,7 @@ pub(crate) fn execute_provider_prompt_capture_stream(
         tools_manager,
         resolved_tools,
         true,
+        None,
     )
 }
 
@@ -120,6 +124,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
     tools_manager: VulcanToolsManager,
     resolved_tools: Vec<ResolvedToolDefinition>,
     capture_only: bool,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream {
     let options = match resolve_provider_options(config, &preparation.model_blueprint.provider_id) {
         Ok(options) => options,
@@ -197,5 +202,6 @@ fn execute_provider_prompt_stream_with_capture_mode(
         preparation.model_blueprint.interleaved_reasoning.clone(),
         request_budget_guard,
         retry_policy,
+        prompt_intervention,
     ))
 }

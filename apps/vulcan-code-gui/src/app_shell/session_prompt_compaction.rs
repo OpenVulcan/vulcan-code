@@ -153,7 +153,8 @@ pub(super) fn stream_prompt_compaction_job(
             }
         };
 
-        let runtime_stream = drive_runtime_stream_launch(request.provider_configuration.clone(), launch);
+        let runtime_stream =
+            drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
         futures_util::pin_mut!(runtime_stream);
         while let Some(event) = runtime_stream.next().await {
             match event {

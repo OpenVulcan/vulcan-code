@@ -913,31 +913,6 @@ pub(super) fn build_user_prompt_transcript_metadata(
     }))
 }
 
-/// Returns whether pending-prompt dispatch must stay blocked because Anthropic sessions cannot safely continue the parent coordinator while detached subagents from the previous tool round are still running.
-/// 返回待发送提示词分发是否必须继续保持阻塞，因为 Anthropic 会话在前一轮工具回合的分离子代理仍在运行时，无法安全地让父协调器继续推进。
-pub(super) fn anthropic_pending_prompt_dispatch_is_blocked(
-    uses_anthropic_runtime: bool,
-    has_running_subagents: bool,
-) -> bool {
-    uses_anthropic_runtime && has_running_subagents
-}
-
-/// Returns the internal queue index that should dispatch next, optionally preferring delegated-completion callbacks so Anthropic sessions can close older tool rounds before user-authored follow-ups resume.
-/// 返回内部队列下一条应被分发的索引；在需要时优先选择子代理完成回流项，使 Anthropic 会话能先闭合旧工具回合，再恢复处理用户跟进消息。
-pub(super) fn pending_prompt_dispatch_index(
-    queue: &[PendingSessionPromptEntry],
-    prefer_delegate_completion: bool,
-) -> usize {
-    if prefer_delegate_completion
-        && let Some(index) = queue
-            .iter()
-            .position(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
-    {
-        return index;
-    }
-    0
-}
-
 /// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
 /// 解析注入到委派完成跟进提示词中的本地化终态标签。
 pub(super) fn delegate_completion_status_label(run_state: SubagentTaskRunState) -> &'static str {

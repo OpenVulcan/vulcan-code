@@ -12,6 +12,10 @@ use vulcan_provider_config::config::{
 };
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 
+/// Maximum number of pending prompts retained in either visible or internal queues.
+/// 可见队列或内部队列中允许保留的最大待发送提示词数量。
+pub const PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
+
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,6 +30,210 @@ pub enum PendingSessionPromptSource {
     /// Synthetic follow-up generated when one delegated subagent reports back asynchronously.
     /// 某个委派子代理异步回报后生成的合成跟进消息。
     DelegateCompletion,
+}
+
+/// Returns the internal queue index that should dispatch next.
+/// 返回内部队列下一条应被分发的索引。
+///
+/// # Parameters
+/// 参数
+/// `queue` is the internal pending prompt queue owned by one session.
+/// `queue` 是单个会话拥有的内部待发送提示词队列。
+/// `prefer_delegate_completion` asks the router to close delegated callbacks before user follow-ups.
+/// `prefer_delegate_completion` 要求路由器在用户跟进前优先闭合委派回调。
+///
+/// # Returns
+/// 返回值
+/// The queue index that should be removed and dispatched next.
+/// 应被移除并优先分发的队列索引。
+pub fn pending_prompt_dispatch_index(
+    queue: &[PendingSessionPromptEntry],
+    prefer_delegate_completion: bool,
+) -> usize {
+    if prefer_delegate_completion
+        && let Some(index) = queue
+            .iter()
+            .position(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
+    {
+        return index;
+    }
+    0
+}
+
+/// Runtime facts required by the shared pending-prompt dispatch gate.
+/// 共享待发送提示词分发门禁所需的运行态事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingPromptDispatchContext {
+    /// Whether the current provider uses the Anthropic runtime family.
+    /// 当前 Provider 是否使用 Anthropic 运行时族。
+    pub uses_anthropic_runtime: bool,
+    /// Whether delegated subagents are still running under the same parent session.
+    /// 同一父会话下是否仍有委派子代理正在运行。
+    pub has_running_subagents: bool,
+    /// Whether the parent session still owns an active root model stream.
+    /// 父会话是否仍拥有活跃的根模型流。
+    pub has_active_run: bool,
+    /// Current visible session run phase.
+    /// 当前可见会话运行阶段。
+    pub run_phase: Option<crate::SessionRunPhase>,
+    /// Whether a prompt compaction job is still active for this session.
+    /// 当前会话是否仍有活跃的提示词压缩任务。
+    pub has_active_compaction: bool,
+}
+
+/// Reason why a queued prompt cannot be dispatched yet.
+/// 排队提示词暂时不能分发的原因。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPromptDispatchBlockReason {
+    /// Anthropic parent dispatch must wait for running delegated subagents.
+    /// Anthropic 父会话分发必须等待运行中的委派子代理。
+    AnthropicRunningSubagents,
+    /// A root model stream is still active.
+    /// 根模型流仍在运行。
+    ActiveRun,
+    /// The session is still in preparation.
+    /// 会话仍处于准备阶段。
+    Preparing,
+    /// A prompt compaction job is still active.
+    /// 提示词压缩任务仍在运行。
+    ActiveCompaction,
+    /// Automatic dispatch is blocked by a manually stopped phase.
+    /// 自动分发被手动停止阶段阻塞。
+    Stopped,
+}
+
+/// Returns the shared iced-compatible reason that blocks queued prompt dispatch.
+/// 返回与 iced 兼容的共享排队提示词分发阻塞原因。
+///
+/// # Parameters
+/// 参数
+/// `context` contains UI-specific runtime facts collected by the caller.
+/// `context` 包含调用方收集的界面专属运行态事实。
+/// `allow_from_stopped_phase` mirrors iced manual insert behavior.
+/// `allow_from_stopped_phase` 对齐 iced 手动引导行为。
+///
+/// # Returns
+/// 返回值
+/// A block reason when dispatch must wait, otherwise `None`.
+/// 必须等待时返回阻塞原因，否则返回 `None`。
+pub fn pending_prompt_dispatch_block_reason(
+    context: PendingPromptDispatchContext,
+    allow_from_stopped_phase: bool,
+) -> Option<PendingPromptDispatchBlockReason> {
+    if context.uses_anthropic_runtime && context.has_running_subagents {
+        return Some(PendingPromptDispatchBlockReason::AnthropicRunningSubagents);
+    }
+    if context.has_active_run {
+        return Some(PendingPromptDispatchBlockReason::ActiveRun);
+    }
+    if context.run_phase == Some(crate::SessionRunPhase::Preparing) {
+        return Some(PendingPromptDispatchBlockReason::Preparing);
+    }
+    if context.has_active_compaction {
+        return Some(PendingPromptDispatchBlockReason::ActiveCompaction);
+    }
+    if !allow_from_stopped_phase && context.run_phase == Some(crate::SessionRunPhase::Stopped) {
+        return Some(PendingPromptDispatchBlockReason::Stopped);
+    }
+    None
+}
+
+/// Runtime facts required by the shared pending-prompt busy-lane check.
+/// 共享待发送提示词繁忙通道判断所需的运行态事实。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingPromptBusyLaneContext {
+    /// Dispatch context shared with the queued prompt router.
+    /// 与排队提示词路由器共享的分发上下文。
+    pub dispatch: PendingPromptDispatchContext,
+    /// Whether the session still owns an active precheck progress row.
+    /// 当前会话是否仍拥有活跃的预检查进度行。
+    pub has_precheck_progress: bool,
+}
+
+/// Returns whether the internal system lane is still busy using iced semantics.
+/// 使用 iced 语义判断内部系统通道是否仍然繁忙。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped queue state.
+/// `ui_state` 是会话级队列状态。
+/// `context` contains UI-specific runtime facts collected by the caller.
+/// `context` 包含调用方收集的界面专属运行态事实。
+///
+/// # Returns
+/// 返回值
+/// `true` when a submitted prompt must enter the visible pending queue.
+/// 当提交的提示词必须进入可见待发送队列时返回 `true`。
+pub fn pending_prompt_lane_is_busy(
+    ui_state: &SessionTranscriptUiState,
+    context: PendingPromptBusyLaneContext,
+) -> bool {
+    context.dispatch.has_active_run
+        || (context.dispatch.run_phase == Some(crate::SessionRunPhase::Preparing)
+            && !context.dispatch.has_active_run
+            && context.has_precheck_progress)
+        || context.dispatch.has_active_compaction
+        || !ui_state.pending_prompt_queue.is_empty()
+        || context.dispatch.has_running_subagents
+}
+
+/// Error returned when a visible pending prompt cannot be routed into the internal queue.
+/// 当可见待发送提示词无法路由进内部队列时返回的错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPromptQueueRouteError {
+    /// The requested visible panel entry no longer exists.
+    /// 请求的可见面板条目已不存在。
+    MissingPanelEntry,
+    /// The internal queue is already at capacity.
+    /// 内部队列已经达到容量上限。
+    InternalQueueFull,
+}
+
+/// Outcome returned after routing a visible pending prompt into the internal queue.
+/// 将可见待发送提示词路由进内部队列后的结果。
+#[derive(Debug, Clone)]
+pub enum PendingPromptQueueRouteOutcome {
+    /// A fresh internal queue entry was created and inserted.
+    /// 已创建并插入新的内部队列项。
+    Inserted(PendingSessionPromptEntry),
+    /// The visible row had already been inserted earlier.
+    /// 该可见行此前已经插入过。
+    AlreadyInserted,
+}
+
+/// Builds one internal pending prompt entry from a visible panel entry.
+/// 从可见面板条目构建一条内部待发送提示词项。
+///
+/// # Parameters
+/// 参数
+/// `panel_entry` is the visible queue row selected by the user or passive dispatcher.
+/// `panel_entry` 是用户或被动分发器选中的可见队列行。
+/// `internal_entry_id` is the stable id assigned by the caller.
+/// `internal_entry_id` 是调用方分配的稳定内部条目标识。
+/// `created_at` is the Unix-millis text captured for the internal entry.
+/// `created_at` 是为内部条目捕获的 Unix 毫秒文本。
+///
+/// # Returns
+/// 返回值
+/// The internal prompt entry that can be appended to a session execution queue.
+/// 可追加到会话执行队列中的内部提示词条目。
+pub fn pending_session_prompt_entry_from_panel_entry(
+    panel_entry: &PendingPromptPanelEntry,
+    internal_entry_id: String,
+    created_at: String,
+) -> PendingSessionPromptEntry {
+    PendingSessionPromptEntry {
+        id: internal_entry_id,
+        prompt: panel_entry.prompt.clone(),
+        preview: panel_entry.preview.clone(),
+        attachments: panel_entry.attachments.clone(),
+        model_reference: panel_entry.model_reference.clone(),
+        runtime_options: panel_entry.runtime_options.clone(),
+        source: PendingSessionPromptSource::UserFollowup,
+        task_id: None,
+        panel_entry_id: Some(panel_entry.id.clone()),
+        created_at,
+    }
 }
 
 /// Runtime controls captured when a queued prompt is authored or inserted.
@@ -172,6 +380,18 @@ pub enum PendingPromptPanelEntryState {
     Inserted,
 }
 
+/// Drop target used to reorder one visible pending-prompt panel entry.
+/// 用于重排单条可见待发送提示词面板项的落点。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingPromptPanelDropTarget {
+    /// Insert the dragged entry before one concrete visible row.
+    /// 将正在拖拽的条目插入到某个具体可见行之前。
+    Before(String),
+    /// Insert the dragged entry at the tail of the visible queue.
+    /// 将正在拖拽的条目插入到可见队列尾部。
+    End,
+}
+
 impl Default for PendingPromptPanelEntryState {
     /// Returns the default visible prompt-panel entry state used for older persisted snapshots.
     /// 返回旧持久化快照恢复时使用的默认可见队列项状态。
@@ -275,6 +495,339 @@ impl SessionTranscriptUiState {
             && self.pending_prompt_panel_queue.is_empty()
             && self.composer_draft.is_empty()
             && !self.unread
+    }
+}
+
+/// Routes one visible panel entry into the internal pending prompt queue.
+/// 将单条可见面板条目路由进内部待发送提示词队列。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+/// `panel_entry_id` identifies the visible row to insert.
+/// `panel_entry_id` 标识需要插入的可见行。
+/// `internal_entry_id` is the stable id assigned to the new internal entry.
+/// `internal_entry_id` 是分配给新内部条目的稳定标识。
+/// `created_at` is the creation timestamp for the internal entry.
+/// `created_at` 是内部条目的创建时间。
+///
+/// # Returns
+/// 返回值
+/// The route outcome or a queue routing error.
+/// 路由结果或队列路由错误。
+pub fn route_pending_prompt_panel_entry_into_internal_queue(
+    ui_state: &mut SessionTranscriptUiState,
+    panel_entry_id: &str,
+    internal_entry_id: String,
+    created_at: String,
+) -> Result<PendingPromptQueueRouteOutcome, PendingPromptQueueRouteError> {
+    let Some(panel_index) = ui_state
+        .pending_prompt_panel_queue
+        .iter()
+        .position(|entry| entry.id == panel_entry_id)
+    else {
+        return Err(PendingPromptQueueRouteError::MissingPanelEntry);
+    };
+    if ui_state.pending_prompt_panel_queue[panel_index].state
+        == PendingPromptPanelEntryState::Inserted
+    {
+        return Ok(PendingPromptQueueRouteOutcome::AlreadyInserted);
+    }
+    if ui_state.pending_prompt_queue.len() >= PENDING_PROMPT_QUEUE_LIMIT {
+        return Err(PendingPromptQueueRouteError::InternalQueueFull);
+    }
+    let panel_entry = ui_state.pending_prompt_panel_queue[panel_index].clone();
+    let internal_entry =
+        pending_session_prompt_entry_from_panel_entry(&panel_entry, internal_entry_id, created_at);
+    ui_state.pending_prompt_queue.push(internal_entry.clone());
+    if let Some(panel_entry) = ui_state.pending_prompt_panel_queue.get_mut(panel_index) {
+        panel_entry.state = PendingPromptPanelEntryState::Inserted;
+    }
+    Ok(PendingPromptQueueRouteOutcome::Inserted(internal_entry))
+}
+
+/// Takes the next dispatchable prompt from the internal queue or clones the first ready visible row.
+/// 从内部队列取出下一条可分发提示词，或克隆第一条待命可见行。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+/// `prefer_delegate_completion` mirrors the iced Anthropic dispatch preference.
+/// `prefer_delegate_completion` 对齐 iced 的 Anthropic 分发优先级。
+/// `fallback_internal_entry_id` is used only when a visible ready row becomes the dispatch entry.
+/// `fallback_internal_entry_id` 仅在可见待命行转为分发项时使用。
+/// `fallback_created_at` is used only when a visible ready row becomes the dispatch entry.
+/// `fallback_created_at` 仅在可见待命行转为分发项时使用。
+///
+/// # Returns
+/// 返回值
+/// The dispatch prompt entry when one is available.
+/// 存在可分发条目时返回待分发提示词项。
+pub fn take_next_pending_prompt_entry(
+    ui_state: &mut SessionTranscriptUiState,
+    prefer_delegate_completion: bool,
+    fallback_internal_entry_id: String,
+    fallback_created_at: String,
+) -> Option<PendingSessionPromptEntry> {
+    if let Some(entry) =
+        take_next_internal_pending_prompt_entry(ui_state, prefer_delegate_completion)
+    {
+        return Some(entry);
+    }
+    let panel_index = ui_state
+        .pending_prompt_panel_queue
+        .iter()
+        .position(|entry| entry.state == PendingPromptPanelEntryState::Ready)?;
+    let panel_entry = ui_state.pending_prompt_panel_queue[panel_index].clone();
+    Some(pending_session_prompt_entry_from_panel_entry(
+        &panel_entry,
+        fallback_internal_entry_id,
+        fallback_created_at,
+    ))
+}
+
+/// Takes the next already-internalized pending prompt without promoting a visible ready row.
+/// 只取出下一条已经进入内部队列的待发送提示词，不提升可见待命行。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+/// `prefer_delegate_completion` mirrors the iced Anthropic dispatch preference.
+/// `prefer_delegate_completion` 对齐 iced 的 Anthropic 分发优先级。
+///
+/// # Returns
+/// 返回值
+/// The internal dispatch prompt entry when one is available.
+/// 存在内部可分发条目时返回待分发提示词项。
+pub fn take_next_internal_pending_prompt_entry(
+    ui_state: &mut SessionTranscriptUiState,
+    prefer_delegate_completion: bool,
+) -> Option<PendingSessionPromptEntry> {
+    if ui_state.pending_prompt_queue.is_empty() {
+        return None;
+    }
+    let dispatch_index = pending_prompt_dispatch_index(
+        ui_state.pending_prompt_queue.as_slice(),
+        prefer_delegate_completion,
+    );
+    Some(ui_state.pending_prompt_queue.remove(dispatch_index))
+}
+
+/// Removes one visible panel entry and any linked internal queue entries.
+/// 移除单条可见面板条目及其关联的内部队列项。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+/// `panel_entry_id` identifies the visible row to remove.
+/// `panel_entry_id` 标识需要移除的可见行。
+///
+/// # Returns
+/// 返回值
+/// The removed visible panel entry when it existed.
+/// 若可见面板条目存在，则返回被移除的条目。
+pub fn remove_pending_prompt_panel_entry(
+    ui_state: &mut SessionTranscriptUiState,
+    panel_entry_id: &str,
+) -> Option<PendingPromptPanelEntry> {
+    let panel_index = ui_state
+        .pending_prompt_panel_queue
+        .iter()
+        .position(|entry| entry.id == panel_entry_id)?;
+    let removed_entry = ui_state.pending_prompt_panel_queue.remove(panel_index);
+    ui_state
+        .pending_prompt_queue
+        .retain(|entry| entry.panel_entry_id.as_deref() != Some(panel_entry_id));
+    Some(removed_entry)
+}
+
+/// Applies the iced pending-prompt drop-target semantics to the shared visible panel queue.
+/// 将 iced 的待发送提示词落点语义应用到共享可见面板队列。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+/// `dragged_entry_id` identifies the visible row being moved.
+/// `dragged_entry_id` 标识正在移动的可见行。
+/// `drop_target` is the iced-compatible insertion target.
+/// `drop_target` 是与 iced 兼容的插入落点。
+///
+/// # Returns
+/// 返回值
+/// Whether the visible queue order changed.
+/// 返回可见队列顺序是否发生变化。
+pub fn apply_pending_prompt_panel_drop_target(
+    ui_state: &mut SessionTranscriptUiState,
+    dragged_entry_id: &str,
+    drop_target: &PendingPromptPanelDropTarget,
+) -> bool {
+    let queue = &mut ui_state.pending_prompt_panel_queue;
+    let Some(current_index) = queue.iter().position(|entry| entry.id == dragged_entry_id) else {
+        return false;
+    };
+    let mut target_index = match drop_target {
+        PendingPromptPanelDropTarget::Before(target_entry_id) => {
+            let Some(index) = queue.iter().position(|entry| entry.id == *target_entry_id) else {
+                return false;
+            };
+            index
+        }
+        PendingPromptPanelDropTarget::End => queue.len(),
+    };
+    let entry = queue.remove(current_index);
+    if current_index < target_index {
+        target_index = target_index.saturating_sub(1);
+    }
+    if target_index == current_index {
+        queue.insert(current_index, entry);
+        return false;
+    }
+    let bounded_target_index = target_index.min(queue.len());
+    queue.insert(bounded_target_index, entry);
+    true
+}
+
+/// Clears internal queued prompts and restores linked visible entries to ready.
+/// 清空内部待发送提示词，并把关联的可见条目恢复为待命状态。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing both prompt queues.
+/// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
+///
+/// # Returns
+/// 返回值
+/// Whether any queue state changed.
+/// 是否发生了任何队列状态变更。
+pub fn clear_internal_pending_prompt_queue_and_restore_panel(
+    ui_state: &mut SessionTranscriptUiState,
+) -> bool {
+    let had_internal_entries = !ui_state.pending_prompt_queue.is_empty();
+    let linked_panel_ids = ui_state
+        .pending_prompt_queue
+        .iter()
+        .filter_map(|entry| entry.panel_entry_id.clone())
+        .collect::<BTreeSet<_>>();
+    ui_state.pending_prompt_queue.clear();
+    let mut changed = had_internal_entries;
+    for panel_entry in &mut ui_state.pending_prompt_panel_queue {
+        if (linked_panel_ids.is_empty() || linked_panel_ids.contains(&panel_entry.id))
+            && panel_entry.state == PendingPromptPanelEntryState::Inserted
+        {
+            panel_entry.state = PendingPromptPanelEntryState::Ready;
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Builds one minimal visible pending-prompt panel entry for order tests.
+    /// 为顺序测试构建一条最小可见待发送提示词面板项。
+    fn test_panel_entry(id: &str) -> PendingPromptPanelEntry {
+        PendingPromptPanelEntry {
+            id: id.to_string(),
+            prompt: format!("prompt-{id}"),
+            preview: format!("prompt-{id}"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            state: PendingPromptPanelEntryState::Ready,
+            created_at: String::from("1000"),
+        }
+    }
+
+    /// Returns the visible pending-prompt panel queue ids in order.
+    /// 按顺序返回可见待发送提示词面板队列标识。
+    fn panel_entry_ids(ui_state: &SessionTranscriptUiState) -> Vec<String> {
+        ui_state
+            .pending_prompt_panel_queue
+            .iter()
+            .map(|entry| entry.id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn pending_prompt_panel_drop_target_matches_iced_before_semantics() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![
+                test_panel_entry("a"),
+                test_panel_entry("b"),
+                test_panel_entry("c"),
+            ],
+            ..SessionTranscriptUiState::default()
+        };
+
+        let changed = apply_pending_prompt_panel_drop_target(
+            &mut ui_state,
+            "a",
+            &PendingPromptPanelDropTarget::Before(String::from("c")),
+        );
+
+        assert!(changed);
+        assert_eq!(panel_entry_ids(&ui_state), vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn pending_prompt_panel_drop_target_matches_iced_end_semantics() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![
+                test_panel_entry("a"),
+                test_panel_entry("b"),
+                test_panel_entry("c"),
+            ],
+            ..SessionTranscriptUiState::default()
+        };
+
+        let changed = apply_pending_prompt_panel_drop_target(
+            &mut ui_state,
+            "a",
+            &PendingPromptPanelDropTarget::End,
+        );
+
+        assert!(changed);
+        assert_eq!(panel_entry_ids(&ui_state), vec!["b", "c", "a"]);
+    }
+
+    /// Verifies manually guided prompts preserve the user's click order.
+    /// 验证手动引导的提示词会保留用户的点击顺序。
+    #[test]
+    fn routed_guidance_prompts_keep_first_in_first_out_order() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a"), test_panel_entry("b")],
+            ..SessionTranscriptUiState::default()
+        };
+
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route first guidance prompt");
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "b",
+            String::from("internal-b"),
+            String::from("1002"),
+        )
+        .expect("route second guidance prompt");
+
+        let first = take_next_internal_pending_prompt_entry(&mut ui_state, false)
+            .expect("take first guided prompt");
+        let second = take_next_internal_pending_prompt_entry(&mut ui_state, false)
+            .expect("take second guided prompt");
+
+        assert_eq!(first.panel_entry_id.as_deref(), Some("a"));
+        assert_eq!(second.panel_entry_id.as_deref(), Some("b"));
     }
 }
 

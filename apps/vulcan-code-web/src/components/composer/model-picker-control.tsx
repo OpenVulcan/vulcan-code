@@ -51,6 +51,9 @@ export function ModelPickerControl(props: {
   // Called when the user selects one model row.
   // 用户选择单个模型行时触发。
   onValueChange: (choice: ModelPickerChoice) => void;
+  // Optional signal that opens the picker from an external slash-command route.
+  // 可选信号，用于从外部 slash 指令路由打开筛选器。
+  openSignal?: number;
 }) {
   const [open, setOpen] = React.useState(false);
   const [filter, setFilter] = React.useState("");
@@ -69,6 +72,13 @@ export function ModelPickerControl(props: {
       setFilter("");
     }
   }, [open]);
+
+  React.useEffect(() => {
+    if (props.openSignal === undefined || props.openSignal <= 0) {
+      return;
+    }
+    setOpen(true);
+  }, [props.openSignal]);
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>

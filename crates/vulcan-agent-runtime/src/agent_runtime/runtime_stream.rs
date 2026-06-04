@@ -6,6 +6,7 @@ use crate::agent_runtime::events::ExecutionStreamEvent;
 use crate::agent_runtime::execution_models::ExecutionPreparationRequest;
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::runtime_stream_launch::prepare_runtime_stream_launch;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
@@ -30,6 +31,34 @@ pub fn stream_runtime_run(
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
+    stream_runtime_run_with_intervention(
+        config,
+        agent_profile_catalog,
+        luaskills_runtime,
+        mcp_runtime,
+        task_runtime,
+        question_runtime,
+        command_session_runtime,
+        token_budget_runtime,
+        request,
+        None,
+    )
+}
+
+/// Streams one provider run while allowing a host to inject guidance at safe tool boundaries.
+/// 流式执行一次 Provider 调用，并允许宿主在安全工具边界注入引导。
+pub fn stream_runtime_run_with_intervention(
+    config: ProviderConfigurationFile,
+    agent_profile_catalog: AgentProfileCatalog,
+    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    mcp_runtime: Option<McpRuntimeAccess>,
+    task_runtime: Arc<TaskRuntime>,
+    question_runtime: Arc<QuestionRuntime>,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    token_budget_runtime: Arc<TokenBudgetRuntime>,
+    request: ExecutionPreparationRequest,
+    prompt_intervention: Option<RuntimePromptIntervention>,
+) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     let mcp_runtime_access = mcp_runtime.unwrap_or_else(|| configured_mcp_runtime_access(&config));
     stream_runtime_run_with_access(
         config,
@@ -41,6 +70,7 @@ pub fn stream_runtime_run(
         command_session_runtime,
         token_budget_runtime,
         request,
+        prompt_intervention,
     )
 }
 
@@ -56,6 +86,7 @@ fn stream_runtime_run_with_access(
     command_session_runtime: Arc<CommandSessionRuntime>,
     token_budget_runtime: Arc<TokenBudgetRuntime>,
     request: ExecutionPreparationRequest,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
         let launch = match prepare_runtime_stream_launch(
@@ -75,7 +106,7 @@ fn stream_runtime_run_with_access(
                 return;
             }
         };
-        let runtime_stream = drive_runtime_stream_launch(config, launch);
+        let runtime_stream = drive_runtime_stream_launch(config, launch, prompt_intervention);
         futures_util::pin_mut!(runtime_stream);
         while let Some(event) = runtime_stream.next().await {
             yield event;

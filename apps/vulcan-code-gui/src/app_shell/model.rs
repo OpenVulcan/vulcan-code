@@ -3,13 +3,14 @@
 
 use std::fmt;
 pub use vulcan_workbench_model::{
-    ActivityEntry, ActivityLevel, PendingPromptModelReference, PendingPromptPanelEntry,
-    PendingPromptPanelEntryState, PendingPromptRuntimeOptions, PendingPromptWebSearchOverride,
-    PendingSessionPromptEntry, PendingSessionPromptSource, SessionCompactionEntry,
-    SessionComposerDraftState, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
+    ActivityEntry, ActivityLevel, PENDING_PROMPT_QUEUE_LIMIT, PendingPromptModelReference,
+    PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptRuntimeOptions,
+    PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
+    SessionCompactionEntry, SessionComposerDraftState, SessionId, SessionMessageEntry,
+    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
     TaskProjectSummary, VmmProfileSyncState, VmmWritebackOutboxEntry,
+    pending_prompt_dispatch_index,
 };
 
 /// Execution modes for AI coding tasks.

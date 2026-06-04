@@ -17,6 +17,7 @@ use crate::agent_runtime::provider_transport_retry::{
 use crate::agent_runtime::provider_transport_stream_executor::StreamingRuntimeToolExecutor;
 use crate::agent_runtime::provider_transport_tool_context::PreparedHostToolRuntimeContext;
 use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_execution_handler};
 use crate::agent_runtime::tool_runtime_bridge::VulcanManagedToolRuntimeBridge;
 use crate::model::SessionId;
@@ -67,6 +68,7 @@ pub(crate) fn execute_host_controlled_stream<A, F>(
     provider_label: String,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<
@@ -81,6 +83,7 @@ where
     Box::pin(stream! {
         let provider_factory = Arc::new(provider_factory);
         let provider_label_for_join = provider_label.clone();
+        let prompt_intervention = prompt_intervention.clone();
         let (live_sender, mut live_receiver) =
             unbounded_channel::<Result<ProviderStreamDelta, String>>();
         let task_sender = live_sender.clone();
@@ -114,7 +117,8 @@ where
                 let mut unsafe_delta_seen = false;
                 let attempt_result = {
                     let checkpoint_sender = attempt_sender.clone();
-                    let run_future = controller.run_user_turn_streaming_with_checkpoints(
+                    let prompt_intervention = prompt_intervention.clone();
+                    let run_future = controller.run_user_turn_streaming_with_checkpoints_and_interventions(
                         &provider_adapter,
                         &tool_executor,
                         &tool_policy,
@@ -126,6 +130,12 @@ where
                                     usage.cloned(),
                                 ),
                             ));
+                        },
+                        move |controller| {
+                            prompt_intervention
+                                .as_ref()
+                                .map(|intervention| intervention(session_id, controller))
+                                .unwrap_or(false)
                         },
                     );
                     tokio::pin!(run_future);
@@ -241,6 +251,7 @@ pub(crate) fn execute_host_controlled_stream_with_prepared_inputs<A, F>(
     core_snapshot: CoreConversationSnapshot,
     provider_factory: F,
     provider_label: impl Into<String>,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderDeltaStream
 where
     A: VulcanStreamingProviderAdapter<
@@ -298,5 +309,6 @@ where
         provider_label,
         request_budget_guard,
         retry_policy,
+        prompt_intervention,
     )
 }

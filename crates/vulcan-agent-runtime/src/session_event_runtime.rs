@@ -2,6 +2,7 @@
 //! 用于后台会话状态更新的共享会话事件归约器。
 
 use serde_json::json;
+use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
     SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRuntimeStateEntry,
@@ -443,10 +444,41 @@ pub fn apply_checkpoint_conversation_state(
     checkpoint_state: SessionConversationState,
     now: &str,
 ) {
-    let preserved_records = runtime_state.conversation_state.records.clone();
+    let mut preserved_records = runtime_state.conversation_state.records.clone();
+    merge_checkpoint_user_records(&mut preserved_records, &checkpoint_state.records);
     runtime_state.conversation_state = checkpoint_state;
     runtime_state.conversation_state.records = preserved_records;
     runtime_state.updated_at = now.to_string();
+}
+
+/// Merges user-visible checkpoint records that were created inside the host-owned controller.
+/// 合并由宿主控制器内部创建的用户可见检查点记录。
+///
+/// # Parameters
+/// 参数
+/// `preserved_records` are the WebUI-local transcript projections retained across checkpoints.
+/// `preserved_records` 是跨检查点保留的 WebUI 本地转录投影。
+/// `checkpoint_records` are records emitted by the canonical controller snapshot.
+/// `checkpoint_records` 是规范控制器快照发出的记录。
+fn merge_checkpoint_user_records(
+    preserved_records: &mut Vec<SessionConversationRecord>,
+    checkpoint_records: &[SessionConversationRecord],
+) {
+    let mut preserved_ids = preserved_records
+        .iter()
+        .map(|record| record.id.clone())
+        .collect::<BTreeSet<_>>();
+    for record in checkpoint_records {
+        if !record.visible
+            || record.kind != SessionMessageKind::User
+            || record.record_kind != SessionMessageRecordKind::Transcript
+            || preserved_ids.contains(&record.id)
+        {
+            continue;
+        }
+        preserved_ids.insert(record.id.clone());
+        preserved_records.push(record.clone());
+    }
 }
 
 /// Applies the terminal execution report to one background conversation state.
@@ -817,6 +849,47 @@ mod tests {
             records_before_checkpoint
         );
         assert_eq!(runtime_state.updated_at, "1002");
+    }
+
+    /// Verifies checkpoint-created guided user records are merged into visible transcript projections.
+    /// 验证检查点创建的引导用户记录会合并进可见转录投影。
+    #[test]
+    fn checkpoint_merges_guided_user_record() {
+        let session_id = test_session_id();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_prompt_record(&mut runtime_state, session_id, "1100", "先调用工具");
+        let mut output_record_id = None;
+        append_stream_delta_record_to_state(
+            &mut runtime_state,
+            session_id,
+            "1101",
+            &mut output_record_id,
+            SessionMessageRecordKind::AssistantOutput,
+            "输出",
+            "工具已经完成。",
+            false,
+        );
+        let mut checkpoint_state = runtime_state.conversation_state.clone();
+        checkpoint_state.records.push(SessionConversationRecord {
+            id: String::from("core-guided-user-record"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户输入"),
+            body: String::from("不需要配图了"),
+            metadata: None,
+            created_at: String::from("1102"),
+        });
+
+        apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1103");
+
+        assert!(runtime_state.conversation_state.records.iter().any(|record| {
+            record.kind == SessionMessageKind::User && record.body == "不需要配图了"
+        }));
+        assert!(runtime_state.conversation_state.records.iter().any(|record| {
+            record.record_kind == SessionMessageRecordKind::AssistantOutput
+                && record.body == "工具已经完成。"
+        }));
     }
 
     /// Verifies terminal reports keep streamed records when they also carry a canonical checkpoint.

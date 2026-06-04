@@ -5,12 +5,12 @@ use super::workbench_model_state::{
 use super::{
     ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
     PromptCompactionExecution, SessionPromptCompactionTrigger, ToolModalPresentation,
-    VulcanWorkbench, anthropic_pending_prompt_dispatch_is_blocked,
-    build_background_legacy_maintenance_queue, build_command_session_stop_result_metadata,
-    build_composer_slash_command_state, build_session_record_message_id,
-    build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
-    compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
-    composer_visible_line_count, generated_attachments_from_tool_metadata,
+    VulcanWorkbench, build_background_legacy_maintenance_queue,
+    build_command_session_stop_result_metadata, build_composer_slash_command_state,
+    build_session_record_message_id, build_session_turn_stats_from_state,
+    clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
+    composer_text_has_submittable_content, composer_visible_line_count,
+    generated_attachments_from_tool_metadata,
     merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
     pending_prompt_dispatch_index, prune_session_messages_to_limit,
     sanitize_workspace_history_search_query_input, session_event_store_missing_error,
@@ -38,6 +38,7 @@ use vulcan_hooks::{
     FnHookEventListener, FnHookHandler, HookDecision, HookEvent, HookEventKind, HookInvocation,
     HookMode, HookRegistration, HookResult,
 };
+use vulcan_workbench_model::{PendingPromptDispatchContext, pending_prompt_dispatch_block_reason};
 
 /// Builds a compact session summary for queue-related unit tests.
 /// 为队列相关单元测试构建一条紧凑会话摘要。
@@ -1598,10 +1599,49 @@ fn pending_prompt_dispatch_index_prefers_delegate_completion_for_anthropic() {
 /// 验证当上一轮工具回合的分离子代理仍在运行时，Anthropic 会话会阻止待发送提示词分发，而其他运行时保持原有行为。
 #[test]
 fn anthropic_pending_prompt_dispatch_blocks_only_for_running_subagents() {
-    assert!(anthropic_pending_prompt_dispatch_is_blocked(true, true));
-    assert!(!anthropic_pending_prompt_dispatch_is_blocked(true, false));
-    assert!(!anthropic_pending_prompt_dispatch_is_blocked(false, true));
-    assert!(!anthropic_pending_prompt_dispatch_is_blocked(false, false));
+    assert!(
+        pending_prompt_dispatch_block_reason(
+            test_pending_prompt_dispatch_context(true, true),
+            true,
+        )
+        .is_some()
+    );
+    assert!(
+        pending_prompt_dispatch_block_reason(
+            test_pending_prompt_dispatch_context(true, false),
+            true,
+        )
+        .is_none()
+    );
+    assert!(
+        pending_prompt_dispatch_block_reason(
+            test_pending_prompt_dispatch_context(false, true),
+            true,
+        )
+        .is_none()
+    );
+    assert!(
+        pending_prompt_dispatch_block_reason(
+            test_pending_prompt_dispatch_context(false, false),
+            true,
+        )
+        .is_none()
+    );
+}
+
+/// Builds one dispatch context focused on Anthropic subagent gating for queue-router tests.
+/// 为队列路由测试构建一份聚焦 Anthropic 子代理门禁的分发上下文。
+fn test_pending_prompt_dispatch_context(
+    uses_anthropic_runtime: bool,
+    has_running_subagents: bool,
+) -> PendingPromptDispatchContext {
+    PendingPromptDispatchContext {
+        uses_anthropic_runtime,
+        has_running_subagents,
+        has_active_run: false,
+        run_phase: None,
+        has_active_compaction: false,
+    }
 }
 
 /// Verifies that transcript pruning removes the oldest messages first.

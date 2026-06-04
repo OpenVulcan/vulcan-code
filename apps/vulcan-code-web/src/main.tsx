@@ -112,6 +112,7 @@ import type {
   AiCapabilityTargetSummary,
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
+  ComposerSlashCommandSummary,
   ContextInjectionCardSummary,
   ContextInjectionSnapshot,
   ContextUsageSnapshot,
@@ -119,6 +120,7 @@ import type {
   ConversationSummary,
   FeatureAreaSummary,
   MainAreaId,
+  PendingPromptSummary,
   ProjectSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
@@ -144,6 +146,7 @@ import {
   Clock3,
   Code2,
   Copy,
+  CornerDownRight,
   Database,
   FileCode2,
   FileJson2,
@@ -154,6 +157,7 @@ import {
   FolderOpen,
   GitBranch,
   Globe,
+  GripVertical,
   Hammer,
   History,
   Image as ImageIcon,
@@ -190,6 +194,7 @@ import {
   Sun,
   SquareIcon,
   TerminalSquare,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -291,6 +296,28 @@ interface ComposerSubmission {
   // 按 AI 能力键分组的运行时目标顺序覆盖。
   aiCapabilityTargetOrderOverrides: Record<string, string[]>;
 }
+
+// ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.
+// ComposerSlashCommandOpenTarget 命名 slash 指令可打开的现有输入区弹窗。
+type ComposerSlashCommandOpenTarget = "model" | "reasoning";
+
+// ComposerSlashCommandResult describes the routed effect of one slash command activation.
+// ComposerSlashCommandResult 描述单个 slash 指令激活后的路由效果。
+interface ComposerSlashCommandResult {
+  // Whether the command was handled by the caller.
+  // 调用方是否已处理该指令。
+  handled: boolean;
+  // Optional text inserted into the composer after command activation.
+  // 指令激活后可选插入到输入区的文本。
+  replacementText?: string;
+  // Optional existing popup opened by command activation.
+  // 指令激活后打开的可选现有弹窗。
+  openTarget?: ComposerSlashCommandOpenTarget;
+}
+
+// SLASH_SKILL_PROMPT matches the native workbench prompt inserted by /skill.
+// SLASH_SKILL_PROMPT 对齐原生工作台中 /skill 插入的提示词。
+const SLASH_SKILL_PROMPT = "请根据当前任务判断是否需要调用 `skill` 工具加载已启用的提示词技能详情。";
 
 // DEFAULT_PROJECT_BADGE_CONFIG provides the first generated badge preview.
 // DEFAULT_PROJECT_BADGE_CONFIG 提供生成式徽标的初始预览配置。
@@ -746,6 +773,41 @@ const browserFallbackStartup: StartupSnapshot = {
   recentLogs: ["[webui] browser preview mode"],
 };
 
+// browserFallbackSlashCommands mirrors the service-projected iced command catalog for preview mode.
+// browserFallbackSlashCommands 在预览模式中镜像 service 投影出的 iced 指令目录。
+const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
+  {
+    id: "model",
+    command: "/model",
+    descriptionZh: "选择当前模型",
+    descriptionEn: "Select the current model",
+  },
+  {
+    id: "compact",
+    command: "/compact",
+    descriptionZh: "压缩当前会话上下文",
+    descriptionEn: "Compact the current conversation context",
+  },
+  {
+    id: "reasoning",
+    command: "/reasoning",
+    descriptionZh: "选择当前思考级别",
+    descriptionEn: "Select the current reasoning level",
+  },
+  {
+    id: "skill",
+    command: "/skill",
+    descriptionZh: "插入提示词技能加载指令",
+    descriptionEn: "Insert the prompt-skill loading instruction",
+  },
+  {
+    id: "skills",
+    command: "/skills",
+    descriptionZh: "打开提示词技能面板",
+    descriptionEn: "Open the prompt skills panel",
+  },
+];
+
 // BrowserFallbackWorkbench is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackWorkbench 用于 WebUI 在 Tauri 外部进行前端开发时展示。
 const browserFallbackWorkbench: WorkbenchSnapshot = {
@@ -829,6 +891,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
     { id: "settings", label: "设置", description: "项目、模型、工具、诊断与系统设置", status: "预览" },
   ],
+  composerSlashCommands: browserFallbackSlashCommands,
+  pendingPrompts: [],
   plugins: [
     { id: "vulcan-codekit", name: "Vulcan CodeKit", kind: "LuaSkill", status: "预览", capability: "代码搜索、AST 定位、结构化 patch" },
     { id: "vulcan-curl", name: "Vulcan Curl", kind: "LuaSkill", status: "预览", capability: "HTTP GET/POST 与受控请求" },
@@ -1018,6 +1082,60 @@ async function submitConversationPrompt(
   });
 }
 
+// stopConversationRun stops the selected backend conversation run.
+// stopConversationRun 停止当前选中的后端会话运行。
+async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_stop_conversation_run");
+}
+
+// editPendingPrompt restores one queued prompt from the selected conversation queue.
+// editPendingPrompt 从当前选中会话队列恢复单条排队提示词。
+async function editPendingPrompt(entryId: string): Promise<PendingPromptSummary | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<PendingPromptSummary>("service_edit_pending_prompt", { entryId });
+}
+
+// insertPendingPrompt routes one visible queue item through the shared pending-prompt router.
+// insertPendingPrompt 通过共享待发送提示词路由器插入单条可见队列项。
+async function insertPendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_insert_pending_prompt", { entryId });
+}
+
+// removePendingPrompt removes one queued prompt from the selected conversation queue.
+// removePendingPrompt 从当前选中会话队列移除单条排队提示词。
+async function removePendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_remove_pending_prompt", { entryId });
+}
+
+// reorderPendingPrompts persists one iced-compatible pending prompt drop target.
+// reorderPendingPrompts 持久化一次与 iced 兼容的待发送提示词拖放落点。
+async function reorderPendingPrompts(
+  conversationId: string | null,
+  draggedEntryId: string,
+  targetEntryId: string | null,
+): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_reorder_pending_prompts", { conversationId, draggedEntryId, targetEntryId });
+}
+
 // pickComposerAttachments opens the native picker and stages selected files through the service.
 // pickComposerAttachments 通过服务打开原生选择器并暂存选中的文件。
 async function pickComposerAttachments(
@@ -1060,6 +1178,82 @@ async function stageComposerAttachmentBytes(
 // MAX_COMPOSER_ATTACHMENTS matches the iced composer attachment limit.
 // MAX_COMPOSER_ATTACHMENTS 对齐 iced 输入区附件数量上限。
 const MAX_COMPOSER_ATTACHMENTS = 10;
+
+// normalizedComposerSlashCommandId returns the stable action id for a projected command.
+// normalizedComposerSlashCommandId 返回投影指令对应的稳定动作标识。
+function normalizedComposerSlashCommandId(command: ComposerSlashCommandSummary): string {
+  const id = command.id.trim().toLowerCase();
+  if (id) {
+    return id;
+  }
+  return command.command.replace(/^\/+/, "").trim().toLowerCase();
+}
+
+// composerSlashCommandDescription returns the locale-specific description for one command row.
+// composerSlashCommandDescription 返回单个指令行的当前语言说明。
+function composerSlashCommandDescription(command: ComposerSlashCommandSummary, locale: LocaleCode): string {
+  return locale === "en-US" ? command.descriptionEn : command.descriptionZh;
+}
+
+// composerSlashCommandMatchesInput mirrors the native slash-command prefix matching rule.
+// composerSlashCommandMatchesInput 对齐原生 slash 指令前缀匹配规则。
+function composerSlashCommandMatchesInput(command: ComposerSlashCommandSummary, input: string): boolean {
+  if (!input.startsWith("/")) {
+    return false;
+  }
+  const filterText = input.slice(1).trim().toLowerCase();
+  const trigger = command.command.replace(/^\/+/, "").toLowerCase();
+  return trigger.startsWith(filterText);
+}
+
+// exactComposerSlashCommand finds a command whose trigger exactly equals the typed input.
+// exactComposerSlashCommand 查找触发词与当前输入完全相等的指令。
+function exactComposerSlashCommand(
+  commands: ComposerSlashCommandSummary[],
+  input: string,
+): ComposerSlashCommandSummary | null {
+  const normalizedInput = input.trim();
+  return commands.find((command) => command.command.localeCompare(normalizedInput, undefined, { sensitivity: "accent" }) === 0) ?? null;
+}
+
+// isComposerTextEntryElement detects native or rich text-entry targets that should keep focus.
+// isComposerTextEntryElement 检测应保留焦点的原生或富文本输入目标。
+function isComposerTextEntryElement(element: Element | null): boolean {
+  if (!element) {
+    return false;
+  }
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+    return true;
+  }
+  if (element instanceof HTMLElement && element.isContentEditable) {
+    return true;
+  }
+  return Boolean(element.closest('[contenteditable="true"], [role="textbox"]'));
+}
+
+// hasBlockingComposerPopup detects modal, menu, or popover surfaces that own keyboard input.
+// hasBlockingComposerPopup 检测拥有键盘输入权的模态框、菜单或弹出层。
+function hasBlockingComposerPopup(): boolean {
+  if (typeof document === "undefined") {
+    return false;
+  }
+  return Boolean(document.querySelector([
+    '[role="dialog"]',
+    '[role="alertdialog"]',
+    '[role="menu"]',
+    '[role="listbox"]',
+  ].join(",")));
+}
+
+// isComposerPrintableKey returns whether a global key event should become prompt text.
+// isComposerPrintableKey 返回全局键盘事件是否应转换为提示词文本。
+function isComposerPrintableKey(event: KeyboardEvent): boolean {
+  return event.key.length === 1
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && !event.isComposing;
+}
 
 // fileToBase64 converts a browser File into a standard base64 payload.
 // fileToBase64 将浏览器 File 转换为标准 base64 载荷。
@@ -1846,6 +2040,84 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, [selectedConversation, selectedConversationId, selectedDraftConversation, workbenchState.projects]);
 
+  // handleEditPendingPrompt restores one queued prompt back into the active composer.
+  // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
+  const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
+    try {
+      const pendingPrompt = await editPendingPrompt(entryId);
+      if (!pendingPrompt) {
+        return null;
+      }
+      const snapshot = await loadWorkbenchSnapshot();
+      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      return pendingPrompt;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return null;
+    }
+  }, []);
+
+  // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
+  // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
+  const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
+    try {
+      const snapshot = await insertPendingPrompt(entryId);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  // handleStopConversationRun stops the active backend conversation stream.
+  // handleStopConversationRun 停止当前活跃的后端会话流。
+  const handleStopConversationRun = React.useCallback(async (): Promise<boolean> => {
+    try {
+      const snapshot = await stopConversationRun();
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+      return Boolean(snapshot);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
+  // handleRemovePendingPrompt removes one queued prompt through the shared service queue.
+  // handleRemovePendingPrompt 通过共享服务队列移除单条排队提示词。
+  const handleRemovePendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
+    try {
+      const snapshot = await removePendingPrompt(entryId);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  // handleReorderPendingPrompts persists one visible pending prompt order update.
+  // handleReorderPendingPrompts 持久化一次可见待发送提示词排序更新。
+  const handleReorderPendingPrompts = React.useCallback(async (
+    entryIds: string[],
+    draggedEntryId: string,
+    targetEntryId: string | null,
+  ): Promise<void> => {
+    setWorkbenchState((current) => ({ ...current, pendingPrompts: reorderPendingPromptSummaries(current.pendingPrompts ?? [], entryIds) }));
+    try {
+      const snapshot = await reorderPendingPrompts(selectedConversationIdRef.current, draggedEntryId, targetEntryId);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      const snapshot = await loadWorkbenchSnapshot();
+      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+    }
+  }, []);
+
   // handleSelectWorkbenchModel persists one model picker choice through the shared service.
   // handleSelectWorkbenchModel 通过共享服务持久化单个模型筛选器选择。
   const handleSelectWorkbenchModel = React.useCallback(async (choice: ModelPickerChoice): Promise<boolean> => {
@@ -2082,6 +2354,27 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     };
   }, [draftConversation?.id, hydratedConversationIds, selectedConversationId]);
 
+  // handleComposerSlashCommand routes slash commands into existing workbench actions.
+  // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
+  const handleComposerSlashCommand = React.useCallback((command: ComposerSlashCommandSummary): ComposerSlashCommandResult => {
+    switch (normalizedComposerSlashCommandId(command)) {
+      case "model":
+        return { handled: true, openTarget: "model" };
+      case "reasoning":
+        return { handled: true, openTarget: "reasoning" };
+      case "skill":
+        return { handled: true, replacementText: SLASH_SKILL_PROMPT };
+      case "skills":
+        setActiveArea("skills");
+        return { handled: true };
+      case "compact":
+        toast.info("WebUI 上下文压缩路由尚未接入。");
+        return { handled: true };
+      default:
+        return { handled: false };
+    }
+  }, []);
+
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
       <header
@@ -2132,7 +2425,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onSelectConversation={handleSelectConversation}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
+            onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
+            onStopConversationRun={handleStopConversationRun}
+            onEditPendingPrompt={handleEditPendingPrompt}
+            onInsertPendingPrompt={handleInsertPendingPrompt}
+            onRemovePendingPrompt={handleRemovePendingPrompt}
+            onReorderPendingPrompts={handleReorderPendingPrompts}
           />
         ) : (
           <ExtractedFeatureShell
@@ -2335,6 +2634,41 @@ function mergeConversationSummaries(
       unread: keepUnread,
     };
   });
+}
+
+// reorderPendingPromptSummaries applies an optimistic pending-prompt order by id.
+// reorderPendingPromptSummaries 根据标识应用乐观待发送提示词排序。
+function reorderPendingPromptSummaries(entries: PendingPromptSummary[], entryIds: string[]): PendingPromptSummary[] {
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
+  const reordered = entryIds
+    .map((entryId) => entriesById.get(entryId))
+    .filter((entry): entry is PendingPromptSummary => Boolean(entry));
+  const orderedIds = new Set(entryIds);
+  return [
+    ...reordered,
+    ...entries.filter((entry) => !orderedIds.has(entry.id)),
+  ];
+}
+
+// useVerticalSortableItem centralizes the sidebar-proven vertical sortable item behavior.
+// useVerticalSortableItem 集中左侧侧栏已验证的纵向排序条目行为。
+function useVerticalSortableItem(id: string, disabled = false) {
+  // sortable owns the dnd-kit state and drag listeners for one vertical item.
+  // sortable 持有单个纵向条目的 dnd-kit 状态与拖拽监听。
+  const sortable = useSortable({ id, disabled });
+  // sortableTransform keeps movement vertical-only and prevents size-based text scaling.
+  // sortableTransform 将移动限制为仅纵向，并阻止基于尺寸差异的文字缩放。
+  const sortableTransform = sortable.transform ? { ...sortable.transform, x: 0, scaleX: 1, scaleY: 1 } : null;
+  // sortableStyle is shared by project rows and pending prompt rows.
+  // sortableStyle 由项目行和待发送提示词行共同使用。
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(sortableTransform),
+    transition: sortable.transition,
+  };
+  return {
+    ...sortable,
+    sortableStyle,
+  };
 }
 
 // mergeConversationMessages replaces one conversation message window in the local workbench state.
@@ -3595,7 +3929,13 @@ function ConsoleShell(props: {
   onSelectConversation: (conversationId: string) => void;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  onStopConversationRun: () => Promise<boolean>;
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   return (
     <SidebarProvider className="console-shell">
@@ -3887,7 +4227,13 @@ function ConsoleShellContent(props: {
   onSelectConversation: (conversationId: string) => void;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  onStopConversationRun: () => Promise<boolean>;
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   // sidebar controls the left project tree that can collapse automatically.
   // sidebar 控制可自动折叠的左侧项目树。
@@ -4008,7 +4354,13 @@ function ConsoleShellContent(props: {
           onToggleRightPanel={handleRightPanelToggle}
           onSelectWorkbenchModel={props.onSelectWorkbenchModel}
           onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+          onSlashCommand={props.onSlashCommand}
           onSubmitPrompt={props.onSubmitPrompt}
+          onStopConversationRun={props.onStopConversationRun}
+          onEditPendingPrompt={props.onEditPendingPrompt}
+          onInsertPendingPrompt={props.onInsertPendingPrompt}
+          onRemovePendingPrompt={props.onRemovePendingPrompt}
+          onReorderPendingPrompts={props.onReorderPendingPrompts}
         />
       </SidebarInset>
     </div>
@@ -4102,9 +4454,27 @@ function WorkspaceResizableBody(props: {
   // Persists one workbench reasoning-effort selection through the backend runtime.
   // 通过后端运行时持久化单个工作台思考档位选择。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Routes one projected composer slash command through the workbench shell.
+  // 通过工作台外壳路由单个投影输入区 slash 指令。
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   // Sends one composer prompt through the backend runtime.
   // 通过后端运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Stops the selected backend conversation run.
+  // 停止当前选中的后端会话运行。
+  onStopConversationRun: () => Promise<boolean>;
+  // Restores one pending prompt into the composer.
+  // 将单条待发送提示词恢复到输入区。
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  // Routes one pending prompt into the shared insertion queue.
+  // 将单条待发送提示词路由进共享引导队列。
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  // Removes one pending prompt from the queue.
+  // 从队列中移除单条待发送提示词。
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  // Persists the visible pending prompt order.
+  // 持久化可见待发送提示词顺序。
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   return (
     <div className={cn("workspace-resizable-body-shell", props.rightPanelFloating && "has-floating-context")}>
@@ -4132,7 +4502,13 @@ function WorkspaceResizableBody(props: {
               conversationLoadError={props.conversationLoadError}
               onSelectWorkbenchModel={props.onSelectWorkbenchModel}
               onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+              onSlashCommand={props.onSlashCommand}
               onSubmitPrompt={props.onSubmitPrompt}
+              onStopConversationRun={props.onStopConversationRun}
+              onEditPendingPrompt={props.onEditPendingPrompt}
+              onInsertPendingPrompt={props.onInsertPendingPrompt}
+              onRemovePendingPrompt={props.onRemovePendingPrompt}
+              onReorderPendingPrompts={props.onReorderPendingPrompts}
             />
           </section>
         </ResizablePanel>
@@ -4929,14 +5305,7 @@ function SortableProjectRow(props: {
   // 使用共享侧栏样式渲染单个会话行。
   renderConversationRow: (conversation: ConversationSummary, compactPinned?: boolean) => React.ReactNode;
 }) {
-  const {
-    attributes,
-    isDragging,
-    listeners,
-    setNodeRef,
-    transform,
-    transition,
-  } = useSortable({ id: props.project.id });
+  const sortable = useVerticalSortableItem(props.project.id);
   const folderName = projectFolderName(props.project.path);
   const showOriginalFolderName = folderName.length > 0 && folderName !== props.project.name;
   const conversationPreviewLimit = 5;
@@ -4947,18 +5316,11 @@ function SortableProjectRow(props: {
   const conversationOverflowLabel = props.isConversationListExpanded
     ? props.locale === "zh-CN" ? "折叠显示" : "Collapse"
     : props.locale === "zh-CN" ? "展开显示" : "Show more";
-  // sortableTransform keeps dnd-kit movement vertical-only and prevents size-based text scaling.
-  // sortableTransform 将 dnd-kit 移动限制为仅纵向，并阻止基于尺寸差异的文字缩放。
-  const sortableTransform = transform ? { ...transform, x: 0, scaleX: 1, scaleY: 1 } : null;
-  const sortableStyle: React.CSSProperties = {
-    transform: CSS.Transform.toString(sortableTransform),
-    transition,
-  };
   return (
     <SidebarMenuItem
-      className={cn("project-tree-item", isDragging && "drag-source")}
-      ref={setNodeRef}
-      style={sortableStyle}
+      className={cn("project-tree-item", sortable.isDragging && "drag-source")}
+      ref={sortable.setNodeRef}
+      style={sortable.sortableStyle}
     >
       {props.sidebarState === "collapsed" ? (
         <CollapsedProjectMenu
@@ -4970,7 +5332,7 @@ function SortableProjectRow(props: {
           selectedConversationId={props.selectedConversationId}
         />
       ) : (
-        <div className={cn("project-folder-row", isDragging && "drag-source-row")} {...attributes} {...listeners}>
+        <div className={cn("project-folder-row", sortable.isDragging && "drag-source-row")} {...sortable.attributes} {...sortable.listeners}>
           <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
             <SidebarMenuButton
               aria-expanded={props.isOpen}
@@ -5713,7 +6075,13 @@ function ChatArea(props: {
   conversationLoadError: string | null;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  onStopConversationRun: () => Promise<boolean>;
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   // t resolves localized runtime labels for conversation overlays and cues.
   // t 解析会话浮层与提示使用的本地化运行文案。
@@ -5730,6 +6098,9 @@ function ChatArea(props: {
   // isAtConversationBottom tracks whether the user is viewing the latest conversation content.
   // isAtConversationBottom 跟踪用户是否正在查看最新的会话内容。
   const [isAtConversationBottom, setIsAtConversationBottom] = React.useState(true);
+  // composerDockHeight tracks the actual floating composer stack height for overlay positioning.
+  // composerDockHeight 跟踪浮动输入区堆栈真实高度，用于定位浮层。
+  const [composerDockHeight, setComposerDockHeight] = React.useState(132);
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
@@ -5746,6 +6117,7 @@ function ChatArea(props: {
   // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
   const streamingThinkingBlock = activeStreamingThinkingBlock(selectedConversation, messages);
   const runtimeCueText = streamingThinkingBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
+  const isConversationRunning = conversationIsRunning(selectedConversation);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -5845,7 +6217,10 @@ function ChatArea(props: {
   }, [conversationStreamSignature, props.selectedConversationId, updateConversationBottomState]);
 
   return (
-    <div className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}>
+    <div
+      className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}
+      style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
+    >
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
       ) : isEmptyConversation ? (
@@ -5855,12 +6230,20 @@ function ChatArea(props: {
             conversationId={props.selectedDraftConversation ? null : selectedConversation?.id ?? null}
             aiCapabilities={props.workbench.aiCapabilities ?? []}
             attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
+            slashCommands={props.workbench.composerSlashCommands ?? []}
             providers={props.workbench.providers}
+            pendingPrompts={props.workbench.pendingPrompts ?? []}
             reasoningSelection={props.workbench.reasoningSelection ?? null}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+            onSlashCommand={props.onSlashCommand}
             onSubmitPrompt={props.onSubmitPrompt}
-        />
+            onStopConversationRun={props.onStopConversationRun}
+            onEditPendingPrompt={props.onEditPendingPrompt}
+            onInsertPendingPrompt={props.onInsertPendingPrompt}
+            onRemovePendingPrompt={props.onRemovePendingPrompt}
+            onReorderPendingPrompts={props.onReorderPendingPrompts}
+          />
       ) : (
         <>
           <ConversationWorkspace
@@ -5876,15 +6259,25 @@ function ChatArea(props: {
             attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
             projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
             conversationId={selectedConversation?.id ?? null}
+            slashCommands={props.workbench.composerSlashCommands ?? []}
             contextUsage={props.workbench.contextUsage ?? null}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+            onSlashCommand={props.onSlashCommand}
+            onComposerDockHeightChange={setComposerDockHeight}
             onSubmitPrompt={props.onSubmitPrompt}
+            onStopConversationRun={props.onStopConversationRun}
             providers={props.workbench.providers}
+            pendingPrompts={props.workbench.pendingPrompts ?? []}
+            isConversationRunning={isConversationRunning}
             reasoningSelection={props.workbench.reasoningSelection ?? null}
             runtimeCueText={runtimeCueText}
             showScrollToBottom={!isAtConversationBottom}
+            onEditPendingPrompt={props.onEditPendingPrompt}
+            onInsertPendingPrompt={props.onInsertPendingPrompt}
+            onRemovePendingPrompt={props.onRemovePendingPrompt}
+            onReorderPendingPrompts={props.onReorderPendingPrompts}
           />
         </>
       )}
@@ -5928,6 +6321,7 @@ function ConversationWorkspace(props: {
           <ConversationRenderItemView
             item={item}
             key={item.id}
+            sessionRunning={conversationIsRunning(props.conversation)}
             onOpenDetail={setDetail}
             onOpenMedia={setMediaPlayer}
           />
@@ -5951,6 +6345,7 @@ function ConversationWorkspace(props: {
 // ConversationRenderItemView 渲染单条投影后的转录展示项。
 function ConversationRenderItemView(props: {
   item: ConversationRenderItem;
+  sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
@@ -5986,6 +6381,7 @@ function ConversationRenderItemView(props: {
         {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
         <ConversationBlocksView
           blocks={props.item.blocks}
+          sessionRunning={props.sessionRunning}
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
         />
@@ -6006,6 +6402,7 @@ function stripUserPromptHeading(body: string): string {
 // ConversationBlockView 将单个解析块分派给对应视觉渲染器。
 function ConversationBlocksView(props: {
   blocks: ConversationBlock[];
+  sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
@@ -6013,6 +6410,7 @@ function ConversationBlocksView(props: {
     return (
       <ToolExecutionBlock
         blocks={props.blocks}
+        sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
       />
@@ -6029,6 +6427,7 @@ function ConversationBlocksView(props: {
   return (
     <SpecialConversationBlock
       block={block}
+      sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
       onOpenMedia={props.onOpenMedia}
     />
@@ -6101,6 +6500,7 @@ function MarkdownMessage(props: {
 // SpecialConversationBlock 渲染紧凑的工具、命令、diff、思考与提示行。
 function SpecialConversationBlock(props: {
   block: ConversationBlock;
+  sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
@@ -6112,6 +6512,7 @@ function SpecialConversationBlock(props: {
     return (
       <ToolExecutionBlock
         blocks={[props.block]}
+        sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
       />
@@ -6192,6 +6593,7 @@ function ThinkingBlock(props: {
 // ToolExecutionBlock 渲染单条紧凑的合并工具执行行。
 function ToolExecutionBlock(props: {
   blocks: ConversationBlock[];
+  sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
@@ -6203,9 +6605,9 @@ function ToolExecutionBlock(props: {
     return null;
   }
 
-  const summary = toolExecutionSummary(props.blocks);
+  const summary = toolExecutionSummary(props.blocks, props.sessionRunning);
   const toolName = toolExecutionName(props.blocks);
-  const displayState = toolExecutionDisplayState(props.blocks);
+  const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
   const detailBody = props.blocks
     .map((block) => `## ${blockTitle(block.kind, block.toolName)}\n\n${block.body}`)
@@ -6248,13 +6650,13 @@ function ToolExecutionBlock(props: {
 
 // toolExecutionSummary builds the compact transcript row summary for one tool execution.
 // toolExecutionSummary 为单次工具执行构建紧凑转录行摘要。
-function toolExecutionSummary(blocks: ConversationBlock[]): string {
+function toolExecutionSummary(blocks: ConversationBlock[], sessionRunning: boolean): string {
   const commandBlock = blocks.find((block) => block.kind === "command");
   const resultBlock = blocks.find((block) => block.kind === "tool-result");
   const callBlock = blocks.find((block) => block.kind === "tool-call");
   const source = `${resultBlock?.body ?? ""}\n${callBlock?.body ?? ""}`;
   const toolName = toolExecutionName(blocks);
-  const statusLabel = toolDisplayStateLabel(toolExecutionDisplayState(blocks));
+  const statusLabel = toolDisplayStateLabel(toolExecutionDisplayState(blocks, sessionRunning));
   if (commandBlock && !toolName) {
     return commandBlock.summary.includes("命令")
       ? commandBlock.summary
@@ -6294,7 +6696,7 @@ function toolExecutionName(blocks: ConversationBlock[]): string | null {
 
 // toolExecutionDisplayState resolves the stable compact display state for one tool execution row.
 // toolExecutionDisplayState 解析单条工具执行行使用的稳定紧凑显示状态。
-function toolExecutionDisplayState(blocks: ConversationBlock[]): "failed" | "completed" | "running" {
+function toolExecutionDisplayState(blocks: ConversationBlock[], sessionRunning: boolean): "failed" | "completed" | "running" | "stopped" {
   if (blocks.some((block) => block.kind === "tool-result" && toolMetadataContainsReturnPayload(block.rawMetadata, block.body))) {
     return "completed";
   }
@@ -6311,6 +6713,9 @@ function toolExecutionDisplayState(blocks: ConversationBlock[]): "failed" | "com
   }
   if (textState === "completed") {
     return "completed";
+  }
+  if (!sessionRunning) {
+    return "stopped";
   }
   return "running";
 }
@@ -6442,6 +6847,7 @@ function generatedMediaIcon(kind: GeneratedMediaKind) {
 function toolDisplayStateLabel(status: "failed" | "completed" | "running" | string): string {
   if (status === "failed") return "失败";
   if (status === "completed") return "已完成";
+  if (status === "stopped") return "已停止";
   return "进行中";
 }
 
@@ -6790,6 +7196,19 @@ function conversationRuntimeCueText(
   return t("runtime.requesting");
 }
 
+// conversationIsRunning derives the send-button stop state from backend session status.
+// conversationIsRunning 从后端会话状态推导发送按钮的停止状态。
+function conversationIsRunning(conversation: ConversationSummary | undefined): boolean {
+  if (!conversation) {
+    return false;
+  }
+  const phase = (conversation.runPhase ?? "").trim().toLowerCase();
+  if (phase && !["idle", "ready", "failed", "stopped"].includes(phase)) {
+    return true;
+  }
+  return conversation.status.trim().toLowerCase() === "running";
+}
+
 // sessionRunPhaseCueText maps the backend per-session phase to a reusable active cue.
 // sessionRunPhaseCueText 将后端会话级阶段映射为可复用的活动提示。
 function sessionRunPhaseCueText(
@@ -6866,6 +7285,15 @@ function ComposerDock(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Slash commands projected by the shared workbench service.
+  // 共享工作台服务投影出的 slash 指令。
+  slashCommands: ComposerSlashCommandSummary[];
+  // Visible pending prompts retained for the selected conversation.
+  // 当前选中会话保留的可见待发送提示词。
+  pendingPrompts: PendingPromptSummary[];
+  // Whether the selected conversation has an active backend run.
+  // 当前选中会话是否存在活跃后端运行。
+  isConversationRunning: boolean;
   // showScrollToBottom controls whether the bottom-jump button is visible.
   // showScrollToBottom 控制是否显示跳转到底部按钮。
   showScrollToBottom: boolean;
@@ -6881,9 +7309,30 @@ function ComposerDock(props: {
   // onSelectWorkbenchReasoningEffort persists a selected reasoning effort.
   // onSelectWorkbenchReasoningEffort 持久化选中的思考档位。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // onSlashCommand routes one projected slash command.
+  // onSlashCommand 路由单个投影 slash 指令。
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
+  // Reports the measured floating composer stack height.
+  // 上报浮动输入区堆栈的实测高度。
+  onComposerDockHeightChange: (height: number) => void;
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // onStopConversationRun stops the selected backend conversation stream.
+  // onStopConversationRun 停止当前选中的后端会话流。
+  onStopConversationRun: () => Promise<boolean>;
+  // Restores one pending prompt into the composer.
+  // 将单条待发送提示词恢复到输入区。
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  // Routes one pending prompt into the shared insertion queue.
+  // 将单条待发送提示词路由进共享引导队列。
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  // Removes one pending prompt from the visible queue.
+  // 从可见队列移除单条待发送提示词。
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  // Persists the pending prompt order.
+  // 持久化待发送提示词顺序。
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -6891,8 +7340,28 @@ function ComposerDock(props: {
   // runtimeCueText 在输入区附近显示当前会话的进行中活动。
   runtimeCueText: string | null;
 }) {
+  // dockRef measures the full composer stack, including pending queue rows and runtime cues.
+  // dockRef 测量完整输入区堆栈，包括待发送队列行与运行提示。
+  const dockRef = React.useRef<HTMLDivElement | null>(null);
+  const onComposerDockHeightChange = props.onComposerDockHeightChange;
+
+  React.useLayoutEffect(() => {
+    const element = dockRef.current;
+    if (!element) {
+      return;
+    }
+    const reportHeight = () => onComposerDockHeightChange(Math.ceil(element.getBoundingClientRect().height));
+    reportHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(reportHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [onComposerDockHeightChange]);
+
   return (
-    <div className="composer-dock">
+    <div className="composer-dock" ref={dockRef}>
       {props.showScrollToBottom ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -6921,10 +7390,19 @@ function ComposerDock(props: {
         projectId={props.projectId}
         conversationId={props.conversationId}
         contextUsage={props.contextUsage}
+        slashCommands={props.slashCommands}
+        pendingPrompts={props.pendingPrompts}
+        isConversationRunning={props.isConversationRunning}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+        onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
+        onStopConversationRun={props.onStopConversationRun}
+        onEditPendingPrompt={props.onEditPendingPrompt}
+        onInsertPendingPrompt={props.onInsertPendingPrompt}
+        onRemovePendingPrompt={props.onRemovePendingPrompt}
+        onReorderPendingPrompts={props.onReorderPendingPrompts}
         reasoningSelection={props.reasoningSelection}
       />
     </div>
@@ -6949,6 +7427,15 @@ function ComposerPanel(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Slash commands projected by the shared workbench service.
+  // 共享工作台服务投影出的 slash 指令。
+  slashCommands: ComposerSlashCommandSummary[];
+  // Visible pending prompts retained for the selected conversation.
+  // 当前选中会话保留的可见待发送提示词。
+  pendingPrompts: PendingPromptSummary[];
+  // Whether the selected conversation has an active backend run.
+  // 当前选中会话是否存在活跃后端运行。
+  isConversationRunning: boolean;
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
@@ -6958,9 +7445,27 @@ function ComposerPanel(props: {
   // Persists one selected workbench reasoning effort.
   // 持久化单个选中的工作台思考档位。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Routes one projected slash command through the workbench shell.
+  // 通过工作台外壳路由单个投影 slash 指令。
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Stops the selected backend conversation stream.
+  // 停止当前选中的后端会话流。
+  onStopConversationRun: () => Promise<boolean>;
+  // Restores one pending prompt into the composer.
+  // 将单条待发送提示词恢复到输入区。
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  // Routes one pending prompt into the shared insertion queue.
+  // 将单条待发送提示词路由进共享引导队列。
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  // Removes one pending prompt from the visible queue.
+  // 从可见队列移除单条待发送提示词。
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  // Persists the pending prompt order.
+  // 持久化待发送提示词顺序。
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -6971,6 +7476,18 @@ function ComposerPanel(props: {
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState("");
+  // slashHighlightedIndex stores the highlighted command row while the slash panel is visible.
+  // slashHighlightedIndex 保存 slash 面板可见时的高亮指令行。
+  const [slashHighlightedIndex, setSlashHighlightedIndex] = React.useState(0);
+  // slashDismissedInput stores the exact input dismissed by Escape.
+  // slashDismissedInput 保存被 Escape 隐藏的精确输入内容。
+  const [slashDismissedInput, setSlashDismissedInput] = React.useState<string | null>(null);
+  // modelPickerOpenSignal opens the existing model picker from /model.
+  // modelPickerOpenSignal 通过 /model 打开现有模型筛选器。
+  const [modelPickerOpenSignal, setModelPickerOpenSignal] = React.useState(0);
+  // reasoningPickerOpenSignal opens the existing reasoning selector from /reasoning.
+  // reasoningPickerOpenSignal 通过 /reasoning 打开现有思考档位选择器。
+  const [reasoningPickerOpenSignal, setReasoningPickerOpenSignal] = React.useState(0);
   // attachments stores staged composer attachments submitted with the next prompt.
   // attachments 保存下一条提示词将携带的已暂存输入区附件。
   const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>([]);
@@ -6986,6 +7503,9 @@ function ComposerPanel(props: {
   // attachmentFileInputRef opens the browser file picker for manual attachment selection.
   // attachmentFileInputRef 打开浏览器文件选择器用于手动选择附件。
   const attachmentFileInputRef = React.useRef<HTMLInputElement | null>(null);
+  // composerTextareaRef focuses the prompt field from global workspace typing.
+  // composerTextareaRef 用于从工作台全局输入聚焦提示词输入框。
+  const composerTextareaRef = React.useRef<HTMLTextAreaElement | null>(null);
   // executionMode stores the local preview execution-mode selection.
   // executionMode 保存本地预览用的执行模式选择。
   const [executionMode, setExecutionMode] = React.useState("build");
@@ -7099,17 +7619,107 @@ function ComposerPanel(props: {
   const placeholder = React.useMemo(() => {
     return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
   }, [t]);
+  // visibleSlashCommands mirrors iced prefix filtering for the slash command panel.
+  // visibleSlashCommands 对齐 iced 前缀过滤逻辑，供 slash 指令面板展示。
+  const visibleSlashCommands = React.useMemo(() => {
+    if (!draftInput.startsWith("/") || slashDismissedInput === draftInput) {
+      return [];
+    }
+    return props.slashCommands.filter((command) => composerSlashCommandMatchesInput(command, draftInput));
+  }, [draftInput, props.slashCommands, slashDismissedInput]);
+  // slashPanelVisible controls whether the current slash input has at least one match.
+  // slashPanelVisible 控制当前 slash 输入是否存在至少一个匹配项。
+  const slashPanelVisible = visibleSlashCommands.length > 0;
+  // highlightedSlashCommand resolves the currently highlighted command row.
+  // highlightedSlashCommand 解析当前高亮的指令行。
+  const highlightedSlashCommand = visibleSlashCommands[Math.min(slashHighlightedIndex, Math.max(visibleSlashCommands.length - 1, 0))] ?? null;
+  // exactSlashCommand mirrors iced exact trigger activation before the highlighted row.
+  // exactSlashCommand 对齐 iced 精确触发优先于高亮项的激活规则。
+  const exactSlashCommand = React.useMemo(
+    () => exactComposerSlashCommand(visibleSlashCommands, draftInput),
+    [draftInput, visibleSlashCommands],
+  );
+
+  React.useEffect(() => {
+    setSlashHighlightedIndex((current) => {
+      if (!visibleSlashCommands.length) {
+        return 0;
+      }
+      return Math.min(current, visibleSlashCommands.length - 1);
+    });
+  }, [visibleSlashCommands.length]);
+
+  // handleDraftInputChange tracks typed content and re-enables slash matching after edits.
+  // handleDraftInputChange 跟踪输入内容，并在编辑后重新启用 slash 匹配。
+  const handleDraftInputChange = React.useCallback((value: string) => {
+    setDraftInput(value);
+    if (slashDismissedInput !== null && value !== slashDismissedInput) {
+      setSlashDismissedInput(null);
+    }
+  }, [slashDismissedInput]);
+
+  React.useEffect(() => {
+    // handleGlobalWorkspaceTyping redirects ordinary workspace typing into the composer.
+    // handleGlobalWorkspaceTyping 将工作台中的普通键入重定向到输入区。
+    const handleGlobalWorkspaceTyping = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !isComposerPrintableKey(event)) {
+        return;
+      }
+      const textarea = composerTextareaRef.current;
+      if (!textarea || document.activeElement === textarea) {
+        return;
+      }
+      if (hasBlockingComposerPopup() || isComposerTextEntryElement(document.activeElement)) {
+        return;
+      }
+      event.preventDefault();
+      textarea.focus({ preventScroll: true });
+      setDraftInput((current) => `${current}${event.key}`);
+      if (slashDismissedInput !== null) {
+        setSlashDismissedInput(null);
+      }
+    };
+    document.addEventListener("keydown", handleGlobalWorkspaceTyping);
+    return () => document.removeEventListener("keydown", handleGlobalWorkspaceTyping);
+  }, [slashDismissedInput]);
+
+  // activateSlashCommand dispatches one selected command and applies its UI route result.
+  // activateSlashCommand 分派单个选中的指令并应用其 UI 路由结果。
+  const activateSlashCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
+    const result = props.onSlashCommand(command);
+    if (!result.handled) {
+      return;
+    }
+    setDraftInput("");
+    setSlashDismissedInput(null);
+    setSlashHighlightedIndex(0);
+    if (result.replacementText !== undefined) {
+      setDraftInput(result.replacementText);
+    }
+    if (result.openTarget === "model") {
+      setModelPickerOpenSignal((current) => current + 1);
+    }
+    if (result.openTarget === "reasoning") {
+      setReasoningPickerOpenSignal((current) => current + 1);
+    }
+  }, [props]);
 
   // handleComposerSend validates input and forwards it to the real backend runtime.
   // handleComposerSend 校验输入并转发到真实后端运行时。
   const handleComposerSend = React.useCallback(async () => {
-    if (isComposerRunning) {
-      setIsComposerRunning(false);
-      toast.info("停止已拦截：真实停止链路待接入。");
+    const prompt = draftInput.trim();
+    const hasSubmittableContent = Boolean(prompt || attachments.length > 0);
+    if (props.isConversationRunning && !hasSubmittableContent) {
+      const stopped = await props.onStopConversationRun();
+      if (!stopped) {
+        toast.error("停止当前会话失败。");
+      }
       return;
     }
-    const prompt = draftInput.trim();
-    if (!prompt && attachments.length === 0) {
+    if (isComposerRunning) {
+      return;
+    }
+    if (!hasSubmittableContent) {
       toast.info("请输入任务指令。");
       return;
     }
@@ -7140,6 +7750,27 @@ function ComposerPanel(props: {
       setIsComposerRunning(false);
     }
   }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+
+  // handleComposerStop stops the active backend conversation without consuming draft text.
+  // handleComposerStop 在不消费草稿文本的前提下停止活跃后端会话。
+  const handleComposerStop = React.useCallback(async () => {
+    const stopped = await props.onStopConversationRun();
+    if (!stopped) {
+      toast.error("停止当前会话失败。");
+    }
+  }, [props]);
+
+  // handlePendingPromptEdit restores one queued prompt into the composer draft.
+  // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
+  const handlePendingPromptEdit = React.useCallback(async (entryId: string) => {
+    const entry = await props.onEditPendingPrompt(entryId);
+    if (!entry) {
+      return;
+    }
+    setDraftInput(entry.prompt);
+    setAttachments(entry.attachments ?? []);
+    window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
+  }, [props]);
 
   // stageComposerFiles validates and stages files selected, dropped, or pasted into the composer.
   // stageComposerFiles 校验并暂存通过选择、拖拽或粘贴进入输入区的文件。
@@ -7330,12 +7961,45 @@ function ComposerPanel(props: {
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
   const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (slashPanelVisible) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setSlashHighlightedIndex((current) => (current + 1) % visibleSlashCommands.length);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setSlashHighlightedIndex((current) => (current - 1 + visibleSlashCommands.length) % visibleSlashCommands.length);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSlashDismissedInput(draftInput);
+        return;
+      }
+      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+        const command = exactSlashCommand ?? highlightedSlashCommand;
+        if (command) {
+          event.preventDefault();
+          activateSlashCommand(command);
+          return;
+        }
+      }
+    }
     if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) {
       return;
     }
     event.preventDefault();
     void handleComposerSend();
-  }, [handleComposerSend]);
+  }, [
+    activateSlashCommand,
+    draftInput,
+    exactSlashCommand,
+    handleComposerSend,
+    highlightedSlashCommand,
+    slashPanelVisible,
+    visibleSlashCommands.length,
+  ]);
 
   return (
     <section
@@ -7354,6 +8018,15 @@ function ComposerPanel(props: {
         ref={attachmentFileInputRef}
         type="file"
       />
+      {props.pendingPrompts.length ? (
+        <PendingPromptQueueStrip
+          entries={props.pendingPrompts}
+          onEdit={(entryId) => void handlePendingPromptEdit(entryId)}
+          onInsert={(entryId) => void props.onInsertPendingPrompt(entryId)}
+          onRemove={(entryId) => void props.onRemovePendingPrompt(entryId)}
+          onReorder={(entryIds, draggedEntryId, targetEntryId) => void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId)}
+        />
+      ) : null}
       {attachments.length ? (
         <ComposerAttachmentStrip
           attachments={attachments}
@@ -7366,12 +8039,22 @@ function ComposerPanel(props: {
           onRemove={removeComposerAttachment}
         />
       ) : null}
+      {slashPanelVisible ? (
+        <ComposerSlashCommandPanel
+          commands={visibleSlashCommands}
+          highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
+          locale={locale}
+          onActivate={activateSlashCommand}
+          onHighlight={setSlashHighlightedIndex}
+        />
+      ) : null}
       <Textarea
         aria-label={t("composer.aria.input")}
-        onChange={(event) => setDraftInput(event.currentTarget.value)}
+        onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
         onKeyDown={handleComposerKeyDown}
         onPaste={handleComposerPaste}
         placeholder={placeholder}
+        ref={composerTextareaRef}
         value={draftInput}
       />
       <div className="composer-toolbar">
@@ -7394,6 +8077,7 @@ function ComposerPanel(props: {
             filterPlaceholder={t("composer.modelPicker.filter")}
             noMatchesLabel={t("composer.modelPicker.noMatches")}
             onValueChange={(choice) => void handleModelChoiceChange(choice)}
+            openSignal={modelPickerOpenSignal}
             providers={props.providers}
             value={modelChoice}
           />
@@ -7416,17 +8100,29 @@ function ComposerPanel(props: {
             className="reasoning no-indicator"
             fallbackLabel={t("composer.selectFallback")}
             onValueChange={(value) => void handleReasoningEffortChange(value)}
+            openSignal={reasoningPickerOpenSignal}
             options={reasoningEffortOptions}
             value={reasoningEffort}
           />
+          {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (
+            <Button
+              aria-label={t("composer.aria.stop")}
+              className="send-button running"
+              onClick={() => void handleComposerStop()}
+              size="icon"
+              type="button"
+            >
+              <Square fill="currentColor" size={15} strokeWidth={0} />
+            </Button>
+          ) : null}
           <Button
-            aria-label={isComposerRunning ? t("composer.aria.stop") : t("composer.aria.send")}
-            className={cn("send-button", isComposerRunning && "running")}
+            aria-label={props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? t("composer.aria.stop") : t("composer.aria.send")}
+            className={cn("send-button", props.isConversationRunning && !draftInput.trim() && attachments.length === 0 && "running")}
             onClick={() => void handleComposerSend()}
             size="icon"
             type="button"
           >
-            {isComposerRunning ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
+            {props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
           </Button>
         </div>
       </div>
@@ -7434,6 +8130,195 @@ function ComposerPanel(props: {
         <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
       ) : null}
     </section>
+  );
+}
+
+// PendingPromptQueueStrip renders the service-backed visible send queue above the composer.
+// PendingPromptQueueStrip 渲染输入区上方由服务端持久化的可见发送队列。
+function PendingPromptQueueStrip(props: {
+  // Queue entries returned by the selected conversation snapshot.
+  // 当前选中会话快照返回的队列条目。
+  entries: PendingPromptSummary[];
+  // Restores one entry into the composer draft.
+  // 将单条队列恢复到输入区草稿。
+  onEdit: (entryId: string) => void;
+  // Routes one entry into the shared insertion queue.
+  // 将单条队列项路由进共享引导队列。
+  onInsert: (entryId: string) => void;
+  // Removes one entry from the queue.
+  // 从队列中移除单条条目。
+  onRemove: (entryId: string) => void;
+  // Persists a reordered entry id list.
+  // 持久化重排后的条目标识列表。
+  onReorder: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => void;
+}) {
+  // sensors keeps accidental clicks from turning into drag operations.
+  // sensors 防止普通点击误触发拖拽。
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  // entryIds is the stable dnd item list derived from the backend queue.
+  // entryIds 是从后端队列派生出的稳定拖拽条目列表。
+  const entryIds = React.useMemo(() => props.entries.map((entry) => entry.id), [props.entries]);
+  // handleDragEnd persists the iced-compatible drop target derived from the visual dnd order.
+  // handleDragEnd 从可视拖拽顺序推导与 iced 兼容的落点并持久化。
+  const handleDragEnd = React.useCallback((event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : null;
+    if (!overId || activeId === overId) {
+      return;
+    }
+    const oldIndex = entryIds.indexOf(activeId);
+    const newIndex = entryIds.indexOf(overId);
+    if (oldIndex < 0 || newIndex < 0) {
+      return;
+    }
+    const nextEntryIds = arrayMove(entryIds, oldIndex, newIndex);
+    const movedIndex = nextEntryIds.indexOf(activeId);
+    const targetEntryId = movedIndex >= 0 ? nextEntryIds[movedIndex + 1] ?? null : null;
+    props.onReorder(nextEntryIds, activeId, targetEntryId);
+  }, [entryIds, props]);
+
+  return (
+    <div className="pending-prompt-strip" aria-label="待发送队列">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={entryIds} strategy={verticalListSortingStrategy}>
+          <div className="pending-prompt-list">
+            {props.entries.map((entry) => (
+              <PendingPromptQueueRow
+                entry={entry}
+                key={entry.id}
+                onEdit={props.onEdit}
+                onInsert={props.onInsert}
+                onRemove={props.onRemove}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
+    </div>
+  );
+}
+
+// PendingPromptQueueRow renders one sortable queued prompt row.
+// PendingPromptQueueRow 渲染单条可排序的排队提示词。
+function PendingPromptQueueRow(props: {
+  // Queue entry rendered by this row.
+  // 当前行渲染的队列条目。
+  entry: PendingPromptSummary;
+  // Restores this entry into the composer draft.
+  // 将当前条目恢复到输入区草稿。
+  onEdit: (entryId: string) => void;
+  // Routes this entry into the shared insertion queue.
+  // 将当前条目路由进共享引导队列。
+  onInsert: (entryId: string) => void;
+  // Removes this entry from the queue.
+  // 从队列移除当前条目。
+  onRemove: (entryId: string) => void;
+}) {
+  const sortable = useVerticalSortableItem(props.entry.id, props.entry.state === "inserted");
+  const attachmentText = props.entry.attachments.length ? `  · ${props.entry.attachments.length} 个附件` : "";
+  const previewText = `${props.entry.preview || props.entry.prompt || "附件消息"}${attachmentText}`;
+  return (
+    <div
+      className={cn("pending-prompt-row", sortable.isDragging && "dragging", props.entry.state === "inserted" && "inserted")}
+      ref={sortable.setNodeRef}
+      style={sortable.sortableStyle}
+    >
+      <div
+        aria-label="拖动待发送提示词"
+        className="pending-prompt-row-handle"
+        {...sortable.attributes}
+        {...sortable.listeners}
+      >
+        <GripVertical size={13} />
+      </div>
+      <div className="pending-prompt-row-main">
+        <span className="pending-prompt-preview">{previewText}</span>
+      </div>
+      <div
+        className="pending-prompt-row-actions"
+        onClick={(event) => event.stopPropagation()}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              className={cn("pending-prompt-guide-button", props.entry.state === "inserted" && "inserted")}
+              aria-label={props.entry.state === "inserted" ? "已引导待发送提示词" : "引导待发送提示词"}
+              disabled={props.entry.state === "inserted"}
+              onClick={() => props.onInsert(props.entry.id)}
+              size="xs"
+              type="button"
+              variant="ghost"
+            >
+              <CornerDownRight size={13} />
+              <span>{props.entry.state === "inserted" ? "已引导" : "引导"}</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">{props.entry.state === "inserted" ? "已引导" : "引导"}</TooltipContent>
+        </Tooltip>
+        {props.entry.state === "inserted" ? null : (
+          <>
+            <Button
+              aria-label="删除待发送提示词"
+              onClick={() => props.onRemove(props.entry.id)}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            >
+              <Trash2 size={13} />
+            </Button>
+            <Button
+              aria-label="编辑待发送提示词"
+              onClick={() => props.onEdit(props.entry.id)}
+              size="icon-sm"
+              type="button"
+              variant="ghost"
+            >
+              <Pencil size={13} />
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ComposerSlashCommandPanel renders the iced-style slash command candidate list.
+// ComposerSlashCommandPanel 渲染对齐 iced 的 slash 指令候选列表。
+function ComposerSlashCommandPanel(props: {
+  // Visible commands after prefix filtering.
+  // 前缀过滤后的可见指令。
+  commands: ComposerSlashCommandSummary[];
+  // Highlighted command row index.
+  // 当前高亮的指令行索引。
+  highlightedIndex: number;
+  // Current interface language.
+  // 当前界面语言。
+  locale: LocaleCode;
+  // Activates one command row.
+  // 激活单个指令行。
+  onActivate: (command: ComposerSlashCommandSummary) => void;
+  // Updates highlighted command row.
+  // 更新高亮指令行。
+  onHighlight: (index: number) => void;
+}) {
+  return (
+    <div className="composer-slash-panel" role="listbox" aria-label="Slash commands">
+      {props.commands.map((command, index) => (
+        <button
+          aria-selected={index === props.highlightedIndex}
+          className={cn("composer-slash-row", index === props.highlightedIndex && "active")}
+          key={command.id || command.command}
+          onClick={() => props.onActivate(command)}
+          onMouseEnter={() => props.onHighlight(index)}
+          role="option"
+          type="button"
+        >
+          <span className="composer-slash-command">{command.command}</span>
+          <span className="composer-slash-description">{composerSlashCommandDescription(command, props.locale)}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -7847,14 +8732,27 @@ function ComposerSelectControl(props: {
   // Current selected option value.
   // 当前选中的选项值。
   value: string;
+  // Optional signal that opens the selector from an external slash-command route.
+  // 可选信号，用于从外部 slash 指令路由打开选择器。
+  openSignal?: number;
   // Selection change handler.
   // 选项变更处理函数。
   onValueChange: (value: string) => void;
 }) {
+  // open controls the Radix select popover so slash commands can reuse it.
+  // open 控制 Radix 选择弹窗，使 slash 指令可复用它。
+  const [open, setOpen] = React.useState(false);
   const selectedOption = props.options.find((option) => option.value === props.value) ?? props.options[0];
 
+  React.useEffect(() => {
+    if (props.openSignal === undefined || props.openSignal <= 0) {
+      return;
+    }
+    setOpen(true);
+  }, [props.openSignal]);
+
   return (
-    <Select onValueChange={props.onValueChange} value={props.value}>
+    <Select onOpenChange={setOpen} onValueChange={props.onValueChange} open={open} value={props.value}>
       <SelectTrigger
         aria-label={props.ariaLabel}
         className={cn("composer-select-trigger", props.className)}
@@ -7902,6 +8800,12 @@ function EmptyConversationCenter(props: {
   // Attachment capability gates used by composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Slash commands projected by the shared workbench service.
+  // 共享工作台服务投影出的 slash 指令。
+  slashCommands: ComposerSlashCommandSummary[];
+  // Visible pending prompts retained by the shared session runtime.
+  // 共享会话运行时保留的可见待发送提示词。
+  pendingPrompts: PendingPromptSummary[];
   // Project id used by first-message attachment staging.
   // 首条消息附件暂存使用的项目标识。
   projectId: string | null;
@@ -7923,9 +8827,27 @@ function EmptyConversationCenter(props: {
   // Persists one selected workbench reasoning effort.
   // 持久化单个选中的工作台思考档位。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Routes one projected composer slash command.
+  // 路由单个投影输入区 slash 指令。
+  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   // Sends the first prompt that materializes this draft conversation.
   // 发送用于实体化当前草稿会话的第一条提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Stops the selected backend conversation stream.
+  // 停止当前选中的后端会话流。
+  onStopConversationRun: () => Promise<boolean>;
+  // Restores one pending prompt into the composer.
+  // 将单条待发送提示词恢复到输入区。
+  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
+  // Routes one pending prompt into the shared insertion queue.
+  // 将单条待发送提示词路由进共享引导队列。
+  onInsertPendingPrompt: (entryId: string) => Promise<void>;
+  // Removes one pending prompt from the visible queue.
+  // 从可见队列移除单条待发送提示词。
+  onRemovePendingPrompt: (entryId: string) => Promise<void>;
+  // Persists the pending prompt order.
+  // 持久化待发送提示词顺序。
+  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   // t translates the empty conversation prompt while projectName remains user data.
   // t 翻译空会话引导语，projectName 仍保留为用户数据。
@@ -7943,11 +8865,20 @@ function EmptyConversationCenter(props: {
         projectId={props.projectId}
         conversationId={props.conversationId}
         contextUsage={null}
+        slashCommands={props.slashCommands}
+        pendingPrompts={props.pendingPrompts}
+        isConversationRunning={false}
         providers={props.providers}
         reasoningSelection={props.reasoningSelection}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+        onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
+        onStopConversationRun={props.onStopConversationRun}
+        onEditPendingPrompt={props.onEditPendingPrompt}
+        onInsertPendingPrompt={props.onInsertPendingPrompt}
+        onRemovePendingPrompt={props.onRemovePendingPrompt}
+        onReorderPendingPrompts={props.onReorderPendingPrompts}
       />
     </section>
   );

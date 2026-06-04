@@ -85,6 +85,7 @@ pub mod runtime_stream_delta;
 pub mod runtime_stream_driver;
 pub mod runtime_stream_driver_loop;
 pub mod runtime_stream_finalize;
+pub mod runtime_stream_intervention;
 pub mod runtime_stream_launch;
 pub mod runtime_stream_launch_payload;
 pub mod runtime_stream_preparation;
@@ -102,7 +103,8 @@ pub use execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
 };
 pub use runtime::RuntimeFoundation;
-pub use runtime_stream::stream_runtime_run;
+pub use runtime_stream::{stream_runtime_run, stream_runtime_run_with_intervention};
+pub use runtime_stream_intervention::RuntimePromptIntervention;
 
 #[cfg(test)]
 mod runtime_boundary_guard;

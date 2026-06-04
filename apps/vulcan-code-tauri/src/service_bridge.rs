@@ -30,11 +30,7 @@ use time::OffsetDateTime;
 use vldb_controller_client::ControllerSqliteValue;
 use vulcan_agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
-    ExecutionStreamEvent,
-    attachment_assets::{
-        attachment_descriptor_from_mime_type, attachment_descriptor_from_path, stage_attachment_bytes,
-        stage_attachment_file,
-    },
+    ExecutionStreamEvent, RuntimePromptIntervention,
     agent_profile::{AgentProfileCatalog, load_agent_profile_catalog},
     agent_runtime::{
         context_injection_runtime::{
@@ -43,7 +39,8 @@ use vulcan_agent_runtime::{
             core_provider_context_injection_from_state_for_turn,
         },
         conversation_hooks::{
-            ConversationHookRuntime, VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
+            ConversationCompletionRequest, ConversationHookRuntime, VmmWritebackHookEffect,
+            vmm_profile_sync_effect_from_report,
         },
         events::{RuntimeEvent, RuntimeEventKind},
         question_runtime::QuestionRuntime,
@@ -54,23 +51,28 @@ use vulcan_agent_runtime::{
             vmm_profile_placement_phase,
         },
     },
+    attachment_assets::{
+        attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
+        stage_attachment_bytes, stage_attachment_file,
+    },
     conversation_protocol::{
         SessionConversationPayload, conversation_state_from_session_messages,
         conversation_state_to_session_messages,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
-    provider_config::{
-        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
-    },
     provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
+    provider_config::{
+        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ProviderRuntimeKind,
+        ReasoningEffortLevel,
+    },
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, append_user_prompt_record_with_attachments,
         apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
         collapse_streaming_thinking_in_state,
     },
-    stream_runtime_run,
+    stream_runtime_run_with_intervention,
     tooling::CommandSessionRuntime,
     workbench_ai_capability_router::{
         WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
@@ -79,21 +81,29 @@ use vulcan_agent_runtime::{
 };
 use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
 use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
+use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_service_api::{
     AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
-    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage,
-    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole,
-    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
-    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent,
-    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    ToolCallSummary, WorkbenchSnapshot,
+    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
+    ConversationMessage, ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary,
+    MessageRole, PendingPromptSummary, PluginSummary, ProjectSummary, ProviderModelSummary,
+    ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
+    RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary, StartupSnapshot,
+    StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{
-    PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, TaskProjectSummary,
+    PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
+    PendingPromptModelReference, PendingPromptPanelDropTarget, PendingPromptPanelEntry,
+    PendingPromptPanelEntryState, PendingPromptQueueRouteError, PendingPromptQueueRouteOutcome,
+    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
+    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, TaskProjectSummary,
+    apply_pending_prompt_panel_drop_target, clear_internal_pending_prompt_queue_and_restore_panel,
+    pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
+    remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
+    take_next_internal_pending_prompt_entry, take_next_pending_prompt_entry,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
@@ -188,6 +198,9 @@ struct ServiceBridgeState {
     /// Latest context-budget snapshots keyed by session id.
     /// 按会话标识索引的最近上下文预算快照。
     live_context_budgets: BTreeMap<SessionId, ContextBudgetSnapshot>,
+    /// Active WebUI stream task handles keyed by session id.
+    /// 按会话标识索引的 WebUI 活动流任务句柄。
+    active_stream_tasks: BTreeMap<SessionId, tauri::async_runtime::JoinHandle<()>>,
 }
 
 /// Thread-safe service state handle.
@@ -208,6 +221,7 @@ pub fn run() {
         token_budget_runtime: None,
         mcp_runtime: None,
         live_context_budgets: BTreeMap::new(),
+        active_stream_tasks: BTreeMap::new(),
     }));
 
     tauri::Builder::default()
@@ -224,6 +238,11 @@ pub fn run() {
             service_stage_composer_attachment_paths,
             service_stage_composer_attachment_bytes,
             service_submit_conversation_prompt,
+            service_stop_conversation_run,
+            service_insert_pending_prompt,
+            service_edit_pending_prompt,
+            service_remove_pending_prompt,
+            service_reorder_pending_prompts,
             service_select_workbench_model,
             service_select_workbench_reasoning_effort,
             service_open_project_directory,
@@ -528,8 +547,12 @@ async fn service_pick_composer_attachments(
     conversation_id: Option<String>,
     kind: Option<String>,
 ) -> Result<Vec<ComposerAttachmentSummary>, String> {
-    let (workspace_path, kind_filter) =
-        composer_attachment_workspace_and_kind(&state, project_id.as_deref(), conversation_id.as_deref(), kind.as_deref())?;
+    let (workspace_path, kind_filter) = composer_attachment_workspace_and_kind(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        kind.as_deref(),
+    )?;
     let mut dialog = rfd::FileDialog::new();
     if let Some(kind_filter) = kind_filter.as_ref() {
         dialog = dialog.add_filter(
@@ -560,8 +583,11 @@ async fn service_stage_composer_attachment_paths(
     conversation_id: Option<String>,
     paths: Vec<String>,
 ) -> Result<Vec<ComposerAttachmentSummary>, String> {
-    let workspace_path =
-        composer_attachment_workspace_path(&state, project_id.as_deref(), conversation_id.as_deref())?;
+    let workspace_path = composer_attachment_workspace_path(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
     let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
     stage_composer_attachment_paths_for_workspace(&workspace_path, paths)
 }
@@ -577,8 +603,11 @@ async fn service_stage_composer_attachment_bytes(
     mime_type: String,
     data_base64: String,
 ) -> Result<ComposerAttachmentSummary, String> {
-    let workspace_path =
-        composer_attachment_workspace_path(&state, project_id.as_deref(), conversation_id.as_deref())?;
+    let workspace_path = composer_attachment_workspace_path(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+    )?;
     let descriptor = attachment_descriptor_from_mime_type(&mime_type)
         .or_else(|| attachment_descriptor_from_path_fallback(&file_name))
         .ok_or_else(|| format!("文件 `{}` 不是受支持的附件格式。", file_name.trim()))?;
@@ -604,9 +633,7 @@ fn composer_attachment_workspace_and_kind(
     kind: Option<&str>,
 ) -> Result<(String, Option<ConversationAttachmentKind>), String> {
     let workspace_path = composer_attachment_workspace_path(state, project_id, conversation_id)?;
-    let kind = kind
-        .map(parse_composer_attachment_kind)
-        .transpose()?;
+    let kind = kind.map(parse_composer_attachment_kind).transpose()?;
     Ok((workspace_path, kind))
 }
 
@@ -726,7 +753,9 @@ fn composer_attachment_kind_label(kind: &ConversationAttachmentKind) -> &'static
 
 /// Returns file extensions accepted by the native picker for one attachment kind.
 /// 返回单种附件类型在原生选择器中接受的扩展名。
-fn composer_attachment_kind_extensions(kind: &ConversationAttachmentKind) -> &'static [&'static str] {
+fn composer_attachment_kind_extensions(
+    kind: &ConversationAttachmentKind,
+) -> &'static [&'static str] {
     match kind {
         ConversationAttachmentKind::Image => &["png", "jpg", "jpeg", "webp", "gif", "bmp"],
         ConversationAttachmentKind::Audio => &["mp3", "wav", "m4a", "aac", "flac", "ogg"],
@@ -806,11 +835,74 @@ async fn service_submit_conversation_prompt(
     let mut workspace_snapshot =
         load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
             .await?;
+    let previous_workspace_snapshot = current_workspace_snapshot_from_state(&state)?;
+    preserve_active_session_run_state(
+        previous_workspace_snapshot.as_ref(),
+        &mut workspace_snapshot,
+    );
+    if let Some(session_id) = conversation_id.as_deref().and_then(parse_session_id) {
+        let has_active_stream_task = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?
+            .active_stream_tasks
+            .contains_key(&session_id);
+        if session_has_blocking_system_prompt_work(
+            &workspace_snapshot,
+            &agent_runtime.provider_configuration,
+            session_id,
+            has_active_stream_task,
+        ) {
+            let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
+            let entry = build_webui_pending_prompt_panel_entry(
+                prompt,
+                attachments,
+                current_pending_prompt_model_reference(&agent_runtime.provider_configuration),
+                pending_prompt_runtime_options_from_submission(
+                    &agent_runtime,
+                    reasoning_effort.as_deref(),
+                    disabled_ai_capability_kinds.as_deref(),
+                )?,
+            );
+            enqueue_webui_pending_prompt_panel_entry(
+                &mut workspace_snapshot,
+                &agent_runtime,
+                session_id,
+                &workspace_path,
+                entry,
+            )?;
+            let runtime_state = workspace_snapshot
+                .session_runtime_state
+                .get_mut(&session_id)
+                .ok_or_else(|| String::from("排队后未找到会话运行时状态。"))?;
+            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+                controller_runtime.clone(),
+                session_id,
+                runtime_state,
+            )
+            .await?;
+            return store_and_emit_workbench_snapshot(
+                &app,
+                &state,
+                &controller_runtime,
+                &luaskills_catalog,
+                &token_budget_runtime,
+                &mcp_catalog,
+                &agent_runtime.provider_configuration,
+                &agent_runtime.ai_tool_configuration,
+                workspace_snapshot,
+                &logs,
+            );
+        }
+    }
     let (session_id, session_title, workspace_path) = materialize_prompt_session(
         &mut workspace_snapshot,
         project_id.as_deref(),
         conversation_id.as_deref(),
-        if prompt.is_empty() { "附件会话" } else { &prompt },
+        if prompt.is_empty() {
+            "附件会话"
+        } else {
+            &prompt
+        },
     )?;
     let request = append_prompt_and_build_request(
         &mut workspace_snapshot,
@@ -865,6 +957,334 @@ async fn service_submit_conversation_prompt(
         request,
     );
     Ok(workbench)
+}
+
+/// Stops the selected WebUI conversation run and clears guided internal queue work.
+/// 停止当前选中的 WebUI 会话运行，并清理已引导的内部队列任务。
+#[tauri::command]
+async fn service_stop_conversation_run(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let selected_session_id = selected_session_id_from_state(&state)?;
+    let active_task = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .active_stream_tasks
+        .remove(&selected_session_id);
+    if let Some(active_task) = active_task {
+        active_task.abort();
+    }
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    stop_webui_session_work(&mut workspace_snapshot, selected_session_id)?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+        .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?;
+    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        controller_runtime.clone(),
+        selected_session_id,
+        runtime_state,
+    )
+    .await?;
+    store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot,
+        &logs,
+    )
+}
+
+/// Inserts one visible pending prompt into the shared internal prompt queue.
+/// 将单条可见待发送提示词插入共享内部提示词队列。
+#[tauri::command]
+async fn service_insert_pending_prompt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    entry_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let selected_session_id = selected_session_id_from_state(&state)?;
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    let workspace_path = workspace_path_for_session(&workspace_snapshot, selected_session_id);
+    insert_webui_pending_prompt_into_internal_queue(
+        &mut workspace_snapshot,
+        &agent_runtime,
+        selected_session_id,
+        &workspace_path,
+        &entry_id,
+    )?;
+    mark_webui_session_waiting_for_guided_prompt_dispatch(
+        &mut workspace_snapshot,
+        selected_session_id,
+    );
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+        .ok_or_else(|| String::from("引导后未找到会话运行时状态。"))?;
+    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        controller_runtime.clone(),
+        selected_session_id,
+        runtime_state,
+    )
+    .await?;
+    let mut workbench = store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot,
+        &logs,
+    )?;
+    let started_next_prompt = match maybe_prepare_next_webui_pending_prompt(
+        &app,
+        &state,
+        &controller_runtime,
+        &agent_runtime,
+        selected_session_id,
+        true,
+    )
+    .await
+    {
+        Ok(Some(next_request)) => {
+            spawn_agent_stream_task(
+                app,
+                state.inner().clone(),
+                controller_runtime,
+                agent_runtime,
+                next_request,
+            );
+            true
+        }
+        Ok(None) => false,
+        Err(error) => return Err(error),
+    };
+    if started_next_prompt {
+        workbench = refresh_workbench_snapshot(state).await?;
+    }
+    Ok(workbench)
+}
+
+/// Restores one visible pending prompt into the WebUI composer and removes it from the queue.
+/// 将单条可见待发送提示词恢复到 WebUI 输入区，并从队列中移除。
+#[tauri::command]
+async fn service_edit_pending_prompt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    entry_id: String,
+) -> Result<PendingPromptSummary, String> {
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let selected_session_id = selected_session_id_from_state(&state)?;
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+    else {
+        return Err(String::from("当前会话没有可编辑的待发送队列。"));
+    };
+    let Some(entry) = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id)
+    else {
+        return Err(String::from("没有找到待编辑的待发送提示词。"));
+    };
+    runtime_state.updated_at = current_unix_millis_text();
+    let summary = pending_prompt_summary_from_panel_entry(&entry);
+    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        controller_runtime.clone(),
+        selected_session_id,
+        runtime_state,
+    )
+    .await?;
+    let _ = store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot,
+        &logs,
+    )?;
+    Ok(summary)
+}
+
+/// Removes one visible pending prompt from the selected conversation queue.
+/// 从当前选中会话队列中移除单条可见待发送提示词。
+#[tauri::command]
+async fn service_remove_pending_prompt(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    entry_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let selected_session_id = selected_session_id_from_state(&state)?;
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+    else {
+        return store_and_emit_workbench_snapshot(
+            &app,
+            &state,
+            &controller_runtime,
+            &luaskills_catalog,
+            &token_budget_runtime,
+            &mcp_catalog,
+            &agent_runtime.provider_configuration,
+            &agent_runtime.ai_tool_configuration,
+            workspace_snapshot,
+            &logs,
+        );
+    };
+    if remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id).is_some() {
+        runtime_state.updated_at = current_unix_millis_text();
+        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+            controller_runtime.clone(),
+            selected_session_id,
+            runtime_state,
+        )
+        .await?;
+    }
+    store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot,
+        &logs,
+    )
+}
+
+/// Reorders the visible pending prompt queue for the selected conversation.
+/// 重排当前选中会话的可见待发送提示词队列。
+#[tauri::command]
+async fn service_reorder_pending_prompts(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    conversation_id: Option<String>,
+    dragged_entry_id: String,
+    target_entry_id: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        agent_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+    ) = runtime_parts_from_state(&state)?;
+    let selected_session_id = conversation_id
+        .as_deref()
+        .and_then(parse_session_id)
+        .map(Ok)
+        .unwrap_or_else(|| selected_session_id_from_state(&state))?;
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    workspace_snapshot.selected_session = selected_session_id;
+    let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+    else {
+        return store_and_emit_workbench_snapshot(
+            &app,
+            &state,
+            &controller_runtime,
+            &luaskills_catalog,
+            &token_budget_runtime,
+            &mcp_catalog,
+            &agent_runtime.provider_configuration,
+            &agent_runtime.ai_tool_configuration,
+            workspace_snapshot,
+            &logs,
+        );
+    };
+    let drop_target = target_entry_id
+        .filter(|entry_id| !entry_id.trim().is_empty())
+        .map(PendingPromptPanelDropTarget::Before)
+        .unwrap_or(PendingPromptPanelDropTarget::End);
+    if apply_pending_prompt_panel_drop_target(
+        &mut runtime_state.ui_state,
+        &dragged_entry_id,
+        &drop_target,
+    ) {
+        runtime_state.updated_at = current_unix_millis_text();
+        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+            controller_runtime.clone(),
+            selected_session_id,
+            runtime_state,
+        )
+        .await?;
+    }
+    store_and_emit_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot,
+        &logs,
+    )
 }
 
 /// Selects and persists the active workbench provider/model pair.
@@ -1545,6 +1965,38 @@ fn controller_runtime_from_state(
         .ok_or_else(|| String::from("service is still starting; controller runtime is not ready"))
 }
 
+/// Reads the selected session identifier from the retained workspace state.
+/// 从保留的工作区状态中读取当前选中会话标识。
+fn selected_session_id_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<SessionId, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref()
+        && workspace_snapshot.selected_session != SessionId::nil()
+    {
+        return Ok(workspace_snapshot.selected_session);
+    }
+    guard
+        .workbench
+        .selected_conversation_id
+        .as_deref()
+        .and_then(parse_session_id)
+        .ok_or_else(|| String::from("当前没有选中的会话。"))
+}
+
+/// Clones the latest in-memory workspace snapshot retained by the service bridge.
+/// 克隆服务桥接层保留的最近内存工作区快照。
+fn current_workspace_snapshot_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<Option<WorkspaceSnapshot>, String> {
+    state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))
+        .map(|guard| guard.workspace_snapshot.clone())
+}
+
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 fn runtime_parts_from_state(
@@ -1627,6 +2079,506 @@ async fn load_workspace_for_submission(
         }
     }
     Ok(workspace_snapshot)
+}
+
+/// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.
+/// 判断提交的提示词是否必须进入可见队列而不是立即启动。
+fn session_has_blocking_system_prompt_work(
+    workspace_snapshot: &WorkspaceSnapshot,
+    provider_configuration: &ProviderConfigurationFile,
+    session_id: SessionId,
+    has_active_stream_task: bool,
+) -> bool {
+    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
+        return has_active_stream_task
+            || session_has_running_subagent_tasks_from_workspace(workspace_snapshot, session_id);
+    };
+    pending_prompt_lane_is_busy(
+        &runtime_state.ui_state,
+        PendingPromptBusyLaneContext {
+            dispatch: webui_pending_prompt_dispatch_context(
+                workspace_snapshot,
+                provider_configuration,
+                session_id,
+                has_active_stream_task,
+            ),
+            has_precheck_progress: false,
+        },
+    )
+}
+
+/// Builds the shared pending-prompt dispatch context from WebUI-owned runtime facts.
+/// 从 WebUI 持有的运行态事实构建共享待发送提示词分发上下文。
+fn webui_pending_prompt_dispatch_context(
+    workspace_snapshot: &WorkspaceSnapshot,
+    provider_configuration: &ProviderConfigurationFile,
+    session_id: SessionId,
+    has_active_stream_task: bool,
+) -> PendingPromptDispatchContext {
+    PendingPromptDispatchContext {
+        uses_anthropic_runtime: session_uses_anthropic_runtime(
+            workspace_snapshot,
+            provider_configuration,
+            session_id,
+        ),
+        has_running_subagents: session_has_running_subagent_tasks_from_workspace(
+            workspace_snapshot,
+            session_id,
+        ),
+        has_active_run: has_active_stream_task,
+        run_phase: workspace_snapshot
+            .session_run_phases
+            .get(&session_id)
+            .copied(),
+        has_active_compaction: false,
+    }
+}
+
+/// Returns whether task-session metadata still marks a child subagent as running.
+/// 判断 task 会话元数据是否仍标记某个子代理正在运行。
+fn session_has_running_subagent_tasks_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> bool {
+    workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .is_some_and(|runtime_state| {
+            latest_task_session_metadata_marks_running(
+                runtime_state
+                    .conversation_state
+                    .records
+                    .iter()
+                    .filter_map(|record| record.metadata.as_ref()),
+            )
+        })
+        || workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .is_some_and(|messages| {
+                latest_task_session_metadata_marks_running(
+                    messages
+                        .iter()
+                        .filter_map(|message| message.metadata.as_ref()),
+                )
+            })
+}
+
+/// Returns whether the latest metadata for any task session still says it is running.
+/// 判断任一 task 会话的最新元数据是否仍表示正在运行。
+fn latest_task_session_metadata_marks_running<'a>(
+    metadata_values: impl DoubleEndedIterator<Item = &'a Value>,
+) -> bool {
+    let mut seen_task_keys = BTreeSet::new();
+    for metadata in metadata_values.rev() {
+        if !metadata_is_task_session_related(metadata) {
+            continue;
+        }
+        let status = task_session_metadata_status(metadata);
+        let Some(task_key) = task_session_metadata_key(metadata) else {
+            if status.is_some_and(|status| status.trim().eq_ignore_ascii_case("running")) {
+                return true;
+            }
+            continue;
+        };
+        if !seen_task_keys.insert(task_key) {
+            continue;
+        }
+        if status.is_some_and(|status| status.trim().eq_ignore_ascii_case("running")) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns whether one task-session metadata object represents an in-flight child task.
+/// 判断单个 task 会话元数据对象是否表示仍在执行中的子任务。
+fn metadata_is_task_session_related(metadata: &Value) -> bool {
+    metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+        || metadata.get("tool_name").and_then(Value::as_str) == Some("task")
+}
+
+/// Returns the latest status label carried by one task-session metadata object.
+/// 返回单个 task 会话元数据对象携带的最新状态标签。
+fn task_session_metadata_status(metadata: &Value) -> Option<&str> {
+    let payload_status = metadata
+        .get("payload")
+        .and_then(|payload| payload.get("execution_status"))
+        .and_then(Value::as_str);
+    let display_status = metadata
+        .get("display_state")
+        .or_else(|| metadata.get("tool_display_state"))
+        .and_then(Value::as_str);
+    payload_status.or(display_status)
+}
+
+/// Returns a stable key used to compare task-session metadata updates.
+/// 返回用于比较 task 会话元数据更新的稳定键。
+fn task_session_metadata_key(metadata: &Value) -> Option<String> {
+    metadata
+        .get("payload")
+        .and_then(|payload| {
+            payload
+                .get("task_session_id")
+                .or_else(|| payload.get("task_id"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| metadata.get("tool_call_id").and_then(Value::as_str))
+        .or_else(|| {
+            metadata
+                .get("arguments")
+                .and_then(|arguments| arguments.get("task_id"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// Stops WebUI-visible session work and restores queue state to the iced stopped semantics.
+/// 停止 WebUI 可见会话任务，并按 iced 停止语义恢复队列状态。
+fn stop_webui_session_work(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let now = current_unix_millis_text();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    clear_internal_pending_prompt_queue_and_restore_panel(&mut runtime_state.ui_state);
+    runtime_state.updated_at = now.clone();
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Stopped);
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Blocked;
+        session.focus = String::from("已按用户请求停止当前会话运行。");
+        session.last_updated_label = String::from("刚刚");
+    }
+    workspace_snapshot.session_messages.insert(
+        session_id,
+        conversation_state_to_session_messages(&runtime_state.conversation_state),
+    );
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    Ok(())
+}
+
+/// Marks one idle WebUI session as waiting for an already guided internal prompt.
+/// 将一个空闲 WebUI 会话标记为正在等待已引导的内部提示词。
+fn mark_webui_session_waiting_for_guided_prompt_dispatch(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) {
+    if workspace_snapshot
+        .sessions
+        .iter()
+        .any(|session| session.id == session_id && session.status == SessionState::Running)
+    {
+        return;
+    }
+    let now = current_unix_millis_text();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    runtime_state.updated_at = now.clone();
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Blocked;
+        session.focus = String::from("已有消息接入主会话，正在等待当前系统任务处理完成后继续。");
+        session.last_updated_label = String::from("刚刚");
+    }
+    workspace_snapshot.session_messages.insert(
+        session_id,
+        conversation_state_to_session_messages(&runtime_state.conversation_state),
+    );
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
+}
+
+/// Builds one WebUI-originated visible pending prompt entry.
+/// 构建一条来自 WebUI 的可见待发送提示词条目。
+fn build_webui_pending_prompt_panel_entry(
+    prompt: String,
+    attachments: Vec<ConversationAttachment>,
+    model_reference: Option<PendingPromptModelReference>,
+    runtime_options: PendingPromptRuntimeOptions,
+) -> PendingPromptPanelEntry {
+    let created_at = current_unix_millis_text();
+    PendingPromptPanelEntry {
+        id: format!("webui-pending-panel-{}", SessionId::new_v4()),
+        preview: pending_prompt_preview_text(&prompt, &attachments),
+        prompt,
+        attachments,
+        model_reference,
+        runtime_options,
+        state: PendingPromptPanelEntryState::Ready,
+        created_at,
+    }
+}
+
+/// Appends one visible pending prompt entry to the selected session queue and mirrors the queued user event.
+/// 将一条可见待发送提示词追加到选中会话队列，并镜像已排队用户事件。
+fn enqueue_webui_pending_prompt_panel_entry(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    workspace_path: &str,
+    entry: PendingPromptPanelEntry,
+) -> Result<(), String> {
+    let now = current_unix_millis_text();
+    let project_id = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.project_id.clone());
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    if runtime_state.ui_state.pending_prompt_panel_queue.len() >= PENDING_PROMPT_QUEUE_LIMIT {
+        return Err(String::from(
+            "待发送消息队列已满，最多保留 10 条，请等待前面的消息完成后再继续追加。",
+        ));
+    }
+    let entry_id = entry.id.clone();
+    let prompt = entry.prompt.clone();
+    runtime_state
+        .ui_state
+        .pending_prompt_panel_queue
+        .push(entry);
+    runtime_state.updated_at = now;
+    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
+        hook_runtime.record_queued_user_prompt(
+            session_id,
+            &entry_id,
+            project_id,
+            workspace_path.to_string(),
+            PendingSessionPromptSource::UserFollowup,
+            &prompt,
+        );
+    }
+    Ok(())
+}
+
+/// Inserts one visible WebUI queue row into the internal session prompt queue.
+/// 将一条 WebUI 可见队列行插入内部会话提示词队列。
+fn insert_webui_pending_prompt_into_internal_queue(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    workspace_path: &str,
+    entry_id: &str,
+) -> Result<(), String> {
+    let project_id = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.project_id.clone());
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        .ok_or_else(|| String::from("当前会话没有可引导的待发送队列。"))?;
+    let created_at = current_unix_millis_text();
+    let internal_entry_id = format!("webui-pending-internal-{}", SessionId::new_v4());
+    let route_outcome = route_pending_prompt_panel_entry_into_internal_queue(
+        &mut runtime_state.ui_state,
+        entry_id,
+        internal_entry_id,
+        created_at,
+    )
+    .map_err(|error| match error {
+        PendingPromptQueueRouteError::MissingPanelEntry => {
+            String::from("没有找到待引导的待发送提示词。")
+        }
+        PendingPromptQueueRouteError::InternalQueueFull => {
+            String::from("待发送消息队列已满，最多保留 10 条，请等待前面的消息完成后再继续追加。")
+        }
+    })?;
+    runtime_state.updated_at = current_unix_millis_text();
+    let PendingPromptQueueRouteOutcome::Inserted(internal_entry) = route_outcome else {
+        return Ok(());
+    };
+    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
+        hook_runtime.record_queued_user_prompt(
+            session_id,
+            entry_id,
+            project_id,
+            workspace_path.to_string(),
+            PendingSessionPromptSource::UserFollowup,
+            &internal_entry.prompt,
+        );
+    }
+    Ok(())
+}
+
+/// Returns whether one session should use Anthropic-specific queue dispatch ordering.
+/// 返回单个会话是否应使用 Anthropic 专属队列分发顺序。
+fn session_uses_anthropic_runtime(
+    workspace_snapshot: &WorkspaceSnapshot,
+    provider_configuration: &ProviderConfigurationFile,
+    session_id: SessionId,
+) -> bool {
+    if let Some(active_provider_id) = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.active_provider_id.as_deref())
+    {
+        return provider_config::supported_provider_by_id(active_provider_id)
+            .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic);
+    }
+    provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)
+        .and_then(|(provider_id, _)| provider_config::supported_provider_by_id(provider_id))
+        .is_some_and(|definition| definition.runtime == ProviderRuntimeKind::Anthropic)
+}
+
+/// Returns the workspace path associated with one session.
+/// 返回单个会话关联的工作区路径。
+fn workspace_path_for_session(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> String {
+    workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.project_id.as_deref())
+        .and_then(|project_id| {
+            workspace_snapshot
+                .task_projects
+                .iter()
+                .find(|project| project.id == project_id)
+        })
+        .map(|project| project.path.clone())
+        .unwrap_or_else(|| workspace_root().display().to_string())
+}
+
+/// Builds one compact single-line preview used by the pending prompt queue strip.
+/// 构建待发送提示词队列条使用的单行紧凑预览。
+fn pending_prompt_preview_text(prompt: &str, attachments: &[ConversationAttachment]) -> String {
+    let trimmed_prompt = prompt.trim();
+    let attachment_prefix = if attachments.is_empty() {
+        String::new()
+    } else {
+        format!("{} 个附件 · ", attachments.len())
+    };
+    let text = if trimmed_prompt.is_empty() {
+        String::from("附件消息")
+    } else {
+        trimmed_prompt
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let preview = format!("{attachment_prefix}{text}");
+    if preview.chars().count() <= 48 {
+        preview
+    } else {
+        format!("{}...", preview.chars().take(48).collect::<String>())
+    }
+}
+
+/// Captures the active provider/model identity for one queued WebUI prompt.
+/// 为单条 WebUI 排队提示词捕获当前激活的供应商与模型身份。
+fn current_pending_prompt_model_reference(
+    provider_configuration: &ProviderConfigurationFile,
+) -> Option<PendingPromptModelReference> {
+    let (provider_id, model_id) = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)?;
+    Some(PendingPromptModelReference {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        provider_label: provider_config::provider_summary(provider_id),
+        model_name: provider_config::model_summary(provider_id, model_id, provider_configuration),
+        openrouter_endpoint_route: (provider_id == "openrouter")
+            .then(|| {
+                provider_config::openrouter_endpoint_route_for_model(
+                    provider_configuration,
+                    model_id,
+                )
+            })
+            .flatten(),
+    })
+}
+
+/// Captures runtime controls for one queued WebUI prompt from the shared service router input.
+/// 从共享服务路由输入捕获单条 WebUI 排队提示词的运行控制参数。
+fn pending_prompt_runtime_options_from_submission(
+    agent_runtime: &AgentRuntimeBridge,
+    reasoning_effort: Option<&str>,
+    disabled_ai_capability_kinds: Option<&[String]>,
+) -> Result<PendingPromptRuntimeOptions, String> {
+    Ok(PendingPromptRuntimeOptions {
+        reasoning_effort: reasoning_effort
+            .and_then(parse_reasoning_effort)
+            .or_else(|| active_reasoning_selection_effort(&agent_runtime.provider_configuration))
+            .unwrap_or(ReasoningEffortLevel::Medium),
+        temperature: None,
+        web_search_override: Default::default(),
+        web_search_provider_id: None,
+        disabled_ai_capability_kinds: effective_workbench_disabled_ai_capability_kinds(
+            &agent_runtime.ai_tool_configuration,
+            disabled_ai_capability_kinds,
+        )?,
+    })
+}
+
+/// Clones provider configuration and overrides only the queued prompt's locked model identity.
+/// 克隆 Provider 配置，并仅覆盖排队提示词锁定的模型身份。
+fn provider_configuration_for_model_reference(
+    provider_configuration: &ProviderConfigurationFile,
+    model_reference: Option<&PendingPromptModelReference>,
+) -> ProviderConfigurationFile {
+    let mut next_configuration = provider_configuration.clone();
+    if let Some(model_reference) = model_reference {
+        next_configuration.model = Some(format!(
+            "{}/{}",
+            model_reference.provider_id, model_reference.model_id
+        ));
+        if model_reference.provider_id == "openrouter" {
+            provider_config::set_openrouter_endpoint_route_for_model(
+                &mut next_configuration,
+                &model_reference.model_id,
+                model_reference.openrouter_endpoint_route.clone(),
+            );
+        }
+    }
+    next_configuration
+}
+
+/// Clones the runtime bridge with the queued prompt's locked provider configuration.
+/// 使用排队提示词锁定的 Provider 配置克隆运行时桥接。
+fn agent_runtime_for_pending_prompt(
+    agent_runtime: &AgentRuntimeBridge,
+    prompt_entry: &PendingSessionPromptEntry,
+) -> AgentRuntimeBridge {
+    let mut next_runtime = agent_runtime.clone();
+    next_runtime.provider_configuration = provider_configuration_for_model_reference(
+        &agent_runtime.provider_configuration,
+        prompt_entry.model_reference.as_ref(),
+    );
+    next_runtime
 }
 
 /// Resolves or creates the session that should receive the submitted prompt.
@@ -2021,7 +2973,10 @@ fn patch_latest_prechecked_user_prompt_record(
             && let Some(object) = metadata.as_object_mut()
         {
             object.insert(String::from("canonical_text"), serde_json::json!(prompt));
-            object.insert(String::from("canonical_user_text"), serde_json::json!(prompt));
+            object.insert(
+                String::from("canonical_user_text"),
+                serde_json::json!(prompt),
+            );
         }
     }
     runtime_state.updated_at = current_unix_millis_text();
@@ -2347,9 +3302,17 @@ fn spawn_agent_stream_task(
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
 ) {
-    tauri::async_runtime::spawn(async move {
+    let session_id = request.session_id;
+    let task_state = state.clone();
+    let handle = tauri::async_runtime::spawn(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
-        let mut stream = Box::pin(stream_runtime_run(
+        let mut reached_finished_event = false;
+        let prompt_intervention = build_webui_prompt_intervention(
+            app.clone(),
+            task_state.clone(),
+            agent_runtime.provider_configuration.clone(),
+        );
+        let mut stream = Box::pin(stream_runtime_run_with_intervention(
             agent_runtime.provider_configuration.clone(),
             agent_runtime.agent_profile_catalog.clone(),
             agent_runtime.luaskills_runtime.clone(),
@@ -2359,31 +3322,39 @@ fn spawn_agent_stream_task(
             Arc::clone(&agent_runtime.command_session_runtime),
             Arc::clone(&agent_runtime.token_budget_runtime),
             request,
+            Some(prompt_intervention),
         ));
 
         while let Some(event) = stream.next().await {
             match event {
                 ExecutionStreamEvent::Prepared(preparation) => {
-                    if let Err(error) = apply_execution_preparation(&app, &state, &preparation) {
+                    if let Err(error) = apply_execution_preparation(&app, &task_state, &preparation)
+                    {
                         eprintln!("[tauri-service] apply preparation failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
-                    if let Err(error) =
-                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
-                    {
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Requesting,
+                    ) {
                         eprintln!("[tauri-service] apply request-started failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
-                    if let Err(error) =
-                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Thinking)
-                    {
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Thinking,
+                    ) {
                         eprintln!("[tauri-service] apply thinking phase failed: {error}");
                     }
                     if let Err(error) = append_stream_delta_record(
                         &app,
-                        &state,
+                        &task_state,
                         session_id,
                         &mut record_ids.thinking_record_id,
                         SessionMessageRecordKind::ThinkingOutput,
@@ -2396,25 +3367,31 @@ fn spawn_agent_stream_task(
                 }
                 ExecutionStreamEvent::ThinkingCompleted { session_id } => {
                     if let Err(error) =
-                        collapse_streaming_thinking(&app, &state, session_id, &record_ids)
+                        collapse_streaming_thinking(&app, &task_state, session_id, &record_ids)
                     {
                         eprintln!("[tauri-service] complete thinking failed: {error}");
                     }
-                    if let Err(error) =
-                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
-                    {
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Requesting,
+                    ) {
                         eprintln!("[tauri-service] restore request phase failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
-                    if let Err(error) =
-                        apply_session_phase(&app, &state, session_id, SessionRunPhase::Requesting)
-                    {
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Requesting,
+                    ) {
                         eprintln!("[tauri-service] apply output phase failed: {error}");
                     }
                     if let Err(error) = append_stream_delta_record(
                         &app,
-                        &state,
+                        &task_state,
                         session_id,
                         &mut record_ids.output_record_id,
                         SessionMessageRecordKind::AssistantOutput,
@@ -2428,11 +3405,12 @@ fn spawn_agent_stream_task(
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
                     if is_provider_tool_boundary_runtime_event(&event) {
                         record_ids.thinking_record_id = None;
+                        record_ids.output_record_id = None;
                     }
                     if matches!(event.kind, RuntimeEventKind::ToolStarted) {
                         if let Err(error) = apply_session_phase(
                             &app,
-                            &state,
+                            &task_state,
                             session_id,
                             SessionRunPhase::ToolRunning,
                         ) {
@@ -2442,7 +3420,7 @@ fn spawn_agent_stream_task(
                     if matches!(event.kind, RuntimeEventKind::ToolFinished) {
                         if let Err(error) = apply_session_phase(
                             &app,
-                            &state,
+                            &task_state,
                             session_id,
                             SessionRunPhase::Requesting,
                         ) {
@@ -2455,9 +3433,35 @@ fn spawn_agent_stream_task(
                         hook_runtime.record_tool_runtime_event(session_id, &event);
                     }
                     if let Err(error) =
-                        append_runtime_event_projection(&app, &state, session_id, &event)
+                        append_runtime_event_projection(&app, &task_state, session_id, &event)
                     {
                         eprintln!("[tauri-service] append runtime event failed: {error}");
+                    }
+                    match maybe_prepare_next_webui_pending_prompt(
+                        &app,
+                        &task_state,
+                        &controller_runtime,
+                        &agent_runtime,
+                        session_id,
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(Some(next_request)) => {
+                            spawn_agent_stream_task(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                agent_runtime.clone(),
+                                next_request,
+                            );
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            eprintln!(
+                                "[tauri-service] prepare pending prompt after runtime event failed: {error}"
+                            );
+                        }
                     }
                 }
                 ExecutionStreamEvent::ConversationCheckpoint {
@@ -2468,7 +3472,7 @@ fn spawn_agent_stream_task(
                 } => {
                     if let Err(error) = apply_conversation_checkpoint(
                         &app,
-                        &state,
+                        &task_state,
                         &controller_runtime,
                         session_id,
                         conversation_state,
@@ -2481,22 +3485,372 @@ fn spawn_agent_stream_task(
                     }
                 }
                 ExecutionStreamEvent::Finished(report) => {
-                    if let Err(error) = apply_execution_report(
+                    reached_finished_event = true;
+                    let finished_session_id = report.session_id;
+                    if let Ok(mut guard) = task_state.lock() {
+                        guard.active_stream_tasks.remove(&finished_session_id);
+                    }
+                    let final_report_apply = match apply_execution_report_to_memory(
                         &app,
-                        &state,
-                        &controller_runtime,
+                        &task_state,
                         &agent_runtime,
                         report,
+                    ) {
+                        Ok(apply) => Some(apply),
+                        Err(error) => {
+                            eprintln!("[tauri-service] apply final report failed: {error}");
+                            None
+                        }
+                    };
+                    let started_next_prompt = match maybe_prepare_next_webui_pending_prompt(
+                        &app,
+                        &task_state,
+                        &controller_runtime,
+                        &agent_runtime,
+                        finished_session_id,
+                        false,
                     )
                     .await
                     {
-                        eprintln!("[tauri-service] apply final report failed: {error}");
+                        Ok(Some(next_request)) => {
+                            spawn_agent_stream_task(
+                                app.clone(),
+                                task_state.clone(),
+                                controller_runtime.clone(),
+                                agent_runtime.clone(),
+                                next_request,
+                            );
+                            true
+                        }
+                        Ok(None) => false,
+                        Err(error) => {
+                            eprintln!(
+                                "[tauri-service] prepare next pending prompt failed: {error}"
+                            );
+                            false
+                        }
+                    };
+                    if let Some(completion_request) = final_report_apply
+                        .as_ref()
+                        .and_then(|apply| apply.completion_request.clone())
+                    {
+                        spawn_conversation_completion_hook_task(
+                            app.clone(),
+                            task_state.clone(),
+                            controller_runtime.clone(),
+                            agent_runtime.clone(),
+                            completion_request,
+                        );
+                    }
+                    if !started_next_prompt
+                        && let Some(apply) = final_report_apply
+                        && let Err(error) = persist_workspace_session_update(
+                            controller_runtime.clone(),
+                            &apply.workspace_snapshot,
+                            finished_session_id,
+                        )
+                        .await
+                    {
+                        eprintln!("[tauri-service] persist final report failed: {error}");
                     }
                     break;
                 }
             }
         }
+        if !reached_finished_event && let Ok(mut guard) = task_state.lock() {
+            guard.active_stream_tasks.remove(&session_id);
+        }
     });
+    if let Ok(mut guard) = state.lock()
+        && let Some(previous_task) = guard.active_stream_tasks.insert(session_id, handle)
+    {
+        previous_task.abort();
+    }
+}
+
+/// Builds the WebUI runtime intervention that injects guided prompts before the next provider request.
+/// 构建 WebUI 运行时干预器，用于在下一次 Provider 请求前注入引导提示词。
+///
+/// # Parameters
+/// 参数
+/// `app` is the Tauri app handle used to emit refreshed workbench snapshots.
+/// `app` 是用于发出刷新后工作台快照的 Tauri 应用句柄。
+/// `state` is the shared service bridge state that owns the active workspace snapshot.
+/// `state` 是拥有当前工作区快照的共享服务桥接状态。
+/// `provider_configuration` is the provider configuration used by the shared pending router.
+/// `provider_configuration` 是共享待发送路由器使用的 Provider 配置。
+///
+/// # Returns
+/// 返回值
+/// A callback consumed by the host-controlled runtime stream.
+/// 返回供宿主控制运行时流消费的回调。
+fn build_webui_prompt_intervention(
+    app: tauri::AppHandle,
+    state: SharedServiceBridgeState,
+    provider_configuration: ProviderConfigurationFile,
+) -> RuntimePromptIntervention {
+    Arc::new(move |session_id, controller: &mut VulcanCoreController| {
+        match take_next_webui_internal_guidance_prompt(
+            &app,
+            &state,
+            &provider_configuration,
+            session_id,
+        ) {
+            Ok(Some(entry)) => controller
+                .append_interjected_user_turn_with_attachments(
+                    entry.prompt.as_str(),
+                    entry.attachments,
+                )
+                .is_some(),
+            Ok(None) => false,
+            Err(error) => {
+                eprintln!("[tauri-service] apply guided prompt intervention failed: {error}");
+                false
+            }
+        }
+    })
+}
+
+/// Takes one already-guided WebUI prompt from the shared internal queue.
+/// 从共享内部队列取出一条已经引导的 WebUI 提示词。
+///
+/// # Parameters
+/// 参数
+/// `app` is used by the workspace mutation helper to emit the updated queue view.
+/// `app` 由工作区变更辅助函数用于发出更新后的队列视图。
+/// `state` contains the current workspace snapshot and live runtime handles.
+/// `state` 包含当前工作区快照与实时运行时句柄。
+/// `provider_configuration` lets the shared router preserve iced Anthropic dispatch preference.
+/// `provider_configuration` 用于让共享路由器保留 iced 的 Anthropic 分发偏好。
+/// `session_id` identifies the session whose stream reached a safe tool boundary.
+/// `session_id` 标识流已经到达安全工具边界的会话。
+///
+/// # Returns
+/// 返回值
+/// The guided prompt entry when one was waiting in the internal queue.
+/// 当内部队列存在等待中的引导条目时返回该条目。
+fn take_next_webui_internal_guidance_prompt(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+    session_id: SessionId,
+) -> Result<Option<PendingSessionPromptEntry>, String> {
+    let mut guided_entry = None;
+    with_workspace_mutation(app, state, |workspace| {
+        let prefer_delegate_completion =
+            session_uses_anthropic_runtime(workspace, provider_configuration, session_id);
+        let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
+            return;
+        };
+        let Some(entry) = take_next_internal_pending_prompt_entry(
+            &mut runtime_state.ui_state,
+            prefer_delegate_completion,
+        ) else {
+            return;
+        };
+        if let Some(panel_entry_id) = entry.panel_entry_id.as_deref() {
+            let _ = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, panel_entry_id);
+        }
+        runtime_state.updated_at = current_unix_millis_text();
+        guided_entry = Some(entry);
+    })?;
+    Ok(guided_entry)
+}
+
+/// Prepares the next visible queued prompt after one WebUI-owned session run reaches a clean idle point.
+/// 在 WebUI 拥有的单次会话运行到达干净空闲点后准备下一条可见排队提示词。
+///
+/// `allow_from_stopped_phase` lets manual insert match iced while automatic continuation still respects stop.
+/// `allow_from_stopped_phase` 让手动插入对齐 iced，同时自动续跑仍尊重停止状态。
+async fn maybe_prepare_next_webui_pending_prompt(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    allow_from_stopped_phase: bool,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
+    let (mut workspace_snapshot, has_active_stream_task) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        (
+            guard
+                .workspace_snapshot
+                .clone()
+                .ok_or_else(|| String::from("workspace snapshot is not ready"))?,
+            guard.active_stream_tasks.contains_key(&session_id),
+        )
+    };
+    if pending_prompt_dispatch_block_reason(
+        webui_pending_prompt_dispatch_context(
+            &workspace_snapshot,
+            &agent_runtime.provider_configuration,
+            session_id,
+            has_active_stream_task,
+        ),
+        allow_from_stopped_phase,
+    )
+    .is_some()
+    {
+        return Ok(None);
+    }
+    let Some(session_title) = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .map(|session| session.title.clone())
+    else {
+        return Ok(None);
+    };
+    let prefer_delegate_completion = session_uses_anthropic_runtime(
+        &workspace_snapshot,
+        &agent_runtime.provider_configuration,
+        session_id,
+    );
+    let Some(entry) = take_next_webui_pending_prompt(
+        &mut workspace_snapshot,
+        session_id,
+        prefer_delegate_completion,
+    ) else {
+        return Ok(None);
+    };
+    let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
+    let runtime_options = entry.runtime_options.clone();
+    let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
+    let disabled_ai_capability_kinds = if runtime_options.disabled_ai_capability_kinds.is_empty() {
+        None
+    } else {
+        Some(
+            runtime_options
+                .disabled_ai_capability_kinds
+                .iter()
+                .map(|kind| kind.key().to_string())
+                .collect(),
+        )
+    };
+    let request = append_prompt_and_build_request(
+        &mut workspace_snapshot,
+        &entry_agent_runtime,
+        session_id,
+        &session_title,
+        &workspace_path,
+        &entry.prompt,
+        entry.attachments,
+        Some(String::from("build")),
+        Some(reasoning_effort_wire_value(runtime_options.reasoning_effort).to_string()),
+        disabled_ai_capability_kinds,
+        None,
+        None,
+        |_| Ok(()),
+    )
+    .await?;
+    if let Some(panel_entry_id) = entry.panel_entry_id.as_deref()
+        && let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&session_id)
+    {
+        let _ = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, panel_entry_id);
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
+        .await?;
+    store_current_workbench_snapshot(
+        app,
+        state,
+        controller_runtime,
+        &entry_agent_runtime,
+        workspace_snapshot,
+    )?;
+    Ok(Some(request))
+}
+
+/// Removes the next dispatchable queued prompt from the internal or visible WebUI queues.
+/// 从 WebUI 内部或可见队列中移除下一条可分发排队提示词。
+fn take_next_webui_pending_prompt(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    prefer_delegate_completion: bool,
+) -> Option<PendingSessionPromptEntry> {
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)?;
+    let created_at = current_unix_millis_text();
+    let internal_entry_id = format!("webui-pending-internal-{}", SessionId::new_v4());
+    let entry = take_next_pending_prompt_entry(
+        &mut runtime_state.ui_state,
+        prefer_delegate_completion,
+        internal_entry_id,
+        created_at,
+    )?;
+    runtime_state.updated_at = current_unix_millis_text();
+    Some(entry)
+}
+
+/// Rebuilds and emits the retained workbench snapshot after a service-side queue mutation.
+/// 在 service 侧队列变更后重建并发出保留的工作台快照。
+fn store_current_workbench_snapshot(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    workspace_snapshot: WorkspaceSnapshot,
+) -> Result<WorkbenchSnapshot, String> {
+    let (luaskills_catalog, token_budget_runtime, mcp_catalog, logs) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let luaskills_catalog = guard
+            .luaskills_runtime
+            .as_ref()
+            .and_then(|handle| crate::luaskills_bridge::load_luaskills_catalog(handle).ok())
+            .unwrap_or_else(empty_luaskills_catalog);
+        let token_budget_runtime = guard.token_budget_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; token budget runtime is not ready")
+        })?;
+        let mcp_catalog = guard
+            .mcp_runtime
+            .as_ref()
+            .map(TauriMcpRuntimeHandle::catalog)
+            .unwrap_or_else(empty_mcp_catalog);
+        (
+            luaskills_catalog,
+            token_budget_runtime,
+            mcp_catalog,
+            guard.startup.recent_logs.clone(),
+        )
+    };
+    let selected_messages =
+        selected_session_messages_from_workspace(&workspace_snapshot).unwrap_or_default();
+    let live_context_budgets = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .live_context_budgets
+        .clone();
+    let workbench = workbench_from_runtime(
+        controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        &workspace_snapshot,
+        selected_messages.as_slice(),
+        &logs,
+        &live_context_budgets,
+    );
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workspace_snapshot = Some(workspace_snapshot);
+        guard.workbench = workbench.clone();
+    }
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+    Ok(workbench)
 }
 
 /// Applies execution preparation identity fields to the target session runtime state.
@@ -2706,16 +4060,43 @@ async fn apply_conversation_checkpoint(
         .map(|_| ())
 }
 
-/// Applies the terminal execution report and persists the final transcript state.
-/// 应用终态执行报告，并持久化最终转录状态。
-async fn apply_execution_report(
+/// Result produced after applying one terminal report to retained memory.
+/// 将一份终态报告应用到保留内存后产生的结果。
+struct TerminalReportMemoryApply {
+    /// Updated workspace snapshot after applying the terminal report.
+    /// 应用终态报告后的更新工作区快照。
+    workspace_snapshot: WorkspaceSnapshot,
+    /// Completed-turn hook request that should run asynchronously.
+    /// 需要异步执行的完成回合 hook 请求。
+    completion_request: Option<ConversationCompletionRequest>,
+}
+
+/// Applies the terminal execution report to retained memory and emits the updated workbench view.
+/// 将终态执行报告应用到保留内存中，并发出更新后的工作台视图。
+///
+/// # Parameters
+/// 参数
+/// `app` is the Tauri app handle used to emit the refreshed workbench snapshot.
+/// `app` 是用于发出刷新后工作台快照的 Tauri 应用句柄。
+/// `state` owns the retained workspace snapshot mutated by the stream task.
+/// `state` 持有由流任务修改的保留工作区快照。
+/// `agent_runtime` provides conversation hooks and VMM synchronization state.
+/// `agent_runtime` 提供会话 hook 与 VMM 同步状态。
+/// `report` is the terminal execution report produced by the agent runtime.
+/// `report` 是 Agent 运行时产出的终态执行报告。
+///
+/// # Returns
+/// 返回值
+/// The updated workspace snapshot after the terminal report has been applied in memory.
+/// 返回终态报告已经应用到内存后的更新工作区快照。
+fn apply_execution_report_to_memory(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
-    controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
     report: ExecutionRunReport,
-) -> Result<(), String> {
+) -> Result<TerminalReportMemoryApply, String> {
     let session_id = report.session_id;
+    let mut completion_request = None;
     let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
         let now = current_unix_millis_text();
         let runtime_state = workspace
@@ -2734,31 +4115,28 @@ async fn apply_execution_report(
             .and_then(|session| session.project_id.clone());
         let conversation_state = runtime_state.conversation_state.clone();
         if apply_result.is_success {
-            let (hook_turn_id, vmm_writeback_effects) = agent_runtime
-                .conversation_hook_runtime
-                .lock()
-                .map(|mut hook_runtime| {
-                    hook_runtime.complete_turn(
-                        session_id,
-                        project_id.clone(),
-                        report.assistant_output.as_deref().unwrap_or(
-                            "The model completed the run but did not return visible text output.",
-                        ),
-                        report.provider_request_count,
-                        &conversation_state,
-                    )
-                })
-                .unwrap_or_default();
+            let hook_turn_id = if let Ok(mut hook_runtime) =
+                agent_runtime.conversation_hook_runtime.lock()
+            {
+                let (hook_turn_id, request) = hook_runtime.prepare_turn_completion_dispatch(
+                    session_id,
+                    project_id.clone(),
+                    report.assistant_output.as_deref().unwrap_or(
+                        "The model completed the run but did not return visible text output.",
+                    ),
+                    report.provider_request_count,
+                    &conversation_state,
+                );
+                completion_request = Some(request);
+                hook_turn_id
+            } else {
+                String::new()
+            };
             runtime_state
                 .context_injection_state
                 .consume_turn(&hook_turn_id, &now);
             runtime_state.vmm_profile_sync.record_completed_turn();
             let profile_sync = runtime_state.vmm_profile_sync.clone();
-            apply_vmm_writeback_effects_to_runtime_state(
-                runtime_state,
-                vmm_writeback_effects,
-                &now,
-            );
             agent_runtime
                 .vmm_hook_runtime
                 .store_profile_sync_state(session_id, profile_sync);
@@ -2805,9 +4183,76 @@ async fn apply_execution_report(
                 workspace,
             ));
     })?;
-    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
-        .await
-        .map(|_| ())
+    Ok(TerminalReportMemoryApply {
+        workspace_snapshot,
+        completion_request,
+    })
+}
+
+/// Spawns the completed-turn hook without blocking queued prompt dispatch.
+/// 启动完成回合 hook，避免阻塞排队提示词分发。
+///
+/// # Parameters
+/// 参数
+/// `app` is the Tauri app handle used to emit any later VMM outbox updates.
+/// `app` 是用于发出后续 VMM outbox 更新的 Tauri 应用句柄。
+/// `state` owns the retained workspace snapshot that receives hook side effects.
+/// `state` 持有接收 hook 副作用的保留工作区快照。
+/// `controller_runtime` persists VMM outbox changes after the hook finishes.
+/// `controller_runtime` 在 hook 完成后持久化 VMM outbox 变更。
+/// `agent_runtime` provides VMM hook snapshot refresh state.
+/// `agent_runtime` 提供 VMM hook 快照刷新状态。
+/// `completion_request` is the prepared completed-turn hook dispatch request.
+/// `completion_request` 是已准备的完成回合 hook 调度请求。
+fn spawn_conversation_completion_hook_task(
+    app: tauri::AppHandle,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    completion_request: ConversationCompletionRequest,
+) {
+    tauri::async_runtime::spawn(async move {
+        let outcome = completion_request.run().await;
+        let session_id = outcome.session_id;
+        if let Err(error) = outcome.report.as_ref() {
+            eprintln!(
+                "[tauri-service] completed-turn hook failed for {}: {}",
+                outcome.turn_id, error
+            );
+        }
+        if outcome.vmm_writeback_effects.is_empty() {
+            return;
+        }
+        let workspace_snapshot = match with_workspace_mutation(&app, &state, |workspace| {
+            let now = current_unix_millis_text();
+            if let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) {
+                apply_vmm_writeback_effects_to_runtime_state(
+                    runtime_state,
+                    outcome.vmm_writeback_effects,
+                    &now,
+                );
+                runtime_state.updated_at = now;
+            }
+            agent_runtime
+                .vmm_hook_runtime
+                .replace_snapshot(build_vmm_hook_config_snapshot(
+                    &agent_runtime.provider_configuration,
+                    workspace,
+                ));
+        }) {
+            Ok(workspace_snapshot) => workspace_snapshot,
+            Err(error) => {
+                eprintln!("[tauri-service] apply completed-turn hook effects failed: {error}");
+                return;
+            }
+        };
+        if let Err(error) =
+            persist_workspace_session_update(controller_runtime, &workspace_snapshot, session_id)
+                .await
+        {
+            eprintln!("[tauri-service] persist completed-turn hook effects failed: {error}");
+        }
+    });
 }
 
 /// Applies VMM writeback hook effects to one session runtime state.
@@ -3173,28 +4618,50 @@ fn preserve_active_session_run_state(
     {
         refreshed_snapshot.selected_session = previous_snapshot.selected_session;
     }
-    for previous_session in previous_snapshot
-        .sessions
-        .iter()
-        .filter(|session| session.status == SessionState::Running)
-    {
+    for previous_session in previous_snapshot.sessions.iter().filter(|session| {
+        session.status == SessionState::Running
+            || previous_snapshot
+                .session_run_phases
+                .get(&session.id)
+                .copied()
+                .is_some_and(is_active_session_run_phase)
+            || previous_snapshot
+                .session_runtime_state
+                .get(&session.id)
+                .is_some_and(|runtime_state| {
+                    !runtime_state.ui_state.pending_prompt_queue.is_empty()
+                        || !runtime_state.ui_state.pending_prompt_panel_queue.is_empty()
+                })
+    }) {
+        let previous_phase = previous_snapshot
+            .session_run_phases
+            .get(&previous_session.id)
+            .copied();
+        let had_active_run = previous_session.status == SessionState::Running
+            || previous_phase.is_some_and(is_active_session_run_phase);
         if let Some(refreshed_session) = refreshed_snapshot
             .sessions
             .iter_mut()
             .find(|session| session.id == previous_session.id)
         {
-            refreshed_session.status = SessionState::Running;
+            refreshed_session.status = if had_active_run {
+                SessionState::Running
+            } else {
+                previous_session.status
+            };
             refreshed_session.last_updated_label = previous_session.last_updated_label.clone();
         }
-        let previous_phase = previous_snapshot
-            .session_run_phases
-            .get(&previous_session.id)
-            .copied()
-            .filter(|phase| is_active_session_run_phase(*phase))
-            .unwrap_or(SessionRunPhase::Preparing);
-        refreshed_snapshot
-            .session_run_phases
-            .insert(previous_session.id, previous_phase);
+        if let Some(previous_phase) = previous_phase {
+            let preserved_phase = if had_active_run && !is_active_session_run_phase(previous_phase)
+            {
+                SessionRunPhase::Preparing
+            } else {
+                previous_phase
+            };
+            refreshed_snapshot
+                .session_run_phases
+                .insert(previous_session.id, preserved_phase);
+        }
         if let Some(runtime_state) = previous_snapshot
             .session_runtime_state
             .get(&previous_session.id)
@@ -4000,6 +5467,17 @@ fn workbench_from_runtime(
             provider_configuration,
             ai_tool_configuration,
         ),
+        composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
+        pending_prompts: selected_runtime_state
+            .map(|runtime_state| {
+                runtime_state
+                    .ui_state
+                    .pending_prompt_panel_queue
+                    .iter()
+                    .map(pending_prompt_summary_from_panel_entry)
+                    .collect()
+            })
+            .unwrap_or_default(),
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
         logs: logs
@@ -4024,6 +5502,28 @@ fn workbench_from_runtime(
             selected_runtime_state,
             live_context_budgets,
         ),
+    }
+}
+
+/// Converts one persisted visible pending-prompt entry into a WebUI summary.
+/// 将单条持久化可见待发送提示词转换为 WebUI 摘要。
+fn pending_prompt_summary_from_panel_entry(
+    entry: &PendingPromptPanelEntry,
+) -> PendingPromptSummary {
+    PendingPromptSummary {
+        id: entry.id.clone(),
+        prompt: entry.prompt.clone(),
+        preview: entry.preview.clone(),
+        attachments: entry
+            .attachments
+            .iter()
+            .map(composer_attachment_summary_from_core)
+            .collect(),
+        state: match entry.state {
+            PendingPromptPanelEntryState::Ready => String::from("ready"),
+            PendingPromptPanelEntryState::Inserted => String::from("inserted"),
+        },
+        created_at: entry.created_at.clone(),
     }
 }
 
@@ -4448,6 +5948,8 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
             &ProviderConfigurationFile::default(),
             &ProviderConfigurationFile::default().ai_tools,
         ),
+        composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
+        pending_prompts: Vec::new(),
         memories: Vec::new(),
         command_sessions: Vec::new(),
         logs: logs
@@ -4735,9 +6237,10 @@ fn active_workbench_model_capabilities(
         .as_deref()
         .and_then(provider_config::parse_active_model_reference)?;
     let definition = provider_config::supported_provider_by_id(provider_id)?;
-    let active_model = provider_config::effective_model_choices(provider_id, provider_configuration)
-        .into_iter()
-        .find(|model| model.id == model_id);
+    let active_model =
+        provider_config::effective_model_choices(provider_id, provider_configuration)
+            .into_iter()
+            .find(|model| model.id == model_id);
     Some(resolve_effective_model_capabilities(
         definition,
         active_model.as_ref(),

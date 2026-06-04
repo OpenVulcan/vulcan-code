@@ -199,13 +199,13 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PaneKind, PendingPromptModelReference,
-    PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptRuntimeOptions,
-    PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
-    SessionCompactionEntry, SessionComposerDraftState, SessionId, SessionMessageEntry,
-    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
-    TaskProjectSummary,
+    ActivityEntry, ActivityLevel, ExecutionMode, PENDING_PROMPT_QUEUE_LIMIT, PaneKind,
+    PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
+    PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
+    PendingSessionPromptSource, SessionCompactionEntry, SessionComposerDraftState, SessionId,
+    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, SessionTurnStats,
+    SessionTurnStatsStatus, TaskProjectSummary, pending_prompt_dispatch_index,
 };
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
@@ -296,7 +296,7 @@ const LOGO_ASSET_BYTES: &[u8] = include_bytes!("../../resources/vulcan-mark.svg"
 
 /// Maximum number of queued follow-up prompts retained per session before new manual submissions are rejected.
 /// 每个会话在拒绝新的手动提交之前最多保留的排队跟进提示词数量。
-const SESSION_PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
+const SESSION_PENDING_PROMPT_QUEUE_LIMIT: usize = PENDING_PROMPT_QUEUE_LIMIT;
 
 /// Seed Rust code rendered in the embedded editor component.
 /// 展示在嵌入式编辑器中的示例 Rust 代码。

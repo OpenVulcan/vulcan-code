@@ -7,6 +7,7 @@ use crate::agent_runtime::runtime_stream_delta::process_provider_stream_delta;
 use crate::agent_runtime::runtime_stream_finalize::{
     build_failure_terminal_events, build_success_terminal_events,
 };
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch;
 use crate::model::SessionId;
 use crate::provider_config::ProviderConfigurationFile;
@@ -101,6 +102,7 @@ impl ExecutionStreamDeltaCoalescer {
 pub(crate) fn drive_runtime_stream_provider_loop(
     config: ProviderConfigurationFile,
     launch: RuntimeStreamLaunch,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
         let session_id = launch.session_id;
@@ -131,6 +133,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
             token_budget_runtime.clone(),
             tools_manager,
             resolved_tool_definitions,
+            prompt_intervention,
         );
 
         let mut delta_coalescer = ExecutionStreamDeltaCoalescer::default();

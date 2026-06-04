@@ -3,6 +3,7 @@
 
 use crate::agent_runtime::provider_transport_request_budget::ProviderRequestBudgetGuard;
 use crate::agent_runtime::provider_transport_retry::ProviderRetryPolicy;
+use crate::agent_runtime::runtime_stream_intervention::RuntimePromptIntervention;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::model::SessionId;
 use crate::provider_config::{ModelInterleavedCapability, ProviderApiFamily, ProviderRuntimeKind};
@@ -88,6 +89,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Runtime retry policy applied around host-controlled provider attempts.
     /// 包裹宿主控制 Provider 尝试的运行时重试策略。
     pub(crate) retry_policy: ProviderRetryPolicy,
+    /// Optional host intervention invoked at replay-safe tool boundaries.
+    /// 在可回放安全工具边界调用的可选宿主干预钩子。
+    pub(crate) prompt_intervention: Option<RuntimePromptIntervention>,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -115,6 +119,7 @@ pub(crate) fn build_provider_transport_execution_request(
     interleaved_reasoning: Option<ModelInterleavedCapability>,
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
+    prompt_intervention: Option<RuntimePromptIntervention>,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -140,5 +145,6 @@ pub(crate) fn build_provider_transport_execution_request(
         interleaved_reasoning,
         request_budget_guard,
         retry_policy,
+        prompt_intervention,
     }
 }

@@ -57,6 +57,9 @@ pub const HOOK_CONVERSATION_COMPACTED: &str = "conversation.compacted";
 /// Host-side safety ceiling for waiting on precheck hook results.
 /// 等待 precheck hook 结果的宿主侧安全兜底上限。
 const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
+/// Host-side safety ceiling for completed-turn hook dispatch.
+/// 完成回合 hook 调度的宿主侧安全兜底上限。
+const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 
 /// One compact timeline item emitted to conversation hook consumers.
 /// 发送给会话 hook 消费方的一条精简 timeline 项。
@@ -506,6 +509,33 @@ impl ConversationHookRuntime {
         provider_request_count: usize,
         conversation_state: &SessionConversationState,
     ) -> (String, Vec<VmmWritebackHookEffect>) {
+        let (completed_turn_id, request) = self.prepare_turn_completion_dispatch(
+            session_id,
+            project_id,
+            assistant_content,
+            provider_request_count,
+            conversation_state,
+        );
+        let report = request.run_blocking();
+        (
+            completed_turn_id,
+            report
+                .as_ref()
+                .map(vmm_writeback_effects_from_report)
+                .unwrap_or_default(),
+        )
+    }
+
+    /// Completes one logical turn locally and returns a dispatch request that can run off the critical path.
+    /// 在本地闭合一个逻辑回合，并返回可脱离关键路径执行的调度请求。
+    pub fn prepare_turn_completion_dispatch(
+        &mut self,
+        session_id: SessionId,
+        project_id: Option<String>,
+        assistant_content: &str,
+        provider_request_count: usize,
+        conversation_state: &SessionConversationState,
+    ) -> (String, ConversationCompletionRequest) {
         let turn = self
             .active_turns
             .remove(&session_id)
@@ -522,18 +552,30 @@ impl ConversationHookRuntime {
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
         });
-        let report = self.dispatch_json_blocking(
-            HOOK_CONVERSATION_TURN_COMPLETED,
+        (
+            completed_turn_id.clone(),
+            ConversationCompletionRequest::new(
+                self.dispatcher.clone(),
+                session_id,
+                payload,
+                completed_turn_id,
+            ),
+        )
+    }
+
+    /// Dispatches one prepared completed-turn payload synchronously for legacy callers.
+    /// 为旧调用方同步调度一条已准备的完成回合 payload。
+    fn dispatch_completion_blocking(
+        dispatcher: HookDispatcher,
+        session_id: SessionId,
+        payload: Value,
+    ) -> Option<HookDispatchReport> {
+        Self::dispatch_json_blocking_with_dispatcher(
+            dispatcher,
             session_id,
             payload,
-            HookScope::Session,
-        );
-        (
-            completed_turn_id,
-            report
-                .as_ref()
-                .map(vmm_writeback_effects_from_report)
-                .unwrap_or_default(),
+            HOOK_CONVERSATION_TURN_COMPLETED,
+            COMPLETION_DISPATCH_TIMEOUT_MS,
         )
     }
 
@@ -654,20 +696,19 @@ impl ConversationHookRuntime {
         spawn_hook_dispatch(dispatcher, request);
     }
 
-    /// Dispatches one JSON hook payload synchronously and returns its report.
-    /// 同步调度一条 JSON hook payload 并返回其报告。
-    fn dispatch_json_blocking(
-        &self,
-        point: &'static str,
+    /// Dispatches one JSON hook payload synchronously through the provided dispatcher.
+    /// 通过给定调度器同步调度一条 JSON hook payload。
+    fn dispatch_json_blocking_with_dispatcher(
+        dispatcher: HookDispatcher,
         session_id: SessionId,
         payload: Value,
-        scope: HookScope,
+        point: &'static str,
+        timeout_ms: u64,
     ) -> Option<HookDispatchReport> {
-        let dispatcher = self.dispatcher.clone();
         let context = HookContext {
             run_id: format!("{point}:{session_id}"),
             point: point.to_string(),
-            scope,
+            scope: HookScope::Session,
             actor: HookActor::new("vulcan-code-runtime"),
             workspace_id: None,
             project_id: None,
@@ -684,10 +725,7 @@ impl ConversationHookRuntime {
                 .build()
                 .ok()?;
             runtime.block_on(async move {
-                tokio::time::timeout(
-                    Duration::from_millis(PRECHECK_DISPATCH_TIMEOUT_MS),
-                    dispatcher.dispatch(request),
-                )
+                tokio::time::timeout(Duration::from_millis(timeout_ms), dispatcher.dispatch(request))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -844,6 +882,126 @@ pub struct ConversationPrecheckOutcome {
     /// Logical turn id associated with this precheck.
     /// 与该 precheck 关联的逻辑回合标识。
     pub turn_id: String,
+}
+
+/// Prepared completed-turn hook request that can run after the next queued prompt starts.
+/// 可在下一条排队提示词启动后执行的已准备完成回合 hook 请求。
+#[derive(Clone)]
+pub struct ConversationCompletionRequest {
+    /// Dispatcher snapshot used for this completed-turn hook.
+    /// 当前完成回合 hook 使用的调度器快照。
+    dispatcher: HookDispatcher,
+    /// Session that owns the completed turn.
+    /// 拥有已完成回合的会话。
+    session_id: SessionId,
+    /// JSON payload sent to the completed-turn hook point.
+    /// 发送给完成回合 hook 点位的 JSON 载荷。
+    payload: Value,
+    /// Logical turn id associated with this completed turn.
+    /// 与该完成回合关联的逻辑回合标识。
+    turn_id: String,
+}
+
+impl ConversationCompletionRequest {
+    /// Builds one prepared completed-turn hook request.
+    /// 构建一条已准备的完成回合 hook 请求。
+    fn new(
+        dispatcher: HookDispatcher,
+        session_id: SessionId,
+        payload: Value,
+        turn_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            dispatcher,
+            session_id,
+            payload,
+            turn_id: turn_id.into(),
+        }
+    }
+
+    /// Returns the session that owns the completed turn.
+    /// 返回拥有该完成回合的会话。
+    pub fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    /// Returns the logical turn id associated with this completed-turn request.
+    /// 返回与这条完成回合请求关联的逻辑回合标识。
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
+    /// Runs the completed-turn hook dispatch on a worker thread.
+    /// 在工作线程执行完成回合 hook 调度。
+    pub async fn run(self) -> ConversationCompletionOutcome {
+        self.run_on_worker_thread().await
+    }
+
+    /// Runs the completed-turn hook dispatch synchronously for legacy callers.
+    /// 为旧调用方同步执行完成回合 hook 调度。
+    fn run_blocking(self) -> Option<HookDispatchReport> {
+        ConversationHookRuntime::dispatch_completion_blocking(
+            self.dispatcher,
+            self.session_id,
+            self.payload,
+        )
+    }
+
+    /// Runs the completed-turn hook dispatch in a private worker thread.
+    /// 在私有工作线程中执行完成回合 hook 调度。
+    async fn run_on_worker_thread(self) -> ConversationCompletionOutcome {
+        let session_id = self.session_id;
+        let turn_id = self.turn_id.clone();
+        let (sender, receiver) = oneshot::channel();
+        let spawn_result = std::thread::Builder::new()
+            .name(format!("vulcan-completion-{session_id}"))
+            .spawn(move || {
+                let result = self.run_blocking();
+                let _ = sender.send(result);
+            });
+        if let Err(error) = spawn_result {
+            return ConversationCompletionOutcome {
+                session_id,
+                turn_id,
+                report: Err(format!("completed-turn hook thread failed to start: {error}")),
+                vmm_writeback_effects: Vec::new(),
+            };
+        }
+        let report = receiver
+            .await
+            .map_err(|_| String::from("completed-turn hook dispatch thread disconnected"))
+            .and_then(|report| {
+                report.ok_or_else(|| String::from("completed-turn hook dispatch produced no report"))
+            });
+        let vmm_writeback_effects = report
+            .as_ref()
+            .map(vmm_writeback_effects_from_report)
+            .unwrap_or_default();
+        ConversationCompletionOutcome {
+            session_id,
+            turn_id,
+            report,
+            vmm_writeback_effects,
+        }
+    }
+}
+
+/// Result produced by one asynchronous completed-turn hook dispatch.
+/// 单次异步完成回合 hook 调度产生的结果。
+#[derive(Debug, Clone)]
+pub struct ConversationCompletionOutcome {
+    /// Session that owns the completed turn.
+    /// 拥有已完成回合的会话。
+    pub session_id: SessionId,
+    /// Logical turn id associated with the completed turn.
+    /// 与已完成回合关联的逻辑回合标识。
+    pub turn_id: String,
+    /// Hook dispatch report or a non-fatal error message.
+    /// hook 调度报告或非致命错误消息。
+    pub report: Result<HookDispatchReport, String>,
+    /// VMM writeback effects extracted from the completed-turn hook report.
+    /// 从完成回合 hook 报告中提取的 VMM 写回效果。
+    pub vmm_writeback_effects: Vec<VmmWritebackHookEffect>,
 }
 
 /// Extracts VMM writeback effects from one hook dispatch report.
