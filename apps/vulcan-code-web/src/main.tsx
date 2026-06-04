@@ -6054,7 +6054,7 @@ function TurnStatsBlock(props: { block: ConversationBlock }) {
           <strong>{props.block.summary || props.block.title}</strong>
         </div>
       </TooltipTrigger>
-      <TooltipContent className="turn-stats-tooltip" showArrow={false} side="right" sideOffset={8}>
+      <TooltipContent className="turn-stats-tooltip" side="right" sideOffset={8}>
         <pre>{props.block.body}</pre>
       </TooltipContent>
     </Tooltip>
@@ -6723,6 +6723,7 @@ function ComposerPanel(props: {
             onTargetMove={handleAiCapabilityTargetMove}
             onTargetToggle={handleAiCapabilityTargetToggle}
           />
+          <ContextUsageOrb snapshot={props.contextUsage} />
         </div>
         <div className="composer-toolbar-right">
           <ComposerSelectControl
@@ -6733,7 +6734,6 @@ function ComposerPanel(props: {
             options={reasoningEffortOptions}
             value={reasoningEffort}
           />
-          <ContextUsageOrb snapshot={props.contextUsage} />
           <Button
             aria-label={isComposerRunning ? t("composer.aria.stop") : t("composer.aria.send")}
             className={cn("send-button", isComposerRunning && "running")}

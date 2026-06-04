@@ -2048,11 +2048,12 @@ button {
 }
 
 .context-usage-tooltip strong {
+  color: inherit;
   font-size: 12px;
 }
 
 .context-usage-tooltip span {
-  color: var(--muted-foreground);
+  color: inherit;
   font-size: 11px;
   line-height: 1.35;
 }
@@ -3325,10 +3326,6 @@ button {
 
 .turn-stats-tooltip {
   max-width: min(520px, calc(100vw - 32px));
-  border: 1px solid var(--border);
-  background: var(--popover);
-  color: var(--popover-foreground);
-  box-shadow: 0 16px 40px color-mix(in oklch, var(--foreground) 18%, transparent);
 }
 
 .turn-stats-tooltip pre {
