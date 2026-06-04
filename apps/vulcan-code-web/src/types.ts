@@ -183,6 +183,61 @@ export interface ConversationMessage {
   // Optional structured transcript metadata.
   // 可选结构化转录元数据。
   metadata?: unknown;
+  // Structured user attachments projected from transcript metadata.
+  // 从转录元数据投影出的结构化用户附件。
+  attachments?: ComposerAttachmentSummary[];
+}
+
+// ComposerAttachmentCapabilitySummary describes whether one attachment kind is allowed.
+// ComposerAttachmentCapabilitySummary 描述单种附件类型当前是否允许使用。
+export interface ComposerAttachmentCapabilitySummary {
+  // Stable attachment kind key.
+  // 稳定附件类型键。
+  kind: string;
+  // User-facing attachment kind label.
+  // 面向用户显示的附件类型名称。
+  label: string;
+  // Whether this attachment kind can be submitted.
+  // 当前附件类型是否允许提交。
+  enabled: boolean;
+  // Whether the active provider/model supports this kind natively.
+  // 当前 Provider/模型是否原生支持该类型。
+  native: boolean;
+  // Whether host-side AI tools bridge this kind.
+  // 宿主侧 AI 工具是否桥接该类型。
+  bridged: boolean;
+  // Browser file picker accept string.
+  // 浏览器文件选择 accept 字符串。
+  accept: string;
+}
+
+// ComposerAttachmentSummary describes one staged composer attachment.
+// ComposerAttachmentSummary 描述单条已暂存的输入区附件。
+export interface ComposerAttachmentSummary {
+  // Stable attachment kind key.
+  // 稳定附件类型键。
+  kind: string;
+  // Human-readable file name.
+  // 人类可读文件名。
+  fileName: string;
+  // Managed local path used for provider replay.
+  // Provider 回放使用的托管本地路径。
+  localPath: string;
+  // Optional original source path.
+  // 可选原始来源路径。
+  sourcePath?: string | null;
+  // Optional asset identifier.
+  // 可选资源标识。
+  assetId?: string | null;
+  // Optional byte length.
+  // 可选字节长度。
+  byteLen?: number | null;
+  // Optional preview local path.
+  // 可选预览本地路径。
+  previewLocalPath?: string | null;
+  // MIME type.
+  // MIME 类型。
+  mimeType: string;
 }
 
 // ToolCallSummary describes one tool call block.
@@ -479,6 +534,9 @@ export interface WorkbenchSnapshot {
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];
+  // Attachment capability gates for the composer attachment controls.
+  // 输入区附件控件使用的附件能力门控。
+  composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

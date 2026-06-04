@@ -50,6 +50,15 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   ResizableHandle,
@@ -98,6 +107,8 @@ import { I18nProvider, useI18n, type LocaleCode } from "@/i18n";
 import type {
   AiCapabilitySummary,
   AiCapabilityTargetSummary,
+  ComposerAttachmentCapabilitySummary,
+  ComposerAttachmentSummary,
   ContextInjectionCardSummary,
   ContextInjectionSnapshot,
   ContextUsageSnapshot,
@@ -146,6 +157,7 @@ import {
   ImagePlus,
   Link,
   Minus,
+  Plus,
   LayoutDashboard,
   MailOpen,
   Maximize2,
@@ -257,6 +269,9 @@ interface ComposerSubmission {
   // User-entered prompt text to append into the active conversation.
   // 需要追加到当前会话中的用户输入提示词。
   prompt: string;
+  // Staged attachments submitted before the prompt text.
+  // 在提示词文本之前提交的已暂存附件。
+  attachments: ComposerAttachmentSummary[];
   // Composer execution mode selected by the user.
   // 用户选择的输入区执行模式。
   executionMode: string;
@@ -976,6 +991,7 @@ async function submitConversationPrompt(
   projectId: string | null,
   conversationId: string | null,
   prompt: string,
+  attachments: ComposerAttachmentSummary[],
   executionMode: string,
   reasoningEffort: string,
   disabledAiCapabilityKinds: AiCapabilityKind[],
@@ -990,12 +1006,126 @@ async function submitConversationPrompt(
     projectId,
     conversationId,
     prompt,
+    attachments,
     executionMode,
     reasoningEffort,
     disabledAiCapabilityKinds,
     disabledAiCapabilityTargetSelectors,
     aiCapabilityTargetOrderOverrides,
   });
+}
+
+// pickComposerAttachments opens the native picker and stages selected files through the service.
+// pickComposerAttachments 通过服务打开原生选择器并暂存选中的文件。
+async function pickComposerAttachments(
+  projectId: string | null,
+  conversationId: string | null,
+  kind: string | null,
+): Promise<ComposerAttachmentSummary[]> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return [];
+  }
+  return invoke<ComposerAttachmentSummary[]>("service_pick_composer_attachments", {
+    projectId,
+    conversationId,
+    kind,
+  });
+}
+
+// stageComposerAttachmentBytes stages one browser/drop/paste provided file through the service.
+// stageComposerAttachmentBytes 通过服务暂存一个由浏览器、拖拽或粘贴提供的文件。
+async function stageComposerAttachmentBytes(
+  projectId: string | null,
+  conversationId: string | null,
+  file: File,
+): Promise<ComposerAttachmentSummary | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return browserComposerAttachmentFromFile(file);
+  }
+  const dataBase64 = await fileToBase64(file);
+  return invoke<ComposerAttachmentSummary>("service_stage_composer_attachment_bytes", {
+    projectId,
+    conversationId,
+    fileName: file.name || "clipboard-attachment",
+    mimeType: file.type || "",
+    dataBase64,
+  });
+}
+
+// MAX_COMPOSER_ATTACHMENTS matches the iced composer attachment limit.
+// MAX_COMPOSER_ATTACHMENTS 对齐 iced 输入区附件数量上限。
+const MAX_COMPOSER_ATTACHMENTS = 10;
+
+// fileToBase64 converts a browser File into a standard base64 payload.
+// fileToBase64 将浏览器 File 转换为标准 base64 载荷。
+async function fileToBase64(file: File): Promise<string> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// browserComposerAttachmentFromFile creates a preview-only attachment for browser preview mode.
+// browserComposerAttachmentFromFile 为浏览器预览模式创建仅预览附件。
+function browserComposerAttachmentFromFile(file: File): ComposerAttachmentSummary | null {
+  const kind = inferComposerAttachmentKindFromFile(file);
+  if (!kind) {
+    return null;
+  }
+  return {
+    kind,
+    fileName: file.name || "attachment",
+    localPath: URL.createObjectURL(file),
+    sourcePath: null,
+    assetId: null,
+    byteLen: file.size,
+    previewLocalPath: null,
+    mimeType: file.type || "",
+  };
+}
+
+// inferComposerAttachmentKindFromFile maps MIME type and extension to a composer kind.
+// inferComposerAttachmentKindFromFile 将 MIME 类型与扩展名映射到输入区附件类型。
+function inferComposerAttachmentKindFromFile(file: File): string | null {
+  const mimeType = file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  if (mimeType.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/.test(name)) return "image";
+  if (mimeType.startsWith("audio/") || /\.(mp3|wav|m4a|aac|flac|ogg)$/.test(name)) return "audio";
+  if (mimeType.startsWith("video/") || /\.(mp4|mov|mkv|webm|avi)$/.test(name)) return "video";
+  if (mimeType === "application/pdf" || /\.pdf$/.test(name)) return "pdf";
+  return null;
+}
+
+// composerAttachmentMedia converts a staged attachment into a reusable media preview descriptor.
+// composerAttachmentMedia 将已暂存附件转换为可复用的媒体预览描述。
+function composerAttachmentMedia(attachment: ComposerAttachmentSummary): GeneratedMediaAttachment | null {
+  const kind = attachment.kind === "pdf" ? "document" : attachment.kind;
+  if (kind !== "image" && kind !== "audio" && kind !== "video" && kind !== "document") {
+    return null;
+  }
+  return {
+    kind,
+    fileName: attachment.fileName,
+    localPath: attachment.localPath,
+    previewLocalPath: attachment.previewLocalPath ?? undefined,
+    mimeType: attachment.mimeType,
+  };
+}
+
+// composerAttachmentAccept joins browser accept strings for enabled attachment capabilities.
+// composerAttachmentAccept 拼接已启用附件能力的浏览器 accept 字符串。
+function composerAttachmentAccept(capabilities: ComposerAttachmentCapabilitySummary[]): string {
+  return capabilities
+    .filter((capability) => capability.enabled)
+    .map((capability) => capability.accept)
+    .filter(Boolean)
+    .join(",");
 }
 
 // selectWorkbenchModel persists the active provider/model pair through the desktop service.
@@ -1686,6 +1816,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         activeProjectId,
         activeConversationId,
         submission.prompt,
+        submission.attachments,
         submission.executionMode,
         submission.reasoningEffort,
         submission.disabledAiCapabilityKinds,
@@ -3563,6 +3694,62 @@ function normalizeMarkdownImageSource(src: string | undefined): string | undefin
     return mediaSourceUrl(unwrapped);
   }
   return src;
+}
+
+// markdownImageAttachment converts one rendered Markdown image URL into a preview attachment.
+// markdownImageAttachment 将单个已渲染 Markdown 图片 URL 转换为预览附件。
+function markdownImageAttachment(src: string | undefined, alt: string | undefined): GeneratedMediaAttachment | null {
+  const value = src?.trim();
+  if (!value) {
+    return null;
+  }
+  const cleanValue = value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1).trim() : value;
+  const fileName = markdownImageFileName(cleanValue, alt);
+  return {
+    kind: "image",
+    fileName,
+    localPath: cleanValue,
+    mimeType: markdownImageMimeType(cleanValue),
+  };
+}
+
+// markdownImageFileName returns a stable display name for Markdown image previews.
+// markdownImageFileName 为 Markdown 图片预览返回稳定展示名称。
+function markdownImageFileName(src: string, alt: string | undefined): string {
+  const cleanAlt = alt?.replace(/\|\s*\d+\s*$/u, "").trim();
+  if (cleanAlt) {
+    return cleanAlt;
+  }
+  const withoutQuery = src.split(/[?#]/u, 1)[0] ?? src;
+  const normalized = withoutQuery.replace(/\\/g, "/");
+  const tail = normalized.split("/").filter(Boolean).pop();
+  return tail ? decodeURIComponentSafe(tail) : "markdown-image";
+}
+
+// markdownImageMimeType infers a lightweight MIME type from a Markdown image URL.
+// markdownImageMimeType 从 Markdown 图片 URL 推断轻量 MIME 类型。
+function markdownImageMimeType(src: string): string | undefined {
+  if (/^data:image\/([^;,]+)/i.test(src)) {
+    const match = src.match(/^data:(image\/[^;,]+)/i);
+    return match?.[1];
+  }
+  const clean = src.split(/[?#]/u, 1)[0]?.toLowerCase() ?? "";
+  if (clean.endsWith(".png")) return "image/png";
+  if (clean.endsWith(".jpg") || clean.endsWith(".jpeg")) return "image/jpeg";
+  if (clean.endsWith(".webp")) return "image/webp";
+  if (clean.endsWith(".gif")) return "image/gif";
+  if (clean.endsWith(".svg")) return "image/svg+xml";
+  return undefined;
+}
+
+// decodeURIComponentSafe decodes URL text while tolerating malformed percent escapes.
+// decodeURIComponentSafe 在容忍非法百分号转义的情况下解码 URL 文本。
+function decodeURIComponentSafe(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 // normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
@@ -5661,7 +5848,10 @@ function ChatArea(props: {
       ) : isEmptyConversation ? (
           <EmptyConversationCenter
             projectName={emptyProjectName}
+            projectId={props.selectedDraftConversation?.projectId ?? selectedProject?.id ?? null}
+            conversationId={props.selectedDraftConversation ? null : selectedConversation?.id ?? null}
             aiCapabilities={props.workbench.aiCapabilities ?? []}
+            attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
             providers={props.workbench.providers}
             reasoningSelection={props.workbench.reasoningSelection ?? null}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
@@ -5680,6 +5870,9 @@ function ChatArea(props: {
           {streamingThinkingBlock ? <StreamingThinkingOverlay block={streamingThinkingBlock} /> : null}
           <ComposerDock
             aiCapabilities={props.workbench.aiCapabilities ?? []}
+            attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
+            projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
+            conversationId={selectedConversation?.id ?? null}
             contextUsage={props.workbench.contextUsage ?? null}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
@@ -5763,10 +5956,22 @@ function ConversationRenderItemView(props: {
     [props.item.userMessage?.body],
   );
   if (props.item.role === "user") {
+    const attachments = props.item.userMessage?.attachments ?? [];
     return (
       <article className="message-row user">
+        {attachments.length ? (
+          <ComposerAttachmentStrip
+            attachments={attachments}
+            onOpenMedia={(attachment) => {
+              const media = composerAttachmentMedia(attachment);
+              if (media) {
+                props.onOpenMedia(media);
+              }
+            }}
+          />
+        ) : null}
         <div className="user-bubble">
-          <p>{userBody}</p>
+          {userBody ? <p>{userBody}</p> : null}
         </div>
       </article>
     );
@@ -5816,7 +6021,7 @@ function ConversationBlocksView(props: {
     return null;
   }
   if (block.kind === "markdown") {
-    return <MarkdownMessage content={block.body} />;
+    return <MarkdownMessage content={block.body} onOpenMedia={props.onOpenMedia} />;
   }
   return (
     <SpecialConversationBlock
@@ -5829,7 +6034,14 @@ function ConversationBlocksView(props: {
 
 // MarkdownMessage renders assistant Markdown with Vulcan-specific component styling.
 // MarkdownMessage 使用 Vulcan 定制组件样式渲染 assistant Markdown。
-function MarkdownMessage(props: { content: string }) {
+function MarkdownMessage(props: {
+  // Markdown source content to render.
+  // 需要渲染的 Markdown 源内容。
+  content: string;
+  // Optional media opener used by Markdown images.
+  // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
   const content = React.useMemo(() => normalizeMarkdownLocalImageLinks(props.content), [props.content]);
   return (
     <div className="markdown-message">
@@ -5844,11 +6056,29 @@ function MarkdownMessage(props: { content: string }) {
           },
           img: ({ alt, src, title }) => {
             const width = markdownImageWidthFromTitle(title);
+            const imageSource = normalizeMarkdownImageSource(src) ?? src;
+            const imageAttachment = markdownImageAttachment(imageSource, alt);
+            const imageStyle = width ? { width, maxWidth: 800 } : undefined;
+            if (imageAttachment && props.onOpenMedia) {
+              return (
+                <button
+                  className="markdown-image-button"
+                  onClick={() => props.onOpenMedia?.(imageAttachment)}
+                  style={imageStyle}
+                  type="button"
+                >
+                  <img
+                    alt={alt ?? ""}
+                    src={imageSource}
+                  />
+                </button>
+              );
+            }
             return (
               <img
                 alt={alt ?? ""}
-                src={normalizeMarkdownImageSource(src) ?? src}
-                style={width ? { width, maxWidth: 800 } : undefined}
+                src={imageSource}
+                style={imageStyle}
               />
             );
           },
@@ -5995,7 +6225,7 @@ function ToolExecutionBlock(props: {
   return (
     <div className="tool-execution-stack">
       <button
-        className="tool-execution-row"
+        className={cn("tool-execution-row", displayState === "running" && "running")}
         onClick={openDetail}
         type="button"
       >
@@ -6293,7 +6523,7 @@ function ConversationDetailModal(props: {
           {props.detail.kind === "diff" ? (
             <pre className="diff-detail"><code>{props.detail.body}</code></pre>
           ) : (
-      <MarkdownMessage content={props.detail.body} />
+      <MarkdownMessage content={props.detail.body} onOpenMedia={props.onOpenMedia} />
           )}
         </div>
       </DialogContent>
@@ -6392,7 +6622,13 @@ function GeneratedMediaPlayerWindow(props: {
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="generated-media-player-window sm:max-w-[min(1120px,96vw)]" showCloseButton={false}>
+      <DialogContent
+        className={cn(
+          "generated-media-player-window sm:max-w-[min(1120px,96vw)]",
+          props.attachment.kind === "image" && "image-player-window",
+        )}
+        showCloseButton={false}
+      >
         <header className="generated-media-player-header">
           <span className="generated-media-player-title">
             <MediaIcon size={18} />
@@ -6591,6 +6827,15 @@ function ComposerDock(props: {
   // AI capability route summaries used by the composer capability tree.
   // 输入区能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Attachment capability gates used by composer attachment controls.
+  // 输入区附件控件使用的附件能力门控。
+  attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Owning project id used for attachment staging.
+  // 附件暂存使用的所属项目标识。
+  projectId: string | null;
+  // Owning conversation id used for attachment staging.
+  // 附件暂存使用的所属会话标识。
+  conversationId: string | null;
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
@@ -6645,6 +6890,9 @@ function ComposerDock(props: {
       ) : null}
       <ComposerPanel
         aiCapabilities={props.aiCapabilities}
+        attachmentCapabilities={props.attachmentCapabilities}
+        projectId={props.projectId}
+        conversationId={props.conversationId}
         contextUsage={props.contextUsage}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
@@ -6662,6 +6910,15 @@ function ComposerPanel(props: {
   // AI capability route summaries used by the quick capability tree.
   // 快捷能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Attachment capability gates used by add/drop/paste.
+  // 添加、拖拽与粘贴使用的附件能力门控。
+  attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Owning project id used for attachment staging.
+  // 附件暂存使用的所属项目标识。
+  projectId: string | null;
+  // Owning conversation id used for attachment staging.
+  // 附件暂存使用的所属会话标识。
+  conversationId: string | null;
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
@@ -6687,6 +6944,21 @@ function ComposerPanel(props: {
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
   const [draftInput, setDraftInput] = React.useState("");
+  // attachments stores staged composer attachments submitted with the next prompt.
+  // attachments 保存下一条提示词将携带的已暂存输入区附件。
+  const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>([]);
+  // isAttachmentDragOver highlights the composer when valid files are dragged over it.
+  // isAttachmentDragOver 在有效文件拖入输入区时高亮边框。
+  const [isAttachmentDragOver, setIsAttachmentDragOver] = React.useState(false);
+  // attachmentPickerKind stores the current hidden file input filter.
+  // attachmentPickerKind 保存当前隐藏文件输入框过滤类型。
+  const [attachmentPickerKind, setAttachmentPickerKind] = React.useState<string | null>(null);
+  // composerMediaPlayer stores an attachment preview opened from the composer strip.
+  // composerMediaPlayer 保存从输入区附件条打开的附件预览。
+  const [composerMediaPlayer, setComposerMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
+  // attachmentFileInputRef opens the browser file picker for manual attachment selection.
+  // attachmentFileInputRef 打开浏览器文件选择器用于手动选择附件。
+  const attachmentFileInputRef = React.useRef<HTMLInputElement | null>(null);
   // executionMode stores the local preview execution-mode selection.
   // executionMode 保存本地预览用的执行模式选择。
   const [executionMode, setExecutionMode] = React.useState("build");
@@ -6725,6 +6997,18 @@ function ComposerPanel(props: {
   const capabilitySignature = React.useMemo(
     () => aiCapabilitySignature(props.aiCapabilities),
     [props.aiCapabilities],
+  );
+  // enabledAttachmentCapabilities resolves the kinds currently accepted by runtime capability gates.
+  // enabledAttachmentCapabilities 解析当前运行时能力门控接受的附件类型。
+  const enabledAttachmentCapabilities = React.useMemo(
+    () => props.attachmentCapabilities.filter((capability) => capability.enabled),
+    [props.attachmentCapabilities],
+  );
+  // enabledAttachmentKinds speeds up local drop and paste validation.
+  // enabledAttachmentKinds 加速本地拖拽与粘贴校验。
+  const enabledAttachmentKinds = React.useMemo(
+    () => new Set(enabledAttachmentCapabilities.map((capability) => capability.kind)),
+    [enabledAttachmentCapabilities],
   );
 
   React.useEffect(() => {
@@ -6798,18 +7082,23 @@ function ComposerPanel(props: {
       return;
     }
     const prompt = draftInput.trim();
-    if (!prompt) {
+    if (!prompt && attachments.length === 0) {
       toast.info("请输入任务指令。");
       return;
     }
     // submittedInput preserves the exact textarea content for a failure-only restore.
     // submittedInput 保存精确输入内容，仅在发送失败时用于恢复。
     const submittedInput = draftInput;
+    // submittedAttachments preserves staged files for a failure-only restore.
+    // submittedAttachments 保存已暂存文件，仅在发送失败时用于恢复。
+    const submittedAttachments = attachments;
     setDraftInput("");
+    setAttachments([]);
     setIsComposerRunning(true);
     try {
       const sent = await props.onSubmitPrompt({
         prompt,
+        attachments: submittedAttachments,
         executionMode,
         reasoningEffort,
         disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
@@ -6818,11 +7107,130 @@ function ComposerPanel(props: {
       });
       if (!sent) {
         setDraftInput((current) => current || submittedInput);
+        setAttachments((current) => current.length ? current : submittedAttachments);
       }
     } finally {
       setIsComposerRunning(false);
     }
-  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+
+  // stageComposerFiles validates and stages files selected, dropped, or pasted into the composer.
+  // stageComposerFiles 校验并暂存通过选择、拖拽或粘贴进入输入区的文件。
+  const stageComposerFiles = React.useCallback(async (files: File[], preferredKind?: string | null) => {
+    const candidates = files.filter((file) => {
+      const kind = inferComposerAttachmentKindFromFile(file);
+      return Boolean(kind && (!preferredKind || kind === preferredKind) && enabledAttachmentKinds.has(kind));
+    });
+    if (!candidates.length) {
+      toast.info("当前模型或扩展能力不支持这些附件。");
+      return;
+    }
+    const availableSlots = MAX_COMPOSER_ATTACHMENTS - attachments.length;
+    if (availableSlots <= 0) {
+      toast.info(`最多只能添加 ${MAX_COMPOSER_ATTACHMENTS} 个附件。`);
+      return;
+    }
+    const acceptedFiles = candidates.slice(0, availableSlots);
+    if (candidates.length > acceptedFiles.length) {
+      toast.info(`已达到 ${MAX_COMPOSER_ATTACHMENTS} 个附件上限，部分文件未添加。`);
+    }
+    const staged: ComposerAttachmentSummary[] = [];
+    for (const file of acceptedFiles) {
+      try {
+        const attachment = await stageComposerAttachmentBytes(props.projectId, props.conversationId, file);
+        if (attachment) {
+          staged.push(attachment);
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (!staged.length) {
+      return;
+    }
+    setAttachments((current) => {
+      const seen = new Set(current.map((attachment) => `${attachment.localPath}\n${attachment.fileName}`));
+      const unique = staged.filter((attachment) => {
+        const key = `${attachment.localPath}\n${attachment.fileName}`;
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      });
+      return [...current, ...unique].slice(0, MAX_COMPOSER_ATTACHMENTS);
+    });
+  }, [attachments.length, enabledAttachmentKinds, props.conversationId, props.projectId]);
+
+  // openAttachmentPicker opens the browser file picker with a kind-specific accept filter.
+  // openAttachmentPicker 使用类型特定 accept 过滤器打开浏览器文件选择器。
+  const openAttachmentPicker = React.useCallback((kind: string | null) => {
+    setAttachmentPickerKind(kind);
+    window.requestAnimationFrame(() => attachmentFileInputRef.current?.click());
+  }, []);
+
+  // handleAttachmentInputChange stages files selected through the hidden input.
+  // handleAttachmentInputChange 暂存通过隐藏输入框选择的文件。
+  const handleAttachmentInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.currentTarget.files ?? []);
+    event.currentTarget.value = "";
+    if (files.length) {
+      void stageComposerFiles(files, attachmentPickerKind);
+    }
+  }, [attachmentPickerKind, stageComposerFiles]);
+
+  // handleComposerPaste gives file and image clipboard payloads priority over plain text.
+  // handleComposerPaste 让文件与图片剪贴板载荷优先于普通文本处理。
+  const handleComposerPaste = React.useCallback((event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const fileList = Array.from(event.clipboardData.files ?? []);
+    const itemFiles = Array.from(event.clipboardData.items ?? [])
+      .map((item) => item.kind === "file" ? item.getAsFile() : null)
+      .filter((file): file is File => Boolean(file));
+    const files = fileList.length ? fileList : itemFiles;
+    if (!files.length) {
+      return;
+    }
+    const hasSupportedFile = files.some((file) => {
+      const kind = inferComposerAttachmentKindFromFile(file);
+      return Boolean(kind && enabledAttachmentKinds.has(kind));
+    });
+    if (!hasSupportedFile) {
+      return;
+    }
+    event.preventDefault();
+    void stageComposerFiles(files);
+  }, [enabledAttachmentKinds, stageComposerFiles]);
+
+  // handleComposerDragOver highlights the composer only when dragged files are acceptable.
+  // handleComposerDragOver 仅在拖入文件可接受时高亮输入区。
+  const handleComposerDragOver = React.useCallback((event: React.DragEvent<HTMLElement>) => {
+    const hasFiles = Array.from(event.dataTransfer.types).includes("Files");
+    if (!hasFiles || enabledAttachmentCapabilities.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setIsAttachmentDragOver(true);
+  }, [enabledAttachmentCapabilities.length]);
+
+  // handleComposerDrop stages dropped files and clears drag highlighting.
+  // handleComposerDrop 暂存拖入文件并清理拖拽高亮。
+  const handleComposerDrop = React.useCallback((event: React.DragEvent<HTMLElement>) => {
+    const files = Array.from(event.dataTransfer.files ?? []);
+    if (!files.length) {
+      setIsAttachmentDragOver(false);
+      return;
+    }
+    event.preventDefault();
+    setIsAttachmentDragOver(false);
+    void stageComposerFiles(files);
+  }, [stageComposerFiles]);
+
+  // removeComposerAttachment removes one staged attachment by index.
+  // removeComposerAttachment 按索引移除单个已暂存附件。
+  const removeComposerAttachment = React.useCallback((index: number) => {
+    setAttachments((current) => current.filter((_, currentIndex) => currentIndex !== index));
+  }, []);
 
   // handleAiCapabilityToggle updates the current-message disabled capability set.
   // handleAiCapabilityToggle 更新当前消息级禁用能力集合。
@@ -6903,16 +7311,48 @@ function ComposerPanel(props: {
   }, [handleComposerSend]);
 
   return (
-    <section className="composer-panel">
+    <section
+      className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
+      onDragLeave={() => setIsAttachmentDragOver(false)}
+      onDragOver={handleComposerDragOver}
+      onDrop={handleComposerDrop}
+    >
+      <input
+        accept={attachmentPickerKind
+          ? enabledAttachmentCapabilities.find((capability) => capability.kind === attachmentPickerKind)?.accept
+          : composerAttachmentAccept(enabledAttachmentCapabilities)}
+        className="composer-attachment-input"
+        multiple
+        onChange={handleAttachmentInputChange}
+        ref={attachmentFileInputRef}
+        type="file"
+      />
+      {attachments.length ? (
+        <ComposerAttachmentStrip
+          attachments={attachments}
+          onOpenMedia={(attachment) => {
+            const media = composerAttachmentMedia(attachment);
+            if (media) {
+              setComposerMediaPlayer(media);
+            }
+          }}
+          onRemove={removeComposerAttachment}
+        />
+      ) : null}
       <Textarea
         aria-label={t("composer.aria.input")}
         onChange={(event) => setDraftInput(event.currentTarget.value)}
         onKeyDown={handleComposerKeyDown}
+        onPaste={handleComposerPaste}
         placeholder={placeholder}
         value={draftInput}
       />
       <div className="composer-toolbar">
         <div className="composer-toolbar-left">
+          <ComposerAttachmentMenu
+            capabilities={enabledAttachmentCapabilities}
+            onPick={openAttachmentPicker}
+          />
           <ComposerSelectControl
             ariaLabel={t("composer.aria.mode")}
             className="mode no-indicator"
@@ -6963,8 +7403,144 @@ function ComposerPanel(props: {
           </Button>
         </div>
       </div>
+      {composerMediaPlayer ? (
+        <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
+      ) : null}
     </section>
   );
+}
+
+// ComposerAttachmentMenu renders the plus button and attachment submenu.
+// ComposerAttachmentMenu 渲染加号按钮与附件子菜单。
+function ComposerAttachmentMenu(props: {
+  // Enabled attachment capability gates available for this prompt.
+  // 当前提示词可用的已启用附件能力门控。
+  capabilities: ComposerAttachmentCapabilitySummary[];
+  // Opens a file picker for one attachment kind or all kinds.
+  // 按附件类型或全部类型打开文件选择器。
+  onPick: (kind: string | null) => void;
+}) {
+  const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          aria-label="添加附件"
+          className="composer-add-button"
+          size="icon"
+          type="button"
+          variant="secondary"
+        >
+          <Plus size={17} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="composer-attachment-menu" side="top" sideOffset={8}>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <PaperclipIcon />
+            <span>附件</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            {menuCapabilities.length ? (
+              menuCapabilities.map((capability) => (
+                <DropdownMenuItem
+                  key={capability.kind}
+                  onSelect={() => props.onPick(capability.kind)}
+                >
+                  <ComposerAttachmentKindIcon kind={capability.kind} />
+                  <span>{capability.label}</span>
+                </DropdownMenuItem>
+              ))
+            ) : (
+              <DropdownMenuItem disabled>
+                <span>当前无可用附件类型</span>
+              </DropdownMenuItem>
+            )}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// PaperclipIcon keeps the attachment menu decoupled from lucide naming changes.
+// PaperclipIcon 让附件菜单不直接依赖 lucide 的命名变化。
+function PaperclipIcon() {
+  const Icon = (LucideIcons as unknown as Record<string, React.ComponentType<{ size?: number }>>).Paperclip;
+  return Icon ? <Icon size={15} /> : <FileText size={15} />;
+}
+
+// ComposerAttachmentKindIcon renders a compact icon for one attachment type.
+// ComposerAttachmentKindIcon 渲染单种附件类型的紧凑图标。
+function ComposerAttachmentKindIcon(props: { kind: string }) {
+  if (props.kind === "image") return <ImageIcon size={15} />;
+  if (props.kind === "video") return <Video size={15} />;
+  if (props.kind === "audio") return <Music2 size={15} />;
+  return <FileText size={15} />;
+}
+
+// ComposerAttachmentStrip renders staged attachments before the prompt text.
+// ComposerAttachmentStrip 在提示词文本之前渲染已暂存附件。
+function ComposerAttachmentStrip(props: {
+  // Staged attachments shown in the strip.
+  // 附件条中展示的已暂存附件。
+  attachments: ComposerAttachmentSummary[];
+  // Opens an attachment preview.
+  // 打开附件预览。
+  onOpenMedia: (attachment: ComposerAttachmentSummary) => void;
+  // Removes one attachment by index.
+  // 按索引移除单个附件。
+  onRemove?: (index: number) => void;
+}) {
+  return (
+    <div className="composer-attachment-strip">
+      {props.attachments.map((attachment, index) => (
+        <button
+          className={cn("composer-attachment-tile", {
+            "image-attachment": attachment.kind === "image",
+          })}
+          key={`${attachment.localPath}-${index}`}
+          onClick={() => props.onOpenMedia(attachment)}
+          type="button"
+        >
+          <ComposerAttachmentPreview attachment={attachment} />
+          {attachment.kind === "image" ? null : (
+            <span className="composer-attachment-name">{attachment.fileName}</span>
+          )}
+          {props.onRemove ? (
+            <span
+              aria-label="移除附件"
+              className="composer-attachment-remove"
+              onClick={(event) => {
+                event.stopPropagation();
+                props.onRemove?.(index);
+              }}
+              role="button"
+              tabIndex={0}
+            >
+              <X size={12} />
+            </span>
+          ) : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ComposerAttachmentPreview renders one staged attachment thumbnail or media icon.
+// ComposerAttachmentPreview 渲染单个已暂存附件缩略图或媒体图标。
+function ComposerAttachmentPreview(props: { attachment: ComposerAttachmentSummary }) {
+  const media = composerAttachmentMedia(props.attachment);
+  if (media?.kind === "image") {
+    return <img alt={props.attachment.fileName} src={mediaSourceUrl(media.localPath)} />;
+  }
+  if (media?.kind === "video") {
+    return <Video size={20} />;
+  }
+  if (media?.kind === "audio") {
+    return <Music2 size={20} />;
+  }
+  return <FileText size={20} />;
 }
 
 // ContextUsageOrb renders the iced-style context usage diagnostic control.
@@ -7296,6 +7872,15 @@ function EmptyConversationCenter(props: {
   // AI capability route summaries used by the composer capability tree.
   // 输入区能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Attachment capability gates used by composer attachment controls.
+  // 输入区附件控件使用的附件能力门控。
+  attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
+  // Project id used by first-message attachment staging.
+  // 首条消息附件暂存使用的项目标识。
+  projectId: string | null;
+  // Optional conversation id used by attachment staging.
+  // 附件暂存使用的可选会话标识。
+  conversationId: string | null;
   // Project name used by the empty-state prompt.
   // 空状态提示使用的项目名称。
   projectName: string;
@@ -7327,6 +7912,9 @@ function EmptyConversationCenter(props: {
       <h2>{promptText}</h2>
       <ComposerPanel
         aiCapabilities={props.aiCapabilities}
+        attachmentCapabilities={props.attachmentCapabilities}
+        projectId={props.projectId}
+        conversationId={props.conversationId}
         contextUsage={null}
         providers={props.providers}
         reasoningSelection={props.reasoningSelection}

@@ -2,6 +2,7 @@
 //! 用于后台会话状态更新的共享会话事件归约器。
 
 use serde_json::json;
+use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
     SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRuntimeStateEntry,
     SessionTurnStatsStatus,
@@ -48,19 +49,32 @@ pub fn append_user_prompt_record(
     now: &str,
     prompt: &str,
 ) {
+    append_user_prompt_record_with_attachments(runtime_state, session_id, now, prompt, Vec::new());
+}
+
+/// Appends one user prompt with structured attachments as canonical context and visible transcript.
+/// 将带结构化附件的用户提示词同时追加为规范上下文与可见转录记录。
+pub fn append_user_prompt_record_with_attachments(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    prompt: &str,
+    attachments: Vec<ConversationAttachment>,
+) {
     runtime_state.ui_state.unread = false;
     let message_id = format!("session-{session_id}-protocol-user-{now}");
     append_user_text_message(
         &mut runtime_state.conversation_state,
         message_id,
         prompt.to_string(),
-        Vec::new(),
+        attachments.clone(),
     );
     let record_id = build_session_record_message_id(
         session_id,
         now,
         runtime_state.conversation_state.records.len(),
     );
+    let metadata = build_user_prompt_record_metadata(prompt, &attachments);
     append_record(
         &mut runtime_state.conversation_state,
         SessionConversationRecord {
@@ -70,11 +84,29 @@ pub fn append_user_prompt_record(
             visible: true,
             title: String::from("用户指令"),
             body: prompt.to_string(),
-            metadata: None,
+            metadata,
             created_at: now.to_string(),
         },
     );
     runtime_state.updated_at = now.to_string();
+}
+
+/// Builds reload-safe metadata for one visible user prompt record.
+/// 为一条可见用户提示词记录构建可安全重载的元数据。
+fn build_user_prompt_record_metadata(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> Option<serde_json::Value> {
+    if attachments.is_empty() {
+        return None;
+    }
+    let serialized_attachments = serde_json::to_value(attachments).ok()?;
+    Some(json!({
+        "canonical_text": prompt,
+        "canonical_user_text": prompt,
+        "attachments": serialized_attachments.clone(),
+        "transcript_attachments": serialized_attachments,
+    }))
 }
 
 /// Appends or extends one streaming transcript record inside the background state.

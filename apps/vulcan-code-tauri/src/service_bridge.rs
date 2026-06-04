@@ -12,7 +12,9 @@ use std::{
 };
 
 use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
+use base64::engine::general_purpose::{
+    STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
+};
 use futures_util::StreamExt;
 use http_range::HttpRange;
 use serde_json::Value;
@@ -29,6 +31,10 @@ use vldb_controller_client::ControllerSqliteValue;
 use vulcan_agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
     ExecutionStreamEvent,
+    attachment_assets::{
+        attachment_descriptor_from_mime_type, attachment_descriptor_from_path, stage_attachment_bytes,
+        stage_attachment_file,
+    },
     agent_profile::{AgentProfileCatalog, load_agent_profile_catalog},
     agent_runtime::{
         context_injection_runtime::{
@@ -57,9 +63,10 @@ use vulcan_agent_runtime::{
     provider_config::{
         self, PersistedAiToolConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
     },
+    provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
-        append_stream_delta_record_to_state, append_user_prompt_record,
+        append_stream_delta_record_to_state, append_user_prompt_record_with_attachments,
         apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
         collapse_streaming_thinking_in_state,
     },
@@ -72,14 +79,16 @@ use vulcan_agent_runtime::{
 };
 use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
 use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
+use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_service_api::{
     AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary,
-    ContextInjectionCardSummary, ContextInjectionItemSummary, ContextInjectionSnapshot,
-    ContextUsageSnapshot, ConversationMessage, ConversationSummary, FeatureAreaSummary,
-    LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary,
-    ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
-    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary,
-    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
+    ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
+    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage,
+    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole,
+    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
+    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent,
+    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
@@ -211,6 +220,9 @@ pub fn run() {
             service_startup_snapshot,
             service_workbench_snapshot,
             service_session_messages,
+            service_pick_composer_attachments,
+            service_stage_composer_attachment_paths,
+            service_stage_composer_attachment_bytes,
             service_submit_conversation_prompt,
             service_select_workbench_model,
             service_select_workbench_reasoning_effort,
@@ -507,6 +519,237 @@ async fn service_session_messages(
     ))
 }
 
+/// Opens the native attachment picker and stages selected files for composer use.
+/// 打开原生附件选择器，并将选中文件暂存给输入区使用。
+#[tauri::command]
+async fn service_pick_composer_attachments(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    kind: Option<String>,
+) -> Result<Vec<ComposerAttachmentSummary>, String> {
+    let (workspace_path, kind_filter) =
+        composer_attachment_workspace_and_kind(&state, project_id.as_deref(), conversation_id.as_deref(), kind.as_deref())?;
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(kind_filter) = kind_filter.as_ref() {
+        dialog = dialog.add_filter(
+            composer_attachment_kind_label(kind_filter),
+            composer_attachment_kind_extensions(kind_filter),
+        );
+    } else {
+        dialog = dialog.add_filter(
+            "附件",
+            &[
+                "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp3", "wav", "m4a", "aac", "flac",
+                "ogg", "mp4", "mov", "mkv", "webm", "avi", "pdf",
+            ],
+        );
+    }
+    let Some(paths) = dialog.pick_files() else {
+        return Ok(Vec::new());
+    };
+    stage_composer_attachment_paths_for_workspace(&workspace_path, paths)
+}
+
+/// Stages existing local paths as composer attachments.
+/// 将已有本地路径暂存为输入区附件。
+#[tauri::command]
+async fn service_stage_composer_attachment_paths(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    paths: Vec<String>,
+) -> Result<Vec<ComposerAttachmentSummary>, String> {
+    let workspace_path =
+        composer_attachment_workspace_path(&state, project_id.as_deref(), conversation_id.as_deref())?;
+    let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    stage_composer_attachment_paths_for_workspace(&workspace_path, paths)
+}
+
+/// Stages one browser-provided in-memory file as a composer attachment.
+/// 将浏览器提供的一份内存文件暂存为输入区附件。
+#[tauri::command]
+async fn service_stage_composer_attachment_bytes(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    file_name: String,
+    mime_type: String,
+    data_base64: String,
+) -> Result<ComposerAttachmentSummary, String> {
+    let workspace_path =
+        composer_attachment_workspace_path(&state, project_id.as_deref(), conversation_id.as_deref())?;
+    let descriptor = attachment_descriptor_from_mime_type(&mime_type)
+        .or_else(|| attachment_descriptor_from_path_fallback(&file_name))
+        .ok_or_else(|| format!("文件 `{}` 不是受支持的附件格式。", file_name.trim()))?;
+    let bytes = BASE64_STANDARD
+        .decode(data_base64.trim())
+        .map_err(|error| format!("解码附件 `{}` 失败：{}。", file_name.trim(), error))?;
+    let attachment = stage_attachment_bytes(
+        &workspace_path,
+        &descriptor,
+        file_name.trim(),
+        None,
+        bytes.as_slice(),
+    )?;
+    Ok(composer_attachment_summary_from_core(&attachment))
+}
+
+/// Resolves workspace path and optional attachment-kind filter for composer staging.
+/// 解析输入区附件暂存所需的工作区路径与可选附件类型过滤。
+fn composer_attachment_workspace_and_kind(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+    kind: Option<&str>,
+) -> Result<(String, Option<ConversationAttachmentKind>), String> {
+    let workspace_path = composer_attachment_workspace_path(state, project_id, conversation_id)?;
+    let kind = kind
+        .map(parse_composer_attachment_kind)
+        .transpose()?;
+    Ok((workspace_path, kind))
+}
+
+/// Resolves the project workspace path used to stage one composer attachment.
+/// 解析暂存输入区附件时使用的项目工作区路径。
+fn composer_attachment_workspace_path(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<String, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        return Ok(workspace_root().display().to_string());
+    };
+    let owner_project_id = conversation_id
+        .and_then(parse_session_id)
+        .and_then(|session_id| {
+            workspace_snapshot
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .and_then(|session| session.project_id.as_deref())
+        })
+        .or(project_id)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(owner_project_id) = owner_project_id else {
+        return Ok(workspace_root().display().to_string());
+    };
+    Ok(workspace_snapshot
+        .task_projects
+        .iter()
+        .find(|project| project.id == owner_project_id)
+        .map(|project| project.path.clone())
+        .unwrap_or_else(|| workspace_root().display().to_string()))
+}
+
+/// Stages local paths for a resolved workspace path and converts them to service DTOs.
+/// 为已解析的工作区路径暂存本地路径，并转换为 service DTO。
+fn stage_composer_attachment_paths_for_workspace(
+    workspace_path: &str,
+    paths: Vec<PathBuf>,
+) -> Result<Vec<ComposerAttachmentSummary>, String> {
+    paths
+        .iter()
+        .map(|path| stage_attachment_file(workspace_path, path))
+        .map(|result| result.map(|attachment| composer_attachment_summary_from_core(&attachment)))
+        .collect()
+}
+
+/// Converts a core conversation attachment into the WebUI service DTO.
+/// 将核心会话附件转换为 WebUI service DTO。
+fn composer_attachment_summary_from_core(
+    attachment: &ConversationAttachment,
+) -> ComposerAttachmentSummary {
+    ComposerAttachmentSummary {
+        kind: attachment.kind.modality_name().to_string(),
+        file_name: attachment.file_name.clone(),
+        local_path: attachment.local_path.clone(),
+        source_path: attachment.source_path.clone(),
+        asset_id: attachment.asset_id.clone(),
+        byte_len: attachment.byte_len,
+        preview_local_path: attachment.preview_local_path.clone(),
+        mime_type: attachment.mime_type.clone(),
+    }
+}
+
+/// Converts a WebUI service attachment DTO back into the core conversation attachment.
+/// 将 WebUI service 附件 DTO 转回核心会话附件。
+fn composer_attachment_summary_to_core(
+    summary: ComposerAttachmentSummary,
+) -> Result<ConversationAttachment, String> {
+    Ok(ConversationAttachment {
+        kind: parse_composer_attachment_kind(&summary.kind)?,
+        file_name: summary.file_name,
+        local_path: summary.local_path,
+        source_path: summary.source_path,
+        asset_id: summary.asset_id,
+        byte_len: summary.byte_len,
+        preview_local_path: summary.preview_local_path,
+        mime_type: summary.mime_type,
+    })
+}
+
+/// Parses one stable composer attachment kind key.
+/// 解析单个稳定输入区附件类型键。
+fn parse_composer_attachment_kind(value: &str) -> Result<ConversationAttachmentKind, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "image" => Ok(ConversationAttachmentKind::Image),
+        "audio" => Ok(ConversationAttachmentKind::Audio),
+        "video" => Ok(ConversationAttachmentKind::Video),
+        "pdf" | "document" => Ok(ConversationAttachmentKind::Pdf),
+        other => Err(format!("不支持的附件类型：{other}")),
+    }
+}
+
+/// Resolves an attachment descriptor from a browser file name when the MIME type is missing.
+/// 当浏览器未提供 MIME 类型时，从文件名解析附件描述。
+fn attachment_descriptor_from_path_fallback(
+    file_name: &str,
+) -> Option<vulcan_agent_runtime::attachment_assets::AttachmentDescriptor> {
+    attachment_descriptor_from_path(Path::new(file_name))
+}
+
+/// Returns the localized label used by the native file picker filter.
+/// 返回原生文件选择器过滤器使用的本地化名称。
+fn composer_attachment_kind_label(kind: &ConversationAttachmentKind) -> &'static str {
+    match kind {
+        ConversationAttachmentKind::Image => "图片",
+        ConversationAttachmentKind::Audio => "音频",
+        ConversationAttachmentKind::Video => "视频",
+        ConversationAttachmentKind::Pdf => "PDF",
+    }
+}
+
+/// Returns file extensions accepted by the native picker for one attachment kind.
+/// 返回单种附件类型在原生选择器中接受的扩展名。
+fn composer_attachment_kind_extensions(kind: &ConversationAttachmentKind) -> &'static [&'static str] {
+    match kind {
+        ConversationAttachmentKind::Image => &["png", "jpg", "jpeg", "webp", "gif", "bmp"],
+        ConversationAttachmentKind::Audio => &["mp3", "wav", "m4a", "aac", "flac", "ogg"],
+        ConversationAttachmentKind::Video => &["mp4", "mov", "mkv", "webm", "avi"],
+        ConversationAttachmentKind::Pdf => &["pdf"],
+    }
+}
+
+/// Returns the browser file picker accept list for one attachment kind.
+/// 返回单种附件类型对应的浏览器文件选择 accept 列表。
+fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind) -> &'static str {
+    match kind {
+        ConversationAttachmentKind::Image => "image/png,image/jpeg,image/webp,image/gif,image/bmp",
+        ConversationAttachmentKind::Audio => {
+            "audio/mpeg,audio/wav,audio/mp4,audio/aac,audio/flac,audio/ogg"
+        }
+        ConversationAttachmentKind::Video => {
+            "video/mp4,video/quicktime,video/x-matroska,video/webm,video/x-msvideo"
+        }
+        ConversationAttachmentKind::Pdf => "application/pdf",
+    }
+}
+
 /// Returns the current in-memory transcript projection for one service session.
 /// 返回单个服务会话当前的内存转录投影。
 fn in_memory_session_messages_for_service(
@@ -537,12 +780,18 @@ async fn service_submit_conversation_prompt(
     prompt: String,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
+    attachments: Option<Vec<ComposerAttachmentSummary>>,
     disabled_ai_capability_kinds: Option<Vec<String>>,
     disabled_ai_capability_target_selectors: Option<Vec<String>>,
     ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
 ) -> Result<WorkbenchSnapshot, String> {
     let prompt = prompt.trim().to_string();
-    if prompt.is_empty() {
+    let attachments = attachments
+        .unwrap_or_default()
+        .into_iter()
+        .map(composer_attachment_summary_to_core)
+        .collect::<Result<Vec<_>, _>>()?;
+    if prompt.is_empty() && attachments.is_empty() {
         return Err(String::from("请输入任务指令。"));
     }
 
@@ -561,7 +810,7 @@ async fn service_submit_conversation_prompt(
         &mut workspace_snapshot,
         project_id.as_deref(),
         conversation_id.as_deref(),
-        &prompt,
+        if prompt.is_empty() { "附件会话" } else { &prompt },
     )?;
     let request = append_prompt_and_build_request(
         &mut workspace_snapshot,
@@ -570,6 +819,7 @@ async fn service_submit_conversation_prompt(
         &session_title,
         &workspace_path,
         &prompt,
+        attachments,
         execution_mode,
         reasoning_effort,
         disabled_ai_capability_kinds,
@@ -1452,6 +1702,7 @@ async fn append_prompt_and_build_request(
     session_title: &str,
     workspace_path: &str,
     prompt: &str,
+    attachments: Vec<ConversationAttachment>,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
     disabled_ai_capability_kinds: Option<Vec<String>>,
@@ -1476,7 +1727,13 @@ async fn append_prompt_and_build_request(
             runtime_state.conversation_state = conversation_state_from_session_messages(messages);
         }
     }
-    append_user_prompt_record(runtime_state, session_id, &now, &sanitized_prompt);
+    append_user_prompt_record_with_attachments(
+        runtime_state,
+        session_id,
+        &now,
+        &sanitized_prompt,
+        attachments,
+    );
     let system_prompt_hook_phase = vmm_profile_placement_phase(
         runtime_state.conversation_state.messages.len(),
         runtime_state.last_compaction_id.as_deref(),
@@ -1760,7 +2017,12 @@ fn patch_latest_prechecked_user_prompt_record(
         })
     {
         record.body = prompt.to_string();
-        record.metadata = None;
+        if let Some(metadata) = record.metadata.as_mut()
+            && let Some(object) = metadata.as_object_mut()
+        {
+            object.insert(String::from("canonical_text"), serde_json::json!(prompt));
+            object.insert(String::from("canonical_user_text"), serde_json::json!(prompt));
+        }
     }
     runtime_state.updated_at = current_unix_millis_text();
 }
@@ -3734,6 +3996,10 @@ fn workbench_from_runtime(
         providers: providers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
         ai_capabilities: ai_capabilities(ai_tool_configuration),
+        composer_attachment_capabilities: composer_attachment_capabilities(
+            provider_configuration,
+            ai_tool_configuration,
+        ),
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
         logs: logs
@@ -4053,7 +4319,29 @@ fn conversation_messages_from_session(
             record_kind: Some(message.record_kind.as_persisted_key().to_string()),
             body: message.body.clone(),
             metadata: message.metadata.clone(),
+            attachments: composer_message_attachments_from_metadata(message.metadata.as_ref()),
         })
+        .collect()
+}
+
+/// Extracts composer attachments from durable transcript metadata.
+/// 从持久转录元数据中提取输入区附件。
+fn composer_message_attachments_from_metadata(
+    metadata: Option<&serde_json::Value>,
+) -> Vec<ComposerAttachmentSummary> {
+    let Some(metadata) = metadata else {
+        return Vec::new();
+    };
+    let Some(attachment_value) = metadata
+        .get("attachments")
+        .or_else(|| metadata.get("transcript_attachments"))
+    else {
+        return Vec::new();
+    };
+    serde_json::from_value::<Vec<ConversationAttachment>>(attachment_value.clone())
+        .unwrap_or_default()
+        .iter()
+        .map(composer_attachment_summary_from_core)
         .collect()
 }
 
@@ -4156,6 +4444,10 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         providers: providers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
+        composer_attachment_capabilities: composer_attachment_capabilities(
+            &ProviderConfigurationFile::default(),
+            &ProviderConfigurationFile::default().ai_tools,
+        ),
         memories: Vec::new(),
         command_sessions: Vec::new(),
         logs: logs
@@ -4396,6 +4688,61 @@ fn ai_capabilities(
             }
         })
         .collect()
+}
+
+/// Creates composer attachment gates using the same capability resolver as runtime execution.
+/// 使用与运行时执行相同的能力解析器创建输入区附件门控。
+fn composer_attachment_capabilities(
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Vec<ComposerAttachmentCapabilitySummary> {
+    let capabilities =
+        active_workbench_model_capabilities(provider_configuration, ai_tool_configuration);
+    [
+        ConversationAttachmentKind::Image,
+        ConversationAttachmentKind::Video,
+        ConversationAttachmentKind::Audio,
+        ConversationAttachmentKind::Pdf,
+    ]
+    .into_iter()
+    .map(|kind| {
+        let native = capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.supports_attachment_kind(kind.clone()));
+        let enabled = capabilities
+            .as_ref()
+            .is_some_and(|capabilities| capabilities.allows_staged_attachment_kind(kind.clone()));
+        ComposerAttachmentCapabilitySummary {
+            kind: kind.modality_name().to_string(),
+            label: composer_attachment_kind_label(&kind).to_string(),
+            enabled,
+            native,
+            bridged: enabled && !native,
+            accept: composer_attachment_kind_accept(&kind).to_string(),
+        }
+    })
+    .collect()
+}
+
+/// Resolves the active workbench model capabilities from persisted provider settings.
+/// 从持久化 Provider 设置解析当前工作台模型能力。
+fn active_workbench_model_capabilities(
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Option<ResolvedModelCapabilities> {
+    let (provider_id, model_id) = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let active_model = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .find(|model| model.id == model_id);
+    Some(resolve_effective_model_capabilities(
+        definition,
+        active_model.as_ref(),
+        ai_tool_configuration,
+    ))
 }
 
 /// Creates VMM memory summaries from restored workspace state.

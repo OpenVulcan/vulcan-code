@@ -1972,12 +1972,121 @@ button {
   pointer-events: auto;
 }
 
+.composer-panel.attachment-drag-over {
+  border-color: var(--ring);
+  box-shadow:
+    0 0 0 2px color-mix(in oklch, var(--ring) 30%, transparent),
+    0 16px 40px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.composer-attachment-input {
+  display: none;
+}
+
+.composer-attachment-strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px 12px 0;
+}
+
+.message-row.user .composer-attachment-strip {
+  max-width: min(800px, 78%);
+  justify-content: flex-end;
+  margin-left: auto;
+  padding: 0 0 6px;
+}
+
+.composer-attachment-tile {
+  position: relative;
+  width: 104px;
+  min-width: 104px;
+  height: 82px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  justify-items: center;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--muted);
+  color: var(--foreground);
+  cursor: default;
+}
+
+.composer-attachment-tile.image-attachment {
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.composer-attachment-tile:hover {
+  background: var(--accent);
+}
+
+.composer-attachment-tile img {
+  width: 100%;
+  height: 42px;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.composer-attachment-tile.image-attachment img {
+  height: 100%;
+  border-radius: inherit;
+}
+
+.composer-attachment-name {
+  width: 100%;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 18px;
+  height: 18px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ef4444;
+  color: white;
+}
+
+.composer-attachment-tile:hover .composer-attachment-remove {
+  display: inline-flex;
+}
+
 .composer-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 10px 12px 12px;
+}
+
+.composer-add-button {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 10px;
+}
+
+.composer-attachment-menu {
+  min-width: 160px;
+}
+
+.composer-attachment-menu svg {
+  color: var(--muted-foreground);
 }
 
 .composer-toolbar-left {
@@ -2716,6 +2825,9 @@ button {
 }
 
 .message-row.user {
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
   justify-content: flex-end;
 }
 
@@ -2826,6 +2938,24 @@ button {
 
 .markdown-message img {
   max-width: min(100%, 800px);
+  height: auto;
+}
+
+.markdown-image-button {
+  display: inline-block;
+  max-width: min(100%, 800px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  line-height: 0;
+  vertical-align: top;
+  cursor: zoom-in;
+}
+
+.markdown-image-button img {
+  display: block;
+  width: 100%;
+  max-width: 100%;
   height: auto;
 }
 
@@ -2999,10 +3129,42 @@ button {
   color: var(--foreground);
 }
 
+.tool-execution-row.running svg {
+  color: var(--foreground);
+  animation: tool-running-pulse 1.15s ease-in-out infinite;
+}
+
+.tool-execution-row.running span {
+  background-image: linear-gradient(
+    120deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 34%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 66%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 220% auto;
+  background-position: 160% center;
+  background-clip: text;
+  color: transparent;
+  animation: shiny-text 1.45s linear infinite;
+}
+
 .tool-execution-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@keyframes tool-running-pulse {
+  0%,
+  100% {
+    opacity: 0.46;
+  }
+
+  50% {
+    opacity: 1;
+  }
 }
 
 .generated-media-strip {
@@ -3213,6 +3375,7 @@ button {
   max-height: min(90vh, 860px);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
   overflow: hidden;
   padding: 0;
 }
@@ -3248,26 +3411,37 @@ button {
 }
 
 .generated-media-player-body {
-  min-height: min(62vh, 620px);
+  min-height: 0;
   display: grid;
   place-items: center;
   overflow: auto;
-  padding: 16px;
-  background: color-mix(in oklch, var(--muted) 60%, transparent);
+  padding: 0;
+  background: var(--background);
+}
+
+.image-player-window .generated-media-player-body {
+  align-items: start;
+  justify-items: stretch;
 }
 
 .generated-media-player-image-wrap {
   min-width: 100%;
-  min-height: min(62vh, 620px);
-  display: grid;
-  place-items: center;
+  min-height: 0;
+  display: block;
   overflow: auto;
 }
 
+.image-player-window .generated-media-player-image-wrap {
+  align-self: start;
+  line-height: 0;
+}
+
 .generated-media-player-image {
-  max-width: 100%;
-  max-height: min(72vh, 720px);
-  transform-origin: center center;
+  display: block;
+  width: 100%;
+  max-width: none;
+  max-height: none;
+  transform-origin: top center;
   transition: transform 140ms ease;
 }
 
