@@ -33,7 +33,8 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         context_injection_runtime::{
             collect_builtin_manual_injection_ops_and_sanitized_prompt,
-            context_injection_panel_cards_for_kind, core_provider_context_injection_from_state_for_turn,
+            context_injection_panel_cards_for_kind,
+            core_provider_context_injection_from_state_for_turn,
         },
         conversation_hooks::{
             ConversationHookRuntime, VmmWritebackHookEffect, vmm_profile_sync_effect_from_report,
@@ -69,16 +70,17 @@ use vulcan_agent_runtime::{
         effective_workbench_disabled_ai_capability_kinds,
     },
 };
-use vulcan_service_api::{
-    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary, ContextInjectionCardSummary,
-    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage,
-    ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary, MessageRole, PluginSummary,
-    ProjectSummary, ProviderModelSummary, ProviderSummary, RuntimeModuleSnapshot, ServiceEvent,
-    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus, ToolCallSummary,
-    WorkbenchSnapshot,
-};
 use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
 use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
+use vulcan_service_api::{
+    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary,
+    ContextInjectionCardSummary, ContextInjectionItemSummary, ContextInjectionSnapshot,
+    ContextUsageSnapshot, ConversationMessage, ConversationSummary, FeatureAreaSummary,
+    LogEntrySummary, MemorySummary, MessageRole, PluginSummary, ProjectSummary,
+    ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
+    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary,
+    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, ToolCallSummary, WorkbenchSnapshot,
+};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
@@ -211,6 +213,7 @@ pub fn run() {
             service_session_messages,
             service_submit_conversation_prompt,
             service_select_workbench_model,
+            service_select_workbench_reasoning_effort,
             service_open_project_directory,
             service_open_project_directory_path,
             service_add_project_from_folder,
@@ -655,6 +658,41 @@ async fn service_select_workbench_model(
             .map_err(|error| format!("保存模型选择失败：{error}"))?;
         agent_runtime.provider_configuration = next_configuration.clone();
         guard.workbench.providers = providers(&next_configuration);
+        guard.workbench.reasoning_selection = reasoning_selection(&next_configuration);
+        guard.workbench.clone()
+    };
+
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+    Ok(workbench)
+}
+
+/// Persists the active workbench reasoning effort through the shared provider configuration.
+/// 通过共享 Provider 配置持久化当前工作台思考档位。
+#[tauri::command]
+async fn service_select_workbench_reasoning_effort(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    effort: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let selected_effort =
+        parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.workbench_reasoning_effort = Some(selected_effort);
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存思考档位失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        guard.workbench.reasoning_selection = reasoning_selection(&next_configuration);
         guard.workbench.clone()
     };
 
@@ -1615,7 +1653,8 @@ async fn append_prompt_and_build_request(
             .as_deref()
             .and_then(parse_reasoning_effort)
             .or(runtime_state.active_reasoning_effort)
-            .unwrap_or(ReasoningEffortLevel::XHigh),
+            .or_else(|| active_reasoning_selection_effort(&agent_runtime.provider_configuration))
+            .unwrap_or(ReasoningEffortLevel::Medium),
         ai_tool_configuration,
         prompt_purpose: ExecutionPromptPurpose::UserTurn,
         project_prompt_skills: project_configuration.prompt_skills,
@@ -1901,7 +1940,7 @@ fn parse_session_id(value: &str) -> Option<SessionId> {
 /// Converts the composer reasoning string into the shared provider-config enum.
 /// 将输入区思考档位字符串转换为共享 provider-config 枚举。
 fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffortLevel> {
-    match value {
+    match value.trim().to_ascii_lowercase().as_str() {
         "off" => Some(ReasoningEffortLevel::Off),
         "low" => Some(ReasoningEffortLevel::Low),
         "medium" => Some(ReasoningEffortLevel::Medium),
@@ -1909,6 +1948,74 @@ fn parse_reasoning_effort(value: &str) -> Option<ReasoningEffortLevel> {
         "x-high" | "max" => Some(ReasoningEffortLevel::XHigh),
         _ => None,
     }
+}
+
+/// Converts one shared reasoning-effort enum into the WebUI wire value.
+/// 将单个共享思考档位枚举转换为 WebUI 传输值。
+fn reasoning_effort_wire_value(effort: ReasoningEffortLevel) -> &'static str {
+    match effort {
+        ReasoningEffortLevel::Off => "off",
+        ReasoningEffortLevel::Low => "low",
+        ReasoningEffortLevel::Medium => "medium",
+        ReasoningEffortLevel::High => "high",
+        ReasoningEffortLevel::XHigh => "x-high",
+    }
+}
+
+/// Resolves the effective reasoning effort for the active model using the shared selector view.
+/// 使用共享选择器视图解析当前激活模型的生效思考档位。
+fn active_reasoning_selection_effort(
+    provider_configuration: &ProviderConfigurationFile,
+) -> Option<ReasoningEffortLevel> {
+    let preferred_effort = provider_configuration
+        .workbench_reasoning_effort
+        .unwrap_or(ReasoningEffortLevel::Medium);
+    let (provider_id, model_id) = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let active_model =
+        provider_config::effective_model_choices(provider_id, provider_configuration)
+            .into_iter()
+            .find(|model| model.id == model_id);
+    Some(
+        definition
+            .reasoning_selection_view(active_model.as_ref(), preferred_effort)
+            .selected_effort,
+    )
+}
+
+/// Builds the WebUI reasoning selector snapshot from the shared provider configuration.
+/// 从共享 Provider 配置构建 WebUI 思考选择器快照。
+fn reasoning_selection(
+    provider_configuration: &ProviderConfigurationFile,
+) -> Option<ReasoningSelectionSummary> {
+    let preferred_effort = provider_configuration
+        .workbench_reasoning_effort
+        .unwrap_or(ReasoningEffortLevel::Medium);
+    let (provider_id, model_id) = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let active_model =
+        provider_config::effective_model_choices(provider_id, provider_configuration)
+            .into_iter()
+            .find(|model| model.id == model_id);
+    let view = definition.reasoning_selection_view(active_model.as_ref(), preferred_effort);
+    Some(ReasoningSelectionSummary {
+        options: view
+            .options
+            .into_iter()
+            .map(|option| ReasoningSelectionOptionSummary {
+                value: reasoning_effort_wire_value(option.effort).to_string(),
+                label: option.label,
+            })
+            .collect(),
+        selected_effort: reasoning_effort_wire_value(view.selected_effort).to_string(),
+        note: view.note,
+    })
 }
 
 /// Creates a readable generated session title from the submitted prompt.
@@ -3625,6 +3732,7 @@ fn workbench_from_runtime(
         plugins: plugins_from_luaskills(luaskills_catalog),
         settings: settings(),
         providers: providers(provider_configuration),
+        reasoning_selection: reasoning_selection(provider_configuration),
         ai_capabilities: ai_capabilities(ai_tool_configuration),
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
@@ -3665,7 +3773,10 @@ fn context_injection_snapshot_from_runtime_state(
     ));
     let mut static_cards = Vec::new();
     if let Some(profile_card) = static_vmm_profile_panel_card(
-        runtime_state.vmm_profile_sync.base_profile_content.as_deref(),
+        runtime_state
+            .vmm_profile_sync
+            .base_profile_content
+            .as_deref(),
         runtime_state.vmm_profile_sync.updated_at.as_deref(),
     ) {
         static_cards.push(profile_card);
@@ -3714,7 +3825,9 @@ fn static_vmm_profile_panel_card(
     content: Option<&str>,
     updated_at: Option<&str>,
 ) -> Option<ContextInjectionCardSummary> {
-    let content = content.map(str::trim).filter(|content| !content.is_empty())?;
+    let content = content
+        .map(str::trim)
+        .filter(|content| !content.is_empty())?;
     let mut detail_lines = Vec::new();
     if let Some(updated_at) = updated_at.map(str::trim).filter(|value| !value.is_empty()) {
         detail_lines.push(format!("更新时间：{updated_at}"));
@@ -4041,6 +4154,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         plugins: Vec::new(),
         settings: settings(),
         providers: providers(&ProviderConfigurationFile::default()),
+        reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
         memories: Vec::new(),
         command_sessions: Vec::new(),

@@ -293,6 +293,31 @@ export interface ProviderModelSummary {
   active?: boolean;
 }
 
+// ReasoningSelectionOptionSummary describes one backend-resolved reasoning selector option.
+// ReasoningSelectionOptionSummary 描述单个后端解析出的思考选择器选项。
+export interface ReasoningSelectionOptionSummary {
+  // Stable reasoning effort value sent through the service router.
+  // 通过服务路由发送的稳定思考档位值。
+  value: string;
+  // Provider-resolved user-facing option label.
+  // Provider 解析出的面向用户选项标签。
+  label: string;
+}
+
+// ReasoningSelectionSummary describes the active backend reasoning selector view.
+// ReasoningSelectionSummary 描述当前激活的后端思考选择器视图。
+export interface ReasoningSelectionSummary {
+  // Dynamic options supported by the active provider and model.
+  // 当前激活 Provider 与模型支持的动态选项。
+  options: ReasoningSelectionOptionSummary[];
+  // Effective selected reasoning effort value.
+  // 当前生效的已选思考档位值。
+  selectedEffort: string;
+  // Optional backend reconciliation note.
+  // 可选后端档位协调说明。
+  note?: string | null;
+}
+
 // MemorySummary describes one VMM memory area item.
 // MemorySummary 描述单个 VMM 记忆区域项目。
 export interface MemorySummary {
@@ -448,6 +473,9 @@ export interface WorkbenchSnapshot {
   // Provider summaries.
   // Provider 摘要。
   providers: ProviderSummary[];
+  // Backend-resolved reasoning selector view for the active model.
+  // 后端根据当前激活模型解析出的思考选择器视图。
+  reasoningSelection?: ReasoningSelectionSummary | null;
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];

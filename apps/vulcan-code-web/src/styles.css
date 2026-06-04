@@ -2824,6 +2824,11 @@ button {
   color: var(--primary);
 }
 
+.markdown-message img {
+  max-width: min(100%, 800px);
+  height: auto;
+}
+
 .markdown-message blockquote {
   border-left: 3px solid var(--border);
   padding-left: 10px;

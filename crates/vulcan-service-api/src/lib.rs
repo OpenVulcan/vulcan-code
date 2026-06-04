@@ -128,6 +128,10 @@ pub struct WorkbenchSnapshot {
     /// Provider summaries shown in the provider area.
     /// Provider 区域展示的供应商摘要。
     pub providers: Vec<ProviderSummary>,
+    /// Reasoning selector view resolved from the active provider and model.
+    /// 根据当前激活 Provider 与模型解析出的思考选择器视图。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_selection: Option<ReasoningSelectionSummary>,
     /// AI capability route summaries shown by the composer quick controls.
     /// 输入区快捷控制展示的 AI 能力路由摘要。
     #[serde(default)]
@@ -503,6 +507,36 @@ pub struct ProviderModelSummary {
     /// 该模型是否为当前工作台模型。
     #[serde(default)]
     pub active: bool,
+}
+
+/// Summarizes the workbench reasoning selector resolved by the backend.
+/// 汇总由后端解析出的工作台思考选择器。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningSelectionSummary {
+    /// Dynamic options supported by the active provider and model.
+    /// 当前激活 Provider 与模型支持的动态选项。
+    pub options: Vec<ReasoningSelectionOptionSummary>,
+    /// Effective selected reasoning effort value.
+    /// 当前生效的已选思考档位值。
+    pub selected_effort: String,
+    /// Optional note explaining model-specific reconciliation.
+    /// 可选说明，用于解释模型特定的档位协调结果。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Summarizes one reasoning selector option.
+/// 汇总单个思考选择器选项。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReasoningSelectionOptionSummary {
+    /// Stable reasoning effort value sent back through the service router.
+    /// 通过服务路由回传的稳定思考档位值。
+    pub value: String,
+    /// User-facing option label resolved from provider configuration.
+    /// 从 Provider 配置解析出的面向用户选项标签。
+    pub label: String,
 }
 
 /// Summarizes one VMM memory bundle or node group.

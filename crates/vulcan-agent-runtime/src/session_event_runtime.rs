@@ -207,8 +207,10 @@ fn append_tool_finished_projection_to_state(
     let Some(tool_call_id) = parse_tool_finished_runtime_event_title(&event.title) else {
         return false;
     };
-    let display_state =
-        tool_display_state_for_finished_event(event.metadata.as_ref(), !event.detail.trim().is_empty());
+    let display_state = tool_display_state_for_finished_event(
+        event.metadata.as_ref(),
+        !event.detail.trim().is_empty(),
+    );
     let tool_name = event
         .metadata
         .as_ref()
@@ -248,10 +250,7 @@ fn append_tool_finished_projection_to_state(
         )),
         created_at: now.to_string(),
     };
-    runtime_state
-        .conversation_state
-        .records
-        .push(record);
+    runtime_state.conversation_state.records.push(record);
     runtime_state.updated_at = now.to_string();
     true
 }

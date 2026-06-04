@@ -107,6 +107,7 @@ import type {
   MainAreaId,
   ProjectSummary,
   ProviderSummary,
+  ReasoningSelectionSummary,
   SettingsSubAreaId,
   StartupStepSnapshot,
   StartupSnapshot,
@@ -843,6 +844,14 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     },
     { id: "local", name: "本地模型", status: "待接入", enabledModels: "0", models: [] },
   ],
+  reasoningSelection: {
+    selectedEffort: "x-high",
+    options: [
+      { value: "off", label: "关闭" },
+      { value: "high", label: "高" },
+      { value: "x-high", label: "Max" },
+    ],
+  },
   aiCapabilities: [
     {
       kind: "web_search",
@@ -1000,6 +1009,16 @@ async function selectWorkbenchModel(choice: ModelPickerChoice): Promise<Workbenc
     providerId: choice.providerId,
     modelId: choice.modelId,
   });
+}
+
+// selectWorkbenchReasoningEffort persists one reasoning selection through the desktop service router.
+// selectWorkbenchReasoningEffort 通过桌面服务路由持久化单个思考档位选择。
+async function selectWorkbenchReasoningEffort(effort: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
 }
 
 // openProjectDirectoryPath asks the desktop shell to reveal one filesystem folder.
@@ -1409,6 +1428,17 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
+  // consoleWorkbenchState clears selected-session projections while a local draft conversation is active.
+  // consoleWorkbenchState 在本地草稿会话激活时清空当前会话投影，避免沿用上一会话的侧栏状态。
+  const consoleWorkbenchState = React.useMemo<WorkbenchSnapshot>(() => {
+    if (!selectedDraftConversation) {
+      return workbenchState;
+    }
+    return {
+      ...workbenchState,
+      contextInjection: null,
+    };
+  }, [selectedDraftConversation, workbenchState]);
   // showStartupOverlay blocks workspace interaction until the real service bootstrap completes.
   // showStartupOverlay 在真实服务启动完成前阻塞工作区交互。
   const showStartupOverlay = !props.startup.ready && props.startup.phase !== "browser-preview";
@@ -1698,6 +1728,21 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, []);
 
+  // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
+  // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
+  const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
+    try {
+      const snapshot = await selectWorkbenchReasoningEffort(effort);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
   // handleConversationMenuAction executes conversation-tree context menu commands.
   // handleConversationMenuAction 执行会话树右键菜单命令。
   const handleConversationMenuAction = React.useCallback(async (action: ConversationMenuAction, conversation: ConversationSummary) => {
@@ -1937,7 +1982,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         {showConsoleSidebar ? (
           <ConsoleShell
             startup={props.startup}
-            workbench={workbenchState}
+            workbench={consoleWorkbenchState}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
@@ -1952,6 +1997,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
+            onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
             onSubmitPrompt={handleSubmitConversationPrompt}
           />
         ) : (
@@ -3414,6 +3460,7 @@ function ConsoleShell(props: {
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   return (
@@ -3501,6 +3548,106 @@ function mediaSourceUrl(path: string): string {
   return normalized.startsWith("/") ? `file://${normalized}` : `file:///${normalized}`;
 }
 
+// normalizeMarkdownImageSource converts generated local image paths into renderable media URLs.
+// normalizeMarkdownImageSource 将 Markdown 中的生成本地图片路径转换为可渲染媒体 URL。
+function normalizeMarkdownImageSource(src: string | undefined): string | undefined {
+  const value = src?.trim();
+  if (!value) {
+    return src;
+  }
+  const unwrapped = value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1).trim() : value;
+  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(unwrapped)) {
+    return unwrapped;
+  }
+  if (looksLikeLocalFilesystemPath(unwrapped)) {
+    return mediaSourceUrl(unwrapped);
+  }
+  return src;
+}
+
+// normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
+// normalizeMarkdownLocalImageLinks 在 Markdown 清理移除本地路径前重写本地图片链接。
+function normalizeMarkdownLocalImageLinks(content: string): string {
+  return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string) => {
+    const normalized = normalizeMarkdownImageDestination(destination);
+    const width = markdownImageWidthFromAlt(alt);
+    const cleanAlt = width ? alt.replace(/\|\s*\d+\s*$/u, "").trim() : alt;
+    const nextDestination = normalized ?? destination.trim();
+    const widthTitle = width ? ` "width=${width}"` : "";
+    return normalized || width ? `![${cleanAlt}](${nextDestination}${widthTitle})` : full;
+  });
+}
+
+// normalizeMarkdownImageDestination extracts and rewrites one Markdown image destination.
+// normalizeMarkdownImageDestination 提取并重写单个 Markdown 图片目标。
+function normalizeMarkdownImageDestination(destination: string): string | null {
+  const trimmed = destination.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const sizedDestination = markdownImageSizedDestination(trimmed);
+  if (sizedDestination) {
+    const normalized = normalizeMarkdownImageDestination(sizedDestination.path);
+    const nextPath = normalized ?? sizedDestination.path.trim();
+    return `${nextPath} "width=${sizedDestination.width}"`;
+  }
+  const titleMatch = trimmed.match(/^(.+?)(\s+["'][^"']*["'])$/);
+  const rawPath = (titleMatch ? titleMatch[1] : trimmed).trim();
+  const title = titleMatch?.[2] ?? "";
+  const unwrapped = rawPath.startsWith("<") && rawPath.endsWith(">") ? rawPath.slice(1, -1).trim() : rawPath;
+  const normalized = normalizeMarkdownImageSource(unwrapped);
+  if (!normalized || normalized === unwrapped) {
+    return null;
+  }
+  return `${normalized}${title}`;
+}
+
+// markdownImageSizedDestination parses Markdown image destinations that carry an explicit width suffix.
+// markdownImageSizedDestination 解析携带显式宽度后缀的 Markdown 图片目标。
+function markdownImageSizedDestination(destination: string): { path: string; width: number } | null {
+  const match = destination.match(/^(.+?)\s+=([1-9]\d{0,4})(?:x\d*)?$/u);
+  if (!match) {
+    return null;
+  }
+  return { path: match[1].trim(), width: clampMarkdownImageWidth(Number(match[2])) };
+}
+
+// markdownImageWidthFromAlt parses Obsidian-style image alt width hints.
+// markdownImageWidthFromAlt 解析 Obsidian 风格的图片 alt 宽度提示。
+function markdownImageWidthFromAlt(alt: string): number | null {
+  const match = alt.match(/\|\s*([1-9]\d{0,4})\s*$/u);
+  return match ? clampMarkdownImageWidth(Number(match[1])) : null;
+}
+
+// markdownImageWidthFromTitle parses explicit width hints carried by Markdown image title text.
+// markdownImageWidthFromTitle 解析 Markdown 图片 title 文本携带的显式宽度提示。
+function markdownImageWidthFromTitle(title: string | undefined): number | null {
+  if (!title) {
+    return null;
+  }
+  const match = title.match(/(?:^|\s)(?:width|w)\s*=\s*([1-9]\d{0,4})(?:px)?(?:\s|$)/iu);
+  return match ? clampMarkdownImageWidth(Number(match[1])) : null;
+}
+
+// clampMarkdownImageWidth caps explicit Markdown image widths to avoid oversized transcript layouts.
+// clampMarkdownImageWidth 限制显式 Markdown 图片宽度，避免转录布局被过大图片撑开。
+function clampMarkdownImageWidth(width: number): number {
+  return Math.min(Math.max(Math.round(width), 1), 800);
+}
+
+// looksLikeLocalFilesystemPath detects Windows and Unix filesystem paths carried in Markdown.
+// looksLikeLocalFilesystemPath 检测 Markdown 中携带的 Windows 与 Unix 文件系统路径。
+function looksLikeLocalFilesystemPath(value: string): boolean {
+  const normalized = value.replace(/\\/g, "/");
+  return (
+    /^[a-zA-Z]:[\\/]/.test(value)
+    || value.startsWith("\\\\")
+    || value.startsWith("/")
+    || normalized.startsWith(".vulcan/code/attachments/")
+    || normalized.startsWith("./.vulcan/code/attachments/")
+  );
+}
+
 // base64UrlEncodeUtf8 encodes a local media path into a URL-safe route segment.
 // base64UrlEncodeUtf8 将本地媒体路径编码为 URL 安全的路由片段。
 function base64UrlEncodeUtf8(value: string): string {
@@ -3549,6 +3696,7 @@ function ConsoleShellContent(props: {
   onReorderProjects: (projectIds: string[]) => void;
   onSelectConversation: (conversationId: string) => void;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // sidebar controls the left project tree that can collapse automatically.
@@ -3669,6 +3817,7 @@ function ConsoleShellContent(props: {
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
           onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+          onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
           onSubmitPrompt={props.onSubmitPrompt}
         />
       </SidebarInset>
@@ -3760,6 +3909,9 @@ function WorkspaceResizableBody(props: {
   // Persists one workbench model selection through the backend runtime.
   // 通过后端运行时持久化单个工作台模型选择。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Persists one workbench reasoning-effort selection through the backend runtime.
+  // 通过后端运行时持久化单个工作台思考档位选择。
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   // Sends one composer prompt through the backend runtime.
   // 通过后端运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -3789,6 +3941,7 @@ function WorkspaceResizableBody(props: {
               loadingConversationId={props.loadingConversationId}
               conversationLoadError={props.conversationLoadError}
               onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+              onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
               onSubmitPrompt={props.onSubmitPrompt}
             />
           </section>
@@ -5369,6 +5522,7 @@ function ChatArea(props: {
   loadingConversationId: string | null;
   conversationLoadError: string | null;
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
 }) {
   // t resolves localized runtime labels for conversation overlays and cues.
@@ -5509,7 +5663,9 @@ function ChatArea(props: {
             projectName={emptyProjectName}
             aiCapabilities={props.workbench.aiCapabilities ?? []}
             providers={props.workbench.providers}
+            reasoningSelection={props.workbench.reasoningSelection ?? null}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+            onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
             onSubmitPrompt={props.onSubmitPrompt}
         />
       ) : (
@@ -5527,8 +5683,10 @@ function ChatArea(props: {
             contextUsage={props.workbench.contextUsage ?? null}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+            onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
             onSubmitPrompt={props.onSubmitPrompt}
             providers={props.workbench.providers}
+            reasoningSelection={props.workbench.reasoningSelection ?? null}
             runtimeCueText={runtimeCueText}
             showScrollToBottom={!isAtConversationBottom}
           />
@@ -5672,6 +5830,7 @@ function ConversationBlocksView(props: {
 // MarkdownMessage renders assistant Markdown with Vulcan-specific component styling.
 // MarkdownMessage 使用 Vulcan 定制组件样式渲染 assistant Markdown。
 function MarkdownMessage(props: { content: string }) {
+  const content = React.useMemo(() => normalizeMarkdownLocalImageLinks(props.content), [props.content]);
   return (
     <div className="markdown-message">
       <ReactMarkdown
@@ -5683,13 +5842,23 @@ function MarkdownMessage(props: { content: string }) {
             const inline = !className;
             return inline ? <code className="inline-code">{children}</code> : <code className={className}>{children}</code>;
           },
+          img: ({ alt, src, title }) => {
+            const width = markdownImageWidthFromTitle(title);
+            return (
+              <img
+                alt={alt ?? ""}
+                src={normalizeMarkdownImageSource(src) ?? src}
+                style={width ? { width, maxWidth: 800 } : undefined}
+              />
+            );
+          },
           pre: ({ children }) => <pre className="markdown-code-block">{children}</pre>,
           table: ({ children }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
         }}
         rehypePlugins={markdownSanitizers}
         remarkPlugins={markdownPlugins}
       >
-        {props.content}
+        {content}
       </ReactMarkdown>
     </div>
   );
@@ -6437,9 +6606,15 @@ function ComposerDock(props: {
   // onSelectWorkbenchModel persists a selected workbench model.
   // onSelectWorkbenchModel 持久化选中的工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // onSelectWorkbenchReasoningEffort persists a selected reasoning effort.
+  // onSelectWorkbenchReasoningEffort 持久化选中的思考档位。
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Backend-resolved reasoning selector view for the active provider and model.
+  // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
+  reasoningSelection: ReasoningSelectionSummary | null;
   // runtimeCueText shows the current session in-progress activity near the composer.
   // runtimeCueText 在输入区附近显示当前会话的进行中活动。
   runtimeCueText: string | null;
@@ -6473,7 +6648,9 @@ function ComposerDock(props: {
         contextUsage={props.contextUsage}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSubmitPrompt={props.onSubmitPrompt}
+        reasoningSelection={props.reasoningSelection}
       />
     </div>
   );
@@ -6494,9 +6671,15 @@ function ComposerPanel(props: {
   // Persists one selected workbench model.
   // 持久化单个选中的工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Persists one selected workbench reasoning effort.
+  // 持久化单个选中的工作台思考档位。
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Backend-resolved reasoning selector view for the active provider and model.
+  // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
+  reasoningSelection: ReasoningSelectionSummary | null;
 }) {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
@@ -6519,8 +6702,8 @@ function ComposerPanel(props: {
   // aiCapabilityTargetOrder stores current-message target route ordering.
   // aiCapabilityTargetOrder 保存当前消息级目标路由顺序。
   const [aiCapabilityTargetOrder, setAiCapabilityTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
-  // reasoningEffort stores the local preview reasoning-effort selection.
-  // reasoningEffort 保存本地预览用的思考档位选择。
+  // reasoningEffort stores the backend-synchronized reasoning-effort selection.
+  // reasoningEffort 保存与后端同步的思考档位选择。
   const [reasoningEffort, setReasoningEffort] = React.useState("x-high");
   // isComposerRunning stores the local send/stop preview state.
   // isComposerRunning 保存输入区发送/停止的本地预览状态。
@@ -6567,15 +6750,39 @@ function ComposerPanel(props: {
     { value: "build", label: t("composer.mode.execute") },
     { value: "plan", label: t("composer.mode.plan") },
   ], [t]);
-  // reasoningEffortOptions mirrors provider-config ReasoningEffortLevel labels plus the DeepSeek Max override.
-  // reasoningEffortOptions 对齐 provider-config 的思考档位标签，并包含 DeepSeek 的 Max 覆盖标签。
-  const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
-    { value: "off", label: t("composer.reasoning.off"), subtitle: t("composer.reasoning.subtitle") },
-    { value: "low", label: t("composer.reasoning.low"), subtitle: t("composer.reasoning.subtitle") },
-    { value: "medium", label: t("composer.reasoning.medium"), subtitle: t("composer.reasoning.subtitle") },
-    { value: "high", label: t("composer.reasoning.high"), subtitle: t("composer.reasoning.subtitle") },
-    { value: "x-high", label: t("composer.reasoning.max"), subtitle: t("composer.reasoning.subtitle") },
+  // fallbackReasoningEffortOptions is only used when no backend selector view is available.
+  // fallbackReasoningEffortOptions 仅在没有后端选择器视图时使用。
+  const fallbackReasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
+    { value: "off", label: t("composer.reasoning.off") },
+    { value: "low", label: t("composer.reasoning.low") },
+    { value: "medium", label: t("composer.reasoning.medium") },
+    { value: "high", label: t("composer.reasoning.high") },
+    { value: "x-high", label: t("composer.reasoning.max") },
   ], [t]);
+  // reasoningEffortOptions uses the shared backend selector view before falling back to local preview labels.
+  // reasoningEffortOptions 优先使用共享后端选择器视图，再回退到本地预览标签。
+  const reasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => {
+    if (props.reasoningSelection?.options.length) {
+      return props.reasoningSelection.options.map((option) => ({
+        value: option.value,
+        label: option.label,
+      }));
+    }
+    return fallbackReasoningEffortOptions;
+  }, [fallbackReasoningEffortOptions, props.reasoningSelection, t]);
+  // serviceSelectedReasoningEffort mirrors the active backend-selected effort when available.
+  // serviceSelectedReasoningEffort 在可用时镜像后端选中的生效思考档位。
+  const serviceSelectedReasoningEffort = props.reasoningSelection?.selectedEffort;
+
+  React.useEffect(() => {
+    if (serviceSelectedReasoningEffort && serviceSelectedReasoningEffort !== reasoningEffort) {
+      setReasoningEffort(serviceSelectedReasoningEffort);
+      return;
+    }
+    if (!reasoningEffortOptions.some((option) => option.value === reasoningEffort)) {
+      setReasoningEffort(reasoningEffortOptions[0]?.value ?? "medium");
+    }
+  }, [reasoningEffort, reasoningEffortOptions, serviceSelectedReasoningEffort]);
   // placeholder describes the platform-specific send and newline keyboard behavior.
   // placeholder 描述平台相关的发送与换行键盘行为。
   const placeholder = React.useMemo(() => {
@@ -6674,6 +6881,17 @@ function ComposerPanel(props: {
     }
   }, [modelChoice, props]);
 
+  // handleReasoningEffortChange applies one backend-routed reasoning selection with rollback.
+  // handleReasoningEffortChange 应用单个后端路由的思考档位选择并支持失败回滚。
+  const handleReasoningEffortChange = React.useCallback(async (value: string) => {
+    const previousEffort = reasoningEffort;
+    setReasoningEffort(value);
+    const ok = await props.onSelectWorkbenchReasoningEffort(value);
+    if (!ok) {
+      setReasoningEffort(previousEffort);
+    }
+  }, [props, reasoningEffort]);
+
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
   const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -6730,7 +6948,7 @@ function ComposerPanel(props: {
             ariaLabel={t("composer.aria.reasoning")}
             className="reasoning no-indicator"
             fallbackLabel={t("composer.selectFallback")}
-            onValueChange={setReasoningEffort}
+            onValueChange={(value) => void handleReasoningEffortChange(value)}
             options={reasoningEffortOptions}
             value={reasoningEffort}
           />
@@ -7084,9 +7302,15 @@ function EmptyConversationCenter(props: {
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
+  // Backend-resolved reasoning selector view for the active provider and model.
+  // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
+  reasoningSelection: ReasoningSelectionSummary | null;
   // Persists one selected workbench model.
   // 持久化单个选中的工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Persists one selected workbench reasoning effort.
+  // 持久化单个选中的工作台思考档位。
+  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
   // Sends the first prompt that materializes this draft conversation.
   // 发送用于实体化当前草稿会话的第一条提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
@@ -7105,7 +7329,9 @@ function EmptyConversationCenter(props: {
         aiCapabilities={props.aiCapabilities}
         contextUsage={null}
         providers={props.providers}
+        reasoningSelection={props.reasoningSelection}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSubmitPrompt={props.onSubmitPrompt}
       />
     </section>
