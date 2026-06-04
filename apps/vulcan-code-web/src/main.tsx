@@ -5978,7 +5978,7 @@ function GeneratedMediaInlineCard(props: {
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
   if (props.attachment.kind === "image") {
     return (
-      <button className="generated-media-card image" onClick={props.onOpenDetail} type="button">
+      <button className="generated-media-card image" onClick={() => props.onOpenMedia(props.attachment)} type="button">
         <img alt={props.attachment.fileName} src={source} />
         <span>{props.attachment.fileName}</span>
       </button>
@@ -6014,7 +6014,6 @@ function GeneratedMediaInlineCard(props: {
     const mediaSource = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
     return (
       <div className="generated-media-card audio">
-        <span className="generated-media-icon"><MediaIcon size={18} /></span>
         <audio controls preload="metadata" src={mediaSource} />
       </div>
     );
@@ -6206,11 +6205,11 @@ function GeneratedMediaDetail(props: {
   );
 }
 
-// GeneratedMediaPlayerWindow renders an independent player window for generated audio/video assets.
-// GeneratedMediaPlayerWindow 为生成的音频/视频资源渲染独立播放窗口。
+// GeneratedMediaPlayerWindow renders an independent viewer window for generated media assets.
+// GeneratedMediaPlayerWindow 为生成媒体资源渲染独立查看窗口。
 function GeneratedMediaPlayerWindow(props: {
   // attachment describes the generated media file to play.
-  // attachment 描述需要播放的生成媒体文件。
+  // attachment 描述需要播放或查看的生成媒体文件。
   attachment: GeneratedMediaAttachment;
   // onClose closes the independent player window.
   // onClose 关闭独立播放窗口。
@@ -6218,6 +6217,9 @@ function GeneratedMediaPlayerWindow(props: {
 }) {
   const source = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
+  // imageZoom stores the transient zoom ratio used only by the image viewer.
+  // imageZoom 保存仅用于图片查看器的临时缩放比例。
+  const [imageZoom, setImageZoom] = React.useState(1);
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
@@ -6227,12 +6229,30 @@ function GeneratedMediaPlayerWindow(props: {
             <MediaIcon size={18} />
             <DialogTitle>{props.attachment.fileName}</DialogTitle>
           </span>
-          <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
-            <X size={17} />
-          </Button>
+          <span className="generated-media-player-actions">
+            {props.attachment.kind === "image" ? (
+              <span className="generated-media-zoom-controls">
+                <Button onClick={() => setImageZoom((value) => Math.max(0.25, value - 0.25))} size="sm" type="button" variant="outline">-</Button>
+                <strong>{Math.round(imageZoom * 100)}%</strong>
+                <Button onClick={() => setImageZoom((value) => Math.min(4, value + 0.25))} size="sm" type="button" variant="outline">+</Button>
+              </span>
+            ) : null}
+            <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
+              <X size={17} />
+            </Button>
+          </span>
         </header>
         <div className="generated-media-player-body">
-          {props.attachment.kind === "video" ? (
+          {props.attachment.kind === "image" ? (
+            <div className="generated-media-player-image-wrap">
+              <img
+                alt={props.attachment.fileName}
+                className="generated-media-player-image"
+                src={source}
+                style={{ transform: `scale(${imageZoom})` }}
+              />
+            </div>
+          ) : props.attachment.kind === "video" ? (
             <video
               className="generated-media-player-video"
               controls
@@ -6677,7 +6697,7 @@ function ComposerPanel(props: {
         <div className="composer-toolbar-left">
           <ComposerSelectControl
             ariaLabel={t("composer.aria.mode")}
-            className="mode"
+            className="mode no-indicator"
             fallbackLabel={t("composer.selectFallback")}
             onValueChange={setExecutionMode}
             options={executionModeOptions}
@@ -6707,7 +6727,7 @@ function ComposerPanel(props: {
         <div className="composer-toolbar-right">
           <ComposerSelectControl
             ariaLabel={t("composer.aria.reasoning")}
-            className="reasoning"
+            className="reasoning no-indicator"
             fallbackLabel={t("composer.selectFallback")}
             onValueChange={setReasoningEffort}
             options={reasoningEffortOptions}
@@ -6815,9 +6835,10 @@ function ComposerAiCapabilityControl(props: {
       capability: capabilityByKind.get(option.value),
     }));
   }, [capabilityByKind]);
-  const enabledCount = visibleCapabilities.filter(({ option, capability }) => {
+  const enabledCapabilityEntries = visibleCapabilities.filter(({ option, capability }) => {
     return Boolean(capability?.available) && !props.disabledKinds.has(option.value);
-  }).length;
+  });
+  const enabledCount = enabledCapabilityEntries.length;
   const triggerSubtitle = props.locale === "zh-CN"
     ? `${enabledCount}/${visibleCapabilities.length} 已启用`
     : `${enabledCount}/${visibleCapabilities.length} enabled`;
@@ -6846,10 +6867,26 @@ function ComposerAiCapabilityControl(props: {
           type="button"
         >
           <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
-          <span className="composer-select-copy">
-            <span className="composer-select-label">{props.locale === "zh-CN" ? "扩展能力" : "Extended Capability"}</span>
-            <span className="composer-select-subtitle">{triggerSubtitle}</span>
-          </span>
+            <span className="composer-select-copy">
+              <span className="composer-select-label">{props.locale === "zh-CN" ? "扩展能力" : "Extended Capability"}</span>
+              <span className="composer-capability-icon-row" aria-label={triggerSubtitle}>
+                {enabledCapabilityEntries.length > 0 ? (
+                  enabledCapabilityEntries.map(({ option }) => {
+                    const Icon = option.Icon;
+                    return (
+                      <Icon
+                        aria-label={props.locale === "zh-CN" ? option.labelZh : option.labelEn}
+                        className="composer-capability-mini-icon"
+                        key={option.value}
+                        size={11}
+                      />
+                    );
+                  })
+                ) : (
+                  <span className="composer-capability-mini-empty" aria-hidden="true" />
+                )}
+              </span>
+            </span>
         </button>
       </DialogTrigger>
       <DialogContent className="composer-capability-dialog">

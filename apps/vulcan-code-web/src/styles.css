@@ -2076,7 +2076,7 @@ button {
 }
 
 .composer-select-trigger.mode {
-  width: 84px;
+  width: 66px;
 }
 
 .composer-select-trigger.model {
@@ -2088,7 +2088,39 @@ button {
 }
 
 .composer-capability-trigger {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
   border: 0;
+}
+
+.composer-capability-trigger .composer-select-copy {
+  justify-items: center;
+  text-align: center;
+}
+
+.composer-capability-icon-row {
+  min-width: 0;
+  display: inline-flex;
+  max-width: 100%;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+}
+
+.composer-capability-mini-icon {
+  flex: 0 0 auto;
+  opacity: 0.88;
+}
+
+.composer-capability-mini-empty {
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 36%, transparent);
 }
 
 .composer-capability-dialog {
@@ -2283,8 +2315,12 @@ button {
 }
 
 .composer-select-trigger.reasoning {
-  width: 112px;
+  width: 92px;
   padding-left: 14px;
+}
+
+.composer-select-trigger.no-indicator > svg:last-child {
+  display: none;
 }
 
 .composer-select-icon {
@@ -2965,7 +3001,7 @@ button {
 
 .generated-media-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 240px));
+  grid-template-columns: repeat(auto-fit, minmax(234px, 312px));
   gap: 10px;
 }
 
@@ -2990,7 +3026,7 @@ button {
 
 .generated-media-card.image img {
   width: 100%;
-  max-height: 180px;
+  max-height: 234px;
   object-fit: contain;
   border-radius: 8px;
   background: var(--muted);
@@ -3002,7 +3038,7 @@ button {
 
 .generated-media-video-thumb {
   position: relative;
-  min-height: 128px;
+  min-height: 166px;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -3015,7 +3051,7 @@ button {
 .generated-media-video-thumb video {
   width: 100%;
   height: 100%;
-  max-height: 180px;
+  max-height: 234px;
   object-fit: cover;
 }
 
@@ -3037,7 +3073,10 @@ button {
 }
 
 .generated-media-card.audio {
-  grid-template-columns: 28px minmax(0, 1fr);
+  width: 312px;
+  max-width: 100%;
+  min-width: min(312px, 100%);
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .generated-media-card.audio audio {
@@ -3195,6 +3234,13 @@ button {
   white-space: nowrap;
 }
 
+.generated-media-player-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .generated-media-player-body {
   min-height: min(62vh, 620px);
   display: grid;
@@ -3202,6 +3248,21 @@ button {
   overflow: auto;
   padding: 16px;
   background: color-mix(in oklch, var(--muted) 60%, transparent);
+}
+
+.generated-media-player-image-wrap {
+  min-width: 100%;
+  min-height: min(62vh, 620px);
+  display: grid;
+  place-items: center;
+  overflow: auto;
+}
+
+.generated-media-player-image {
+  max-width: 100%;
+  max-height: min(72vh, 720px);
+  transform-origin: center center;
+  transition: transform 140ms ease;
 }
 
 .generated-media-player-video {
