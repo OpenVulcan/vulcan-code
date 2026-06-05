@@ -1,9 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import Lightbox from "yet-another-react-lightbox";
-import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import ReactMarkdown from "react-markdown";
-import "yet-another-react-lightbox/styles.css";
 import {
   closestCenter,
   DndContext,
@@ -173,6 +170,7 @@ import {
   MessageSquareText,
   MicVocal,
   Music2,
+  Scan,
   PanelRightClose,
   PanelRightOpen,
   PanelTopOpen,
@@ -656,6 +654,40 @@ interface GeneratedMediaAttachment {
   // Optional MIME type persisted by the host.
   // 宿主持久化的可选 MIME 类型。
   mimeType?: string;
+}
+
+// GENERATED_MEDIA_MIN_ZOOM is the smallest image zoom ratio allowed in media viewers.
+// GENERATED_MEDIA_MIN_ZOOM 是媒体查看器允许的最小图片缩放比例。
+const GENERATED_MEDIA_MIN_ZOOM = 0.1;
+
+// GENERATED_MEDIA_MAX_ZOOM is the largest image zoom ratio allowed in media viewers.
+// GENERATED_MEDIA_MAX_ZOOM 是媒体查看器允许的最大图片缩放比例。
+const GENERATED_MEDIA_MAX_ZOOM = 10;
+
+// GENERATED_MEDIA_ZOOM_STEP is the fixed zoom delta used by media viewer controls.
+// GENERATED_MEDIA_ZOOM_STEP 是媒体查看器控制按钮使用的固定缩放步长。
+const GENERATED_MEDIA_ZOOM_STEP = 0.1;
+
+// GeneratedMediaImageSize stores measured image or viewport dimensions used for true-size zoom math.
+// GeneratedMediaImageSize 保存用于真实尺寸缩放计算的图片或视口尺寸。
+interface GeneratedMediaImageSize {
+  // Width in CSS pixels or natural image pixels depending on the measurement source.
+  // 宽度，单位根据测量来源为 CSS 像素或图片自然像素。
+  width: number;
+  // Height in CSS pixels or natural image pixels depending on the measurement source.
+  // 高度，单位根据测量来源为 CSS 像素或图片自然像素。
+  height: number;
+}
+
+// GeneratedMediaImageOffset stores the pan offset from the image viewport center.
+// GeneratedMediaImageOffset 保存相对图片视口中心的拖拽偏移。
+interface GeneratedMediaImageOffset {
+  // Horizontal offset in CSS pixels.
+  // 水平方向 CSS 像素偏移。
+  x: number;
+  // Vertical offset in CSS pixels.
+  // 垂直方向 CSS 像素偏移。
+  y: number;
 }
 
 // ConversationRenderItemKind describes the projected transcript item family.
@@ -4285,14 +4317,29 @@ function decodeURIComponentSafe(value: string): string {
 // normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
 // normalizeMarkdownLocalImageLinks 在 Markdown 清理移除本地路径前重写本地图片链接。
 function normalizeMarkdownLocalImageLinks(content: string): string {
-  return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string) => {
+  return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string, offset: number) => {
     const normalized = normalizeMarkdownImageDestination(destination);
     const width = markdownImageWidthFromAlt(alt);
     const cleanAlt = width ? alt.replace(/\|\s*\d+\s*$/u, "").trim() : alt;
     const nextDestination = normalized ?? destination.trim();
     const widthTitle = width ? ` "width=${width}"` : "";
-    return normalized || width ? `![${cleanAlt}](${nextDestination}${widthTitle})` : full;
+    const imageMarkdown = normalized || width ? `![${cleanAlt}](${nextDestination}${widthTitle})` : full;
+    return `${markdownImageLeadingBlockPrefix(content, offset)}${imageMarkdown}`;
   });
+}
+
+// markdownImageLeadingBlockPrefix returns the newline prefix needed to render an image as its own block.
+// markdownImageLeadingBlockPrefix 返回将图片渲染为独立块所需的换行前缀。
+function markdownImageLeadingBlockPrefix(content: string, offset: number): string {
+  const previousContent = content.slice(0, Math.max(0, offset));
+  if (previousContent.trim().length === 0) {
+    return "";
+  }
+  if (/(?:\r?\n)[ \t]*(?:\r?\n)[ \t]*$/u.test(previousContent)) {
+    return "";
+  }
+  const lineStart = Math.max(content.lastIndexOf("\n", offset - 1), content.lastIndexOf("\r", offset - 1)) + 1;
+  return content.slice(lineStart, offset).trim().length > 0 ? "\n\n" : "\n";
 }
 
 // normalizeMarkdownImageDestination extracts and rewrites one Markdown image destination.
@@ -7393,6 +7440,71 @@ function ConversationLoadingCenter() {
   );
 }
 
+// clampGeneratedMediaZoom keeps image zoom values inside the supported media viewer range.
+// clampGeneratedMediaZoom 将图片缩放值限制在媒体查看器支持范围内。
+function clampGeneratedMediaZoom(value: number): number {
+  return Math.min(GENERATED_MEDIA_MAX_ZOOM, Math.max(GENERATED_MEDIA_MIN_ZOOM, value));
+}
+
+// generatedMediaFitScale returns the best fit scale relative to the original image size.
+// generatedMediaFitScale 返回相对图片原始尺寸的最佳适配缩放比例。
+function generatedMediaFitScale(
+  viewportSize: GeneratedMediaImageSize | null,
+  naturalSize: GeneratedMediaImageSize | null,
+): number | null {
+  if (!viewportSize || !naturalSize || viewportSize.width <= 0 || viewportSize.height <= 0 || naturalSize.width <= 0 || naturalSize.height <= 0) {
+    return null;
+  }
+  return clampGeneratedMediaZoom(Math.min(1, viewportSize.width / naturalSize.width, viewportSize.height / naturalSize.height));
+}
+
+// clampGeneratedMediaImageOffset keeps a panned image reachable inside the viewport.
+// clampGeneratedMediaImageOffset 将拖拽后的图片偏移限制在视口可达范围内。
+function clampGeneratedMediaImageOffset(
+  offset: GeneratedMediaImageOffset,
+  scale: number,
+  viewportSize: GeneratedMediaImageSize | null,
+  naturalSize: GeneratedMediaImageSize | null,
+): GeneratedMediaImageOffset {
+  if (!viewportSize || !naturalSize || viewportSize.width <= 0 || viewportSize.height <= 0 || naturalSize.width <= 0 || naturalSize.height <= 0) {
+    return { x: 0, y: 0 };
+  }
+  const scaledWidth = naturalSize.width * scale;
+  const scaledHeight = naturalSize.height * scale;
+  const maxX = Math.max(0, (scaledWidth - viewportSize.width) / 2);
+  const maxY = Math.max(0, (scaledHeight - viewportSize.height) / 2);
+  return {
+    x: Math.min(maxX, Math.max(-maxX, offset.x)),
+    y: Math.min(maxY, Math.max(-maxY, offset.y)),
+  };
+}
+
+// generatedMediaZoomOffsetAroundPoint preserves the visual anchor while changing scale.
+// generatedMediaZoomOffsetAroundPoint 在缩放时保持鼠标或中心锚点的视觉位置。
+function generatedMediaZoomOffsetAroundPoint(
+  offset: GeneratedMediaImageOffset,
+  currentScale: number,
+  nextScale: number,
+  anchor: GeneratedMediaImageOffset,
+  viewportSize: GeneratedMediaImageSize | null,
+  naturalSize: GeneratedMediaImageSize | null,
+): GeneratedMediaImageOffset {
+  if (currentScale <= 0) {
+    return clampGeneratedMediaImageOffset(offset, nextScale, viewportSize, naturalSize);
+  }
+  const ratio = nextScale / currentScale;
+  return clampGeneratedMediaImageOffset({
+    x: anchor.x - (anchor.x - offset.x) * ratio,
+    y: anchor.y - (anchor.y - offset.y) * ratio,
+  }, nextScale, viewportSize, naturalSize);
+}
+
+// generatedMediaHasImageOffset returns whether the image is currently panned.
+// generatedMediaHasImageOffset 返回图片当前是否存在拖拽偏移。
+function generatedMediaHasImageOffset(offset: GeneratedMediaImageOffset): boolean {
+  return Math.abs(offset.x) > 0.5 || Math.abs(offset.y) > 0.5;
+}
+
 // GeneratedMediaDetail renders media outputs in a zoomable/player-capable detail modal section.
 // GeneratedMediaDetail 在详情弹窗中渲染可缩放或可播放的媒体输出区域。
 function GeneratedMediaDetail(props: {
@@ -7416,9 +7528,9 @@ function GeneratedMediaDetail(props: {
         <span><MediaIcon size={17} />{primary.fileName}</span>
         {primary.kind === "image" ? (
           <span className="generated-media-zoom-controls">
-            <Button onClick={() => setZoom((value) => Math.max(0.25, value - 0.25))} size="sm" type="button" variant="outline">-</Button>
+            <Button onClick={() => setZoom((value) => clampGeneratedMediaZoom(value - GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">-</Button>
             <strong>{Math.round(zoom * 100)}%</strong>
-            <Button onClick={() => setZoom((value) => Math.min(4, value + 0.25))} size="sm" type="button" variant="outline">+</Button>
+            <Button onClick={() => setZoom((value) => clampGeneratedMediaZoom(value + GENERATED_MEDIA_ZOOM_STEP))} size="sm" type="button" variant="outline">+</Button>
           </span>
         ) : null}
       </header>
@@ -7456,69 +7568,210 @@ function GeneratedMediaDetail(props: {
   );
 }
 
-// GeneratedMediaPlayerWindow renders an independent viewer window for generated media assets.
-// GeneratedMediaPlayerWindow 为生成媒体资源渲染独立查看窗口。
+// GeneratedMediaPlayerWindow renders a dialog viewer for generated media assets.
+// GeneratedMediaPlayerWindow 为生成媒体资源渲染弹窗查看器。
 function GeneratedMediaPlayerWindow(props: {
   // attachment describes the generated media file to play.
   // attachment 描述需要播放或查看的生成媒体文件。
   attachment: GeneratedMediaAttachment;
-  // onClose closes the independent player window.
-  // onClose 关闭独立播放窗口。
+  // onClose closes the media player dialog.
+  // onClose 关闭媒体播放弹窗。
   onClose: () => void;
 }) {
+  const imageStageRef = React.useRef<HTMLDivElement | null>(null);
+  const imageElementRef = React.useRef<HTMLImageElement | null>(null);
+  const imageInitializedRef = React.useRef(false);
+  const imageDragRef = React.useRef<{
+    // Pointer id captured by the image stage during one drag.
+    // 单次拖拽期间图片舞台捕获的指针标识。
+    pointerId: number;
+    // Pointer x coordinate at drag start.
+    // 拖拽开始时的指针 x 坐标。
+    startX: number;
+    // Pointer y coordinate at drag start.
+    // 拖拽开始时的指针 y 坐标。
+    startY: number;
+    // Image offset at drag start.
+    // 拖拽开始时的图片偏移。
+    startOffset: GeneratedMediaImageOffset;
+  } | null>(null);
+  const [imageScale, setImageScale] = React.useState(1);
+  const [imageOffset, setImageOffset] = React.useState<GeneratedMediaImageOffset>({ x: 0, y: 0 });
+  const [isImageDragging, setIsImageDragging] = React.useState(false);
+  const [isMaximized, setIsMaximized] = React.useState(false);
+  const [imageNaturalSize, setImageNaturalSize] = React.useState<GeneratedMediaImageSize | null>(null);
+  const [imageViewportSize, setImageViewportSize] = React.useState<GeneratedMediaImageSize | null>(null);
   const source = useGeneratedMediaSource(props.attachment.localPath, props.attachment.mimeType);
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
-  if (props.attachment.kind === "image") {
-    return (
-      <Lightbox
-        carousel={{
-          finite: true,
-          imageFit: "contain",
-        }}
-        close={() => props.onClose()}
-        index={0}
-        labels={{
-          Close: "关闭",
-          Next: "下一张",
-          Previous: "上一张",
-          "Zoom in": "放大",
-          "Zoom out": "缩小",
-        }}
-        open
-        plugins={[Zoom]}
-        portal={{
-          container: {
-            style: {
-              top: "var(--app-header-height)",
-            },
-          },
-        }}
-        slides={[{
-          alt: props.attachment.fileName,
-          src: source,
-        }]}
-        styles={{
-          container: {
-            backgroundColor: "color-mix(in oklch, var(--background) 72%, transparent)",
-            backdropFilter: "blur(18px)",
-            WebkitBackdropFilter: "blur(18px)",
-          },
-        }}
-        zoom={{
-          maxZoomPixelRatio: 1,
-          minZoom: 0.25,
-          scrollToZoom: true,
-          wheelZoomDistanceFactor: 90,
-          zoomInMultiplier: 1.5,
-        }}
-      />
-    );
-  }
+  const isImage = props.attachment.kind === "image";
+  const imageFitScale = generatedMediaFitScale(imageViewportSize, imageNaturalSize) ?? 1;
+  React.useEffect(() => {
+    imageInitializedRef.current = false;
+    imageDragRef.current = null;
+    imageElementRef.current = null;
+    setImageScale(1);
+    setImageOffset({ x: 0, y: 0 });
+    setIsImageDragging(false);
+    setIsMaximized(false);
+    setImageNaturalSize(null);
+    setImageViewportSize(null);
+  }, [source]);
+  React.useEffect(() => {
+    if (!isImage || !source) {
+      return undefined;
+    }
+    let cancelled = false;
+    const image = new Image();
+    image.onload = () => {
+      if (!cancelled) {
+        setImageNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
+      }
+    };
+    image.src = source;
+    return () => {
+      cancelled = true;
+    };
+  }, [isImage, source]);
+  const syncImageNaturalSize = React.useCallback((image: HTMLImageElement | null) => {
+    if (!image || image.naturalWidth <= 0 || image.naturalHeight <= 0) {
+      return;
+    }
+    setImageNaturalSize({ width: image.naturalWidth, height: image.naturalHeight });
+  }, []);
+  React.useLayoutEffect(() => {
+    const node = imageStageRef.current;
+    if (!node || !isImage) {
+      return undefined;
+    }
+    const updateSize = () => {
+      const rect = node.getBoundingClientRect();
+      setImageViewportSize({ width: rect.width, height: rect.height });
+    };
+    updateSize();
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [isImage, isMaximized]);
+  React.useEffect(() => {
+    syncImageNaturalSize(imageElementRef.current);
+  }, [syncImageNaturalSize, source]);
+  React.useEffect(() => {
+    if (imageInitializedRef.current || !imageNaturalSize || !imageViewportSize) {
+      return;
+    }
+    imageInitializedRef.current = true;
+    setImageScale(generatedMediaFitScale(imageViewportSize, imageNaturalSize) ?? 1);
+    setImageOffset({ x: 0, y: 0 });
+  }, [imageNaturalSize, imageViewportSize]);
+  React.useEffect(() => {
+    setImageOffset((offset) => clampGeneratedMediaImageOffset(offset, imageScale, imageViewportSize, imageNaturalSize));
+  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  const applyImageScaleAroundCenter = React.useCallback((nextScale: number) => {
+    if (!imageNaturalSize || !imageViewportSize) {
+      return;
+    }
+    const clampedScale = clampGeneratedMediaZoom(nextScale);
+    setImageOffset((offset) => generatedMediaZoomOffsetAroundPoint(
+      offset,
+      imageScale,
+      clampedScale,
+      { x: 0, y: 0 },
+      imageViewportSize,
+      imageNaturalSize,
+    ));
+    setImageScale(clampedScale);
+  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  const handleImageFit = React.useCallback(() => {
+    const nextScale = generatedMediaFitScale(imageViewportSize, imageNaturalSize);
+    if (nextScale === null) {
+      return;
+    }
+    setImageScale(nextScale);
+    setImageOffset({ x: 0, y: 0 });
+  }, [imageNaturalSize, imageViewportSize]);
+  const handleImageOriginalSize = React.useCallback(() => {
+    if (!imageNaturalSize || !imageViewportSize) {
+      return;
+    }
+    setImageScale(1);
+    setImageOffset({ x: 0, y: 0 });
+  }, [imageNaturalSize, imageViewportSize]);
+  const zoomImageAtPoint = React.useCallback((deltaY: number, clientX: number, clientY: number, target: HTMLElement) => {
+    if (!imageNaturalSize || !imageViewportSize) {
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    const anchor = {
+      x: clientX - rect.left - rect.width / 2,
+      y: clientY - rect.top - rect.height / 2,
+    };
+    const nextScale = clampGeneratedMediaZoom(imageScale * (deltaY < 0 ? 1.1 : 1 / 1.1));
+    setImageOffset((offset) => generatedMediaZoomOffsetAroundPoint(
+      offset,
+      imageScale,
+      nextScale,
+      anchor,
+      imageViewportSize,
+      imageNaturalSize,
+    ));
+    setImageScale(nextScale);
+  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  React.useEffect(() => {
+    const node = imageStageRef.current;
+    if (!node || !isImage) {
+      return undefined;
+    }
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      zoomImageAtPoint(event.deltaY, event.clientX, event.clientY, node);
+    };
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+  }, [isImage, zoomImageAtPoint]);
+  const handleImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !imageNaturalSize || !imageViewportSize) {
+      return;
+    }
+    event.preventDefault();
+    imageDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startOffset: imageOffset,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsImageDragging(true);
+  }, [imageNaturalSize, imageOffset, imageViewportSize]);
+  const handleImagePointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = imageDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    event.preventDefault();
+    setImageOffset(clampGeneratedMediaImageOffset({
+      x: drag.startOffset.x + event.clientX - drag.startX,
+      y: drag.startOffset.y + event.clientY - drag.startY,
+    }, imageScale, imageViewportSize, imageNaturalSize));
+  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  const handleImagePointerEnd = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = imageDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    imageDragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    setIsImageDragging(false);
+  }, []);
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent
-        className="generated-media-player-window sm:max-w-[min(1120px,96vw)]"
+        className={cn(
+          "generated-media-player-window sm:max-w-[min(1120px,96vw)]",
+          isMaximized && "maximized",
+        )}
         showCloseButton={false}
       >
         <header className="generated-media-player-header">
@@ -7527,13 +7780,79 @@ function GeneratedMediaPlayerWindow(props: {
             <DialogTitle>{props.attachment.fileName}</DialogTitle>
           </span>
           <span className="generated-media-player-actions">
+            {isImage ? (
+              <GeneratedMediaImageZoomControl
+                canUseZoom={imageNaturalSize !== null && imageViewportSize !== null}
+                fitScale={imageFitScale}
+                naturalSize={imageNaturalSize}
+                offset={imageOffset}
+                onFit={handleImageFit}
+                onOriginalSize={handleImageOriginalSize}
+                onZoomIn={() => applyImageScaleAroundCenter(imageScale + GENERATED_MEDIA_ZOOM_STEP)}
+                onZoomOut={() => applyImageScaleAroundCenter(imageScale - GENERATED_MEDIA_ZOOM_STEP)}
+                scale={imageScale}
+              />
+            ) : null}
+            <Button
+              aria-label={isMaximized ? "还原播放器" : "最大化播放器"}
+              className="icon-button"
+              onClick={() => setIsMaximized((value) => !value)}
+              size="icon"
+              type="button"
+              variant="outline"
+            >
+              {isMaximized ? <Minimize2 size={17} /> : <Maximize2 size={17} />}
+            </Button>
             <Button aria-label="关闭播放器" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
               <X size={17} />
             </Button>
           </span>
         </header>
-        <div className="generated-media-player-body">
-          {props.attachment.kind === "video" ? (
+        <div
+          className={cn("generated-media-player-body", isImage && "image")}
+        >
+          {isImage ? (
+            <div
+              className={cn("generated-media-image-viewer", isImageDragging && "dragging")}
+              onPointerCancel={handleImagePointerEnd}
+              onPointerDown={handleImagePointerDown}
+              onPointerMove={handleImagePointerMove}
+              onPointerUp={handleImagePointerEnd}
+              ref={imageStageRef}
+            >
+              {imageNaturalSize ? (
+                <div
+                  className="generated-media-image-canvas"
+                  style={{
+                    transform: `translate(calc(-50% + ${imageOffset.x}px), calc(-50% + ${imageOffset.y}px))`,
+                  }}
+                >
+                  <img
+                    alt={props.attachment.fileName}
+                    className="generated-media-player-image"
+                    draggable={false}
+                    onLoad={(event) => syncImageNaturalSize(event.currentTarget)}
+                    ref={imageElementRef}
+                    src={source}
+                    style={{
+                      height: imageNaturalSize.height,
+                      transform: `scale(${imageScale})`,
+                      width: imageNaturalSize.width,
+                    }}
+                  />
+                </div>
+              ) : (
+                <img
+                  alt={props.attachment.fileName}
+                  className="generated-media-player-image loading"
+                  draggable={false}
+                  onLoad={(event) => syncImageNaturalSize(event.currentTarget)}
+                  ref={imageElementRef}
+                  src={source}
+                />
+              )}
+            </div>
+          ) : props.attachment.kind === "video" ? (
             <video
               className="generated-media-player-video"
               controls
@@ -7556,6 +7875,114 @@ function GeneratedMediaPlayerWindow(props: {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// GeneratedMediaImageZoomControl renders the lightweight image zoom toolbar in the dialog header.
+// GeneratedMediaImageZoomControl 在弹窗标题栏渲染轻量图片缩放工具条。
+function GeneratedMediaImageZoomControl(props: {
+  // Whether the image has enough measurements to accept zoom actions.
+  // 图片是否已有足够尺寸信息来接受缩放操作。
+  canUseZoom: boolean;
+  // Fit-to-window scale relative to the image's original size.
+  // 相对图片原始尺寸的自适应窗口缩放比例。
+  fitScale: number;
+  // naturalSize is the loaded image's original pixel size.
+  // naturalSize 是已加载图片的原始像素尺寸。
+  naturalSize: GeneratedMediaImageSize | null;
+  // offset is the current pan offset.
+  // offset 是当前拖拽平移偏移。
+  offset: GeneratedMediaImageOffset;
+  // Restores fit-to-window scale and centered position.
+  // 恢复自适应窗口缩放与居中位置。
+  onFit: () => void;
+  // Restores original image size and centered position.
+  // 恢复图片原始尺寸与居中位置。
+  onOriginalSize: () => void;
+  // Increases the image scale.
+  // 放大图片。
+  onZoomIn: () => void;
+  // Decreases the image scale.
+  // 缩小图片。
+  onZoomOut: () => void;
+  // Current scale relative to the image's original size.
+  // 当前相对图片原始尺寸的缩放比例。
+  scale: number;
+}) {
+  const hasOffset = generatedMediaHasImageOffset(props.offset);
+  const percent = Math.round(props.scale * 100);
+  const canUseZoom = props.canUseZoom && props.naturalSize !== null;
+  const canZoomOut = canUseZoom && props.scale > GENERATED_MEDIA_MIN_ZOOM + 0.001;
+  const canZoomIn = canUseZoom && props.scale < GENERATED_MEDIA_MAX_ZOOM - 0.001;
+  const canFitWindow = canUseZoom && (Math.abs(props.scale - props.fitScale) > 0.001 || hasOffset);
+  const canUseOriginalSize = canUseZoom && (Math.abs(props.scale - 1) > 0.001 || hasOffset);
+  return (
+    <span className="generated-media-image-zoom-control">
+      <GeneratedMediaImageZoomIconButton
+        disabled={!canFitWindow}
+        icon={<Scan size={16} />}
+        label="自适应窗口"
+        onClick={props.onFit}
+      />
+      <GeneratedMediaImageZoomIconButton
+        disabled={!canUseOriginalSize}
+        icon={<SquareIcon size={15} />}
+        label="原始尺寸"
+        onClick={props.onOriginalSize}
+      />
+      <GeneratedMediaImageZoomIconButton
+        disabled={!canZoomOut}
+        icon={<Minus size={16} />}
+        label="缩小图片"
+        onClick={props.onZoomOut}
+      />
+      <strong>{percent}%</strong>
+      <GeneratedMediaImageZoomIconButton
+        disabled={!canZoomIn}
+        icon={<Plus size={16} />}
+        label="放大图片"
+        onClick={props.onZoomIn}
+      />
+    </span>
+  );
+}
+
+// GeneratedMediaImageZoomIconButton renders one icon-only image zoom toolbar action with a tooltip.
+// GeneratedMediaImageZoomIconButton 渲染带提示的单个纯图标图片缩放工具按钮。
+function GeneratedMediaImageZoomIconButton(props: {
+  // Whether the action is currently unavailable.
+  // 当前操作是否不可用。
+  disabled: boolean;
+  // Icon rendered inside the toolbar button.
+  // 工具按钮内渲染的图标。
+  icon: React.ReactNode;
+  // Tooltip and accessibility label.
+  // Tooltip 与无障碍标签。
+  label: string;
+  // Click handler for the toolbar action.
+  // 工具按钮点击处理函数。
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="generated-media-image-zoom-trigger">
+          <Button
+            aria-label={props.label}
+            className="icon-button"
+            disabled={props.disabled}
+            onClick={props.onClick}
+            size="icon-sm"
+            title={props.label}
+            type="button"
+            variant="ghost"
+          >
+            {props.icon}
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6}>{props.label}</TooltipContent>
+    </Tooltip>
   );
 }
 

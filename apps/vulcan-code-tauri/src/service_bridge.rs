@@ -334,8 +334,8 @@ fn service_open_external_url(url: String) -> Result<String, String> {
     Ok(String::from("已请求使用系统默认浏览器打开 GitHub。"))
 }
 
-/// Serves generated media files through a local custom protocol with HTTP range support.
-/// 通过带 HTTP Range 支持的本地自定义协议提供生成媒体文件。
+/// Serves generated and local media files through a local custom protocol with HTTP range support.
+/// 通过带 HTTP Range 支持的本地自定义协议提供生成媒体文件和本地媒体文件。
 fn vulcan_media_protocol_response(request: tauri::http::Request<Vec<u8>>) -> Response<Vec<u8>> {
     match build_vulcan_media_protocol_response(request) {
         Ok(response) => response,
@@ -343,16 +343,16 @@ fn vulcan_media_protocol_response(request: tauri::http::Request<Vec<u8>>) -> Res
     }
 }
 
-/// Builds one generated media protocol response for images, audio, and video.
-/// 为图片、音频和视频构建单个生成媒体协议响应。
+/// Builds one media protocol response for images, audio, video, and PDFs.
+/// 为图片、音频、视频和 PDF 构建单个媒体协议响应。
 fn build_vulcan_media_protocol_response(
     request: tauri::http::Request<Vec<u8>>,
 ) -> Result<Response<Vec<u8>>, String> {
     let media_path = media_path_from_protocol_request(&request)?;
-    if !is_allowed_generated_media_path(&media_path) {
+    if !is_allowed_media_asset_path(&media_path) {
         return Ok(vulcan_media_error_response(
             StatusCode::FORBIDDEN,
-            "媒体路径不在生成附件目录中。",
+            "媒体路径不是允许的媒体资源类型。",
         ));
     }
 
@@ -455,6 +455,44 @@ fn is_allowed_generated_media_path(path: &Path) -> bool {
     normalized_components
         .windows(3)
         .any(|window| window == [".vulcan", "code", "attachments"])
+}
+
+/// Returns whether a media path can be served by the local media protocol.
+/// 返回媒体路径是否允许通过本地媒体协议提供。
+fn is_allowed_media_asset_path(path: &Path) -> bool {
+    if is_allowed_generated_media_path(path) {
+        return true;
+    }
+    has_supported_media_asset_extension(path)
+}
+
+/// Returns whether a local path extension is supported by the media protocol.
+/// 返回本地路径扩展名是否受媒体协议支持。
+fn has_supported_media_asset_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("png")
+            | Some("jpg")
+            | Some("jpeg")
+            | Some("webp")
+            | Some("gif")
+            | Some("bmp")
+            | Some("svg")
+            | Some("mp4")
+            | Some("webm")
+            | Some("mov")
+            | Some("mkv")
+            | Some("mp3")
+            | Some("wav")
+            | Some("m4a")
+            | Some("aac")
+            | Some("flac")
+            | Some("ogg")
+            | Some("pdf")
+    )
 }
 
 /// Parses one bounded HTTP range for media playback.
