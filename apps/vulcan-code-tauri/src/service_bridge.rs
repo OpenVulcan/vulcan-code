@@ -1256,9 +1256,10 @@ async fn service_remove_pending_prompt(
         &logs,
     )?;
     if removed {
-        let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
+        let snapshot_for_persist =
+            current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
         spawn_workspace_session_persist_task(
             state.inner().clone(),
             controller_runtime.clone(),
@@ -1332,9 +1333,10 @@ async fn service_reorder_pending_prompts(
         &logs,
     )?;
     if did_reorder {
-        let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
+        let snapshot_for_persist =
+            current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+                String::from("service is still starting; workspace snapshot is not ready")
+            })?;
         spawn_workspace_session_persist_task(
             state.inner().clone(),
             controller_runtime.clone(),
@@ -3257,6 +3259,70 @@ fn spawn_workspace_session_persist_task(
     });
 }
 
+/// Persists only one WebUI session runtime-state row in the background.
+/// 在后台仅持久化一个 WebUI 会话运行态行。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained service state and per-session write versions.
+/// `state` 持有保留服务状态与按会话划分的写入版本。
+/// `controller_runtime` owns the workspace store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` is the already-rendered snapshot containing the runtime state.
+/// `workspace_snapshot` 是已经渲染过且包含运行态的快照。
+/// `session_id` selects the session runtime-state row to persist.
+/// `session_id` 选择需要持久化的会话运行态行。
+/// `reason` labels the write site for diagnostics.
+/// `reason` 标记写入来源，供诊断使用。
+fn spawn_workspace_session_runtime_state_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    reason: Option<String>,
+) {
+    let persist_version = match next_webui_session_persist_version(&state, session_id) {
+        Ok(version) => version,
+        Err(error) => {
+            eprintln!("[tauri-service] runtime-state persist version failed: {error}");
+            return;
+        }
+    };
+    tauri::async_runtime::spawn(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
+            return;
+        }
+        let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .or_else(|| {
+                workspace_snapshot
+                    .archived_session_runtime_state
+                    .get(&session_id)
+                    .cloned()
+            })
+        else {
+            return;
+        };
+        if let Err(error) =
+            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+                controller_runtime,
+                session_id,
+                &runtime_state,
+            )
+            .await
+        {
+            let reason_label = reason.as_deref().unwrap_or("runtime_state");
+            eprintln!(
+                "[tauri-service] background runtime-state persist failed ({reason_label}): {error}"
+            );
+        }
+    });
+}
+
 /// Allocates the next background persistence version for one WebUI session.
 /// 为一个 WebUI 会话分配下一次后台持久化版本。
 ///
@@ -4332,7 +4398,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
         &entry_agent_runtime,
         workspace_snapshot.clone(),
     )?;
-    spawn_workspace_session_persist_task(
+    spawn_workspace_session_runtime_state_persist_task(
         state.clone(),
         controller_runtime.clone(),
         workspace_snapshot,
@@ -4640,7 +4706,7 @@ fn apply_conversation_checkpoint(
         );
         workspace.hydrated_session_ids.insert(session_id);
     })?;
-    spawn_workspace_session_persist_task(
+    spawn_workspace_session_runtime_state_persist_task(
         state.clone(),
         controller_runtime.clone(),
         workspace_snapshot,

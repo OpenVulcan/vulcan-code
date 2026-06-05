@@ -393,6 +393,30 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE workspace_history_search_docs ADD COLUMN created_at TEXT NOT NULL DEFAULT '';",
     )
     .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN event_seq INTEGER NOT NULL DEFAULT 0;",
+    )
+    .await?;
+    ensure_optional_workspace_history_search_doc_column(
+        client,
+        sqlite_binding_id,
+        "ALTER TABLE workspace_history_search_docs ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
+    )
+    .await?;
     ensure_protocol_reset_applied(client, sqlite_binding_id).await
 }
 
@@ -809,7 +833,11 @@ CREATE TABLE IF NOT EXISTS workspace_history_search_docs (
     turn_index INTEGER NOT NULL DEFAULT 0,
     ordinal INTEGER NOT NULL DEFAULT 0,
     role TEXT NOT NULL DEFAULT 'assistant',
-    created_at TEXT NOT NULL DEFAULT ''
+    created_at TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL DEFAULT '',
+    index_version INTEGER NOT NULL DEFAULT 0,
+    event_seq INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_workspace_history_search_docs_session

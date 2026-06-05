@@ -4,7 +4,7 @@
 #![allow(dead_code)]
 
 use super::*;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use vulcan_context_injection::ContextInjectionState;
@@ -416,8 +416,8 @@ pub(super) struct SessionEventStoreLoadResult {
     pub rows: Vec<PersistedSessionEventRow>,
 }
 
-/// Rewrites one whole session event store from the in-memory transcript snapshot.
-/// 根据内存中的转录快照重写单个完整会话事件存储。
+/// Persists one session event store from the in-memory transcript snapshot, appending when the existing stream is a valid prefix.
+/// 根据内存中的转录快照持久化单个会话事件存储；当已有事件流是有效前缀时采用追加。
 pub(super) fn persist_session_event_store(
     session: &SessionSummary,
     messages: &[SessionMessageEntry],
@@ -436,12 +436,23 @@ pub(super) fn persist_session_event_store(
             )
         })?;
     let store_dir = session_event_store_dir(project_id, session.id);
-    recreate_session_store_directory(&store_dir)?;
     let events_path = session_event_segment_path(&store_dir);
     let runtime_state_path = session_event_runtime_state_path(&store_dir);
     let blob_dir = session_event_blob_dir(&store_dir);
     let checkpoint_dir = session_event_checkpoint_dir(&store_dir);
     let context_current_path = session_event_context_current_path(&store_dir);
+    let (rows, turn_rows, search_documents) =
+        build_persisted_session_event_rows(project_id, session.id, messages);
+
+    let append_result = try_append_session_event_store_if_prefix_matches(
+        &store_dir,
+        &events_path,
+        &blob_dir,
+        &rows,
+    )?;
+    if !append_result.appended_or_unchanged {
+        recreate_session_store_directory(&store_dir)?;
+    }
     fs::create_dir_all(&blob_dir).map_err(|error| {
         format!(
             "创建会话事件 blob 目录失败（{}）：{error}",
@@ -454,10 +465,9 @@ pub(super) fn persist_session_event_store(
             checkpoint_dir.display()
         )
     })?;
-
-    let (rows, turn_rows, search_documents) =
-        build_persisted_session_event_rows(project_id, session.id, messages);
-    write_session_event_rows(&events_path, &blob_dir, &rows)?;
+    if !append_result.appended_or_unchanged {
+        write_session_event_rows(&events_path, &blob_dir, &rows)?;
+    }
 
     let runtime_state_document = runtime_state
         .map(runtime_state_to_store_document)
@@ -486,7 +496,11 @@ pub(super) fn persist_session_event_store(
         checkpoint_files,
         context_current_file: default_context_current_relative_path(),
         context_snapshot_dir: default_context_snapshot_directory_relative_path(),
-        created_at: current_unix_millis_text(),
+        created_at: append_result
+            .existing_manifest
+            .as_ref()
+            .map(|manifest| manifest.created_at.clone())
+            .unwrap_or_else(current_unix_millis_text),
         updated_at: current_unix_millis_text(),
     };
     write_session_manifest(&session_event_manifest_path(&store_dir), &manifest)?;
@@ -1080,6 +1094,65 @@ fn write_context_document(
     write_json_file(path, context)
 }
 
+/// Result of trying to persist a session event stream through the append fast path.
+/// 尝试通过追加快路径持久化会话事件流后的结果。
+struct SessionEventStoreAppendAttempt {
+    /// Existing manifest preserved when the append path can keep the original creation timestamp.
+    /// 追加路径可保留原创建时间时使用的既有 manifest。
+    existing_manifest: Option<SessionEventStoreManifest>,
+    /// Whether the event stream was appended or already matched the requested rows.
+    /// 事件流是否已经追加完成或本来就匹配请求行。
+    appended_or_unchanged: bool,
+}
+
+/// Appends only the new event rows when the stored event stream is a semantic prefix of the requested snapshot.
+/// 当已存事件流是请求快照的语义前缀时，仅追加新的事件行。
+fn try_append_session_event_store_if_prefix_matches(
+    store_dir: &Path,
+    events_path: &Path,
+    blob_dir: &Path,
+    rows: &[PersistedSessionEventRow],
+) -> Result<SessionEventStoreAppendAttempt, String> {
+    let manifest_path = session_event_manifest_path(store_dir);
+    if !manifest_path.exists() || !events_path.exists() {
+        return Ok(SessionEventStoreAppendAttempt {
+            existing_manifest: None,
+            appended_or_unchanged: false,
+        });
+    }
+    let existing_manifest = read_json_file::<SessionEventStoreManifest>(&manifest_path).ok();
+    let existing_rows = match read_session_event_rows(events_path, blob_dir) {
+        Ok(rows) => rows,
+        Err(_) => {
+            return Ok(SessionEventStoreAppendAttempt {
+                existing_manifest,
+                appended_or_unchanged: false,
+            });
+        }
+    };
+    if existing_rows.len() > rows.len() {
+        return Ok(SessionEventStoreAppendAttempt {
+            existing_manifest,
+            appended_or_unchanged: false,
+        });
+    }
+    let prefix_matches = existing_rows
+        .iter()
+        .zip(rows.iter())
+        .all(|(left, right)| persisted_event_rows_match_semantically(left, right));
+    if !prefix_matches {
+        return Ok(SessionEventStoreAppendAttempt {
+            existing_manifest,
+            appended_or_unchanged: false,
+        });
+    }
+    append_session_event_rows(events_path, blob_dir, &rows[existing_rows.len()..])?;
+    Ok(SessionEventStoreAppendAttempt {
+        existing_manifest,
+        appended_or_unchanged: true,
+    })
+}
+
 /// Writes one whole JSONL event stream and externalizes oversized bodies into blob files.
 /// 写入完整 JSONL 事件流，并将超大正文外置到 blob 文件。
 fn write_session_event_rows(
@@ -1113,6 +1186,57 @@ fn write_session_event_rows(
     writer.flush().map_err(|error| {
         format!(
             "刷新会话事件流文件失败（{}）：{error}",
+            events_path.display()
+        )
+    })
+}
+
+/// Appends new JSONL event rows and externalizes oversized bodies into blob files.
+/// 追加新的 JSONL 事件行，并将超大正文外置到 blob 文件。
+fn append_session_event_rows(
+    events_path: &Path,
+    blob_dir: &Path,
+    rows: &[PersistedSessionEventRow],
+) -> Result<(), String> {
+    if rows.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = events_path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("创建会话事件流父目录失败（{}）：{error}", parent.display())
+        })?;
+    }
+    fs::create_dir_all(blob_dir).map_err(|error| {
+        format!(
+            "创建会话事件 blob 目录失败（{}）：{error}",
+            blob_dir.display()
+        )
+    })?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(events_path)
+        .map_err(|error| {
+            format!(
+                "打开会话事件流追加失败（{}）：{error}",
+                events_path.display()
+            )
+        })?;
+    let mut writer = BufWriter::new(file);
+    for row in rows {
+        let stored_row = externalize_event_body_if_needed(blob_dir, row)?;
+        let line = serde_json::to_string(&stored_row)
+            .map_err(|error| format!("序列化会话事件行失败：{error}"))?;
+        writer
+            .write_all(line.as_bytes())
+            .map_err(|error| format!("追加会话事件行失败（{}）：{error}", events_path.display()))?;
+        writer.write_all(b"\n").map_err(|error| {
+            format!("追加会话事件换行失败（{}）：{error}", events_path.display())
+        })?;
+    }
+    writer.flush().map_err(|error| {
+        format!(
+            "刷新追加会话事件流失败（{}）：{error}",
             events_path.display()
         )
     })
@@ -1159,6 +1283,26 @@ fn read_session_event_rows(
         rows.push(row);
     }
     Ok(rows)
+}
+
+/// Returns whether two event rows represent the same canonical transcript event, ignoring storage-only blob placement.
+/// 返回两条事件行是否表示同一个规范转录事件，并忽略仅用于存储的 blob 放置差异。
+fn persisted_event_rows_match_semantically(
+    left: &PersistedSessionEventRow,
+    right: &PersistedSessionEventRow,
+) -> bool {
+    left.event_id == right.event_id
+        && left.turn_id == right.turn_id
+        && left.turn_index == right.turn_index
+        && left.seq == right.seq
+        && left.seq_in_turn == right.seq_in_turn
+        && left.kind == right.kind
+        && left.record_kind == right.record_kind
+        && left.visible == right.visible
+        && left.title == right.title
+        && left.body == right.body
+        && left.metadata == right.metadata
+        && left.created_at == right.created_at
 }
 
 /// Externalizes one oversized event body into a blob file while keeping a short inline preview on the event row.
@@ -1472,6 +1616,42 @@ mod tests {
             visible: true,
             title: id.to_string(),
             body: body.to_string(),
+            metadata: None,
+            created_at: String::from("1"),
+        }
+    }
+
+    /// Verifies semantic event-row matching ignores blob placement while still comparing transcript content.
+    /// 验证事件行语义匹配会忽略 blob 放置差异，但仍比较转录正文内容。
+    #[test]
+    fn event_row_semantic_match_ignores_blob_path_only() {
+        let mut stored = test_persisted_event_row("event-1", "hello");
+        stored.body_blob_path = Some(String::from("blobs/event-1.txt"));
+        let requested = test_persisted_event_row("event-1", "hello");
+        let changed_body = test_persisted_event_row("event-1", "changed");
+
+        assert!(persisted_event_rows_match_semantically(&stored, &requested));
+        assert!(!persisted_event_rows_match_semantically(
+            &stored,
+            &changed_body,
+        ));
+    }
+
+    /// Builds one persisted event row for append-prefix tests.
+    /// 为追加前缀测试构建一条持久化事件行。
+    fn test_persisted_event_row(event_id: &str, body: &str) -> PersistedSessionEventRow {
+        PersistedSessionEventRow {
+            event_id: event_id.to_string(),
+            turn_id: String::from("turn-000000"),
+            turn_index: 0,
+            seq: 0,
+            seq_in_turn: 0,
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::AssistantOutput,
+            visible: true,
+            title: String::from("title"),
+            body: body.to_string(),
+            body_blob_path: None,
             metadata: None,
             created_at: String::from("1"),
         }

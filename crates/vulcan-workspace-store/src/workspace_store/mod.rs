@@ -21,7 +21,7 @@ use serde_json::Value;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::{
     ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
@@ -122,6 +122,9 @@ const WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX: &str = "workspace_history_s
 /// SQLite name filter used to enumerate controller-managed workspace-history FTS virtual tables.
 /// 用于枚举控制器托管工作台历史 FTS 虚表的 SQLite 名称过滤模式。
 const WORKSPACE_HISTORY_SEARCH_INDEX_NAME_LIKE_PATTERN: &str = "workspace_history_search_%";
+/// Search projection schema version used to invalidate stale unchanged rows.
+/// 用于使旧版未变化行失效的搜索投影结构版本。
+const WORKSPACE_HISTORY_SEARCH_INDEX_VERSION: i64 = 1;
 /// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
 /// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
 const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
@@ -569,11 +572,46 @@ struct StoredWorkspaceHistorySearchDocumentStateRow {
     message_id: String,
     /// Stable session identifier stored in SQLite.
     /// 存储在 SQLite 中的稳定会话标识。
-    #[serde(rename = "session_id")]
-    _session_id: String,
+    session_id: String,
     /// Stable project identifier stored in SQLite.
     /// 存储在 SQLite 中的稳定项目标识。
     project_id: String,
+    /// Stable canonical event identifier backing the indexed document.
+    /// 作为索引文档后端来源的稳定规范事件标识。
+    #[serde(default)]
+    event_id: String,
+    /// Stable turn index used by search-hit reconstruction.
+    /// 用于搜索命中重建的稳定轮次索引。
+    #[serde(default)]
+    turn_index: i64,
+    /// Stable event sequence used as the ordinal-like search anchor.
+    /// 作为类 ordinal 搜索锚点使用的稳定事件序号。
+    #[serde(default)]
+    ordinal: i64,
+    /// Persisted role label used by search-hit projection.
+    /// 供搜索命中投影使用的持久化角色标签。
+    #[serde(default)]
+    role: String,
+    /// Event creation timestamp used by result metadata.
+    /// 供结果元数据使用的事件创建时间戳。
+    #[serde(default)]
+    created_at: String,
+    /// Stable hash of the indexed content and routing metadata.
+    /// 已索引正文与路由元数据的稳定哈希值。
+    #[serde(default)]
+    content_hash: String,
+    /// Projection version used to invalidate stale index rows.
+    /// 用于使旧投影行失效的索引版本。
+    #[serde(default)]
+    index_version: i64,
+    /// Stable event sequence stored beside the search projection.
+    /// 与搜索投影一同保存的稳定事件序号。
+    #[serde(default)]
+    event_seq: i64,
+    /// Last update timestamp for the search projection row.
+    /// 搜索投影行的最近更新时间戳。
+    #[serde(default)]
+    updated_at: String,
 }
 
 /// One prepared workspace-history search document awaiting controller-managed FTS synchronization.
@@ -1660,6 +1698,25 @@ fn stable_workspace_history_search_hash(value: &str) -> u64 {
     "workspace-history-search".hash(&mut hasher);
     value.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Returns one stable content hash for an indexed workspace-history document.
+/// 返回一个用于索引工作台历史文档的稳定内容哈希。
+fn workspace_history_search_document_content_hash(
+    document: &WorkspaceHistorySearchDocumentUpsert,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    "workspace-history-search-document".hash(&mut hasher);
+    WORKSPACE_HISTORY_SEARCH_INDEX_VERSION.hash(&mut hasher);
+    document.session_id.hash(&mut hasher);
+    document.project_id.hash(&mut hasher);
+    document.event_id.hash(&mut hasher);
+    document.turn_index.hash(&mut hasher);
+    document.ordinal.hash(&mut hasher);
+    document.role.hash(&mut hasher);
+    document.created_at.hash(&mut hasher);
+    document.content.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Converts one persisted message-role string back into the session message kind.

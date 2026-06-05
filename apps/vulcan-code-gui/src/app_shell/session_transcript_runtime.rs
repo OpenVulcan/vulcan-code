@@ -2069,7 +2069,7 @@ impl VulcanWorkbench {
         self.sync_session_messages_from_conversation_state(session_id);
         self.sync_context_usage_from_session_budget(session_id);
         Task::batch([
-            self.persist_single_session_update_task(session_id),
+            self.persist_single_session_runtime_state_task(session_id),
             self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }

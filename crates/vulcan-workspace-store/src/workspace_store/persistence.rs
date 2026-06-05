@@ -394,11 +394,9 @@ pub async fn persist_single_session_update(
 
     let sessions = std::slice::from_ref(session);
     let archived_sessions = Vec::<SessionSummary>::new();
-    let archived_session_messages = BTreeMap::<SessionId, Vec<SessionMessageEntry>>::new();
     let archived_session_compactions = BTreeMap::<SessionId, Vec<SessionCompactionEntry>>::new();
     let archived_session_runtime_state = BTreeMap::<SessionId, SessionRuntimeStateEntry>::new();
     let hydrated_session_ids = BTreeSet::<SessionId>::new();
-    let mut session_messages = BTreeMap::new();
     let mut session_compactions = BTreeMap::new();
     let mut session_runtime_state = BTreeMap::new();
     let retained_compactions;
@@ -420,25 +418,26 @@ pub async fn persist_single_session_update(
         retained_compactions = query_session_compaction_entries(&controller, session.id).await?;
         retained_compactions.as_slice()
     };
-    session_messages.insert(session.id, effective_messages.to_vec());
     session_compactions.insert(session.id, effective_compactions.to_vec());
     if let Some(runtime_state) = runtime_state {
         session_runtime_state.insert(session.id, runtime_state.clone());
     }
 
-    replace_session_event_stores(
-        &controller,
-        sessions,
-        &session_messages,
-        &session_compactions,
-        &session_runtime_state,
-        &archived_sessions,
-        &archived_session_messages,
-        &archived_session_compactions,
-        &archived_session_runtime_state,
-        &mut warnings,
-    )
-    .await?;
+    let persist_result = persist_session_event_store(
+        session,
+        effective_messages,
+        runtime_state,
+        effective_compactions,
+    )?;
+    if let Err(error) =
+        persist_single_session_event_store_projection(&controller, session, &persist_result).await
+    {
+        warnings.push(workspace_history_search_sync_warning(
+            "增量同步单会话事件投影失败",
+            1,
+            &error,
+        ));
+    }
     if compactions.is_some() {
         replace_session_compactions(
             &controller,
@@ -955,54 +954,56 @@ LIMIT 1;
     )
 }
 
-/// Mirrors one already persisted event-store rewrite back into SQLite indexes for single-session maintenance.
-/// 将单个已写出的事件存储重写结果镜像回 SQLite 索引，用于单会话维护路径。
+/// Mirrors one already persisted event-store rewrite back into SQLite using incremental projection updates.
+/// 使用增量投影更新将单个已写出的事件存储重写结果镜像回 SQLite。
 async fn persist_single_session_event_store_projection(
     controller: &ControllerRuntimeHandle,
     session: &SessionSummary,
     persist_result: &SessionEventStorePersistResult,
 ) -> Result<(), String> {
-    let session_id_text = session.id.to_string();
-    let session_ids = vec![session_id_text];
-    delete_workspace_history_search_documents_for_session_ids(
-        controller,
-        &session_ids,
-        "删除旧工作台历史搜索索引失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "workspace_history_search_docs",
-        &session_ids,
-        "删除旧工作台历史搜索投影失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_turn_index",
-        &session_ids,
-        "删除旧会话 turn 索引失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_message_chunks",
-        &session_ids,
-        "删除旧会话消息分片失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_messages",
-        &session_ids,
-        "删除旧会话消息正文失败",
-    )
-    .await?;
-
+    let trace_started_at = Instant::now();
+    workspace_store_projection_trace(
+        session.id,
+        "projection_start",
+        format!(
+            "turn_rows={} search_docs={}",
+            persist_result.turn_rows.len(),
+            persist_result.search_documents.len()
+        ),
+    );
     let single_result = vec![(session.clone(), persist_result.clone())];
     upsert_session_event_store_session_rows(controller, &single_result).await?;
+    workspace_store_projection_trace(
+        session.id,
+        "session_position_upserted",
+        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
+    );
     upsert_session_turn_index_rows(controller, &single_result).await?;
-    upsert_session_event_search_documents(controller, &single_result).await
+    delete_stale_session_turn_index_rows(controller, session.id, persist_result.latest_turn_index)
+        .await?;
+    workspace_store_projection_trace(
+        session.id,
+        "turn_index_upserted",
+        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
+    );
+    delete_stale_workspace_history_search_documents_for_session(
+        controller,
+        session.id,
+        persist_result,
+    )
+    .await?;
+    workspace_store_projection_trace(
+        session.id,
+        "stale_search_docs_deleted",
+        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
+    );
+    upsert_session_event_search_documents(controller, &single_result).await?;
+    workspace_store_projection_trace(
+        session.id,
+        "search_docs_upserted",
+        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
+    );
+    Ok(())
 }
 
 /// Queries the current project ownership and title needed to route one session into workspace-history search indexes.
@@ -1456,6 +1457,24 @@ fn workspace_history_search_sync_warning(
     )
 }
 
+/// Emits one optional workspace-store projection trace line when the diagnostic environment flag is enabled.
+/// 当诊断环境开关启用时输出一条可选的工作区存储投影跟踪日志。
+fn workspace_store_projection_trace(session_id: SessionId, stage: &str, detail: impl AsRef<str>) {
+    let enabled = std::env::var("VULCAN_WORKSPACE_STORE_PROJECTION_TRACE")
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false);
+    if enabled {
+        eprintln!(
+            "[workspace-store][projection] session={session_id} stage={stage} {}",
+            detail.as_ref()
+        );
+    }
+}
+
 /// Collects the session identifiers whose canonical event-store files must actually be rewritten during one snapshot flush.
 /// 收集一次快照刷新期间确实需要重写规范事件存储文件的会话标识集合。
 fn collect_session_event_store_rewrite_ids(
@@ -1741,10 +1760,46 @@ INSERT INTO session_turn_index (
     end_seq,
     turn_state,
     summary_message_id
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7);
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(session_id, turn_index) DO UPDATE SET
+    turn_id = excluded.turn_id,
+    start_seq = excluded.start_seq,
+    end_seq = excluded.end_seq,
+    turn_state = excluded.turn_state,
+    summary_message_id = excluded.summary_message_id;
 "#,
         params,
         "写入会话事件 turn 索引失败",
+    )
+    .await
+}
+
+/// Deletes turn-index rows that no longer exist after an incremental single-session rewrite.
+/// 删除增量单会话重写后已经不存在的轮次索引行。
+async fn delete_stale_session_turn_index_rows(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    latest_turn_index: i64,
+) -> Result<(), String> {
+    let statement = if latest_turn_index < 0 {
+        "DELETE FROM session_turn_index WHERE session_id = ?1;".to_string()
+    } else {
+        "DELETE FROM session_turn_index WHERE session_id = ?1 AND turn_index > ?2;".to_string()
+    };
+    let params = if latest_turn_index < 0 {
+        vec![vec![ControllerSqliteValue::String(session_id.to_string())]]
+    } else {
+        vec![vec![
+            ControllerSqliteValue::String(session_id.to_string()),
+            ControllerSqliteValue::Int64(latest_turn_index),
+        ]]
+    };
+    execute_sqlite_batch_safely(
+        controller,
+        "session_turn_index",
+        &statement,
+        params,
+        "删除陈旧会话 turn 索引失败",
     )
     .await
 }
@@ -1774,6 +1829,39 @@ async fn upsert_session_event_search_documents(
         })
         .collect::<Vec<_>>();
     upsert_workspace_history_search_documents(controller, documents).await
+}
+
+/// Deletes search documents whose canonical event ids disappeared from the latest single-session event store.
+/// 删除最近单会话事件存储中已经消失的规范事件搜索文档。
+async fn delete_stale_workspace_history_search_documents_for_session(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    persist_result: &SessionEventStorePersistResult,
+) -> Result<(), String> {
+    let session_ids = vec![session_id.to_string()];
+    let existing_rows =
+        query_workspace_history_search_document_state_for_session_ids(controller, &session_ids)
+            .await?;
+    if existing_rows.is_empty() {
+        return Ok(());
+    }
+
+    let current_document_ids = persist_result
+        .search_documents
+        .iter()
+        .map(|document| document.document_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let stale_message_ids = existing_rows
+        .iter()
+        .filter(|row| !current_document_ids.contains(row.message_id.as_str()))
+        .map(|row| row.message_id.clone())
+        .collect::<Vec<_>>();
+    delete_workspace_history_search_documents_for_message_ids(
+        controller,
+        &stale_message_ids,
+        "删除陈旧工作台历史搜索索引失败",
+    )
+    .await
 }
 
 /// Upserts prepared transcript rows and rewrites only their own chunk rows.
@@ -2276,8 +2364,12 @@ INSERT INTO workspace_history_search_docs (
     turn_index,
     ordinal,
     role,
-    created_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+    created_at,
+    content_hash,
+    index_version,
+    event_seq,
+    updated_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
 ON CONFLICT(message_id) DO UPDATE SET
     session_id = excluded.session_id,
     project_id = excluded.project_id,
@@ -2285,7 +2377,11 @@ ON CONFLICT(message_id) DO UPDATE SET
     turn_index = excluded.turn_index,
     ordinal = excluded.ordinal,
     role = excluded.role,
-    created_at = excluded.created_at;
+    created_at = excluded.created_at,
+    content_hash = excluded.content_hash,
+    index_version = excluded.index_version,
+    event_seq = excluded.event_seq,
+    updated_at = excluded.updated_at;
 "#
 }
 
@@ -2573,12 +2669,39 @@ async fn upsert_workspace_history_search_documents(
 
     ensure_workspace_history_search_index(controller, WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME)
         .await?;
+    let message_ids = documents
+        .iter()
+        .map(|document| document.message_id.clone())
+        .collect::<Vec<_>>();
+    let existing_rows =
+        query_workspace_history_search_document_state_for_message_ids(controller, &message_ids)
+            .await?;
+    let existing_by_message_id = existing_rows
+        .iter()
+        .cloned()
+        .map(|row| (row.message_id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
     let mut project_index_rows = BTreeMap::<String, Vec<Vec<ControllerSqliteValue>>>::new();
     let mut global_index_rows = Vec::with_capacity(documents.len());
     let mut state_rows = Vec::with_capacity(documents.len());
+    let mut stale_rows_to_delete = Vec::new();
     let mut ensured_project_indexes = BTreeSet::new();
 
     for document in documents {
+        let content_hash = workspace_history_search_document_content_hash(&document);
+        let event_seq = document.ordinal;
+        if let Some(existing_row) = existing_by_message_id.get(&document.message_id) {
+            if workspace_history_search_document_matches_state(
+                &document,
+                &content_hash,
+                event_seq,
+                existing_row,
+            ) {
+                continue;
+            }
+            stale_rows_to_delete.push(existing_row.clone());
+        }
+
         let project_index_name = workspace_history_search_project_index_name(&document.project_id);
         if ensured_project_indexes.insert(project_index_name.clone()) {
             ensure_workspace_history_search_index(controller, &project_index_name).await?;
@@ -2606,8 +2729,23 @@ async fn upsert_workspace_history_search_documents(
             ControllerSqliteValue::Int64(document.ordinal),
             ControllerSqliteValue::String(document.role),
             ControllerSqliteValue::String(document.created_at),
+            ControllerSqliteValue::String(content_hash),
+            ControllerSqliteValue::Int64(WORKSPACE_HISTORY_SEARCH_INDEX_VERSION),
+            ControllerSqliteValue::Int64(event_seq),
+            ControllerSqliteValue::String(current_unix_millis_text()),
         ]);
     }
+
+    if global_index_rows.is_empty() && state_rows.is_empty() {
+        return Ok(());
+    }
+
+    delete_workspace_history_search_documents_from_rows(
+        controller,
+        &stale_rows_to_delete,
+        "删除已变化工作台历史搜索索引失败",
+    )
+    .await?;
 
     execute_sqlite_batch_safely(
         controller,
@@ -2639,6 +2777,26 @@ async fn upsert_workspace_history_search_documents(
     .await?;
 
     Ok(())
+}
+
+/// Returns whether one prepared search document is already represented by its persisted state row.
+/// 返回一条预处理搜索文档是否已经被持久化状态行完整表示。
+fn workspace_history_search_document_matches_state(
+    document: &WorkspaceHistorySearchDocumentUpsert,
+    content_hash: &str,
+    event_seq: i64,
+    existing_row: &StoredWorkspaceHistorySearchDocumentStateRow,
+) -> bool {
+    existing_row.session_id == document.session_id
+        && existing_row.project_id == document.project_id
+        && existing_row.event_id == document.event_id
+        && existing_row.turn_index == document.turn_index
+        && existing_row.ordinal == document.ordinal
+        && existing_row.role == document.role
+        && existing_row.created_at == document.created_at
+        && existing_row.content_hash == content_hash
+        && existing_row.index_version == WORKSPACE_HISTORY_SEARCH_INDEX_VERSION
+        && existing_row.event_seq == event_seq
 }
 
 /// Deletes controller-managed workspace-history FTS documents for the provided message identifiers.
@@ -2698,7 +2856,7 @@ async fn query_workspace_history_search_document_state_for_message_ids(
             .collect::<Vec<_>>()
             .join(", ");
         let statement = format!(
-            "SELECT message_id, session_id, project_id FROM workspace_history_search_docs WHERE message_id IN ({placeholders});"
+            "SELECT message_id, session_id, project_id, event_id, turn_index, ordinal, role, created_at, content_hash, index_version, event_seq, updated_at FROM workspace_history_search_docs WHERE message_id IN ({placeholders});"
         );
         let result = controller
             .client
@@ -2739,7 +2897,7 @@ async fn query_workspace_history_search_document_state_for_session_ids(
             .collect::<Vec<_>>()
             .join(", ");
         let statement = format!(
-            "SELECT message_id, session_id, project_id FROM workspace_history_search_docs WHERE session_id IN ({placeholders});"
+            "SELECT message_id, session_id, project_id, event_id, turn_index, ordinal, role, created_at, content_hash, index_version, event_seq, updated_at FROM workspace_history_search_docs WHERE session_id IN ({placeholders});"
         );
         let result = controller
             .client
@@ -3109,5 +3267,91 @@ mod tests {
 
         assert_eq!(rows.len(), 1);
         assert!(pushed_session_ids.contains(&session_id));
+    }
+
+    /// Verifies unchanged search documents are recognized before FTS writes are scheduled.
+    /// 验证未变化搜索文档会在安排 FTS 写入前被识别出来。
+    #[test]
+    fn search_document_state_match_skips_unchanged_projection() {
+        let document = test_workspace_history_search_document();
+        let content_hash = workspace_history_search_document_content_hash(&document);
+        let row = StoredWorkspaceHistorySearchDocumentStateRow {
+            message_id: document.message_id.clone(),
+            session_id: document.session_id.clone(),
+            project_id: document.project_id.clone(),
+            event_id: document.event_id.clone(),
+            turn_index: document.turn_index,
+            ordinal: document.ordinal,
+            role: document.role.clone(),
+            created_at: document.created_at.clone(),
+            content_hash: content_hash.clone(),
+            index_version: WORKSPACE_HISTORY_SEARCH_INDEX_VERSION,
+            event_seq: document.ordinal,
+            updated_at: String::from("123"),
+        };
+
+        assert!(workspace_history_search_document_matches_state(
+            &document,
+            &content_hash,
+            document.ordinal,
+            &row,
+        ));
+    }
+
+    /// Verifies index-version changes force a search projection refresh.
+    /// 验证索引版本变化会强制刷新搜索投影。
+    #[test]
+    fn search_document_state_match_rejects_stale_index_version() {
+        let document = test_workspace_history_search_document();
+        let content_hash = workspace_history_search_document_content_hash(&document);
+        let row = StoredWorkspaceHistorySearchDocumentStateRow {
+            message_id: document.message_id.clone(),
+            session_id: document.session_id.clone(),
+            project_id: document.project_id.clone(),
+            event_id: document.event_id.clone(),
+            turn_index: document.turn_index,
+            ordinal: document.ordinal,
+            role: document.role.clone(),
+            created_at: document.created_at.clone(),
+            content_hash: content_hash.clone(),
+            index_version: WORKSPACE_HISTORY_SEARCH_INDEX_VERSION.saturating_sub(1),
+            event_seq: document.ordinal,
+            updated_at: String::from("123"),
+        };
+
+        assert!(!workspace_history_search_document_matches_state(
+            &document,
+            &content_hash,
+            document.ordinal,
+            &row,
+        ));
+    }
+
+    /// Verifies the search ownership upsert stores projection change-tracking fields.
+    /// 验证搜索归属上写语句会保存投影变化跟踪字段。
+    #[test]
+    fn search_state_upsert_statement_tracks_projection_changes() {
+        let statement = workspace_history_search_state_upsert_statement();
+
+        assert!(statement.contains("content_hash"));
+        assert!(statement.contains("index_version"));
+        assert!(statement.contains("event_seq"));
+        assert!(statement.contains("updated_at"));
+    }
+
+    /// Builds one representative search document for pure projection tests.
+    /// 为纯投影测试构造一条代表性搜索文档。
+    fn test_workspace_history_search_document() -> WorkspaceHistorySearchDocumentUpsert {
+        WorkspaceHistorySearchDocumentUpsert {
+            message_id: String::from("event-0001"),
+            session_id: String::from("session-a"),
+            project_id: String::from("project-a"),
+            event_id: String::from("event-0001"),
+            turn_index: 1,
+            ordinal: 2,
+            role: String::from("assistant"),
+            created_at: String::from("1000"),
+            content: String::from("hello indexed world"),
+        }
     }
 }
