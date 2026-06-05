@@ -8002,22 +8002,7 @@ function ComposerPanel(props: {
   ]);
 
   return (
-    <section
-      className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
-      onDragLeave={() => setIsAttachmentDragOver(false)}
-      onDragOver={handleComposerDragOver}
-      onDrop={handleComposerDrop}
-    >
-      <input
-        accept={attachmentPickerKind
-          ? enabledAttachmentCapabilities.find((capability) => capability.kind === attachmentPickerKind)?.accept
-          : composerAttachmentAccept(enabledAttachmentCapabilities)}
-        className="composer-attachment-input"
-        multiple
-        onChange={handleAttachmentInputChange}
-        ref={attachmentFileInputRef}
-        type="file"
-      />
+    <>
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
           entries={props.pendingPrompts}
@@ -8027,109 +8012,126 @@ function ComposerPanel(props: {
           onReorder={(entryIds, draggedEntryId, targetEntryId) => void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId)}
         />
       ) : null}
-      {attachments.length ? (
-        <ComposerAttachmentStrip
-          attachments={attachments}
-          onOpenMedia={(attachment) => {
-            const media = composerAttachmentMedia(attachment);
-            if (media) {
-              setComposerMediaPlayer(media);
-            }
-          }}
-          onRemove={removeComposerAttachment}
+      <section
+        className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
+        onDragLeave={() => setIsAttachmentDragOver(false)}
+        onDragOver={handleComposerDragOver}
+        onDrop={handleComposerDrop}
+      >
+        <input
+          accept={attachmentPickerKind
+            ? enabledAttachmentCapabilities.find((capability) => capability.kind === attachmentPickerKind)?.accept
+            : composerAttachmentAccept(enabledAttachmentCapabilities)}
+          className="composer-attachment-input"
+          multiple
+          onChange={handleAttachmentInputChange}
+          ref={attachmentFileInputRef}
+          type="file"
         />
-      ) : null}
-      {slashPanelVisible ? (
-        <ComposerSlashCommandPanel
-          commands={visibleSlashCommands}
-          highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
-          locale={locale}
-          onActivate={activateSlashCommand}
-          onHighlight={setSlashHighlightedIndex}
-        />
-      ) : null}
-      <Textarea
-        aria-label={t("composer.aria.input")}
-        onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
-        onKeyDown={handleComposerKeyDown}
-        onPaste={handleComposerPaste}
-        placeholder={placeholder}
-        ref={composerTextareaRef}
-        value={draftInput}
-      />
-      <div className="composer-toolbar">
-        <div className="composer-toolbar-left">
-          <ComposerAttachmentMenu
-            capabilities={enabledAttachmentCapabilities}
-            onPick={openAttachmentPicker}
+        {attachments.length ? (
+          <ComposerAttachmentStrip
+            attachments={attachments}
+            onOpenMedia={(attachment) => {
+              const media = composerAttachmentMedia(attachment);
+              if (media) {
+                setComposerMediaPlayer(media);
+              }
+            }}
+            onRemove={removeComposerAttachment}
           />
-          <ComposerSelectControl
-            ariaLabel={t("composer.aria.mode")}
-            className="mode no-indicator"
-            fallbackLabel={t("composer.selectFallback")}
-            onValueChange={setExecutionMode}
-            options={executionModeOptions}
-            value={executionMode}
-          />
-          <ModelPickerControl
-            ariaLabel={t("composer.aria.model")}
-            fallbackLabel={t("composer.selectFallback")}
-            filterPlaceholder={t("composer.modelPicker.filter")}
-            noMatchesLabel={t("composer.modelPicker.noMatches")}
-            onValueChange={(choice) => void handleModelChoiceChange(choice)}
-            openSignal={modelPickerOpenSignal}
-            providers={props.providers}
-            value={modelChoice}
-          />
-          <ComposerAiCapabilityControl
-            ariaLabel={t("composer.aria.capability")}
-            capabilities={props.aiCapabilities}
-            disabledKinds={disabledAiCapabilityKinds}
-            disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
-            targetOrder={aiCapabilityTargetOrder}
+        ) : null}
+        {slashPanelVisible ? (
+          <ComposerSlashCommandPanel
+            commands={visibleSlashCommands}
+            highlightedIndex={Math.min(slashHighlightedIndex, visibleSlashCommands.length - 1)}
             locale={locale}
-            onToggle={handleAiCapabilityToggle}
-            onTargetMove={handleAiCapabilityTargetMove}
-            onTargetToggle={handleAiCapabilityTargetToggle}
+            onActivate={activateSlashCommand}
+            onHighlight={setSlashHighlightedIndex}
           />
-          <ContextUsageOrb snapshot={props.contextUsage} />
-        </div>
-        <div className="composer-toolbar-right">
-          <ComposerSelectControl
-            ariaLabel={t("composer.aria.reasoning")}
-            className="reasoning no-indicator"
-            fallbackLabel={t("composer.selectFallback")}
-            onValueChange={(value) => void handleReasoningEffortChange(value)}
-            openSignal={reasoningPickerOpenSignal}
-            options={reasoningEffortOptions}
-            value={reasoningEffort}
-          />
-          {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (
+        ) : null}
+        <Textarea
+          aria-label={t("composer.aria.input")}
+          onChange={(event) => handleDraftInputChange(event.currentTarget.value)}
+          onKeyDown={handleComposerKeyDown}
+          onPaste={handleComposerPaste}
+          placeholder={placeholder}
+          ref={composerTextareaRef}
+          value={draftInput}
+        />
+        <div className="composer-toolbar">
+          <div className="composer-toolbar-left">
+            <ComposerAttachmentMenu
+              capabilities={enabledAttachmentCapabilities}
+              onPick={openAttachmentPicker}
+            />
+            <ComposerSelectControl
+              ariaLabel={t("composer.aria.mode")}
+              className="mode no-indicator"
+              fallbackLabel={t("composer.selectFallback")}
+              onValueChange={setExecutionMode}
+              options={executionModeOptions}
+              value={executionMode}
+            />
+            <ModelPickerControl
+              ariaLabel={t("composer.aria.model")}
+              fallbackLabel={t("composer.selectFallback")}
+              filterPlaceholder={t("composer.modelPicker.filter")}
+              noMatchesLabel={t("composer.modelPicker.noMatches")}
+              onValueChange={(choice) => void handleModelChoiceChange(choice)}
+              openSignal={modelPickerOpenSignal}
+              providers={props.providers}
+              value={modelChoice}
+            />
+            <ComposerAiCapabilityControl
+              ariaLabel={t("composer.aria.capability")}
+              capabilities={props.aiCapabilities}
+              disabledKinds={disabledAiCapabilityKinds}
+              disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
+              targetOrder={aiCapabilityTargetOrder}
+              locale={locale}
+              onToggle={handleAiCapabilityToggle}
+              onTargetMove={handleAiCapabilityTargetMove}
+              onTargetToggle={handleAiCapabilityTargetToggle}
+            />
+            <ContextUsageOrb snapshot={props.contextUsage} />
+          </div>
+          <div className="composer-toolbar-right">
+            <ComposerSelectControl
+              ariaLabel={t("composer.aria.reasoning")}
+              className="reasoning no-indicator"
+              fallbackLabel={t("composer.selectFallback")}
+              onValueChange={(value) => void handleReasoningEffortChange(value)}
+              openSignal={reasoningPickerOpenSignal}
+              options={reasoningEffortOptions}
+              value={reasoningEffort}
+            />
+            {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (
+              <Button
+                aria-label={t("composer.aria.stop")}
+                className="send-button running"
+                onClick={() => void handleComposerStop()}
+                size="icon"
+                type="button"
+              >
+                <Square fill="currentColor" size={15} strokeWidth={0} />
+              </Button>
+            ) : null}
             <Button
-              aria-label={t("composer.aria.stop")}
-              className="send-button running"
-              onClick={() => void handleComposerStop()}
+              aria-label={props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? t("composer.aria.stop") : t("composer.aria.send")}
+              className={cn("send-button", props.isConversationRunning && !draftInput.trim() && attachments.length === 0 && "running")}
+              onClick={() => void handleComposerSend()}
               size="icon"
               type="button"
             >
-              <Square fill="currentColor" size={15} strokeWidth={0} />
+              {props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
             </Button>
-          ) : null}
-          <Button
-            aria-label={props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? t("composer.aria.stop") : t("composer.aria.send")}
-            className={cn("send-button", props.isConversationRunning && !draftInput.trim() && attachments.length === 0 && "running")}
-            onClick={() => void handleComposerSend()}
-            size="icon"
-            type="button"
-          >
-            {props.isConversationRunning && !draftInput.trim() && attachments.length === 0 ? <Square fill="currentColor" size={15} strokeWidth={0} /> : <Send size={18} />}
-          </Button>
+          </div>
         </div>
-      </div>
-      {composerMediaPlayer ? (
-        <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
-      ) : null}
-    </section>
+        {composerMediaPlayer ? (
+          <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
+        ) : null}
+      </section>
+    </>
   );
 }
 
