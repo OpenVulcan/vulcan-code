@@ -104,12 +104,12 @@ use vulcan_workbench_model::{
     TaskProjectSummary, apply_pending_prompt_panel_drop_target,
     build_delegate_completion_followup_preview, build_delegate_completion_followup_prompt,
     build_stopped_task_session_metadata, clear_internal_pending_prompt_queue_and_restore_panel,
-    enqueue_pending_prompt_internal_queue_entry, parse_subagent_task_panel_metadata,
-    parse_subagent_task_prompt_metadata, pending_prompt_dispatch_block_reason,
-    pending_prompt_lane_is_busy, remove_pending_prompt_panel_entry,
-    route_pending_prompt_panel_entry_into_internal_queue, subagent_navigation_task_label,
-    take_guided_pending_prompt_entries, take_next_pending_prompt_entry,
-    task_session_message_match_score,
+    enqueue_pending_prompt_internal_queue_entry, next_pending_prompt_dispatch_source,
+    parse_subagent_task_panel_metadata, parse_subagent_task_prompt_metadata,
+    pending_prompt_dispatch_block_reason_for_source, pending_prompt_lane_is_busy,
+    remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
+    subagent_navigation_task_label, take_guided_pending_prompt_entries,
+    take_next_pending_prompt_entry, task_session_message_match_score,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
@@ -4883,7 +4883,21 @@ async fn maybe_prepare_next_webui_pending_prompt(
             has_running_subagents,
         )
     };
-    if pending_prompt_dispatch_block_reason(
+    let prefer_delegate_completion = session_uses_anthropic_runtime(
+        &workspace_snapshot,
+        &agent_runtime.provider_configuration,
+        session_id,
+    );
+    let Some(next_source) = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| {
+            next_pending_prompt_dispatch_source(&runtime_state.ui_state, prefer_delegate_completion)
+        })
+    else {
+        return Ok(false);
+    };
+    if pending_prompt_dispatch_block_reason_for_source(
         webui_pending_prompt_dispatch_context(
             &workspace_snapshot,
             &agent_runtime.provider_configuration,
@@ -4892,6 +4906,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
             has_running_subagents,
         ),
         allow_from_stopped_phase,
+        Some(next_source),
     )
     .is_some()
     {
@@ -4905,11 +4920,6 @@ async fn maybe_prepare_next_webui_pending_prompt(
     else {
         return Ok(false);
     };
-    let prefer_delegate_completion = session_uses_anthropic_runtime(
-        &workspace_snapshot,
-        &agent_runtime.provider_configuration,
-        session_id,
-    );
     let Some(entry) = take_next_webui_pending_prompt(
         &mut workspace_snapshot,
         session_id,

@@ -120,7 +120,33 @@ pub fn pending_prompt_dispatch_block_reason(
     context: PendingPromptDispatchContext,
     allow_from_stopped_phase: bool,
 ) -> Option<PendingPromptDispatchBlockReason> {
-    if context.has_running_subagents {
+    pending_prompt_dispatch_block_reason_for_source(context, allow_from_stopped_phase, None)
+}
+
+/// Returns the shared dispatch block reason for the next prompt source.
+/// 按下一条提示词来源返回共享分发阻塞原因。
+///
+/// # Parameters
+/// 参数
+/// `context` contains UI-specific runtime facts collected by the caller.
+/// `context` 包含调用方收集的界面专属运行态事实。
+/// `allow_from_stopped_phase` mirrors iced manual insert behavior.
+/// `allow_from_stopped_phase` 对齐 iced 手动引导行为。
+/// `next_source` identifies the next prompt that would be dispatched, when known.
+/// `next_source` 标识即将分发的下一条提示词来源，未知时传入空值。
+///
+/// # Returns
+/// 返回值
+/// A block reason when dispatch must wait, otherwise `None`.
+/// 必须等待时返回阻塞原因，否则返回 `None`。
+pub fn pending_prompt_dispatch_block_reason_for_source(
+    context: PendingPromptDispatchContext,
+    allow_from_stopped_phase: bool,
+    next_source: Option<PendingSessionPromptSource>,
+) -> Option<PendingPromptDispatchBlockReason> {
+    if context.has_running_subagents
+        && next_source != Some(PendingSessionPromptSource::DelegateCompletion)
+    {
         return Some(PendingPromptDispatchBlockReason::RunningSubagents);
     }
     if context.has_active_run || provider_session_run_phase_is_active(context.run_phase) {
@@ -139,6 +165,38 @@ pub fn pending_prompt_dispatch_block_reason(
         return Some(PendingPromptDispatchBlockReason::Stopped);
     }
     None
+}
+
+/// Returns the source of the next prompt that would be dispatched from the session queues.
+/// 返回会话队列中下一条将被分发的提示词来源。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped queue state.
+/// `ui_state` 是会话级队列状态。
+/// `prefer_delegate_completion` asks the router to close delegated callbacks before user follow-ups.
+/// `prefer_delegate_completion` 要求路由器在用户跟进前优先闭合委派回调。
+///
+/// # Returns
+/// 返回值
+/// The next prompt source when any dispatchable internal or visible prompt exists.
+/// 存在可分发的内部或可见提示词时返回下一条提示词来源。
+pub fn next_pending_prompt_dispatch_source(
+    ui_state: &SessionTranscriptUiState,
+    prefer_delegate_completion: bool,
+) -> Option<PendingSessionPromptSource> {
+    if !ui_state.pending_prompt_queue.is_empty() {
+        let dispatch_index = pending_prompt_dispatch_index(
+            ui_state.pending_prompt_queue.as_slice(),
+            prefer_delegate_completion,
+        );
+        return Some(ui_state.pending_prompt_queue[dispatch_index].source);
+    }
+    ui_state
+        .pending_prompt_panel_queue
+        .iter()
+        .any(|entry| entry.state == PendingPromptPanelEntryState::Ready)
+        .then_some(PendingSessionPromptSource::UserFollowup)
 }
 
 /// Runtime facts required by the shared pending-prompt busy-lane check.
@@ -1223,6 +1281,56 @@ mod tests {
                 None
             );
         }
+    }
+
+    /// Verifies delegate completion follow-ups may dispatch while sibling subagents keep running.
+    /// 验证委派完成回流可在兄弟子代理仍运行时继续分发。
+    #[test]
+    fn pending_prompt_dispatch_allows_delegate_completion_during_running_subagents() {
+        let context = PendingPromptDispatchContext {
+            uses_anthropic_runtime: false,
+            has_running_subagents: true,
+            has_active_run: false,
+            run_phase: None,
+            has_active_compaction: false,
+        };
+        assert_eq!(
+            pending_prompt_dispatch_block_reason_for_source(
+                context,
+                true,
+                Some(PendingSessionPromptSource::UserFollowup)
+            ),
+            Some(PendingPromptDispatchBlockReason::RunningSubagents)
+        );
+        assert_eq!(
+            pending_prompt_dispatch_block_reason_for_source(
+                context,
+                true,
+                Some(PendingSessionPromptSource::DelegateCompletion)
+            ),
+            None
+        );
+    }
+
+    /// Verifies next prompt source peeking follows the same delegate preference as dispatch removal.
+    /// 验证下一条提示词来源窥视遵循与分发移除相同的委派优先规则。
+    #[test]
+    fn next_pending_prompt_dispatch_source_prefers_delegate_when_requested() {
+        let mut ui_state = SessionTranscriptUiState::default();
+        let mut user_entry = test_internal_prompt_entry("user", None);
+        user_entry.source = PendingSessionPromptSource::UserFollowup;
+        let mut delegate_entry = test_internal_prompt_entry("delegate", None);
+        delegate_entry.source = PendingSessionPromptSource::DelegateCompletion;
+        ui_state.pending_prompt_queue.push(user_entry);
+        ui_state.pending_prompt_queue.push(delegate_entry);
+        assert_eq!(
+            next_pending_prompt_dispatch_source(&ui_state, false),
+            Some(PendingSessionPromptSource::UserFollowup)
+        );
+        assert_eq!(
+            next_pending_prompt_dispatch_source(&ui_state, true),
+            Some(PendingSessionPromptSource::DelegateCompletion)
+        );
     }
 
     /// Verifies duplicate delegate-completion callbacks are not enqueued twice.

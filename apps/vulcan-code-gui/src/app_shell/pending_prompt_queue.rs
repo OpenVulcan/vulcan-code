@@ -8,7 +8,8 @@ use vulcan_workbench_model::{
     PendingPromptInternalQueueEnqueuePlan, PendingPromptPanelDropTarget,
     apply_pending_prompt_internal_queue_enqueue_plan,
     apply_pending_prompt_panel_drop_target as apply_shared_pending_prompt_panel_drop_target,
-    pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
+    next_pending_prompt_dispatch_source, pending_prompt_dispatch_block_reason,
+    pending_prompt_dispatch_block_reason_for_source, pending_prompt_lane_is_busy,
     plan_pending_prompt_internal_queue_enqueue,
 };
 
@@ -1329,9 +1330,16 @@ impl VulcanWorkbench {
         session_id: SessionId,
         allow_from_stopped_phase: bool,
     ) -> Task<Message> {
-        if pending_prompt_dispatch_block_reason(
+        let prefer_delegate_completion = self.session_uses_anthropic_runtime(session_id);
+        let Some(next_source) = self.session_runtime_state(session_id).and_then(|state| {
+            next_pending_prompt_dispatch_source(&state.ui_state, prefer_delegate_completion)
+        }) else {
+            return Task::none();
+        };
+        if pending_prompt_dispatch_block_reason_for_source(
             self.pending_prompt_dispatch_context(session_id),
             allow_from_stopped_phase,
+            Some(next_source),
         )
         .is_some()
         {
