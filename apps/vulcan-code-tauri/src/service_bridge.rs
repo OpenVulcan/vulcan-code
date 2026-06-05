@@ -101,7 +101,7 @@ use vulcan_workbench_model::{
     apply_pending_prompt_panel_drop_target, clear_internal_pending_prompt_queue_and_restore_panel,
     pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
     remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
-    take_next_internal_pending_prompt_entry, take_next_pending_prompt_entry,
+    take_guided_pending_prompt_entries, take_next_pending_prompt_entry,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
@@ -4211,23 +4211,24 @@ fn build_webui_prompt_intervention(
     ai_tool_configuration: PersistedAiToolConfiguration,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
-        match take_next_webui_internal_guidance_prompt(
-            &app,
-            &state,
-            &provider_configuration,
-            session_id,
-        ) {
-            Ok(Some(entry)) => {
-                let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
-                    &provider_configuration,
-                    &ai_tool_configuration,
-                    &entry,
-                );
-                controller
-                    .append_interjected_user_turn_with_attachments(prompt.as_str(), attachments)
-                    .is_some()
+        match take_webui_internal_guidance_prompts(&app, &state, session_id) {
+            Ok(entries) => {
+                entries
+                    .iter()
+                    .filter_map(|entry| {
+                        let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
+                            &provider_configuration,
+                            &ai_tool_configuration,
+                            entry,
+                        );
+                        controller.append_interjected_user_turn_with_attachments(
+                            prompt.as_str(),
+                            attachments,
+                        )
+                    })
+                    .count()
+                    > 0
             }
-            Ok(None) => false,
             Err(error) => {
                 eprintln!("[tauri-service] apply guided prompt intervention failed: {error}");
                 false
@@ -4298,8 +4299,8 @@ fn normalize_webui_interjected_prompt_for_provider(
     (normalized.text, normalized.attachments)
 }
 
-/// Takes one already-guided WebUI prompt from the shared internal queue.
-/// 从共享内部队列取出一条已经引导的 WebUI 提示词。
+/// Takes already-guided WebUI prompts from the shared internal queue.
+/// 从共享内部队列取出已经引导的 WebUI 提示词集合。
 ///
 /// # Parameters
 /// 参数
@@ -4307,41 +4308,30 @@ fn normalize_webui_interjected_prompt_for_provider(
 /// `app` 由工作区变更辅助函数用于发出更新后的队列视图。
 /// `state` contains the current workspace snapshot and live runtime handles.
 /// `state` 包含当前工作区快照与实时运行时句柄。
-/// `provider_configuration` lets the shared router preserve iced Anthropic dispatch preference.
-/// `provider_configuration` 用于让共享路由器保留 iced 的 Anthropic 分发偏好。
 /// `session_id` identifies the session whose stream reached a safe tool boundary.
 /// `session_id` 标识流已经到达安全工具边界的会话。
 ///
 /// # Returns
 /// 返回值
-/// The guided prompt entry when one was waiting in the internal queue.
-/// 当内部队列存在等待中的引导条目时返回该条目。
-fn take_next_webui_internal_guidance_prompt(
+/// Guided prompt entries waiting in the internal queue, preserving queue order.
+/// 按队列顺序返回内部队列中等待的引导条目集合。
+fn take_webui_internal_guidance_prompts(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
-    provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
-) -> Result<Option<PendingSessionPromptEntry>, String> {
-    let mut guided_entry = None;
+) -> Result<Vec<PendingSessionPromptEntry>, String> {
+    let mut guided_entries = Vec::new();
     with_workspace_mutation(app, state, |workspace| {
-        let prefer_delegate_completion =
-            session_uses_anthropic_runtime(workspace, provider_configuration, session_id);
         let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
             return;
         };
-        let Some(entry) = take_next_internal_pending_prompt_entry(
-            &mut runtime_state.ui_state,
-            prefer_delegate_completion,
-        ) else {
+        guided_entries = take_guided_pending_prompt_entries(&mut runtime_state.ui_state);
+        if guided_entries.is_empty() {
             return;
-        };
-        if let Some(panel_entry_id) = entry.panel_entry_id.as_deref() {
-            let _ = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, panel_entry_id);
         }
         runtime_state.updated_at = current_unix_millis_text();
-        guided_entry = Some(entry);
     })?;
-    Ok(guided_entry)
+    Ok(guided_entries)
 }
 
 /// Prepares the next visible queued prompt after one WebUI-owned session run reaches a clean idle point.

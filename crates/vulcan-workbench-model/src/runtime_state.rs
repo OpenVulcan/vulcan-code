@@ -123,7 +123,7 @@ pub fn pending_prompt_dispatch_block_reason(
     if context.uses_anthropic_runtime && context.has_running_subagents {
         return Some(PendingPromptDispatchBlockReason::AnthropicRunningSubagents);
     }
-    if context.has_active_run {
+    if context.has_active_run || provider_session_run_phase_is_active(context.run_phase) {
         return Some(PendingPromptDispatchBlockReason::ActiveRun);
     }
     if matches!(
@@ -172,6 +172,7 @@ pub fn pending_prompt_lane_is_busy(
     context: PendingPromptBusyLaneContext,
 ) -> bool {
     context.dispatch.has_active_run
+        || session_run_phase_is_active(context.dispatch.run_phase)
         || (context.dispatch.run_phase == Some(crate::SessionRunPhase::Preparing)
             && !context.dispatch.has_active_run
             && context.has_precheck_progress)
@@ -180,6 +181,54 @@ pub fn pending_prompt_lane_is_busy(
         || !ui_state.pending_prompt_queue.is_empty()
         || !ui_state.pending_prompt_panel_queue.is_empty()
         || context.dispatch.has_running_subagents
+}
+
+/// Returns whether a visible run phase still represents live provider or tool work.
+/// 返回可见运行阶段是否仍表示实时 Provider 或工具工作。
+///
+/// # Parameters
+/// 参数
+/// `phase` is the optional session run phase captured by one frontend or service bridge.
+/// `phase` 是某个前端或服务桥捕获到的可选会话运行阶段。
+///
+/// # Returns
+/// 返回值
+/// `true` when submissions must remain on the queue lane until the phase settles.
+/// 当提交必须继续留在排队通道直到阶段稳定时返回 `true`。
+fn session_run_phase_is_active(phase: Option<crate::SessionRunPhase>) -> bool {
+    matches!(
+        phase,
+        Some(
+            crate::SessionRunPhase::Preparing
+                | crate::SessionRunPhase::MemoryRecall
+                | crate::SessionRunPhase::Requesting
+                | crate::SessionRunPhase::Thinking
+                | crate::SessionRunPhase::ToolRunning
+        )
+    )
+}
+
+/// Returns whether a run phase represents an already-started provider/tool loop.
+/// 返回运行阶段是否表示已经启动的 Provider/工具循环。
+///
+/// # Parameters
+/// 参数
+/// `phase` is the optional session run phase captured by one frontend or service bridge.
+/// `phase` 是某个前端或服务桥捕获到的可选会话运行阶段。
+///
+/// # Returns
+/// 返回值
+/// `true` when the phase should block dispatch as active execution.
+/// 当该阶段应作为活跃执行阻塞分发时返回 `true`。
+fn provider_session_run_phase_is_active(phase: Option<crate::SessionRunPhase>) -> bool {
+    matches!(
+        phase,
+        Some(
+            crate::SessionRunPhase::Requesting
+                | crate::SessionRunPhase::Thinking
+                | crate::SessionRunPhase::ToolRunning
+        )
+    )
 }
 
 /// Error returned when a visible pending prompt cannot be routed into the internal queue.
@@ -268,6 +317,41 @@ impl Default for PendingPromptWebSearchOverride {
     fn default() -> Self {
         Self::FollowGlobal
     }
+}
+
+/// Takes every manually guided internal prompt while leaving passive internal queue entries untouched.
+/// 取出所有手动引导的内部提示词，同时保留被动内部队列项。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped queue state mutated by the shared router.
+/// `ui_state` 是共享路由器会修改的会话级队列状态。
+///
+/// # Returns
+/// 返回值
+/// Guided prompt entries in their existing queue order.
+/// 按现有队列顺序返回引导提示词条目。
+pub fn take_guided_pending_prompt_entries(
+    ui_state: &mut SessionTranscriptUiState,
+) -> Vec<PendingSessionPromptEntry> {
+    let mut guided_entries = Vec::new();
+    let mut retained_entries = Vec::with_capacity(ui_state.pending_prompt_queue.len());
+    let mut removed_panel_entry_ids = Vec::new();
+    for entry in ui_state.pending_prompt_queue.drain(..) {
+        if entry.panel_entry_id.is_some() {
+            if let Some(panel_entry_id) = entry.panel_entry_id.clone() {
+                removed_panel_entry_ids.push(panel_entry_id);
+            }
+            guided_entries.push(entry);
+        } else {
+            retained_entries.push(entry);
+        }
+    }
+    ui_state.pending_prompt_queue = retained_entries;
+    for panel_entry_id in removed_panel_entry_ids {
+        let _ = remove_pending_prompt_panel_entry(ui_state, &panel_entry_id);
+    }
+    guided_entries
 }
 
 /// Runtime controls captured when a queued prompt is authored or inserted.
@@ -804,6 +888,26 @@ mod tests {
         }
     }
 
+    /// Builds one minimal internal pending prompt entry for queue-drain tests.
+    /// 为队列取出测试构建一条最小内部待发送提示词项。
+    fn test_internal_prompt_entry(
+        id: &str,
+        panel_entry_id: Option<&str>,
+    ) -> PendingSessionPromptEntry {
+        PendingSessionPromptEntry {
+            id: id.to_string(),
+            prompt: format!("prompt-{id}"),
+            preview: format!("prompt-{id}"),
+            attachments: Vec::new(),
+            model_reference: None,
+            runtime_options: PendingPromptRuntimeOptions::default(),
+            source: PendingSessionPromptSource::UserFollowup,
+            task_id: None,
+            panel_entry_id: panel_entry_id.map(str::to_string),
+            created_at: String::from("1000"),
+        }
+    }
+
     /// Returns the visible pending-prompt panel queue ids in order.
     /// 按顺序返回可见待发送提示词面板队列标识。
     fn panel_entry_ids(ui_state: &SessionTranscriptUiState) -> Vec<String> {
@@ -880,6 +984,44 @@ mod tests {
         ));
     }
 
+    /// Verifies active provider phases keep WebUI submissions on the queued lane even when the task handle has already settled.
+    /// 验证即使任务句柄已经稳定，活跃 Provider 阶段也会让 WebUI 提交继续进入排队通道。
+    #[test]
+    fn pending_prompt_lane_busy_includes_active_provider_phase() {
+        for phase in [
+            crate::SessionRunPhase::Requesting,
+            crate::SessionRunPhase::Thinking,
+            crate::SessionRunPhase::ToolRunning,
+        ] {
+            assert!(pending_prompt_lane_is_busy(
+                &SessionTranscriptUiState::default(),
+                PendingPromptBusyLaneContext {
+                    dispatch: PendingPromptDispatchContext {
+                        uses_anthropic_runtime: false,
+                        has_running_subagents: false,
+                        has_active_run: false,
+                        run_phase: Some(phase),
+                        has_active_compaction: false,
+                    },
+                    has_precheck_progress: false,
+                },
+            ));
+            assert_eq!(
+                pending_prompt_dispatch_block_reason(
+                    PendingPromptDispatchContext {
+                        uses_anthropic_runtime: false,
+                        has_running_subagents: false,
+                        has_active_run: false,
+                        run_phase: Some(phase),
+                        has_active_compaction: false,
+                    },
+                    false,
+                ),
+                Some(PendingPromptDispatchBlockReason::ActiveRun)
+            );
+        }
+    }
+
     /// Verifies manually guided prompts preserve the user's click order.
     /// 验证手动引导的提示词会保留用户的点击顺序。
     #[test]
@@ -911,6 +1053,44 @@ mod tests {
 
         assert_eq!(first.panel_entry_id.as_deref(), Some("a"));
         assert_eq!(second.panel_entry_id.as_deref(), Some("b"));
+    }
+
+    /// Verifies runtime guidance drains all inserted panel-linked prompts without consuming passive internal work.
+    /// 验证运行时引导会取出所有已插入的面板关联提示词，同时不消耗被动内部工作。
+    #[test]
+    fn take_guided_pending_prompt_entries_keeps_passive_internal_queue() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a"), test_panel_entry("b")],
+            pending_prompt_queue: vec![test_internal_prompt_entry("passive", None)],
+            ..SessionTranscriptUiState::default()
+        };
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route first guidance prompt");
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "b",
+            String::from("internal-b"),
+            String::from("1002"),
+        )
+        .expect("route second guidance prompt");
+
+        let guided_entries = take_guided_pending_prompt_entries(&mut ui_state);
+
+        assert_eq!(
+            guided_entries
+                .iter()
+                .filter_map(|entry| entry.panel_entry_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(ui_state.pending_prompt_queue[0].id, "passive");
+        assert!(ui_state.pending_prompt_panel_queue.is_empty());
     }
 
     /// Verifies dragging visible rows also updates the internal guided dispatch order.

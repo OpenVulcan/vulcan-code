@@ -20,8 +20,8 @@ pub use runtime_state::{
     clear_internal_pending_prompt_queue_and_restore_panel, pending_prompt_dispatch_block_reason,
     pending_prompt_dispatch_index, pending_prompt_lane_is_busy,
     pending_session_prompt_entry_from_panel_entry, remove_pending_prompt_panel_entry,
-    route_pending_prompt_panel_entry_into_internal_queue, take_next_internal_pending_prompt_entry,
-    take_next_pending_prompt_entry,
+    route_pending_prompt_panel_entry_into_internal_queue, take_guided_pending_prompt_entries,
+    take_next_internal_pending_prompt_entry, take_next_pending_prompt_entry,
 };
 pub use session::{SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource};
 pub use turn_stats::{SessionTurnStats, SessionTurnStatsStatus};

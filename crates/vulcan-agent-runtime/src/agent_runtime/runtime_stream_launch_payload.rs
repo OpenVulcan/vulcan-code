@@ -75,9 +75,11 @@ pub(crate) fn build_runtime_stream_launch_payload(
     request: &ExecutionPreparationRequest,
     bootstrap: RuntimeStreamBootstrap,
 ) -> RuntimeStreamLaunch {
+    let effective_prompt =
+        controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
     RuntimeStreamLaunch {
         session_id: request.session_id,
-        effective_prompt: request.prompt.trim().to_string(),
+        effective_prompt,
         preparation: bootstrap.preparation,
         active_agent: bootstrap.active_agent,
         task_runtime: bootstrap.task_runtime,
@@ -93,6 +95,37 @@ pub(crate) fn build_runtime_stream_launch_payload(
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller),
     }
+}
+
+/// Resolves the prompt text handed to `vulcan-core` so preseeded user messages are not duplicated after provider projection.
+/// 解析交给 `vulcan-core` 的提示词文本，避免 Provider 投影后重复追加已预播种的用户消息。
+///
+/// # Parameters
+/// 参数
+/// `request` is the original execution request carrying the user-authored prompt.
+/// `request` 是携带用户原始提示词的执行请求。
+/// `core_snapshot` is the provider-visible snapshot already prepared for the controller.
+/// `core_snapshot` 是已经为控制器准备好的 Provider 可见快照。
+///
+/// # Returns
+/// 返回值
+/// The projected latest user text when present, otherwise the raw request prompt.
+/// 当存在时返回投影后的最新用户文本，否则返回原始请求提示词。
+fn controller_effective_prompt_for_launch(
+    request: &ExecutionPreparationRequest,
+    core_snapshot: &CoreConversationSnapshot,
+) -> String {
+    core_snapshot
+        .messages
+        .last()
+        .and_then(|message| match &message.payload {
+            vulcan_core::types::ConversationPayload::UserText { text, .. } => {
+                Some(text.trim().to_string())
+            }
+            _ => None,
+        })
+        .filter(|text| !text.is_empty())
+        .unwrap_or_else(|| request.prompt.trim().to_string())
 }
 
 #[cfg(test)]
@@ -202,7 +235,7 @@ mod tests {
             messages: vec![CoreConversationMessage {
                 id: String::from("user-1"),
                 payload: CoreConversationPayload::UserText {
-                    text: String::from("历史用户输入"),
+                    text: String::from("请分析主入口文件"),
                     attachments: Vec::new(),
                 },
             }],
@@ -268,5 +301,29 @@ mod tests {
             1
         );
         assert!(launch.stream_state.controller().events().is_empty());
+    }
+
+    /// Uses projected latest user text as the controller prompt so attachment bridge text does not duplicate the raw user message.
+    /// 使用投影后的最新用户文本作为控制器提示词，避免附件桥接文本重复追加原始用户消息。
+    #[test]
+    fn launch_payload_uses_projected_latest_user_prompt_for_controller_reuse() {
+        let request = build_test_request();
+        let mut bootstrap = build_test_bootstrap();
+        bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+            id: String::from("user-projected"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from(
+                    "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件",
+                ),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+
+        assert_eq!(
+            launch.effective_prompt,
+            "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件"
+        );
     }
 }
