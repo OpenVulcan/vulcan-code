@@ -59,6 +59,7 @@ use vulcan_agent_runtime::{
         self, PersistedAiToolConfiguration, ProviderConfigurationFile, ProviderRuntimeKind,
         ReasoningEffortLevel,
     },
+    provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
         append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
@@ -3949,6 +3950,7 @@ fn spawn_agent_stream_task(
             app.clone(),
             task_state.clone(),
             agent_runtime.provider_configuration.clone(),
+            agent_runtime.ai_tool_configuration.clone(),
         );
         let mut stream = Box::pin(stream_runtime_run_with_intervention(
             agent_runtime.provider_configuration.clone(),
@@ -4206,6 +4208,7 @@ fn build_webui_prompt_intervention(
     app: tauri::AppHandle,
     state: SharedServiceBridgeState,
     provider_configuration: ProviderConfigurationFile,
+    ai_tool_configuration: PersistedAiToolConfiguration,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
         match take_next_webui_internal_guidance_prompt(
@@ -4214,12 +4217,16 @@ fn build_webui_prompt_intervention(
             &provider_configuration,
             session_id,
         ) {
-            Ok(Some(entry)) => controller
-                .append_interjected_user_turn_with_attachments(
-                    entry.prompt.as_str(),
-                    entry.attachments,
-                )
-                .is_some(),
+            Ok(Some(entry)) => {
+                let (prompt, attachments) = normalize_webui_interjected_prompt_for_provider(
+                    &provider_configuration,
+                    &ai_tool_configuration,
+                    &entry,
+                );
+                controller
+                    .append_interjected_user_turn_with_attachments(prompt.as_str(), attachments)
+                    .is_some()
+            }
             Ok(None) => false,
             Err(error) => {
                 eprintln!("[tauri-service] apply guided prompt intervention failed: {error}");
@@ -4227,6 +4234,68 @@ fn build_webui_prompt_intervention(
             }
         }
     })
+}
+
+/// Normalizes one dynamically interjected WebUI prompt through the same provider/model capability gate used by request bootstrap.
+/// 通过与请求 bootstrap 相同的 Provider/模型能力门禁归一化一条 WebUI 动态引导提示词。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` is the active provider configuration captured by the running stream.
+/// `provider_configuration` 是当前运行流捕获的活跃 Provider 配置。
+/// `ai_tool_configuration` is the active AI tool routing configuration captured by the running stream.
+/// `ai_tool_configuration` 是当前运行流捕获的活跃 AI 工具路由配置。
+/// `entry` is the internal queued prompt selected for runtime guidance.
+/// `entry` 是被选中用于运行时引导的内部排队提示词。
+///
+/// # Returns
+/// 返回值
+/// Provider-safe prompt text and attachments after unsupported modalities have been downgraded.
+/// 返回不支持模态被降级后的 Provider 安全提示词文本与附件集合。
+fn normalize_webui_interjected_prompt_for_provider(
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+    entry: &PendingSessionPromptEntry,
+) -> (String, Vec<ConversationAttachment>) {
+    let scoped_provider_configuration = provider_configuration_for_model_reference(
+        provider_configuration,
+        entry.model_reference.as_ref(),
+    );
+    let Some((provider_id, model_id)) = scoped_provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)
+    else {
+        return (entry.prompt.clone(), entry.attachments.clone());
+    };
+    let Some(definition) = provider_config::supported_provider_by_id(provider_id) else {
+        return (entry.prompt.clone(), entry.attachments.clone());
+    };
+    let effective_ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
+        ai_tool_configuration,
+        &entry.runtime_options.disabled_ai_capability_kinds,
+        &BTreeSet::new(),
+        &BTreeMap::new(),
+    );
+    let active_model =
+        provider_config::effective_model_choices(provider_id, &scoped_provider_configuration)
+            .into_iter()
+            .find(|model| model.id == model_id);
+    let capabilities = resolve_effective_model_capabilities(
+        definition,
+        active_model.as_ref(),
+        &effective_ai_tool_configuration,
+    );
+    let api_family = definition
+        .effective_runtime_for_model(model_id)
+        .api_family();
+    let normalized = normalize_provider_user_input_for_model(
+        api_family,
+        Some(&capabilities),
+        &entry.prompt,
+        &entry.attachments,
+    );
+    (normalized.text, normalized.attachments)
 }
 
 /// Takes one already-guided WebUI prompt from the shared internal queue.

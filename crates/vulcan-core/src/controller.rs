@@ -543,12 +543,9 @@ impl VulcanCoreController {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
                 on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
-                if on_before_next_provider_turn(self) {
-                    on_safe_checkpoint(
-                        &self.snapshot,
-                        self.last_successful_provider_usage.as_ref(),
-                    );
-                }
+            }
+            if on_before_next_provider_turn(self) {
+                on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
             }
         }
     }
@@ -1715,6 +1712,150 @@ mod tests {
                     ..
                 }) if text == "不需要配图了" && attachments == &vec![guided_attachment]
             ));
+        });
+    }
+
+    /// Delays host guidance until every tool result in the current provider batch has been appended.
+    /// 延迟宿主引导，直到当前 Provider 批次中的所有工具结果都已追加。
+    #[test]
+    fn run_user_turn_streaming_intervention_waits_for_full_tool_batch() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![
+                (
+                    vec![ProviderTurnDelta::Thinking {
+                        delta: String::from("先调用两个工具。"),
+                    }],
+                    ProviderTurnResponse {
+                        assistant_text: String::new(),
+                        assistant_reasoning: String::from("先调用两个工具。"),
+                        provider_message_id: Some(String::from("resp-batch-1")),
+                        provider_message_state: None,
+                        tool_calls: vec![
+                            ConversationToolCall {
+                                id: String::from("tool-item-1"),
+                                tool_call_id: Some(String::from("call-1")),
+                                tool_name: String::from("first_tool"),
+                                arguments: json!({"step": 1}),
+                            },
+                            ConversationToolCall {
+                                id: String::from("tool-item-2"),
+                                tool_call_id: Some(String::from("call-2")),
+                                tool_name: String::from("second_tool"),
+                                arguments: json!({"step": 2}),
+                            },
+                        ],
+                        continuation: Some(ProviderContinuation {
+                            provider_id: Some(String::from("mock-openai-streaming")),
+                            model_id: Some(String::from("mock-model")),
+                            last_provider_message_id: Some(String::from("resp-batch-1")),
+                            updated_at: Some(String::from("4101")),
+                        }),
+                        usage: None,
+                    },
+                ),
+                (
+                    vec![ProviderTurnDelta::Output {
+                        delta: String::from("已处理引导。"),
+                    }],
+                    ProviderTurnResponse {
+                        assistant_text: String::from("已处理引导。"),
+                        assistant_reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-batch-2")),
+                        provider_message_state: None,
+                        tool_calls: Vec::new(),
+                        continuation: Some(ProviderContinuation {
+                            provider_id: Some(String::from("mock-openai-streaming")),
+                            model_id: Some(String::from("mock-model")),
+                            last_provider_message_id: Some(String::from("resp-batch-2")),
+                            updated_at: Some(String::from("4102")),
+                        }),
+                        usage: None,
+                    },
+                ),
+            ]);
+            let executor = MockToolExecutor::new()
+                .with_outcome(
+                    "first_tool",
+                    "第一个工具已完成。",
+                    Some(json!({"tool": "first"})),
+                    false,
+                )
+                .with_outcome(
+                    "second_tool",
+                    "第二个工具已完成。",
+                    Some(json!({"tool": "second"})),
+                    false,
+                );
+            let mut controller =
+                VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+            let mut checkpoints = Vec::<ConversationSnapshot>::new();
+            let mut injected = false;
+
+            let result = controller
+                .run_user_turn_streaming_with_checkpoints_and_interventions(
+                    &adapter,
+                    &executor,
+                    &AllowAllToolPolicy,
+                    "请先调用两个工具",
+                    |snapshot, _| checkpoints.push(snapshot.clone()),
+                    |controller| {
+                        if injected {
+                            return false;
+                        }
+                        injected = true;
+                        controller
+                            .append_interjected_user_turn("批次完成后再引导")
+                            .is_some()
+                    },
+                )
+                .await
+                .expect("run guided batch streaming user turn");
+
+            assert_eq!(result.provider_turns_executed, 2);
+            assert_eq!(result.tool_calls_processed, 2);
+            assert_eq!(checkpoints.len(), 3);
+            assert!(matches!(
+                checkpoints[0].messages.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::ToolResult { tool_call_id, .. },
+                    ..
+                }) if tool_call_id.as_deref() == Some("call-1")
+            ));
+            assert!(matches!(
+                checkpoints[1].messages.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::ToolResult { tool_call_id, .. },
+                    ..
+                }) if tool_call_id.as_deref() == Some("call-2")
+            ));
+            assert!(matches!(
+                checkpoints[2].messages.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::UserText { text, .. },
+                    ..
+                }) if text == "批次完成后再引导"
+            ));
+
+            let built_requests = adapter.built_requests();
+            assert_eq!(built_requests.len(), 2);
+            assert!(matches!(
+                built_requests[1].history.last(),
+                Some(ConversationMessage {
+                    payload: ConversationPayload::UserText { text, .. },
+                    ..
+                }) if text == "批次完成后再引导"
+            ));
+            assert!(built_requests[1].history.iter().any(|message| matches!(
+                &message.payload,
+                ConversationPayload::ToolResult { tool_call_id, .. }
+                    if tool_call_id.as_deref() == Some("call-1")
+            )));
+            assert!(built_requests[1].history.iter().any(|message| matches!(
+                &message.payload,
+                ConversationPayload::ToolResult { tool_call_id, .. }
+                    if tool_call_id.as_deref() == Some("call-2")
+            )));
         });
     }
 
