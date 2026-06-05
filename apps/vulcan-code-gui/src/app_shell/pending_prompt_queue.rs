@@ -4,9 +4,12 @@
 use super::*;
 use vulcan_workbench_model::{
     PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason, PendingPromptDispatchContext,
-    PendingPromptPanelDropTarget,
+    PendingPromptInternalQueueEnqueueError, PendingPromptInternalQueueEnqueueOutcome,
+    PendingPromptInternalQueueEnqueuePlan, PendingPromptPanelDropTarget,
+    apply_pending_prompt_internal_queue_enqueue_plan,
     apply_pending_prompt_panel_drop_target as apply_shared_pending_prompt_panel_drop_target,
     pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
+    plan_pending_prompt_internal_queue_enqueue,
 };
 
 impl VulcanWorkbench {
@@ -254,35 +257,17 @@ impl VulcanWorkbench {
         let now = current_unix_millis_text();
         let entry_id = entry.id.clone();
         let entry_attachments = entry.attachments.clone();
-        let removed_delegate_index = {
+        let enqueue_plan = {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            let queue = &mut runtime_state.ui_state.pending_prompt_queue;
-
-            if entry.source == PendingSessionPromptSource::DelegateCompletion
-                && entry.task_id.as_ref().is_some_and(|task_id| {
-                    queue.iter().any(|existing| {
-                        existing.source == PendingSessionPromptSource::DelegateCompletion
-                            && existing.task_id.as_ref() == Some(task_id)
-                    })
-                })
-            {
-                return Ok(());
-            }
-
-            if queue.len() >= SESSION_PENDING_PROMPT_QUEUE_LIMIT {
-                if entry.source == PendingSessionPromptSource::DelegateCompletion {
-                    if let Some(index) = queue.iter().position(|existing| {
-                        existing.source == PendingSessionPromptSource::DelegateCompletion
-                    }) {
-                        Some(index)
-                    } else {
-                        return Err(queue_full_error);
-                    }
-                } else {
+            match plan_pending_prompt_internal_queue_enqueue(
+                runtime_state.ui_state.pending_prompt_queue.as_slice(),
+                &entry,
+            ) {
+                Ok(PendingPromptInternalQueueEnqueuePlan::AlreadyQueued) => return Ok(()),
+                Ok(plan) => plan,
+                Err(PendingPromptInternalQueueEnqueueError::QueueFull) => {
                     return Err(queue_full_error);
                 }
-            } else {
-                None
             }
         };
 
@@ -297,17 +282,19 @@ impl VulcanWorkbench {
 
         let removed_for_capacity = {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            let queue = &mut runtime_state.ui_state.pending_prompt_queue;
-            let removed_for_capacity = removed_delegate_index
-                .and_then(|index| (index < queue.len()).then(|| queue.remove(index)));
-
-            if insert_front {
-                queue.insert(0, entry);
-            } else {
-                queue.push(entry);
-            }
+            let enqueue_outcome = apply_pending_prompt_internal_queue_enqueue_plan(
+                &mut runtime_state.ui_state,
+                entry,
+                insert_front,
+                enqueue_plan,
+            );
             runtime_state.updated_at = now;
-            removed_for_capacity
+            match enqueue_outcome {
+                PendingPromptInternalQueueEnqueueOutcome::Inserted {
+                    removed_for_capacity,
+                } => removed_for_capacity,
+                PendingPromptInternalQueueEnqueueOutcome::AlreadyQueued => None,
+            }
         };
 
         if let Some(removed_entry) = removed_for_capacity {
@@ -721,11 +708,9 @@ impl VulcanWorkbench {
                 self.pending_prompt_dispatch_context(session_id),
                 true
             ),
-            Some(PendingPromptDispatchBlockReason::AnthropicRunningSubagents)
+            Some(PendingPromptDispatchBlockReason::RunningSubagents)
         ) {
-            String::from(
-                "已接入系统会话队列；Anthropic 协议下需等待当前子代理全部完成后，才能继续插入主会话。",
-            )
+            String::from("已接入系统会话队列；需等待当前子代理全部完成后，才能继续插入主会话。")
         } else {
             String::from("已接入系统会话队列，正在尝试立即插入主会话。")
         };

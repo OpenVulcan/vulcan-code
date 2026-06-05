@@ -1216,6 +1216,7 @@ button {
 
 .console-header-main {
   min-width: 0;
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -1229,6 +1230,8 @@ button {
 }
 
 .console-header h1 {
+  min-width: 0;
+  flex: 0 1 auto;
   margin: 0;
   overflow: hidden;
   color: var(--foreground);
@@ -1236,6 +1239,106 @@ button {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.subagent-title-menu {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.subagent-title-trigger {
+  width: 28px;
+  height: 28px;
+  color: var(--muted-foreground);
+  border-radius: 8px;
+}
+
+.subagent-title-menu.running .subagent-title-trigger {
+  color: hsl(142 62% 34%);
+}
+
+.subagent-title-flyout {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  width: 260px;
+  max-height: min(360px, calc(100vh - 96px));
+  display: grid;
+  gap: 0;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 10px 22px color-mix(in oklch, var(--foreground) 12%, transparent);
+  opacity: 0;
+  overflow-y: auto;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.subagent-title-menu:hover .subagent-title-flyout,
+.subagent-title-menu:focus-within .subagent-title-flyout {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.subagent-title-row-group {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.subagent-title-row-group.active,
+.subagent-title-row.active {
+  background: var(--secondary);
+}
+
+.subagent-title-row {
+  min-width: 0;
+  width: 100%;
+  height: 34px;
+  justify-content: flex-start;
+  gap: 7px;
+  border-radius: 0;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.subagent-title-row span:not(.subagent-navigation-status) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-navigation-status {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.subagent-navigation-status.running {
+  color: hsl(142 62% 34%);
+}
+
+.subagent-navigation-status.failed,
+.subagent-navigation-status.stopped {
+  color: var(--destructive);
+}
+
+.subagent-title-stop {
+  width: 30px;
+  height: 30px;
+  margin-right: 4px;
+  border-radius: 0;
 }
 
 .console-header-separator {

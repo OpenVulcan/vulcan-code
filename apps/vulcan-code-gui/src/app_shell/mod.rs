@@ -112,8 +112,8 @@ use self::panel_navigation_state::{
 };
 use self::session_state::{
     ActiveSessionCompactionState, ActiveSessionRunState, ActiveTranscriptDragAutoScroll,
-    ContextCompactionStatusPanelState, SelectedSubagentTaskPanel, SessionPrecheckProgressState,
-    SessionPromptCompactionTrigger, SubagentTaskPanelState, SubagentTaskRunState,
+    ContextCompactionStatusPanelState, SessionPrecheckProgressState,
+    SessionPromptCompactionTrigger,
 };
 use self::task_tree::TaskTreeActionIcon;
 use self::tool_projection::*;
@@ -202,10 +202,16 @@ use crate::model::{
     ActivityEntry, ActivityLevel, ExecutionMode, PENDING_PROMPT_QUEUE_LIMIT, PaneKind,
     PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
     PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
-    PendingSessionPromptSource, SessionCompactionEntry, SessionComposerDraftState, SessionId,
-    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
-    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, SessionTurnStats,
-    SessionTurnStatsStatus, TaskProjectSummary, pending_prompt_dispatch_index,
+    PendingSessionPromptSource, SelectedSubagentTaskPanel, SessionCompactionEntry,
+    SessionComposerDraftState, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
+    SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
+    SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
+    build_delegate_completion_followup_preview, build_delegate_completion_followup_prompt,
+    pending_prompt_dispatch_index, task_session_arguments_from_tool_metadata,
+    task_session_display_title_from_payload, task_session_display_title_from_tool_metadata,
+    task_session_execution_status_from_tool_metadata, task_session_internal_id_from_payload,
+    task_session_payload_from_tool_metadata, task_session_public_id_from_payload,
 };
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;

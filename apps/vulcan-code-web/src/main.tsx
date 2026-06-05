@@ -133,6 +133,7 @@ import { toast } from "sonner";
 import * as LucideIcons from "lucide-react";
 import {
   Activity,
+  Bot,
   Boxes,
   BrainCircuit,
   Archive,
@@ -1105,6 +1106,36 @@ async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
     return null;
   }
   return invoke<WorkbenchSnapshot>("service_stop_conversation_run");
+}
+
+// openSubagentPanel asks the backend to switch the active transcript surface to a child task.
+// openSubagentPanel 请求后端把活动转录界面切换到子任务。
+async function openSubagentPanel(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_open_subagent_panel", { parentConversationId, taskId });
+}
+
+// closeSubagentPanel asks the backend to return the active transcript surface to the parent conversation.
+// closeSubagentPanel 请求后端将活动转录界面返回父会话。
+async function closeSubagentPanel(): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_close_subagent_panel");
+}
+
+// stopSubagentTask asks the backend to stop one child task through the shared task runtime.
+// stopSubagentTask 请求后端通过共享任务运行时停止单个子任务。
+async function stopSubagentTask(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_stop_subagent_task", { parentConversationId, taskId });
 }
 
 // editPendingPrompt restores one queued prompt from the selected conversation queue.
@@ -2100,6 +2131,46 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, []);
 
+  // handleOpenSubagentPanel asks the backend to display one child task surface.
+  // handleOpenSubagentPanel 请求后端显示单个子任务界面。
+  const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
+    try {
+      const snapshot = await openSubagentPanel(parentConversationId, taskId);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setHydratedConversationIds((current) => new Set(current).add(snapshot.subagentNavigation?.activeConversationId ?? taskId));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  // handleCloseSubagentPanel asks the backend to return to the parent conversation surface.
+  // handleCloseSubagentPanel 请求后端返回父会话界面。
+  const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
+    try {
+      const snapshot = await closeSubagentPanel();
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
+  // handleStopSubagentTask asks the backend to stop one running child task.
+  // handleStopSubagentTask 请求后端停止单个运行中的子任务。
+  const handleStopSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
+    try {
+      const snapshot = await stopSubagentTask(parentConversationId, taskId);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
   // handleRemovePendingPrompt removes one queued prompt through the shared service queue.
   // handleRemovePendingPrompt 通过共享服务队列移除单条排队提示词。
   const handleRemovePendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
@@ -2443,6 +2514,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
             onStopConversationRun={handleStopConversationRun}
+            onOpenSubagentPanel={handleOpenSubagentPanel}
+            onCloseSubagentPanel={handleCloseSubagentPanel}
+            onStopSubagentTask={handleStopSubagentTask}
             onEditPendingPrompt={handleEditPendingPrompt}
             onInsertPendingPrompt={handleInsertPendingPrompt}
             onRemovePendingPrompt={handleRemovePendingPrompt}
@@ -4042,6 +4116,9 @@ function ConsoleShell(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onCloseSubagentPanel: () => Promise<void>;
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
   onInsertPendingPrompt: (entryId: string) => Promise<void>;
   onRemovePendingPrompt: (entryId: string) => Promise<void>;
@@ -4340,6 +4417,9 @@ function ConsoleShellContent(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onCloseSubagentPanel: () => Promise<void>;
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
   onInsertPendingPrompt: (entryId: string) => Promise<void>;
   onRemovePendingPrompt: (entryId: string) => Promise<void>;
@@ -4467,6 +4547,9 @@ function ConsoleShellContent(props: {
           onSlashCommand={props.onSlashCommand}
           onSubmitPrompt={props.onSubmitPrompt}
           onStopConversationRun={props.onStopConversationRun}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          onCloseSubagentPanel={props.onCloseSubagentPanel}
+          onStopSubagentTask={props.onStopSubagentTask}
           onEditPendingPrompt={props.onEditPendingPrompt}
           onInsertPendingPrompt={props.onInsertPendingPrompt}
           onRemovePendingPrompt={props.onRemovePendingPrompt}
@@ -4483,8 +4566,12 @@ function ConsoleHeader(props: {
   conversation?: ConversationSummary;
   draftConversation: DraftConversationSelection | null;
   rightPanelOpen: boolean;
+  subagentNavigation?: WorkbenchSnapshot["subagentNavigation"];
   onToggleLeftPanel: () => void;
   onToggleRightPanel: () => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onCloseSubagentPanel: () => Promise<void>;
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
 }) {
   // t translates stable console chrome labels.
   // t 翻译稳定的控制台外壳标签。
@@ -4499,6 +4586,12 @@ function ConsoleHeader(props: {
         <SidebarTrigger onClick={props.onToggleLeftPanel} />
         <span className="console-header-separator" aria-hidden="true" />
         <h1>{props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title")}</h1>
+        <SubagentNavigationMenu
+          navigation={props.subagentNavigation}
+          onCloseSubagentPanel={props.onCloseSubagentPanel}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          onStopSubagentTask={props.onStopSubagentTask}
+        />
       </div>
       <div className="console-header-actions">
         <Tooltip>
@@ -4573,6 +4666,15 @@ function WorkspaceResizableBody(props: {
   // Stops the selected backend conversation run.
   // 停止当前选中的后端会话运行。
   onStopConversationRun: () => Promise<boolean>;
+  // Opens one backend-routed subagent surface.
+  // 打开单个由后端路由的子代理界面。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Closes the backend-routed subagent surface.
+  // 关闭由后端路由的子代理界面。
+  onCloseSubagentPanel: () => Promise<void>;
+  // Stops one backend-routed subagent task.
+  // 停止单个由后端路由的子代理任务。
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   // Restores one pending prompt into the composer.
   // 将单条待发送提示词恢复到输入区。
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
@@ -4600,8 +4702,12 @@ function WorkspaceResizableBody(props: {
               draftConversation={props.selectedDraftConversation}
               conversation={props.selectedConversation}
               rightPanelOpen={props.rightPanelOpen}
+              subagentNavigation={props.workbench.subagentNavigation}
               onToggleLeftPanel={props.onToggleLeftPanel}
               onToggleRightPanel={props.onToggleRightPanel}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+              onCloseSubagentPanel={props.onCloseSubagentPanel}
+              onStopSubagentTask={props.onStopSubagentTask}
             />
             <ChatArea
               startup={props.startup}
@@ -4615,6 +4721,9 @@ function WorkspaceResizableBody(props: {
               onSlashCommand={props.onSlashCommand}
               onSubmitPrompt={props.onSubmitPrompt}
               onStopConversationRun={props.onStopConversationRun}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+              onCloseSubagentPanel={props.onCloseSubagentPanel}
+              onStopSubagentTask={props.onStopSubagentTask}
               onEditPendingPrompt={props.onEditPendingPrompt}
               onInsertPendingPrompt={props.onInsertPendingPrompt}
               onRemovePendingPrompt={props.onRemovePendingPrompt}
@@ -6188,6 +6297,9 @@ function ChatArea(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onCloseSubagentPanel: () => Promise<void>;
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
   onInsertPendingPrompt: (entryId: string) => Promise<void>;
   onRemovePendingPrompt: (entryId: string) => Promise<void>;
@@ -6215,7 +6327,19 @@ function ChatArea(props: {
   // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
   const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
-  const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
+  const subagentNavigation = props.workbench.subagentNavigation ?? null;
+  const activeSurfaceConversationId = subagentNavigation?.activeConversationId ?? props.selectedConversationId;
+  const activeSubagentTask = subagentNavigation?.tasks?.find((task) => task.isActive) ?? null;
+  const surfaceConversation = activeSubagentTask
+    ? {
+      id: activeSubagentTask.taskId,
+      title: activeSubagentTask.label,
+      status: activeSubagentTask.isRunning ? "running" : activeSubagentTask.runState,
+      runPhase: activeSubagentTask.isRunning ? "requesting" : activeSubagentTask.runState,
+      projectId: selectedConversation?.projectId ?? null,
+    }
+    : selectedConversation;
+  const messages = props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
   // showConversationLoadingOnly is true only when no cached messages can be shown during hydration.
   // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
@@ -6224,7 +6348,7 @@ function ChatArea(props: {
   const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? "当前项目";
   const isEmptyConversation = Boolean(
     props.selectedDraftConversation
-      || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
+      || (!activeSubagentTask && selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
   // emptyPromptVisible keeps the empty prompt mounted long enough to fade out after first submit.
   // emptyPromptVisible 让空会话提示在首次提交后保留足够时间完成淡出。
@@ -6234,7 +6358,7 @@ function ChatArea(props: {
   const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
   // runtimeCueText stores the compact in-progress label shown above the composer.
   // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
-  const streamingThinkingBlock = activeStreamingThinkingBlock(selectedConversation, messages);
+  const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, messages);
   const displayedStreamingThinkingBlock = thinkingOverlayEnabled ? streamingThinkingBlock : null;
   // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
   // streamingThinkingOverlayBlock 在思考弹窗延迟退场期间保留最后一个思考块。
@@ -6247,8 +6371,11 @@ function ChatArea(props: {
     ? thinkingOverlayBlockSignature(displayedStreamingThinkingBlock)
     : null;
   const retainedStreamingThinkingOverlayId = streamingThinkingOverlayBlock?.id ?? null;
-  const runtimeCueText = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
-  const isConversationRunning = conversationIsRunning(selectedConversation);
+  const runtimeCueText = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCueText(surfaceConversation, messages, t);
+  // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
+  // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
+  const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
+  const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -6298,8 +6425,8 @@ function ChatArea(props: {
     }
 
     const element = workspaceRef.current;
-    const selectedChanged = selectedConversationTailRef.current !== props.selectedConversationId;
-    selectedConversationTailRef.current = props.selectedConversationId;
+    const selectedChanged = selectedConversationTailRef.current !== activeSurfaceConversationId;
+    selectedConversationTailRef.current = activeSurfaceConversationId;
     const shouldFollowTail = selectedChanged
       || !element
       || shouldFollowConversationTailRef.current
@@ -6338,14 +6465,14 @@ function ChatArea(props: {
     conversationStreamSignature,
     isEmptyConversation,
     jumpConversationToBottom,
-    props.selectedConversationId,
+    activeSurfaceConversationId,
     showConversationLoadingOnly,
     updateConversationBottomState,
   ]);
 
   React.useEffect(() => {
     updateConversationBottomState();
-  }, [conversationStreamSignature, props.selectedConversationId, updateConversationBottomState]);
+  }, [activeSurfaceConversationId, conversationStreamSignature, updateConversationBottomState]);
 
   React.useEffect(() => {
     window.localStorage.setItem(THINKING_OVERLAY_STORAGE_KEY, thinkingOverlayEnabled ? "true" : "false");
@@ -6410,7 +6537,7 @@ function ChatArea(props: {
             />
           ) : null}
           <ConversationWorkspace
-            conversation={selectedConversation}
+            conversation={surfaceConversation}
             hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
             messages={messages}
             error={props.conversationLoadError}
@@ -6456,6 +6583,91 @@ function ChatArea(props: {
       )}
     </div>
   );
+}
+
+// SubagentNavigationMenu renders the backend-projected subagent switcher from the conversation title bar.
+// SubagentNavigationMenu 从会话标题栏渲染由后端投影的子代理切换器。
+function SubagentNavigationMenu(props: {
+  navigation: WorkbenchSnapshot["subagentNavigation"];
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onCloseSubagentPanel: () => Promise<void>;
+  onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+}) {
+  const navigation = props.navigation;
+  const tasks = navigation?.tasks ?? [];
+  const activeTaskId = navigation?.activeTaskId ?? null;
+  const runningCount = tasks.filter((task) => task.isRunning).length;
+  if (!navigation || tasks.length === 0) {
+    return null;
+  }
+  return (
+    <div className={cn("subagent-title-menu", runningCount > 0 && "running")}>
+      <Button
+        aria-label={runningCount > 0 ? `${runningCount} 个子代理正在运行` : "子代理调度"}
+        className="subagent-title-trigger"
+        size="icon-sm"
+        type="button"
+        variant="ghost"
+      >
+        <Bot size={15} />
+      </Button>
+      <nav className="subagent-title-flyout" aria-label="子代理调度切换">
+        <Button
+          className={cn("subagent-title-row", !activeTaskId && "active")}
+          onClick={() => void props.onCloseSubagentPanel()}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          <MessageSquareText size={14} />
+          <span>主会话</span>
+        </Button>
+        {tasks.map((task) => (
+          <div className={cn("subagent-title-row-group", task.isActive && "active")} key={task.taskId}>
+            <Button
+              className="subagent-title-row"
+              onClick={() => void props.onOpenSubagentPanel(navigation.parentConversationId, task.taskId)}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              <Boxes size={14} />
+              <span>{task.label}</span>
+              <span className={cn("subagent-navigation-status", task.runState)}>{subagentRunStateLabel(task.runState)}</span>
+            </Button>
+            {task.isRunning ? (
+              <Button
+                aria-label={`停止子代理 ${task.label}`}
+                className="subagent-title-stop"
+                onClick={() => void props.onStopSubagentTask(navigation.parentConversationId, task.taskId)}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                <Square size={12} />
+              </Button>
+            ) : null}
+          </div>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+
+// subagentRunStateLabel maps backend run-state keys to compact WebUI labels.
+// subagentRunStateLabel 将后端运行状态键映射为紧凑 WebUI 标签。
+function subagentRunStateLabel(runState: string): string {
+  switch (runState) {
+    case "running":
+      return "运行中";
+    case "stopped":
+      return "已停止";
+    case "failed":
+      return "失败";
+    default:
+      return "已完成";
+  }
 }
 
 // ConversationWorkspace renders the conversation timeline replacement.

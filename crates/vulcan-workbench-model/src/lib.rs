@@ -5,25 +5,45 @@ mod activity;
 mod project;
 mod runtime_state;
 mod session;
+mod subagent;
 mod turn_stats;
 
 pub use activity::{ActivityEntry, ActivityLevel};
 pub use project::TaskProjectSummary;
 pub use runtime_state::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason,
-    PendingPromptDispatchContext, PendingPromptModelReference, PendingPromptPanelDropTarget,
-    PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptQueueRouteError,
-    PendingPromptQueueRouteOutcome, PendingPromptRuntimeOptions, PendingPromptWebSearchOverride,
-    PendingSessionPromptEntry, PendingSessionPromptSource, SessionComposerDraftState,
-    SessionRuntimeStateEntry, SessionTranscriptUiState, VmmProfileSyncState,
-    VmmWritebackOutboxEntry, apply_pending_prompt_panel_drop_target,
-    clear_internal_pending_prompt_queue_and_restore_panel, pending_prompt_dispatch_block_reason,
+    PendingPromptDispatchContext, PendingPromptInternalQueueEnqueueError,
+    PendingPromptInternalQueueEnqueueOutcome, PendingPromptInternalQueueEnqueuePlan,
+    PendingPromptModelReference, PendingPromptPanelDropTarget, PendingPromptPanelEntry,
+    PendingPromptPanelEntryState, PendingPromptQueueRouteError, PendingPromptQueueRouteOutcome,
+    PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
+    PendingSessionPromptSource, SessionComposerDraftState, SessionRuntimeStateEntry,
+    SessionTranscriptUiState, VmmProfileSyncState, VmmWritebackOutboxEntry,
+    apply_pending_prompt_internal_queue_enqueue_plan, apply_pending_prompt_panel_drop_target,
+    clear_internal_pending_prompt_queue_and_restore_panel,
+    enqueue_pending_prompt_internal_queue_entry, pending_prompt_dispatch_block_reason,
     pending_prompt_dispatch_index, pending_prompt_lane_is_busy,
-    pending_session_prompt_entry_from_panel_entry, remove_pending_prompt_panel_entry,
-    route_pending_prompt_panel_entry_into_internal_queue, take_guided_pending_prompt_entries,
-    take_next_internal_pending_prompt_entry, take_next_pending_prompt_entry,
+    pending_session_prompt_entry_from_panel_entry, plan_pending_prompt_internal_queue_enqueue,
+    remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
+    take_guided_pending_prompt_entries, take_next_internal_pending_prompt_entry,
+    take_next_pending_prompt_entry,
 };
 pub use session::{SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource};
+pub use subagent::{
+    SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SubagentTaskPanelState,
+    SubagentTaskRunState, attach_tool_display_state_to_metadata,
+    build_delegate_completion_followup_preview, build_delegate_completion_followup_prompt,
+    build_stopped_task_session_metadata, delegate_completion_status_label,
+    parse_subagent_task_panel_metadata, parse_subagent_task_panel_payload,
+    parse_subagent_task_prompt_metadata, subagent_navigation_task_label,
+    subagent_run_state_from_execution_status, task_session_arguments_from_tool_metadata,
+    task_session_declared_task_id_from_tool_metadata, task_session_description_from_tool_metadata,
+    task_session_display_title_from_payload, task_session_display_title_from_tool_metadata,
+    task_session_execution_status_from_tool_metadata, task_session_internal_id_from_payload,
+    task_session_message_match_score, task_session_payload_from_tool_metadata,
+    task_session_prompt_text_from_tool_metadata, task_session_public_id_from_payload,
+    task_session_subagent_from_tool_metadata, task_session_tool_display_label,
+};
 pub use turn_stats::{SessionTurnStats, SessionTurnStatsStatus};
 pub use vulcan_context::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

@@ -725,7 +725,10 @@ impl ConversationHookRuntime {
                 .build()
                 .ok()?;
             runtime.block_on(async move {
-                tokio::time::timeout(Duration::from_millis(timeout_ms), dispatcher.dispatch(request))
+                tokio::time::timeout(
+                    Duration::from_millis(timeout_ms),
+                    dispatcher.dispatch(request),
+                )
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -963,7 +966,9 @@ impl ConversationCompletionRequest {
             return ConversationCompletionOutcome {
                 session_id,
                 turn_id,
-                report: Err(format!("completed-turn hook thread failed to start: {error}")),
+                report: Err(format!(
+                    "completed-turn hook thread failed to start: {error}"
+                )),
                 vmm_writeback_effects: Vec::new(),
             };
         }
@@ -971,7 +976,8 @@ impl ConversationCompletionRequest {
             .await
             .map_err(|_| String::from("completed-turn hook dispatch thread disconnected"))
             .and_then(|report| {
-                report.ok_or_else(|| String::from("completed-turn hook dispatch produced no report"))
+                report
+                    .ok_or_else(|| String::from("completed-turn hook dispatch produced no report"))
             });
         let vmm_writeback_effects = report
             .as_ref()

@@ -529,6 +529,49 @@ export interface ComposerSlashCommandSummary {
   descriptionEn: string;
 }
 
+// SubagentNavigationSnapshot describes the backend-routed subagent surface state.
+// SubagentNavigationSnapshot 描述由后端路由的子代理界面状态。
+export interface SubagentNavigationSnapshot {
+  // Parent conversation that owns the subagent task cards.
+  // 拥有子代理任务卡片的父会话。
+  parentConversationId: string;
+  // Conversation id currently rendered by the transcript surface.
+  // 当前由转录界面渲染的会话标识。
+  activeConversationId: string;
+  // Active child task id when a subagent surface is open.
+  // 子代理界面打开时的活动子任务标识。
+  activeTaskId?: string | null;
+  // Ordered subagent tasks projected by the backend.
+  // 由后端投影的有序子代理任务。
+  tasks?: SubagentTaskSummary[];
+}
+
+// SubagentTaskSummary describes one subagent navigation row.
+// SubagentTaskSummary 描述单条子代理导航行。
+export interface SubagentTaskSummary {
+  // Stable child task conversation id.
+  // 稳定子任务会话标识。
+  taskId: string;
+  // Caller-facing task id retained in task-session metadata.
+  // 保留在 task-session 元数据中的调用方面向任务标识。
+  publicTaskId: string;
+  // Human-facing label built by the shared backend projection.
+  // 由共享后端投影构建的人类可读标签。
+  label: string;
+  // Optional task description.
+  // 可选任务描述。
+  description?: string | null;
+  // Canonical run state key.
+  // 规范运行状态键。
+  runState: string;
+  // Whether the shared task runtime reports this task as running.
+  // 共享任务运行时是否报告该任务正在运行。
+  isRunning: boolean;
+  // Whether this task is currently opened.
+  // 该任务当前是否已打开。
+  isActive: boolean;
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -553,6 +596,9 @@ export interface WorkbenchSnapshot {
   // Conversation messages.
   // 会话消息。
   messages: ConversationMessage[];
+  // Backend-routed subagent navigation state for the selected parent conversation.
+  // 当前选中父会话的后端路由子代理导航状态。
+  subagentNavigation?: SubagentNavigationSnapshot | null;
   // Tool call summaries.
   // 工具调用摘要。
   toolCalls: ToolCallSummary[];

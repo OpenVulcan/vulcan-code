@@ -6,11 +6,16 @@ pub use vulcan_workbench_model::{
     ActivityEntry, ActivityLevel, PENDING_PROMPT_QUEUE_LIMIT, PendingPromptModelReference,
     PendingPromptPanelEntry, PendingPromptPanelEntryState, PendingPromptRuntimeOptions,
     PendingPromptWebSearchOverride, PendingSessionPromptEntry, PendingSessionPromptSource,
-    SessionCompactionEntry, SessionComposerDraftState, SessionId, SessionMessageEntry,
-    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
-    TaskProjectSummary, VmmProfileSyncState, VmmWritebackOutboxEntry,
-    pending_prompt_dispatch_index,
+    SelectedSubagentTaskPanel, SessionCompactionEntry, SessionComposerDraftState, SessionId,
+    SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource, SessionTurnStats,
+    SessionTurnStatsStatus, SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
+    VmmProfileSyncState, VmmWritebackOutboxEntry, build_delegate_completion_followup_preview,
+    build_delegate_completion_followup_prompt, pending_prompt_dispatch_index,
+    task_session_arguments_from_tool_metadata, task_session_display_title_from_payload,
+    task_session_display_title_from_tool_metadata,
+    task_session_execution_status_from_tool_metadata, task_session_internal_id_from_payload,
+    task_session_payload_from_tool_metadata, task_session_public_id_from_payload,
 };
 
 /// Execution modes for AI coding tasks.

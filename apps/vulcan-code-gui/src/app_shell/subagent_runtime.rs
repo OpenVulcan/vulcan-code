@@ -221,56 +221,7 @@ impl VulcanWorkbench {
     /// Returns the matching score between one visible task-tool message metadata object and one delegate payload so host events can relink running cards to their live child sessions.
     /// 返回某条可见 task 工具消息元数据与某份委派 payload 的匹配分数，供宿主事件把运行中卡片重新关联到实时子会话。
     pub(super) fn task_session_message_match_score(metadata: &Value, payload: &Value) -> usize {
-        let payload_internal_task_id = task_session_internal_id_from_payload(payload);
-        let metadata_internal_task_id = task_session_payload_from_tool_metadata(metadata)
-            .and_then(task_session_internal_id_from_payload);
-        if payload_internal_task_id
-            .zip(metadata_internal_task_id)
-            .is_some_and(|(left, right)| left == right)
-        {
-            return usize::MAX;
-        }
-        if task_session_public_id_from_payload(payload)
-            .zip(task_session_declared_task_id_from_tool_metadata(metadata))
-            .is_some_and(|(left, right)| left == right)
-        {
-            return usize::MAX.saturating_sub(1);
-        }
-
-        let payload_prompt = payload
-            .get("prompt")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        let payload_description = payload
-            .get("description")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-        let payload_subagent = payload
-            .get("subagent")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty());
-
-        let mut score = 0usize;
-        if payload_prompt
-            .zip(task_session_prompt_text_from_tool_metadata(metadata))
-            .is_some_and(|(left, right)| left == right)
-        {
-            score += 4;
-        }
-        if payload_description
-            .zip(task_session_description_from_tool_metadata(metadata))
-            .is_some_and(|(left, right)| left == right)
-        {
-            score += 2;
-        }
-        if payload_subagent
-            .zip(task_session_subagent_from_tool_metadata(metadata))
-            .is_some_and(|(left, right)| left == right)
-        {
-            score += 1;
-        }
-
-        score
+        vulcan_workbench_model::task_session_message_match_score(metadata, payload)
     }
     /// Finds the most suitable parent task-tool call message for one delegate payload so the visible transcript card can inherit task-session metadata.
     /// 为某份委派 payload 找到最合适的父 task 工具调用消息，使可见转录卡片能够继承 task-session 元数据。
@@ -423,74 +374,14 @@ impl VulcanWorkbench {
             return;
         };
 
-        let prompt = message
-            .metadata
-            .as_ref()
-            .and_then(task_session_prompt_text_from_tool_metadata)
-            .map(str::to_string);
-        let description = message
-            .metadata
-            .as_ref()
-            .and_then(task_session_description_from_tool_metadata)
-            .map(str::to_string)
-            .or_else(|| {
-                state_snapshot
-                    .as_ref()
-                    .and_then(|state| state.description.clone())
-            });
-        let subagent = message
-            .metadata
-            .as_ref()
-            .and_then(task_session_subagent_from_tool_metadata)
-            .map(str::to_string)
-            .or_else(|| {
-                state_snapshot.as_ref().and_then(|state| {
-                    (!state.subagent_label.trim().is_empty()).then(|| state.subagent_label.clone())
-                })
-            });
-        let public_task_id = message
-            .metadata
-            .as_ref()
-            .and_then(task_session_declared_task_id_from_tool_metadata)
-            .map(str::to_string)
-            .or_else(|| {
-                state_snapshot
-                    .as_ref()
-                    .map(|state| state.public_task_id.clone())
-            })
-            .unwrap_or_else(|| task_id.to_string());
-        let conversation_state = state_snapshot.and_then(|state| state.conversation_state);
-        let updated_metadata = attach_tool_display_state_metadata(
-            Some(json!({
-                "tool_name": "task",
-                "kind": "task_session",
-                "payload": {
-                    "task_id": public_task_id,
-                    "task_session_id": task_id.to_string(),
-                    "execution_status": "stopped",
-                    "prompt": prompt,
-                    "description": description,
-                    "subagent": subagent,
-                    "result": stop_summary,
-                    "updated_at": current_unix_millis_text(),
-                    "conversation_state": conversation_state,
-                },
-            })),
-            "stopped",
-        )
-        .unwrap_or_else(|| {
-            json!({
-                "tool_name": "task",
-                "kind": "task_session",
-                "payload": {
-                    "task_id": task_id.to_string(),
-                    "task_session_id": task_id.to_string(),
-                    "execution_status": "stopped",
-                    "result": stop_summary,
-                    "updated_at": current_unix_millis_text(),
-                },
-            })
-        });
+        let updated_at = current_unix_millis_text();
+        let updated_metadata = vulcan_workbench_model::build_stopped_task_session_metadata(
+            message.metadata.as_ref(),
+            state_snapshot.as_ref(),
+            task_id,
+            stop_summary,
+            &updated_at,
+        );
         let _ = self.merge_metadata_into_session_record(
             parent_session_id,
             &message_id,

@@ -85,9 +85,9 @@ pub struct PendingPromptDispatchContext {
 /// 排队提示词暂时不能分发的原因。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PendingPromptDispatchBlockReason {
-    /// Anthropic parent dispatch must wait for running delegated subagents.
-    /// Anthropic 父会话分发必须等待运行中的委派子代理。
-    AnthropicRunningSubagents,
+    /// Parent dispatch must wait for running delegated subagents.
+    /// 父会话分发必须等待运行中的委派子代理。
+    RunningSubagents,
     /// A root model stream is still active.
     /// 根模型流仍在运行。
     ActiveRun,
@@ -120,8 +120,8 @@ pub fn pending_prompt_dispatch_block_reason(
     context: PendingPromptDispatchContext,
     allow_from_stopped_phase: bool,
 ) -> Option<PendingPromptDispatchBlockReason> {
-    if context.uses_anthropic_runtime && context.has_running_subagents {
-        return Some(PendingPromptDispatchBlockReason::AnthropicRunningSubagents);
+    if context.has_running_subagents {
+        return Some(PendingPromptDispatchBlockReason::RunningSubagents);
     }
     if context.has_active_run || provider_session_run_phase_is_active(context.run_phase) {
         return Some(PendingPromptDispatchBlockReason::ActiveRun);
@@ -181,6 +181,166 @@ pub fn pending_prompt_lane_is_busy(
         || !ui_state.pending_prompt_queue.is_empty()
         || !ui_state.pending_prompt_panel_queue.is_empty()
         || context.dispatch.has_running_subagents
+}
+
+/// Error returned when one internal pending prompt cannot be added to the queue.
+/// 当内部待发送提示词无法加入队列时返回的错误。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPromptInternalQueueEnqueueError {
+    /// The internal queue has no replaceable slot for the incoming prompt.
+    /// 内部队列没有可替换的空位供传入提示词使用。
+    QueueFull,
+}
+
+/// Shared mutation plan for adding one internal pending prompt entry.
+/// 添加单条内部待发送提示词条目的共享变更计划。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingPromptInternalQueueEnqueuePlan {
+    /// The same delegated completion prompt is already queued.
+    /// 相同的委派完成提示词已经在队列中。
+    AlreadyQueued,
+    /// The prompt should be inserted, optionally removing one older delegate callback first.
+    /// 应插入该提示词，并可选地先移除一条更旧的委派回调。
+    Insert {
+        /// Existing queue index that should be removed before insertion.
+        /// 插入前应移除的现有队列索引。
+        remove_index: Option<usize>,
+    },
+}
+
+/// Result returned after applying one internal pending-prompt enqueue plan.
+/// 应用一条内部待发送提示词入队计划后返回的结果。
+#[derive(Debug, Clone)]
+pub enum PendingPromptInternalQueueEnqueueOutcome {
+    /// The incoming delegated completion was already represented in the queue.
+    /// 传入的委派完成消息已经由队列中的现有条目表示。
+    AlreadyQueued,
+    /// The entry was inserted and may have evicted one older delegate callback.
+    /// 条目已插入，并且可能挤出了一条更旧的委派回调。
+    Inserted {
+        /// Delegate callback removed to keep the queue within its capacity.
+        /// 为保持队列容量而移除的委派回调。
+        removed_for_capacity: Option<PendingSessionPromptEntry>,
+    },
+}
+
+/// Builds the iced-compatible internal queue mutation plan without changing the queue.
+/// 在不修改队列的情况下构建与 iced 兼容的内部队列变更计划。
+///
+/// # Parameters
+/// 参数
+/// `queue` is the current internal prompt queue.
+/// `queue` 是当前内部提示词队列。
+/// `entry` is the prompt entry that the caller wants to enqueue.
+/// `entry` 是调用方希望加入队列的提示词条目。
+///
+/// # Returns
+/// 返回值
+/// A reusable mutation plan, or a queue-full error when no safe slot exists.
+/// 返回可复用的变更计划；当没有安全空位时返回队列已满错误。
+pub fn plan_pending_prompt_internal_queue_enqueue(
+    queue: &[PendingSessionPromptEntry],
+    entry: &PendingSessionPromptEntry,
+) -> Result<PendingPromptInternalQueueEnqueuePlan, PendingPromptInternalQueueEnqueueError> {
+    if entry.source == PendingSessionPromptSource::DelegateCompletion
+        && entry.task_id.as_ref().is_some_and(|task_id| {
+            queue.iter().any(|existing| {
+                existing.source == PendingSessionPromptSource::DelegateCompletion
+                    && existing.task_id.as_ref() == Some(task_id)
+            })
+        })
+    {
+        return Ok(PendingPromptInternalQueueEnqueuePlan::AlreadyQueued);
+    }
+
+    if queue.len() >= PENDING_PROMPT_QUEUE_LIMIT {
+        if entry.source == PendingSessionPromptSource::DelegateCompletion
+            && let Some(index) = queue.iter().position(|existing| {
+                existing.source == PendingSessionPromptSource::DelegateCompletion
+            })
+        {
+            return Ok(PendingPromptInternalQueueEnqueuePlan::Insert {
+                remove_index: Some(index),
+            });
+        }
+        return Err(PendingPromptInternalQueueEnqueueError::QueueFull);
+    }
+
+    Ok(PendingPromptInternalQueueEnqueuePlan::Insert { remove_index: None })
+}
+
+/// Applies one shared internal queue enqueue plan to the provided UI state.
+/// 将一条共享内部队列入队计划应用到给定 UI 状态。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` owns the internal queue to mutate.
+/// `ui_state` 拥有需要变更的内部队列。
+/// `entry` is the prompt entry to insert when the plan allows insertion.
+/// `entry` 是计划允许插入时要写入的提示词条目。
+/// `insert_front` requests front insertion for interrupt-style prompts.
+/// `insert_front` 要求以前插方式插入插队式提示词。
+/// `plan` is the mutation plan previously returned by `plan_pending_prompt_internal_queue_enqueue`.
+/// `plan` 是此前由 `plan_pending_prompt_internal_queue_enqueue` 返回的变更计划。
+///
+/// # Returns
+/// 返回值
+/// The applied mutation outcome, including any evicted delegate callback.
+/// 返回已应用的变更结果，包含任何被挤出的委派回调。
+pub fn apply_pending_prompt_internal_queue_enqueue_plan(
+    ui_state: &mut SessionTranscriptUiState,
+    entry: PendingSessionPromptEntry,
+    insert_front: bool,
+    plan: PendingPromptInternalQueueEnqueuePlan,
+) -> PendingPromptInternalQueueEnqueueOutcome {
+    let PendingPromptInternalQueueEnqueuePlan::Insert { remove_index } = plan else {
+        return PendingPromptInternalQueueEnqueueOutcome::AlreadyQueued;
+    };
+    let removed_for_capacity = remove_index.and_then(|index| {
+        (index < ui_state.pending_prompt_queue.len())
+            .then(|| ui_state.pending_prompt_queue.remove(index))
+    });
+    if insert_front {
+        ui_state.pending_prompt_queue.insert(0, entry);
+    } else {
+        ui_state.pending_prompt_queue.push(entry);
+    }
+    PendingPromptInternalQueueEnqueueOutcome::Inserted {
+        removed_for_capacity,
+    }
+}
+
+/// Enqueues one internal prompt entry using the shared iced queue semantics.
+/// 使用共享 iced 队列语义加入一条内部提示词条目。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` owns the internal queue to mutate.
+/// `ui_state` 拥有需要变更的内部队列。
+/// `entry` is the prompt entry to insert.
+/// `entry` 是需要插入的提示词条目。
+/// `insert_front` requests front insertion for interrupt-style prompts.
+/// `insert_front` 要求以前插方式插入插队式提示词。
+///
+/// # Returns
+/// 返回值
+/// The applied mutation outcome, or a queue-full error.
+/// 返回已应用的变更结果，或队列已满错误。
+pub fn enqueue_pending_prompt_internal_queue_entry(
+    ui_state: &mut SessionTranscriptUiState,
+    entry: PendingSessionPromptEntry,
+    insert_front: bool,
+) -> Result<PendingPromptInternalQueueEnqueueOutcome, PendingPromptInternalQueueEnqueueError> {
+    let plan = plan_pending_prompt_internal_queue_enqueue(
+        ui_state.pending_prompt_queue.as_slice(),
+        &entry,
+    )?;
+    Ok(apply_pending_prompt_internal_queue_enqueue_plan(
+        ui_state,
+        entry,
+        insert_front,
+        plan,
+    ))
 }
 
 /// Returns whether a run phase represents an already-started provider/tool loop.
@@ -1029,6 +1189,143 @@ mod tests {
                 has_precheck_progress: false,
             },
         ));
+    }
+
+    /// Verifies queued prompt dispatch waits for running subagents across provider runtimes.
+    /// 验证待发送提示词分发会在所有 Provider 运行时下等待运行中的子代理。
+    #[test]
+    fn pending_prompt_dispatch_blocks_running_subagents_for_all_runtimes() {
+        for uses_anthropic_runtime in [true, false] {
+            assert_eq!(
+                pending_prompt_dispatch_block_reason(
+                    PendingPromptDispatchContext {
+                        uses_anthropic_runtime,
+                        has_running_subagents: true,
+                        has_active_run: false,
+                        run_phase: None,
+                        has_active_compaction: false,
+                    },
+                    true,
+                ),
+                Some(PendingPromptDispatchBlockReason::RunningSubagents)
+            );
+            assert_eq!(
+                pending_prompt_dispatch_block_reason(
+                    PendingPromptDispatchContext {
+                        uses_anthropic_runtime,
+                        has_running_subagents: false,
+                        has_active_run: false,
+                        run_phase: None,
+                        has_active_compaction: false,
+                    },
+                    true,
+                ),
+                None
+            );
+        }
+    }
+
+    /// Verifies duplicate delegate-completion callbacks are not enqueued twice.
+    /// 验证重复的委派完成回调不会被二次加入内部队列。
+    #[test]
+    fn internal_queue_enqueue_deduplicates_delegate_completion() {
+        let mut ui_state = SessionTranscriptUiState::default();
+        let mut first = test_internal_prompt_entry("delegate-a", None);
+        first.source = PendingSessionPromptSource::DelegateCompletion;
+        first.task_id = Some(String::from("task-a"));
+        let mut duplicate = test_internal_prompt_entry("delegate-a-again", None);
+        duplicate.source = PendingSessionPromptSource::DelegateCompletion;
+        duplicate.task_id = Some(String::from("task-a"));
+
+        let first_outcome =
+            enqueue_pending_prompt_internal_queue_entry(&mut ui_state, first, false)
+                .expect("enqueue first delegate completion");
+        let second_outcome =
+            enqueue_pending_prompt_internal_queue_entry(&mut ui_state, duplicate, false)
+                .expect("deduplicate second delegate completion");
+
+        assert!(matches!(
+            first_outcome,
+            PendingPromptInternalQueueEnqueueOutcome::Inserted { .. }
+        ));
+        assert!(matches!(
+            second_outcome,
+            PendingPromptInternalQueueEnqueueOutcome::AlreadyQueued
+        ));
+        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(ui_state.pending_prompt_queue[0].id, "delegate-a");
+    }
+
+    /// Verifies a full queue may replace the oldest delegate callback with a newer delegate callback.
+    /// 验证满队列可以用新的委派回调替换最旧的委派回调。
+    #[test]
+    fn internal_queue_enqueue_replaces_old_delegate_when_full() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_queue: (0..PENDING_PROMPT_QUEUE_LIMIT)
+                .map(|index| test_internal_prompt_entry(&format!("user-{index}"), None))
+                .collect(),
+            ..SessionTranscriptUiState::default()
+        };
+        ui_state.pending_prompt_queue[3].source = PendingSessionPromptSource::DelegateCompletion;
+        ui_state.pending_prompt_queue[3].task_id = Some(String::from("old-task"));
+        let mut new_delegate = test_internal_prompt_entry("new-delegate", None);
+        new_delegate.source = PendingSessionPromptSource::DelegateCompletion;
+        new_delegate.task_id = Some(String::from("new-task"));
+
+        let outcome =
+            enqueue_pending_prompt_internal_queue_entry(&mut ui_state, new_delegate, false)
+                .expect("replace old delegate callback");
+
+        let PendingPromptInternalQueueEnqueueOutcome::Inserted {
+            removed_for_capacity,
+        } = outcome
+        else {
+            panic!("delegate callback should be inserted");
+        };
+        assert_eq!(
+            removed_for_capacity
+                .as_ref()
+                .and_then(|entry| entry.task_id.as_deref()),
+            Some("old-task")
+        );
+        assert_eq!(
+            ui_state.pending_prompt_queue.len(),
+            PENDING_PROMPT_QUEUE_LIMIT
+        );
+        assert!(
+            ui_state
+                .pending_prompt_queue
+                .iter()
+                .any(|entry| entry.id == "new-delegate")
+        );
+        assert!(
+            !ui_state
+                .pending_prompt_queue
+                .iter()
+                .any(|entry| entry.task_id.as_deref() == Some("old-task"))
+        );
+    }
+
+    /// Verifies a full internal queue rejects ordinary user follow-ups.
+    /// 验证满内部队列会拒绝普通用户跟进消息。
+    #[test]
+    fn internal_queue_enqueue_rejects_user_prompt_when_full() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_queue: (0..PENDING_PROMPT_QUEUE_LIMIT)
+                .map(|index| test_internal_prompt_entry(&format!("user-{index}"), None))
+                .collect(),
+            ..SessionTranscriptUiState::default()
+        };
+        let user_prompt = test_internal_prompt_entry("extra-user", None);
+
+        let error = enqueue_pending_prompt_internal_queue_entry(&mut ui_state, user_prompt, false)
+            .expect_err("full queue should reject ordinary user prompts");
+
+        assert_eq!(error, PendingPromptInternalQueueEnqueueError::QueueFull);
+        assert_eq!(
+            ui_state.pending_prompt_queue.len(),
+            PENDING_PROMPT_QUEUE_LIMIT
+        );
     }
 
     /// Verifies manually guided prompts preserve the user's click order.

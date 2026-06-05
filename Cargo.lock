@@ -8799,6 +8799,7 @@ name = "vulcan-workbench-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
  "uuid",
  "vulcan-context",
  "vulcan-context-injection",

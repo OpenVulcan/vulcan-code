@@ -172,12 +172,12 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use uuid::Uuid;
-    use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
         ControllerConfig, ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
     };
+    use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
     use vulcan_workbench_model::{PendingSessionPromptSource, SessionRuntimeStateEntry};
 
     /// Builds one minimal execution preparation used by launch-payload tests.
@@ -547,6 +547,9 @@ mod tests {
         let launch = build_runtime_stream_launch_payload(&request, bootstrap);
 
         assert_eq!(launch.effective_prompt, expected_effective_prompt);
-        assert_eq!(launch.stream_state.controller().snapshot().messages.len(), 1);
+        assert_eq!(
+            launch.stream_state.controller().snapshot().messages.len(),
+            1
+        );
     }
 }

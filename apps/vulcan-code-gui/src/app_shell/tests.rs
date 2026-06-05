@@ -1649,10 +1649,10 @@ fn pending_prompt_dispatch_index_prefers_delegate_completion_for_anthropic() {
     assert_eq!(pending_prompt_dispatch_index(&queue, false), 0);
 }
 
-/// Verifies Anthropic sessions block pending-prompt dispatch while detached subagents from the previous tool round are still running, whereas other runtimes keep the original behavior.
-/// 验证当上一轮工具回合的分离子代理仍在运行时，Anthropic 会话会阻止待发送提示词分发，而其他运行时保持原有行为。
+/// Verifies any provider runtime blocks pending-prompt dispatch while detached subagents from the previous tool round are still running.
+/// 验证当上一轮工具回合的分离子代理仍在运行时，任意 Provider 运行时都会阻止待发送提示词分发。
 #[test]
-fn anthropic_pending_prompt_dispatch_blocks_only_for_running_subagents() {
+fn pending_prompt_dispatch_blocks_for_running_subagents() {
     assert!(
         pending_prompt_dispatch_block_reason(
             test_pending_prompt_dispatch_context(true, true),
@@ -1672,7 +1672,7 @@ fn anthropic_pending_prompt_dispatch_blocks_only_for_running_subagents() {
             test_pending_prompt_dispatch_context(false, true),
             true,
         )
-        .is_none()
+        .is_some()
     );
     assert!(
         pending_prompt_dispatch_block_reason(

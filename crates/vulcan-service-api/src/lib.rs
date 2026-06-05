@@ -113,6 +113,10 @@ pub struct WorkbenchSnapshot {
     /// Conversation messages shown in the main timeline.
     /// 主时间线展示的会话消息。
     pub messages: Vec<ConversationMessage>,
+    /// Subagent navigation projected for the currently selected parent conversation.
+    /// 为当前选中父会话投影出的子代理导航状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_navigation: Option<SubagentNavigationSnapshot>,
     /// Tool calls shown in the tool panel.
     /// 工具面板展示的工具调用。
     pub tool_calls: Vec<ToolCallSummary>,
@@ -165,6 +169,56 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes the subagent navigation surface for one selected parent conversation.
+/// 描述单个已选父会话的子代理导航界面状态。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentNavigationSnapshot {
+    /// Parent conversation identifier that owns the subagent task cards.
+    /// 拥有子代理任务卡片的父会话标识。
+    pub parent_conversation_id: String,
+    /// Conversation identifier currently rendered in the transcript surface.
+    /// 当前渲染在转录界面中的会话标识。
+    pub active_conversation_id: String,
+    /// Active child task identifier when the subagent surface is open.
+    /// 子代理界面打开时的活动子任务标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_task_id: Option<String>,
+    /// Ordered subagent task entries shown in the navigation control.
+    /// 导航控件中展示的有序子代理任务条目。
+    #[serde(default)]
+    pub tasks: Vec<SubagentTaskSummary>,
+}
+
+/// Summarizes one subagent task entry for WebUI rendering.
+/// 汇总一条供 WebUI 渲染的子代理任务条目。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentTaskSummary {
+    /// Stable child task conversation identifier.
+    /// 稳定的子任务会话标识。
+    pub task_id: String,
+    /// Caller-facing task identifier preserved in task-session metadata.
+    /// 保留在 task-session 元数据中的调用方面向任务标识。
+    pub public_task_id: String,
+    /// Human-facing label built by the shared subagent projection.
+    /// 由共享子代理投影构建的人类可读标签。
+    pub label: String,
+    /// Optional task description supplied to the subagent.
+    /// 传给子代理的可选任务描述。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Canonical lowercase run state such as running, completed, stopped, or failed.
+    /// 规范小写运行状态，例如 running、completed、stopped 或 failed。
+    pub run_state: String,
+    /// Whether this task is actively running according to the shared task runtime.
+    /// 根据共享任务运行时判断该任务是否正在活动运行。
+    pub is_running: bool,
+    /// Whether this task is the currently opened subagent surface.
+    /// 该任务是否为当前打开的子代理界面。
+    pub is_active: bool,
 }
 
 /// Describes one visible pending prompt retained above the composer.

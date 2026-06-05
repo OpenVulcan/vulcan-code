@@ -383,135 +383,6 @@ pub(super) fn tool_display_message_call_id(message: &SessionMessageEntry) -> Opt
         .map(str::to_string)
 }
 
-/// Returns the structured task-session payload attached to one tool-display metadata object when the tool result belongs to the host-managed `task` surface.
-/// 当工具结果属于宿主管理的 `task` 表面时，返回其工具显示元数据对象中附带的结构化 task-session 载荷。
-pub(super) fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    (metadata.get("kind").and_then(Value::as_str) == Some("task_session")).then_some(())?;
-    metadata.get("payload")
-}
-
-/// Returns the caller-facing task identifier stored inside one task-session payload when available.
-/// 返回 task 会话载荷中保存的调用方面向任务标识。
-pub(super) fn task_session_public_id_from_payload(payload: &Value) -> Option<&str> {
-    payload
-        .get("task_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-/// Returns the stable human-readable task title stored inside one task-session payload when available.
-/// 返回 task 会话载荷中保存的稳定人类可读任务标题。
-pub(super) fn task_session_display_title_from_payload(payload: &Value) -> Option<&str> {
-    payload
-        .get("display_title")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-}
-
-/// Returns the internal child-session identifier stored inside one task-session payload, falling back to legacy payloads that only persisted `task_id`.
-/// 返回 task 会话载荷中保存的内部子会话标识；若旧版本只持久化了 `task_id`，则回退兼容解析。
-pub(super) fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionId> {
-    payload
-        .get("task_session_id")
-        .and_then(Value::as_str)
-        .or_else(|| payload.get("task_id").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| SessionId::parse_str(value).ok())
-}
-
-/// Returns the original `task` tool arguments attached to one tool-display metadata object when the card is still in flight.
-/// 当卡片仍处于进行中状态时，返回其工具显示元数据对象中附带的原始 `task` 工具参数。
-pub(super) fn task_session_arguments_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    (metadata.get("tool_name").and_then(Value::as_str) == Some("task")).then_some(())?;
-    metadata.get("arguments")
-}
-
-/// Returns the best-effort caller-facing task identifier attached to one task card from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化载荷元数据或进行中工具参数中返回一条最佳努力的调用方面向任务标识。
-pub(super) fn task_session_declared_task_id_from_tool_metadata(metadata: &Value) -> Option<&str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(task_session_public_id_from_payload)
-        .or_else(|| {
-            task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("task_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-        })
-}
-
-/// Returns the effective execution status stored in one task-session metadata object, falling back to display-only state when no payload exists yet.
-/// 返回一份 task-session 元数据对象中记录的有效执行状态；若尚无 payload，则回退到仅显示层状态。
-pub(super) fn task_session_execution_status_from_tool_metadata<'a>(
-    metadata: &'a Value,
-) -> Option<&'a str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(|payload| payload.get("execution_status"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            metadata
-                .get("tool_display_state")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
-}
-
-/// Returns one trimmed task-session prompt text extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 提示词文本。
-pub(super) fn task_session_prompt_text_from_tool_metadata(metadata: &Value) -> Option<&str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(|payload| payload.get("prompt"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("prompt"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
-}
-
-/// Returns one trimmed task-session description extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 描述文本。
-pub(super) fn task_session_description_from_tool_metadata(metadata: &Value) -> Option<&str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(|payload| payload.get("description"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("description"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
-}
-
-/// Returns one trimmed task-session subagent label extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 子代理标签。
-pub(super) fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(|payload| payload.get("subagent"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("subagent"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-        })
-}
-
-/// Returns one stable human-readable task title extracted from persisted payload metadata when present.
-/// 当存在时，从持久化 payload 元数据中返回一条稳定的人类可读任务标题。
-pub(super) fn task_session_display_title_from_tool_metadata(metadata: &Value) -> Option<&str> {
-    task_session_payload_from_tool_metadata(metadata)
-        .and_then(task_session_display_title_from_payload)
-}
-
 /// Builds the Markdown summary shown by the legacy tool modal when only a persisted task-session result remains available.
 /// 当仅剩持久化 task-session 结果可用时，构建旧工具弹层展示的 Markdown 摘要。
 pub(super) fn task_session_modal_markdown_from_tool_metadata(metadata: &Value) -> Option<String> {
@@ -754,8 +625,8 @@ pub(super) fn change_set_tool_modal_summary_from_tool_metadata(
     change_set_modal_summary_from_payload(host_result.get("payload")?)
 }
 
-/// Builds one compact human-facing task-session label from the optional task description and subagent name.
-/// 根据可选任务描述与子代理名称构建一条紧凑的人类可读 task-session 标签。
+/// Routes task-session label rendering through the shared workbench projection while preserving iced prompt-preview formatting.
+/// 通过共享工作台投影路由 task-session 标签渲染，同时保留 iced 的提示词预览格式。
 pub(super) fn task_session_tool_display_label(
     display_title: Option<&str>,
     description: Option<&str>,
@@ -763,39 +634,17 @@ pub(super) fn task_session_tool_display_label(
     public_task_id: Option<&str>,
     prompt: Option<&str>,
 ) -> String {
-    if let Some(display_title) = display_title
+    let prompt_preview = prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())
-    {
-        return display_title.to_string();
-    }
-    let description = description.map(str::trim).filter(|value| !value.is_empty());
-    let subagent = subagent.map(str::trim).filter(|value| !value.is_empty());
-    let public_task_id = public_task_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-
-    match (description, subagent) {
-        (Some(description), Some(subagent)) if description != subagent => {
-            return format!("{description}（{subagent}）");
-        }
-        (Some(description), _) => return description.to_string(),
-        (_, Some(subagent)) => return subagent.to_string(),
-        _ => {}
-    }
-
-    if let Some(public_task_id) = public_task_id {
-        if SessionId::parse_str(public_task_id).is_err() {
-            return public_task_id.to_string();
-        }
-    }
-    if let Some(prompt) = prompt.map(str::trim).filter(|value| !value.is_empty()) {
-        return pending_prompt_preview_text(prompt, &[]);
-    }
-    if let Some(public_task_id) = public_task_id {
-        return public_task_id.to_string();
-    }
-    String::from("子代理")
+        .map(|prompt| pending_prompt_preview_text(prompt, &[]));
+    vulcan_workbench_model::task_session_tool_display_label(
+        display_title,
+        description,
+        subagent,
+        public_task_id,
+        prompt_preview.as_deref(),
+    )
 }
 
 /// Resolves the localized task-session status copy shown inside the dedicated `task` transcript card title.
@@ -891,45 +740,6 @@ pub(super) fn build_user_prompt_transcript_metadata(
     attachments: &[ConversationAttachment],
 ) -> Option<Value> {
     build_shared_user_prompt_transcript_metadata(prompt, attachments)
-}
-
-/// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
-/// 解析注入到委派完成跟进提示词中的本地化终态标签。
-pub(super) fn delegate_completion_status_label(run_state: SubagentTaskRunState) -> &'static str {
-    match run_state {
-        SubagentTaskRunState::Running => "仍在进行中",
-        SubagentTaskRunState::Completed => "已完成",
-        SubagentTaskRunState::Stopped => "已停止",
-        SubagentTaskRunState::Failed => "已失败",
-    }
-}
-
-/// Builds one queue-strip preview line for a delegated subagent completion callback.
-/// 为一次委派子代理完成回调构建队列条预览文案。
-pub(super) fn build_delegate_completion_followup_preview(state: &SubagentTaskPanelState) -> String {
-    format!(
-        "子代理 {} {}",
-        state.subagent_label,
-        delegate_completion_status_label(state.run_state)
-    )
-}
-
-/// Builds one synthetic follow-up prompt that tells the parent coordinator a delegated subagent has reported back.
-/// 构建一条合成跟进提示词，用于告知父协调代理某个委派子代理已经回报结果。
-pub(super) fn build_delegate_completion_followup_prompt(state: &SubagentTaskPanelState) -> String {
-    let result_text = state.result_text.trim();
-    let safe_result = if result_text.is_empty() {
-        "当前没有更多结构化返回内容，请根据任务状态继续主流程。"
-    } else {
-        result_text
-    };
-    format!(
-        "<system-reminder>\n子代理“{}”已{}。\n任务标识：{}。\n\n子代理返回内容：\n{}\n\n请立即吸收这条结果，并继续推进主流程；如果还有其他子代理仍在执行，请同时维持协调与收敛。\n</system-reminder>",
-        state.subagent_label,
-        delegate_completion_status_label(state.run_state),
-        state.public_task_id,
-        safe_result
-    )
 }
 
 /// Returns whether one visible tool transcript message belongs to the dedicated host-managed `task` surface.
@@ -1233,15 +1043,7 @@ pub(super) fn attach_tool_display_state_metadata(
     metadata: Option<Value>,
     state: &str,
 ) -> Option<Value> {
-    let mut metadata_object = match metadata {
-        Some(Value::Object(object)) => object,
-        _ => serde_json::Map::new(),
-    };
-    metadata_object.insert(
-        String::from("tool_display_state"),
-        Value::String(state.to_string()),
-    );
-    Some(Value::Object(metadata_object))
+    vulcan_workbench_model::attach_tool_display_state_to_metadata(metadata, state)
 }
 
 /// Builds the human-facing Markdown body appended to the transcript after one GUI-initiated command-session stop succeeds.
@@ -1338,76 +1140,24 @@ pub(super) fn build_session_record_message_id(
     format!("session-{session_id}-message-{created_at}-{conversation_record_ordinal}")
 }
 
-/// Parses one persisted task-session payload object into a cacheable subagent task panel state.
-/// 将一份持久化 task 会话载荷对象解析为可缓存的子代理任务面板状态。
-pub(super) fn parse_subagent_task_panel_payload(
-    parent_session_id: SessionId,
-    payload: &Value,
-) -> Option<SubagentTaskPanelState> {
-    let task_id = task_session_internal_id_from_payload(payload)?;
-    let run_state = match payload
-        .get("execution_status")
-        .and_then(Value::as_str)
-        .unwrap_or("completed")
-    {
-        "running" => SubagentTaskRunState::Running,
-        "stopped" => SubagentTaskRunState::Stopped,
-        "failed" => SubagentTaskRunState::Failed,
-        _ => SubagentTaskRunState::Completed,
-    };
-    let description = payload
-        .get("description")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.trim().is_empty());
-    let public_task_id = task_session_public_id_from_payload(payload)
-        .map(str::to_string)
-        .unwrap_or_else(|| task_id.to_string());
-    let subagent_label = task_session_tool_display_label(
-        task_session_display_title_from_payload(payload),
-        description.as_deref(),
-        payload.get("subagent").and_then(Value::as_str),
-        Some(public_task_id.as_str()),
-        payload.get("prompt").and_then(Value::as_str),
-    );
-
-    Some(SubagentTaskPanelState {
-        task_id,
-        public_task_id,
-        parent_session_id,
-        subagent_label,
-        description,
-        run_state,
-        result_text: payload
-            .get("result")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_default(),
-        conversation_state: payload
-            .get("conversation_state")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-    })
-}
-
-/// Parses one merged task-session metadata object into a cacheable subagent task panel state.
-/// 将一份合并后的 task 会话元数据对象解析为可缓存的子代理任务面板状态。
+/// Routes one merged task-session metadata object through the shared subagent projection.
+/// 将一份合并后的 task-session 元数据对象路由到共享子代理投影。
 pub(super) fn parse_subagent_task_panel_metadata(
     parent_session_id: SessionId,
     metadata: &Value,
 ) -> Option<SubagentTaskPanelState> {
-    (metadata.get("kind").and_then(Value::as_str) == Some("task_session")).then_some(())?;
-    parse_subagent_task_panel_payload(parent_session_id, metadata.get("payload")?)
+    let prompt_preview = parse_subagent_task_prompt_metadata(metadata)
+        .as_deref()
+        .map(|prompt| pending_prompt_preview_text(prompt, &[]));
+    vulcan_workbench_model::parse_subagent_task_panel_metadata(
+        parent_session_id,
+        metadata,
+        prompt_preview.as_deref(),
+    )
 }
 
-/// Extracts the task prompt text from one merged task-session metadata object when the host payload keeps it.
-/// 当宿主载荷保留了任务提示词时，从一份合并后的 task 会话元数据对象中提取该提示词文本。
+/// Extracts the task prompt text through the shared task-session projection helper.
+/// 通过共享 task-session 投影辅助函数提取任务提示词文本。
 pub(super) fn parse_subagent_task_prompt_metadata(metadata: &Value) -> Option<String> {
-    (metadata.get("kind").and_then(Value::as_str) == Some("task_session")).then_some(())?;
-    metadata
-        .get("payload")?
-        .get("prompt")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .filter(|value| !value.trim().is_empty())
+    vulcan_workbench_model::parse_subagent_task_prompt_metadata(metadata)
 }
