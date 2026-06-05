@@ -158,18 +158,27 @@ mod tests {
     //! 面向运行时流编排的启动载荷组装测试。
 
     use super::*;
+    use crate::agent_runtime::conversation_hooks::ConversationHookRuntime;
     use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
+    use crate::agent_runtime::runtime_stream_bootstrap_core::build_runtime_bootstrap_core;
     use crate::conversation_protocol::SessionConversationState;
     use crate::provider_config::{PersistedAiToolConfiguration, ProviderRuntimeKind};
+    use crate::workbench_prompt_turn::{
+        SharedPromptTurnContinueInput, SharedPromptTurnRuntimeBeginInput,
+        begin_shared_prompt_turn_with_runtime_state,
+        continue_shared_prompt_turn_after_precheck_with_runtime_state,
+    };
     use serde_json::json;
     use std::collections::BTreeMap;
     use std::sync::Arc;
     use uuid::Uuid;
+    use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::types::{
         ControllerConfig, ConversationMessage as CoreConversationMessage,
         ConversationPayload as CoreConversationPayload,
     };
+    use vulcan_workbench_model::{PendingSessionPromptSource, SessionRuntimeStateEntry};
 
     /// Builds one minimal execution preparation used by launch-payload tests.
     /// 构建一份供启动载荷测试使用的最小执行准备对象。
@@ -416,5 +425,128 @@ mod tests {
             launch.effective_prompt,
             "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件\n\nERROR: Attachment \"demo.pdf\" cannot be uploaded by this API path."
         );
+    }
+
+    /// Covers the WebUI-style begin/continue/launch chain so the preseeded user prompt remains the controller prompt.
+    /// 覆盖 WebUI 风格的 begin/continue/launch 链路，确保预播种用户提示词仍作为控制器提示词。
+    #[test]
+    fn launch_payload_preserves_webui_preseeded_user_prompt_through_shared_turn_flow() {
+        let session_id = Uuid::nil();
+        let prompt = "请分析主入口文件";
+        let attachment = ConversationAttachment {
+            kind: ConversationAttachmentKind::Image,
+            file_name: String::from("image.png"),
+            local_path: String::from(r"D:\workspace\image.png"),
+            source_path: None,
+            asset_id: None,
+            byte_len: Some(1024),
+            preview_local_path: None,
+            mime_type: String::from("image/png"),
+        };
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let mut hook_runtime = ConversationHookRuntime::new();
+        let start = begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id,
+                session_title: "测试会话",
+                workspace_path: r"D:\workspace",
+                prompt_entry_id: String::from("prompt-entry-1"),
+                prompt,
+                attachments: vec![attachment],
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::UserFollowup,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: Default::default(),
+                disabled_ai_capability_target_selectors: Default::default(),
+                ai_capability_target_order_overrides: Default::default(),
+                owning_project_id: None,
+                prior_session_messages: None,
+            },
+        )
+        .expect("begin shared prompt turn");
+        let precheck_outcome = start.precheck_request.clone().skip();
+        let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+            &mut runtime_state,
+            SharedPromptTurnContinueInput {
+                start,
+                precheck_outcome,
+                project_configuration: Default::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                ai_tool_configuration: PersistedAiToolConfiguration::default(),
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect("continue shared prompt turn");
+        let request = continuation.request;
+        let latest_request_message = request
+            .conversation_state
+            .messages
+            .last()
+            .expect("request should contain preseeded user message");
+        assert!(matches!(
+            &latest_request_message.payload,
+            crate::conversation_protocol::SessionConversationPayload::UserText {
+                text,
+                attachments,
+            } if text == prompt && attachments.len() == 1
+        ));
+
+        let mut preparation = build_test_preparation();
+        preparation.session_id = session_id;
+        preparation.session_title = String::from("测试会话");
+        preparation.workspace_path = String::from(r"D:\workspace");
+        preparation.model_blueprint.capabilities.input_modalities = vec![String::from("text")];
+        let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None);
+        let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
+            system_preamble,
+            prompt_layers: _,
+            request_history,
+            core_snapshot,
+            core_controller,
+        } = runtime_core;
+        let latest_projected_message = core_snapshot
+            .messages
+            .last()
+            .expect("projected snapshot should contain latest user message");
+        let CoreConversationPayload::UserText {
+            text: projected_text,
+            attachments: projected_attachments,
+        } = &latest_projected_message.payload
+        else {
+            panic!("latest projected message should be user text");
+        };
+        assert!(projected_text.contains(prompt));
+        assert!(projected_text.contains("Attachment"));
+        assert_ne!(projected_text, prompt);
+        assert!(projected_attachments.is_empty());
+        let expected_effective_prompt = projected_text.clone();
+        let bootstrap = RuntimeStreamBootstrap {
+            preparation,
+            active_agent: None,
+            task_runtime: Arc::new(TaskRuntime::new()),
+            token_budget_runtime: Arc::new(TokenBudgetRuntime::initialize_from_resource_directory(
+                std::env::temp_dir(),
+            )),
+            tools_manager: VulcanToolsManager::default(),
+            resolved_tool_definitions: Vec::new(),
+            discovery_events: Vec::new(),
+            discovery_rows: Vec::new(),
+            discovery_errors: Vec::new(),
+            warnings: Vec::new(),
+            system_preamble,
+            request_history,
+            core_snapshot,
+            core_controller,
+        };
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+
+        assert_eq!(launch.effective_prompt, expected_effective_prompt);
+        assert_eq!(launch.stream_state.controller().snapshot().messages.len(), 1);
     }
 }
