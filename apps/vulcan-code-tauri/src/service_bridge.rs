@@ -4041,9 +4041,7 @@ fn spawn_agent_stream_task(
                         conversation_state,
                         last_successful_provider_usage,
                         provider_request_count,
-                    )
-                    .await
-                    {
+                    ) {
                         eprintln!("[tauri-service] apply checkpoint failed: {error}");
                     }
                 }
@@ -4608,9 +4606,9 @@ fn append_runtime_event_projection(
     .map(|_| ())
 }
 
-/// Applies one safe canonical conversation checkpoint and persists it through the shared store.
-/// 应用一份安全规范会话检查点，并通过共享存储持久化。
-async fn apply_conversation_checkpoint(
+/// Applies one safe canonical conversation checkpoint and persists it off the stream path.
+/// 应用一份安全规范会话检查点，并在流式关键路径外持久化。
+fn apply_conversation_checkpoint(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
@@ -4642,14 +4640,14 @@ async fn apply_conversation_checkpoint(
         );
         workspace.hydrated_session_ids.insert(session_id);
     })?;
-    persist_workspace_session_update(
-        Some(state),
+    spawn_workspace_session_persist_task(
+        state.clone(),
         controller_runtime.clone(),
-        &workspace_snapshot,
+        workspace_snapshot,
         session_id,
-    )
-    .await
-    .map(|_| ())
+        Some(String::from("conversation_checkpoint")),
+    );
+    Ok(())
 }
 
 /// Result produced after applying one terminal report to retained memory.
