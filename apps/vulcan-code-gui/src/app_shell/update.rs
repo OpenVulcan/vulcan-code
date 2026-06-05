@@ -4345,11 +4345,13 @@ impl VulcanWorkbench {
                 session_id,
                 session_title,
                 prompt_entry,
+                prompt_turn_start,
                 outcome,
             } => self.continue_session_run_after_precheck(
                 session_id,
                 session_title,
                 prompt_entry,
+                prompt_turn_start,
                 outcome,
             ),
             Message::RunExecutionStreamEvent { run_id, event } => {

@@ -175,7 +175,7 @@ use crate::attachment_asset_index::{
 use crate::code_view;
 use crate::composer_parts::{
     build_composer_input_parts, composer_parts_have_submittable_content, composer_parts_label_text,
-    composer_parts_preview_text, composer_parts_to_user_payload, composer_parts_transcript_body,
+    composer_parts_preview_text, composer_parts_to_user_payload,
 };
 use crate::context_budget::{
     ContextBudgetSnapshot, ContextCompactionPolicy, apply_context_budget_anchor_baseline,
@@ -230,6 +230,12 @@ use crate::skills::{
     TitleAgentInput,
 };
 use crate::style;
+use crate::workbench_prompt_turn::{
+    SharedPromptTurnContinueInput, SharedPromptTurnRuntimeBeginInput, SharedPromptTurnStart,
+    begin_shared_prompt_turn_with_runtime_state, build_shared_user_prompt_transcript_body,
+    build_shared_user_prompt_transcript_metadata,
+    continue_shared_prompt_turn_after_precheck_with_runtime_state, shared_prompt_precheck_plan,
+};
 
 use self::last_user_message_edit::LastUserMessageEditModalState;
 use crate::theme::{self, ThemePaletteExt};

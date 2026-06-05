@@ -135,47 +135,6 @@ pub fn composer_parts_label_text(parts: &[ComposerInputPart]) -> String {
     }
 }
 
-/// Builds one transcript-visible body that keeps user text and attachment names together.
-/// 构建会在转录中可见的正文，同时保留用户文本与附件名称。
-pub fn composer_parts_transcript_body(parts: &[ComposerInputPart]) -> String {
-    let mut sections = Vec::new();
-
-    if let Some(text) = parts.iter().find_map(|part| match part {
-        ComposerInputPart::Text(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
-        _ => None,
-    }) {
-        sections.push(text);
-    }
-
-    let non_text_lines = parts
-        .iter()
-        .filter_map(|part| match part {
-            ComposerInputPart::Attachment(attachment) => Some(format!(
-                "- {} `{}`",
-                attachment.kind.display_label(),
-                attachment.file_name
-            )),
-            ComposerInputPart::FileContext { label } => Some(format!("- 文件上下文 `{label}`")),
-            ComposerInputPart::SelectionContext { label } => {
-                Some(format!("- 选区上下文 `{label}`"))
-            }
-            ComposerInputPart::AgentHint { label } => Some(format!("- 代理提示 `{label}`")),
-            ComposerInputPart::Text(_) => None,
-        })
-        .collect::<Vec<_>>();
-
-    if !non_text_lines.is_empty() {
-        sections.push(String::from("附件与上下文："));
-        sections.extend(non_text_lines);
-    }
-
-    if sections.is_empty() {
-        String::from("空白消息")
-    } else {
-        sections.join("\n")
-    }
-}
-
 /// Projects the current composer-part list back into the canonical user-text payload consumed by the session protocol.
 /// 将当前提示词 Part 列表重新投影为会话协议消费的规范用户文本载荷。
 pub fn composer_parts_to_user_payload(
@@ -219,7 +178,6 @@ mod tests {
     use super::{
         ComposerInputPart, build_composer_input_parts, composer_parts_have_submittable_content,
         composer_parts_label_text, composer_parts_preview_text, composer_parts_to_user_payload,
-        composer_parts_transcript_body,
     };
     use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 
@@ -238,10 +196,10 @@ mod tests {
         }
     }
 
-    /// Builds preview and transcript output from one mixed text-and-attachment composer payload.
-    /// 根据一组混合文本与附件的提示词载荷构建预览与转录输出。
+    /// Builds preview output from one mixed text-and-attachment composer payload.
+    /// 根据一组混合文本与附件的提示词载荷构建预览输出。
     #[test]
-    fn composer_parts_render_preview_and_transcript() {
+    fn composer_parts_render_preview_for_mixed_payload() {
         let parts = build_composer_input_parts("请总结最新改动", &[test_attachment("diagram.png")]);
 
         assert!(composer_parts_have_submittable_content(&parts));
@@ -253,7 +211,6 @@ mod tests {
             composer_parts_preview_text(&parts, 48),
             "请总结最新改动 [图片 `diagram.png`]"
         );
-        assert!(composer_parts_transcript_body(&parts).contains("附件与上下文："));
     }
 
     /// Falls back to one attachment-only label when the current composer payload has no text.

@@ -4,6 +4,8 @@
 use super::*;
 use vulcan_workbench_model::{
     PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason, PendingPromptDispatchContext,
+    PendingPromptPanelDropTarget,
+    apply_pending_prompt_panel_drop_target as apply_shared_pending_prompt_panel_drop_target,
     pending_prompt_dispatch_block_reason, pending_prompt_lane_is_busy,
 };
 
@@ -554,36 +556,25 @@ impl VulcanWorkbench {
         drop_target: &PendingPromptDropTarget,
     ) -> bool {
         let now = current_unix_millis_text();
+        let shared_drop_target = match drop_target {
+            PendingPromptDropTarget::Before(target_entry_id) => {
+                PendingPromptPanelDropTarget::Before(target_entry_id.clone())
+            }
+            PendingPromptDropTarget::End => PendingPromptPanelDropTarget::End,
+        };
         let did_move = {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            let queue = &mut runtime_state.ui_state.pending_prompt_panel_queue;
-            let Some(current_index) = queue.iter().position(|entry| entry.id == dragged_entry_id)
-            else {
-                return false;
-            };
-            let mut target_index = match drop_target {
-                PendingPromptDropTarget::Before(target_entry_id) => {
-                    let Some(index) = queue.iter().position(|entry| entry.id == *target_entry_id)
-                    else {
-                        return false;
-                    };
-                    index
-                }
-                PendingPromptDropTarget::End => queue.len(),
-            };
-            let entry = queue.remove(current_index);
-            if current_index < target_index {
-                target_index = target_index.saturating_sub(1);
-            }
-            if target_index == current_index {
-                queue.insert(current_index, entry);
-                return false;
-            }
-            let bounded_target_index = target_index.min(queue.len());
-            queue.insert(bounded_target_index, entry);
-            runtime_state.updated_at = now;
-            true
+            apply_shared_pending_prompt_panel_drop_target(
+                &mut runtime_state.ui_state,
+                dragged_entry_id,
+                &shared_drop_target,
+            )
         };
+        if did_move {
+            if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+                runtime_state.updated_at = now;
+            }
+        }
         did_move
     }
 
@@ -910,7 +901,7 @@ impl VulcanWorkbench {
         };
         self.execution_mode = execution_mode;
         let prompt_before_injection_sanitizing = prompt_entry.prompt.clone();
-        let (injection_ops, sanitized_prompt) =
+        let (_, sanitized_prompt) =
             crate::agent_runtime::context_injection_runtime::collect_builtin_manual_injection_ops_and_sanitized_prompt(
                 &prompt_entry.prompt,
             );
@@ -935,29 +926,60 @@ impl VulcanWorkbench {
             self.status_message = error;
             return Task::none();
         }
-        let hook_conversation_state = self.session_conversation_state(session_id);
-        let system_prompt_hook_phase =
-            self.vmm_profile_placement_phase_for_next_user_prompt(session_id, true);
-        let precheck_request = self.conversation_hook_runtime.prepare_user_prompt_precheck(
-            session_id,
-            &prompt_entry.id,
-            owning_project_id.clone(),
-            self.workspace_path_for_session_id(session_id)
-                .unwrap_or_else(|| self.workspace_path.clone()),
-            prompt_entry.source,
-            system_prompt_hook_phase,
-            &prompt_entry.prompt,
-            &hook_conversation_state,
-        );
-        let precheck_turn_id = precheck_request.turn_id().to_string();
-        if !injection_ops.is_empty() {
-            let now = current_unix_millis_text();
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state
-                .context_injection_state
-                .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
-            runtime_state.updated_at = now;
-        }
+        let workspace_path = self
+            .workspace_path_for_session_id(session_id)
+            .unwrap_or_else(|| self.workspace_path.clone());
+        self.hydrated_session_ids.insert(session_id);
+        self.dirty_session_payload_ids.insert(session_id);
+        let precheck_start = {
+            let runtime_state = self
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: current_unix_millis_text(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            begin_shared_prompt_turn_with_runtime_state(
+                runtime_state,
+                &mut self.conversation_hook_runtime,
+                SharedPromptTurnRuntimeBeginInput {
+                    session_id,
+                    session_title: &session_title,
+                    workspace_path: &workspace_path,
+                    prompt_entry_id: prompt_entry.id.clone(),
+                    prompt: &prompt_before_injection_sanitizing,
+                    attachments: prompt_entry.attachments.clone(),
+                    append_canonical_user_message: false,
+                    append_visible_user_prompt_record: false,
+                    source: prompt_entry.source,
+                    execution_mode: execution_mode.to_string(),
+                    reasoning_effort: Some(prompt_entry.runtime_options.reasoning_effort),
+                    disabled_ai_capability_kinds: prompt_entry
+                        .runtime_options
+                        .disabled_ai_capability_kinds
+                        .iter()
+                        .copied()
+                        .collect(),
+                    disabled_ai_capability_target_selectors: BTreeSet::new(),
+                    ai_capability_target_order_overrides: BTreeMap::new(),
+                    owning_project_id: owning_project_id.clone(),
+                    prior_session_messages: None,
+                },
+            )
+        };
+        let precheck_start = match precheck_start {
+            Ok(precheck_start) => precheck_start,
+            Err(error) => {
+                if let Some(panel_entry_id) = prompt_entry.panel_entry_id.as_deref() {
+                    let _ =
+                        self.mark_session_pending_prompt_entry_ready(session_id, panel_entry_id);
+                }
+                self.release_prompt_entry_transient_attachment_refs(session_id, &prompt_entry);
+                self.show_workbench_notice_modal("前置处理失败", error);
+                return Task::none();
+            }
+        };
+        prompt_entry.prompt = precheck_start.prompt.clone();
         let effective_vmm_config = {
             let session_layer = self
                 .session_runtime_state(session_id)
@@ -971,25 +993,9 @@ impl VulcanWorkbench {
         };
         let removed_legacy_profile_injection =
             self.remove_legacy_vmm_profile_context_injection_for_session(session_id);
-        let vmm_memory_ready = effective_vmm_config.diagnose_memory_flow(true)
-            == vulcan_vmm::VmmConfigDiagnostic::Ready;
-        let vmm_precheck_enabled = vmm_memory_ready && effective_vmm_config.precheck_enabled;
         let precheck_hook_snapshots = self.conversation_hook_runtime.precheck_hook_snapshots();
-        let should_skip_precheck = !vmm_memory_ready
-            && !precheck_hook_snapshots.is_empty()
-            && precheck_hook_snapshots
-                .iter()
-                .all(|snapshot| snapshot.registration.id == super::vmm_hooks::VMM_PRECHECK_HOOK_ID);
-        let precheck_progress_labels = precheck_hook_snapshots
-            .iter()
-            .filter(|snapshot| {
-                vmm_precheck_enabled
-                    || snapshot.registration.id != super::vmm_hooks::VMM_PRECHECK_HOOK_ID
-            })
-            .filter_map(|snapshot| snapshot.registration.progress_label.clone())
-            .map(|label| label.trim().to_string())
-            .filter(|label| !label.is_empty())
-            .collect::<Vec<_>>();
+        let precheck_plan =
+            shared_prompt_precheck_plan(&effective_vmm_config, &precheck_hook_snapshots);
         if let (Some(project_id), Some(runtime_state)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
@@ -1045,12 +1051,13 @@ impl VulcanWorkbench {
             }
             self.materialize_session_after_first_user_turn(session_id);
         }
-        if should_skip_precheck || precheck_hook_snapshots.is_empty() {
+        if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
             return self.continue_session_run_after_precheck(
                 session_id,
                 session_title,
                 prompt_entry,
-                precheck_request.skip(),
+                precheck_start.clone(),
+                precheck_start.precheck_request.clone().skip(),
             );
         }
         self.replace_session_runtime_events(session_id, Vec::new());
@@ -1059,7 +1066,7 @@ impl VulcanWorkbench {
         self.last_mcp_discovery_rows.clear();
         self.last_mcp_discovery_errors.clear();
         self.set_session_run_phase(session_id, SessionRunPhase::Preparing);
-        self.set_session_precheck_progress(session_id, precheck_progress_labels);
+        self.set_session_precheck_progress(session_id, precheck_plan.progress_labels);
         if let Some(session) = self
             .sessions
             .iter_mut()
@@ -1078,14 +1085,17 @@ impl VulcanWorkbench {
         let precheck_session_id = session_id;
         let precheck_session_title = session_title.clone();
         let precheck_prompt_entry = prompt_entry.clone();
-        let precheck_task = Task::perform(precheck_request.run(), move |outcome| {
-            Message::UserPromptPrecheckFinished {
+        let precheck_prompt_turn_start = precheck_start.clone();
+        let precheck_task = Task::perform(
+            precheck_start.precheck_request.clone().run(),
+            move |outcome| Message::UserPromptPrecheckFinished {
                 session_id: precheck_session_id,
                 session_title: precheck_session_title.clone(),
                 prompt_entry: precheck_prompt_entry.clone(),
+                prompt_turn_start: precheck_prompt_turn_start.clone(),
                 outcome,
-            }
-        });
+            },
+        );
 
         Task::batch([
             self.persist_single_session_update_task(session_id),
@@ -1101,6 +1111,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
         session_title: String,
         mut prompt_entry: PendingSessionPromptEntry,
+        prompt_turn_start: SharedPromptTurnStart,
         outcome: super::conversation_hooks::ConversationPrecheckOutcome,
     ) -> Task<Message> {
         if outcome.session_id != session_id {
@@ -1122,55 +1133,68 @@ impl VulcanWorkbench {
             return self.persist_single_session_update_task(session_id);
         }
 
-        let mut system_prompt_hook_blocks = Vec::new();
-        match outcome.report {
-            Ok(report) => {
-                if let Some(effect) =
-                    super::conversation_hooks::vmm_profile_sync_effect_from_report(&report)
-                {
-                    let now = current_unix_millis_text();
-                    let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-                    runtime_state.vmm_profile_sync = effect.state;
-                    runtime_state.updated_at = now;
-                    self.refresh_vmm_hook_config_snapshot();
-                }
-                if let Some(rewritten_prompt) = report
-                    .payload
-                    .value
-                    .get("user_content")
-                    .and_then(Value::as_str)
-                    .filter(|content| *content != prompt_entry.prompt)
-                {
-                    prompt_entry.prompt = rewritten_prompt.to_string();
-                    prompt_entry.preview = pending_prompt_preview_text(
-                        &prompt_entry.prompt,
-                        &prompt_entry.attachments,
-                    );
-                    if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
-                        self.patch_latest_prechecked_user_prompt(
-                            session_id,
-                            &prompt_entry.prompt,
-                            &prompt_entry.attachments,
-                        );
-                    }
-                }
-                if !report.injections.is_empty() {
-                    let now = current_unix_millis_text();
-                    let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-                    runtime_state
-                        .context_injection_state
-                        .apply_inserts_for_turn(report.injections, &now, Some(&outcome.turn_id));
-                    runtime_state.updated_at = now;
-                }
-                system_prompt_hook_blocks = report.system_prompt_blocks;
-            }
+        let config_for_run = self.provider_configuration_for_prompt_entry(&prompt_entry);
+        let runtime_options = prompt_entry.runtime_options.clone();
+        let ai_tool_configuration =
+            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
+        let project_configuration =
+            vulcan_provider_config::config::ProjectVulcanCodeConfigurationFile {
+                prompt: None,
+                prompt_skills: self.current_project_prompt_skills_configuration(session_id),
+                vmm: self.current_project_vmm_configuration(session_id),
+            };
+        let provider_reasoning_effort = None;
+        self.hydrated_session_ids.insert(session_id);
+        self.dirty_session_payload_ids.insert(session_id);
+        let continuation = {
+            let runtime_state = self
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: current_unix_millis_text(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            continue_shared_prompt_turn_after_precheck_with_runtime_state(
+                runtime_state,
+                SharedPromptTurnContinueInput {
+                    start: prompt_turn_start,
+                    precheck_outcome: outcome,
+                    ai_tool_configuration,
+                    project_configuration,
+                    runtime_reasoning_effort: Some(runtime_options.reasoning_effort),
+                    provider_reasoning_effort,
+                    patch_visible_user_prompt_record: false,
+                },
+            )
+        };
+        let continuation = match continuation {
+            Ok(continuation) => continuation,
             Err(error) => {
-                self.push_activity(
-                    ActivityLevel::Warning,
-                    "Precheck hook 执行失败",
-                    format!("会话 `{session_title}` 的 precheck 未能完成，已继续真实请求：{error}"),
+                self.push_activity(ActivityLevel::Warning, "Precheck 结果已忽略", error);
+                return Task::none();
+            }
+        };
+        if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "Precheck hook 执行失败",
+                detail.to_string(),
+            );
+        }
+        self.refresh_vmm_hook_config_snapshot();
+        let mut request = continuation.request;
+        if request.prompt != prompt_entry.prompt {
+            prompt_entry.prompt = request.prompt.clone();
+            prompt_entry.preview =
+                pending_prompt_preview_text(&prompt_entry.prompt, &prompt_entry.attachments);
+            if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
+                self.patch_latest_prechecked_user_prompt(
+                    session_id,
+                    &prompt_entry.prompt,
+                    &prompt_entry.attachments,
                 );
             }
+            request.conversation_state = self.session_conversation_state(session_id);
         }
         let owning_project_id = self
             .session_by_id(session_id)
@@ -1192,50 +1216,15 @@ impl VulcanWorkbench {
                 ),
             );
         }
-        let config_for_run = self.provider_configuration_for_prompt_entry(&prompt_entry);
-        let runtime_options = prompt_entry.runtime_options;
-        let ai_tool_configuration =
-            self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
         let execution_mode = if self.selected_agent_requires_plan_mode() {
             ExecutionMode::Plan
         } else {
             self.execution_mode
         };
         self.execution_mode = execution_mode;
-
-        let request = ExecutionPreparationRequest {
-            session_id,
-            session_title,
-            workspace_path: self
-                .workspace_path_for_session_id(session_id)
-                .unwrap_or_else(|| self.workspace_path.clone()),
-            prompt: prompt_entry.prompt,
-            conversation_state: self.session_conversation_state(session_id),
-            execution_mode: execution_mode.to_string(),
-            temperature: runtime_options.temperature,
-            reasoning_effort: runtime_options.reasoning_effort,
-            ai_tool_configuration,
-            prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
-            project_prompt_skills: self.current_project_prompt_skills_configuration(session_id),
-            session_prompt_skill_overrides: self
-                .session_runtime_state(session_id)
-                .map(|state| state.prompt_skill_overrides.clone())
-                .unwrap_or_default(),
-            context_injection: self
-                .session_runtime_state(session_id)
-                .and_then(|state| {
-                    crate::agent_runtime::context_injection_runtime::core_provider_context_injection_from_state_for_turn(
-                        &state.context_injection_state,
-                        Some(&outcome.turn_id),
-                    )
-                }),
-            system_prompt_hook_blocks: system_prompt_hook_blocks,
-            project_vmm: self.current_project_vmm_configuration(session_id),
-            session_vmm: self
-                .session_runtime_state(session_id)
-                .map(|state| state.vmm.clone())
-                .unwrap_or_default(),
-        };
+        request.execution_mode = execution_mode.to_string();
+        request.temperature = runtime_options.temperature;
+        request.reasoning_effort = runtime_options.reasoning_effort;
 
         self.replace_session_runtime_events(session_id, Vec::new());
         self.clear_streaming_message_ids(session_id);
@@ -1425,6 +1414,9 @@ impl VulcanWorkbench {
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.clear_session_precheck_progress(session_id);
+        if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+            runtime_state.active_precheck_turn_id = None;
+        }
         self.mark_running_subagent_tasks_stopped(session_id);
         self.set_session_run_phase(session_id, SessionRunPhase::Stopped);
         if let Some(session) = self
@@ -1491,6 +1483,9 @@ impl VulcanWorkbench {
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.clear_session_precheck_progress(session_id);
+        if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+            runtime_state.active_precheck_turn_id = None;
+        }
         self.mark_running_subagent_tasks_stopped(session_id);
         if !continue_with_next_prompt {
             self.clear_session_pending_prompt_queue(session_id, true);
@@ -1597,6 +1592,9 @@ impl VulcanWorkbench {
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.clear_session_precheck_progress(session_id);
+        if let Some(runtime_state) = self.session_runtime_state.get_mut(&session_id) {
+            runtime_state.active_precheck_turn_id = None;
+        }
         self.mark_running_subagent_tasks_stopped(session_id);
         self.clear_session_pending_prompt_queue(session_id, true);
         self.set_session_run_phase(session_id, SessionRunPhase::Stopped);

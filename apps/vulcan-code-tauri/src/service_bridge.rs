@@ -8,7 +8,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
     process::Command,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use base64::Engine;
@@ -29,36 +29,29 @@ use tauri::{Emitter, Manager};
 use time::OffsetDateTime;
 use vldb_controller_client::ControllerSqliteValue;
 use vulcan_agent_runtime::{
-    ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
-    ExecutionStreamEvent, RuntimePromptIntervention,
+    ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport, ExecutionStreamEvent,
+    RuntimePromptIntervention,
     agent_profile::{AgentProfileCatalog, load_agent_profile_catalog},
     agent_runtime::{
         context_injection_runtime::{
-            collect_builtin_manual_injection_ops_and_sanitized_prompt,
             context_injection_panel_cards_for_kind,
-            core_provider_context_injection_from_state_for_turn,
+            remove_legacy_vmm_profile_context_injection_state,
         },
         conversation_hooks::{
-            ConversationCompletionRequest, ConversationHookRuntime, VmmWritebackHookEffect,
-            vmm_profile_sync_effect_from_report,
+            ConversationCompletionRequest, ConversationHookRuntime, ConversationPrecheckOutcome,
+            VmmWritebackHookEffect,
         },
         events::{RuntimeEvent, RuntimeEventKind},
         question_runtime::QuestionRuntime,
         task_runtime::TaskRuntime,
         token_budget_runtime::TokenBudgetRuntime,
-        vmm_hooks::{
-            VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks,
-            vmm_profile_placement_phase,
-        },
+        vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
     },
     attachment_assets::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
         stage_attachment_bytes, stage_attachment_file,
     },
-    conversation_protocol::{
-        SessionConversationPayload, conversation_state_from_session_messages,
-        conversation_state_to_session_messages,
-    },
+    conversation_protocol::conversation_state_to_session_messages,
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
     provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
@@ -68,15 +61,19 @@ use vulcan_agent_runtime::{
     },
     session_event_runtime::{
         SessionStreamingRecordIds, append_runtime_event_projection_to_state,
-        append_stream_delta_record_to_state, append_user_prompt_record_with_attachments,
-        apply_checkpoint_conversation_state, apply_terminal_execution_report_to_state,
-        collapse_streaming_thinking_in_state,
+        append_stream_delta_record_to_state, apply_checkpoint_conversation_state,
+        apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
     },
     stream_runtime_run_with_intervention,
     tooling::CommandSessionRuntime,
     workbench_ai_capability_router::{
         WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
         effective_workbench_disabled_ai_capability_kinds,
+    },
+    workbench_prompt_turn::{
+        SharedPromptPrecheckPlan, SharedPromptTurnBeginInput, SharedPromptTurnContinueInput,
+        SharedPromptTurnStart, begin_shared_prompt_turn,
+        continue_shared_prompt_turn_after_precheck, shared_prompt_precheck_plan,
     },
 };
 use vulcan_context::{ContextBudgetSeverity, ContextBudgetSnapshot};
@@ -201,11 +198,31 @@ struct ServiceBridgeState {
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     active_stream_tasks: BTreeMap<SessionId, tauri::async_runtime::JoinHandle<()>>,
+    /// Latest background persistence version keyed by session id.
+    /// 按会话标识索引的最新后台持久化版本。
+    session_persist_versions: BTreeMap<SessionId, u64>,
 }
 
 /// Thread-safe service state handle.
 /// 线程安全的服务状态句柄。
 type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+
+/// Shared process-wide gate for WebUI workspace persistence.
+/// WebUI 工作区持久化使用的进程级共享闸门。
+static WEBUI_WORKSPACE_PERSIST_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
+
+/// Returns the shared async persistence gate used by every WebUI workspace write.
+/// 返回所有 WebUI 工作区写入共用的异步持久化闸门。
+///
+/// # Returns
+/// 返回值
+/// A shared mutex that serializes SQLite-backed workspace writes.
+/// 用于串行化 SQLite 工作区写入的共享互斥锁。
+fn webui_workspace_persist_lock() -> Arc<tokio::sync::Mutex<()>> {
+    WEBUI_WORKSPACE_PERSIST_LOCK
+        .get_or_init(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 /// Runs the Tauri application and registers local service commands.
 /// 运行 Tauri 应用并注册本地服务命令。
@@ -222,6 +239,7 @@ pub fn run() {
         mcp_runtime: None,
         live_context_budgets: BTreeMap::new(),
         active_stream_tasks: BTreeMap::new(),
+        session_persist_versions: BTreeMap::new(),
     }));
 
     tauri::Builder::default()
@@ -832,10 +850,17 @@ async fn service_submit_conversation_prompt(
         mcp_catalog,
         logs,
     ) = runtime_parts_from_state(&state)?;
-    let mut workspace_snapshot =
-        load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
-            .await?;
     let previous_workspace_snapshot = current_workspace_snapshot_from_state(&state)?;
+    let submission_session_id = conversation_id.as_deref().and_then(parse_session_id);
+    let mut workspace_snapshot = if let Some(session_id) = submission_session_id
+        && let Some(workspace_snapshot) = previous_workspace_snapshot.clone()
+        && retained_submission_snapshot_has_session_context(&workspace_snapshot, session_id)
+    {
+        workspace_snapshot
+    } else {
+        load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
+            .await?
+    };
     preserve_active_session_run_state(
         previous_workspace_snapshot.as_ref(),
         &mut workspace_snapshot,
@@ -870,17 +895,7 @@ async fn service_submit_conversation_prompt(
                 &workspace_path,
                 entry,
             )?;
-            let runtime_state = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&session_id)
-                .ok_or_else(|| String::from("排队后未找到会话运行时状态。"))?;
-            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-                controller_runtime.clone(),
-                session_id,
-                runtime_state,
-            )
-            .await?;
-            return store_and_emit_workbench_snapshot(
+            let workbench = store_and_emit_workbench_snapshot(
                 &app,
                 &state,
                 &controller_runtime,
@@ -891,7 +906,19 @@ async fn service_submit_conversation_prompt(
                 &agent_runtime.ai_tool_configuration,
                 workspace_snapshot,
                 &logs,
+            )?;
+            let snapshot_for_persist =
+                current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+                    String::from("service is still starting; workspace snapshot is not ready")
+                })?;
+            spawn_workspace_session_persist_task(
+                state.inner().clone(),
+                controller_runtime.clone(),
+                snapshot_for_persist,
+                session_id,
+                Some(String::from("queued_submit")),
             );
+            return Ok(workbench);
         }
     }
     let (session_id, session_title, workspace_path) = materialize_prompt_session(
@@ -904,40 +931,62 @@ async fn service_submit_conversation_prompt(
             &prompt
         },
     )?;
-    let request = append_prompt_and_build_request(
-        &mut workspace_snapshot,
-        &agent_runtime,
+    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
+        &agent_runtime.ai_tool_configuration,
+        disabled_ai_capability_kinds.as_deref(),
+    )?;
+    let disabled_ai_capability_target_selectors =
+        parse_ai_capability_target_selectors(disabled_ai_capability_target_selectors);
+    let ai_capability_target_order_overrides =
+        parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
+    snapshot_webui_context_before_user_prompt(
+        &workspace_snapshot,
         session_id,
-        &session_title,
+        PendingSessionPromptSource::UserFollowup,
+    )?;
+    let precheck_start = {
+        let mut hook_runtime = agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        begin_shared_prompt_turn(
+            &mut workspace_snapshot,
+            &mut hook_runtime,
+            SharedPromptTurnBeginInput {
+                session_id,
+                session_title: &session_title,
+                workspace_path: &workspace_path,
+                prompt_entry_id: format!(
+                    "webui-prompt-{session_id}-{}",
+                    current_unix_millis_text()
+                ),
+                prompt: &prompt,
+                attachments,
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::UserFollowup,
+                execution_mode: execution_mode.unwrap_or_else(|| String::from("build")),
+                reasoning_effort: reasoning_effort.as_deref().and_then(parse_reasoning_effort),
+                disabled_ai_capability_kinds,
+                disabled_ai_capability_target_selectors,
+                ai_capability_target_order_overrides,
+            },
+        )
+    }?;
+    apply_webui_prompt_begin_outer_steps(&mut workspace_snapshot, session_id, &session_title);
+    agent_runtime
+        .vmm_hook_runtime
+        .replace_snapshot(build_vmm_hook_config_snapshot(
+            &agent_runtime.provider_configuration,
+            &workspace_snapshot,
+        ));
+    let precheck_plan = webui_shared_prompt_precheck_plan(
+        &agent_runtime,
+        &workspace_snapshot,
+        session_id,
         &workspace_path,
-        &prompt,
-        attachments,
-        execution_mode,
-        reasoning_effort,
-        disabled_ai_capability_kinds,
-        disabled_ai_capability_target_selectors,
-        ai_capability_target_order_overrides,
-        |visible_prompt_snapshot| {
-            store_and_emit_workbench_snapshot(
-                &app,
-                &state,
-                &controller_runtime,
-                &luaskills_catalog,
-                &token_budget_runtime,
-                &mcp_catalog,
-                &agent_runtime.provider_configuration,
-                &agent_runtime.ai_tool_configuration,
-                visible_prompt_snapshot.clone(),
-                &logs,
-            )
-            .map(|_| ())
-        },
-    )
-    .await?;
-
-    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
-        .await?;
-    let workbench = store_and_emit_workbench_snapshot(
+    )?;
+    let mut workbench = store_and_emit_workbench_snapshot(
         &app,
         &state,
         &controller_runtime,
@@ -949,13 +998,24 @@ async fn service_submit_conversation_prompt(
         workspace_snapshot.clone(),
         &logs,
     )?;
-    spawn_agent_stream_task(
-        app,
+    spawn_workspace_session_persist_task(
         state.inner().clone(),
-        controller_runtime,
-        agent_runtime,
-        request,
+        controller_runtime.clone(),
+        workspace_snapshot,
+        session_id,
+        Some(String::from("submit_begin")),
     );
+    let service_state = state.inner().clone();
+    if start_webui_precheck_or_continue(
+        &app,
+        &service_state,
+        &controller_runtime,
+        &agent_runtime,
+        precheck_start,
+        precheck_plan,
+    )? {
+        workbench = current_workbench_snapshot_from_state(&state)?;
+    }
     Ok(workbench)
 }
 
@@ -988,14 +1048,17 @@ async fn service_stop_conversation_run(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
     stop_webui_session_work(&mut workspace_snapshot, selected_session_id)?;
-    let runtime_state = workspace_snapshot
+    if !workspace_snapshot
         .session_runtime_state
-        .get_mut(&selected_session_id)
-        .ok_or_else(|| String::from("停止后未找到会话运行时状态。"))?;
-    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+        .contains_key(&selected_session_id)
+    {
+        return Err(String::from("停止后未找到会话运行时状态。"));
+    }
+    persist_webui_session_runtime_state_update(
+        state.inner(),
         controller_runtime.clone(),
         selected_session_id,
-        runtime_state,
+        &workspace_snapshot,
     )
     .await?;
     store_and_emit_workbench_snapshot(
@@ -1045,16 +1108,6 @@ async fn service_insert_pending_prompt(
         &mut workspace_snapshot,
         selected_session_id,
     );
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&selected_session_id)
-        .ok_or_else(|| String::from("引导后未找到会话运行时状态。"))?;
-    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-        controller_runtime.clone(),
-        selected_session_id,
-        runtime_state,
-    )
-    .await?;
     let mut workbench = store_and_emit_workbench_snapshot(
         &app,
         &state,
@@ -1067,6 +1120,16 @@ async fn service_insert_pending_prompt(
         workspace_snapshot,
         &logs,
     )?;
+    let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+        String::from("service is still starting; workspace snapshot is not ready")
+    })?;
+    spawn_workspace_session_persist_task(
+        state.inner().clone(),
+        controller_runtime.clone(),
+        snapshot_for_persist,
+        selected_session_id,
+        Some(String::from("guided_insert")),
+    );
     let started_next_prompt = match maybe_prepare_next_webui_pending_prompt(
         &app,
         &state,
@@ -1077,21 +1140,11 @@ async fn service_insert_pending_prompt(
     )
     .await
     {
-        Ok(Some(next_request)) => {
-            spawn_agent_stream_task(
-                app,
-                state.inner().clone(),
-                controller_runtime,
-                agent_runtime,
-                next_request,
-            );
-            true
-        }
-        Ok(None) => false,
+        Ok(started) => started,
         Err(error) => return Err(error),
     };
     if started_next_prompt {
-        workbench = refresh_workbench_snapshot(state).await?;
+        workbench = current_workbench_snapshot_from_state(&state)?;
     }
     Ok(workbench)
 }
@@ -1117,25 +1170,21 @@ async fn service_edit_pending_prompt(
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-    let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&selected_session_id)
-    else {
-        return Err(String::from("当前会话没有可编辑的待发送队列。"));
+    let summary = {
+        let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get_mut(&selected_session_id)
+        else {
+            return Err(String::from("当前会话没有可编辑的待发送队列。"));
+        };
+        let Some(entry) = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id)
+        else {
+            return Err(String::from("没有找到待编辑的待发送提示词。"));
+        };
+        runtime_state.updated_at = current_unix_millis_text();
+        pending_prompt_summary_from_panel_entry(&entry)
     };
-    let Some(entry) = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id)
-    else {
-        return Err(String::from("没有找到待编辑的待发送提示词。"));
-    };
-    runtime_state.updated_at = current_unix_millis_text();
-    let summary = pending_prompt_summary_from_panel_entry(&entry);
-    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-        controller_runtime.clone(),
-        selected_session_id,
-        runtime_state,
-    )
-    .await?;
-    let _ = store_and_emit_workbench_snapshot(
+    store_and_emit_workbench_snapshot(
         &app,
         &state,
         &controller_runtime,
@@ -1147,6 +1196,16 @@ async fn service_edit_pending_prompt(
         workspace_snapshot,
         &logs,
     )?;
+    let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+        String::from("service is still starting; workspace snapshot is not ready")
+    })?;
+    spawn_workspace_session_persist_task(
+        state.inner().clone(),
+        controller_runtime.clone(),
+        snapshot_for_persist,
+        selected_session_id,
+        Some(String::from("pending_edit")),
+    );
     Ok(summary)
 }
 
@@ -1171,33 +1230,20 @@ async fn service_remove_pending_prompt(
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
-    let Some(runtime_state) = workspace_snapshot
+    let removed = if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&selected_session_id)
-    else {
-        return store_and_emit_workbench_snapshot(
-            &app,
-            &state,
-            &controller_runtime,
-            &luaskills_catalog,
-            &token_budget_runtime,
-            &mcp_catalog,
-            &agent_runtime.provider_configuration,
-            &agent_runtime.ai_tool_configuration,
-            workspace_snapshot,
-            &logs,
-        );
+    {
+        if remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id).is_some() {
+            runtime_state.updated_at = current_unix_millis_text();
+            true
+        } else {
+            false
+        }
+    } else {
+        false
     };
-    if remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, &entry_id).is_some() {
-        runtime_state.updated_at = current_unix_millis_text();
-        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-            controller_runtime.clone(),
-            selected_session_id,
-            runtime_state,
-        )
-        .await?;
-    }
-    store_and_emit_workbench_snapshot(
+    let workbench = store_and_emit_workbench_snapshot(
         &app,
         &state,
         &controller_runtime,
@@ -1208,7 +1254,20 @@ async fn service_remove_pending_prompt(
         &agent_runtime.ai_tool_configuration,
         workspace_snapshot,
         &logs,
-    )
+    )?;
+    if removed {
+        let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        spawn_workspace_session_persist_task(
+            state.inner().clone(),
+            controller_runtime.clone(),
+            snapshot_for_persist,
+            selected_session_id,
+            Some(String::from("pending_remove")),
+        );
+    }
+    Ok(workbench)
 }
 
 /// Reorders the visible pending prompt queue for the selected conversation.
@@ -1239,41 +1298,28 @@ async fn service_reorder_pending_prompts(
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
     workspace_snapshot.selected_session = selected_session_id;
-    let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&selected_session_id)
-    else {
-        return store_and_emit_workbench_snapshot(
-            &app,
-            &state,
-            &controller_runtime,
-            &luaskills_catalog,
-            &token_budget_runtime,
-            &mcp_catalog,
-            &agent_runtime.provider_configuration,
-            &agent_runtime.ai_tool_configuration,
-            workspace_snapshot,
-            &logs,
-        );
-    };
     let drop_target = target_entry_id
         .filter(|entry_id| !entry_id.trim().is_empty())
         .map(PendingPromptPanelDropTarget::Before)
         .unwrap_or(PendingPromptPanelDropTarget::End);
-    if apply_pending_prompt_panel_drop_target(
-        &mut runtime_state.ui_state,
-        &dragged_entry_id,
-        &drop_target,
-    ) {
-        runtime_state.updated_at = current_unix_millis_text();
-        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
-            controller_runtime.clone(),
-            selected_session_id,
-            runtime_state,
-        )
-        .await?;
-    }
-    store_and_emit_workbench_snapshot(
+    let did_reorder = if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&selected_session_id)
+    {
+        if apply_pending_prompt_panel_drop_target(
+            &mut runtime_state.ui_state,
+            &dragged_entry_id,
+            &drop_target,
+        ) {
+            runtime_state.updated_at = current_unix_millis_text();
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let workbench = store_and_emit_workbench_snapshot(
         &app,
         &state,
         &controller_runtime,
@@ -1284,7 +1330,20 @@ async fn service_reorder_pending_prompts(
         &agent_runtime.ai_tool_configuration,
         workspace_snapshot,
         &logs,
-    )
+    )?;
+    if did_reorder {
+        let snapshot_for_persist = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        spawn_workspace_session_persist_task(
+            state.inner().clone(),
+            controller_runtime.clone(),
+            snapshot_for_persist,
+            selected_session_id,
+            Some(String::from("pending_reorder")),
+        );
+    }
+    Ok(workbench)
 }
 
 /// Selects and persists the active workbench provider/model pair.
@@ -1762,21 +1821,28 @@ async fn service_mark_conversation_read(
         controller_runtime.clone(),
     )
     .await?;
-    let Some(runtime_state) = workspace_snapshot
+    let marked_read = if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
-    else {
-        return refresh_workbench_snapshot(state).await;
+    {
+        if runtime_state.ui_state.unread {
+            runtime_state.ui_state.unread = false;
+            runtime_state.updated_at = current_unix_millis_text();
+            true
+        } else {
+            false
+        }
+    } else {
+        false
     };
-    if !runtime_state.ui_state.unread {
+    if !marked_read {
         return refresh_workbench_snapshot(state).await;
     }
-    runtime_state.ui_state.unread = false;
-    runtime_state.updated_at = current_unix_millis_text();
-    vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+    persist_webui_session_runtime_state_update(
+        state.inner(),
         controller_runtime,
         session_id,
-        runtime_state,
+        &workspace_snapshot,
     )
     .await?;
     refresh_workbench_snapshot(state).await
@@ -1997,6 +2063,27 @@ fn current_workspace_snapshot_from_state(
         .map(|guard| guard.workspace_snapshot.clone())
 }
 
+/// Clones the latest in-memory workbench snapshot retained by the service bridge.
+/// 克隆服务桥接层保留的最近内存工作台快照。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained service bridge state.
+/// `state` 持有保留的服务桥接状态。
+///
+/// # Returns
+/// 返回值
+/// The latest workbench snapshot already emitted by an in-memory mutation.
+/// 返回内存变更已经发出的最近工作台快照。
+fn current_workbench_snapshot_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))
+        .map(|guard| guard.workbench.clone())
+}
+
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 fn runtime_parts_from_state(
@@ -2081,6 +2168,61 @@ async fn load_workspace_for_submission(
     Ok(workspace_snapshot)
 }
 
+/// Returns whether a retained WebUI snapshot has enough session context for prompt submission.
+/// 判断保留的 WebUI 快照是否已有足够的会话上下文可直接提交提示词。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the in-memory snapshot retained by the service bridge.
+/// `workspace_snapshot` 是服务桥保留的内存工作区快照。
+/// `session_id` selects the submitted conversation.
+/// `session_id` 选择本次提交目标会话。
+///
+/// # Returns
+/// 返回值
+/// `true` when the session was hydrated or already owns concrete conversation context.
+/// 当会话已水合或已拥有具体会话上下文时返回 `true`。
+fn retained_submission_snapshot_has_session_context(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> bool {
+    if workspace_snapshot
+        .hydrated_session_ids
+        .contains(&session_id)
+    {
+        return true;
+    }
+    if workspace_snapshot
+        .session_messages
+        .contains_key(&session_id)
+    {
+        return true;
+    }
+    workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .is_some_and(runtime_state_has_concrete_conversation_context)
+}
+
+/// Returns whether a runtime state carries concrete conversation content rather than a shell row.
+/// 判断运行态是否携带具体会话内容，而不是仅有轻量 shell 行。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the session runtime state to inspect.
+/// `runtime_state` 是待检查的会话运行态。
+///
+/// # Returns
+/// 返回值
+/// `true` when canonical messages or visible records are already loaded.
+/// 当规范消息或可见记录已经加载时返回 `true`。
+fn runtime_state_has_concrete_conversation_context(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> bool {
+    !runtime_state.conversation_state.messages.is_empty()
+        || !runtime_state.conversation_state.records.is_empty()
+}
+
 /// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.
 /// 判断提交的提示词是否必须进入可见队列而不是立即启动。
 fn session_has_blocking_system_prompt_work(
@@ -2093,16 +2235,21 @@ fn session_has_blocking_system_prompt_work(
         return has_active_stream_task
             || session_has_running_subagent_tasks_from_workspace(workspace_snapshot, session_id);
     };
+    let dispatch_context = webui_pending_prompt_dispatch_context(
+        workspace_snapshot,
+        provider_configuration,
+        session_id,
+        has_active_stream_task,
+    );
+    let has_precheck_progress = matches!(
+        dispatch_context.run_phase,
+        Some(SessionRunPhase::MemoryRecall | SessionRunPhase::Preparing)
+    );
     pending_prompt_lane_is_busy(
         &runtime_state.ui_state,
         PendingPromptBusyLaneContext {
-            dispatch: webui_pending_prompt_dispatch_context(
-                workspace_snapshot,
-                provider_configuration,
-                session_id,
-                has_active_stream_task,
-            ),
-            has_precheck_progress: false,
+            dispatch: dispatch_context,
+            has_precheck_progress,
         },
     )
 }
@@ -2250,6 +2397,7 @@ fn stop_webui_session_work(
             ..SessionRuntimeStateEntry::default()
         });
     clear_internal_pending_prompt_queue_and_restore_panel(&mut runtime_state.ui_state);
+    runtime_state.active_precheck_turn_id = None;
     runtime_state.updated_at = now.clone();
     workspace_snapshot
         .session_run_phases
@@ -2581,6 +2729,130 @@ fn agent_runtime_for_pending_prompt(
     next_runtime
 }
 
+/// Returns the owning project id for one session when it has a persisted project scope.
+/// 当会话拥有持久化项目作用域时返回所属项目标识。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains the session summaries.
+/// `workspace_snapshot` 包含会话摘要。
+/// `session_id` selects the session.
+/// `session_id` 选择目标会话。
+///
+/// # Returns
+/// 返回值
+/// A non-empty project id when the session belongs to one project.
+/// 当会话属于某个项目时返回非空项目标识。
+fn owning_project_id_for_session(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<String> {
+    workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .and_then(|session| session.project_id.clone())
+        .filter(|project_id| !project_id.trim().is_empty())
+}
+
+/// Captures the iced-equivalent context snapshot before a WebUI user prompt mutates context.
+/// 在 WebUI 用户提示词改变上下文前捕获与 iced 等价的上下文快照。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains the current runtime state.
+/// `workspace_snapshot` 包含当前运行态。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+/// `source` identifies whether this prompt is visible user input or delegated completion.
+/// `source` 标识该提示词是可见用户输入还是委派完成回流。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the snapshot either succeeds or is not needed.
+/// 快照成功或无需快照后返回 `Ok(())`。
+fn snapshot_webui_context_before_user_prompt(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    source: PendingSessionPromptSource,
+) -> Result<(), String> {
+    if source == PendingSessionPromptSource::DelegateCompletion {
+        return Ok(());
+    }
+    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+        return Ok(());
+    };
+    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
+        return Ok(());
+    };
+    vulcan_workspace_store::workspace_store::snapshot_session_context_before_user_prompt(
+        &project_id,
+        session_id,
+        runtime_state,
+    )
+}
+
+/// Applies iced-equivalent outer steps after one WebUI prompt begin reducer has run.
+/// 在 WebUI 提示词 begin reducer 执行后应用与 iced 等价的外层步骤。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the mutable WebUI workspace snapshot.
+/// `workspace_snapshot` 是可变 WebUI 工作区快照。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+/// `session_title` labels diagnostics.
+/// `session_title` 标记诊断信息。
+fn apply_webui_prompt_begin_outer_steps(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    session_title: &str,
+) {
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+        && remove_legacy_vmm_profile_context_injection_state(
+            &mut runtime_state.context_injection_state,
+        )
+    {
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+    persist_webui_context_current_document(workspace_snapshot, session_id, session_title);
+}
+
+/// Persists the iced-equivalent current context document for a WebUI session when possible.
+/// 在可行时为 WebUI 会话持久化与 iced 等价的当前上下文文档。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains the current runtime state.
+/// `workspace_snapshot` 包含当前运行态。
+/// `session_id` selects the prompt session.
+/// `session_id` 选择提示词会话。
+/// `session_title` labels diagnostics.
+/// `session_title` 标记诊断信息。
+fn persist_webui_context_current_document(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    session_title: &str,
+) {
+    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+        return;
+    };
+    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
+        return;
+    };
+    if let Err(error) =
+        vulcan_workspace_store::workspace_store::persist_session_context_current_document(
+            &project_id,
+            session_id,
+            runtime_state,
+        )
+    {
+        eprintln!("[tauri-service] current context persist failed for `{session_title}`: {error}");
+    }
+}
+
 /// Resolves or creates the session that should receive the submitted prompt.
 /// 解析或创建应该接收本次提示词的会话。
 fn materialize_prompt_session(
@@ -2645,239 +2917,6 @@ fn materialize_prompt_session(
     Ok((session_id, session_title, workspace_path))
 }
 
-/// Appends the visible user prompt and builds the shared runtime execution request.
-/// 追加可见用户提示词，并构建共享运行时执行请求。
-async fn append_prompt_and_build_request(
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    agent_runtime: &AgentRuntimeBridge,
-    session_id: SessionId,
-    session_title: &str,
-    workspace_path: &str,
-    prompt: &str,
-    attachments: Vec<ConversationAttachment>,
-    execution_mode: Option<String>,
-    reasoning_effort: Option<String>,
-    disabled_ai_capability_kinds: Option<Vec<String>>,
-    disabled_ai_capability_target_selectors: Option<Vec<String>>,
-    ai_capability_target_order_overrides: Option<BTreeMap<String, Vec<String>>>,
-    emit_visible_prompt_snapshot: impl FnOnce(&WorkspaceSnapshot) -> Result<(), String>,
-) -> Result<ExecutionPreparationRequest, String> {
-    let now = current_unix_millis_text();
-    let prompt_entry_id = format!("webui-prompt-{session_id}-{now}");
-    let (injection_ops, sanitized_prompt) =
-        collect_builtin_manual_injection_ops_and_sanitized_prompt(prompt);
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .entry(session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
-            updated_at: now.clone(),
-            ..SessionRuntimeStateEntry::default()
-        });
-    runtime_state.ui_state.unread = false;
-    if runtime_state.conversation_state.records.is_empty() {
-        if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
-            runtime_state.conversation_state = conversation_state_from_session_messages(messages);
-        }
-    }
-    append_user_prompt_record_with_attachments(
-        runtime_state,
-        session_id,
-        &now,
-        &sanitized_prompt,
-        attachments,
-    );
-    let system_prompt_hook_phase = vmm_profile_placement_phase(
-        runtime_state.conversation_state.messages.len(),
-        runtime_state.last_compaction_id.as_deref(),
-        runtime_state
-            .vmm_profile_sync
-            .covered_compaction_id
-            .as_deref(),
-    );
-    let hook_conversation_state = runtime_state.conversation_state.clone();
-    workspace_snapshot.session_messages.insert(
-        session_id,
-        conversation_state_to_session_messages(&runtime_state.conversation_state),
-    );
-    workspace_snapshot
-        .session_run_phases
-        .insert(session_id, SessionRunPhase::MemoryRecall);
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
-    emit_visible_prompt_snapshot(workspace_snapshot)?;
-
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            workspace_snapshot,
-        ));
-    let owning_project_id = workspace_snapshot
-        .sessions
-        .iter()
-        .find(|session| session.id == session_id)
-        .and_then(|session| session.project_id.clone())
-        .filter(|project_id| !project_id.trim().is_empty());
-    let precheck_request = {
-        let mut hook_runtime = agent_runtime
-            .conversation_hook_runtime
-            .lock()
-            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
-        hook_runtime.prepare_user_prompt_precheck(
-            session_id,
-            &prompt_entry_id,
-            owning_project_id,
-            workspace_path.to_string(),
-            PendingSessionPromptSource::UserFollowup,
-            system_prompt_hook_phase,
-            &sanitized_prompt,
-            &hook_conversation_state,
-        )
-    };
-    let precheck_outcome = precheck_request.run().await;
-    let mut request_prompt = sanitized_prompt;
-    let mut system_prompt_hook_blocks = Vec::new();
-    if !injection_ops.is_empty()
-        && let Some(runtime_state) = workspace_snapshot
-            .session_runtime_state
-            .get_mut(&session_id)
-    {
-        runtime_state
-            .context_injection_state
-            .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_outcome.turn_id));
-        runtime_state.updated_at = now.clone();
-    }
-    match precheck_outcome.report {
-        Ok(report) => {
-            if let Some(effect) = vmm_profile_sync_effect_from_report(&report)
-                && let Some(runtime_state) = workspace_snapshot
-                    .session_runtime_state
-                    .get_mut(&session_id)
-            {
-                runtime_state.vmm_profile_sync = effect.state;
-                runtime_state.updated_at = current_unix_millis_text();
-            }
-            if let Some(rewritten_prompt) = report
-                .payload
-                .value
-                .get("user_content")
-                .and_then(Value::as_str)
-                .filter(|content| *content != request_prompt)
-            {
-                request_prompt = rewritten_prompt.to_string();
-                patch_latest_prechecked_user_prompt_record(
-                    workspace_snapshot,
-                    session_id,
-                    &request_prompt,
-                );
-            }
-            if !report.injections.is_empty()
-                && let Some(runtime_state) = workspace_snapshot
-                    .session_runtime_state
-                    .get_mut(&session_id)
-            {
-                let now = current_unix_millis_text();
-                runtime_state
-                    .context_injection_state
-                    .apply_inserts_for_turn(
-                        report.injections,
-                        &now,
-                        Some(&precheck_outcome.turn_id),
-                    );
-                runtime_state.updated_at = now;
-            }
-            system_prompt_hook_blocks = report.system_prompt_blocks;
-        }
-        Err(error) => {
-            if let Some(runtime_state) = workspace_snapshot
-                .session_runtime_state
-                .get_mut(&session_id)
-            {
-                append_runtime_event_projection_to_state(
-                    runtime_state,
-                    session_id,
-                    &current_unix_millis_text(),
-                    &RuntimeEvent::new(
-                        RuntimeEventKind::Failed,
-                        "Precheck hook 执行失败",
-                        format!(
-                            "会话 `{session_title}` 的 precheck 未能完成，已继续真实请求：{error}"
-                        ),
-                    ),
-                );
-            }
-        }
-    }
-    workspace_snapshot.session_messages.insert(
-        session_id,
-        conversation_state_to_session_messages(
-            &workspace_snapshot
-                .session_runtime_state
-                .get(&session_id)
-                .map(|runtime_state| runtime_state.conversation_state.clone())
-                .unwrap_or_default(),
-        ),
-    );
-    agent_runtime
-        .vmm_hook_runtime
-        .replace_snapshot(build_vmm_hook_config_snapshot(
-            &agent_runtime.provider_configuration,
-            workspace_snapshot,
-        ));
-
-    let project_configuration = load_project_configuration(workspace_path);
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .unwrap_or_default();
-
-    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
-        &agent_runtime.ai_tool_configuration,
-        disabled_ai_capability_kinds.as_deref(),
-    )?;
-    let disabled_ai_capability_target_selectors = disabled_ai_capability_target_selectors
-        .unwrap_or_default()
-        .into_iter()
-        .map(|selector| selector.trim().to_string())
-        .filter(|selector| !selector.is_empty())
-        .collect::<BTreeSet<_>>();
-    let ai_capability_target_order_overrides =
-        parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
-    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
-        &agent_runtime.ai_tool_configuration,
-        &disabled_ai_capability_kinds,
-        &disabled_ai_capability_target_selectors,
-        &ai_capability_target_order_overrides,
-    );
-
-    Ok(ExecutionPreparationRequest {
-        session_id,
-        session_title: session_title.to_string(),
-        workspace_path: workspace_path.to_string(),
-        prompt: request_prompt,
-        conversation_state: runtime_state.conversation_state.clone(),
-        execution_mode: execution_mode.unwrap_or_else(|| String::from("build")),
-        temperature: runtime_state.active_temperature,
-        reasoning_effort: reasoning_effort
-            .as_deref()
-            .and_then(parse_reasoning_effort)
-            .or(runtime_state.active_reasoning_effort)
-            .or_else(|| active_reasoning_selection_effort(&agent_runtime.provider_configuration))
-            .unwrap_or(ReasoningEffortLevel::Medium),
-        ai_tool_configuration,
-        prompt_purpose: ExecutionPromptPurpose::UserTurn,
-        project_prompt_skills: project_configuration.prompt_skills,
-        session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
-        context_injection: core_provider_context_injection_from_state_for_turn(
-            &runtime_state.context_injection_state,
-            Some(&precheck_outcome.turn_id),
-        ),
-        system_prompt_hook_blocks,
-        project_vmm: project_configuration.vmm,
-        session_vmm: runtime_state.vmm.clone(),
-    })
-}
-
 /// Parses prompt-level AI capability target order overrides from the WebUI payload.
 /// 从 WebUI 载荷中解析提示词级 AI 能力目标顺序覆盖。
 ///
@@ -2914,6 +2953,27 @@ fn parse_ai_capability_target_order_overrides(
     Ok(overrides)
 }
 
+/// Parses prompt-level AI capability target selectors from the WebUI payload.
+/// 从 WebUI 载荷中解析提示词级 AI 能力目标选择器。
+///
+/// # Parameters
+/// 参数
+/// `raw_selectors` contains optional target selector strings.
+/// `raw_selectors` 包含可选的目标选择器字符串。
+///
+/// # Returns
+/// 返回值
+/// A trimmed selector set accepted by the shared prompt-turn core.
+/// 共享提示词回合核心可接受的已清洗选择器集合。
+fn parse_ai_capability_target_selectors(raw_selectors: Option<Vec<String>>) -> BTreeSet<String> {
+    raw_selectors
+        .unwrap_or_default()
+        .into_iter()
+        .map(|selector| selector.trim().to_string())
+        .filter(|selector| !selector.is_empty())
+        .collect()
+}
+
 /// Loads project-local Vulcan Code configuration for one WebUI execution workspace.
 /// 为一个 WebUI 执行工作区加载项目级 Vulcan Code 配置。
 ///
@@ -2933,53 +2993,49 @@ fn load_project_configuration(
         .unwrap_or_default()
 }
 
-/// Rewrites the latest visible user prompt after a precheck transform edits it.
-/// 在 precheck transform 改写提示词后回写最近一条可见用户提示词。
-fn patch_latest_prechecked_user_prompt_record(
-    workspace_snapshot: &mut WorkspaceSnapshot,
+/// Builds the shared precheck plan for a WebUI session using the iced VMM layering rules.
+/// 使用 iced 的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
+///
+/// # Parameters
+/// 参数
+/// `agent_runtime` owns provider configuration and hook runtime state.
+/// `agent_runtime` 持有 Provider 配置与 hook 运行态。
+/// `workspace_snapshot` contains session-scoped VMM overrides.
+/// `workspace_snapshot` 包含会话级 VMM 覆盖配置。
+/// `session_id` selects the session being prepared.
+/// `session_id` 选择正在准备的会话。
+/// `workspace_path` identifies the project configuration file to load.
+/// `workspace_path` 标识需要加载的项目配置文件。
+///
+/// # Returns
+/// 返回值
+/// A shared precheck plan matching the iced shell.
+/// 返回与 iced 外壳一致的共享 precheck 计划。
+fn webui_shared_prompt_precheck_plan(
+    agent_runtime: &AgentRuntimeBridge,
+    workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
-    prompt: &str,
-) {
-    let Some(runtime_state) = workspace_snapshot
+    workspace_path: &str,
+) -> Result<SharedPromptPrecheckPlan, String> {
+    let project_configuration = load_project_configuration(workspace_path);
+    let session_layer = workspace_snapshot
         .session_runtime_state
-        .get_mut(&session_id)
-    else {
-        return;
-    };
-    if let Some(message) = runtime_state
-        .conversation_state
-        .messages
-        .iter_mut()
-        .rev()
-        .find(|message| matches!(message.payload, SessionConversationPayload::UserText { .. }))
-        && let SessionConversationPayload::UserText { text, .. } = &mut message.payload
-    {
-        *text = prompt.to_string();
-    }
-    if let Some(record) = runtime_state
-        .conversation_state
-        .records
-        .iter_mut()
-        .rev()
-        .find(|record| {
-            record.visible
-                && record.kind == SessionMessageKind::User
-                && record.record_kind == SessionMessageRecordKind::Transcript
-                && record.title == "用户指令"
-        })
-    {
-        record.body = prompt.to_string();
-        if let Some(metadata) = record.metadata.as_mut()
-            && let Some(object) = metadata.as_object_mut()
-        {
-            object.insert(String::from("canonical_text"), serde_json::json!(prompt));
-            object.insert(
-                String::from("canonical_user_text"),
-                serde_json::json!(prompt),
-            );
-        }
-    }
-    runtime_state.updated_at = current_unix_millis_text();
+        .get(&session_id)
+        .map(|runtime_state| &runtime_state.vmm);
+    let effective_vmm_config = vulcan_vmm::VmmEffectiveConfig::resolve(
+        &agent_runtime.provider_configuration.vmm,
+        Some(&project_configuration.vmm),
+        session_layer,
+    );
+    let precheck_hook_snapshots = agent_runtime
+        .conversation_hook_runtime
+        .lock()
+        .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?
+        .precheck_hook_snapshots();
+    Ok(shared_prompt_precheck_plan(
+        &effective_vmm_config,
+        &precheck_hook_snapshots,
+    ))
 }
 
 /// Builds the shared VMM hook snapshot from the current Tauri workspace state.
@@ -3060,6 +3116,37 @@ fn build_vmm_hook_config_snapshot(
 /// Persists only the changed session after a WebUI runtime mutation.
 /// 在 WebUI 运行时变更后仅持久化被修改的单个会话。
 async fn persist_workspace_session_update(
+    state: Option<&SharedServiceBridgeState>,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if let Some(state) = state {
+        invalidate_webui_session_persist_version(state, session_id)?;
+    }
+    let persist_lock = webui_workspace_persist_lock();
+    let _persist_guard = persist_lock.lock().await;
+    persist_workspace_session_update_unlocked(controller_runtime, workspace_snapshot, session_id)
+        .await
+}
+
+/// Persists one session snapshot after the caller has acquired the shared WebUI write gate.
+/// 在调用方已取得共享 WebUI 写入闸门后持久化单个会话快照。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` is the workspace snapshot that contains the changed session.
+/// `workspace_snapshot` 是包含变更会话的工作区快照。
+/// `session_id` selects the session to persist.
+/// `session_id` 选择要持久化的会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the session has been saved.
+/// 会话保存完成时返回 `Ok(())`。
+async fn persist_workspace_session_update_unlocked(
     controller_runtime: ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
@@ -3122,6 +3209,161 @@ async fn persist_workspace_session_update(
     )
     .await
     .map(|_| ())
+}
+
+/// Persists one WebUI session snapshot in the background without blocking visible UI updates.
+/// 在后台持久化一个 WebUI 会话快照，不阻塞可见 UI 更新。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` is the already-rendered snapshot to save.
+/// `workspace_snapshot` 是已经渲染过、待保存的快照。
+/// `session_id` selects the session that changed.
+/// `session_id` 选择发生变更的会话。
+/// `reason` labels the write site for diagnostics.
+/// `reason` 标记写入来源，供诊断使用。
+fn spawn_workspace_session_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    reason: Option<String>,
+) {
+    let persist_version = match next_webui_session_persist_version(&state, session_id) {
+        Ok(version) => version,
+        Err(error) => {
+            eprintln!("[tauri-service] background persist version failed: {error}");
+            return;
+        }
+    };
+    tauri::async_runtime::spawn(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
+            return;
+        }
+        if let Err(error) = persist_workspace_session_update_unlocked(
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+        )
+        .await
+        {
+            let reason = reason.unwrap_or_else(|| String::from("session_update"));
+            eprintln!("[tauri-service] background persist failed ({reason}): {error}");
+        }
+    });
+}
+
+/// Allocates the next background persistence version for one WebUI session.
+/// 为一个 WebUI 会话分配下一次后台持久化版本。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session persistence version table.
+/// `state` 持有按会话归属的持久化版本表。
+/// `session_id` selects the session being persisted.
+/// `session_id` 选择正在持久化的会话。
+///
+/// # Returns
+/// 返回值
+/// The version assigned to the new background persistence task.
+/// 返回分配给新后台持久化任务的版本。
+fn next_webui_session_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let next_version = guard
+        .session_persist_versions
+        .get(&session_id)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(1);
+    guard
+        .session_persist_versions
+        .insert(session_id, next_version);
+    Ok(next_version)
+}
+
+/// Returns whether a background persistence task is still the latest one for its session.
+/// 判断某个后台持久化任务是否仍是其会话的最新任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session persistence version table.
+/// `state` 持有按会话归属的持久化版本表。
+/// `session_id` selects the session being persisted.
+/// `session_id` 选择正在持久化的会话。
+/// `persist_version` is the task-local persistence version.
+/// `persist_version` 是任务本地持久化版本。
+///
+/// # Returns
+/// 返回值
+/// `true` when the task may write to disk.
+/// 当该任务可以写入磁盘时返回 `true`。
+fn webui_session_persist_version_is_current(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    persist_version: u64,
+) -> bool {
+    state
+        .lock()
+        .ok()
+        .and_then(|guard| guard.session_persist_versions.get(&session_id).copied())
+        == Some(persist_version)
+}
+
+/// Invalidates older background persistence snapshots for one WebUI session.
+/// 使某个 WebUI 会话上较旧的后台持久化快照失效。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session persistence version table.
+/// `state` 持有按会话归属的持久化版本表。
+/// `session_id` selects the session whose pending background writes should be invalidated.
+/// `session_id` 选择需要使待处理后台写入失效的会话。
+fn invalidate_webui_session_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let _ = next_webui_session_persist_version(state, session_id)?;
+    Ok(())
+}
+
+/// Persists one WebUI session runtime-state mutation through the full session snapshot path.
+/// 通过完整会话快照路径持久化一个 WebUI 会话运行态变更。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `session_id` selects the runtime-state row to update.
+/// `session_id` 选择要更新的运行态记录。
+/// `workspace_snapshot` carries the current complete session snapshot.
+/// `workspace_snapshot` 携带当前完整会话快照。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the store write finishes.
+/// 存储写入完成后返回 `Ok(())`。
+async fn persist_webui_session_runtime_state_update(
+    state: &SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    session_id: SessionId,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Result<(), String> {
+    persist_workspace_session_update(
+        Some(state),
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+    )
+    .await
 }
 
 /// Builds an empty LuaSkills catalog for degraded snapshot rendering.
@@ -3293,6 +3535,336 @@ fn store_and_emit_workbench_snapshot(
     Ok(workbench)
 }
 
+/// Continues one WebUI prompt turn after the shared conversation precheck completes.
+/// 在共享会话预检查完成后继续一个 WebUI 提示词回合。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench snapshot.
+/// `app` 发出刷新后的工作台快照。
+/// `state` owns the retained WebUI workspace snapshot.
+/// `state` 持有 WebUI 保留的工作区快照。
+/// `controller_runtime` provides workspace persistence.
+/// `controller_runtime` 提供工作区持久化能力。
+/// `agent_runtime` provides provider and hook runtime state.
+/// `agent_runtime` 提供 Provider 与 hook 运行态。
+/// `start` is the first-stage prompt turn prepared before precheck.
+/// `start` 是 precheck 前准备好的第一阶段提示词回合。
+/// `precheck_outcome` is the completed hook result.
+/// `precheck_outcome` 是已完成的 hook 结果。
+///
+/// # Returns
+/// 返回值
+/// The execution request when the turn should continue, otherwise `None`.
+/// 需要继续执行时返回执行请求，否则返回 `None`。
+fn continue_webui_prompt_turn_after_precheck_from_state(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    start: SharedPromptTurnStart,
+    precheck_outcome: ConversationPrecheckOutcome,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
+    let session_id = start.session_id;
+    let mut workspace_snapshot = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    if workspace_snapshot.session_run_phases.get(&session_id) == Some(&SessionRunPhase::Stopped) {
+        spawn_workspace_session_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            workspace_snapshot,
+            session_id,
+            Some(String::from("precheck_stopped")),
+        );
+        return Ok(None);
+    }
+    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
+        &agent_runtime.ai_tool_configuration,
+        &start.disabled_ai_capability_kinds,
+        &start.disabled_ai_capability_target_selectors,
+        &start.ai_capability_target_order_overrides,
+    );
+    let project_configuration = load_project_configuration(&start.workspace_path);
+    let runtime_reasoning_effort = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.active_reasoning_effort);
+    let session_title_for_context = start.session_title.clone();
+    let continuation = continue_shared_prompt_turn_after_precheck(
+        &mut workspace_snapshot,
+        SharedPromptTurnContinueInput {
+            start,
+            precheck_outcome,
+            ai_tool_configuration,
+            project_configuration,
+            runtime_reasoning_effort,
+            provider_reasoning_effort: active_reasoning_selection_effort(
+                &agent_runtime.provider_configuration,
+            ),
+            patch_visible_user_prompt_record: true,
+        },
+    )?;
+    agent_runtime
+        .vmm_hook_runtime
+        .replace_snapshot(build_vmm_hook_config_snapshot(
+            &agent_runtime.provider_configuration,
+            &workspace_snapshot,
+        ));
+    if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
+        eprintln!("[tauri-service] precheck hook failed but request will continue: {detail}");
+        if let Err(error) = push_webui_service_diagnostic(
+            state,
+            format!("warning · Precheck hook 执行失败：{detail}"),
+        ) {
+            eprintln!("[tauri-service] record precheck warning failed: {error}");
+        }
+    }
+    let request = continuation.request;
+    persist_webui_context_current_document(
+        &workspace_snapshot,
+        session_id,
+        &session_title_for_context,
+    );
+    let now = current_unix_millis_text();
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+    {
+        runtime_state.updated_at = now.clone();
+    }
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Running;
+        session.focus = String::from("正在请求");
+        session.last_updated_label = String::from("刚刚");
+    }
+    store_current_workbench_snapshot(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        workspace_snapshot.clone(),
+    )?;
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        workspace_snapshot,
+        session_id,
+        Some(String::from("precheck_continue")),
+    );
+    Ok(Some(request))
+}
+
+/// Spawns the shared precheck continuation chain for one WebUI prompt turn.
+/// 为一个 WebUI 提示词回合启动共享 precheck continuation 链路。
+///
+/// # Parameters
+/// 参数
+/// `app` emits workbench snapshots and is forwarded to the stream task.
+/// `app` 发出工作台快照，并继续传递给流任务。
+/// `state` owns retained service state.
+/// `state` 持有保留的服务状态。
+/// `controller_runtime` provides workspace persistence.
+/// `controller_runtime` 提供工作区持久化能力。
+/// `agent_runtime` owns provider and hook runtimes.
+/// `agent_runtime` 持有 Provider 与 hook 运行时。
+/// `start` is the first-stage prompt turn.
+/// `start` 是第一阶段提示词回合。
+fn spawn_webui_precheck_continue_task(
+    app: tauri::AppHandle,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    start: SharedPromptTurnStart,
+) {
+    tauri::async_runtime::spawn(async move {
+        let session_id = start.session_id;
+        let precheck_outcome = start.precheck_request.clone().run().await;
+        match continue_webui_prompt_turn_after_precheck_from_state(
+            &app,
+            &state,
+            &controller_runtime,
+            &agent_runtime,
+            start,
+            precheck_outcome,
+        ) {
+            Ok(Some(request)) => {
+                spawn_agent_stream_task(app, state, controller_runtime, agent_runtime, request)
+            }
+            Ok(None) => {}
+            Err(error) => {
+                eprintln!("[tauri-service] continue WebUI prompt after precheck failed: {error}");
+                if let Err(cleanup_error) = mark_webui_precheck_continuation_failed(
+                    &app,
+                    &state,
+                    &controller_runtime,
+                    &agent_runtime,
+                    session_id,
+                    &error,
+                ) {
+                    eprintln!(
+                        "[tauri-service] cleanup failed WebUI precheck continuation failed: {cleanup_error}"
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// Starts precheck dispatch or immediately continues with a skipped precheck using shared semantics.
+/// 使用共享语义启动 precheck 调度，或在需要跳过时立即继续。
+///
+/// # Parameters
+/// 参数
+/// `app` emits workbench snapshots and runtime stream events.
+/// `app` 发出工作台快照与运行时流事件。
+/// `state` owns retained service state.
+/// `state` 持有保留的服务状态。
+/// `controller_runtime` provides workspace persistence.
+/// `controller_runtime` 提供工作区持久化能力。
+/// `agent_runtime` owns provider and hook runtimes.
+/// `agent_runtime` 持有 Provider 与 hook 运行时。
+/// `start` is the first-stage prompt turn.
+/// `start` 是第一阶段提示词回合。
+/// `precheck_plan` decides whether handlers should run.
+/// `precheck_plan` 决定是否需要运行处理器。
+///
+/// # Returns
+/// 返回值
+/// Whether any continuation or precheck task was started.
+/// 是否已经启动 continuation 或 precheck 任务。
+fn start_webui_precheck_or_continue(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    start: SharedPromptTurnStart,
+    precheck_plan: SharedPromptPrecheckPlan,
+) -> Result<bool, String> {
+    if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
+        let precheck_outcome = start.precheck_request.clone().skip();
+        if let Some(request) = continue_webui_prompt_turn_after_precheck_from_state(
+            app,
+            state,
+            controller_runtime,
+            agent_runtime,
+            start,
+            precheck_outcome,
+        )? {
+            spawn_agent_stream_task(
+                app.clone(),
+                state.clone(),
+                controller_runtime.clone(),
+                agent_runtime.clone(),
+                request,
+            );
+            return Ok(true);
+        }
+        return Ok(false);
+    }
+    spawn_webui_precheck_continue_task(
+        app.clone(),
+        state.clone(),
+        controller_runtime.clone(),
+        agent_runtime.clone(),
+        start,
+    );
+    Ok(true)
+}
+
+/// Marks a WebUI prompt turn as stopped when precheck continuation cannot be applied.
+/// 当 WebUI 提示词回合无法应用 precheck continuation 时，将其标记为已停止。
+///
+/// # Parameters
+/// 参数
+/// `app` emits the refreshed workbench snapshot.
+/// `app` 发出刷新后的工作台快照。
+/// `state` owns the retained workspace snapshot.
+/// `state` 持有保留的工作区快照。
+/// `controller_runtime` persists the cleaned session state.
+/// `controller_runtime` 持久化清理后的会话状态。
+/// `agent_runtime` provides projection configuration for the emitted workbench.
+/// `agent_runtime` 提供发出工作台快照所需的投影配置。
+/// `session_id` selects the failed prompt turn.
+/// `session_id` 选择失败的提示词回合。
+/// `error` describes the continuation failure.
+/// `error` 描述 continuation 失败原因。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the failed state is projected and persisted.
+/// 失败状态完成投影与持久化后返回 `Ok(())`。
+fn mark_webui_precheck_continuation_failed(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    session_id: SessionId,
+    error: &str,
+) -> Result<(), String> {
+    let mut workspace_snapshot = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?
+        .workspace_snapshot
+        .clone()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    let now = current_unix_millis_text();
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+    {
+        runtime_state.active_precheck_turn_id = None;
+        append_runtime_event_projection_to_state(
+            runtime_state,
+            session_id,
+            &now,
+            &RuntimeEvent::new(
+                RuntimeEventKind::Failed,
+                "Precheck 结果已忽略",
+                error.to_string(),
+            ),
+        );
+        runtime_state.updated_at = now.clone();
+    }
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Stopped);
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Blocked;
+        session.focus = String::from("Precheck 结果无法应用，已停止本轮请求。");
+        session.last_updated_label = String::from("刚刚");
+    }
+    store_current_workbench_snapshot(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        workspace_snapshot.clone(),
+    )?;
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        workspace_snapshot,
+        session_id,
+        Some(String::from("precheck_continue_failed")),
+    );
+    Ok(())
+}
+
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
 /// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
 fn spawn_agent_stream_task(
@@ -3447,16 +4019,7 @@ fn spawn_agent_stream_task(
                     )
                     .await
                     {
-                        Ok(Some(next_request)) => {
-                            spawn_agent_stream_task(
-                                app.clone(),
-                                task_state.clone(),
-                                controller_runtime.clone(),
-                                agent_runtime.clone(),
-                                next_request,
-                            );
-                        }
-                        Ok(None) => {}
+                        Ok(_) => {}
                         Err(error) => {
                             eprintln!(
                                 "[tauri-service] prepare pending prompt after runtime event failed: {error}"
@@ -3512,17 +4075,7 @@ fn spawn_agent_stream_task(
                     )
                     .await
                     {
-                        Ok(Some(next_request)) => {
-                            spawn_agent_stream_task(
-                                app.clone(),
-                                task_state.clone(),
-                                controller_runtime.clone(),
-                                agent_runtime.clone(),
-                                next_request,
-                            );
-                            true
-                        }
-                        Ok(None) => false,
+                        Ok(started) => started,
                         Err(error) => {
                             eprintln!(
                                 "[tauri-service] prepare next pending prompt failed: {error}"
@@ -3545,6 +4098,7 @@ fn spawn_agent_stream_task(
                     if !started_next_prompt
                         && let Some(apply) = final_report_apply
                         && let Err(error) = persist_workspace_session_update(
+                            Some(&task_state),
                             controller_runtime.clone(),
                             &apply.workspace_snapshot,
                             finished_session_id,
@@ -3669,7 +4223,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     allow_from_stopped_phase: bool,
-) -> Result<Option<ExecutionPreparationRequest>, String> {
+) -> Result<bool, String> {
     let (mut workspace_snapshot, has_active_stream_task) = {
         let guard = state
             .lock()
@@ -3693,7 +4247,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
     )
     .is_some()
     {
-        return Ok(None);
+        return Ok(false);
     }
     let Some(session_title) = workspace_snapshot
         .sessions
@@ -3701,7 +4255,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
         .find(|session| session.id == session_id)
         .map(|session| session.title.clone())
     else {
-        return Ok(None);
+        return Ok(false);
     };
     let prefer_delegate_completion = session_uses_anthropic_runtime(
         &workspace_snapshot,
@@ -3713,39 +4267,59 @@ async fn maybe_prepare_next_webui_pending_prompt(
         session_id,
         prefer_delegate_completion,
     ) else {
-        return Ok(None);
+        return Ok(false);
     };
     let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
     let runtime_options = entry.runtime_options.clone();
     let entry_agent_runtime = agent_runtime_for_pending_prompt(agent_runtime, &entry);
-    let disabled_ai_capability_kinds = if runtime_options.disabled_ai_capability_kinds.is_empty() {
-        None
-    } else {
-        Some(
-            runtime_options
-                .disabled_ai_capability_kinds
-                .iter()
-                .map(|kind| kind.key().to_string())
-                .collect(),
+    let panel_entry_id = entry.panel_entry_id.clone();
+    let disabled_ai_capability_kinds = runtime_options
+        .disabled_ai_capability_kinds
+        .iter()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    snapshot_webui_context_before_user_prompt(&workspace_snapshot, session_id, entry.source)?;
+    let precheck_start = {
+        let mut hook_runtime = entry_agent_runtime
+            .conversation_hook_runtime
+            .lock()
+            .map_err(|error| format!("会话 hook runtime 加锁失败：{error}"))?;
+        begin_shared_prompt_turn(
+            &mut workspace_snapshot,
+            &mut hook_runtime,
+            SharedPromptTurnBeginInput {
+                session_id,
+                session_title: &session_title,
+                workspace_path: &workspace_path,
+                prompt_entry_id: entry.id.clone(),
+                prompt: &entry.prompt,
+                attachments: entry.attachments,
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: entry.source
+                    != PendingSessionPromptSource::DelegateCompletion,
+                source: entry.source,
+                execution_mode: String::from("build"),
+                reasoning_effort: Some(runtime_options.reasoning_effort),
+                disabled_ai_capability_kinds,
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+            },
         )
-    };
-    let request = append_prompt_and_build_request(
-        &mut workspace_snapshot,
+    }?;
+    apply_webui_prompt_begin_outer_steps(&mut workspace_snapshot, session_id, &session_title);
+    entry_agent_runtime
+        .vmm_hook_runtime
+        .replace_snapshot(build_vmm_hook_config_snapshot(
+            &entry_agent_runtime.provider_configuration,
+            &workspace_snapshot,
+        ));
+    let precheck_plan = webui_shared_prompt_precheck_plan(
         &entry_agent_runtime,
+        &workspace_snapshot,
         session_id,
-        &session_title,
         &workspace_path,
-        &entry.prompt,
-        entry.attachments,
-        Some(String::from("build")),
-        Some(reasoning_effort_wire_value(runtime_options.reasoning_effort).to_string()),
-        disabled_ai_capability_kinds,
-        None,
-        None,
-        |_| Ok(()),
-    )
-    .await?;
-    if let Some(panel_entry_id) = entry.panel_entry_id.as_deref()
+    )?;
+    if let Some(panel_entry_id) = panel_entry_id.as_deref()
         && let Some(runtime_state) = workspace_snapshot
             .session_runtime_state
             .get_mut(&session_id)
@@ -3753,16 +4327,29 @@ async fn maybe_prepare_next_webui_pending_prompt(
         let _ = remove_pending_prompt_panel_entry(&mut runtime_state.ui_state, panel_entry_id);
         runtime_state.updated_at = current_unix_millis_text();
     }
-    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
-        .await?;
     store_current_workbench_snapshot(
         app,
         state,
         controller_runtime,
         &entry_agent_runtime,
-        workspace_snapshot,
+        workspace_snapshot.clone(),
     )?;
-    Ok(Some(request))
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        workspace_snapshot,
+        session_id,
+        Some(String::from("queued_begin")),
+    );
+    start_webui_precheck_or_continue(
+        app,
+        state,
+        controller_runtime,
+        &entry_agent_runtime,
+        precheck_start,
+        precheck_plan,
+    )?;
+    Ok(true)
 }
 
 /// Removes the next dispatchable queued prompt from the internal or visible WebUI queues.
@@ -4055,9 +4642,14 @@ async fn apply_conversation_checkpoint(
         );
         workspace.hydrated_session_ids.insert(session_id);
     })?;
-    persist_workspace_session_update(controller_runtime.clone(), &workspace_snapshot, session_id)
-        .await
-        .map(|_| ())
+    persist_workspace_session_update(
+        Some(state),
+        controller_runtime.clone(),
+        &workspace_snapshot,
+        session_id,
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Result produced after applying one terminal report to retained memory.
@@ -4115,23 +4707,22 @@ fn apply_execution_report_to_memory(
             .and_then(|session| session.project_id.clone());
         let conversation_state = runtime_state.conversation_state.clone();
         if apply_result.is_success {
-            let hook_turn_id = if let Ok(mut hook_runtime) =
-                agent_runtime.conversation_hook_runtime.lock()
-            {
-                let (hook_turn_id, request) = hook_runtime.prepare_turn_completion_dispatch(
-                    session_id,
-                    project_id.clone(),
-                    report.assistant_output.as_deref().unwrap_or(
-                        "The model completed the run but did not return visible text output.",
-                    ),
-                    report.provider_request_count,
-                    &conversation_state,
-                );
-                completion_request = Some(request);
-                hook_turn_id
-            } else {
-                String::new()
-            };
+            let hook_turn_id =
+                if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
+                    let (hook_turn_id, request) = hook_runtime.prepare_turn_completion_dispatch(
+                        session_id,
+                        project_id.clone(),
+                        report.assistant_output.as_deref().unwrap_or(
+                            "The model completed the run but did not return visible text output.",
+                        ),
+                        report.provider_request_count,
+                        &conversation_state,
+                    );
+                    completion_request = Some(request);
+                    hook_turn_id
+                } else {
+                    String::new()
+                };
             runtime_state
                 .context_injection_state
                 .consume_turn(&hook_turn_id, &now);
@@ -4246,9 +4837,13 @@ fn spawn_conversation_completion_hook_task(
                 return;
             }
         };
-        if let Err(error) =
-            persist_workspace_session_update(controller_runtime, &workspace_snapshot, session_id)
-                .await
+        if let Err(error) = persist_workspace_session_update(
+            Some(&state),
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+        )
+        .await
         {
             eprintln!("[tauri-service] persist completed-turn hook effects failed: {error}");
         }
@@ -4639,6 +5234,17 @@ fn preserve_active_session_run_state(
             .copied();
         let had_active_run = previous_session.status == SessionState::Running
             || previous_phase.is_some_and(is_active_session_run_phase);
+        if !refreshed_snapshot
+            .sessions
+            .iter()
+            .any(|session| session.id == previous_session.id)
+        {
+            preserve_missing_visible_session_summary(
+                previous_snapshot,
+                refreshed_snapshot,
+                previous_session,
+            );
+        }
         if let Some(refreshed_session) = refreshed_snapshot
             .sessions
             .iter_mut()
@@ -4662,11 +5268,20 @@ fn preserve_active_session_run_state(
                 .session_run_phases
                 .insert(previous_session.id, preserved_phase);
         }
-        if let Some(runtime_state) = previous_snapshot
+        if let Some(mut runtime_state) = previous_snapshot
             .session_runtime_state
             .get(&previous_session.id)
             .cloned()
         {
+            if let Some(refreshed_runtime_state) = refreshed_snapshot
+                .session_runtime_state
+                .get(&previous_session.id)
+                && !runtime_state_has_concrete_conversation_context(&runtime_state)
+                && runtime_state_has_concrete_conversation_context(refreshed_runtime_state)
+            {
+                runtime_state.conversation_state =
+                    refreshed_runtime_state.conversation_state.clone();
+            }
             refreshed_snapshot
                 .session_runtime_state
                 .insert(previous_session.id, runtime_state);
@@ -4680,6 +5295,87 @@ fn preserve_active_session_run_state(
                 .session_messages
                 .insert(previous_session.id, messages);
         }
+    }
+}
+
+/// Preserves one in-memory visible session that has not reached the database snapshot yet.
+/// 保留一个尚未进入数据库快照的内存可见会话。
+///
+/// # Parameters
+/// 参数
+/// `previous_snapshot` is the retained in-memory snapshot before database refresh.
+/// `previous_snapshot` 是数据库刷新前保留的内存快照。
+/// `refreshed_snapshot` is the database-backed snapshot being repaired.
+/// `refreshed_snapshot` 是正在修复的数据库来源快照。
+/// `previous_session` is the active or queued session to preserve.
+/// `previous_session` 是需要保留的运行中或排队会话。
+fn preserve_missing_visible_session_summary(
+    previous_snapshot: &WorkspaceSnapshot,
+    refreshed_snapshot: &mut WorkspaceSnapshot,
+    previous_session: &SessionSummary,
+) {
+    let previous_index = previous_snapshot
+        .sessions
+        .iter()
+        .position(|session| session.id == previous_session.id)
+        .unwrap_or_default();
+    let insert_index = previous_index.min(refreshed_snapshot.sessions.len());
+    refreshed_snapshot
+        .sessions
+        .insert(insert_index, previous_session.clone());
+    if previous_snapshot.selected_session == previous_session.id {
+        refreshed_snapshot.selected_session = previous_session.id;
+    }
+    preserve_visible_project_session_membership(
+        previous_snapshot,
+        refreshed_snapshot,
+        previous_session,
+    );
+}
+
+/// Preserves the project sidebar membership for one in-memory session.
+/// 保留一个内存会话在项目侧栏中的归属关系。
+///
+/// # Parameters
+/// 参数
+/// `previous_snapshot` is the retained snapshot that still contains the sidebar relation.
+/// `previous_snapshot` 是仍包含侧栏关系的保留快照。
+/// `refreshed_snapshot` is the database-backed snapshot being repaired.
+/// `refreshed_snapshot` 是正在修复的数据库来源快照。
+/// `previous_session` selects the session whose project membership must be retained.
+/// `previous_session` 选择需要保留项目归属的会话。
+fn preserve_visible_project_session_membership(
+    previous_snapshot: &WorkspaceSnapshot,
+    refreshed_snapshot: &mut WorkspaceSnapshot,
+    previous_session: &SessionSummary,
+) {
+    let Some(project_id) = previous_session.project_id.as_deref() else {
+        return;
+    };
+    let Some(previous_project) = previous_snapshot
+        .task_projects
+        .iter()
+        .find(|project| project.id == project_id)
+    else {
+        return;
+    };
+    let previous_index = previous_project
+        .session_ids
+        .iter()
+        .position(|session_id| *session_id == previous_session.id)
+        .unwrap_or_default();
+    if let Some(refreshed_project) = refreshed_snapshot
+        .task_projects
+        .iter_mut()
+        .find(|project| project.id == project_id)
+    {
+        refreshed_project
+            .session_ids
+            .retain(|session_id| *session_id != previous_session.id);
+        let insert_index = previous_index.min(refreshed_project.session_ids.len());
+        refreshed_project
+            .session_ids
+            .insert(insert_index, previous_session.id);
     }
 }
 
@@ -6399,6 +7095,35 @@ fn runtime_module(
         status,
         message: message.to_string(),
     }
+}
+
+/// Appends one WebUI-visible service diagnostic message to the retained startup log buffer.
+/// 向保留的启动日志缓冲区追加一条 WebUI 可见的服务诊断消息。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained service snapshot.
+/// `state` 持有保留的服务快照。
+/// `message` is the user-visible diagnostic text.
+/// `message` 是用户可见的诊断文本。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the diagnostic has been retained.
+/// 诊断信息完成保留后返回 `Ok(())`。
+fn push_webui_service_diagnostic(
+    state: &SharedServiceBridgeState,
+    message: String,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard.startup.recent_logs.push(message);
+    if guard.startup.recent_logs.len() > 200 {
+        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
+        guard.startup.recent_logs.drain(0..overflow);
+    }
+    Ok(())
 }
 
 /// Creates one diagnostic log entry.

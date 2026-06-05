@@ -1552,6 +1552,9 @@ pub(super) enum Message {
         /// Prompt entry that should now continue into the real provider run.
         /// 现在应继续进入真实 Provider 运行的提示词项。
         prompt_entry: PendingSessionPromptEntry,
+        /// Shared prompt-turn state prepared before precheck dispatch.
+        /// precheck 派发前准备好的共享提示词回合状态。
+        prompt_turn_start: SharedPromptTurnStart,
         /// Completed precheck outcome.
         /// 已完成的 precheck 结果。
         outcome: super::conversation_hooks::ConversationPrecheckOutcome,

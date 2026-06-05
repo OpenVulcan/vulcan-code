@@ -126,7 +126,10 @@ pub fn pending_prompt_dispatch_block_reason(
     if context.has_active_run {
         return Some(PendingPromptDispatchBlockReason::ActiveRun);
     }
-    if context.run_phase == Some(crate::SessionRunPhase::Preparing) {
+    if matches!(
+        context.run_phase,
+        Some(crate::SessionRunPhase::Preparing | crate::SessionRunPhase::MemoryRecall)
+    ) {
         return Some(PendingPromptDispatchBlockReason::Preparing);
     }
     if context.has_active_compaction {
@@ -172,8 +175,10 @@ pub fn pending_prompt_lane_is_busy(
         || (context.dispatch.run_phase == Some(crate::SessionRunPhase::Preparing)
             && !context.dispatch.has_active_run
             && context.has_precheck_progress)
+        || context.dispatch.run_phase == Some(crate::SessionRunPhase::MemoryRecall)
         || context.dispatch.has_active_compaction
         || !ui_state.pending_prompt_queue.is_empty()
+        || !ui_state.pending_prompt_panel_queue.is_empty()
         || context.dispatch.has_running_subagents
 }
 
@@ -689,7 +694,61 @@ pub fn apply_pending_prompt_panel_drop_target(
     }
     let bounded_target_index = target_index.min(queue.len());
     queue.insert(bounded_target_index, entry);
+    reorder_internal_pending_prompt_queue_for_panel_order(ui_state);
     true
+}
+
+/// Reorders already-inserted internal prompts to match their visible panel order.
+/// 按可见面板顺序同步重排已经插入的内部提示词。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` contains both the visible panel queue and the internal dispatch queue.
+/// `ui_state` 同时包含可见面板队列与内部派发队列。
+fn reorder_internal_pending_prompt_queue_for_panel_order(ui_state: &mut SessionTranscriptUiState) {
+    let panel_order = ui_state
+        .pending_prompt_panel_queue
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.as_str(), index))
+        .collect::<BTreeMap<_, _>>();
+    if panel_order.is_empty() {
+        return;
+    }
+    let mut linked_entries = ui_state
+        .pending_prompt_queue
+        .iter()
+        .cloned()
+        .enumerate()
+        .filter(|(_, entry)| {
+            entry
+                .panel_entry_id
+                .as_deref()
+                .is_some_and(|panel_entry_id| panel_order.contains_key(panel_entry_id))
+        })
+        .collect::<Vec<_>>();
+    if linked_entries.len() < 2 {
+        return;
+    }
+    linked_entries.sort_by_key(|(original_index, entry)| {
+        let panel_index = entry
+            .panel_entry_id
+            .as_deref()
+            .and_then(|panel_entry_id| panel_order.get(panel_entry_id))
+            .copied()
+            .unwrap_or(usize::MAX);
+        (panel_index, *original_index)
+    });
+    let mut reordered_entries = linked_entries.into_iter().map(|(_, entry)| entry);
+    for entry in &mut ui_state.pending_prompt_queue {
+        let is_linked_panel_entry = entry
+            .panel_entry_id
+            .as_deref()
+            .is_some_and(|panel_entry_id| panel_order.contains_key(panel_entry_id));
+        if is_linked_panel_entry && let Some(reordered_entry) = reordered_entries.next() {
+            *entry = reordered_entry;
+        }
+    }
 }
 
 /// Clears internal queued prompts and restores linked visible entries to ready.
@@ -797,6 +856,30 @@ mod tests {
         assert_eq!(panel_entry_ids(&ui_state), vec!["b", "c", "a"]);
     }
 
+    /// Verifies visible queued prompts keep later submissions on the pending lane.
+    /// 验证可见排队提示词会让后续提交继续进入待发送通道。
+    #[test]
+    fn pending_prompt_lane_busy_includes_visible_panel_queue() {
+        let ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a")],
+            ..SessionTranscriptUiState::default()
+        };
+
+        assert!(pending_prompt_lane_is_busy(
+            &ui_state,
+            PendingPromptBusyLaneContext {
+                dispatch: PendingPromptDispatchContext {
+                    uses_anthropic_runtime: false,
+                    has_running_subagents: false,
+                    has_active_run: false,
+                    run_phase: None,
+                    has_active_compaction: false,
+                },
+                has_precheck_progress: false,
+            },
+        ));
+    }
+
     /// Verifies manually guided prompts preserve the user's click order.
     /// 验证手动引导的提示词会保留用户的点击顺序。
     #[test]
@@ -828,6 +911,49 @@ mod tests {
 
         assert_eq!(first.panel_entry_id.as_deref(), Some("a"));
         assert_eq!(second.panel_entry_id.as_deref(), Some("b"));
+    }
+
+    /// Verifies dragging visible rows also updates the internal guided dispatch order.
+    /// 验证拖动可见行也会同步更新内部引导派发顺序。
+    #[test]
+    fn pending_prompt_panel_drop_target_reorders_inserted_internal_queue() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![
+                test_panel_entry("a"),
+                test_panel_entry("b"),
+                test_panel_entry("c"),
+            ],
+            ..SessionTranscriptUiState::default()
+        };
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route first guidance prompt");
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "b",
+            String::from("internal-b"),
+            String::from("1002"),
+        )
+        .expect("route second guidance prompt");
+
+        let changed = apply_pending_prompt_panel_drop_target(
+            &mut ui_state,
+            "b",
+            &PendingPromptPanelDropTarget::Before(String::from("a")),
+        );
+
+        assert!(changed);
+        assert_eq!(panel_entry_ids(&ui_state), vec!["b", "a", "c"]);
+        let first = take_next_internal_pending_prompt_entry(&mut ui_state, false)
+            .expect("take first guided prompt");
+        let second = take_next_internal_pending_prompt_entry(&mut ui_state, false)
+            .expect("take second guided prompt");
+        assert_eq!(first.panel_entry_id.as_deref(), Some("b"));
+        assert_eq!(second.panel_entry_id.as_deref(), Some("a"));
     }
 }
 
@@ -1005,6 +1131,10 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次安全运行时检查点捕获到的 Provider 请求次数。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_safe_provider_request_count: Option<usize>,
+    /// Active precheck turn id that is allowed to continue into the provider request.
+    /// 当前允许继续进入 Provider 请求的活跃 precheck 回合标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_precheck_turn_id: Option<String>,
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,

@@ -20,7 +20,7 @@ pub(crate) use ui::{style, theme};
 pub(crate) use vulcan_agent_runtime::{
     agent_profile, agent_runtime, attachment_asset_index, attachment_assets, context_budget,
     conversation_protocol, luaskills_runtime, mcp, project_temp_maintenance, provider_usage,
-    skills, tooling,
+    skills, tooling, workbench_prompt_turn,
 };
 pub(crate) use vulcan_provider_config::ai_tool_configuration;
 pub(crate) use vulcan_provider_config::catalog::ai_capability_provider_catalog;

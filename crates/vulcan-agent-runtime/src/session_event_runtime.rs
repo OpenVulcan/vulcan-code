@@ -468,7 +468,7 @@ fn merge_checkpoint_user_records(
         .iter()
         .map(|record| record.id.clone())
         .collect::<BTreeSet<_>>();
-    for record in checkpoint_records {
+    for (index, record) in checkpoint_records.iter().enumerate() {
         if !record.visible
             || record.kind != SessionMessageKind::User
             || record.record_kind != SessionMessageRecordKind::Transcript
@@ -477,8 +477,73 @@ fn merge_checkpoint_user_records(
             continue;
         }
         preserved_ids.insert(record.id.clone());
-        preserved_records.push(record.clone());
+        let insert_index =
+            checkpoint_user_record_insert_index(preserved_records, checkpoint_records, index);
+        preserved_records.insert(insert_index, record.clone());
     }
+}
+
+/// Returns where a checkpoint-created user record belongs in the preserved transcript.
+/// 返回由检查点创建的用户记录在保留转录中的插入位置。
+///
+/// # Parameters
+/// 参数
+/// `preserved_records` are the existing host-side visible records.
+/// `preserved_records` 是宿主侧已经存在的可见记录。
+/// `checkpoint_records` are the ordered records emitted by the controller snapshot.
+/// `checkpoint_records` 是控制器快照发出的有序记录。
+/// `checkpoint_index` points at the missing checkpoint user record.
+/// `checkpoint_index` 指向缺失的检查点用户记录。
+///
+/// # Returns
+/// 返回值
+/// The index that preserves checkpoint and timestamp order as closely as possible.
+/// 返回尽可能保持检查点顺序与时间顺序的插入索引。
+fn checkpoint_user_record_insert_index(
+    preserved_records: &[SessionConversationRecord],
+    checkpoint_records: &[SessionConversationRecord],
+    checkpoint_index: usize,
+) -> usize {
+    let checkpoint_record = &checkpoint_records[checkpoint_index];
+    if let Some(successor_index) = checkpoint_records[checkpoint_index.saturating_add(1)..]
+        .iter()
+        .find_map(|successor| {
+            preserved_record_index_for_checkpoint_record(preserved_records, successor)
+        })
+    {
+        return successor_index;
+    }
+    if !checkpoint_record.created_at.trim().is_empty()
+        && let Some(time_index) = preserved_records.iter().position(|record| {
+            !record.created_at.trim().is_empty() && record.created_at > checkpoint_record.created_at
+        })
+    {
+        return time_index;
+    }
+    preserved_records.len()
+}
+
+/// Finds the preserved record that corresponds to one checkpoint record.
+/// 查找与某条检查点记录对应的保留记录。
+///
+/// # Parameters
+/// 参数
+/// `preserved_records` are the host-side records retained across checkpoints.
+/// `preserved_records` 是跨检查点保留的宿主侧记录。
+/// `checkpoint_record` is the controller-side record used as an ordering anchor.
+/// `checkpoint_record` 是作为排序锚点的控制器侧记录。
+///
+/// # Returns
+/// 返回值
+/// The preserved record index when an anchor can be matched.
+/// 当可以匹配锚点时返回保留记录索引。
+fn preserved_record_index_for_checkpoint_record(
+    preserved_records: &[SessionConversationRecord],
+    checkpoint_record: &SessionConversationRecord,
+) -> Option<usize> {
+    preserved_records
+        .iter()
+        .position(|record| record.id == checkpoint_record.id)
 }
 
 /// Applies the terminal execution report to one background conversation state.
@@ -869,6 +934,17 @@ mod tests {
             "工具已经完成。",
             false,
         );
+        let mut later_output_record_id = None;
+        append_stream_delta_record_to_state(
+            &mut runtime_state,
+            session_id,
+            "1104",
+            &mut later_output_record_id,
+            SessionMessageRecordKind::AssistantOutput,
+            "输出",
+            "后续请求已经开始输出。",
+            false,
+        );
         let mut checkpoint_state = runtime_state.conversation_state.clone();
         checkpoint_state.records.push(SessionConversationRecord {
             id: String::from("core-guided-user-record"),
@@ -883,13 +959,22 @@ mod tests {
 
         apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1103");
 
-        assert!(runtime_state.conversation_state.records.iter().any(|record| {
-            record.kind == SessionMessageKind::User && record.body == "不需要配图了"
-        }));
-        assert!(runtime_state.conversation_state.records.iter().any(|record| {
-            record.record_kind == SessionMessageRecordKind::AssistantOutput
-                && record.body == "工具已经完成。"
-        }));
+        let visible_bodies = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .filter(|record| record.visible)
+            .map(|record| record.body.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible_bodies,
+            vec![
+                "先调用工具",
+                "工具已经完成。",
+                "不需要配图了",
+                "后续请求已经开始输出。"
+            ]
+        );
     }
 
     /// Verifies terminal reports keep streamed records when they also carry a canonical checkpoint.

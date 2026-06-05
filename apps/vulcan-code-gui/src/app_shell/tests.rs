@@ -26,12 +26,17 @@ use crate::model::{
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
 };
 use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
+use crate::workbench_prompt_turn::{
+    SharedPromptTurnRuntimeBeginInput, begin_shared_prompt_turn_with_runtime_state,
+};
 use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
 use iced::Task;
 use iced::widget::text_editor;
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use vulcan_agent_runtime::agent_runtime::vmm_hooks::VMM_PRECHECK_HOOK_ID;
 use vulcan_agent_view::AgentViewBlock;
 use vulcan_core::types::{ConversationAttachmentKind, ProviderUsageSnapshot};
 use vulcan_hooks::{
@@ -1094,7 +1099,7 @@ fn vmm_precheck_registration_exposes_progress_label() {
             super::conversation_hooks::HOOK_CONVERSATION_TURN_PRECHECK,
         ))
         .into_iter()
-        .find(|snapshot| snapshot.registration.id == super::vmm_hooks::VMM_PRECHECK_HOOK_ID)
+        .find(|snapshot| snapshot.registration.id == VMM_PRECHECK_HOOK_ID)
         .expect("built-in VMM precheck hook should be registered");
 
     assert_eq!(
@@ -1119,15 +1124,63 @@ fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
 
     let prompt_entry =
         test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "original prompt");
-    let task = workbench.begin_session_run_from_prompt_entry(
+    workbench
+        .append_user_prompt_to_session_conversation(
+            session_id,
+            prompt_entry.prompt.clone(),
+            prompt_entry.attachments.clone(),
+            Vec::new(),
+        )
+        .expect("append original prompt before precheck");
+    workbench.push_visible_session_record_message_with_metadata(
         session_id,
-        String::from("precheck 改写测试"),
-        prompt_entry.clone(),
+        SessionMessageKind::User,
+        SessionMessageRecordKind::Transcript,
+        "用户指令",
+        super::tool_projection::build_user_prompt_transcript_body(
+            &prompt_entry.prompt,
+            &prompt_entry.attachments,
+        ),
+        super::tool_projection::build_user_prompt_transcript_metadata(
+            &prompt_entry.prompt,
+            &prompt_entry.attachments,
+        ),
+        false,
     );
-    drop(task);
+    let prompt_turn_start = {
+        let workspace_path = workbench.workspace_path.clone();
+        let runtime_state = workbench
+            .session_runtime_state
+            .get_mut(&session_id)
+            .expect("runtime state should exist after append");
+        begin_shared_prompt_turn_with_runtime_state(
+            runtime_state,
+            &mut workbench.conversation_hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id,
+                session_title: "precheck 改写测试",
+                workspace_path: &workspace_path,
+                prompt_entry_id: prompt_entry.id.clone(),
+                prompt: &prompt_entry.prompt,
+                attachments: prompt_entry.attachments.clone(),
+                append_canonical_user_message: false,
+                append_visible_user_prompt_record: false,
+                source: prompt_entry.source,
+                execution_mode: String::from("build"),
+                reasoning_effort: Some(prompt_entry.runtime_options.reasoning_effort),
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: None,
+                prior_session_messages: None,
+            },
+        )
+        .expect("shared prompt turn should start")
+    };
+    let turn_id = prompt_turn_start.precheck_request.turn_id().to_string();
     let outcome = super::conversation_hooks::ConversationPrecheckOutcome {
         session_id,
-        turn_id: String::from("test-turn"),
+        turn_id,
         report: Ok(HookDispatchReport {
             payload: HookPayload::from_serializable(json!({
                 "user_content": "rewritten prompt",
@@ -1148,6 +1201,7 @@ fn precheck_prompt_rewrite_updates_visible_and_canonical_prompt() {
         session_id,
         String::from("precheck 改写测试"),
         prompt_entry,
+        prompt_turn_start,
         outcome,
     );
     drop(continue_task);

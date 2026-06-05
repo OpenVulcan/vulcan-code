@@ -7,7 +7,7 @@ use crate::provider_config;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 pub(super) use vulcan_agent_runtime::agent_runtime::vmm_hooks::{
-    VMM_PRECHECK_HOOK_ID, VmmHookConfigSnapshot, VmmHookRuntimeHandle,
+    VmmHookConfigSnapshot, VmmHookRuntimeHandle,
 };
 use vulcan_agent_runtime::agent_runtime::vmm_hooks::{
     register_builtin_vmm_hooks as register_shared_builtin_vmm_hooks, vmm_profile_placement_phase,

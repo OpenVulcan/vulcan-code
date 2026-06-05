@@ -881,19 +881,7 @@ pub(super) fn build_user_prompt_transcript_body(
     prompt: &str,
     attachments: &[ConversationAttachment],
 ) -> String {
-    let visible_attachments = attachments
-        .iter()
-        .filter(|attachment| attachment.kind != ConversationAttachmentKind::Image)
-        .cloned()
-        .collect::<Vec<_>>();
-    let parts = build_composer_input_parts(prompt, &visible_attachments);
-    let body = composer_parts_transcript_body(&parts);
-
-    if prompt.trim().is_empty() && !attachments.is_empty() && visible_attachments.is_empty() {
-        String::new()
-    } else {
-        body
-    }
+    build_shared_user_prompt_transcript_body(prompt, attachments)
 }
 
 /// Builds transcript-only metadata for one visible user prompt so GUI projections can recover canonical text and attachment strips after reload.
@@ -902,15 +890,7 @@ pub(super) fn build_user_prompt_transcript_metadata(
     prompt: &str,
     attachments: &[ConversationAttachment],
 ) -> Option<Value> {
-    if attachments.is_empty() {
-        return None;
-    }
-
-    let serialized_attachments = serde_json::to_value(attachments).ok()?;
-    Some(json!({
-        "canonical_user_text": prompt,
-        "transcript_attachments": serialized_attachments,
-    }))
+    build_shared_user_prompt_transcript_metadata(prompt, attachments)
 }
 
 /// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
