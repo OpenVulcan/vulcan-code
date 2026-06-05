@@ -115,6 +115,7 @@ fn controller_effective_prompt_for_launch(
     request: &ExecutionPreparationRequest,
     core_snapshot: &CoreConversationSnapshot,
 ) -> String {
+    let raw_prompt = request.prompt.trim().to_string();
     core_snapshot
         .messages
         .last()
@@ -124,8 +125,31 @@ fn controller_effective_prompt_for_launch(
             }
             _ => None,
         })
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| request.prompt.trim().to_string())
+        .filter(|text| projected_user_prompt_matches_request(text, &raw_prompt))
+        .unwrap_or(raw_prompt)
+}
+
+/// Returns whether one projected user prompt can safely stand in for the raw request prompt.
+/// 判断一条投影后的用户提示词是否可以安全代表原始请求提示词。
+///
+/// # Parameters
+/// 参数
+/// `projected_prompt` is the latest user text already present in the controller snapshot.
+/// `projected_prompt` 是控制器快照中已经存在的最新用户文本。
+/// `raw_prompt` is the trimmed user prompt carried by the execution request.
+/// `raw_prompt` 是执行请求携带的裁剪后用户提示词。
+///
+/// # Returns
+/// 返回值
+/// `true` when the projected prompt keeps the raw prompt as one complete paragraph.
+/// 当投影提示词仍把原始提示词保留为一个完整段落时返回 `true`。
+fn projected_user_prompt_matches_request(projected_prompt: &str, raw_prompt: &str) -> bool {
+    if projected_prompt.is_empty() || raw_prompt.is_empty() {
+        return false;
+    }
+    projected_prompt
+        .split("\n\n")
+        .any(|paragraph| paragraph.trim() == raw_prompt)
 }
 
 #[cfg(test)]
@@ -324,6 +348,73 @@ mod tests {
         assert_eq!(
             launch.effective_prompt,
             "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件"
+        );
+    }
+
+    /// Falls back to the request prompt when the latest projected user text belongs to history.
+    /// 当最新投影用户文本属于历史记录时回退使用请求提示词。
+    #[test]
+    fn launch_payload_falls_back_when_projected_user_prompt_mismatches_request() {
+        let request = build_test_request();
+        let mut bootstrap = build_test_bootstrap();
+        bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+            id: String::from("historical-user"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("历史用户输入"),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+
+        assert_eq!(launch.effective_prompt, "请分析主入口文件");
+    }
+
+    /// Reuses projected text when an unsupported attachment note follows the raw prompt.
+    /// 当不支持的附件提示跟随原始提示词时复用投影文本。
+    #[test]
+    fn launch_payload_reuses_projected_prompt_when_suffix_note_follows_request() {
+        let request = build_test_request();
+        let mut bootstrap = build_test_bootstrap();
+        bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+            id: String::from("user-projected-suffix"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from(
+                    "请分析主入口文件\n\nERROR: Attachment \"image.png\" cannot be uploaded by this API path.",
+                ),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+
+        assert_eq!(
+            launch.effective_prompt,
+            "请分析主入口文件\n\nERROR: Attachment \"image.png\" cannot be uploaded by this API path."
+        );
+    }
+
+    /// Reuses projected text when bridge and downgrade notes wrap the raw prompt.
+    /// 当桥接与降级提示包裹原始提示词时复用投影文本。
+    #[test]
+    fn launch_payload_reuses_projected_prompt_when_notes_wrap_request() {
+        let request = build_test_request();
+        let mut bootstrap = build_test_bootstrap();
+        bootstrap.core_snapshot.messages = vec![CoreConversationMessage {
+            id: String::from("user-projected-wrapped"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from(
+                    "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件\n\nERROR: Attachment \"demo.pdf\" cannot be uploaded by this API path.",
+                ),
+                attachments: Vec::new(),
+            },
+        }];
+
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+
+        assert_eq!(
+            launch.effective_prompt,
+            "INFO: Attachment \"image.png\" is kept locally.\n\n请分析主入口文件\n\nERROR: Attachment \"demo.pdf\" cannot be uploaded by this API path."
         );
     }
 }

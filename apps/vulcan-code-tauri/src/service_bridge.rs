@@ -4211,7 +4211,12 @@ fn build_webui_prompt_intervention(
     ai_tool_configuration: PersistedAiToolConfiguration,
 ) -> RuntimePromptIntervention {
     Arc::new(move |session_id, controller: &mut VulcanCoreController| {
-        match take_webui_internal_guidance_prompts(&app, &state, session_id) {
+        match take_webui_internal_guidance_prompts(
+            &app,
+            &state,
+            &provider_configuration,
+            session_id,
+        ) {
             Ok(entries) => {
                 entries
                     .iter()
@@ -4308,6 +4313,8 @@ fn normalize_webui_interjected_prompt_for_provider(
 /// `app` 由工作区变更辅助函数用于发出更新后的队列视图。
 /// `state` contains the current workspace snapshot and live runtime handles.
 /// `state` 包含当前工作区快照与实时运行时句柄。
+/// `provider_configuration` lets the shared router preserve iced Anthropic dispatch preference.
+/// `provider_configuration` 用于让共享路由器保留 iced 的 Anthropic 分发优先级。
 /// `session_id` identifies the session whose stream reached a safe tool boundary.
 /// `session_id` 标识流已经到达安全工具边界的会话。
 ///
@@ -4318,14 +4325,20 @@ fn normalize_webui_interjected_prompt_for_provider(
 fn take_webui_internal_guidance_prompts(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
 ) -> Result<Vec<PendingSessionPromptEntry>, String> {
     let mut guided_entries = Vec::new();
     with_workspace_mutation(app, state, |workspace| {
+        let prefer_delegate_completion =
+            session_uses_anthropic_runtime(workspace, provider_configuration, session_id);
         let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
             return;
         };
-        guided_entries = take_guided_pending_prompt_entries(&mut runtime_state.ui_state);
+        guided_entries = take_guided_pending_prompt_entries(
+            &mut runtime_state.ui_state,
+            prefer_delegate_completion,
+        );
         if guided_entries.is_empty() {
             return;
         }

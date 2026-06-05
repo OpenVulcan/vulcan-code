@@ -172,7 +172,7 @@ pub fn pending_prompt_lane_is_busy(
     context: PendingPromptBusyLaneContext,
 ) -> bool {
     context.dispatch.has_active_run
-        || session_run_phase_is_active(context.dispatch.run_phase)
+        || provider_session_run_phase_is_active(context.dispatch.run_phase)
         || (context.dispatch.run_phase == Some(crate::SessionRunPhase::Preparing)
             && !context.dispatch.has_active_run
             && context.has_precheck_progress)
@@ -181,31 +181,6 @@ pub fn pending_prompt_lane_is_busy(
         || !ui_state.pending_prompt_queue.is_empty()
         || !ui_state.pending_prompt_panel_queue.is_empty()
         || context.dispatch.has_running_subagents
-}
-
-/// Returns whether a visible run phase still represents live provider or tool work.
-/// 返回可见运行阶段是否仍表示实时 Provider 或工具工作。
-///
-/// # Parameters
-/// 参数
-/// `phase` is the optional session run phase captured by one frontend or service bridge.
-/// `phase` 是某个前端或服务桥捕获到的可选会话运行阶段。
-///
-/// # Returns
-/// 返回值
-/// `true` when submissions must remain on the queue lane until the phase settles.
-/// 当提交必须继续留在排队通道直到阶段稳定时返回 `true`。
-fn session_run_phase_is_active(phase: Option<crate::SessionRunPhase>) -> bool {
-    matches!(
-        phase,
-        Some(
-            crate::SessionRunPhase::Preparing
-                | crate::SessionRunPhase::MemoryRecall
-                | crate::SessionRunPhase::Requesting
-                | crate::SessionRunPhase::Thinking
-                | crate::SessionRunPhase::ToolRunning
-        )
-    )
 }
 
 /// Returns whether a run phase represents an already-started provider/tool loop.
@@ -319,35 +294,50 @@ impl Default for PendingPromptWebSearchOverride {
     }
 }
 
-/// Takes every manually guided internal prompt while leaving passive internal queue entries untouched.
-/// 取出所有手动引导的内部提示词，同时保留被动内部队列项。
+/// Takes consecutive manually guided internal prompts using the shared dispatch priority.
+/// 按共享分发优先级取出连续的手动引导内部提示词。
 ///
 /// # Parameters
 /// 参数
 /// `ui_state` is the session-scoped queue state mutated by the shared router.
 /// `ui_state` 是共享路由器会修改的会话级队列状态。
+/// `prefer_delegate_completion` mirrors the iced Anthropic dispatch preference.
+/// `prefer_delegate_completion` 对齐 iced 的 Anthropic 分发优先级。
 ///
 /// # Returns
 /// 返回值
-/// Guided prompt entries in their existing queue order.
-/// 按现有队列顺序返回引导提示词条目。
+/// Guided prompt entries in dispatch order until a passive internal entry blocks the lane.
+/// 按分发顺序返回引导提示词条目，直到被动内部项阻塞通道。
 pub fn take_guided_pending_prompt_entries(
     ui_state: &mut SessionTranscriptUiState,
+    prefer_delegate_completion: bool,
 ) -> Vec<PendingSessionPromptEntry> {
     let mut guided_entries = Vec::new();
-    let mut retained_entries = Vec::with_capacity(ui_state.pending_prompt_queue.len());
     let mut removed_panel_entry_ids = Vec::new();
-    for entry in ui_state.pending_prompt_queue.drain(..) {
-        if entry.panel_entry_id.is_some() {
-            if let Some(panel_entry_id) = entry.panel_entry_id.clone() {
-                removed_panel_entry_ids.push(panel_entry_id);
-            }
-            guided_entries.push(entry);
-        } else {
-            retained_entries.push(entry);
+
+    while !ui_state.pending_prompt_queue.is_empty() {
+        let dispatch_index = pending_prompt_dispatch_index(
+            ui_state.pending_prompt_queue.as_slice(),
+            prefer_delegate_completion,
+        );
+        let Some(panel_entry_id) = ui_state.pending_prompt_queue[dispatch_index]
+            .panel_entry_id
+            .clone()
+        else {
+            break;
+        };
+        let entry = ui_state.pending_prompt_queue.remove(dispatch_index);
+        removed_panel_entry_ids.push(panel_entry_id);
+        guided_entries.push(entry);
+        if prefer_delegate_completion
+            && ui_state
+                .pending_prompt_queue
+                .iter()
+                .any(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
+        {
+            break;
         }
     }
-    ui_state.pending_prompt_queue = retained_entries;
     for panel_entry_id in removed_panel_entry_ids {
         let _ = remove_pending_prompt_panel_entry(ui_state, &panel_entry_id);
     }
@@ -1022,6 +1012,25 @@ mod tests {
         }
     }
 
+    /// Verifies stale preparation without active precheck does not trap new prompts on the queue lane.
+    /// 验证没有活跃预检查的陈旧准备阶段不会把新提示词困在排队通道。
+    #[test]
+    fn pending_prompt_lane_busy_ignores_stale_preparing_without_precheck() {
+        assert!(!pending_prompt_lane_is_busy(
+            &SessionTranscriptUiState::default(),
+            PendingPromptBusyLaneContext {
+                dispatch: PendingPromptDispatchContext {
+                    uses_anthropic_runtime: false,
+                    has_running_subagents: false,
+                    has_active_run: false,
+                    run_phase: Some(crate::SessionRunPhase::Preparing),
+                    has_active_compaction: false,
+                },
+                has_precheck_progress: false,
+            },
+        ));
+    }
+
     /// Verifies manually guided prompts preserve the user's click order.
     /// 验证手动引导的提示词会保留用户的点击顺序。
     #[test]
@@ -1055,13 +1064,13 @@ mod tests {
         assert_eq!(second.panel_entry_id.as_deref(), Some("b"));
     }
 
-    /// Verifies runtime guidance drains all inserted panel-linked prompts without consuming passive internal work.
-    /// 验证运行时引导会取出所有已插入的面板关联提示词，同时不消耗被动内部工作。
+    /// Verifies runtime guidance drains consecutive inserted panel-linked prompts without consuming passive internal work.
+    /// 验证运行时引导会取出连续已插入的面板关联提示词，同时不消耗被动内部工作。
     #[test]
     fn take_guided_pending_prompt_entries_keeps_passive_internal_queue() {
         let mut ui_state = SessionTranscriptUiState {
             pending_prompt_panel_queue: vec![test_panel_entry("a"), test_panel_entry("b")],
-            pending_prompt_queue: vec![test_internal_prompt_entry("passive", None)],
+            pending_prompt_queue: Vec::new(),
             ..SessionTranscriptUiState::default()
         };
         route_pending_prompt_panel_entry_into_internal_queue(
@@ -1078,8 +1087,11 @@ mod tests {
             String::from("1002"),
         )
         .expect("route second guidance prompt");
+        ui_state
+            .pending_prompt_queue
+            .push(test_internal_prompt_entry("passive", None));
 
-        let guided_entries = take_guided_pending_prompt_entries(&mut ui_state);
+        let guided_entries = take_guided_pending_prompt_entries(&mut ui_state, false);
 
         assert_eq!(
             guided_entries
@@ -1091,6 +1103,36 @@ mod tests {
         assert_eq!(ui_state.pending_prompt_queue.len(), 1);
         assert_eq!(ui_state.pending_prompt_queue[0].id, "passive");
         assert!(ui_state.pending_prompt_panel_queue.is_empty());
+    }
+
+    /// Verifies runtime guidance keeps iced delegate-completion priority for Anthropic sessions.
+    /// 验证运行时引导会为 Anthropic 会话保留 iced 的委派完成优先级。
+    #[test]
+    fn take_guided_pending_prompt_entries_respects_delegate_priority() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a")],
+            pending_prompt_queue: vec![PendingSessionPromptEntry {
+                source: PendingSessionPromptSource::DelegateCompletion,
+                ..test_internal_prompt_entry("delegate", None)
+            }],
+            ..SessionTranscriptUiState::default()
+        };
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route guidance prompt");
+
+        let guided_entries = take_guided_pending_prompt_entries(&mut ui_state, true);
+
+        assert!(guided_entries.is_empty());
+        assert_eq!(ui_state.pending_prompt_queue.len(), 2);
+        assert_eq!(
+            ui_state.pending_prompt_panel_queue[0].state,
+            PendingPromptPanelEntryState::Inserted
+        );
     }
 
     /// Verifies dragging visible rows also updates the internal guided dispatch order.
