@@ -204,6 +204,10 @@ import "./styles.css";
 // GITHUB_REPOSITORY_URL 指向公开项目仓库。
 const GITHUB_REPOSITORY_URL = "https://github.com/OpenVulcan/vulcan-code";
 
+// THINKING_OVERLAY_STORAGE_KEY persists the WebUI-only thinking display preference.
+// THINKING_OVERLAY_STORAGE_KEY 持久化仅 WebUI 使用的思考展示偏好。
+const THINKING_OVERLAY_STORAGE_KEY = "vulcan-webui-thinking-overlay-enabled";
+
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
@@ -2478,6 +2482,12 @@ function initialThemeMode(): ThemeMode {
   return stored === "light" || stored === "dark" ? stored : "dark";
 }
 
+// initialThinkingOverlayEnabled returns the persisted thinking display preference.
+// initialThinkingOverlayEnabled 返回持久化的思考展示偏好。
+function initialThinkingOverlayEnabled(): boolean {
+  return window.localStorage.getItem(THINKING_OVERLAY_STORAGE_KEY) !== "false";
+}
+
 // WindowControls renders Tauri-only custom minimize, maximize, and close buttons.
 // WindowControls 渲染仅 Tauri 使用的自定义最小化、最大化与关闭按钮。
 function WindowControls(props: {
@@ -3158,6 +3168,36 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
   }
 
   return items;
+}
+
+// latestThinkingBlockIdAfterLastUser returns the newest thinking block that belongs to the active user turn.
+// latestThinkingBlockIdAfterLastUser 返回属于当前用户 turn 的最新思考块。
+function latestThinkingBlockIdAfterLastUser(items: ConversationRenderItem[]): string | null {
+  let latestThinkingBlockId: string | null = null;
+  for (const item of items) {
+    if (item.role === "user") {
+      latestThinkingBlockId = null;
+      continue;
+    }
+    for (const block of item.blocks) {
+      if (block.kind === "thinking") {
+        latestThinkingBlockId = block.id;
+      }
+    }
+  }
+  return latestThinkingBlockId;
+}
+
+// thinkingOverlayBlockSignature returns a stable content key for delayed popup retention.
+// thinkingOverlayBlockSignature 返回用于延迟保留思考弹窗的稳定内容键。
+function thinkingOverlayBlockSignature(block: ConversationBlock): string {
+  return [
+    block.id,
+    block.title,
+    block.body,
+    block.summary,
+    block.status ?? "",
+  ].join("\u0000");
 }
 
 // isMergeableToolBlock returns whether a block belongs to one tool execution row.
@@ -6101,6 +6141,9 @@ function ChatArea(props: {
   // composerDockHeight tracks the actual floating composer stack height for overlay positioning.
   // composerDockHeight 跟踪浮动输入区堆栈真实高度，用于定位浮层。
   const [composerDockHeight, setComposerDockHeight] = React.useState(132);
+  // thinkingOverlayEnabled controls whether streaming thinking uses the floating surface or inline transcript.
+  // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
+  const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const messages = props.workbench.messages.filter((message) => message.conversationId === props.selectedConversationId);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
@@ -6113,10 +6156,28 @@ function ChatArea(props: {
     props.selectedDraftConversation
       || (selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
   );
+  // emptyPromptVisible keeps the empty prompt mounted long enough to fade out after first submit.
+  // emptyPromptVisible 让空会话提示在首次提交后保留足够时间完成淡出。
+  const [emptyPromptVisible, setEmptyPromptVisible] = React.useState(isEmptyConversation);
+  // emptyPromptLeaving marks the empty prompt exit animation.
+  // emptyPromptLeaving 标记空会话提示退出动画。
+  const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
   // runtimeCueText stores the compact in-progress label shown above the composer.
   // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
   const streamingThinkingBlock = activeStreamingThinkingBlock(selectedConversation, messages);
-  const runtimeCueText = streamingThinkingBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
+  const displayedStreamingThinkingBlock = thinkingOverlayEnabled ? streamingThinkingBlock : null;
+  // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
+  // streamingThinkingOverlayBlock 在思考弹窗延迟退场期间保留最后一个思考块。
+  const [streamingThinkingOverlayBlock, setStreamingThinkingOverlayBlock] = React.useState<ConversationBlock | null>(null);
+  // streamingThinkingOverlayLeaving marks the fade-out half of the delayed thinking popup exit.
+  // streamingThinkingOverlayLeaving 标记思考弹窗延迟退场中的淡出阶段。
+  const [streamingThinkingOverlayLeaving, setStreamingThinkingOverlayLeaving] = React.useState(false);
+  const visibleStreamingThinkingOverlayBlock = displayedStreamingThinkingBlock ?? streamingThinkingOverlayBlock;
+  const displayedStreamingThinkingOverlaySignature = displayedStreamingThinkingBlock
+    ? thinkingOverlayBlockSignature(displayedStreamingThinkingBlock)
+    : null;
+  const retainedStreamingThinkingOverlayId = streamingThinkingOverlayBlock?.id ?? null;
+  const runtimeCueText = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCueText(selectedConversation, messages, t);
   const isConversationRunning = conversationIsRunning(selectedConversation);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
@@ -6216,6 +6277,53 @@ function ChatArea(props: {
     updateConversationBottomState();
   }, [conversationStreamSignature, props.selectedConversationId, updateConversationBottomState]);
 
+  React.useEffect(() => {
+    window.localStorage.setItem(THINKING_OVERLAY_STORAGE_KEY, thinkingOverlayEnabled ? "true" : "false");
+  }, [thinkingOverlayEnabled]);
+
+  React.useEffect(() => {
+    if (displayedStreamingThinkingBlock) {
+      setStreamingThinkingOverlayBlock((current) => (
+        current && thinkingOverlayBlockSignature(current) === displayedStreamingThinkingOverlaySignature
+          ? current
+          : displayedStreamingThinkingBlock
+      ));
+      setStreamingThinkingOverlayLeaving(false);
+      return;
+    }
+    if (!streamingThinkingOverlayBlock) {
+      return;
+    }
+    const fadeTimer = window.setTimeout(() => {
+      setStreamingThinkingOverlayLeaving(true);
+    }, 500);
+    const removeTimer = window.setTimeout(() => {
+      setStreamingThinkingOverlayBlock(null);
+      setStreamingThinkingOverlayLeaving(false);
+    }, 1000);
+    return () => {
+      window.clearTimeout(fadeTimer);
+      window.clearTimeout(removeTimer);
+    };
+  }, [displayedStreamingThinkingBlock, displayedStreamingThinkingOverlaySignature, retainedStreamingThinkingOverlayId, streamingThinkingOverlayBlock]);
+
+  React.useEffect(() => {
+    if (isEmptyConversation) {
+      setEmptyPromptVisible(true);
+      setEmptyPromptLeaving(false);
+      return;
+    }
+    if (!emptyPromptVisible) {
+      return;
+    }
+    setEmptyPromptLeaving(true);
+    const timeout = window.setTimeout(() => {
+      setEmptyPromptVisible(false);
+      setEmptyPromptLeaving(false);
+    }, 360);
+    return () => window.clearTimeout(timeout);
+  }, [emptyPromptVisible, isEmptyConversation]);
+
   return (
     <div
       className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}
@@ -6223,44 +6331,37 @@ function ChatArea(props: {
     >
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
-      ) : isEmptyConversation ? (
-          <EmptyConversationCenter
-            projectName={emptyProjectName}
-            projectId={props.selectedDraftConversation?.projectId ?? selectedProject?.id ?? null}
-            conversationId={props.selectedDraftConversation ? null : selectedConversation?.id ?? null}
-            aiCapabilities={props.workbench.aiCapabilities ?? []}
-            attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
-            slashCommands={props.workbench.composerSlashCommands ?? []}
-            providers={props.workbench.providers}
-            pendingPrompts={props.workbench.pendingPrompts ?? []}
-            reasoningSelection={props.workbench.reasoningSelection ?? null}
-            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-            onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-            onSlashCommand={props.onSlashCommand}
-            onSubmitPrompt={props.onSubmitPrompt}
-            onStopConversationRun={props.onStopConversationRun}
-            onEditPendingPrompt={props.onEditPendingPrompt}
-            onInsertPendingPrompt={props.onInsertPendingPrompt}
-            onRemovePendingPrompt={props.onRemovePendingPrompt}
-            onReorderPendingPrompts={props.onReorderPendingPrompts}
-          />
       ) : (
         <>
+          {emptyPromptVisible ? (
+            <EmptyConversationPrompt
+              leaving={emptyPromptLeaving}
+              projectName={emptyProjectName}
+            />
+          ) : null}
           <ConversationWorkspace
             conversation={selectedConversation}
+            hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
             messages={messages}
             error={props.conversationLoadError}
             onScrollStateChange={updateConversationBottomState}
             scrollRef={workspaceRef}
+            suppressEmptyPlaceholder={isEmptyConversation}
           />
-          {streamingThinkingBlock ? <StreamingThinkingOverlay block={streamingThinkingBlock} /> : null}
+          {visibleStreamingThinkingOverlayBlock ? (
+            <StreamingThinkingOverlay
+              block={visibleStreamingThinkingOverlayBlock}
+              leaving={streamingThinkingOverlayLeaving}
+            />
+          ) : null}
           <ComposerDock
             aiCapabilities={props.workbench.aiCapabilities ?? []}
             attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
             projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
             conversationId={selectedConversation?.id ?? null}
             slashCommands={props.workbench.composerSlashCommands ?? []}
-            contextUsage={props.workbench.contextUsage ?? null}
+            contextUsage={isEmptyConversation ? null : props.workbench.contextUsage ?? null}
+            emptyMode={isEmptyConversation}
             onScrollToBottom={() => scrollConversationToBottom()}
             onSelectWorkbenchModel={props.onSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
@@ -6271,13 +6372,15 @@ function ChatArea(props: {
             providers={props.workbench.providers}
             pendingPrompts={props.workbench.pendingPrompts ?? []}
             isConversationRunning={isConversationRunning}
+            thinkingOverlayEnabled={thinkingOverlayEnabled}
             reasoningSelection={props.workbench.reasoningSelection ?? null}
-            runtimeCueText={runtimeCueText}
-            showScrollToBottom={!isAtConversationBottom}
+            runtimeCueText={isEmptyConversation ? null : runtimeCueText}
+            showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
             onEditPendingPrompt={props.onEditPendingPrompt}
             onInsertPendingPrompt={props.onInsertPendingPrompt}
             onRemovePendingPrompt={props.onRemovePendingPrompt}
             onReorderPendingPrompts={props.onReorderPendingPrompts}
+            onThinkingOverlayEnabledChange={setThinkingOverlayEnabled}
           />
         </>
       )}
@@ -6289,10 +6392,12 @@ function ChatArea(props: {
 // ConversationWorkspace 渲染会话时间线替代组件。
 function ConversationWorkspace(props: {
   conversation?: ConversationSummary;
+  hiddenThinkingBlockId: string | null;
   messages: ConversationMessage[];
   error: string | null;
   onScrollStateChange: () => void;
   scrollRef: React.RefObject<HTMLElement | null>;
+  suppressEmptyPlaceholder?: boolean;
 }) {
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
@@ -6301,6 +6406,10 @@ function ConversationWorkspace(props: {
   // mediaPlayer 保存当前在独立播放窗口中打开的生成媒体。
   const [mediaPlayer, setMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
+  const sessionRunning = conversationIsRunning(props.conversation);
+  const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
+    ? latestThinkingBlockIdAfterLastUser(renderItems)
+    : null;
 
   return (
     <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
@@ -6311,7 +6420,7 @@ function ConversationWorkspace(props: {
             <p>会话正文加载失败：{props.error}</p>
           </article>
         ) : null}
-        {props.messages.length === 0 ? (
+        {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
           <article className="message-card system">
             <span>system</span>
             <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
@@ -6321,7 +6430,9 @@ function ConversationWorkspace(props: {
           <ConversationRenderItemView
             item={item}
             key={item.id}
-            sessionRunning={conversationIsRunning(props.conversation)}
+            autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+            sessionRunning={sessionRunning}
             onOpenDetail={setDetail}
             onOpenMedia={setMediaPlayer}
           />
@@ -6345,6 +6456,8 @@ function ConversationWorkspace(props: {
 // ConversationRenderItemView 渲染单条投影后的转录展示项。
 function ConversationRenderItemView(props: {
   item: ConversationRenderItem;
+  autoExpandThinkingBlockId: string | null;
+  hiddenThinkingBlockId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -6375,12 +6488,20 @@ function ConversationRenderItemView(props: {
     );
   }
 
+  const visibleBlocks = props.hiddenThinkingBlockId
+    ? props.item.blocks.filter((block) => block.id !== props.hiddenThinkingBlockId)
+    : props.item.blocks;
+  if (visibleBlocks.length === 0) {
+    return null;
+  }
+
   return (
     <article className={`message-row ${props.item.role}`}>
       <div className="assistant-flow">
         {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
         <ConversationBlocksView
-          blocks={props.item.blocks}
+          autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+          blocks={visibleBlocks}
           sessionRunning={props.sessionRunning}
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
@@ -6401,6 +6522,7 @@ function stripUserPromptHeading(body: string): string {
 // ConversationBlockView dispatches one parsed block to its visual renderer.
 // ConversationBlockView 将单个解析块分派给对应视觉渲染器。
 function ConversationBlocksView(props: {
+  autoExpandThinkingBlockId: string | null;
   blocks: ConversationBlock[];
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -6426,6 +6548,7 @@ function ConversationBlocksView(props: {
   }
   return (
     <SpecialConversationBlock
+      autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
       sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
@@ -6499,6 +6622,7 @@ function MarkdownMessage(props: {
 // SpecialConversationBlock renders compact tool, command, diff, thinking, and notice rows.
 // SpecialConversationBlock 渲染紧凑的工具、命令、diff、思考与提示行。
 function SpecialConversationBlock(props: {
+  autoExpandThinkingBlockId: string | null;
   block: ConversationBlock;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -6519,7 +6643,14 @@ function SpecialConversationBlock(props: {
     );
   }
   if (props.block.kind === "thinking") {
-    return <ThinkingBlock block={props.block} onOpenDetail={props.onOpenDetail} />;
+    return (
+      <ThinkingBlock
+        autoExpanded={props.block.id === props.autoExpandThinkingBlockId}
+        block={props.block}
+        sessionRunning={props.sessionRunning}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
   }
 
   const Icon = blockIcon(props.block.kind);
@@ -6557,34 +6688,64 @@ function SpecialConversationBlock(props: {
   );
 }
 
-// ThinkingBlock renders a compact thinking row that opens the dedicated detail modal.
-// ThinkingBlock 渲染打开独立详情弹窗的紧凑思考行。
+// ThinkingBlock renders an inline collapsible thinking row matching the native iced transcript.
+// ThinkingBlock 渲染与 iced 原生转录一致的行内可折叠思考块。
 function ThinkingBlock(props: {
+  // autoExpanded requests the current turn thinking block to open after the floating stream hides.
+  // autoExpanded 请求当前 turn 的思考块在流式浮层隐藏后自动展开。
+  autoExpanded: boolean;
   // block contains the thinking transcript payload.
   // block 包含思考转录载荷。
   block: ConversationBlock;
-  // onOpenDetail opens the shared transcript detail dialog.
-  // onOpenDetail 打开共享转录详情弹窗。
-  onOpenDetail: (detail: ConversationDetail) => void;
+  // sessionRunning collapses the current turn thinking block once the turn completes.
+  // sessionRunning 用于在当前 turn 完成后自动折叠思考块。
+  sessionRunning: boolean;
+  // onOpenMedia opens generated media referenced from markdown content.
+  // onOpenMedia 打开 Markdown 内容引用的生成媒体。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  const [expanded, setExpanded] = React.useState(props.autoExpanded);
+  const manualOverrideRef = React.useRef(false);
+  const blockIdRef = React.useRef(props.block.id);
+  const content = props.block.body.trim() || props.block.summary || "暂无思考内容";
+  React.useEffect(() => {
+    if (blockIdRef.current !== props.block.id) {
+      blockIdRef.current = props.block.id;
+      manualOverrideRef.current = false;
+      setExpanded(props.autoExpanded);
+      return;
+    }
+    if (!props.sessionRunning) {
+      manualOverrideRef.current = false;
+      setExpanded(false);
+      return;
+    }
+    if (props.autoExpanded && !manualOverrideRef.current) {
+      setExpanded(true);
+    }
+  }, [props.autoExpanded, props.block.id, props.sessionRunning]);
   return (
-    <section className="thinking-block collapsed">
+    <section className={cn("thinking-block", expanded ? "expanded" : "collapsed")}>
       <button
+        aria-expanded={expanded}
         className="thinking-toggle"
-        onClick={() => props.onOpenDetail({
-          title: "思考过程",
-          kind: "thinking",
-          body: props.block.body,
-          metadata: [["类型", "思考过程"]],
-        })}
+        onClick={() => {
+          manualOverrideRef.current = true;
+          setExpanded((current) => !current);
+        }}
         type="button"
       >
         <span className="thinking-toggle-label">
           <BrainCircuit size={15} />
           <span>思考过程</span>
         </span>
-        <Maximize2 size={13} />
+        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
       </button>
+      {expanded ? (
+        <div className="thinking-body">
+          <MarkdownMessage content={content} onOpenMedia={props.onOpenMedia} />
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -7137,6 +7298,9 @@ function StreamingThinkingOverlay(props: {
   // block contains the currently streaming thinking transcript.
   // block 包含当前正在流式输出的思考转录。
   block: ConversationBlock;
+  // leaving marks the popup fade-out phase after the hold delay.
+  // leaving 标记保留等待后的弹窗淡出阶段。
+  leaving: boolean;
 }) {
   // t resolves localized labels for the floating thinking surface.
   // t 解析浮动思考面板使用的本地化文案。
@@ -7154,7 +7318,7 @@ function StreamingThinkingOverlay(props: {
   }, [props.block.body]);
 
   return (
-    <section className="streaming-thinking-overlay" aria-live="polite" aria-busy="true">
+    <section className={cn("streaming-thinking-overlay", props.leaving && "leaving")} aria-live="polite" aria-busy={!props.leaving}>
       <header className="streaming-thinking-header">
         <span className="streaming-thinking-title">
           <BrainCircuit size={16} />
@@ -7285,6 +7449,9 @@ function ComposerDock(props: {
   // Context usage snapshot shown by the composer orb.
   // 输入区圆盘展示的上下文占用快照。
   contextUsage: ContextUsageSnapshot | null;
+  // Whether the dock is visually centered for an empty conversation.
+  // 输入区浮层是否在空会话中居中显示。
+  emptyMode: boolean;
   // Slash commands projected by the shared workbench service.
   // 共享工作台服务投影出的 slash 指令。
   slashCommands: ComposerSlashCommandSummary[];
@@ -7294,6 +7461,9 @@ function ComposerDock(props: {
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
+  // Whether streaming thinking should use the floating thinking surface.
+  // 流式思考是否使用浮动思考面板。
+  thinkingOverlayEnabled: boolean;
   // showScrollToBottom controls whether the bottom-jump button is visible.
   // showScrollToBottom 控制是否显示跳转到底部按钮。
   showScrollToBottom: boolean;
@@ -7333,6 +7503,9 @@ function ComposerDock(props: {
   // Persists the pending prompt order.
   // 持久化待发送提示词顺序。
   onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
+  // Updates the WebUI-only thinking display preference.
+  // 更新仅 WebUI 使用的思考展示偏好。
+  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -7361,7 +7534,7 @@ function ComposerDock(props: {
   }, [onComposerDockHeightChange]);
 
   return (
-    <div className="composer-dock" ref={dockRef}>
+    <div className={cn("composer-dock", props.emptyMode && "empty-mode")} ref={dockRef}>
       {props.showScrollToBottom ? (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -7393,6 +7566,7 @@ function ComposerDock(props: {
         slashCommands={props.slashCommands}
         pendingPrompts={props.pendingPrompts}
         isConversationRunning={props.isConversationRunning}
+        thinkingOverlayEnabled={props.thinkingOverlayEnabled}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
@@ -7403,6 +7577,7 @@ function ComposerDock(props: {
         onInsertPendingPrompt={props.onInsertPendingPrompt}
         onRemovePendingPrompt={props.onRemovePendingPrompt}
         onReorderPendingPrompts={props.onReorderPendingPrompts}
+        onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
         reasoningSelection={props.reasoningSelection}
       />
     </div>
@@ -7436,6 +7611,9 @@ function ComposerPanel(props: {
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
+  // Whether streaming thinking should use the floating thinking surface.
+  // 流式思考是否使用浮动思考面板。
+  thinkingOverlayEnabled: boolean;
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
@@ -7466,6 +7644,9 @@ function ComposerPanel(props: {
   // Persists the pending prompt order.
   // 持久化待发送提示词顺序。
   onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
+  // Updates the WebUI-only thinking display preference.
+  // 更新仅 WebUI 使用的思考展示偏好。
+  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -8062,7 +8243,9 @@ function ComposerPanel(props: {
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
+              thinkingOverlayEnabled={props.thinkingOverlayEnabled}
               onPick={openAttachmentPicker}
+              onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
             />
             <ComposerSelectControl
               ariaLabel={t("composer.aria.mode")}
@@ -8103,6 +8286,7 @@ function ComposerPanel(props: {
               onValueChange={(value) => void handleReasoningEffortChange(value)}
               openSignal={reasoningPickerOpenSignal}
               options={reasoningEffortOptions}
+              triggerSubtitle={t("composer.reasoning.subtitle")}
               value={reasoningEffort}
             />
             {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (
@@ -8330,9 +8514,15 @@ function ComposerAttachmentMenu(props: {
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];
+  // Whether streaming thinking currently uses the floating thinking surface.
+  // 当前流式思考是否使用浮动思考面板。
+  thinkingOverlayEnabled: boolean;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
+  // Updates the thinking display preference from the plus menu.
+  // 从加号菜单更新思考展示偏好。
+  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
 }) {
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
   return (
@@ -8370,6 +8560,22 @@ function ComposerAttachmentMenu(props: {
                 <span>当前无可用附件类型</span>
               </DropdownMenuItem>
             )}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <BrainCircuit size={15} />
+            <span>思考弹窗</span>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="composer-thinking-menu">
+            <DropdownMenuItem onSelect={() => props.onThinkingOverlayEnabledChange(true)}>
+              <span>开启</span>
+              {props.thinkingOverlayEnabled ? <CheckCircle2 size={14} /> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => props.onThinkingOverlayEnabledChange(false)}>
+              <span>关闭</span>
+              {!props.thinkingOverlayEnabled ? <CheckCircle2 size={14} /> : null}
+            </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
       </DropdownMenuContent>
@@ -8725,6 +8931,9 @@ function ComposerSelectControl(props: {
   // Optional visual icon rendered in the left accessory slot.
   // 渲染在左侧附属槽位中的可选视觉图标。
   icon?: React.ReactNode;
+  // Optional subtitle rendered only inside the closed trigger.
+  // 仅在闭合触发器中渲染的可选副标题。
+  triggerSubtitle?: string;
   // CSS class suffix controlling the iced-aligned fixed width.
   // 控制 iced 对齐固定宽度的 CSS 类后缀。
   className: string;
@@ -8762,8 +8971,8 @@ function ComposerSelectControl(props: {
         {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
         <span className={cn("composer-select-copy", !props.icon && "centered")}>
           <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
-          {selectedOption?.subtitle ? (
-            <span className="composer-select-subtitle">{selectedOption.subtitle}</span>
+          {props.triggerSubtitle || selectedOption?.subtitle ? (
+            <span className="composer-select-subtitle">{props.triggerSubtitle ?? selectedOption?.subtitle}</span>
           ) : null}
         </span>
       </SelectTrigger>
@@ -8793,63 +9002,15 @@ function composerShortcutHint(baseHint: string): string {
   return baseHint;
 }
 
-// EmptyConversationCenter renders the centered first-prompt state for a blank conversation.
-// EmptyConversationCenter 渲染空白会话的居中首次输入状态。
-function EmptyConversationCenter(props: {
-  // AI capability route summaries used by the composer capability tree.
-  // 输入区能力树使用的 AI 能力路由摘要。
-  aiCapabilities: AiCapabilitySummary[];
-  // Attachment capability gates used by composer attachment controls.
-  // 输入区附件控件使用的附件能力门控。
-  attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
-  // Slash commands projected by the shared workbench service.
-  // 共享工作台服务投影出的 slash 指令。
-  slashCommands: ComposerSlashCommandSummary[];
-  // Visible pending prompts retained by the shared session runtime.
-  // 共享会话运行时保留的可见待发送提示词。
-  pendingPrompts: PendingPromptSummary[];
-  // Project id used by first-message attachment staging.
-  // 首条消息附件暂存使用的项目标识。
-  projectId: string | null;
-  // Optional conversation id used by attachment staging.
-  // 附件暂存使用的可选会话标识。
-  conversationId: string | null;
+// EmptyConversationPrompt renders the blank-chat prompt above the shared composer dock.
+// EmptyConversationPrompt 在共享输入区上方渲染空会话提示。
+function EmptyConversationPrompt(props: {
+  // Whether the prompt is playing its exit animation.
+  // 当前提示是否正在播放退出动画。
+  leaving: boolean;
   // Project name used by the empty-state prompt.
   // 空状态提示使用的项目名称。
   projectName: string;
-  // Providers exposed by the shared service API for model picking.
-  // 共享 service API 暴露给模型选择器的 Provider 列表。
-  providers: ProviderSummary[];
-  // Backend-resolved reasoning selector view for the active provider and model.
-  // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
-  reasoningSelection: ReasoningSelectionSummary | null;
-  // Persists one selected workbench model.
-  // 持久化单个选中的工作台模型。
-  onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
-  // Persists one selected workbench reasoning effort.
-  // 持久化单个选中的工作台思考档位。
-  onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
-  // Routes one projected composer slash command.
-  // 路由单个投影输入区 slash 指令。
-  onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
-  // Sends the first prompt that materializes this draft conversation.
-  // 发送用于实体化当前草稿会话的第一条提示词。
-  onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
-  // Stops the selected backend conversation stream.
-  // 停止当前选中的后端会话流。
-  onStopConversationRun: () => Promise<boolean>;
-  // Restores one pending prompt into the composer.
-  // 将单条待发送提示词恢复到输入区。
-  onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
-  // Routes one pending prompt into the shared insertion queue.
-  // 将单条待发送提示词路由进共享引导队列。
-  onInsertPendingPrompt: (entryId: string) => Promise<void>;
-  // Removes one pending prompt from the visible queue.
-  // 从可见队列移除单条待发送提示词。
-  onRemovePendingPrompt: (entryId: string) => Promise<void>;
-  // Persists the pending prompt order.
-  // 持久化待发送提示词顺序。
-  onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
 }) {
   // t translates the empty conversation prompt while projectName remains user data.
   // t 翻译空会话引导语，projectName 仍保留为用户数据。
@@ -8859,29 +9020,8 @@ function EmptyConversationCenter(props: {
   const promptText = t("console.emptyPrompt").replace("{projectName}", props.projectName);
 
   return (
-    <section className="empty-conversation-center">
+    <section className={cn("empty-conversation-prompt", props.leaving && "leaving")} aria-hidden={props.leaving}>
       <h2>{promptText}</h2>
-      <ComposerPanel
-        aiCapabilities={props.aiCapabilities}
-        attachmentCapabilities={props.attachmentCapabilities}
-        projectId={props.projectId}
-        conversationId={props.conversationId}
-        contextUsage={null}
-        slashCommands={props.slashCommands}
-        pendingPrompts={props.pendingPrompts}
-        isConversationRunning={false}
-        providers={props.providers}
-        reasoningSelection={props.reasoningSelection}
-        onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-        onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-        onSlashCommand={props.onSlashCommand}
-        onSubmitPrompt={props.onSubmitPrompt}
-        onStopConversationRun={props.onStopConversationRun}
-        onEditPendingPrompt={props.onEditPendingPrompt}
-        onInsertPendingPrompt={props.onInsertPendingPrompt}
-        onRemovePendingPrompt={props.onRemovePendingPrompt}
-        onReorderPendingPrompts={props.onReorderPendingPrompts}
-      />
     </section>
   );
 }
