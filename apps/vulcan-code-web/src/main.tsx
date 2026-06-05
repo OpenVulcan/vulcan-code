@@ -170,6 +170,7 @@ import {
   Maximize2,
   Minimize2,
   MessageSquareText,
+  MicVocal,
   Music2,
   PanelRightClose,
   PanelRightOpen,
@@ -452,6 +453,9 @@ interface ComposerAiCapabilityOption {
   // English short route hint.
   // 英文短路由提示。
   subtitleEn: string;
+  // Accent color used by the compact trigger and dialog icons.
+  // 紧凑触发器与弹窗图标使用的强调色。
+  color: string;
 }
 
 // COMPOSER_AI_CAPABILITY_OPTIONS keeps the WebUI quick menu in the same semantic order as the iced workbench.
@@ -464,6 +468,7 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Web search",
     subtitleZh: "网页搜索与检索增强",
     subtitleEn: "Browsing-grounded retrieval",
+    color: "#0ea5e9",
   },
   {
     value: "understand_image",
@@ -472,6 +477,7 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Image understanding",
     subtitleZh: "外部视觉能力路由",
     subtitleEn: "Vision capability routing",
+    color: "#6366f1",
   },
   {
     value: "image_generation",
@@ -480,6 +486,7 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Image generation",
     subtitleZh: "图片生成或编辑",
     subtitleEn: "Image generation or editing",
+    color: "#ec4899",
   },
   {
     value: "video_generation",
@@ -488,6 +495,7 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Video generation",
     subtitleZh: "视频生成能力",
     subtitleEn: "Video generation capability",
+    color: "#f97316",
   },
   {
     value: "speech_synthesis",
@@ -496,6 +504,7 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Speech synthesis",
     subtitleZh: "文本转语音生成",
     subtitleEn: "Text-to-speech generation",
+    color: "#14b8a6",
   },
   {
     value: "music_generation",
@@ -504,14 +513,16 @@ const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
     labelEn: "Music generation",
     subtitleZh: "音乐生成能力",
     subtitleEn: "Music generation capability",
+    color: "#a855f7",
   },
   {
     value: "music_cover",
-    Icon: Music2,
+    Icon: MicVocal,
     labelZh: "音乐翻唱",
     labelEn: "Music cover",
     subtitleZh: "基于参考音频翻唱",
     subtitleEn: "Reference-audio cover generation",
+    color: "#84cc16",
   },
 ];
 
@@ -3140,10 +3151,10 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
     const blocks = parseConversationBlocks(message);
     for (const block of blocks) {
       if (isMergeableToolBlock(block)) {
-        const key = toolMergeKey(block);
-        const existing = key && block.kind !== "tool-call" ? toolCallItems.get(key) : undefined;
+        const existing = block.kind !== "tool-call" ? findToolMergeItem(toolCallItems, block) : undefined;
         if (existing) {
           existing.blocks = mergeToolBlocks(existing.blocks, block);
+          registerToolMergeItem(toolCallItems, existing);
           continue;
         }
 
@@ -3153,9 +3164,7 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
           blocks: [block],
         };
         items.push(item);
-        if (key && block.kind === "tool-call") {
-          toolCallItems.set(key, item);
-        }
+        registerToolMergeItem(toolCallItems, item);
         continue;
       }
 
@@ -3203,13 +3212,55 @@ function thinkingOverlayBlockSignature(block: ConversationBlock): string {
 // isMergeableToolBlock returns whether a block belongs to one tool execution row.
 // isMergeableToolBlock 返回某个块是否属于同一工具执行行。
 function isMergeableToolBlock(block: ConversationBlock): boolean {
-  return block.kind === "tool-call" || block.kind === "tool-result" || block.kind === "command";
+  if (block.kind === "tool-call" || block.kind === "tool-result" || block.kind === "command") {
+    return true;
+  }
+  return block.kind === "diff" && Boolean(block.toolCallId || block.toolResultId || block.toolName);
 }
 
-// toolMergeKey resolves the grouping key used for call/result merging.
-// toolMergeKey 解析调用与返回合并使用的分组键。
-function toolMergeKey(block: ConversationBlock): string | null {
-  return block.toolCallId ?? block.commandSessionId ?? block.toolName ?? null;
+// findToolMergeItem resolves an existing tool execution row using exact ids before the tool-name fallback.
+// findToolMergeItem 优先使用精确标识，其次用工具名回退，解析已有工具执行行。
+function findToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, block: ConversationBlock): ConversationRenderItem | undefined {
+  for (const key of toolMergeKeysForBlock(block)) {
+    const item = toolCallItems.get(key);
+    if (item) {
+      return item;
+    }
+  }
+  return undefined;
+}
+
+// registerToolMergeItem indexes every known key for one visible tool execution row.
+// registerToolMergeItem 为单条可见工具执行行登记所有已知合并键。
+function registerToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, item: ConversationRenderItem): void {
+  for (const block of item.blocks) {
+    for (const key of toolMergeKeysForBlock(block)) {
+      toolCallItems.set(key, item);
+    }
+  }
+}
+
+// toolMergeKeysForBlock resolves stable grouping keys from precise ids to the tool-name fallback.
+// toolMergeKeysForBlock 按精确标识到工具名回退的顺序解析稳定分组键。
+function toolMergeKeysForBlock(block: ConversationBlock): string[] {
+  const keys = [
+    block.toolCallId ? `call:${block.toolCallId}` : null,
+    block.commandSessionId ? `command:${block.commandSessionId}` : null,
+    block.toolResultId ? toolCallIdFromToolResultId(block.toolResultId) : null,
+    block.toolName ? `name:${block.toolName}` : null,
+  ];
+  return keys.filter((key): key is string => Boolean(key));
+}
+
+// toolCallIdFromToolResultId recovers conventional tool-call ids from host-generated result ids.
+// toolCallIdFromToolResultId 从宿主生成的结果标识中恢复约定形式的工具调用标识。
+function toolCallIdFromToolResultId(toolResultId: string): string | null {
+  const trimmed = toolResultId.trim();
+  if (!trimmed.startsWith("tool-result-")) {
+    return null;
+  }
+  const toolCallId = trimmed.slice("tool-result-".length).trim();
+  return toolCallId ? `call:${toolCallId}` : null;
 }
 
 // mergeToolBlocks merges one tool result into an existing tool execution row.
@@ -3224,7 +3275,7 @@ function mergeToolBlocks(blocks: ConversationBlock[], incoming: ConversationBloc
 function toolBlockOrder(kind: ConversationBlockKind): number {
   if (kind === "tool-call") return 0;
   if (kind === "command") return 1;
-  if (kind === "tool-result") return 2;
+  if (kind === "tool-result" || kind === "diff") return 2;
   return 3;
 }
 
@@ -3601,7 +3652,7 @@ function detectToolAttributes(source: string): Record<string, string> {
   const attributes: Record<string, string> = {};
   const toolName = extractToolNameFromText(source);
   const toolCallId = source.match(/tool_call_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
-  const toolResultId = source.match(/tool_result_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
+  const toolResultId = extractToolResultIdFromText(source);
   const commandSessionId = source.match(/command_session_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
   const status = extractToolStatusFromText(source);
   if (toolName) attributes.tool_name = toolName;
@@ -3610,6 +3661,25 @@ function detectToolAttributes(source: string): Record<string, string> {
   if (commandSessionId) attributes.command_session_id = commandSessionId;
   if (status) attributes.status = status;
   return attributes;
+}
+
+// extractToolResultIdFromText recovers host result ids from legacy Markdown or compact plain text.
+// extractToolResultIdFromText 从旧版 Markdown 或紧凑纯文本中恢复宿主结果标识。
+function extractToolResultIdFromText(source: string): string | null {
+  const normalized = source.replace(/\r\n/g, "\n");
+  const patterns = [
+    /tool_result_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i,
+    /##\s*Result ID\s*\n+\s*`([^`]+)`/im,
+    /(?:^|\n)\s*Result ID\s*\n+\s*`?([A-Za-z0-9_.:-]+)`?/im,
+    /(?:^|\n)\s*Result ID\s+([A-Za-z0-9_.:-]+)/im,
+  ];
+  for (const pattern of patterns) {
+    const value = normalized.match(pattern)?.[1]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+  return null;
 }
 
 // extractToolNameFromText recovers a tool name from legacy localized titles and Markdown bodies.
@@ -8099,19 +8169,16 @@ function ComposerPanel(props: {
     });
   }, []);
 
-  // handleAiCapabilityTargetMove changes the prompt-level target order for one capability.
-  // handleAiCapabilityTargetMove 调整单个能力的提示词级目标顺序。
-  const handleAiCapabilityTargetMove = React.useCallback((kind: AiCapabilityKind, targetSelector: string, direction: -1 | 1) => {
+  // handleAiCapabilityTargetReorder replaces the prompt-level route order for one capability.
+  // handleAiCapabilityTargetReorder 替换单个能力的提示词级路由顺序。
+  const handleAiCapabilityTargetReorder = React.useCallback((kind: AiCapabilityKind, targetSelectors: string[]) => {
     setAiCapabilityTargetOrder((current) => {
       const next = new Map(current);
-      const currentOrder = [...(next.get(kind) ?? [])];
-      const currentIndex = currentOrder.indexOf(targetSelector);
-      const targetIndex = currentIndex + direction;
-      if (currentIndex < 0 || targetIndex < 0 || targetIndex >= currentOrder.length) {
+      const currentOrder = next.get(kind) ?? [];
+      if (currentOrder.length === targetSelectors.length && currentOrder.every((selector, index) => selector === targetSelectors[index])) {
         return current;
       }
-      [currentOrder[currentIndex], currentOrder[targetIndex]] = [currentOrder[targetIndex], currentOrder[currentIndex]];
-      next.set(kind, currentOrder);
+      next.set(kind, targetSelectors);
       return next;
     });
   }, []);
@@ -8273,7 +8340,7 @@ function ComposerPanel(props: {
               targetOrder={aiCapabilityTargetOrder}
               locale={locale}
               onToggle={handleAiCapabilityToggle}
-              onTargetMove={handleAiCapabilityTargetMove}
+              onTargetReorder={handleAiCapabilityTargetReorder}
               onTargetToggle={handleAiCapabilityTargetToggle}
             />
             <ContextUsageOrb snapshot={props.contextUsage} />
@@ -8703,6 +8770,34 @@ function ContextUsageOrb(props: {
   );
 }
 
+// ComposerCapabilityIcon renders one semantic capability icon with enabled or grayscale treatment.
+// ComposerCapabilityIcon 使用启用彩色或未启用灰度样式渲染单个语义能力图标。
+function ComposerCapabilityIcon(props: {
+  // Whether this capability is enabled for the current prompt.
+  // 当前能力是否在本次提示词中启用。
+  enabled: boolean;
+  // Optional accessible label for the icon wrapper.
+  // 图标外层可选无障碍标签。
+  label?: string;
+  // Capability option that provides the icon component and accent color.
+  // 提供图标组件与强调色的能力选项。
+  option: ComposerAiCapabilityOption;
+  // Rendered icon size in pixels.
+  // 图标渲染像素尺寸。
+  size: number;
+}) {
+  const Icon = props.option.Icon;
+  return (
+    <span
+      aria-label={props.label}
+      className={cn("composer-capability-colored-icon", props.enabled ? "enabled" : "disabled")}
+      style={{ "--capability-color": props.option.color } as React.CSSProperties}
+    >
+      <Icon size={props.size} />
+    </span>
+  );
+}
+
 // ComposerAiCapabilityControl renders the iced-aligned capability dialog.
 // ComposerAiCapabilityControl 渲染对齐 iced 的能力设置对话框。
 function ComposerAiCapabilityControl(props: {
@@ -8727,9 +8822,9 @@ function ComposerAiCapabilityControl(props: {
   // Toggles one capability on or off.
   // 开关单个能力。
   onToggle: (kind: AiCapabilityKind, enabled: boolean) => void;
-  // Moves one target route up or down within one capability.
-  // 在单个能力中上移或下移一个目标路由。
-  onTargetMove: (kind: AiCapabilityKind, targetSelector: string, direction: -1 | 1) => void;
+  // Replaces the target route order within one capability.
+  // 替换单个能力中的目标路由顺序。
+  onTargetReorder: (kind: AiCapabilityKind, targetSelectors: string[]) => void;
   // Toggles one capability target on or off.
   // 开关单个能力目标。
   onTargetToggle: (targetSelector: string, enabled: boolean) => void;
@@ -8760,7 +8855,26 @@ function ComposerAiCapabilityControl(props: {
   const selectedCapability = selectedEntry?.capability;
   const selectedTargets = orderedAiCapabilityTargets(selectedCapability, props.targetOrder);
   const selectedEnabled = Boolean(selectedCapability?.available) && !props.disabledKinds.has(selectedEntry.option.value);
-  const SelectedIcon = selectedEntry.option.Icon;
+  const targetDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const targetSortableIds = React.useMemo(
+    () => selectedTargets.map((target) => target.targetSelector),
+    [selectedTargets],
+  );
+  // handleTargetDragEnd applies the dnd-kit order directly to current-message route overrides.
+  // handleTargetDragEnd 将 dnd-kit 顺序直接应用到当前消息级路由覆盖。
+  const handleTargetDragEnd = React.useCallback((event: DragEndEvent) => {
+    const activeId = String(event.active.id);
+    const overId = event.over ? String(event.over.id) : null;
+    if (!overId || activeId === overId) {
+      return;
+    }
+    const oldIndex = targetSortableIds.indexOf(activeId);
+    const newIndex = targetSortableIds.indexOf(overId);
+    if (oldIndex < 0 || newIndex < 0) {
+      return;
+    }
+    props.onTargetReorder(selectedEntry.option.value, arrayMove(targetSortableIds, oldIndex, newIndex));
+  }, [props, selectedEntry.option.value, targetSortableIds]);
 
   React.useEffect(() => {
     if (visibleCapabilities.some(({ option }) => option.value === selectedKind)) {
@@ -8784,21 +8898,15 @@ function ComposerAiCapabilityControl(props: {
             <span className="composer-select-copy">
               <span className="composer-select-label">{props.locale === "zh-CN" ? "扩展能力" : "Extended Capability"}</span>
               <span className="composer-capability-icon-row" aria-label={triggerSubtitle}>
-                {enabledCapabilityEntries.length > 0 ? (
-                  enabledCapabilityEntries.map(({ option }) => {
-                    const Icon = option.Icon;
-                    return (
-                      <Icon
-                        aria-label={props.locale === "zh-CN" ? option.labelZh : option.labelEn}
-                        className="composer-capability-mini-icon"
-                        key={option.value}
-                        size={11}
-                      />
-                    );
-                  })
-                ) : (
-                  <span className="composer-capability-mini-empty" aria-hidden="true" />
-                )}
+                {visibleCapabilities.map(({ option, capability }) => (
+                  <ComposerCapabilityIcon
+                    enabled={Boolean(capability?.available) && !props.disabledKinds.has(option.value)}
+                    key={option.value}
+                    label={props.locale === "zh-CN" ? option.labelZh : option.labelEn}
+                    option={option}
+                    size={11}
+                  />
+                ))}
               </span>
             </span>
         </button>
@@ -8806,10 +8914,10 @@ function ComposerAiCapabilityControl(props: {
       <DialogContent className="composer-capability-dialog">
         <DialogHeader>
           <DialogTitle>{props.locale === "zh-CN" ? "当前消息能力设置" : "Current-message capabilities"}</DialogTitle>
-          <DialogDescription>
+          <DialogDescription className="composer-capability-dialog-note">
             {props.locale === "zh-CN"
-              ? "左侧选择能力类型，右侧勾选目标并调整本次请求的路由顺序。"
-              : "Choose a capability on the left, then enable targets and order routes for this request."}
+              ? "会话进行中动态变更能力会重建上下文，并影响下一次对话的缓存命中。"
+              : "Note: Changing capabilities while a session is running rebuilds context and affects the next turn's cache hit rate."}
           </DialogDescription>
         </DialogHeader>
         <div className="composer-capability-dialog-grid">
@@ -8817,7 +8925,6 @@ function ComposerAiCapabilityControl(props: {
             {visibleCapabilities.map(({ option, capability }) => {
               const available = Boolean(capability?.available);
               const enabled = available && !props.disabledKinds.has(option.value);
-              const Icon = option.Icon;
               const targetCount = capability?.targets.length ?? 0;
               return (
                 <div
@@ -8827,19 +8934,29 @@ function ComposerAiCapabilityControl(props: {
                     !available && "unavailable",
                   )}
                   key={option.value}
+                  onClick={() => setSelectedKind(option.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedKind(option.value);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                 >
                   <input
                     checked={enabled}
                     disabled={!available}
                     onChange={(event) => props.onToggle(option.value, event.currentTarget.checked)}
+                    onClick={(event) => event.stopPropagation()}
                     type="checkbox"
                   />
-                  <button
-                    className="composer-capability-kind-select"
-                    onClick={() => setSelectedKind(option.value)}
-                    type="button"
-                  >
-                    <Icon size={16} />
+                  <span className="composer-capability-kind-select">
+                    <ComposerCapabilityIcon
+                      enabled={enabled}
+                      option={option}
+                      size={16}
+                    />
                     <span className="composer-capability-kind-copy">
                       <span>{props.locale === "zh-CN" ? option.labelZh : option.labelEn}</span>
                       <small>
@@ -8849,64 +8966,48 @@ function ComposerAiCapabilityControl(props: {
                             : `${targetCount} targets`
                           : props.locale === "zh-CN"
                             ? "暂无可用目标"
-                            : "No targets"}
+                        : "No targets"}
                       </small>
                     </span>
-                  </button>
+                  </span>
                 </div>
               );
             })}
           </aside>
           <section className="composer-capability-dialog-right">
             <div className="composer-capability-detail-header">
-              <span className="composer-capability-detail-icon"><SelectedIcon size={18} /></span>
+              <span className="composer-capability-detail-icon">
+                <ComposerCapabilityIcon
+                  enabled={selectedEnabled}
+                  option={selectedEntry.option}
+                  size={18}
+                />
+              </span>
               <span className="composer-capability-detail-copy">
                 <strong>{props.locale === "zh-CN" ? selectedEntry.option.labelZh : selectedEntry.option.labelEn}</strong>
                 <small>{props.locale === "zh-CN" ? selectedEntry.option.subtitleZh : selectedEntry.option.subtitleEn}</small>
               </span>
             </div>
             {selectedTargets.length > 0 ? (
-              <div className="composer-capability-target-table">
-                {selectedTargets.map((target, index) => {
-                  const targetEnabled = selectedEnabled && target.enabled && !props.disabledTargetSelectors.has(target.targetSelector);
-                  return (
-                    <div className={cn("composer-capability-target-row", !target.enabled && "disabled")} key={target.targetSelector}>
-                      <input
-                        checked={targetEnabled}
-                        disabled={!selectedEnabled || !target.enabled}
-                        onChange={(event) => props.onTargetToggle(target.targetSelector, event.currentTarget.checked)}
-                        type="checkbox"
-                      />
-                      <span className="composer-capability-target-copy">
-                        <span>{target.targetName || target.targetAlias}</span>
-                        <small>{target.vendorName} · {target.modelId || target.targetAlias}</small>
-                      </span>
-                      <span className="composer-capability-target-actions">
-                        <Button
-                          aria-label={props.locale === "zh-CN" ? "上移目标" : "Move target up"}
-                          disabled={index === 0}
-                          onClick={() => props.onTargetMove(selectedEntry.option.value, target.targetSelector, -1)}
-                          size="icon"
-                          type="button"
-                          variant="ghost"
-                        >
-                          <ArrowUp size={14} />
-                        </Button>
-                        <Button
-                          aria-label={props.locale === "zh-CN" ? "下移目标" : "Move target down"}
-                          disabled={index === selectedTargets.length - 1}
-                          onClick={() => props.onTargetMove(selectedEntry.option.value, target.targetSelector, 1)}
-                          size="icon"
-                          type="button"
-                          variant="ghost"
-                        >
-                          <ArrowDown size={14} />
-                        </Button>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+              <DndContext sensors={targetDragSensors} collisionDetection={closestCenter} onDragEnd={handleTargetDragEnd}>
+                <SortableContext items={targetSortableIds} strategy={verticalListSortingStrategy}>
+                  <div className="composer-capability-target-table">
+                    {selectedTargets.map((target) => {
+                      const targetEnabled = selectedEnabled && target.enabled && !props.disabledTargetSelectors.has(target.targetSelector);
+                      return (
+                        <ComposerCapabilityTargetRow
+                          disabled={!target.enabled}
+                          enabled={targetEnabled}
+                          key={target.targetSelector}
+                          selectedEnabled={selectedEnabled}
+                          target={target}
+                          onToggle={props.onTargetToggle}
+                        />
+                      );
+                    })}
+                  </div>
+                </SortableContext>
+              </DndContext>
             ) : (
               <div className="composer-capability-dialog-empty">
                 {props.locale === "zh-CN" ? "当前能力暂无已配置目标。" : "This capability has no configured targets."}
@@ -8916,6 +9017,50 @@ function ComposerAiCapabilityControl(props: {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ComposerCapabilityTargetRow renders one globally draggable capability target route row.
+// ComposerCapabilityTargetRow 渲染单条整行可拖动的能力目标路由。
+function ComposerCapabilityTargetRow(props: {
+  // Whether the target route is globally disabled.
+  // 当前目标路由是否全局不可用。
+  disabled: boolean;
+  // Whether the target route is enabled for this prompt.
+  // 当前目标路由是否在本次提示词中启用。
+  enabled: boolean;
+  // Whether the owning capability is enabled.
+  // 所属能力是否启用。
+  selectedEnabled: boolean;
+  // Target route summary displayed by the row.
+  // 当前行展示的目标路由摘要。
+  target: AiCapabilityTargetSummary;
+  // Toggles the target route for this prompt.
+  // 开关本次提示词中的目标路由。
+  onToggle: (targetSelector: string, enabled: boolean) => void;
+}) {
+  const sortable = useVerticalSortableItem(props.target.targetSelector, false);
+  return (
+    <div
+      className={cn("composer-capability-target-row", props.disabled && "disabled", sortable.isDragging && "dragging")}
+      ref={sortable.setNodeRef}
+      style={sortable.sortableStyle}
+      {...sortable.attributes}
+      {...sortable.listeners}
+    >
+      <GripVertical className="composer-capability-target-handle" size={14} />
+      <input
+        checked={props.enabled}
+        disabled={!props.selectedEnabled || !props.target.enabled}
+        onChange={(event) => props.onToggle(props.target.targetSelector, event.currentTarget.checked)}
+        onPointerDown={(event) => event.stopPropagation()}
+        type="checkbox"
+      />
+      <span className="composer-capability-target-copy">
+        <span>{props.target.targetName || props.target.targetAlias}</span>
+        <small>{props.target.vendorName} · {props.target.modelId || props.target.targetAlias}</small>
+      </span>
+    </div>
   );
 }
 

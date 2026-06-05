@@ -2268,14 +2268,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 7px 10px 8px;
+  gap: 7px;
+  padding: 8px 11px 9px;
 }
 
 .composer-add-button {
-  width: 30px;
-  height: 30px;
-  flex: 0 0 30px;
+  width: 33px;
+  height: 33px;
+  flex: 0 0 33px;
   border-radius: 8px;
 }
 
@@ -2297,7 +2297,7 @@ button {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 
@@ -2307,14 +2307,14 @@ button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 7px;
 }
 
 .context-usage-orb {
   --context-usage-accent: #64748b;
-  width: 27px;
-  height: 27px;
-  flex: 0 0 27px;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2371,15 +2371,15 @@ button {
 }
 
 .composer-select-trigger {
-  height: 30px;
+  height: 33px;
   min-width: 0;
   justify-content: flex-start;
-  gap: 6px;
+  gap: 7px;
   border-color: transparent;
   border-radius: 8px;
   background: var(--muted);
   color: var(--foreground);
-  padding: 4px 7px;
+  padding: 5px 8px;
   box-shadow: none;
 }
 
@@ -2389,15 +2389,15 @@ button {
 }
 
 .composer-select-trigger.mode {
-  width: 53px;
+  width: 58px;
 }
 
 .composer-select-trigger.model {
-  width: 160px;
+  width: 176px;
 }
 
 .composer-select-trigger.capability {
-  width: 120px;
+  width: 176px;
 }
 
 .composer-capability-trigger {
@@ -2416,38 +2416,60 @@ button {
   min-width: 0;
   display: inline-flex;
   max-width: 100%;
-  height: 12px;
+  height: 14px;
   align-items: center;
   justify-content: center;
-  gap: 3px;
+  gap: 4px;
   overflow: hidden;
-  color: var(--muted-foreground);
 }
 
-.composer-capability-mini-icon {
+.composer-capability-colored-icon {
   flex: 0 0 auto;
-  opacity: 0.88;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--capability-color, var(--foreground));
 }
 
-.composer-capability-mini-empty {
-  width: 18px;
-  height: 2px;
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--muted-foreground) 36%, transparent);
+.composer-capability-colored-icon.enabled {
+  opacity: 1;
+}
+
+.composer-capability-colored-icon.disabled {
+  color: var(--muted-foreground);
+  filter: grayscale(1);
+  opacity: 0.44;
+}
+
+.composer-capability-colored-icon svg {
+  flex: 0 0 auto;
 }
 
 .composer-capability-dialog {
   width: min(860px, calc(100vw - 48px));
   max-width: min(860px, calc(100vw - 48px));
+  height: min(520px, calc(100vh - 88px));
+  max-height: min(520px, calc(100vh - 88px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   padding: 18px;
 }
 
+.composer-capability-dialog-note {
+  margin-top: 6px;
+  border-left: 3px solid #ef4444;
+  padding: 5px 8px;
+  background: color-mix(in oklch, #ef4444 10%, transparent);
+  color: #dc2626;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .composer-capability-dialog-grid {
+  min-height: 0;
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 16px;
-  min-height: 430px;
-  max-height: min(620px, calc(100vh - 190px));
 }
 
 .composer-capability-dialog-left,
@@ -2465,13 +2487,18 @@ button {
 }
 
 .composer-capability-kind-row {
-  min-height: 54px;
+  width: 100%;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  border-radius: 10px;
-  padding: 6px 8px;
+  border: 0;
+  border-radius: 0;
+  padding: 5px 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .composer-capability-kind-row:hover {
@@ -2500,11 +2527,8 @@ button {
   grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  border: 0;
   padding: 0;
-  background: transparent;
   color: inherit;
-  text-align: left;
 }
 
 .composer-capability-kind-copy,
@@ -2548,7 +2572,7 @@ button {
   align-items: center;
   gap: 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 0;
   padding: 10px 12px;
   background: var(--muted);
 }
@@ -2559,7 +2583,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 10px;
+  border-radius: 0;
   background: var(--background);
   color: var(--foreground);
   box-shadow: inset 0 0 0 1px var(--border);
@@ -2584,15 +2608,29 @@ button {
 }
 
 .composer-capability-target-row {
-  min-height: 52px;
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 14px 18px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 7px 8px 7px 10px;
+  border-radius: 0;
+  padding: 7px 8px;
   background: var(--background);
+  cursor: grab;
+  touch-action: none;
+}
+
+.composer-capability-target-row:hover {
+  background: var(--accent);
+}
+
+.composer-capability-target-row.dragging {
+  opacity: 0.68;
+  cursor: grabbing;
+}
+
+.composer-capability-target-handle {
+  color: var(--muted-foreground);
 }
 
 .composer-capability-target-row.disabled {
@@ -2606,17 +2644,6 @@ button {
   accent-color: var(--primary);
 }
 
-.composer-capability-target-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.composer-capability-target-actions button {
-  width: 26px;
-  height: 26px;
-}
-
 .composer-capability-dialog-empty {
   min-height: 220px;
   display: grid;
@@ -2628,7 +2655,7 @@ button {
 }
 
 .composer-select-trigger.reasoning {
-  width: 78px;
+  width: 86px;
   padding-left: 10px;
 }
 
@@ -2800,8 +2827,8 @@ button {
 }
 
 .send-button {
-  width: 30px;
-  height: 30px;
+  width: 33px;
+  height: 33px;
   border-radius: 999px;
   background: var(--foreground);
   color: var(--background);
