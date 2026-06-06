@@ -32,6 +32,10 @@ target
 /docs/completed/
 .codex_tmp*
 
+# Local task board state.
+# 本地任务看板状态。
+/TASK_NOW.md
+
 # Generated WebUI dependencies and build outputs.
 # WebUI 生成的依赖与构建产物。
 /apps/vulcan-code-web/node_modules/
