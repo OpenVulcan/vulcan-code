@@ -1468,11 +1468,56 @@ fn workspace_store_projection_trace(session_id: SessionId, stage: &str, detail: 
         })
         .unwrap_or(false);
     if enabled {
+        let (timestamp, unix_ms) = workspace_store_trace_timestamp();
         eprintln!(
-            "[workspace-store][projection] session={session_id} stage={stage} {}",
+            "[workspace-store][projection] timestamp={timestamp} unix_ms={unix_ms} session={session_id} stage={stage} {}",
             detail.as_ref()
         );
     }
+}
+
+/// Returns one UTC trace timestamp plus Unix milliseconds using only standard-library time.
+/// 仅使用标准库时间返回一组 UTC 跟踪时间戳与 Unix 毫秒。
+fn workspace_store_trace_timestamp() -> (String, u128) {
+    let unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    let seconds = (unix_ms / 1_000) as i64;
+    let millis = unix_ms % 1_000;
+    let days = seconds.div_euclid(86_400);
+    let seconds_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_date_from_unix_days(days);
+    let hour = seconds_of_day / 3_600;
+    let minute = (seconds_of_day % 3_600) / 60;
+    let second = seconds_of_day % 60;
+    (
+        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"),
+        unix_ms,
+    )
+}
+
+/// Converts days since the Unix epoch into one proleptic Gregorian UTC date.
+/// 将 Unix 纪元以来的天数转换为一个前推格里高利 UTC 日期。
+fn civil_date_from_unix_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
+    let shifted_days = days_since_unix_epoch + 719_468;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
 }
 
 /// Collects the session identifiers whose canonical event-store files must actually be rewritten during one snapshot flush.

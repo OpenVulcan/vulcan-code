@@ -717,6 +717,21 @@ pub(super) enum Message {
     /// Updates the editable user-agent max-turn override field.
     /// 更新可编辑用户 Agent 最大轮次数覆盖字段。
     UserAgentProfileMaxTurnsChanged(String),
+    /// Updates the editable user-agent prompt-skill identifiers field.
+    /// 更新可编辑用户 Agent 提示词技能标识字段。
+    UserAgentProfileSkillIdsChanged(String),
+    /// Updates the editable user-agent native-tool identifiers field.
+    /// 更新可编辑用户 Agent 原生工具标识字段。
+    UserAgentProfileNativeToolsChanged(String),
+    /// Updates the editable user-agent MCP-tool identifiers field.
+    /// 更新可编辑用户 Agent MCP 工具标识字段。
+    UserAgentProfileMcpToolsChanged(String),
+    /// Updates the editable user-agent shared tool-policy field.
+    /// 更新可编辑用户 Agent 共享工具策略字段。
+    UserAgentProfileToolPolicyChanged(String),
+    /// Applies one editing action to the user-agent runtime-policy buffer.
+    /// 向用户 Agent 运行时策略缓冲区应用一次编辑动作。
+    UserAgentProfileRuntimePolicyAction(text_editor::Action),
     /// Applies one editing action to the editable user-agent prompt buffer.
     /// 向可编辑用户 Agent 提示词缓冲区应用一次编辑动作。
     UserAgentProfilePromptAction(text_editor::Action),

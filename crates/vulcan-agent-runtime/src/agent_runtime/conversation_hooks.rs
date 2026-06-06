@@ -61,6 +61,35 @@ const PRECHECK_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 /// 完成回合 hook 调度的宿主侧安全兜底上限。
 const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 
+/// Completion state for one logical conversation turn.
+/// 单个逻辑会话回合的完成状态。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationTurnCompletionStatus {
+    /// The model response finished, but child subagents or delegate follow-ups still belong to the same user turn.
+    /// 模型响应已经结束，但子代理或委派回流仍属于同一个用户回合。
+    AwaitingSubagents,
+    /// The full logical user turn is complete and can be submitted to completed-turn consumers.
+    /// 完整逻辑用户回合已经结束，可以提交给完成回合消费方。
+    Completed,
+}
+
+impl ConversationTurnCompletionStatus {
+    /// Returns the stable payload value used by hook consumers.
+    /// 返回 hook 消费方使用的稳定载荷值。
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AwaitingSubagents => "awaiting_subagents",
+            Self::Completed => "completed",
+        }
+    }
+
+    /// Returns whether this state closes the active logical turn.
+    /// 返回该状态是否会闭合活动逻辑回合。
+    pub const fn is_final(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+}
+
 /// One compact timeline item emitted to conversation hook consumers.
 /// 发送给会话 hook 消费方的一条精简 timeline 项。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -232,6 +261,12 @@ impl ConversationHookRuntime {
             .registration_snapshots(Some(HOOK_CONVERSATION_TURN_PRECHECK))
     }
 
+    /// Returns whether a logical user turn is currently open for the session.
+    /// 返回该会话当前是否存在打开中的逻辑用户回合。
+    pub fn has_active_turn(&self, session_id: SessionId) -> bool {
+        self.active_turns.contains_key(&session_id)
+    }
+
     /// Registers every built-in conversation hook point descriptor.
     /// 注册所有内置会话 hook 点位描述。
     fn register_builtin_points(&mut self) {
@@ -309,6 +344,42 @@ impl ConversationHookRuntime {
                 HookScope::Session,
             );
         }
+        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
+    }
+
+    /// Prepares an internal continuation without opening a user logical turn or dispatching precheck hooks.
+    /// 准备一条内部续跑请求，不打开用户逻辑回合，也不调度 precheck hook。
+    pub fn prepare_internal_prompt_continuation(
+        &mut self,
+        session_id: SessionId,
+        prompt_entry_id: &str,
+        project_id: Option<String>,
+        workspace_path: String,
+        source: PendingSessionPromptSource,
+        system_prompt_hook_phase: SystemPromptHookPhase,
+        prompt: &str,
+        conversation_state: &SessionConversationState,
+    ) -> ConversationPrecheckRequest {
+        self.next_turn_sequence = self.next_turn_sequence.saturating_add(1);
+        let turn_id = format!(
+            "session-{session_id}-internal-continuation-{}",
+            self.next_turn_sequence
+        );
+        let event_kind = pending_prompt_source_event_kind(source);
+        let payload = json!({
+            "session_id": session_id.to_string(),
+            "project_id": project_id,
+            "workspace_path": workspace_path,
+            "turn_id": turn_id,
+            "event_kind": event_kind,
+            "internal_continuation": true,
+            "prompt_entry_id": prompt_entry_id,
+            "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
+            "user_content": prompt,
+            "visible_history_count": visible_history_count(conversation_state),
+            "message_count": conversation_state.messages.len(),
+            "record_count": conversation_state.records.len(),
+        });
         ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
     }
 
@@ -467,22 +538,21 @@ impl ConversationHookRuntime {
             RuntimeEventKind::ToolFinished => (HOOK_CONVERSATION_TOOL_FINISHED, "tool_finished"),
             _ => return,
         };
-        let turn_id = self.ensure_turn_for_runtime_event(session_id);
+        let Some(turn_id) = self
+            .active_turns
+            .get(&session_id)
+            .map(|turn| turn.turn_id.clone())
+        else {
+            return;
+        };
         let source_id = event
             .metadata
             .as_ref()
             .and_then(|metadata| metadata.get("tool_call_id"))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let content = compact_runtime_event_content(event);
-        if let Some(turn) = self.active_turns.get_mut(&session_id) {
-            turn.timeline.push(ConversationTimelineItem::new(
-                "tool",
-                timeline_kind,
-                content.clone(),
-                source_id.clone(),
-            ));
-        }
+        // Tool events still dispatch hook notifications, but they do not belong in the user-turn timeline.
+        // 工具事件仍会派发 hook 通知，但不进入用户回合 timeline。
         self.dispatch_json(
             hook_point,
             session_id,
@@ -509,12 +579,40 @@ impl ConversationHookRuntime {
         provider_request_count: usize,
         conversation_state: &SessionConversationState,
     ) -> (String, Vec<VmmWritebackHookEffect>) {
-        let (completed_turn_id, request) = self.prepare_turn_completion_dispatch(
+        self.complete_turn_with_status(
             session_id,
             project_id,
             assistant_content,
             provider_request_count,
             conversation_state,
+            ConversationTurnCompletionStatus::Completed,
+            0,
+            0,
+        )
+    }
+
+    /// Dispatches a completed-turn hook payload with an explicit logical completion state.
+    /// 使用显式逻辑完成状态调度完成回合 hook 载荷。
+    pub fn complete_turn_with_status(
+        &mut self,
+        session_id: SessionId,
+        project_id: Option<String>,
+        assistant_content: &str,
+        provider_request_count: usize,
+        conversation_state: &SessionConversationState,
+        completion_status: ConversationTurnCompletionStatus,
+        pending_subagent_count: usize,
+        pending_delegate_completion_count: usize,
+    ) -> (String, Vec<VmmWritebackHookEffect>) {
+        let (completed_turn_id, request) = self.prepare_turn_completion_dispatch_with_status(
+            session_id,
+            project_id,
+            assistant_content,
+            provider_request_count,
+            conversation_state,
+            completion_status,
+            pending_subagent_count,
+            pending_delegate_completion_count,
         );
         let report = request.run_blocking();
         (
@@ -536,11 +634,44 @@ impl ConversationHookRuntime {
         provider_request_count: usize,
         conversation_state: &SessionConversationState,
     ) -> (String, ConversationCompletionRequest) {
-        let turn = self
-            .active_turns
-            .remove(&session_id)
-            .unwrap_or_else(|| self.reconstruct_turn_from_state(session_id, conversation_state));
+        self.prepare_turn_completion_dispatch_with_status(
+            session_id,
+            project_id,
+            assistant_content,
+            provider_request_count,
+            conversation_state,
+            ConversationTurnCompletionStatus::Completed,
+            0,
+            0,
+        )
+    }
+
+    /// Prepares one completed-turn hook payload while preserving unfinished logical turns when required.
+    /// 准备一条完成回合 hook 载荷，并在需要时保留尚未结束的逻辑回合。
+    pub fn prepare_turn_completion_dispatch_with_status(
+        &mut self,
+        session_id: SessionId,
+        project_id: Option<String>,
+        assistant_content: &str,
+        provider_request_count: usize,
+        conversation_state: &SessionConversationState,
+        completion_status: ConversationTurnCompletionStatus,
+        pending_subagent_count: usize,
+        pending_delegate_completion_count: usize,
+    ) -> (String, ConversationCompletionRequest) {
+        let turn = if completion_status.is_final() {
+            self.active_turns
+                .remove(&session_id)
+                .unwrap_or_else(|| self.reconstruct_turn_from_state(session_id, conversation_state))
+        } else if let Some(turn) = self.active_turns.get(&session_id) {
+            turn.clone()
+        } else {
+            let turn = self.reconstruct_turn_from_state(session_id, conversation_state);
+            self.active_turns.insert(session_id, turn.clone());
+            turn
+        };
         let completed_turn_id = turn.turn_id.clone();
+        let turn_complete = completion_status.is_final();
         let payload = json!({
             "session_id": session_id.to_string(),
             "project_id": project_id,
@@ -549,8 +680,15 @@ impl ConversationHookRuntime {
             "timeline": turn.timeline,
             "assistant_content": assistant_content,
             "provider_request_count": provider_request_count,
+            "completion_status": completion_status.as_str(),
+            "turn_complete": turn_complete,
+            "pending_subagent_count": pending_subagent_count,
+            "pending_delegate_completion_count": pending_delegate_completion_count,
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
+            "turn_messages": &conversation_state.messages,
+            "turn_records": &conversation_state.records,
+            "conversation_state": conversation_state,
         });
         (
             completed_turn_id.clone(),
@@ -1185,17 +1323,6 @@ fn question_prompt_payloads(questions: &[QuestionPrompt]) -> Vec<Value> {
         .collect()
 }
 
-/// Builds compact timeline content from one runtime event.
-/// 根据单个运行时事件构建精简 timeline 内容。
-fn compact_runtime_event_content(event: &RuntimeEvent) -> String {
-    let detail = event.detail.trim();
-    if detail.is_empty() {
-        event.title.clone()
-    } else {
-        format!("{}\n{}", event.title, detail)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     //! Tests for conversation hook turn assembly.
@@ -1239,6 +1366,173 @@ mod tests {
         assert_eq!(turn.timeline.len(), 1);
         assert_eq!(turn.timeline[0].kind, "user_interrupt");
         assert_eq!(turn.timeline[0].content, "supplement");
+    }
+
+    /// Verifies internal delegate continuations never open a user hook turn.
+    /// 验证内部委派续跑不会打开用户 hook 回合。
+    #[test]
+    fn internal_continuation_does_not_open_user_turn() {
+        let mut runtime = ConversationHookRuntime::new();
+        let session_id = SessionId::from_u128(142);
+        let request = runtime.prepare_internal_prompt_continuation(
+            session_id,
+            "entry-1",
+            Some(String::from("project")),
+            String::from("D:/workspace"),
+            PendingSessionPromptSource::DelegateCompletion,
+            SystemPromptHookPhase::SubsequentSession,
+            "delegate finished",
+            &SessionConversationState::default(),
+        );
+
+        assert!(!runtime.active_turns.contains_key(&session_id));
+        assert!(request.turn_id().contains("internal-continuation"));
+        let outcome = request.skip();
+        assert!(!runtime.active_turns.contains_key(&session_id));
+        assert_eq!(outcome.session_id, session_id);
+    }
+
+    /// Verifies orphan tool events do not synthesize empty user turns.
+    /// 验证孤立工具事件不会合成空用户回合。
+    #[test]
+    fn orphan_tool_runtime_event_does_not_create_user_turn() {
+        let mut runtime = ConversationHookRuntime::new();
+        let session_id = SessionId::from_u128(143);
+
+        runtime.record_tool_runtime_event(
+            session_id,
+            &RuntimeEvent::new(RuntimeEventKind::ToolStarted, "tool", "started"),
+        );
+
+        assert!(!runtime.active_turns.contains_key(&session_id));
+    }
+
+    /// Verifies tool events remain hook notifications instead of completed-turn timeline rows.
+    /// 验证工具事件只保留为 hook 通知，不进入完成回合 timeline。
+    #[test]
+    fn tool_runtime_event_stays_out_of_completed_timeline() {
+        let mut runtime = ConversationHookRuntime::new();
+        let session_id = SessionId::from_u128(144);
+        let state = SessionConversationState::default();
+
+        runtime.prepare_user_prompt_precheck(
+            session_id,
+            "entry-1",
+            Some(String::from("project")),
+            String::from("D:/workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            SystemPromptHookPhase::FirstSession,
+            "first",
+            &state,
+        );
+        runtime.record_tool_runtime_event(
+            session_id,
+            &RuntimeEvent::new(RuntimeEventKind::ToolFinished, "tool", "finished"),
+        );
+
+        let (_turn_id, request) =
+            runtime.prepare_turn_completion_dispatch(session_id, None, "done", 1, &state);
+        let timeline = request
+            .payload
+            .get("timeline")
+            .and_then(Value::as_array)
+            .expect("completion payload should expose a timeline array");
+        assert!(timeline.is_empty());
+    }
+
+    /// Verifies unfinished subagent completion dispatch keeps the original user turn open.
+    /// 验证未完成的子代理完成调度会保留原始用户回合。
+    #[test]
+    fn awaiting_subagent_completion_keeps_active_turn() {
+        let mut runtime = ConversationHookRuntime::new();
+        let session_id = SessionId::from_u128(145);
+        let state = SessionConversationState {
+            messages: vec![SessionConversationMessage {
+                id: String::from("m1"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("spawn two subagents"),
+                    attachments: Vec::new(),
+                },
+            }],
+            ..SessionConversationState::default()
+        };
+        runtime.prepare_user_prompt_precheck(
+            session_id,
+            "entry-1",
+            Some(String::from("project")),
+            String::from("D:/workspace"),
+            PendingSessionPromptSource::UserFollowup,
+            SystemPromptHookPhase::FirstSession,
+            "spawn two subagents",
+            &state,
+        );
+
+        let (awaiting_turn_id, awaiting_request) = runtime
+            .prepare_turn_completion_dispatch_with_status(
+                session_id,
+                Some(String::from("project")),
+                "children are still running",
+                1,
+                &state,
+                ConversationTurnCompletionStatus::AwaitingSubagents,
+                2,
+                1,
+            );
+
+        assert!(runtime.has_active_turn(session_id));
+        assert_eq!(
+            awaiting_request
+                .payload
+                .get("completion_status")
+                .and_then(Value::as_str),
+            Some("awaiting_subagents")
+        );
+        assert_eq!(
+            awaiting_request
+                .payload
+                .get("turn_complete")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            awaiting_request
+                .payload
+                .get("pending_subagent_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert!(
+            awaiting_request
+                .payload
+                .get("turn_messages")
+                .and_then(Value::as_array)
+                .is_some_and(|messages| messages.len() == 1)
+        );
+
+        let (completed_turn_id, completed_request) = runtime.prepare_turn_completion_dispatch(
+            session_id,
+            Some(String::from("project")),
+            "all children returned",
+            2,
+            &state,
+        );
+
+        assert_eq!(awaiting_turn_id, completed_turn_id);
+        assert!(!runtime.has_active_turn(session_id));
+        assert_eq!(
+            completed_request
+                .payload
+                .get("completion_status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            completed_request
+                .payload
+                .get("turn_complete")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

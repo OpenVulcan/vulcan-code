@@ -1248,6 +1248,17 @@ button {
   align-items: center;
 }
 
+.subagent-title-menu::after {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 19;
+  width: 260px;
+  height: 8px;
+  display: none;
+  content: "";
+}
+
 .subagent-title-trigger {
   width: 28px;
   height: 28px;
@@ -1261,7 +1272,7 @@ button {
 
 .subagent-title-flyout {
   position: absolute;
-  top: 100%;
+  top: calc(100% - 2px);
   left: 0;
   z-index: 20;
   width: 260px;
@@ -1278,6 +1289,11 @@ button {
   pointer-events: none;
   transform: translateY(-4px);
   transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.subagent-title-menu:hover::after,
+.subagent-title-menu:focus-within::after {
+  display: block;
 }
 
 .subagent-title-menu:hover .subagent-title-flyout,

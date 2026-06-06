@@ -334,6 +334,9 @@ fn tool_display_state_for_finished_event(
     metadata: Option<&serde_json::Value>,
     has_return_body: bool,
 ) -> &'static str {
+    if metadata.is_some_and(tool_metadata_represents_running_task_session) {
+        return "running";
+    }
     if has_return_body || metadata.is_some_and(tool_metadata_contains_return_payload) {
         return "completed";
     }
@@ -352,6 +355,34 @@ fn tool_display_state_for_finished_event(
         return "failed";
     }
     "completed"
+}
+
+/// Returns whether one tool-finish metadata object is the running acknowledgement for a TaskSession.
+/// 返回单个工具结束元数据对象是否表示 TaskSession 的运行中确认。
+fn tool_metadata_represents_running_task_session(metadata: &serde_json::Value) -> bool {
+    task_session_execution_status_from_metadata(metadata)
+        .is_some_and(|status| status.eq_ignore_ascii_case("running"))
+}
+
+/// Reads the TaskSession execution status from host-result or direct task metadata.
+/// 从宿主结果或直接任务元数据中读取 TaskSession 执行状态。
+fn task_session_execution_status_from_metadata(metadata: &serde_json::Value) -> Option<&str> {
+    metadata
+        .get("host_result")
+        .and_then(|host_result| {
+            (host_result.get("kind").and_then(serde_json::Value::as_str) == Some("task_session"))
+                .then(|| host_result.get("payload"))
+                .flatten()
+        })
+        .and_then(|payload| payload.get("execution_status"))
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            (metadata.get("kind").and_then(serde_json::Value::as_str) == Some("task_session"))
+                .then(|| metadata.get("payload"))
+                .flatten()
+                .and_then(|payload| payload.get("execution_status"))
+                .and_then(serde_json::Value::as_str)
+        })
 }
 
 /// Returns whether a tool-finish event carries an API-level returned payload even when the payload itself reports a semantic failure.
@@ -1122,6 +1153,28 @@ mod tests {
         assert_eq!(
             tool_display_state_for_finished_event(Some(&metadata), false),
             "completed"
+        );
+    }
+
+    /// Verifies a running TaskSession acknowledgement stays running even though the task tool call returned.
+    /// 验证 TaskSession 运行中确认在 task 工具调用返回后仍保持运行态。
+    #[test]
+    fn running_task_session_result_keeps_running_display_state() {
+        let metadata = json!({
+            "tool_result_id": "tool-result-call-task",
+            "host_result": {
+                "kind": "task_session",
+                "payload": {
+                    "task_session_id": test_session_id().to_string(),
+                    "execution_status": "running",
+                },
+            },
+            "display_state": "completed",
+        });
+
+        assert_eq!(
+            tool_display_state_for_finished_event(Some(&metadata), true),
+            "running"
         );
     }
 

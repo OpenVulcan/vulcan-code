@@ -1053,6 +1053,9 @@ impl VulcanWorkbench {
             .workspace_path_for_session_id(session_id)
             .unwrap_or_else(|| self.workspace_path.clone());
         let model_reference = self.preferred_model_reference_for_session_compaction(session_id);
+        let model_label = model_reference
+            .as_ref()
+            .map(|reference| format!("{}/{}", reference.provider_id, reference.model_id));
         let provider_configuration =
             self.provider_configuration_for_model_reference(model_reference.as_ref());
         let runtime_options = self.current_pending_prompt_runtime_options();
@@ -1081,7 +1084,7 @@ impl VulcanWorkbench {
             workspace_path,
             plan: plan.clone(),
             provider_configuration,
-            model_reference,
+            model_label,
             reasoning_effort: runtime_options.reasoning_effort,
             ai_tool_configuration,
             agent_profile_catalog: self.agent_profile_catalog.clone(),
@@ -1789,6 +1792,18 @@ impl VulcanWorkbench {
             controller_events,
         } = report;
         let is_success = error.is_none();
+        // Main-session membership decides whether completion hooks, VMM side effects, persistence, and queue dispatch may run.
+        // 主会话成员关系决定完成 hook、VMM 副作用、持久化与队列分发是否允许执行。
+        let is_main_session = self.session_by_id(session_id).is_some();
+        let prompt_purpose = preparation
+            .as_ref()
+            .map(|preparation| preparation.prompt_purpose)
+            .unwrap_or(crate::agent_runtime::ExecutionPromptPurpose::UserTurn);
+        let runs_completed_turn_hooks = prompt_purpose.runs_completed_turn_hooks();
+        let is_delegate_completion = matches!(
+            prompt_purpose,
+            crate::agent_runtime::ExecutionPromptPurpose::DelegateCompletion
+        );
         let mut perf_trace = TranscriptPerfTrace::begin(
             "apply_execution_run_report",
             format!(
@@ -1963,6 +1978,24 @@ impl VulcanWorkbench {
         phase_started_at = Instant::now();
 
         self.refresh_session_queued_steps(session_id);
+        let pending_subagent_count = self
+            .running_subagent_task_states_for_tree_after_refresh(session_id)
+            .len();
+        let pending_delegate_completion_count =
+            self.session_pending_delegate_completion_prompt_count(session_id);
+        let has_active_hook_turn = self.conversation_hook_runtime.has_active_turn(session_id);
+        let completion_status =
+            if pending_subagent_count > 0 || pending_delegate_completion_count > 0 {
+                super::conversation_hooks::ConversationTurnCompletionStatus::AwaitingSubagents
+            } else {
+                super::conversation_hooks::ConversationTurnCompletionStatus::Completed
+            };
+        let should_dispatch_completion_hook = is_main_session
+            && is_success
+            && (runs_completed_turn_hooks || (is_delegate_completion && has_active_hook_turn));
+        let should_terminate_completion_hook = is_main_session
+            && !is_success
+            && (runs_completed_turn_hooks || (is_delegate_completion && has_active_hook_turn));
         if is_success {
             let summary_message_id = self.append_session_summary_output(
                 session_id,
@@ -1976,37 +2009,44 @@ impl VulcanWorkbench {
                 SessionTurnStatsStatus::Completed,
                 Some(provider_request_count),
             );
-            let now = current_unix_millis_text();
-            let project_id = self
-                .session_by_id(session_id)
-                .and_then(|session| session.project_id.clone());
-            let conversation_state = self.session_conversation_state(session_id);
-            let (hook_turn_id, vmm_writeback_effects) =
-                self.conversation_hook_runtime.complete_turn(
-                    session_id,
-                    project_id,
-                    summary_assistant_output.as_deref().unwrap_or(
-                        "The model completed the run but did not return visible text output.",
-                    ),
-                    provider_request_count,
-                    &conversation_state,
-                );
-            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state
-                .context_injection_state
-                .consume_turn(&hook_turn_id, &now);
-            runtime_state.vmm_profile_sync.record_completed_turn();
-            let profile_sync = runtime_state.vmm_profile_sync.clone();
-            apply_vmm_writeback_effects_to_runtime_state(
-                runtime_state,
-                vmm_writeback_effects,
-                &now,
-            );
-            runtime_state.updated_at = now;
-            self.vmm_hook_runtime
-                .store_profile_sync_state(session_id, profile_sync);
-            self.refresh_vmm_hook_config_snapshot();
-        } else {
+            if should_dispatch_completion_hook {
+                let now = current_unix_millis_text();
+                let project_id = self
+                    .session_by_id(session_id)
+                    .and_then(|session| session.project_id.clone());
+                let conversation_state = self.session_conversation_state(session_id);
+                let (hook_turn_id, vmm_writeback_effects) =
+                    self.conversation_hook_runtime.complete_turn_with_status(
+                        session_id,
+                        project_id,
+                        summary_assistant_output.as_deref().unwrap_or(
+                            "The model completed the run but did not return visible text output.",
+                        ),
+                        provider_request_count,
+                        &conversation_state,
+                        completion_status,
+                        pending_subagent_count,
+                        pending_delegate_completion_count,
+                    );
+                if completion_status.is_final() {
+                    let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+                    runtime_state
+                        .context_injection_state
+                        .consume_turn(&hook_turn_id, &now);
+                    runtime_state.vmm_profile_sync.record_completed_turn();
+                    let profile_sync = runtime_state.vmm_profile_sync.clone();
+                    apply_vmm_writeback_effects_to_runtime_state(
+                        runtime_state,
+                        vmm_writeback_effects,
+                        &now,
+                    );
+                    runtime_state.updated_at = now;
+                    self.vmm_hook_runtime
+                        .store_profile_sync_state(session_id, profile_sync);
+                    self.refresh_vmm_hook_config_snapshot();
+                }
+            }
+        } else if should_terminate_completion_hook {
             let project_id = self
                 .session_by_id(session_id)
                 .and_then(|session| session.project_id.clone());
@@ -2019,7 +2059,11 @@ impl VulcanWorkbench {
         }
         perf_trace.checkpoint("append_hidden_summary_and_stats", phase_started_at);
         phase_started_at = Instant::now();
-        let compaction_task = self.maybe_compact_session_history(session_id);
+        let compaction_task = if should_dispatch_completion_hook && completion_status.is_final() {
+            self.maybe_compact_session_history(session_id)
+        } else {
+            Task::none()
+        };
         self.clear_streaming_message_ids(session_id);
         self.session_tool_call_message_ids.remove(&session_id);
         self.refresh_session_agent_view_buffers(session_id);
@@ -2027,7 +2071,11 @@ impl VulcanWorkbench {
         perf_trace.checkpoint("finalize_followup_state", phase_started_at);
         phase_started_at = Instant::now();
 
-        let persist_task = self.persist_single_session_update_task(session_id);
+        let persist_task = if is_main_session {
+            self.persist_single_session_update_task(session_id)
+        } else {
+            Task::none()
+        };
         perf_trace.checkpoint("build_persist_task", phase_started_at);
         perf_trace.finish();
 
@@ -2035,7 +2083,11 @@ impl VulcanWorkbench {
             compaction_task,
             persist_task,
             self.maybe_follow_selected_session_transcript_tail(session_id),
-            self.maybe_start_next_pending_prompt(session_id, false),
+            if is_main_session {
+                self.maybe_start_next_pending_prompt(session_id, false)
+            } else {
+                Task::none()
+            },
         ])
     }
 
@@ -2048,6 +2100,9 @@ impl VulcanWorkbench {
         last_successful_provider_usage: Option<ProviderUsageSnapshot>,
         provider_request_count: usize,
     ) -> Task<Message> {
+        // Main-session membership decides whether checkpoint persistence may use the workspace store.
+        // 主会话成员关系决定 checkpoint 是否可以使用普通工作区存储持久化。
+        let is_main_session = self.session_by_id(session_id).is_some();
         self.ensure_session_conversation_state_loaded(session_id);
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         let preserved_records = runtime_state.conversation_state.records.clone();
@@ -2068,8 +2123,13 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
         self.sync_session_messages_from_conversation_state(session_id);
         self.sync_context_usage_from_session_budget(session_id);
+        let persist_task = if is_main_session {
+            self.persist_single_session_runtime_state_task(session_id)
+        } else {
+            Task::none()
+        };
         Task::batch([
-            self.persist_single_session_runtime_state_task(session_id),
+            persist_task,
             self.maybe_follow_selected_session_transcript_tail(session_id),
         ])
     }

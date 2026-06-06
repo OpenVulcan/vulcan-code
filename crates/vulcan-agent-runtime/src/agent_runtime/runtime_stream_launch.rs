@@ -11,7 +11,7 @@ use crate::agent_runtime::runtime_stream_launch_payload::{
 use crate::agent_runtime::runtime_stream_preparation::{
     RuntimePreparedLaunchInput, prepare_runtime_launch_input,
 };
-use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
@@ -43,29 +43,34 @@ pub async fn prepare_runtime_stream_launch(
         token_budget_runtime,
         request,
     )?;
-    build_runtime_stream_launch_from_prepared_input(prepared_launch_input).await
+    build_runtime_stream_launch_from_prepared_input(config.clone(), prepared_launch_input).await
 }
 
 /// Assembles the final runtime-stream launch payload from one already prepared launch input.
 /// 根据一份已经准备完成的启动输入组装最终运行时流启动载荷。
 async fn build_runtime_stream_launch_from_prepared_input(
+    config: ProviderConfigurationFile,
     prepared_launch_input: RuntimePreparedLaunchInput,
 ) -> Result<RuntimeStreamLaunch, ExecutionRunReport> {
     let RuntimePreparedLaunchInput {
         foundation,
         luaskills_runtime,
-        ai_tool_configuration,
         request,
         preparation,
     } = prepared_launch_input;
-    let bootstrap = bootstrap_runtime_stream(
-        &foundation,
-        luaskills_runtime,
-        ai_tool_configuration,
-        &request,
-        preparation,
-    )
-    .await;
+    let foundation = Arc::new(foundation);
+    let task_execution_context = Some(TaskExecutionRuntimeContext::new(
+        config,
+        Arc::clone(&foundation),
+        luaskills_runtime.clone(),
+        request.clone(),
+    ));
+    let bootstrap =
+        bootstrap_runtime_stream(&foundation, luaskills_runtime, &request, preparation).await;
 
-    Ok(build_runtime_stream_launch_payload(&request, bootstrap))
+    Ok(build_runtime_stream_launch_payload(
+        &request,
+        bootstrap,
+        task_execution_context,
+    ))
 }

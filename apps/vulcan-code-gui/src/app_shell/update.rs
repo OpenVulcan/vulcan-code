@@ -2525,6 +2525,28 @@ impl VulcanWorkbench {
                 self.agent_profile_form.max_turns_text = value;
                 Task::none()
             }
+            Message::UserAgentProfileSkillIdsChanged(value) => {
+                self.agent_profile_form.skill_ids_text = value;
+                Task::none()
+            }
+            Message::UserAgentProfileNativeToolsChanged(value) => {
+                self.agent_profile_form.native_tools_text = value;
+                Task::none()
+            }
+            Message::UserAgentProfileMcpToolsChanged(value) => {
+                self.agent_profile_form.mcp_tools_text = value;
+                Task::none()
+            }
+            Message::UserAgentProfileToolPolicyChanged(value) => {
+                self.agent_profile_form.tool_policy = value;
+                Task::none()
+            }
+            Message::UserAgentProfileRuntimePolicyAction(action) => {
+                self.agent_profile_form
+                    .runtime_policy_buffer
+                    .perform(action);
+                Task::none()
+            }
             Message::UserAgentProfilePromptAction(action) => {
                 self.agent_profile_form.prompt_buffer.perform(action);
                 Task::none()
@@ -3246,11 +3268,8 @@ impl VulcanWorkbench {
                 let Some(session_id) = self.active_transcript_surface_session_id() else {
                     return Task::none();
                 };
-                let selected_root_session_id = self.selected_session().map(|session| session.id);
-                if selected_root_session_id == Some(session_id)
-                    && let Some(task_id) =
-                        self.resolve_task_session_id_from_rendered_tool_block(session_id, &block_id)
-                    && self.should_open_subagent_panel_from_tool_card(session_id, task_id)
+                if let Some(task_id) =
+                    self.resolve_task_session_id_from_rendered_tool_block(session_id, &block_id)
                     && self.open_subagent_task_panel(session_id, task_id)
                 {
                     return Task::none();
@@ -3281,27 +3300,44 @@ impl VulcanWorkbench {
                     self.status_message = String::from("当前子代理已经结束，无需再次停止。");
                     return Task::none();
                 }
+                let mut task_states_to_mark = vec![(state.parent_session_id, state.clone())];
+                task_states_to_mark.extend(
+                    self.running_subagent_task_states_for_tree_after_refresh(state.task_id),
+                );
                 let stop_summary = subagent_task_stopped_summary_text();
                 match self
                     .runtime_foundation
                     .task_runtime()
-                    .stop_task(state.task_id)
+                    .stop_task_tree(state.task_id)
                 {
-                    Ok(true) => {
-                        self.mark_subagent_task_stopped(
-                            state.parent_session_id,
-                            state.task_id,
-                            stop_summary,
-                        );
+                    Ok(stopped_task_ids) if !stopped_task_ids.is_empty() => {
+                        let stopped_task_ids =
+                            stopped_task_ids.into_iter().collect::<BTreeSet<_>>();
+                        let mut sessions_to_persist = BTreeSet::new();
+                        for (direct_parent_session_id, task_state) in task_states_to_mark {
+                            if !stopped_task_ids.contains(&task_state.task_id) {
+                                continue;
+                            }
+                            self.mark_subagent_task_stopped(
+                                direct_parent_session_id,
+                                task_state.task_id,
+                                stop_summary,
+                            );
+                            sessions_to_persist.insert(direct_parent_session_id);
+                            sessions_to_persist.insert(task_state.task_id);
+                        }
                         self.refresh_subagent_navigation_round_visibility(state.parent_session_id);
                         self.status_message = String::from("已停止当前子代理调用。");
-                        Task::batch([
-                            self.persist_single_session_update_task(state.parent_session_id),
-                            self.persist_single_session_update_task(state.task_id),
+                        let mut tasks = sessions_to_persist
+                            .into_iter()
+                            .map(|session_id| self.persist_single_session_update_task(session_id))
+                            .collect::<Vec<_>>();
+                        tasks.push(
                             self.maybe_follow_selected_session_transcript_tail(state.task_id),
-                        ])
+                        );
+                        Task::batch(tasks)
                     }
-                    Ok(false) => {
+                    Ok(_) => {
                         self.status_message =
                             String::from("当前子代理已不在执行中，可直接查看已有结果。");
                         Task::none()

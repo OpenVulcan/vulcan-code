@@ -10,6 +10,7 @@ pub mod events;
 pub mod execution_models;
 pub mod execution_preparation;
 pub mod executor;
+pub mod prompt_compaction;
 pub mod prompt_composer_runtime;
 pub mod provider;
 pub mod provider_attachment;

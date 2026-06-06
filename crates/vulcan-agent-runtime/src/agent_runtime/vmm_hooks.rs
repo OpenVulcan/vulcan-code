@@ -388,6 +388,9 @@ async fn handle_vmm_post_action(
     runtime: VmmHookRuntimeHandle,
     invocation: HookInvocation,
 ) -> Result<HookResult, HookError> {
+    if !vmm_post_action_payload_is_final(&invocation.payload.value) {
+        return Ok(HookResult::default());
+    }
     let config = runtime.resolve_effective_config(&invocation);
     ensure_vmm_ready(&config)?;
     let request = post_action_request_from_completed_payload(&invocation.payload.value, &config)
@@ -422,6 +425,21 @@ async fn handle_vmm_post_action(
         });
     }
     Ok(vmm_writeback_effect_result(effects))
+}
+
+/// Returns whether one completed-turn payload represents the final logical user turn.
+/// 返回一条完成回合载荷是否代表最终逻辑用户回合。
+fn vmm_post_action_payload_is_final(payload: &Value) -> bool {
+    let turn_complete = payload
+        .get("turn_complete")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let status_is_final = payload
+        .get("completion_status")
+        .and_then(Value::as_str)
+        .map(|status| status == "completed")
+        .unwrap_or(true);
+    turn_complete && status_is_final
 }
 
 /// Runs the VMM chat-compaction notification after a session summary is accepted.
@@ -1062,4 +1080,28 @@ fn invocation_session_id(invocation: &HookInvocation) -> Option<String> {
         .session_id
         .clone()
         .or_else(|| payload_string(&invocation.payload.value, "session_id"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies VMM post-action skips unfinished delegated subagent turns.
+    /// 验证 VMM post-action 会跳过尚未完成的委派子代理回合。
+    #[test]
+    fn vmm_post_action_payload_requires_final_turn() {
+        assert!(vmm_post_action_payload_is_final(&json!({
+            "session_id": "s",
+            "user_content": "u",
+            "assistant_content": "a"
+        })));
+        assert!(!vmm_post_action_payload_is_final(&json!({
+            "completion_status": "awaiting_subagents",
+            "turn_complete": false
+        })));
+        assert!(!vmm_post_action_payload_is_final(&json!({
+            "completion_status": "completed",
+            "turn_complete": false
+        })));
+    }
 }

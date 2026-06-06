@@ -106,6 +106,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 ) -> impl Stream<Item = ExecutionStreamEvent> + Send + 'static {
     stream! {
         let session_id = launch.session_id;
+        let task_execution_context = launch.task_execution_context;
         let effective_prompt = launch.effective_prompt;
         let preparation = launch.preparation;
         let active_agent = launch.active_agent;
@@ -120,6 +121,9 @@ pub(crate) fn drive_runtime_stream_provider_loop(
         let request_history = launch.request_history;
         let core_snapshot = launch.core_snapshot;
         let mut stream_state = launch.stream_state;
+        let _task_execution_context_guard = task_execution_context.map(|context| {
+            task_runtime.install_execution_context(session_id, context)
+        });
 
         let mut provider_stream = execute_provider_prompt_stream(
             &config,

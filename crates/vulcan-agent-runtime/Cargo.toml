@@ -41,9 +41,14 @@ vulcan-prompt-composer.workspace = true
 vulcan-prompt-skills.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
+vulcan-session-core.workspace = true
+vulcan-task-session.workspace = true
 vulcan-token-counter.workspace = true
 vulcan-tools-luaskills-call.workspace = true
 vulcan-tools-manager.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true
 vulcan-workspace-store.workspace = true
+
+[dev-dependencies]
+tempfile = "3.23.0"

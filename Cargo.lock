@@ -8466,6 +8466,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tempfile",
  "time",
  "tokio",
  "uuid",
@@ -8483,6 +8484,8 @@ dependencies = [
  "vulcan-prompt-skills",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-session-core",
+ "vulcan-task-session",
  "vulcan-token-counter",
  "vulcan-tools-luaskills-call",
  "vulcan-tools-manager",
@@ -8564,6 +8567,8 @@ dependencies = [
  "vulcan-prompt-skills",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-session-core",
+ "vulcan-task-session",
  "vulcan-token-counter",
  "vulcan-tools-luaskills-call",
  "vulcan-tools-manager",
@@ -8598,6 +8603,8 @@ dependencies = [
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-service-api",
+ "vulcan-session-core",
+ "vulcan-task-session",
  "vulcan-token-counter",
  "vulcan-vmm",
  "vulcan-workbench-model",
@@ -8689,6 +8696,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-main-session"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-session-core",
+]
+
+[[package]]
 name = "vulcan-markdown"
 version = "0.1.0"
 dependencies = [
@@ -8755,6 +8771,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-session-core"
+version = "0.1.0"
+dependencies = [
+ "futures-core",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "vulcan-task-session"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-context",
+ "vulcan-context-compaction",
+ "vulcan-session-core",
+]
+
+[[package]]
 name = "vulcan-token-counter"
 version = "0.1.0"
 dependencies = [
@@ -8800,11 +8837,14 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tempfile",
  "uuid",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
+ "vulcan-session-core",
+ "vulcan-task-session",
  "vulcan-vmm",
 ]
 

@@ -312,7 +312,7 @@ impl VulcanWorkbench {
     /// Resolves the editable last-user draft and validates all rollback safety gates.
     /// 解析可编辑的最后用户草稿，并校验全部回滚安全门禁。
     fn last_user_message_edit_draft_for_message(
-        &self,
+        &mut self,
         session_id: SessionId,
         message_id: &str,
     ) -> Result<LastUserMessageEditDraft, String> {
@@ -339,7 +339,7 @@ impl VulcanWorkbench {
     /// Validates shell-level conditions before a last-user rollback can begin.
     /// 在最后用户消息回滚开始前校验外壳层面的条件。
     fn validate_last_user_message_edit_gate(
-        &self,
+        &mut self,
         session_id: SessionId,
         require_empty_composer: bool,
     ) -> Result<(), String> {
@@ -378,7 +378,7 @@ impl VulcanWorkbench {
                 "当前会话仍有待发送队列。请先处理队列，再编辑最后用户消息。",
             ));
         }
-        if self.session_has_running_subagent_tasks(session_id) {
+        if self.session_has_running_subagent_tasks_after_refresh(session_id) {
             return Err(String::from(
                 "当前会话仍有运行中的子代理任务，暂不能回滚历史。",
             ));

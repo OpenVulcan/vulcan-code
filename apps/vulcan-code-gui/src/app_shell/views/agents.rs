@@ -215,6 +215,73 @@ impl VulcanWorkbench {
                     ]
                     .spacing(10),
                     column![
+                        text("子代理技能与工具").size(13),
+                        row![
+                            column![
+                                text("技能").size(12),
+                                text_input(
+                                    "例如 regular.review, luaskills.bridge",
+                                    &self.agent_profile_form.skill_ids_text,
+                                )
+                                .on_input(Message::UserAgentProfileSkillIdsChanged)
+                                .padding([10, 12]),
+                            ]
+                            .spacing(6)
+                            .width(FillPortion(3)),
+                            column![
+                                text("工具策略").size(12),
+                                text_input(
+                                    "例如 analysis-safe",
+                                    &self.agent_profile_form.tool_policy,
+                                )
+                                .on_input(Message::UserAgentProfileToolPolicyChanged)
+                                .padding([10, 12]),
+                            ]
+                            .spacing(6)
+                            .width(FillPortion(2)),
+                        ]
+                        .spacing(10),
+                        row![
+                            column![
+                                text("原生工具").size(12),
+                                text_input(
+                                    "例如 shell_command, vulcan_file_list",
+                                    &self.agent_profile_form.native_tools_text,
+                                )
+                                .on_input(Message::UserAgentProfileNativeToolsChanged)
+                                .padding([10, 12]),
+                            ]
+                            .spacing(6)
+                            .width(FillPortion(1)),
+                            column![
+                                text("MCP 工具").size(12),
+                                text_input(
+                                    "例如 server.tool 或 tool 名称",
+                                    &self.agent_profile_form.mcp_tools_text,
+                                )
+                                .on_input(Message::UserAgentProfileMcpToolsChanged)
+                                .padding([10, 12]),
+                            ]
+                            .spacing(6)
+                            .width(FillPortion(1)),
+                        ]
+                        .spacing(10),
+                    ]
+                    .spacing(8),
+                    column![
+                        text("运行时策略 YAML").size(13),
+                        container(
+                            text_editor(&self.agent_profile_form.runtime_policy_buffer)
+                                .height(92)
+                                .padding(10)
+                                .size(13)
+                                .wrapping(iced::widget::text::Wrapping::Word)
+                                .on_action(Message::UserAgentProfileRuntimePolicyAction),
+                        )
+                        .style(container::bordered_box),
+                    ]
+                    .spacing(6),
+                    column![
                         text("主提示词 Markdown").size(13),
                         container(
                             text_editor(&self.agent_profile_form.prompt_buffer)
@@ -281,6 +348,18 @@ impl VulcanWorkbench {
                 .temperature
                 .map(|temperature| format!("温度：{temperature:.2}")),
             profile.max_turns.map(|turns| format!("最大轮次：{turns}")),
+            (!profile.skill_ids.is_empty()).then(|| format!("技能：{}", profile.skill_ids.len())),
+            (!profile.native_tools.is_empty())
+                .then(|| format!("原生工具：{}", profile.native_tools.len())),
+            (!profile.mcp_tools.is_empty()).then(|| format!("MCP：{}", profile.mcp_tools.len())),
+            profile
+                .tool_policy
+                .as_ref()
+                .map(|tool_policy| format!("策略：{tool_policy}")),
+            profile
+                .runtime_policy
+                .has_override()
+                .then(|| String::from("运行时策略")),
         ]
         .into_iter()
         .flatten()

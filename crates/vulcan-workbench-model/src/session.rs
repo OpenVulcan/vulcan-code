@@ -39,6 +39,16 @@ impl SessionState {
 /// 跨工作台、持久化与运行时层统一使用的稳定 UUID 会话标识。
 pub type SessionId = Uuid;
 
+/// Builds one stable session record identifier from the canonical conversation record ordinal instead of the visible transcript window length.
+/// 基于规范会话记录序号而不是可见转录窗口长度，构建一条稳定的会话记录标识。
+pub fn build_session_record_message_id(
+    session_id: SessionId,
+    created_at: &str,
+    conversation_record_ordinal: usize,
+) -> String {
+    format!("session-{session_id}-message-{created_at}-{conversation_record_ordinal}")
+}
+
 /// Lightweight summary of a coding session.
 /// 编码会话的轻量级摘要信息。
 #[derive(Debug, Clone)]

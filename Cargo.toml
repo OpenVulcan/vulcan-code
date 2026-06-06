@@ -3,6 +3,9 @@ members = [
     "apps/vulcan-code-gui",
     "apps/vulcan-code-tauri",
     "crates/vulcan-agent-runtime",
+    "crates/vulcan-session-core",
+    "crates/vulcan-main-session",
+    "crates/vulcan-task-session",
     "crates/vulcan-service-api",
     "crates/vulcan-change-set",
     "crates/vulcan-host-tools",
@@ -46,6 +49,9 @@ iced = { git = "https://github.com/lingeasy/iced.git", branch = "vulcan-code", d
 iced_aw = { git = "https://github.com/lingeasy/iced_aw.git", branch = "vulcan-code", default-features = false, features = ["context_menu", "date_picker"] }
 iced_fonts = { git = "https://github.com/lingeasy/iced_fonts.git", branch = "vulcan-code", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
 vulcan-agent-runtime = { path = "crates/vulcan-agent-runtime" }
+vulcan-session-core = { path = "crates/vulcan-session-core" }
+vulcan-main-session = { path = "crates/vulcan-main-session" }
+vulcan-task-session = { path = "crates/vulcan-task-session" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
 vulcan-agent-view = { path = "crates/vulcan-agent-view" }
 vulcan-markdown = { path = "crates/vulcan-markdown" }

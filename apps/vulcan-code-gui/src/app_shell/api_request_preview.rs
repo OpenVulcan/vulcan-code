@@ -75,6 +75,13 @@ impl VulcanWorkbench {
             );
         let request = ExecutionPreparationRequest {
             session_id,
+            execution_scope: vulcan_session_core::ExecutionScope::MainSession {
+                session_id: vulcan_session_core::SessionNodeId::from(session_id),
+            },
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
+            execution_agent_id: None,
+            agent_system_prompt_override: None,
+            task_session_store_root: None,
             session_title,
             workspace_path: self
                 .workspace_path_for_session_id(session_id)
@@ -85,6 +92,7 @@ impl VulcanWorkbench {
             temperature: runtime_options.temperature,
             reasoning_effort: runtime_options.reasoning_effort,
             ai_tool_configuration,
+            tool_exposure_override: Default::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             project_prompt_skills: self.current_project_prompt_skills_configuration(session_id),
             session_prompt_skill_overrides: self

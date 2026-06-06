@@ -16,6 +16,10 @@ use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 /// 可见队列或内部队列中允许保留的最大待发送提示词数量。
 pub const PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
 
+/// Extra internal slots reserved for delegated completion callbacks.
+/// 为委派完成回调保留的额外内部槽位数量。
+pub const PENDING_PROMPT_DELEGATE_COMPLETION_RESERVE_LIMIT: usize = 64;
+
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +34,31 @@ pub enum PendingSessionPromptSource {
     /// Synthetic follow-up generated when one delegated subagent reports back asynchronously.
     /// 某个委派子代理异步回报后生成的合成跟进消息。
     DelegateCompletion,
+}
+
+impl PendingSessionPromptSource {
+    /// Returns whether this prompt source begins a new user-authored parent turn.
+    /// 返回该提示词来源是否会开启新的用户编写父会话轮次。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` for user prompts that should reset parent-round UI affordances.
+    /// 对应应重置父级轮次界面的用户提示词时返回 `true`。
+    pub fn starts_user_parent_turn(self) -> bool {
+        !matches!(self, PendingSessionPromptSource::DelegateCompletion)
+    }
+
+    /// Returns whether this source should run user-prompt precheck hooks.
+    /// 返回该来源是否应该运行用户提示词 precheck hook。
+    pub fn runs_user_prompt_precheck(self) -> bool {
+        self.starts_user_parent_turn()
+    }
+
+    /// Returns whether this source should close the logical user-authored turn.
+    /// 返回该来源是否应该闭合用户编写的逻辑回合。
+    pub fn runs_completed_turn_hooks(self) -> bool {
+        self.starts_user_parent_turn()
+    }
 }
 
 /// Returns the internal queue index that should dispatch next.
@@ -58,6 +87,24 @@ pub fn pending_prompt_dispatch_index(
         return index;
     }
     0
+}
+
+/// Returns whether delegate-completion callbacks must be selected before user follow-ups.
+/// 返回委派完成回调是否必须优先于用户跟进消息被选中。
+///
+/// # Parameters
+/// 参数
+/// `context` contains the shared runtime facts that decide queue routing.
+/// `context` 包含用于决定队列路由的共享运行态事实。
+///
+/// # Returns
+/// 返回值
+/// `true` when delegate callbacks should close before user-authored prompts.
+/// 当委派回调应先于用户提示词闭合时返回 `true`。
+pub fn pending_prompt_dispatch_prefers_delegate_completion(
+    context: PendingPromptDispatchContext,
+) -> bool {
+    context.uses_anthropic_runtime || context.has_running_subagents
 }
 
 /// Runtime facts required by the shared pending-prompt dispatch gate.
@@ -321,6 +368,13 @@ pub fn plan_pending_prompt_internal_queue_enqueue(
                 remove_index: Some(index),
             });
         }
+        if entry.source == PendingSessionPromptSource::DelegateCompletion
+            && queue.len()
+                < PENDING_PROMPT_QUEUE_LIMIT
+                    .saturating_add(PENDING_PROMPT_DELEGATE_COMPLETION_RESERVE_LIMIT)
+        {
+            return Ok(PendingPromptInternalQueueEnqueuePlan::Insert { remove_index: None });
+        }
         return Err(PendingPromptInternalQueueEnqueueError::QueueFull);
     }
 
@@ -560,6 +614,34 @@ pub fn take_guided_pending_prompt_entries(
         let _ = remove_pending_prompt_panel_entry(ui_state, &panel_entry_id);
     }
     guided_entries
+}
+
+/// Takes guided prompt entries that may be safely injected at a provider runtime boundary.
+/// 取出可在 Provider 运行时边界安全注入的引导提示词条目。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped queue state mutated by the shared router.
+/// `ui_state` 是共享路由器会修改的会话级队列状态。
+/// `context` contains the same routing facts used by idle queued-prompt dispatch.
+/// `context` 包含与空闲队列分发相同的路由事实。
+///
+/// # Returns
+/// 返回值
+/// Guided prompt entries in intervention order, or an empty list when running subagents require waiting.
+/// 返回按干预顺序排列的引导提示词；若运行中子代理要求等待则返回空列表。
+pub fn take_runtime_intervention_guided_pending_prompt_entries(
+    ui_state: &mut SessionTranscriptUiState,
+    context: PendingPromptDispatchContext,
+) -> Vec<PendingSessionPromptEntry> {
+    let prefer_delegate_completion = pending_prompt_dispatch_prefers_delegate_completion(context);
+    if context.has_running_subagents
+        && next_pending_prompt_dispatch_source(ui_state, prefer_delegate_completion)
+            != Some(PendingSessionPromptSource::DelegateCompletion)
+    {
+        return Vec::new();
+    }
+    take_guided_pending_prompt_entries(ui_state, prefer_delegate_completion)
 }
 
 /// Runtime controls captured when a queued prompt is authored or inserted.
@@ -1333,6 +1415,50 @@ mod tests {
         );
     }
 
+    /// Verifies running subagents force delegated callbacks ahead of queued user follow-ups.
+    /// 验证仍在运行的子代理会强制委派回调优先于排队用户跟进。
+    #[test]
+    fn running_subagents_force_delegate_dispatch_priority() {
+        let mut ui_state = SessionTranscriptUiState::default();
+        let mut user_entry = test_internal_prompt_entry("user", None);
+        user_entry.source = PendingSessionPromptSource::UserFollowup;
+        let mut delegate_entry = test_internal_prompt_entry("delegate", None);
+        delegate_entry.source = PendingSessionPromptSource::DelegateCompletion;
+        ui_state.pending_prompt_queue.push(user_entry);
+        ui_state.pending_prompt_queue.push(delegate_entry);
+        let dispatch_context = PendingPromptDispatchContext {
+            uses_anthropic_runtime: false,
+            has_running_subagents: true,
+            has_active_run: false,
+            run_phase: None,
+            has_active_compaction: false,
+        };
+        let prefer_delegate_completion =
+            pending_prompt_dispatch_prefers_delegate_completion(dispatch_context);
+
+        assert!(prefer_delegate_completion);
+        assert_eq!(
+            next_pending_prompt_dispatch_source(&ui_state, prefer_delegate_completion),
+            Some(PendingSessionPromptSource::DelegateCompletion)
+        );
+        let dispatched = take_next_pending_prompt_entry(
+            &mut ui_state,
+            prefer_delegate_completion,
+            String::from("fallback"),
+            String::from("1001"),
+        )
+        .expect("delegate completion should dispatch before user follow-up");
+        assert_eq!(
+            dispatched.source,
+            PendingSessionPromptSource::DelegateCompletion
+        );
+        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(
+            ui_state.pending_prompt_queue[0].source,
+            PendingSessionPromptSource::UserFollowup
+        );
+    }
+
     /// Verifies duplicate delegate-completion callbacks are not enqueued twice.
     /// 验证重复的委派完成回调不会被二次加入内部队列。
     #[test]
@@ -1411,6 +1537,42 @@ mod tests {
                 .pending_prompt_queue
                 .iter()
                 .any(|entry| entry.task_id.as_deref() == Some("old-task"))
+        );
+    }
+
+    /// Verifies delegated completions can use reserved internal capacity when user prompts fill the ordinary queue.
+    /// 验证用户提示词占满普通队列时，委派完成回调可以使用预留的内部容量。
+    #[test]
+    fn internal_queue_enqueue_allows_delegate_reserve_when_users_fill_queue() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_queue: (0..PENDING_PROMPT_QUEUE_LIMIT)
+                .map(|index| test_internal_prompt_entry(&format!("user-{index}"), None))
+                .collect(),
+            ..SessionTranscriptUiState::default()
+        };
+        let mut delegate = test_internal_prompt_entry("delegate-after-users", None);
+        delegate.source = PendingSessionPromptSource::DelegateCompletion;
+        delegate.task_id = Some(String::from("task-after-users"));
+
+        let outcome = enqueue_pending_prompt_internal_queue_entry(&mut ui_state, delegate, false)
+            .expect("delegate callback should use reserved capacity");
+
+        assert!(matches!(
+            outcome,
+            PendingPromptInternalQueueEnqueueOutcome::Inserted {
+                removed_for_capacity: None
+            }
+        ));
+        assert_eq!(
+            ui_state.pending_prompt_queue.len(),
+            PENDING_PROMPT_QUEUE_LIMIT + 1
+        );
+        assert_eq!(
+            ui_state
+                .pending_prompt_queue
+                .last()
+                .map(|entry| entry.source),
+            Some(PendingSessionPromptSource::DelegateCompletion)
         );
     }
 
@@ -1538,6 +1700,77 @@ mod tests {
             ui_state.pending_prompt_panel_queue[0].state,
             PendingPromptPanelEntryState::Inserted
         );
+    }
+
+    /// Verifies runtime intervention does not inject user guidance while delegated siblings still run.
+    /// 验证存在仍在运行的委派兄弟任务时，运行时干预不会注入用户引导。
+    #[test]
+    fn runtime_intervention_guidance_waits_for_running_subagents() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a")],
+            ..SessionTranscriptUiState::default()
+        };
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route guidance prompt");
+        let context = PendingPromptDispatchContext {
+            uses_anthropic_runtime: false,
+            has_running_subagents: true,
+            has_active_run: true,
+            run_phase: Some(crate::SessionRunPhase::ToolRunning),
+            has_active_compaction: false,
+        };
+
+        let guided_entries =
+            take_runtime_intervention_guided_pending_prompt_entries(&mut ui_state, context);
+
+        assert!(guided_entries.is_empty());
+        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(
+            ui_state.pending_prompt_panel_queue[0].state,
+            PendingPromptPanelEntryState::Inserted
+        );
+    }
+
+    /// Verifies runtime intervention still injects user guidance after delegated siblings have settled.
+    /// 验证委派兄弟任务收敛后，运行时干预仍会注入用户引导。
+    #[test]
+    fn runtime_intervention_guidance_runs_after_subagents_settle() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_panel_queue: vec![test_panel_entry("a")],
+            ..SessionTranscriptUiState::default()
+        };
+        route_pending_prompt_panel_entry_into_internal_queue(
+            &mut ui_state,
+            "a",
+            String::from("internal-a"),
+            String::from("1001"),
+        )
+        .expect("route guidance prompt");
+        let context = PendingPromptDispatchContext {
+            uses_anthropic_runtime: false,
+            has_running_subagents: false,
+            has_active_run: true,
+            run_phase: Some(crate::SessionRunPhase::ToolRunning),
+            has_active_compaction: false,
+        };
+
+        let guided_entries =
+            take_runtime_intervention_guided_pending_prompt_entries(&mut ui_state, context);
+
+        assert_eq!(
+            guided_entries
+                .iter()
+                .filter_map(|entry| entry.panel_entry_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["a"]
+        );
+        assert!(ui_state.pending_prompt_queue.is_empty());
+        assert!(ui_state.pending_prompt_panel_queue.is_empty());
     }
 
     /// Verifies dragging visible rows also updates the internal guided dispatch order.

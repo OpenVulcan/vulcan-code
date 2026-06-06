@@ -31,6 +31,21 @@ pub(super) struct AgentProfileFormState {
     /// Optional max-turn override shown as editable text.
     /// 以可编辑文本形式展示的可选最大轮次数覆盖值。
     pub(super) max_turns_text: String,
+    /// Comma-separated prompt skill identifiers bound to the profile.
+    /// 绑定到该配置的逗号分隔提示词技能标识。
+    pub(super) skill_ids_text: String,
+    /// Comma-separated native tool identifiers exposed by the profile.
+    /// 该配置暴露的逗号分隔原生工具标识。
+    pub(super) native_tools_text: String,
+    /// Comma-separated MCP tool identifiers exposed by the profile.
+    /// 该配置暴露的逗号分隔 MCP 工具标识。
+    pub(super) mcp_tools_text: String,
+    /// Optional shared tool-policy identifier.
+    /// 可选的共享工具策略标识。
+    pub(super) tool_policy: String,
+    /// Editable YAML runtime-policy override buffer.
+    /// 可编辑的 YAML 运行时策略覆盖缓冲区。
+    pub(super) runtime_policy_buffer: Content,
     /// Editable primary prompt buffer saved as the Markdown body.
     /// 保存为 Markdown 正文的可编辑主提示词缓冲区。
     pub(super) prompt_buffer: Content,
@@ -53,6 +68,13 @@ impl AgentProfileFormState {
                 .max_turns
                 .map(|value| value.to_string())
                 .unwrap_or_default(),
+            skill_ids_text: agent_profile::format_agent_profile_list_text(&profile.skill_ids),
+            native_tools_text: agent_profile::format_agent_profile_list_text(&profile.native_tools),
+            mcp_tools_text: agent_profile::format_agent_profile_list_text(&profile.mcp_tools),
+            tool_policy: profile.tool_policy.clone().unwrap_or_default(),
+            runtime_policy_buffer: Content::with_text(
+                &agent_profile::format_runtime_policy_request_text(profile.runtime_policy),
+            ),
             prompt_buffer: Content::with_text(&profile.prompt),
         }
     }
@@ -69,6 +91,11 @@ impl Default for AgentProfileFormState {
             model: String::new(),
             temperature_text: String::new(),
             max_turns_text: String::new(),
+            skill_ids_text: String::new(),
+            native_tools_text: String::new(),
+            mcp_tools_text: String::new(),
+            tool_policy: String::new(),
+            runtime_policy_buffer: Content::with_text(""),
             prompt_buffer: Content::with_text(""),
         }
     }

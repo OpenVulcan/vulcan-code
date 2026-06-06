@@ -16,7 +16,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeAccess;
-use crate::provider_config::{PersistedAiToolConfiguration, ProviderConfigurationFile};
+use crate::provider_config::ProviderConfigurationFile;
 use crate::tooling::CommandSessionRuntime;
 use std::sync::Arc;
 
@@ -29,9 +29,6 @@ pub(crate) struct RuntimePreparedLaunchInput {
     /// Optional LuaSkills runtime handle that remains available for later bootstrap steps.
     /// 供后续 bootstrap 步骤继续使用的可选 LuaSkills 运行时句柄。
     pub luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    /// API-native tool configuration captured for this launch.
-    /// 为本次启动捕获的 API 原生工具配置。
-    pub ai_tool_configuration: PersistedAiToolConfiguration,
     /// Original execution request owned by the current runtime launch.
     /// 归属于当前运行时启动流程的原始执行请求。
     pub request: ExecutionPreparationRequest,
@@ -45,13 +42,11 @@ impl RuntimePreparedLaunchInput {
     /// 根据一份已组装的准备资源打包对象与一份通过校验的执行准备构建一份启动准备输入。
     fn from_resources(
         resources: RuntimePreparationResources,
-        ai_tool_configuration: PersistedAiToolConfiguration,
         preparation: ExecutionPreparation,
     ) -> Self {
         Self {
             foundation: resources.foundation,
             luaskills_runtime: resources.luaskills_runtime,
-            ai_tool_configuration,
             request: resources.request,
             preparation,
         }
@@ -97,11 +92,8 @@ pub(crate) fn prepare_runtime_launch_input(
         }
     };
 
-    let ai_tool_configuration = resources.request.ai_tool_configuration.clone();
-
     Ok(RuntimePreparedLaunchInput::from_resources(
         resources,
-        ai_tool_configuration,
         preparation,
     ))
 }

@@ -122,7 +122,8 @@ fn build_runtime_prompt_assembly_input(
     let provider_prompt =
         load_provider_base_system_prompt_with_source(&preparation.model_blueprint)
             .unwrap_or_else(default_provider_base_system_prompt);
-    let agent_prompt = active_agent.and_then(build_agent_prompt_snapshot);
+    let agent_prompt = build_request_agent_prompt_override_snapshot(preparation)
+        .or_else(|| active_agent.and_then(build_agent_prompt_snapshot));
     let environment_context = EnvironmentContextSnapshot::new(format!(
         "Current workspace: {}\nCurrent execution mode: {}",
         preparation.workspace_path, preparation.execution_mode
@@ -135,7 +136,9 @@ fn build_runtime_prompt_assembly_input(
 
     PromptAssemblyInput {
         mode: match preparation.prompt_purpose {
-            ExecutionPromptPurpose::UserTurn => PromptAssemblyMode::Primary,
+            ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::DelegateCompletion => {
+                PromptAssemblyMode::Primary
+            }
             ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompaction,
         },
         model: ModelDescriptor {
@@ -179,7 +182,7 @@ fn build_runtime_prompt_assembly_input(
 /// 构建特殊提示词用途所需的开发者侧运行时指令。
 fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
     match purpose {
-        ExecutionPromptPurpose::UserTurn => Vec::new(),
+        ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::DelegateCompletion => Vec::new(),
         ExecutionPromptPurpose::ContextCompaction => {
             vec![build_context_compaction_developer_segment()]
         }
@@ -207,6 +210,21 @@ fn build_agent_prompt_snapshot(agent: &RuntimeAgentDefinition) -> Option<AgentPr
             "Runtime agent `{}` ({}) system prompt",
             agent.id, agent.name
         )),
+    )
+}
+
+/// Builds a request-scoped agent prompt override snapshot when one is present.
+/// 当请求携带代理提示词覆盖时构建请求级代理提示词快照。
+fn build_request_agent_prompt_override_snapshot(
+    preparation: &ExecutionPreparation,
+) -> Option<AgentPromptSnapshot> {
+    let text = preparation.agent_system_prompt_override.as_deref()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(
+        AgentPromptSnapshot::new(text.to_string())
+            .with_source_label("Request-scoped agent system prompt override"),
     )
 }
 
@@ -674,6 +692,26 @@ mod tests {
         );
     }
 
+    /// Verifies request-scoped agent prompt overrides enter the shared runtime prompt composer.
+    /// 验证请求级代理提示词覆盖会进入共享运行时提示词组合器。
+    #[test]
+    fn runtime_prompt_layers_use_request_scoped_agent_prompt_override() {
+        let mut preparation = build_test_preparation(
+            String::from("D:/missing"),
+            PersistedPromptConfiguration::default(),
+        );
+        preparation.agent_system_prompt_override =
+            Some(String::from("Task-specific reviewer instructions."));
+
+        let layers = build_runtime_prompt_layers_for_agent(&preparation, None);
+
+        assert!(
+            layers
+                .fallback_text
+                .contains("Task-specific reviewer instructions.")
+        );
+    }
+
     /// Verifies tool registration help reaches the runtime tool-guidance layer.
     /// 验证工具注册说明会进入运行时工具指导层。
     #[test]
@@ -780,9 +818,11 @@ mod tests {
             agent_id: String::from("default"),
             agent_name: String::from("Default"),
             agent_kind: String::from("Primary"),
+            agent_system_prompt_override: None,
             model_blueprint: sample_model_blueprint(),
             prompt_preview: String::new(),
             workspace_path,
+            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 0,
             execution_mode: String::from("Build"),

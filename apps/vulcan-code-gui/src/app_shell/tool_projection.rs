@@ -936,65 +936,7 @@ pub(super) fn merge_tool_display_metadata(
     tool_call_metadata: Option<Value>,
     tool_result_metadata: Option<Value>,
 ) -> Option<Value> {
-    match (tool_call_metadata, tool_result_metadata) {
-        (Some(Value::Object(mut tool_call_object)), Some(Value::Object(tool_result_object))) => {
-            let preferred_task_session_payload = match (
-                task_session_payload_execution_rank_from_metadata_object(&tool_call_object),
-                task_session_payload_execution_rank_from_metadata_object(&tool_result_object),
-            ) {
-                (Some(call_rank), Some(result_rank)) if call_rank > result_rank => {
-                    task_session_payload_from_metadata_object(&tool_call_object).cloned()
-                }
-                (Some(call_rank), Some(result_rank)) if result_rank > call_rank => {
-                    task_session_payload_from_metadata_object(&tool_result_object).cloned()
-                }
-                _ => None,
-            };
-            tool_call_object.extend(tool_result_object);
-            if let Some(preferred_payload) = preferred_task_session_payload {
-                tool_call_object.insert(
-                    String::from("kind"),
-                    Value::String(String::from("task_session")),
-                );
-                tool_call_object.insert(String::from("payload"), preferred_payload);
-            }
-            Some(Value::Object(tool_call_object))
-        }
-        (Some(metadata), None) => Some(metadata),
-        (None, Some(metadata)) => Some(metadata),
-        (Some(_), Some(metadata)) => Some(metadata),
-        (None, None) => None,
-    }
-}
-
-/// Returns the nested task-session payload stored inside one tool-display metadata object when available.
-/// 当存在时，返回单份工具显示元数据对象中嵌套保存的 task-session payload。
-pub(super) fn task_session_payload_from_metadata_object(
-    metadata: &serde_json::Map<String, Value>,
-) -> Option<&Value> {
-    metadata
-        .get("payload")
-        .filter(|payload| payload.is_object())
-}
-
-/// Returns one comparable execution-rank score for the task-session payload embedded in tool-display metadata.
-/// 返回工具显示元数据中嵌入的 task-session payload 的可比较执行阶段优先级分值。
-pub(super) fn task_session_payload_execution_rank_from_metadata_object(
-    metadata: &serde_json::Map<String, Value>,
-) -> Option<u8> {
-    let execution_status = task_session_payload_from_metadata_object(metadata)
-        .and_then(|payload| payload.get("execution_status"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(match execution_status {
-        "running" => 0,
-        "created" => 0,
-        "completed" => 2,
-        "stopped" => 2,
-        "failed" => 2,
-        _ => 1,
-    })
+    vulcan_workbench_model::merge_tool_display_metadata(tool_call_metadata, tool_result_metadata)
 }
 
 /// Returns the stable display state used by one human-facing tool execution card.
@@ -1128,16 +1070,6 @@ pub(super) fn parse_session_id_text(value: Option<&str>) -> Option<SessionId> {
     (!value.is_empty())
         .then_some(value)
         .and_then(|value| SessionId::parse_str(value).ok())
-}
-
-/// Builds one stable session record identifier from the canonical conversation record ordinal instead of the visible transcript window length.
-/// 基于规范会话记录序号而不是可见转录窗口长度，构建一条稳定的会话记录标识。
-pub(super) fn build_session_record_message_id(
-    session_id: SessionId,
-    created_at: &str,
-    conversation_record_ordinal: usize,
-) -> String {
-    format!("session-{session_id}-message-{created_at}-{conversation_record_ordinal}")
 }
 
 /// Routes one merged task-session metadata object through the shared subagent projection.

@@ -3,11 +3,13 @@
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
-use crate::agent_runtime::execution_models::ExecutionPreparation;
+use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
+use crate::agent_runtime::execution_preparation::{
+    filter_resolved_tool_definitions_by_tool_exposure, resolve_execution_tool_exposure,
+};
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::provider_config::PersistedAiToolConfiguration;
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -47,15 +49,19 @@ pub(crate) struct RuntimeBootstrapResources {
 pub(crate) fn resolve_runtime_bootstrap_resources(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    ai_tool_configuration: PersistedAiToolConfiguration,
+    request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
 ) -> RuntimeBootstrapResources {
-    let active_agent = foundation.active_agent_definition().cloned();
+    let active_agent = foundation
+        .agent_definition(&preparation.agent_id)
+        .or_else(|| foundation.active_agent_definition())
+        .cloned();
     let active_agent_tool_id = active_agent
         .as_ref()
         .map(|agent| agent.id.clone())
         .unwrap_or_else(|| preparation.agent_id.clone());
     let task_runtime = foundation.task_runtime();
+    let tool_exposure = resolve_execution_tool_exposure(foundation, &active_agent_tool_id, request);
     let tools_manager = build_vulcan_tools_manager(
         Arc::clone(&task_runtime),
         foundation.question_runtime(),
@@ -64,11 +70,11 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
         (!preparation.workspace_path.is_empty())
             .then(|| PathBuf::from(preparation.workspace_path.clone())),
         preparation.conversation_attachments.clone(),
-        foundation.resolved_native_tools_for_agent(&active_agent_tool_id),
-        foundation.resolved_luaskills_tools_for_agent(&active_agent_tool_id),
-        foundation.resolved_luaskills_dispatch_tools_for_agent(&active_agent_tool_id),
-        foundation.resolved_mcp_tools_for_agent(&active_agent_tool_id),
-        ai_tool_configuration,
+        tool_exposure.native_tool_ids.clone(),
+        tool_exposure.luaskills_tools.clone(),
+        tool_exposure.luaskills_dispatch_tools.clone(),
+        tool_exposure.mcp_tools.clone(),
+        tool_exposure.ai_tool_configuration.clone(),
         resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
         vulcan_prompt_skills::enabled_skill_names(&preparation.prompt_skills),
         preparation.prompt_skill_user_root.clone(),
@@ -79,8 +85,11 @@ pub(crate) fn resolve_runtime_bootstrap_resources(
     let mut resolved_tool_definitions = tools_manager
         .resolve_for_execution_mode(&preparation.execution_mode)
         .definitions;
-    let prompt_skill_tool_available = preparation.prompt_purpose
-        == crate::agent_runtime::execution_models::ExecutionPromptPurpose::UserTurn
+    filter_resolved_tool_definitions_by_tool_exposure(
+        &mut resolved_tool_definitions,
+        &tool_exposure,
+    );
+    let prompt_skill_tool_available = preparation.prompt_purpose.supports_user_turn_tooling()
         && vulcan_prompt_skills::render_prompt_skills_instructions(&preparation.prompt_skills)
             .is_some();
     if !prompt_skill_tool_available {

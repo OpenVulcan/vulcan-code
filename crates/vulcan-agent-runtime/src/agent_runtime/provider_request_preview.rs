@@ -472,6 +472,7 @@ mod tests {
             agent_id: String::from("main"),
             agent_name: String::from("Main Agent"),
             agent_kind: String::from("analysis"),
+            agent_system_prompt_override: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("anthropic"),
                 provider_name: String::from("Anthropic"),
@@ -506,6 +507,7 @@ mod tests {
             },
             prompt_preview: String::from("检查请求预览"),
             workspace_path: String::from(r"D:\openvulcan\vulcan-code"),
+            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 0,
             execution_mode: String::from("默认模式"),

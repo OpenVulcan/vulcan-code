@@ -9,6 +9,7 @@ use crate::runtime_assets;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
 /// Stable identifier of the default worker agent seeded into fresh configurations.
 /// 注入到新配置中的默认工作代理稳定标识。
@@ -271,6 +272,9 @@ pub struct RuntimeAgentDefinition {
     /// Optional max-turn override.
     /// 可选最大轮次数覆盖。
     pub max_turns: Option<u16>,
+    /// Optional task-session runtime feature overrides.
+    /// 可选的子代理运行时能力覆盖。
+    pub runtime_policy: ExecutionRuntimePolicyRequest,
 }
 
 /// Runtime-facing aggregate configuration consumed by the compose foundation.
@@ -572,6 +576,7 @@ fn default_worker_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.2),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -594,6 +599,7 @@ fn default_plan_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.1),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -616,6 +622,7 @@ fn default_explore_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.1),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -641,6 +648,7 @@ fn default_lua_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.15),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -666,6 +674,7 @@ fn default_memory_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.1),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -701,6 +710,7 @@ fn default_coordinator_agent() -> RuntimeAgentDefinition {
         model: None,
         temperature: Some(0.15),
         max_turns: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -719,6 +729,13 @@ fn runtime_agent_from_user_profile(profile: &UserAgentProfile) -> RuntimeAgentDe
     definition.model = profile.model.clone();
     definition.temperature = profile.temperature.or(definition.temperature);
     definition.max_turns = profile.max_turns.or(definition.max_turns);
+    definition.skill_ids = profile.skill_ids.clone();
+    definition.native_tools = profile.native_tools.clone();
+    definition.mcp_tools = profile.mcp_tools.clone();
+    if profile.tool_policy.is_some() {
+        definition.tool_policy = profile.tool_policy.clone();
+    }
+    definition.runtime_policy = profile.runtime_policy;
     definition
 }
 
@@ -759,8 +776,9 @@ mod tests {
         ANALYSIS_SAFE_TOOL_POLICY_ID, AgentRuntimeConfig, DEFAULT_SAFE_TOOL_POLICY_ID,
         EXPLORE_AGENT_ID, LUA_SAFE_TOOL_POLICY_ID, PLAN_AGENT_ID, ensure_runtime_defaults,
     };
-    use crate::agent_profile::AgentProfileCatalog;
+    use crate::agent_profile::{AgentProfileCatalog, UserAgentProfile};
     use crate::provider_config::{PersistedToolPolicyEntry, ProviderConfigurationFile};
+    use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
     /// Verifies that the runtime seed always exposes the first-class plan and explore agents.
     /// 验证运行时种子始终会暴露一等的 plan 与 explore 代理。
@@ -796,6 +814,54 @@ mod tests {
             AgentRuntimeConfig::from_sources(&ProviderConfigurationFile::default(), &catalog);
 
         assert_eq!(runtime_config.active_agent_id, PLAN_AGENT_ID);
+    }
+
+    /// Verifies user-authored profiles project advanced tool and runtime-policy fields into runtime agents.
+    /// 验证用户自定义配置会将高级工具与运行时策略字段投影到运行时代理。
+    #[test]
+    fn runtime_config_projects_user_profile_advanced_overrides() {
+        let mut catalog = AgentProfileCatalog::default();
+        catalog.agents.insert(
+            String::from("agent-review"),
+            UserAgentProfile {
+                id: String::from("agent-review"),
+                name: String::from("Review Agent"),
+                description: String::from("Reviews code"),
+                prompt: String::from("Review carefully."),
+                model: Some(String::from("deepseek/deepseek-chat")),
+                temperature: Some(0.3),
+                max_turns: Some(8),
+                skill_ids: vec![String::from("regular.review")],
+                native_tools: vec![String::from("shell_command")],
+                mcp_tools: vec![String::from("server.tool")],
+                tool_policy: Some(String::from("analysis-safe")),
+                runtime_policy: ExecutionRuntimePolicyRequest {
+                    hooks_enabled: Some(true),
+                    vmm_enabled: None,
+                    memory_recall_enabled: Some(true),
+                    memory_writeback_enabled: None,
+                    search_projection_enabled: Some(true),
+                    database_projection_enabled: Some(true),
+                },
+            },
+        );
+
+        let runtime_config =
+            AgentRuntimeConfig::from_sources(&ProviderConfigurationFile::default(), &catalog);
+        let agent = runtime_config
+            .agents
+            .iter()
+            .find(|agent| agent.id == "agent-review")
+            .expect("user agent should project");
+
+        assert_eq!(agent.skill_ids, vec![String::from("regular.review")]);
+        assert_eq!(agent.native_tools, vec![String::from("shell_command")]);
+        assert_eq!(agent.mcp_tools, vec![String::from("server.tool")]);
+        assert_eq!(agent.tool_policy.as_deref(), Some("analysis-safe"));
+        assert_eq!(agent.runtime_policy.hooks_enabled, Some(true));
+        assert_eq!(agent.runtime_policy.memory_recall_enabled, Some(true));
+        assert_eq!(agent.runtime_policy.search_projection_enabled, Some(true));
+        assert_eq!(agent.runtime_policy.database_projection_enabled, Some(true));
     }
 
     /// Verifies that runtime projection injects reserved tool-policy defaults in memory when the persisted configuration omits them.

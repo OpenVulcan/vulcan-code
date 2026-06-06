@@ -727,6 +727,9 @@ interface ConversationBlock {
   // Optional command-session identifier for command-like tool rows.
   // 命令类工具行使用的可选命令会话标识。
   commandSessionId?: string;
+  // Optional child task-session identifier for routed subagent review.
+  // 用于路由子代理复看的可选子任务会话标识。
+  taskSessionId?: string;
   // Optional raw metadata used for generated media and future plugin-specific renderers.
   // 可选原始元数据，用于生成媒体与未来插件专属渲染器。
   rawMetadata?: unknown;
@@ -1787,6 +1790,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedConversationIdRef lets async submit completions avoid stealing focus after the user switches sessions.
   // selectedConversationIdRef 让异步提交完成时避免在用户已切换会话后抢回焦点。
   const selectedConversationIdRef = React.useRef<string | null>(selectedConversationId);
+  // subagentNavigationRequestSeqRef rejects stale async subagent route responses after a newer click.
+  // subagentNavigationRequestSeqRef 在发生更新点击后丢弃过期的异步子代理路由响应。
+  const subagentNavigationRequestSeqRef = React.useRef(0);
+  // subagentRoutePreferenceRef stores the last user-selected subagent display route for WebUI-only routing.
+  // subagentRoutePreferenceRef 保存用户最后选择的子代理显示路由，仅用于 WebUI 显示路由。
+  const subagentRoutePreferenceRef = React.useRef<SubagentRoutePreference | null>(null);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
@@ -2138,6 +2147,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleInsertPendingPrompt routes one queued prompt through the shared backend queue router.
   // handleInsertPendingPrompt 通过共享后端队列路由引导单条排队提示词。
   const handleInsertPendingPrompt = React.useCallback(async (entryId: string): Promise<void> => {
+    webuiClickTrace("pending_prompt.insert.invoke", { entryId });
     try {
       const snapshot = await insertPendingPrompt(entryId);
       if (snapshot) {
@@ -2151,6 +2161,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleStopConversationRun stops the active backend conversation stream.
   // handleStopConversationRun 停止当前活跃的后端会话流。
   const handleStopConversationRun = React.useCallback(async (): Promise<boolean> => {
+    webuiClickTrace("conversation.stop.invoke");
     try {
       const snapshot = await stopConversationRun();
       if (snapshot) {
@@ -2163,27 +2174,78 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, []);
 
-  // handleOpenSubagentPanel asks the backend to display one child task surface.
-  // handleOpenSubagentPanel 请求后端显示单个子任务界面。
-  const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
+  // handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
+  // handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
+  const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
+    const requestSeq = subagentNavigationRequestSeqRef.current + 1;
+    subagentNavigationRequestSeqRef.current = requestSeq;
+    subagentRoutePreferenceRef.current = { parentConversationId, taskId };
+    webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq });
+    setWorkbenchState((current) => openSubagentSurfaceForConversation(current, parentConversationId, taskId));
     try {
       const snapshot = await openSubagentPanel(parentConversationId, taskId);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        if (subagentNavigationRequestSeqRef.current !== requestSeq) {
+          webuiClickTrace("subagent.open.stale_result", {
+            parentConversationId,
+            taskId,
+            requestSeq,
+            latestRequestSeq: subagentNavigationRequestSeqRef.current,
+          });
+          return true;
+        }
+        setWorkbenchState((current) => applySubagentRoutePreference(
+          mergeWorkbenchSnapshot(current, snapshot),
+          subagentRoutePreferenceRef.current,
+        ));
         setHydratedConversationIds((current) => new Set(current).add(snapshot.subagentNavigation?.activeConversationId ?? taskId));
       }
+      webuiClickTrace("subagent.open.result", {
+        parentConversationId,
+        taskId,
+        requestSeq,
+        opened: Boolean(snapshot),
+        activeConversationId: snapshot?.subagentNavigation?.activeConversationId ?? null,
+        activeTaskId: snapshot?.subagentNavigation?.activeTaskId ?? null,
+      });
+      return Boolean(snapshot);
     } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      const message = nextError instanceof Error ? nextError.message : String(nextError);
+      webuiClickTrace("subagent.open.error", { parentConversationId, taskId, message });
+      if (message.includes("不可恢复") || message.includes("没有找到可打开的子代理任务")) {
+        return false;
+      }
+      toast.error(message);
+      return false;
     }
   }, []);
 
   // handleCloseSubagentPanel asks the backend to return to the parent conversation surface.
   // handleCloseSubagentPanel 请求后端返回父会话界面。
   const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
+    const parentConversationId = selectedConversationIdRef.current;
+    const requestSeq = subagentNavigationRequestSeqRef.current + 1;
+    subagentNavigationRequestSeqRef.current = requestSeq;
+    if (parentConversationId) {
+      subagentRoutePreferenceRef.current = { parentConversationId, taskId: null };
+      setWorkbenchState((current) => closeSubagentSurfaceForConversation(current, parentConversationId));
+    }
+    webuiClickTrace("subagent.close.invoke", { parentConversationId, requestSeq });
     try {
       const snapshot = await closeSubagentPanel();
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        if (subagentNavigationRequestSeqRef.current !== requestSeq) {
+          webuiClickTrace("subagent.close.stale_result", {
+            parentConversationId,
+            requestSeq,
+            latestRequestSeq: subagentNavigationRequestSeqRef.current,
+          });
+          return;
+        }
+        setWorkbenchState((current) => applySubagentRoutePreference(
+          mergeWorkbenchSnapshot(current, snapshot),
+          subagentRoutePreferenceRef.current,
+        ));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2193,6 +2255,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleStopSubagentTask asks the backend to stop one running child task.
   // handleStopSubagentTask 请求后端停止单个运行中的子任务。
   const handleStopSubagentTask = React.useCallback(async (parentConversationId: string, taskId: string): Promise<void> => {
+    webuiClickTrace("subagent.stop.invoke", { parentConversationId, taskId });
     try {
       const snapshot = await stopSubagentTask(parentConversationId, taskId);
       if (snapshot) {
@@ -2332,8 +2395,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleSelectConversation selects a conversation and persists its read marker.
   // handleSelectConversation 选择会话并持久化它的已读标记。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
+    subagentNavigationRequestSeqRef.current += 1;
+    subagentRoutePreferenceRef.current = { parentConversationId: conversationId, taskId: null };
     setSelectedConversationId(conversationId);
-    setWorkbenchState((current) => markConversationLocallyRead(current, conversationId));
+    setWorkbenchState((current) => closeSubagentSurfaceForConversation(
+      markConversationLocallyRead(current, conversationId),
+      conversationId,
+    ));
     void selectConversation(conversationId)
       .then((snapshot) => {
         if (snapshot) {
@@ -2416,7 +2484,10 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   }, [draftConversation?.id]);
 
   React.useEffect(() => {
-    setWorkbenchState((current) => mergeWorkbenchSnapshot(current, props.workbench));
+    setWorkbenchState((current) => applySubagentRoutePreference(
+      mergeWorkbenchSnapshot(current, props.workbench),
+      subagentRoutePreferenceRef.current,
+    ));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
     setSelectedConversationId((current) => {
       if (current && current === draftConversationIdRef.current) {
@@ -2724,6 +2795,17 @@ function GitHubMark() {
   );
 }
 
+// SubagentRoutePreference describes the WebUI-only visible route selected by the user.
+// SubagentRoutePreference 描述用户选择的仅 WebUI 可见子代理路由。
+interface SubagentRoutePreference {
+  // Parent conversation that owns the displayed subagent navigation.
+  // 拥有所显示子代理导航的父会话。
+  parentConversationId: string;
+  // Child task id to display, or null when the parent conversation is displayed.
+  // 要显示的子任务标识；为 null 时显示父会话。
+  taskId: string | null;
+}
+
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
 // mergeWorkbenchSnapshot 合并后端工作台更新且不丢弃已懒加载的会话正文。
 function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchSnapshot): WorkbenchSnapshot {
@@ -2738,6 +2820,67 @@ function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchS
     selectedConversationId,
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...incoming.messages],
+  };
+}
+
+// applySubagentRoutePreference keeps late backend snapshots from overriding the user's latest WebUI route choice.
+// applySubagentRoutePreference 防止迟到的后端快照覆盖用户最后选择的 WebUI 路由。
+function applySubagentRoutePreference(workbench: WorkbenchSnapshot, preference: SubagentRoutePreference | null): WorkbenchSnapshot {
+  if (!preference || workbench.subagentNavigation?.parentConversationId !== preference.parentConversationId) {
+    return workbench;
+  }
+  if (!preference.taskId) {
+    return closeSubagentSurfaceForConversation(workbench, preference.parentConversationId);
+  }
+  return openSubagentSurfaceForConversation(workbench, preference.parentConversationId, preference.taskId);
+}
+
+// openSubagentSurfaceForConversation switches a known child task into view without changing backend execution state.
+// openSubagentSurfaceForConversation 在不改变后端执行状态的情况下将已知子任务切入视图。
+function openSubagentSurfaceForConversation(
+  workbench: WorkbenchSnapshot,
+  parentConversationId: string,
+  taskId: string,
+): WorkbenchSnapshot {
+  const navigation = workbench.subagentNavigation;
+  if (!navigation || navigation.parentConversationId !== parentConversationId) {
+    return workbench;
+  }
+  if (!navigation.tasks?.some((task) => task.taskId === taskId)) {
+    return workbench;
+  }
+  return {
+    ...workbench,
+    subagentNavigation: {
+      ...navigation,
+      activeConversationId: taskId,
+      activeTaskId: taskId,
+      tasks: navigation.tasks.map((task) => ({ ...task, isActive: task.taskId === taskId })),
+    },
+  };
+}
+
+// closeSubagentSurfaceForConversation returns the visible route to the selected parent conversation while preserving its task list.
+// closeSubagentSurfaceForConversation 将可见路由返回到选中的父会话，同时保留该父会话的子任务列表。
+function closeSubagentSurfaceForConversation(workbench: WorkbenchSnapshot, conversationId: string): WorkbenchSnapshot {
+  const navigation = workbench.subagentNavigation;
+  if (!navigation) {
+    return workbench;
+  }
+  if (navigation.parentConversationId !== conversationId) {
+    return {
+      ...workbench,
+      subagentNavigation: null,
+    };
+  }
+  return {
+    ...workbench,
+    subagentNavigation: {
+      ...navigation,
+      activeConversationId: conversationId,
+      activeTaskId: null,
+      tasks: navigation.tasks?.map((task) => ({ ...task, isActive: false })),
+    },
   };
 }
 
@@ -3222,6 +3365,21 @@ const markdownPlugins = [remarkGfm];
 // markdownSanitizers 保存用于不可信转录内容的 HTML 清理管线。
 const markdownSanitizers = [rehypeSanitize];
 
+// webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
+// webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
+function webuiClickTrace(action: string, detail: Record<string, unknown> = {}): void {
+  try {
+    console.debug("[webui][click]", {
+      timestamp: new Date().toISOString(),
+      action,
+      ...detail,
+    });
+  } catch {
+    // Ignore console failures from restricted WebView contexts.
+    // 忽略受限 WebView 环境中的控制台失败。
+  }
+}
+
 // directiveKinds maps Vulcan directive names to WebUI conversation block kinds.
 // directiveKinds 将 Vulcan 指令名称映射为 WebUI 会话块类型。
 const directiveKinds: Record<string, ConversationBlockKind> = {
@@ -3460,11 +3618,22 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "payload.command_session_id",
     "payload.commandSessionId",
   ]);
+  const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
+  const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
+      "payload.execution_status",
+      "payload.executionStatus",
+      "host_result.payload.execution_status",
+      "hostResult.payload.executionStatus",
+    ]) : null;
   const explicitStatus = metadataString(message.metadata, [
       "tool_display_state",
       "toolDisplayState",
       "display_state",
       "displayState",
+      "payload.execution_status",
+      "payload.executionStatus",
+      "host_result.payload.execution_status",
+      "hostResult.payload.executionStatus",
       "status",
       "state",
       "payload.status",
@@ -3473,11 +3642,12 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     ]);
   const hasReturnedToolPayload = message.recordKind === "tool-result-output"
     && toolMetadataContainsReturnPayload(message.metadata, message.body);
-  const status = hasReturnedToolPayload
+  const fallbackStatus = hasReturnedToolPayload
     ? "completed"
     : explicitStatus
       ?? metadataToolFailureStatus(message.metadata)
       ?? turnStatsStatus(message.metadata);
+  const status = taskSessionStatus ?? fallbackStatus;
   const summary = turnStatsSummary(message.metadata);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
@@ -3485,9 +3655,23 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
   if (toolCallId) attributes.tool_call_id = toolCallId;
   if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
+  if (taskSessionId) attributes.task_session_id = taskSessionId;
   if (status) attributes.status = status;
   if (summary) attributes.summary = summary;
   return attributes;
+}
+
+// taskSessionIdFromToolMetadata extracts the routed child task-session id from host task metadata.
+// taskSessionIdFromToolMetadata 从宿主 task 元数据中提取路由用的子任务会话标识。
+function taskSessionIdFromToolMetadata(metadata: unknown): string | null {
+  return metadataString(metadata, [
+    "payload.task_session_id",
+    "payload.taskSessionId",
+    "host_result.payload.task_session_id",
+    "hostResult.payload.taskSessionId",
+    "task_session_id",
+    "taskSessionId",
+  ]);
 }
 
 // metadataString reads a dotted path string from unknown JSON metadata.
@@ -3872,6 +4056,7 @@ function conversationSpecialBlock(
     toolCallId: attributes.tool_call_id,
     toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
+    taskSessionId: attributes.task_session_id,
     rawMetadata,
     mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,
   };
@@ -3889,6 +4074,9 @@ function normalizeToolDisplayState(status?: string | null): string | undefined {
   }
   if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded" || normalized === "ready") {
     return "completed";
+  }
+  if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted") {
+    return "stopped";
   }
   if (normalized === "running" || normalized === "pending" || normalized === "preview" || normalized === "in_progress") {
     return "running";
@@ -4148,7 +4336,7 @@ function ConsoleShell(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   onCloseSubagentPanel: () => Promise<void>;
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
@@ -4464,7 +4652,7 @@ function ConsoleShellContent(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   onCloseSubagentPanel: () => Promise<void>;
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
@@ -4616,7 +4804,7 @@ function ConsoleHeader(props: {
   subagentNavigation?: WorkbenchSnapshot["subagentNavigation"];
   onToggleLeftPanel: () => void;
   onToggleRightPanel: () => void;
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   onCloseSubagentPanel: () => Promise<void>;
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
 }) {
@@ -4715,7 +4903,7 @@ function WorkspaceResizableBody(props: {
   onStopConversationRun: () => Promise<boolean>;
   // Opens one backend-routed subagent surface.
   // 打开单个由后端路由的子代理界面。
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   // Closes the backend-routed subagent surface.
   // 关闭由后端路由的子代理界面。
   onCloseSubagentPanel: () => Promise<void>;
@@ -6344,7 +6532,7 @@ function ChatArea(props: {
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
   onStopConversationRun: () => Promise<boolean>;
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   onCloseSubagentPanel: () => Promise<void>;
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
@@ -6374,7 +6562,9 @@ function ChatArea(props: {
   // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
   const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
-  const subagentNavigation = props.workbench.subagentNavigation ?? null;
+  const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
+    ? props.workbench.subagentNavigation
+    : null;
   const activeSurfaceConversationId = subagentNavigation?.activeConversationId ?? props.selectedConversationId;
   const activeSubagentTask = subagentNavigation?.tasks?.find((task) => task.isActive) ?? null;
   const surfaceConversation = activeSubagentTask
@@ -6588,7 +6778,9 @@ function ChatArea(props: {
             hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
             messages={messages}
             error={props.conversationLoadError}
+            parentConversationId={activeSurfaceConversationId ?? null}
             onScrollStateChange={updateConversationBottomState}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
             scrollRef={workspaceRef}
             suppressEmptyPlaceholder={isEmptyConversation}
           />
@@ -6636,7 +6828,7 @@ function ChatArea(props: {
 // SubagentNavigationMenu 从会话标题栏渲染由后端投影的子代理切换器。
 function SubagentNavigationMenu(props: {
   navigation: WorkbenchSnapshot["subagentNavigation"];
-  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<void>;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   onCloseSubagentPanel: () => Promise<void>;
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
 }) {
@@ -6661,7 +6853,14 @@ function SubagentNavigationMenu(props: {
       <nav className="subagent-title-flyout" aria-label="子代理调度切换">
         <Button
           className={cn("subagent-title-row", !activeTaskId && "active")}
-          onClick={() => void props.onCloseSubagentPanel()}
+          onClick={() => {
+            webuiClickTrace("subagent.menu.main", {
+              parentConversationId: navigation.parentConversationId,
+              activeTaskId,
+              runningCount,
+            });
+            void props.onCloseSubagentPanel();
+          }}
           size="sm"
           type="button"
           variant="ghost"
@@ -6673,7 +6872,15 @@ function SubagentNavigationMenu(props: {
           <div className={cn("subagent-title-row-group", task.isActive && "active")} key={task.taskId}>
             <Button
               className="subagent-title-row"
-              onClick={() => void props.onOpenSubagentPanel(navigation.parentConversationId, task.taskId)}
+              onClick={() => {
+                webuiClickTrace("subagent.menu.open_task", {
+                  parentConversationId: navigation.parentConversationId,
+                  taskId: task.taskId,
+                  runState: task.runState,
+                  isRunning: task.isRunning,
+                });
+                void props.onOpenSubagentPanel(navigation.parentConversationId, task.taskId);
+              }}
               size="sm"
               type="button"
               variant="ghost"
@@ -6686,7 +6893,14 @@ function SubagentNavigationMenu(props: {
               <Button
                 aria-label={`停止子代理 ${task.label}`}
                 className="subagent-title-stop"
-                onClick={() => void props.onStopSubagentTask(navigation.parentConversationId, task.taskId)}
+                onClick={() => {
+                  webuiClickTrace("subagent.menu.stop_task", {
+                    parentConversationId: navigation.parentConversationId,
+                    taskId: task.taskId,
+                    runState: task.runState,
+                  });
+                  void props.onStopSubagentTask(navigation.parentConversationId, task.taskId);
+                }}
                 size="icon"
                 type="button"
                 variant="ghost"
@@ -6724,7 +6938,9 @@ function ConversationWorkspace(props: {
   hiddenThinkingBlockId: string | null;
   messages: ConversationMessage[];
   error: string | null;
+  parentConversationId: string | null;
   onScrollStateChange: () => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   scrollRef: React.RefObject<HTMLElement | null>;
   suppressEmptyPlaceholder?: boolean;
 }) {
@@ -6761,9 +6977,11 @@ function ConversationWorkspace(props: {
             key={item.id}
             autoExpandThinkingBlockId={autoExpandThinkingBlockId}
             hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+            parentConversationId={props.parentConversationId}
             sessionRunning={sessionRunning}
             onOpenDetail={setDetail}
             onOpenMedia={setMediaPlayer}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
           />
         ))}
       </div>
@@ -6787,9 +7005,11 @@ function ConversationRenderItemView(props: {
   item: ConversationRenderItem;
   autoExpandThinkingBlockId: string | null;
   hiddenThinkingBlockId: string | null;
+  parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   const userBody = React.useMemo(
     () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
@@ -6831,9 +7051,11 @@ function ConversationRenderItemView(props: {
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
+          parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
         />
       </div>
     </article>
@@ -6853,17 +7075,21 @@ function stripUserPromptHeading(body: string): string {
 function ConversationBlocksView(props: {
   autoExpandThinkingBlockId: string | null;
   blocks: ConversationBlock[];
+  parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   if (props.blocks.length > 1 && props.blocks.every(isMergeableToolBlock)) {
     return (
       <ToolExecutionBlock
         blocks={props.blocks}
+        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
+        onOpenSubagentPanel={props.onOpenSubagentPanel}
       />
     );
   }
@@ -6879,9 +7105,11 @@ function ConversationBlocksView(props: {
     <SpecialConversationBlock
       autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
+      parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
       onOpenMedia={props.onOpenMedia}
+      onOpenSubagentPanel={props.onOpenSubagentPanel}
     />
   );
 }
@@ -6953,9 +7181,11 @@ function MarkdownMessage(props: {
 function SpecialConversationBlock(props: {
   autoExpandThinkingBlockId: string | null;
   block: ConversationBlock;
+  parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   if (props.block.kind === "turn-stats") {
     return <TurnStatsBlock block={props.block} />;
@@ -6965,9 +7195,11 @@ function SpecialConversationBlock(props: {
     return (
       <ToolExecutionBlock
         blocks={[props.block]}
+        parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
+        onOpenSubagentPanel={props.onOpenSubagentPanel}
       />
     );
   }
@@ -7083,14 +7315,16 @@ function ThinkingBlock(props: {
 // ToolExecutionBlock 渲染单条紧凑的合并工具执行行。
 function ToolExecutionBlock(props: {
   blocks: ConversationBlock[];
+  parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   const callBlock = props.blocks.find((block) => block.kind === "tool-call");
   const resultBlock = props.blocks.find((block) => block.kind === "tool-result");
   const commandBlock = props.blocks.find((block) => block.kind === "command");
-  const primaryBlock = resultBlock ?? commandBlock ?? callBlock ?? props.blocks[0];
+  const primaryBlock = preferredTaskSessionDisplayBlock(props.blocks) ?? resultBlock ?? commandBlock ?? callBlock ?? props.blocks[0];
   if (!primaryBlock) {
     return null;
   }
@@ -7099,6 +7333,7 @@ function ToolExecutionBlock(props: {
   const toolName = toolExecutionName(props.blocks);
   const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
+  const taskSessionId = props.blocks.find((block) => block.taskSessionId)?.taskSessionId ?? null;
   const detailBody = props.blocks
     .map((block) => `## ${blockTitle(block.kind, block.toolName)}\n\n${block.body}`)
     .join("\n\n---\n\n");
@@ -7109,13 +7344,46 @@ function ToolExecutionBlock(props: {
     ...(resultBlock ? [["结果", "已返回"] as [string, string]] : []),
   ];
 
-  const openDetail = () => props.onOpenDetail({
-    title: summary,
-    kind: primaryBlock.kind,
-    body: detailBody,
-    metadata,
-    mediaAttachments,
-  });
+  const openFallbackDetail = () => {
+    webuiClickTrace("tool.open_fallback_detail", {
+      toolName,
+      displayState,
+      primaryKind: primaryBlock.kind,
+      taskSessionId,
+      blockKinds: props.blocks.map((block) => block.kind),
+    });
+    props.onOpenDetail({
+      title: summary,
+      kind: primaryBlock.kind,
+      body: detailBody,
+      metadata,
+      mediaAttachments,
+    });
+  };
+  const openDetail = () => {
+    webuiClickTrace("tool.open", {
+      toolName,
+      displayState,
+      taskSessionId,
+      parentConversationId: props.parentConversationId,
+      blockKinds: props.blocks.map((block) => block.kind),
+    });
+    if (props.parentConversationId && taskSessionId) {
+      void props.onOpenSubagentPanel(props.parentConversationId, taskSessionId).then((opened) => {
+        webuiClickTrace("tool.open_subagent_result", {
+          toolName,
+          taskSessionId,
+          opened,
+          parentConversationId: props.parentConversationId,
+        });
+        if (!opened) {
+          openFallbackDetail();
+        }
+      });
+      return;
+    }
+    openFallbackDetail();
+  };
 
   return (
     <div className="tool-execution-stack">
@@ -7184,9 +7452,51 @@ function toolExecutionName(blocks: ConversationBlock[]): string | null {
   return null;
 }
 
+// preferredTaskSessionDisplayBlock keeps routed task-session rows anchored to the newest terminal metadata.
+// preferredTaskSessionDisplayBlock 让已路由 task-session 行优先使用最新终态元数据作为展示锚点。
+function preferredTaskSessionDisplayBlock(blocks: ConversationBlock[]): ConversationBlock | null {
+  const taskBlocks = blocks.filter((block) => block.taskSessionId);
+  if (!taskBlocks.length) {
+    return null;
+  }
+  return taskBlocks.find((block) => {
+    const state = normalizeToolDisplayState(block.status);
+    return state === "failed" || state === "stopped" || state === "completed";
+  }) ?? taskBlocks.find((block) => block.kind === "tool-call") ?? taskBlocks[0] ?? null;
+}
+
+// taskSessionExecutionDisplayState resolves the visible state for routed task-session rows from explicit task metadata.
+// taskSessionExecutionDisplayState 从显式 task 元数据解析已路由 task-session 行的可见状态。
+function taskSessionExecutionDisplayState(blocks: ConversationBlock[]): "failed" | "completed" | "running" | "stopped" | null {
+  const taskBlocks = blocks.filter((block) => block.taskSessionId);
+  if (!taskBlocks.length) {
+    return null;
+  }
+  const states = taskBlocks
+    .map((block) => normalizeToolDisplayState(block.status))
+    .filter((state): state is string => Boolean(state));
+  if (states.includes("failed")) {
+    return "failed";
+  }
+  if (states.includes("stopped")) {
+    return "stopped";
+  }
+  if (states.includes("completed")) {
+    return "completed";
+  }
+  if (states.includes("running")) {
+    return "running";
+  }
+  return null;
+}
+
 // toolExecutionDisplayState resolves the stable compact display state for one tool execution row.
 // toolExecutionDisplayState 解析单条工具执行行使用的稳定紧凑显示状态。
 function toolExecutionDisplayState(blocks: ConversationBlock[], sessionRunning: boolean): "failed" | "completed" | "running" | "stopped" {
+  const taskSessionState = taskSessionExecutionDisplayState(blocks);
+  if (taskSessionState) {
+    return taskSessionState;
+  }
   if (blocks.some((block) => block.kind === "tool-result" && toolMetadataContainsReturnPayload(block.rawMetadata, block.body))) {
     return "completed";
   }
@@ -8599,6 +8909,12 @@ function ComposerPanel(props: {
   const handleComposerSend = React.useCallback(async () => {
     const prompt = draftInput.trim();
     const hasSubmittableContent = Boolean(prompt || attachments.length > 0);
+    webuiClickTrace("composer.send_or_stop", {
+      isConversationRunning: props.isConversationRunning,
+      hasSubmittableContent,
+      promptChars: prompt.length,
+      attachmentCount: attachments.length,
+    });
     if (props.isConversationRunning && !hasSubmittableContent) {
       const stopped = await props.onStopConversationRun();
       if (!stopped) {
@@ -8644,15 +8960,21 @@ function ComposerPanel(props: {
   // handleComposerStop stops the active backend conversation without consuming draft text.
   // handleComposerStop 在不消费草稿文本的前提下停止活跃后端会话。
   const handleComposerStop = React.useCallback(async () => {
+    webuiClickTrace("composer.stop", {
+      isConversationRunning: props.isConversationRunning,
+      draftChars: draftInput.trim().length,
+      attachmentCount: attachments.length,
+    });
     const stopped = await props.onStopConversationRun();
     if (!stopped) {
       toast.error("停止当前会话失败。");
     }
-  }, [props]);
+  }, [attachments.length, draftInput, props]);
 
   // handlePendingPromptEdit restores one queued prompt into the composer draft.
   // handlePendingPromptEdit 将单条排队提示词恢复到输入区草稿。
   const handlePendingPromptEdit = React.useCallback(async (entryId: string) => {
+    webuiClickTrace("pending_prompt.edit", { entryId });
     const entry = await props.onEditPendingPrompt(entryId);
     if (!entry) {
       return;
@@ -9137,7 +9459,13 @@ function PendingPromptQueueRow(props: {
               className={cn("pending-prompt-guide-button", props.entry.state === "inserted" && "inserted")}
               aria-label={props.entry.state === "inserted" ? "已引导待发送提示词" : "引导待发送提示词"}
               disabled={props.entry.state === "inserted"}
-              onClick={() => props.onInsert(props.entry.id)}
+          onClick={() => {
+            webuiClickTrace("pending_prompt.row.insert", {
+              entryId: props.entry.id,
+              state: props.entry.state,
+            });
+            props.onInsert(props.entry.id);
+          }}
               size="xs"
               type="button"
               variant="ghost"
@@ -9152,7 +9480,10 @@ function PendingPromptQueueRow(props: {
           <>
             <Button
               aria-label="删除待发送提示词"
-              onClick={() => props.onRemove(props.entry.id)}
+              onClick={() => {
+                webuiClickTrace("pending_prompt.row.remove", { entryId: props.entry.id });
+                props.onRemove(props.entry.id);
+              }}
               size="icon-sm"
               type="button"
               variant="ghost"
@@ -9161,7 +9492,10 @@ function PendingPromptQueueRow(props: {
             </Button>
             <Button
               aria-label="编辑待发送提示词"
-              onClick={() => props.onEdit(props.entry.id)}
+              onClick={() => {
+                webuiClickTrace("pending_prompt.row.edit", { entryId: props.entry.id });
+                props.onEdit(props.entry.id);
+              }}
               size="icon-sm"
               type="button"
               variant="ghost"

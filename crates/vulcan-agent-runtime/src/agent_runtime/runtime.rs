@@ -20,11 +20,14 @@ use crate::mcp::{
 use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
+use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use vulcan_luaskills_prompt::{
     LuaSkillPromptEntry, render_luaskill_argument_summary, render_luaskill_schema_markdown,
 };
+use vulcan_session_core::{PromptSkillSnapshot, ProviderModelSnapshot, ToolExposureSnapshot};
+use vulcan_task_session::SubagentProfile;
 
 /// High-level runtime summary exposed to UI placeholder surfaces.
 /// 暴露给 UI 占位面板的高层运行时摘要。
@@ -211,6 +214,15 @@ impl RuntimeFoundation {
                 },
                 None => (Vec::new(), Vec::new(), Vec::new()),
             };
+        let subagent_profiles = build_task_runtime_subagent_profiles(
+            &runtime_config,
+            &native_tools,
+            &mcp_runtime_access,
+            &mut warnings,
+        );
+        if let Err(error) = task_runtime.configure_subagent_profiles(subagent_profiles) {
+            warnings.push(format!("同步子代理 profile 到 TaskRuntime 失败：{error}"));
+        }
 
         Self {
             config: runtime_config,
@@ -367,10 +379,16 @@ impl RuntimeFoundation {
     /// Returns the runtime definition of the currently active agent.
     /// 返回当前激活代理的运行时定义。
     pub fn active_agent_definition(&self) -> Option<&RuntimeAgentDefinition> {
+        self.agent_definition(&self.config.active_agent_id)
+    }
+
+    /// Returns the runtime definition for one agent identifier.
+    /// 返回指定代理标识对应的运行时定义。
+    pub fn agent_definition(&self, agent_id: &str) -> Option<&RuntimeAgentDefinition> {
         self.config
             .agents
             .iter()
-            .find(|definition| definition.id == self.config.active_agent_id)
+            .find(|definition| definition.id == agent_id)
     }
 
     /// Returns whether one agent identifier has already been built into the runtime foundation.
@@ -520,6 +538,151 @@ impl RuntimeFoundation {
     }
 }
 
+/// Builds TaskRuntime subagent profiles from the already-resolved runtime foundation configuration.
+/// 从已解析的运行时基础架构配置构建 TaskRuntime 子代理配置快照。
+fn build_task_runtime_subagent_profiles(
+    runtime_config: &AgentRuntimeConfig,
+    native_tools: &NativeToolCatalog,
+    mcp_runtime_access: &McpRuntimeAccess,
+    warnings: &mut Vec<String>,
+) -> Vec<SubagentProfile> {
+    let available_native_tool_ids = native_tools
+        .descriptors
+        .iter()
+        .map(|descriptor| descriptor.id.clone())
+        .collect::<BTreeSet<_>>();
+    runtime_config
+        .agents
+        .iter()
+        .map(|definition| {
+            runtime_agent_definition_to_subagent_profile(
+                definition,
+                runtime_config,
+                &available_native_tool_ids,
+                mcp_runtime_access,
+                warnings,
+            )
+        })
+        .collect()
+}
+
+/// Converts one runtime agent definition into the TaskSession resolver's profile model.
+/// 将单个运行时代理定义转换为 TaskSession 解析器使用的配置模型。
+fn runtime_agent_definition_to_subagent_profile(
+    definition: &RuntimeAgentDefinition,
+    runtime_config: &AgentRuntimeConfig,
+    available_native_tool_ids: &BTreeSet<String>,
+    mcp_runtime_access: &McpRuntimeAccess,
+    warnings: &mut Vec<String>,
+) -> SubagentProfile {
+    let mut profile = SubagentProfile::new(definition.id.clone(), definition.name.clone());
+    if !definition.description.trim().is_empty() {
+        profile.description = Some(definition.description.clone());
+    }
+    if !definition.system_prompt.trim().is_empty() {
+        profile.base_system_prompt = Some(definition.system_prompt.clone());
+    }
+    profile.provider_model = provider_model_snapshot_from_runtime_agent(definition);
+    profile.tool_exposure = tool_exposure_snapshot_from_runtime_agent(
+        definition,
+        runtime_config,
+        available_native_tool_ids,
+        mcp_runtime_access,
+        warnings,
+    );
+    profile.prompt_skills = PromptSkillSnapshot {
+        enabled: definition.skill_ids.clone(),
+        disabled: Vec::new(),
+    };
+    profile.runtime_policy = definition.runtime_policy;
+    profile.extra = runtime_agent_extra_payload(definition);
+    profile
+}
+
+/// Builds a provider/model snapshot from one runtime agent definition.
+/// 从单个运行时代理定义构建供应商与模型快照。
+fn provider_model_snapshot_from_runtime_agent(
+    definition: &RuntimeAgentDefinition,
+) -> ProviderModelSnapshot {
+    let mut snapshot = ProviderModelSnapshot::default();
+    let Some(model) = definition
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return snapshot;
+    };
+    if let Some((provider_id, model_id)) = model.split_once('/') {
+        snapshot.provider_id = Some(provider_id.trim().to_string());
+        snapshot.model_id = Some(model_id.trim().to_string());
+    } else {
+        snapshot.model_id = Some(model.to_string());
+    }
+    snapshot
+}
+
+/// Builds a tool exposure snapshot from one runtime agent's resolved tool policy.
+/// 根据单个运行时代理已解析工具策略构建工具可见性快照。
+fn tool_exposure_snapshot_from_runtime_agent(
+    definition: &RuntimeAgentDefinition,
+    runtime_config: &AgentRuntimeConfig,
+    available_native_tool_ids: &BTreeSet<String>,
+    mcp_runtime_access: &McpRuntimeAccess,
+    warnings: &mut Vec<String>,
+) -> ToolExposureSnapshot {
+    let policy = definition
+        .tool_policy
+        .as_ref()
+        .and_then(|policy_id| runtime_config.tool_policies.get(policy_id));
+    let mut allowed_tools = resolve_agent_native_tools(
+        definition,
+        &runtime_config.tool_policies,
+        available_native_tool_ids,
+        warnings,
+    );
+    let mcp_allowlist = resolve_agent_mcp_tool_allowlist(definition, policy);
+    allowed_tools.extend(
+        mcp_runtime_access
+            .available_tool_bindings_filtered(&mcp_allowlist)
+            .into_iter()
+            .map(|binding| binding.id().to_string()),
+    );
+    dedupe_string_list(&mut allowed_tools);
+    ToolExposureSnapshot {
+        allowed_tools,
+        disabled_tools: Vec::new(),
+        allowed_ai_capabilities: Vec::new(),
+        disabled_ai_capabilities: Vec::new(),
+        luaskills_overrides: Value::Null,
+        mcp_server_overrides: Value::Null,
+    }
+}
+
+/// Builds an extra payload containing runtime scalar overrides declared by an agent.
+/// 构建包含代理声明的运行时标量覆盖的额外载荷。
+fn runtime_agent_extra_payload(definition: &RuntimeAgentDefinition) -> Value {
+    let mut payload = serde_json::Map::new();
+    if let Some(temperature) = definition.temperature {
+        payload.insert(String::from("temperature"), json!(temperature));
+    }
+    if let Some(max_turns) = definition.max_turns {
+        payload.insert(String::from("max_turns"), json!(max_turns));
+    }
+    if payload.is_empty() {
+        Value::Null
+    } else {
+        Value::Object(payload)
+    }
+}
+
+/// Deduplicates one string list while preserving the original order.
+/// 在保留原始顺序的同时为字符串列表去重。
+fn dedupe_string_list(values: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    values.retain(|value| seen.insert(value.clone()));
+}
+
 /// Resolves the native tool whitelist for one agent definition.
 /// 为单个代理定义解析原生工具白名单。
 fn resolve_agent_native_tools(
@@ -657,16 +820,20 @@ fn build_luaskill_prompt_entries(
 #[cfg(test)]
 mod tests {
     use super::{
-        filter_luaskills_entries_by_explicit_registration,
+        build_task_runtime_subagent_profiles, filter_luaskills_entries_by_explicit_registration,
         filter_luaskills_entries_by_host_dispatch, resolve_agent_native_tools,
+        runtime_agent_definition_to_subagent_profile,
     };
     use crate::agent_runtime::config::{
-        RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
+        AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeToolPolicyDefinition,
     };
-    use crate::provider_config::PersistedLuaSkillsConfiguration;
+    use crate::mcp::configured_mcp_runtime_access;
+    use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
+    use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_vmm::VmmConfigLayer;
 
     /// Verifies that referencing one missing tool policy blocks native-tool exposure instead of silently falling back to a full-open default.
     /// 验证当代理引用缺失的工具策略时，原生工具暴露会被阻断，而不是静默退回到完全放开的默认行为。
@@ -688,6 +855,7 @@ mod tests {
             model: None,
             temperature: None,
             max_turns: None,
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
         };
         let available_native_tool_ids =
             BTreeSet::from([String::from("shell_command"), String::from("shell_session")]);
@@ -703,6 +871,169 @@ mod tests {
         assert!(resolved.is_empty());
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("不会暴露任何原生工具"));
+    }
+
+    /// Verifies runtime agent definitions become TaskSession profiles without TaskRuntime re-reading private configuration.
+    /// 验证运行时代理定义会转换为 TaskSession profile，而不需要 TaskRuntime 重新读取私有配置。
+    #[test]
+    fn runtime_agent_definition_becomes_subagent_profile_snapshot() {
+        let definition = RuntimeAgentDefinition {
+            id: String::from("agent-review"),
+            name: String::from("Review Agent"),
+            kind: RuntimeAgentKind::Worker,
+            description: String::from("Review code changes"),
+            system_prompt: String::from("Review code carefully."),
+            skill_ids: vec![
+                String::from("regular.review"),
+                String::from("luaskills.bridge"),
+            ],
+            native_tools: Vec::new(),
+            mcp_tools: Vec::new(),
+            delegates: Vec::new(),
+            tool_policy: Some(String::from("review-tools")),
+            routes: Vec::new(),
+            fallback_delegate: None,
+            model: Some(String::from("deepseek/deepseek-chat")),
+            temperature: Some(0.3),
+            max_turns: Some(8),
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest {
+                hooks_enabled: Some(true),
+                vmm_enabled: None,
+                memory_recall_enabled: Some(true),
+                memory_writeback_enabled: None,
+                search_projection_enabled: Some(true),
+                database_projection_enabled: Some(true),
+            },
+        };
+        let mut runtime_config = test_runtime_config(vec![definition.clone()]);
+        runtime_config.tool_policies.insert(
+            String::from("review-tools"),
+            RuntimeToolPolicyDefinition {
+                id: String::from("review-tools"),
+                name: String::from("Review Tools"),
+                allow_all_native: false,
+                native_tools: vec![
+                    String::from("shell_command"),
+                    String::from("missing_tool"),
+                    String::from("shell_command"),
+                ],
+                mcp_servers: Vec::new(),
+                mcp_tools: Vec::new(),
+            },
+        );
+        let available_native_tool_ids = BTreeSet::from([
+            String::from("shell_command"),
+            String::from("vulcan_file_list"),
+        ]);
+        let mcp_runtime_access =
+            configured_mcp_runtime_access(&ProviderConfigurationFile::default());
+        let mut warnings = Vec::new();
+
+        let profile = runtime_agent_definition_to_subagent_profile(
+            &definition,
+            &runtime_config,
+            &available_native_tool_ids,
+            &mcp_runtime_access,
+            &mut warnings,
+        );
+
+        assert_eq!(profile.id, "agent-review");
+        assert_eq!(profile.name, "Review Agent");
+        assert_eq!(profile.description.as_deref(), Some("Review code changes"));
+        assert_eq!(
+            profile.base_system_prompt.as_deref(),
+            Some("Review code carefully.")
+        );
+        assert_eq!(
+            profile.provider_model.provider_id.as_deref(),
+            Some("deepseek")
+        );
+        assert_eq!(
+            profile.provider_model.model_id.as_deref(),
+            Some("deepseek-chat")
+        );
+        assert_eq!(
+            profile.prompt_skills.enabled,
+            vec![
+                String::from("regular.review"),
+                String::from("luaskills.bridge")
+            ]
+        );
+        assert_eq!(
+            profile.tool_exposure.allowed_tools,
+            vec![String::from("shell_command")]
+        );
+        let resolved_temperature = profile.extra["temperature"].as_f64().unwrap_or_default();
+        assert!((resolved_temperature - 0.3).abs() < 0.000001);
+        assert_eq!(profile.extra["max_turns"], json!(8));
+        assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
+        assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
+        assert_eq!(profile.runtime_policy.search_projection_enabled, Some(true));
+        assert_eq!(
+            profile.runtime_policy.database_projection_enabled,
+            Some(true)
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("missing_tool"));
+    }
+
+    /// Verifies the TaskRuntime profile synchronization entry consumes the shared native-tool catalog descriptors.
+    /// 验证 TaskRuntime profile 同步入口会消费共享原生工具目录描述符。
+    #[test]
+    fn build_task_runtime_subagent_profiles_uses_native_catalog_descriptors() {
+        let definition = RuntimeAgentDefinition {
+            id: String::from("agent-artist"),
+            name: String::from("Artist Agent"),
+            kind: RuntimeAgentKind::Worker,
+            description: String::new(),
+            system_prompt: String::new(),
+            skill_ids: Vec::new(),
+            native_tools: vec![
+                String::from("image_generation"),
+                String::from("unregistered_tool"),
+            ],
+            mcp_tools: Vec::new(),
+            delegates: Vec::new(),
+            tool_policy: None,
+            routes: Vec::new(),
+            fallback_delegate: None,
+            model: Some(String::from("flux-dev")),
+            temperature: None,
+            max_turns: None,
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
+        };
+        let runtime_config = test_runtime_config(vec![definition]);
+        let native_tools = NativeToolCatalog {
+            definitions: BTreeMap::new(),
+            descriptors: vec![
+                test_native_tool_descriptor("image_generation"),
+                test_native_tool_descriptor("music_generation"),
+            ],
+            vmm_global: VmmConfigLayer::default(),
+        };
+        let mcp_runtime_access =
+            configured_mcp_runtime_access(&ProviderConfigurationFile::default());
+        let mut warnings = Vec::new();
+
+        let profiles = build_task_runtime_subagent_profiles(
+            &runtime_config,
+            &native_tools,
+            &mcp_runtime_access,
+            &mut warnings,
+        );
+
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].id, "agent-artist");
+        assert_eq!(
+            profiles[0].tool_exposure.allowed_tools,
+            vec![String::from("image_generation")]
+        );
+        assert_eq!(
+            profiles[0].provider_model.model_id.as_deref(),
+            Some("flux-dev")
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("unregistered_tool"));
     }
 
     /// Verifies that only explicitly registered LuaSkills tools enter provider-visible schemas while implicit tools remain host-dispatchable later.
@@ -779,6 +1110,36 @@ mod tests {
                 },
                 "required": ["value"]
             }),
+        }
+    }
+
+    /// Builds one minimal runtime configuration for TaskRuntime profile synchronization tests.
+    /// 为 TaskRuntime profile 同步测试构建一份最小运行时配置。
+    fn test_runtime_config(agents: Vec<RuntimeAgentDefinition>) -> AgentRuntimeConfig {
+        AgentRuntimeConfig {
+            active_model: Some(String::from("deepseek/deepseek-chat")),
+            active_agent_id: agents
+                .first()
+                .map(|agent| agent.id.clone())
+                .unwrap_or_else(|| String::from("agent-a")),
+            agents,
+            skills: Vec::new(),
+            tool_policies: BTreeMap::new(),
+            configured_mcp_server_ids: Vec::new(),
+            enabled_mcp_server_ids: Vec::new(),
+        }
+    }
+
+    /// Builds one native-tool descriptor used by TaskRuntime profile synchronization tests.
+    /// 构建 TaskRuntime profile 同步测试使用的原生工具描述符。
+    fn test_native_tool_descriptor(tool_id: &str) -> NativeToolDescriptor {
+        NativeToolDescriptor {
+            id: tool_id.to_string(),
+            name: tool_id.to_string(),
+            description: String::from("test tool"),
+            help_text: None,
+            ai_visible: true,
+            available_in_plan: false,
         }
     }
 }

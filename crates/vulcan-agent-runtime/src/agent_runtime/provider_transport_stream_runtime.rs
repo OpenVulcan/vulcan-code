@@ -33,7 +33,6 @@ use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
     ProviderTurnResponse as CoreProviderTurnResponse,
 };
-use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
 /// Prepared adapter launch inputs handed to one concrete Provider adapter constructor after the shared runtime wrapper consumes controller-only fields.
 /// 在共享运行时包装器消费控制器专用字段后，交给具体 Provider 适配器构造过程的已准备输入对象。
@@ -58,8 +57,6 @@ pub(crate) struct PreparedProviderTransportAdapterInputs {
 pub(crate) fn execute_host_controlled_stream<A, F>(
     session_id: SessionId,
     task_runtime: Arc<TaskRuntime>,
-    tools_manager: Arc<VulcanToolsManager>,
-    resolved_tool_definitions: Vec<ResolvedToolDefinition>,
     controller_config: CoreControllerConfig,
     core_snapshot: CoreConversationSnapshot,
     prompt: String,
@@ -105,12 +102,8 @@ where
                     session_id,
                     build_task_execution_handler(
                         Arc::clone(&task_runtime),
-                        Arc::clone(&provider_factory),
                         controller_config.clone(),
-                        Arc::clone(&tools_manager),
-                        resolved_tool_definitions.clone(),
                         attempt_sender.clone(),
-                        provider_label.clone(),
                     ),
                 );
                 let tool_policy = AllowAllToolPolicy;
@@ -279,11 +272,10 @@ where
         tool_context:
             PreparedHostToolRuntimeContext {
                 session_id,
-                tools_manager,
                 runtime_bridge,
                 task_runtime,
-                resolved_tool_definitions,
                 provider_tool_definitions,
+                ..
             },
         request_budget_guard,
         retry_policy,
@@ -299,8 +291,6 @@ where
     execute_host_controlled_stream(
         session_id,
         task_runtime,
-        tools_manager,
-        resolved_tool_definitions,
         controller_config,
         core_snapshot,
         prompt,

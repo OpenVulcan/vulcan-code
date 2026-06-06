@@ -102,6 +102,9 @@ impl VulcanWorkbench {
             ),
             None => None,
         };
+        let runtime_policy = agent_profile::parse_runtime_policy_request_text(
+            &self.agent_profile_form.runtime_policy_buffer.text(),
+        )?;
 
         Ok(agent_profile::UserAgentProfile {
             id: normalized_id,
@@ -111,6 +114,17 @@ impl VulcanWorkbench {
             model: trim_to_option(&self.agent_profile_form.model),
             temperature,
             max_turns,
+            skill_ids: agent_profile::parse_agent_profile_list_text(
+                &self.agent_profile_form.skill_ids_text,
+            ),
+            native_tools: agent_profile::parse_agent_profile_list_text(
+                &self.agent_profile_form.native_tools_text,
+            ),
+            mcp_tools: agent_profile::parse_agent_profile_list_text(
+                &self.agent_profile_form.mcp_tools_text,
+            ),
+            tool_policy: trim_to_option(&self.agent_profile_form.tool_policy),
+            runtime_policy,
         })
     }
 

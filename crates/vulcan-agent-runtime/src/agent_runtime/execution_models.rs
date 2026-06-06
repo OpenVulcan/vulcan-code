@@ -20,6 +20,7 @@ use vulcan_core::types::{
 use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
+use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
 
@@ -30,6 +31,21 @@ pub struct ExecutionPreparationRequest {
     /// Target session identifier.
     /// 目标会话标识。
     pub session_id: SessionId,
+    /// Shared execution scope used by main-session and task-session routers.
+    /// 主会话与子代理会话路由共用的执行范围。
+    pub execution_scope: ExecutionScope,
+    /// Runtime feature policy enforced for this execution request.
+    /// 本次执行请求强制执行的运行时能力策略。
+    pub runtime_policy: ExecutionRuntimePolicy,
+    /// Optional agent identifier that should own this execution instead of the globally active agent.
+    /// 可选的本次执行代理标识，用于替代全局激活代理。
+    pub execution_agent_id: Option<String>,
+    /// Optional request-scoped replacement for the active agent system prompt.
+    /// 可选的请求级激活代理系统提示词替换内容。
+    pub agent_system_prompt_override: Option<String>,
+    /// Optional file-domain root for task-session artifacts owned by this execution.
+    /// 本次执行拥有的可选子代理会话文件域根目录。
+    pub task_session_store_root: Option<PathBuf>,
     /// Target session title.
     /// 目标会话标题。
     pub session_title: String,
@@ -54,6 +70,9 @@ pub struct ExecutionPreparationRequest {
     /// Effective AI-tool configuration snapshot locked for the current run.
     /// 为当前运行锁定的生效 AI 工具配置快照。
     pub ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Request-scoped tool exposure override applied by the shared preparation bridge.
+    /// 由共享准备桥应用的请求级工具可见性覆盖。
+    pub tool_exposure_override: ToolExposureSnapshot,
     /// Prompt purpose used to choose runtime prompt assembly and tool exposure.
     /// 用于选择运行时提示词装配与工具暴露策略的提示词用途。
     pub prompt_purpose: ExecutionPromptPurpose,
@@ -85,6 +104,9 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
+    /// Internal continuation used when a delegated child task reports back.
+    /// 委派子任务回报时使用的内部续跑。
+    DelegateCompletion,
     /// Internal context-compaction summary request.
     /// 内部上下文压缩摘要请求。
     ContextCompaction,
@@ -105,11 +127,23 @@ impl ExecutionPromptPurpose {
         matches!(self, Self::ContextCompaction)
     }
 
+    /// Returns whether this purpose may use normal user-turn tool affordances.
+    /// 返回该用途是否可以使用普通用户回合的工具能力。
+    pub const fn supports_user_turn_tooling(self) -> bool {
+        matches!(self, Self::UserTurn | Self::DelegateCompletion)
+    }
+
+    /// Returns whether this purpose should run completed-turn hooks.
+    /// 返回该用途是否应该运行完成回合 hook。
+    pub const fn runs_completed_turn_hooks(self) -> bool {
+        matches!(self, Self::UserTurn)
+    }
+
     /// Returns the maximum provider-turn override required by this purpose.
     /// 返回该用途要求的最大 Provider 回合数覆盖值。
     pub const fn max_turns_override(self) -> Option<usize> {
         match self {
-            Self::UserTurn => None,
+            Self::UserTurn | Self::DelegateCompletion => None,
             Self::ContextCompaction => Some(1),
         }
     }
@@ -119,6 +153,7 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
+            Self::DelegateCompletion => "delegate-completion",
             Self::ContextCompaction => "context-compaction",
         }
     }
@@ -143,6 +178,9 @@ pub struct ExecutionPreparation {
     /// Active agent kind label.
     /// 当前激活代理类型标签。
     pub agent_kind: String,
+    /// Optional request-scoped replacement for the active agent system prompt.
+    /// 可选的请求级激活代理系统提示词替换内容。
+    pub agent_system_prompt_override: Option<String>,
     /// Validated provider/model runtime blueprint.
     /// 通过校验的 Provider/Model 运行时蓝图。
     pub model_blueprint: ProviderRuntimeBlueprint,
@@ -152,6 +190,9 @@ pub struct ExecutionPreparation {
     /// Workspace path captured for the run.
     /// 为本次运行捕获的工作区路径。
     pub workspace_path: String,
+    /// Optional file-domain root for task-session artifacts owned by this run.
+    /// 本次运行拥有的可选子代理会话文件域根目录。
+    pub task_session_store_root: Option<PathBuf>,
     /// Latest host-visible attachment catalog captured from the canonical conversation window for this run.
     /// 为本次运行从规范会话窗口捕获的最新宿主可见附件目录。
     pub conversation_attachments: Vec<ConversationAttachment>,

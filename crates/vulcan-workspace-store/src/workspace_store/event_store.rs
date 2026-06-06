@@ -1417,6 +1417,12 @@ fn session_event_store_dir(project_id: &str, session_id: SessionId) -> PathBuf {
         .join(session_id.to_string())
 }
 
+/// Returns the public stable directory used by one concrete session event store.
+/// 返回单个具体会话事件存储使用的公开稳定目录。
+pub fn session_event_store_directory(project_id: &str, session_id: SessionId) -> PathBuf {
+    session_event_store_dir(project_id, session_id)
+}
+
 /// Returns the stable manifest path used by one concrete session event store.
 /// 返回单个具体会话事件存储使用的稳定 manifest 路径。
 fn session_event_manifest_path(store_dir: &Path) -> PathBuf {

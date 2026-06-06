@@ -208,7 +208,11 @@ use crate::model::{
     SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
     SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
     build_delegate_completion_followup_preview, build_delegate_completion_followup_prompt,
-    pending_prompt_dispatch_index, task_session_arguments_from_tool_metadata,
+    build_session_record_message_id, collect_running_subagent_task_states_for_tree,
+    merge_subagent_task_panel_cache, normalize_subagent_task_panel_state,
+    pending_prompt_dispatch_index, select_subagent_navigation_panel_states,
+    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
+    subagent_task_panel_states_from_task_session_store, task_session_arguments_from_tool_metadata,
     task_session_display_title_from_payload, task_session_display_title_from_tool_metadata,
     task_session_execution_status_from_tool_metadata, task_session_internal_id_from_payload,
     task_session_payload_from_tool_metadata, task_session_public_id_from_payload,
@@ -4404,8 +4408,12 @@ impl VulcanWorkbench {
     /// Appends one runtime event to the current session event stream and refreshes the corresponding raw/Markdown caches.
     /// 向当前会话事件流追加一条运行时事件，并刷新对应的原文与 Markdown 缓存。
     fn push_session_runtime_event(&mut self, session_id: SessionId, event: RuntimeEvent) {
-        self.conversation_hook_runtime
-            .record_tool_runtime_event(session_id, &event);
+        // Only main sessions may feed conversation hooks; TaskSession events stay display-only by default.
+        // 只有主会话可以进入会话 hook；TaskSession 事件默认只用于显示。
+        if self.session_by_id(session_id).is_some() {
+            self.conversation_hook_runtime
+                .record_tool_runtime_event(session_id, &event);
+        }
         if self.absorb_tool_runtime_event_into_transcript(session_id, &event) {
             return;
         }
@@ -4476,7 +4484,11 @@ impl VulcanWorkbench {
         }
         if is_finished {
             self.detached_subagent_task_listeners.remove(&state.task_id);
-            self.enqueue_delegate_completion_followup_if_needed(session_id, &state);
+            // Completed child callbacks only belong to an open parent user turn.
+            // 子代理完成回调只属于仍打开的父级用户回合。
+            if self.conversation_hook_runtime.has_active_turn(session_id) {
+                self.enqueue_delegate_completion_followup_if_needed(session_id, &state);
+            }
         }
         self.upsert_subagent_task_panel_state(state);
         if is_finished {

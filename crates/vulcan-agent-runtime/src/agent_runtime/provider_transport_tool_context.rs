@@ -16,18 +16,12 @@ pub(crate) struct PreparedHostToolRuntimeContext {
     /// Stable controller session identifier used by the current execution turn.
     /// 当前执行回合使用的稳定控制器会话标识。
     pub(crate) session_id: SessionId,
-    /// Shared host-owned tools manager reused by child task execution contexts.
-    /// 供子任务执行上下文复用的共享宿主自有工具管理器。
-    pub(crate) tools_manager: Arc<VulcanToolsManager>,
     /// Shared host-managed bridge that owns the real tool dispatch path for the current execution turn.
     /// 持有当前执行回合真实工具调度路径的共享宿主管理桥接层。
     pub(crate) runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
     /// Shared resumable task runtime reused by the current execution turn.
     /// 被当前执行回合复用的共享可恢复任务运行时。
     pub(crate) task_runtime: Arc<TaskRuntime>,
-    /// Fully resolved tool definitions reused by child task execution contexts.
-    /// 供子任务执行上下文复用的完整已解析工具定义集合。
-    pub(crate) resolved_tool_definitions: Vec<ResolvedToolDefinition>,
     /// Mirrored provider-visible tool definitions exposed to the transport request builder.
     /// 暴露给传输请求构建器的镜像 Provider 可见工具定义集合。
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
@@ -44,14 +38,12 @@ pub(crate) fn prepare_host_tool_runtime_context(
     let tools_manager = Arc::new(tools_manager);
     PreparedHostToolRuntimeContext {
         session_id,
-        tools_manager: Arc::clone(&tools_manager),
         runtime_bridge: Arc::new(VulcanManagedToolRuntimeBridge::new(
             Arc::clone(&tools_manager),
             resolved_tools,
             session_id,
         )),
         task_runtime,
-        resolved_tool_definitions: resolved_tools.to_vec(),
         provider_tool_definitions: resolved_tools
             .iter()
             .map(resolved_tool_definition_to_provider_tool_definition)

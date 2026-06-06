@@ -31,6 +31,8 @@ vulcan-mcp-runtime.workspace = true
 vulcan-provider-config.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api = { path = "../../crates/vulcan-service-api" }
+vulcan-session-core.workspace = true
+vulcan-task-session.workspace = true
 vulcan-token-counter.workspace = true
 vulcan-vmm.workspace = true
 vulcan-workbench-model.workspace = true

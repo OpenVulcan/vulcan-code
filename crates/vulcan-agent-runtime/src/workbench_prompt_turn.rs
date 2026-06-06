@@ -59,6 +59,18 @@ pub struct SharedPromptPrecheckPlan {
     pub progress_labels: Vec<String>,
 }
 
+impl SharedPromptPrecheckPlan {
+    /// Builds the no-hook plan used by internal delegate-result continuations.
+    /// 构建内部委派结果回流使用的无 hook 计划。
+    pub fn internal_continuation() -> Self {
+        Self {
+            has_precheck_hooks: false,
+            should_skip_precheck: true,
+            progress_labels: Vec::new(),
+        }
+    }
+}
+
 /// Prepared prompt turn that must continue after precheck completes.
 /// 需要在 precheck 完成后继续的提示词回合。
 #[derive(Clone)]
@@ -339,9 +351,14 @@ pub fn begin_shared_prompt_turn(
             conversation_state_to_session_messages(&runtime_state.conversation_state),
         );
     }
+    let initial_phase = if input.source.runs_user_prompt_precheck() {
+        SessionRunPhase::MemoryRecall
+    } else {
+        SessionRunPhase::Preparing
+    };
     workspace_snapshot
         .session_run_phases
-        .insert(input.session_id, SessionRunPhase::MemoryRecall);
+        .insert(input.session_id, initial_phase);
     workspace_snapshot
         .hydrated_session_ids
         .insert(input.session_id);
@@ -409,16 +426,29 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             .as_deref(),
     );
     let hook_conversation_state = runtime_state.conversation_state.clone();
-    let precheck_request = conversation_hook_runtime.prepare_user_prompt_precheck(
-        input.session_id,
-        &input.prompt_entry_id,
-        input.owning_project_id,
-        input.workspace_path.to_string(),
-        input.source,
-        system_prompt_hook_phase,
-        &sanitized_prompt,
-        &hook_conversation_state,
-    );
+    let precheck_request = if input.source.runs_user_prompt_precheck() {
+        conversation_hook_runtime.prepare_user_prompt_precheck(
+            input.session_id,
+            &input.prompt_entry_id,
+            input.owning_project_id,
+            input.workspace_path.to_string(),
+            input.source,
+            system_prompt_hook_phase,
+            &sanitized_prompt,
+            &hook_conversation_state,
+        )
+    } else {
+        conversation_hook_runtime.prepare_internal_prompt_continuation(
+            input.session_id,
+            &input.prompt_entry_id,
+            input.owning_project_id,
+            input.workspace_path.to_string(),
+            input.source,
+            system_prompt_hook_phase,
+            &sanitized_prompt,
+            &hook_conversation_state,
+        )
+    };
     let precheck_turn_id = precheck_request.turn_id().to_string();
     runtime_state.active_precheck_turn_id = Some(precheck_turn_id.clone());
     if !injection_ops.is_empty() {
@@ -573,8 +603,33 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             precheck_failure_detail = Some(detail);
         }
     }
+    let prompt_purpose = if input.start.source.runs_user_prompt_precheck() {
+        ExecutionPromptPurpose::UserTurn
+    } else {
+        ExecutionPromptPurpose::DelegateCompletion
+    };
+    let runtime_policy = if input.start.source.runs_user_prompt_precheck() {
+        vulcan_session_core::ExecutionRuntimePolicy::main_session()
+    } else {
+        vulcan_session_core::ExecutionRuntimePolicy::main_session_internal_continuation()
+    };
+    let context_injection = if input.start.source.runs_user_prompt_precheck() {
+        core_provider_context_injection_from_state_for_turn(
+            &runtime_state.context_injection_state,
+            Some(&input.precheck_outcome.turn_id),
+        )
+    } else {
+        None
+    };
     let request = ExecutionPreparationRequest {
         session_id,
+        execution_scope: vulcan_session_core::ExecutionScope::MainSession {
+            session_id: vulcan_session_core::SessionNodeId::from(session_id),
+        },
+        runtime_policy,
+        execution_agent_id: None,
+        agent_system_prompt_override: None,
+        task_session_store_root: None,
         session_title: input.start.session_title,
         workspace_path: input.start.workspace_path,
         prompt: request_prompt,
@@ -588,13 +643,11 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             .or(input.provider_reasoning_effort)
             .unwrap_or(ReasoningEffortLevel::Medium),
         ai_tool_configuration: input.ai_tool_configuration,
-        prompt_purpose: ExecutionPromptPurpose::UserTurn,
+        tool_exposure_override: Default::default(),
+        prompt_purpose,
         project_prompt_skills: input.project_configuration.prompt_skills,
         session_prompt_skill_overrides: runtime_state.prompt_skill_overrides.clone(),
-        context_injection: core_provider_context_injection_from_state_for_turn(
-            &runtime_state.context_injection_state,
-            Some(&input.precheck_outcome.turn_id),
-        ),
+        context_injection,
         system_prompt_hook_blocks,
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
@@ -834,4 +887,77 @@ fn current_unix_millis_text() -> String {
         .checked_div(1_000_000)
         .unwrap_or_default()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for shared prompt-turn routing decisions.
+    //! 共享提示词回合路由决策测试。
+
+    use super::*;
+
+    /// Builds one delegate-completion prompt start used by continuation routing tests.
+    /// 构建一条供续跑路由测试使用的委派完成提示词启动态。
+    fn begin_delegate_completion_prompt(
+        runtime_state: &mut SessionRuntimeStateEntry,
+    ) -> SharedPromptTurnStart {
+        let mut hook_runtime = ConversationHookRuntime::new();
+        begin_shared_prompt_turn_with_runtime_state(
+            runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id: SessionId::from_u128(901),
+                session_title: "主会话",
+                workspace_path: "D:/workspace",
+                prompt_entry_id: String::from("delegate-entry"),
+                prompt: "子代理完成",
+                attachments: Vec::new(),
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: false,
+                source: PendingSessionPromptSource::DelegateCompletion,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: Some(String::from("project-a")),
+                prior_session_messages: None,
+            },
+        )
+        .expect("delegate completion prompt should start")
+    }
+
+    /// Verifies delegate completions become internal continuations instead of user-turn executions.
+    /// 验证委派完成回流会变成内部续跑，而不是普通用户回合执行。
+    #[test]
+    fn delegate_completion_continuation_uses_internal_runtime_policy() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let start = begin_delegate_completion_prompt(&mut runtime_state);
+        let precheck_outcome = start.precheck_request.clone().skip();
+
+        let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+            &mut runtime_state,
+            SharedPromptTurnContinueInput {
+                start,
+                precheck_outcome,
+                ai_tool_configuration: PersistedAiToolConfiguration::default(),
+                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: false,
+            },
+        )
+        .expect("delegate completion prompt should continue");
+
+        assert_eq!(
+            continuation.request.prompt_purpose,
+            ExecutionPromptPurpose::DelegateCompletion
+        );
+        assert!(!continuation.request.runtime_policy.hooks_enabled);
+        assert!(continuation.request.runtime_policy.vmm_enabled);
+        assert!(!continuation.request.runtime_policy.memory_recall_enabled);
+        assert!(!continuation.request.runtime_policy.memory_writeback_enabled);
+        assert!(continuation.request.context_injection.is_none());
+        assert!(runtime_state.active_precheck_turn_id.is_none());
+    }
 }

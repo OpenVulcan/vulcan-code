@@ -178,6 +178,15 @@ fn execute_provider_prompt_stream_with_capture_mode(
     } else {
         ProviderRetryPolicy::from_config(&config.retry)
     };
+    if let Some(task_session_store_root) = preparation.task_session_store_root.clone()
+        && let Err(error) = task_runtime
+            .configure_task_session_store_root(preparation.session_id, task_session_store_root)
+    {
+        eprintln!(
+            "[task-session-store] configure store root failed for session {}: {error}",
+            preparation.session_id
+        );
+    }
 
     execute_provider_transport_stream(build_provider_transport_execution_request(
         preparation.model_blueprint.runtime_kind,

@@ -281,6 +281,7 @@ mod tests {
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
+            agent_system_prompt_override: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
@@ -301,6 +302,7 @@ mod tests {
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),
+            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 2,
             execution_mode: String::from("Build"),

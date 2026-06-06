@@ -4,7 +4,13 @@
 use crate::SessionId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use vulcan_context::SessionConversationState;
+use std::collections::{BTreeMap, BTreeSet};
+use vulcan_context::{
+    SessionConversationRecord, SessionConversationState, SessionMessageEntry,
+    SessionMessageRecordKind,
+};
+use vulcan_session_core::{ParentSessionRef, SessionContextDocument, SessionNodeId};
+use vulcan_task_session::{TaskSessionMetadata, TaskSessionStatus, TaskSessionStore};
 
 /// Canonical user-facing stop summary reused by subagent cards, panels, and WebUI projections.
 /// 供子代理卡片、面板与 WebUI 投影共同复用的规范用户可见停止摘要。
@@ -81,11 +87,25 @@ pub struct SubagentTaskPanelState {
     pub conversation_state: Option<SessionConversationState>,
 }
 
-/// Returns the structured task-session payload attached to one tool-display metadata object when the tool result belongs to the host-managed `task` surface.
-/// 当工具结果属于宿主管理的 `task` 表面时，返回其工具显示元数据对象中附带的结构化 task-session 载荷。
+/// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the tool result belongs to the host-managed `task` surface.
+/// 当工具结果属于宿主管理的 `task` 表面时，返回直接元数据或 host-result 元数据中附带的结构化 task-session 载荷。
 pub fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    (metadata.get("kind").and_then(Value::as_str) == Some("task_session")).then_some(())?;
-    metadata.get("payload")
+    if metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+        && let Some(payload) = metadata
+            .get("payload")
+            .filter(|payload| payload.is_object())
+    {
+        return Some(payload);
+    }
+    metadata
+        .get("host_result")
+        .and_then(Value::as_object)
+        .and_then(|host_result| {
+            (host_result.get("kind").and_then(Value::as_str) == Some("task_session"))
+                .then(|| host_result.get("payload"))
+                .flatten()
+        })
+        .filter(|payload| payload.is_object())
 }
 
 /// Returns the caller-facing task identifier stored inside one task-session payload when available.
@@ -284,6 +304,93 @@ pub fn attach_tool_display_state_to_metadata(
     Some(Value::Object(metadata_object))
 }
 
+/// Shallow-merges one tool-call metadata object with a later tool-result or delegate metadata object.
+/// 将工具调用元数据对象与后续工具结果或委派元数据对象做浅层合并。
+///
+/// # Parameters
+/// 参数
+/// `tool_call_metadata` is the earlier metadata object attached to the parent tool card.
+/// `tool_call_metadata` 是较早附着在父级工具卡片上的元数据对象。
+/// `tool_result_metadata` is the later metadata object reported by the runtime.
+/// `tool_result_metadata` 是运行时后续报告的元数据对象。
+///
+/// # Returns
+/// 返回值
+/// The merged metadata object while preserving the most advanced task-session payload.
+/// 返回合并后的元数据对象，并保留执行阶段更靠后的 task-session 载荷。
+pub fn merge_tool_display_metadata(
+    tool_call_metadata: Option<Value>,
+    tool_result_metadata: Option<Value>,
+) -> Option<Value> {
+    match (tool_call_metadata, tool_result_metadata) {
+        (Some(Value::Object(mut tool_call_object)), Some(Value::Object(tool_result_object))) => {
+            let preferred_task_session_payload = match (
+                task_session_payload_execution_rank_from_metadata_object(&tool_call_object),
+                task_session_payload_execution_rank_from_metadata_object(&tool_result_object),
+            ) {
+                (Some(call_rank), Some(result_rank)) if call_rank > result_rank => {
+                    task_session_payload_from_metadata_object(&tool_call_object).cloned()
+                }
+                (Some(call_rank), Some(result_rank)) if result_rank > call_rank => {
+                    task_session_payload_from_metadata_object(&tool_result_object).cloned()
+                }
+                _ => None,
+            };
+            tool_call_object.extend(tool_result_object);
+            if let Some(preferred_payload) = preferred_task_session_payload {
+                tool_call_object.insert(
+                    String::from("kind"),
+                    Value::String(String::from("task_session")),
+                );
+                tool_call_object.insert(String::from("payload"), preferred_payload);
+            }
+            Some(Value::Object(tool_call_object))
+        }
+        (Some(metadata), None) => Some(metadata),
+        (None, Some(metadata)) => Some(metadata),
+        (Some(_), Some(metadata)) => Some(metadata),
+        (None, None) => None,
+    }
+}
+
+/// Returns the nested direct or host-result task-session payload stored inside one metadata object when available.
+/// 当存在时，返回单份元数据对象中嵌套保存的直接或 host-result task-session 载荷。
+fn task_session_payload_from_metadata_object(
+    metadata: &serde_json::Map<String, Value>,
+) -> Option<&Value> {
+    metadata
+        .get("payload")
+        .filter(|payload| payload.is_object())
+        .or_else(|| {
+            metadata
+                .get("host_result")
+                .and_then(Value::as_object)
+                .and_then(|host_result| {
+                    (host_result.get("kind").and_then(Value::as_str) == Some("task_session"))
+                        .then(|| host_result.get("payload"))
+                        .flatten()
+                })
+                .filter(|payload| payload.is_object())
+        })
+}
+
+/// Returns one comparable execution-rank score for the task-session payload embedded in metadata.
+/// 返回元数据中嵌入的 task-session 载荷的可比较执行阶段分值。
+fn task_session_payload_execution_rank_from_metadata_object(
+    metadata: &serde_json::Map<String, Value>,
+) -> Option<u8> {
+    let execution_status = task_session_payload_from_metadata_object(metadata)
+        .and_then(|payload| payload.get("execution_status"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    Some(match execution_status {
+        "running" | "created" => 0,
+        "completed" | "stopped" | "failed" => 2,
+        _ => 1,
+    })
+}
+
 /// Returns the matching score between one task-card metadata object and one delegate payload.
 /// 返回某条 task 卡片元数据与某份委派 payload 的匹配分数。
 ///
@@ -351,6 +458,113 @@ pub fn task_session_message_match_score(metadata: &Value, payload: &Value) -> us
     score
 }
 
+/// Finds the best parent task-card message id for one task-session payload across projected messages and canonical records.
+/// 在投影消息与规范记录中，为一份 task-session 载荷查找最匹配的父级 task 卡片消息标识。
+///
+/// # Parameters
+/// 参数
+/// `messages` yields projected parent transcript messages from the UI surface.
+/// `messages` 产出界面投影中的父级转录消息。
+/// `records` yields canonical parent conversation records from runtime state.
+/// `records` 产出运行时状态中的父级规范会话记录。
+/// `payload` is the task-session payload emitted by the shared task runtime.
+/// `payload` 是共享任务运行时发出的 task-session 载荷。
+///
+/// # Returns
+/// 返回值
+/// The best matching message id when one can be resolved.
+/// 解析到匹配项时返回最佳消息标识。
+pub fn find_task_session_tool_message_id_for_payload<'a>(
+    messages: impl Iterator<Item = &'a SessionMessageEntry>,
+    records: impl Iterator<Item = &'a SessionConversationRecord>,
+    payload: &Value,
+) -> Option<String> {
+    let mut best_match: Option<(usize, String)> = None;
+    if collect_best_task_session_message_match(messages, payload, &mut best_match) {
+        return best_match.map(|(_, message_id)| message_id);
+    }
+    if collect_best_task_session_record_match(records, payload, &mut best_match) {
+        return best_match.map(|(_, message_id)| message_id);
+    }
+    best_match.map(|(_, message_id)| message_id)
+}
+
+/// Updates the best task-card match from projected session messages.
+/// 从投影会话消息中更新最佳 task 卡片匹配项。
+fn collect_best_task_session_message_match<'a>(
+    messages: impl Iterator<Item = &'a SessionMessageEntry>,
+    payload: &Value,
+    best_match: &mut Option<(usize, String)>,
+) -> bool {
+    for message in messages {
+        if message.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            continue;
+        }
+        let Some(metadata) = message.metadata.as_ref() else {
+            continue;
+        };
+        if !task_session_metadata_can_match_tool_card(metadata) {
+            continue;
+        }
+        if update_task_session_best_match(metadata, payload, message.id.clone(), best_match) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Updates the best task-card match from canonical session conversation records.
+/// 从规范会话记录中更新最佳 task 卡片匹配项。
+fn collect_best_task_session_record_match<'a>(
+    records: impl Iterator<Item = &'a SessionConversationRecord>,
+    payload: &Value,
+    best_match: &mut Option<(usize, String)>,
+) -> bool {
+    for record in records {
+        if record.record_kind != SessionMessageRecordKind::ToolCallOutput {
+            continue;
+        }
+        let Some(metadata) = record.metadata.as_ref() else {
+            continue;
+        };
+        if !task_session_metadata_can_match_tool_card(metadata) {
+            continue;
+        }
+        if update_task_session_best_match(metadata, payload, record.id.clone(), best_match) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns whether one metadata object represents a task tool card that can be matched with task-session payloads.
+/// 返回单个元数据对象是否表示可与 task-session 载荷匹配的 task 工具卡片。
+fn task_session_metadata_can_match_tool_card(metadata: &Value) -> bool {
+    metadata.get("tool_name").and_then(Value::as_str) == Some("task")
+        || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
+}
+
+/// Applies one candidate score to the current best task-card match.
+/// 将单个候选分数应用到当前最佳 task 卡片匹配项。
+fn update_task_session_best_match(
+    metadata: &Value,
+    payload: &Value,
+    message_id: String,
+    best_match: &mut Option<(usize, String)>,
+) -> bool {
+    let score = task_session_message_match_score(metadata, payload);
+    if score == 0 {
+        return false;
+    }
+    if best_match
+        .as_ref()
+        .is_none_or(|(best_score, _)| score > *best_score)
+    {
+        *best_match = Some((score, message_id));
+    }
+    score == usize::MAX
+}
+
 /// Builds canonical stopped task-session metadata for a parent task card.
 /// 为父级 task 卡片构建规范的已停止 task-session 元数据。
 ///
@@ -398,7 +612,6 @@ pub fn build_stopped_task_session_metadata(
         .map(str::to_string)
         .or_else(|| state_snapshot.map(|state| state.public_task_id.clone()))
         .unwrap_or_else(|| task_id.to_string());
-    let conversation_state = state_snapshot.and_then(|state| state.conversation_state.clone());
     let metadata = json!({
         "tool_name": "task",
         "kind": "task_session",
@@ -411,7 +624,6 @@ pub fn build_stopped_task_session_metadata(
             "subagent": subagent,
             "result": stop_summary,
             "updated_at": updated_at,
-            "conversation_state": conversation_state,
         },
     });
     attach_tool_display_state_to_metadata(Some(metadata), "stopped").unwrap_or_else(|| {
@@ -459,6 +671,499 @@ pub fn subagent_run_state_from_execution_status(status: Option<&str>) -> Subagen
     }
 }
 
+/// Converts a file-backed TaskSession status into the workbench-facing panel run state.
+/// 将文件态 TaskSession 状态转换为工作台面板使用的运行状态。
+pub fn subagent_run_state_from_task_session_status(
+    status: TaskSessionStatus,
+) -> SubagentTaskRunState {
+    match status {
+        TaskSessionStatus::Created
+        | TaskSessionStatus::Running
+        | TaskSessionStatus::WaitingChildren
+        | TaskSessionStatus::WaitingFollowup
+        | TaskSessionStatus::Compacting => SubagentTaskRunState::Running,
+        TaskSessionStatus::Stopped => SubagentTaskRunState::Stopped,
+        TaskSessionStatus::Failed => SubagentTaskRunState::Failed,
+        TaskSessionStatus::Completed | TaskSessionStatus::Archived => {
+            SubagentTaskRunState::Completed
+        }
+    }
+}
+
+/// Builds a shared workbench panel state from file-backed TaskSession metadata and optional persisted context.
+/// 根据文件态 TaskSession 元数据和可选持久上下文构建共享工作台面板状态。
+///
+/// # Parameters
+/// 参数
+/// `metadata` is the canonical TaskSession metadata loaded from `task-session.json`.
+/// `metadata` 是从 `task-session.json` 加载的规范 TaskSession 元数据。
+/// `context` is the optional `context/current.json` document containing the reviewable conversation state.
+/// `context` 是可选的 `context/current.json` 文档，里面包含可复看的会话状态。
+/// `latest_event_payload` is the newest lifecycle payload used to recover full result text when available.
+/// `latest_event_payload` 是最新生命周期载荷，用于在可用时恢复完整结果文本。
+///
+/// # Returns
+/// 返回值
+/// A display-ready subagent panel state, or `None` when the metadata has no direct parent.
+/// 返回可直接显示的子代理面板状态；若元数据没有直接父级则返回 `None`。
+pub fn subagent_task_panel_state_from_task_session(
+    metadata: &TaskSessionMetadata,
+    context: Option<&SessionContextDocument>,
+    latest_event_payload: Option<&Value>,
+) -> Option<SubagentTaskPanelState> {
+    let parent_session_id = parent_session_id_from_task_session_parent(&metadata.parent)?;
+    let conversation_state = context.and_then(|document| {
+        serde_json::from_value::<SessionConversationState>(document.conversation_state.clone()).ok()
+    });
+    let result_text = latest_event_payload
+        .and_then(|payload| payload.get("result"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| metadata.last_result_summary.clone())
+        .unwrap_or_default();
+    let subagent_label = task_session_tool_display_label(
+        Some(metadata.display_title.as_str()),
+        metadata.description.as_deref(),
+        metadata.effective_config.subagent_profile_id.as_deref(),
+        Some(metadata.public_task_id.as_str()),
+        None,
+    );
+
+    Some(SubagentTaskPanelState {
+        task_id: metadata.task_session_id.as_uuid(),
+        public_task_id: metadata.public_task_id.clone(),
+        parent_session_id,
+        subagent_label,
+        description: metadata.description.clone(),
+        run_state: subagent_run_state_from_task_session_status(metadata.status),
+        result_text,
+        conversation_state,
+    })
+}
+
+/// Loads direct child panel states from a shared TaskSession store for one parent session.
+/// 从共享 TaskSession 存储加载某个父会话下的直接子代理面板状态。
+///
+/// # Parameters
+/// 参数
+/// `store` is the shared TaskSession store implementation used by iced and WebUI.
+/// `store` 是 iced 与 WebUI 共同使用的 TaskSession 存储实现。
+/// `parent_session_id` is the direct parent session whose child tasks should be listed.
+/// `parent_session_id` 是需要列出子任务的直接父会话标识。
+///
+/// # Returns
+/// 返回值
+/// A best-effort list of display-ready child panel states; unreadable items are skipped.
+/// 返回可直接显示的子代理面板状态列表；无法读取的条目会被跳过。
+pub fn subagent_task_panel_states_from_task_session_store<S>(
+    store: &S,
+    parent_session_id: SessionId,
+) -> Vec<SubagentTaskPanelState>
+where
+    S: TaskSessionStore + ?Sized,
+{
+    let Some(parent) = subagent_parent_ref_from_task_session_store(store, parent_session_id) else {
+        return Vec::new();
+    };
+    let task_ids = match store.list_task_invocation_events(parent.clone()) {
+        Ok(events) => events
+            .into_iter()
+            .filter(|event| event.parent == parent)
+            .map(|event| event.task_session_id)
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    let mut seen = BTreeSet::new();
+    task_ids
+        .into_iter()
+        .filter(|task_id| seen.insert(*task_id))
+        .filter_map(|task_id| subagent_task_panel_state_from_store(store, task_id))
+        .filter(|state| state.parent_session_id == parent_session_id)
+        .collect()
+}
+
+/// Normalizes one cached panel state against the shared live runtime fact and an optional terminal persisted snapshot.
+/// 根据共享实时运行事实与可选终态持久化快照，归一化单条缓存面板状态。
+///
+/// # Parameters
+/// 参数
+/// `state` is the cached panel state that may still contain a stale running flag.
+/// `state` 是可能仍包含陈旧运行中标记的缓存面板状态。
+/// `is_live_running` reports whether the shared TaskRuntime still owns the task abort handle.
+/// `is_live_running` 表示共享 TaskRuntime 是否仍持有该任务的中止句柄。
+/// `terminal_persisted_state` is a fresher non-running state loaded from the file store or payload metadata.
+/// `terminal_persisted_state` 是从文件存储或载荷元数据读取到的更新终态状态。
+///
+/// # Returns
+/// 返回值
+/// A panel state whose run-state matches the shared task lifecycle semantics.
+/// 返回运行状态与共享任务生命周期语义一致的面板状态。
+pub fn normalize_subagent_task_panel_state(
+    state: &SubagentTaskPanelState,
+    is_live_running: bool,
+    terminal_persisted_state: Option<&SubagentTaskPanelState>,
+) -> SubagentTaskPanelState {
+    if is_live_running {
+        let mut normalized_state = state.clone();
+        normalized_state.run_state = SubagentTaskRunState::Running;
+        return normalized_state;
+    }
+    if !state.run_state.is_running() {
+        return state.clone();
+    }
+    if let Some(persisted_state) =
+        terminal_persisted_state.filter(|state| !state.run_state.is_running())
+    {
+        return persisted_state.clone();
+    }
+
+    let mut normalized_state = state.clone();
+    normalized_state.run_state =
+        if normalized_state.result_text.trim() == SUBAGENT_TASK_STOPPED_SUMMARY_TEXT.trim() {
+            SubagentTaskRunState::Stopped
+        } else {
+            SubagentTaskRunState::Completed
+        };
+    normalized_state
+}
+
+/// Merges file-backed, legacy-payload, and previous live states into the canonical subagent panel cache.
+/// 将文件态、旧载荷与上一轮实时状态合并为规范子代理面板缓存。
+///
+/// # Parameters
+/// 参数
+/// `previous_states` is the frontend cache from the previous refresh.
+/// `previous_states` 是前端上一轮刷新保留的缓存。
+/// `file_backed_states` are canonical TaskSession states loaded from the shared file store.
+/// `file_backed_states` 是从共享文件存储读取的规范 TaskSession 状态。
+/// `legacy_states` are old task payload states used only when no file-backed state exists for the same task.
+/// `legacy_states` 是仅在同一任务缺少文件态时使用的旧 task 载荷状态。
+/// `is_task_live_running` is the host-supplied shared TaskRuntime lookup.
+/// `is_task_live_running` 是宿主提供的共享 TaskRuntime 查询函数。
+///
+/// # Returns
+/// 返回值
+/// A task-id keyed cache map ready to replace the caller's UI cache bucket.
+/// 返回按任务标识索引、可直接替换调用方 UI 缓存桶的映射。
+pub fn merge_subagent_task_panel_cache<F>(
+    previous_states: &BTreeMap<SessionId, SubagentTaskPanelState>,
+    file_backed_states: Vec<SubagentTaskPanelState>,
+    legacy_states: Vec<SubagentTaskPanelState>,
+    mut is_task_live_running: F,
+) -> BTreeMap<SessionId, SubagentTaskPanelState>
+where
+    F: FnMut(SessionId) -> bool,
+{
+    let file_backed_task_ids = file_backed_states
+        .iter()
+        .map(|state| state.task_id)
+        .collect::<BTreeSet<_>>();
+    let persisted_states = file_backed_states
+        .into_iter()
+        .chain(
+            legacy_states
+                .into_iter()
+                .filter(|state| !file_backed_task_ids.contains(&state.task_id)),
+        )
+        .collect::<Vec<_>>();
+    let terminal_persisted_states = persisted_states
+        .iter()
+        .filter(|state| !state.run_state.is_running())
+        .map(|state| (state.task_id, state.clone()))
+        .collect::<BTreeMap<_, _>>();
+
+    let mut merged = previous_states
+        .iter()
+        .filter_map(|(task_id, state)| {
+            let is_live_running = is_task_live_running(*task_id);
+            let normalized = normalize_subagent_task_panel_state(
+                state,
+                is_live_running,
+                terminal_persisted_states.get(task_id),
+            );
+            (normalized.run_state.is_running() && is_live_running).then_some((*task_id, normalized))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    for state in persisted_states {
+        let normalized = if state.run_state.is_running() {
+            previous_states
+                .get(&state.task_id)
+                .map(|existing| {
+                    normalize_subagent_task_panel_state(
+                        existing,
+                        is_task_live_running(existing.task_id),
+                        terminal_persisted_states.get(&existing.task_id),
+                    )
+                })
+                .filter(|existing| !existing.run_state.is_running())
+                .unwrap_or_else(|| {
+                    normalize_subagent_task_panel_state(
+                        &state,
+                        is_task_live_running(state.task_id),
+                        None,
+                    )
+                })
+        } else {
+            normalize_subagent_task_panel_state(
+                &state,
+                is_task_live_running(state.task_id),
+                terminal_persisted_states.get(&state.task_id),
+            )
+        };
+        merged.insert(normalized.task_id, normalized);
+    }
+
+    merged
+}
+
+/// Collects running subagent task states by walking the direct-child TaskSession tree from one parent.
+/// 从一个父级开始遍历直接子 TaskSession 树，并收集仍在运行的子代理任务状态。
+///
+/// # Parameters
+/// 参数
+/// `root_parent_session_id` is the parent session whose child tree should be inspected.
+/// `root_parent_session_id` 是需要检查其子任务树的父会话标识。
+/// `child_states_for_parent` returns already refreshed and normalized direct-child task states for each visited parent.
+/// `child_states_for_parent` 返回每个已访问父级下已经刷新并归一化的直接子任务状态。
+///
+/// # Returns
+/// 返回值
+/// A list of running child task states paired with the direct parent that owns each task card.
+/// 返回仍在运行的子任务状态列表，并携带每个任务卡片所属的直接父级。
+pub fn collect_running_subagent_task_states_for_tree<F>(
+    root_parent_session_id: SessionId,
+    mut child_states_for_parent: F,
+) -> Vec<(SessionId, SubagentTaskPanelState)>
+where
+    F: FnMut(SessionId) -> Vec<SubagentTaskPanelState>,
+{
+    let mut running_states = Vec::new();
+    let mut seen_parent_ids = BTreeSet::new();
+    let mut pending_parent_ids = vec![root_parent_session_id];
+    while let Some(parent_session_id) = pending_parent_ids.pop() {
+        if !seen_parent_ids.insert(parent_session_id) {
+            continue;
+        }
+        for state in child_states_for_parent(parent_session_id) {
+            pending_parent_ids.push(state.task_id);
+            if state.run_state.is_running() {
+                running_states.push((parent_session_id, state));
+            }
+        }
+    }
+    running_states
+}
+
+/// Returns whether one shared panel state contains reviewable child conversation content.
+/// 返回一条共享面板状态是否包含可复看的子会话内容。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared subagent panel state loaded from live runtime or the file-backed TaskSession store.
+/// `state` 是从实时运行时或文件态 TaskSession 存储加载的共享子代理面板状态。
+///
+/// # Returns
+/// 返回值
+/// `true` when either canonical records or protocol messages can be projected into a child transcript.
+/// 当规范记录或协议消息可以投影为子会话转录时返回 `true`。
+pub fn subagent_task_panel_state_has_recoverable_conversation(
+    state: &SubagentTaskPanelState,
+) -> bool {
+    state
+        .conversation_state
+        .as_ref()
+        .is_some_and(|conversation_state| {
+            !conversation_state.records.is_empty() || !conversation_state.messages.is_empty()
+        })
+}
+
+/// Returns whether one normalized subagent panel may be opened by a UI surface.
+/// 返回一条已归一化子代理面板是否允许被界面打开。
+///
+/// # Parameters
+/// 参数
+/// `state` is the normalized panel state shared by iced and WebUI.
+/// `state` 是 iced 与 WebUI 共用的已归一化面板状态。
+/// `has_recoverable_detail` reports whether the host can still project a transcript for this task.
+/// `has_recoverable_detail` 表示宿主是否仍能为该任务投影转录详情。
+///
+/// # Returns
+/// 返回值
+/// `true` when the task is running or has recoverable transcript detail.
+/// 当任务仍在运行或仍有可复看的转录详情时返回 `true`。
+pub fn subagent_task_panel_is_openable(
+    state: &SubagentTaskPanelState,
+    has_recoverable_detail: bool,
+) -> bool {
+    state.run_state.is_running() || has_recoverable_detail
+}
+
+/// Returns whether the subagent navigation surface should be exposed for the current parent coordination round.
+/// 返回当前父级协调轮次是否应该暴露子代理导航界面。
+///
+/// # Parameters
+/// 参数
+/// `has_visible_round` reports whether the parent session still owns a recorded navigation round.
+/// `has_visible_round` 表示父会话是否仍拥有已记录的导航轮次。
+/// `has_running_subagents` reports whether any direct or nested child task is still running.
+/// `has_running_subagents` 表示是否仍有任意直接或嵌套子任务处于运行中。
+/// `has_active_subagent_panel` reports whether the UI is currently rendering one child task surface.
+/// `has_active_subagent_panel` 表示界面当前是否正在渲染某个子任务界面。
+///
+/// # Returns
+/// 返回值
+/// `true` when a UI should show the subagent switcher or keep the parent-return route available.
+/// 当界面应显示子代理切换器或保留返回父会话路径时返回 `true`。
+pub fn subagent_navigation_surface_is_visible(
+    has_visible_round: bool,
+    has_running_subagents: bool,
+    has_active_subagent_panel: bool,
+) -> bool {
+    has_visible_round || has_running_subagents || has_active_subagent_panel
+}
+
+/// Returns whether a parent coordination round should keep its subagent navigation state alive after one child event settles.
+/// 返回某个父级协调轮次在单个子事件收敛后是否仍应保留子代理导航状态。
+///
+/// # Parameters
+/// 参数
+/// `has_active_parent_run` reports whether the parent session is still executing or preparing a run.
+/// `has_active_parent_run` 表示父会话是否仍在执行或准备运行。
+/// `has_running_subagents` reports whether any direct or nested child task is still running.
+/// `has_running_subagents` 表示是否仍有任意直接或嵌套子任务处于运行中。
+/// `has_pending_delegate_completion` reports whether the parent still has queued delegated completion callbacks.
+/// `has_pending_delegate_completion` 表示父会话是否仍有待处理的委派完成回调队列项。
+///
+/// # Returns
+/// 返回值
+/// `true` when the current round still owns blocking coordination work and should remain visible.
+/// 当当前轮次仍拥有阻塞协调工作并应继续显示时返回 `true`。
+pub fn subagent_navigation_round_should_remain_visible(
+    has_active_parent_run: bool,
+    has_running_subagents: bool,
+    has_pending_delegate_completion: bool,
+) -> bool {
+    has_active_parent_run || has_running_subagents || has_pending_delegate_completion
+}
+
+/// Selects the subagent states that should appear in a navigation surface for the current parent.
+/// 为当前父级选择应该出现在子代理导航界面中的状态列表。
+///
+/// # Parameters
+/// 参数
+/// `normalized_states` is the already refreshed and normalized child panel state list.
+/// `normalized_states` 是已经刷新并归一化的子面板状态列表。
+/// `requested_active_task_id` is the task that is currently opened, when any.
+/// `requested_active_task_id` 是当前已打开的任务标识；没有打开项时为空。
+/// `has_recoverable_detail` reports whether a non-running active task can still be reviewed.
+/// `has_recoverable_detail` 表示非运行中的活动任务是否仍可复看。
+///
+/// # Returns
+/// 返回值
+/// The visible navigation states plus the still-valid active task id.
+/// 返回可见导航状态列表，以及仍然有效的活动任务标识。
+pub fn select_subagent_navigation_panel_states<F>(
+    normalized_states: &[SubagentTaskPanelState],
+    requested_active_task_id: Option<SessionId>,
+    mut has_recoverable_detail: F,
+) -> (Vec<SubagentTaskPanelState>, Option<SessionId>)
+where
+    F: FnMut(&SubagentTaskPanelState) -> bool,
+{
+    let mut navigation_states = normalized_states
+        .iter()
+        .filter(|state| state.run_state.is_running())
+        .cloned()
+        .collect::<Vec<_>>();
+
+    if let Some(active_task_id) = requested_active_task_id
+        && !navigation_states
+            .iter()
+            .any(|state| state.task_id == active_task_id)
+        && let Some(active_state) = normalized_states.iter().find(|state| {
+            state.task_id == active_task_id
+                && subagent_task_panel_is_openable(state, has_recoverable_detail(state))
+        })
+    {
+        navigation_states.push(active_state.clone());
+    }
+
+    let active_task_id = requested_active_task_id.filter(|task_id| {
+        navigation_states
+            .iter()
+            .any(|state| state.task_id == *task_id)
+    });
+    (navigation_states, active_task_id)
+}
+
+/// Resolves the file-backed parent reference used to list direct children for either a root session or a nested TaskSession.
+/// 为根会话或嵌套 TaskSession 解析列出直接子节点时使用的文件态父级引用。
+///
+/// # Parameters
+/// 参数
+/// `store` is the root file-backed TaskSession store.
+/// `store` 是根目录对应的文件态 TaskSession 存储。
+/// `parent_session_id` is either the root main session id or a TaskSession id inside that root store.
+/// `parent_session_id` 可以是根主会话标识，也可以是该根存储下的 TaskSession 标识。
+///
+/// # Returns
+/// 返回值
+/// The direct parent reference understood by `TaskSessionStore`, or `None` if metadata lookup fails unexpectedly.
+/// 返回 `TaskSessionStore` 能理解的直接父级引用；若元数据读取异常则返回 `None`。
+pub fn subagent_parent_ref_from_task_session_store<S>(
+    store: &S,
+    parent_session_id: SessionId,
+) -> Option<ParentSessionRef>
+where
+    S: TaskSessionStore + ?Sized,
+{
+    let parent_node_id = SessionNodeId::from(parent_session_id);
+    match store.load_task_session(parent_node_id) {
+        Ok(Some(metadata)) => Some(ParentSessionRef::TaskSession {
+            root_session_id: metadata.root_session_id,
+            parent_task_session_id: parent_node_id,
+        }),
+        Ok(None) => Some(ParentSessionRef::MainSession {
+            root_session_id: parent_node_id,
+        }),
+        Err(_) => None,
+    }
+}
+
+/// Loads one child panel state from a shared TaskSession store.
+/// 从共享 TaskSession 存储加载单个子代理面板状态。
+fn subagent_task_panel_state_from_store<S>(
+    store: &S,
+    task_id: SessionNodeId,
+) -> Option<SubagentTaskPanelState>
+where
+    S: TaskSessionStore + ?Sized,
+{
+    let metadata = store.load_task_session(task_id).ok().flatten()?;
+    let context = store.load_context(task_id).ok().flatten();
+    let events = store.load_events(task_id).unwrap_or_default();
+    let latest_payload = events
+        .iter()
+        .rev()
+        .map(|event| &event.payload)
+        .find(|payload| !payload.is_null());
+    subagent_task_panel_state_from_task_session(&metadata, context.as_ref(), latest_payload)
+}
+
+/// Resolves the direct parent identifier from a file-backed TaskSession parent reference.
+/// 从文件态 TaskSession 父级引用解析直接父级标识。
+fn parent_session_id_from_task_session_parent(parent: &ParentSessionRef) -> Option<SessionId> {
+    match parent {
+        ParentSessionRef::None => None,
+        ParentSessionRef::MainSession { root_session_id } => Some(root_session_id.as_uuid()),
+        ParentSessionRef::TaskSession {
+            parent_task_session_id,
+            ..
+        } => Some(parent_task_session_id.as_uuid()),
+    }
+}
+
 /// Resolves the localized terminal status label injected into delegated completion follow-up prompts.
 /// 解析注入到委派完成跟进提示词中的本地化终态标签。
 pub fn delegate_completion_status_label(run_state: SubagentTaskRunState) -> &'static str {
@@ -485,12 +1190,12 @@ pub fn build_delegate_completion_followup_preview(state: &SubagentTaskPanelState
 pub fn build_delegate_completion_followup_prompt(state: &SubagentTaskPanelState) -> String {
     let result_text = state.result_text.trim();
     let safe_result = if result_text.is_empty() {
-        "当前没有更多结构化返回内容，请根据任务状态继续主流程。"
+        "当前没有更多结构化返回内容。请只记录这条子代理状态，不要补做该子代理任务，也不要改用主线程工具补齐缺失结果。"
     } else {
         result_text
     };
     format!(
-        "<system-reminder>\n子代理“{}”已{}。\n任务标识：{}。\n\n子代理返回内容：\n{}\n\n请立即吸收这条结果，并继续推进主流程；如果还有其他子代理仍在执行，请同时维持协调与收敛。\n</system-reminder>",
+        "<system-reminder>\n这是子代理回调，不是用户的新需求，也不是让主线程补做任务的指令。\n子代理“{}”已{}。\n任务标识：{}。\n\n子代理返回内容：\n{}\n\n处理规则：\n1. 只吸收并汇总这条子代理结果，不要重复启动同一个子代理。\n2. 如果仍有其他子代理运行中，可以调用 task 携带原 task_id 查询对应任务状态；不要启动替代任务，不要改用主线程工具或其他非 task 工具替代未完成子代理的工作。\n3. 对还没回调的子代理，只能记录“仍在等待/运行中”，不能假设其结果，不能自行生成缺失产物。\n4. 只有所有必需子代理结果已经齐备时，才向用户给出最终总结；否则保持等待和协调。\n</system-reminder>",
         state.subagent_label,
         delegate_completion_status_label(state.run_state),
         state.public_task_id,
@@ -537,10 +1242,9 @@ pub fn parse_subagent_task_panel_payload(
             .and_then(Value::as_str)
             .map(str::to_string)
             .unwrap_or_default(),
-        conversation_state: payload
-            .get("conversation_state")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
+        // Legacy payload snapshots are intentionally not treated as reviewable TaskSession transcripts; full child context must come from the file-backed TaskSession store.
+        // 旧 payload 快照会被有意排除在可复看 TaskSession 转录之外；完整子会话上下文必须来自文件态 TaskSession 存储。
+        conversation_state: None,
     })
 }
 
@@ -569,6 +1273,8 @@ pub fn parse_subagent_task_prompt_metadata(metadata: &Value) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::collections::BTreeMap;
+    use vulcan_context::SessionMessageKind;
 
     /// Verifies shared task-session payload parsing keeps iced-visible labels and lifecycle state.
     /// 验证共享 task-session payload 解析会保留 iced 可见标签与生命周期状态。
@@ -632,5 +1338,609 @@ mod tests {
             task_session_subagent_from_tool_metadata(&argument_metadata),
             Some("tester")
         );
+    }
+
+    /// Verifies host-result task-session metadata uses the same shared payload helpers as direct delegate metadata.
+    /// 验证 host-result task-session 元数据会使用与直接委派元数据相同的共享载荷辅助入口。
+    #[test]
+    fn extracts_task_session_fields_from_host_result_metadata() {
+        let parent_session_id = SessionId::new_v4();
+        let task_id = SessionId::new_v4();
+        let metadata = json!({
+            "tool_name": "task",
+            "host_result": {
+                "kind": "task_session",
+                "payload": {
+                    "task_id": "public-host",
+                    "task_session_id": task_id.to_string(),
+                    "execution_status": "running",
+                    "prompt": "生成图片",
+                    "description": "图片子代理",
+                    "subagent": "image-worker"
+                }
+            },
+            "tool_display_state": "completed"
+        });
+
+        assert_eq!(
+            task_session_declared_task_id_from_tool_metadata(&metadata),
+            Some("public-host")
+        );
+        assert_eq!(
+            task_session_execution_status_from_tool_metadata(&metadata),
+            Some("running")
+        );
+        let state = parse_subagent_task_panel_metadata(parent_session_id, &metadata, None)
+            .expect("host-result task-session metadata should parse");
+        assert_eq!(state.task_id, task_id);
+        assert_eq!(state.run_state, SubagentTaskRunState::Running);
+        assert_eq!(state.subagent_label, "图片子代理（image-worker）");
+    }
+
+    /// Verifies the shared task-card lookup prefers canonical record matches over weaker projected-message matches.
+    /// 验证共享 task 卡片查找会优先选择规范记录中的强匹配，而不是投影消息里的弱匹配。
+    #[test]
+    fn finds_task_session_tool_message_id_across_messages_and_records() {
+        let task_session_id = SessionId::new_v4();
+        let payload = json!({
+            "task_id": "public-task",
+            "task_session_id": task_session_id.to_string(),
+            "prompt": "执行审核",
+        });
+        let weak_message = SessionMessageEntry {
+            id: String::from("message-weak"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::from("task"),
+            body: String::new(),
+            metadata: Some(json!({
+                "tool_name": "task",
+                "arguments": {
+                    "prompt": "执行审核"
+                }
+            })),
+            created_at: String::from("1"),
+        };
+        let exact_record = SessionConversationRecord {
+            id: String::from("record-exact"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::from("task"),
+            body: String::new(),
+            metadata: Some(json!({
+                "tool_name": "task",
+                "kind": "task_session",
+                "payload": {
+                    "task_id": "public-task",
+                    "task_session_id": task_session_id.to_string(),
+                    "execution_status": "completed"
+                }
+            })),
+            created_at: String::from("2"),
+        };
+
+        let message_id = find_task_session_tool_message_id_for_payload(
+            [&weak_message].into_iter(),
+            [&exact_record].into_iter(),
+            &payload,
+        );
+
+        assert_eq!(message_id.as_deref(), Some("record-exact"));
+    }
+
+    /// Verifies newly written stopped task metadata keeps only an index and summary.
+    /// 验证新写入的停止态 task 元数据只保留索引与摘要。
+    #[test]
+    fn stopped_task_session_metadata_omits_embedded_conversation_state() {
+        let task_id = SessionId::new_v4();
+
+        let metadata = build_stopped_task_session_metadata(None, None, task_id, "已停止", "1000");
+
+        assert_eq!(metadata["payload"]["task_session_id"], task_id.to_string());
+        assert_eq!(metadata["payload"]["execution_status"], "stopped");
+        assert!(
+            metadata["payload"].get("conversation_state").is_none(),
+            "new stopped metadata must not embed child transcripts"
+        );
+    }
+
+    /// Verifies shared tool metadata merging keeps the most advanced task-session payload.
+    /// 验证共享工具元数据合并会保留执行阶段最靠后的 task-session 载荷。
+    #[test]
+    fn merge_tool_display_metadata_preserves_advanced_task_session_payload() {
+        let running_metadata = json!({
+            "tool_name": "task",
+            "kind": "task_session",
+            "payload": {
+                "task_id": "reviewer",
+                "task_session_id": "child-1",
+                "execution_status": "running"
+            }
+        });
+        let completed_metadata = json!({
+            "tool_name": "task",
+            "kind": "task_session",
+            "payload": {
+                "task_id": "reviewer",
+                "task_session_id": "child-1",
+                "execution_status": "completed",
+                "result": "done"
+            }
+        });
+
+        let merged = merge_tool_display_metadata(
+            Some(completed_metadata.clone()),
+            Some(running_metadata.clone()),
+        )
+        .expect("metadata should merge");
+        assert_eq!(
+            merged
+                .get("payload")
+                .and_then(|payload| payload.get("execution_status"))
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let merged = merge_tool_display_metadata(Some(running_metadata), Some(completed_metadata))
+            .expect("metadata should merge");
+        assert_eq!(
+            merged
+                .get("payload")
+                .and_then(|payload| payload.get("execution_status"))
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+    }
+
+    /// Verifies metadata merging ranks host-result task-session payloads instead of trusting the generic completed display state.
+    /// 验证元数据合并会按 host-result task-session 载荷排名，而不是信任通用的已完成显示状态。
+    #[test]
+    fn merge_tool_display_metadata_ranks_host_result_task_session_payload() {
+        let running_metadata = json!({
+            "tool_name": "task",
+            "tool_display_state": "completed",
+            "host_result": {
+                "kind": "task_session",
+                "payload": {
+                    "task_id": "reviewer",
+                    "task_session_id": "child-1",
+                    "execution_status": "running"
+                }
+            }
+        });
+        let completed_metadata = json!({
+            "tool_name": "task",
+            "kind": "task_session",
+            "payload": {
+                "task_id": "reviewer",
+                "task_session_id": "child-1",
+                "execution_status": "completed",
+                "result": "done"
+            }
+        });
+
+        let merged = merge_tool_display_metadata(Some(completed_metadata), Some(running_metadata))
+            .expect("metadata should merge");
+
+        assert_eq!(
+            task_session_payload_from_tool_metadata(&merged)
+                .and_then(|payload| payload.get("execution_status"))
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+    }
+
+    /// Verifies legacy task payloads cannot recover embedded child transcripts as full TaskSession panels.
+    /// 验证旧 task payload 不能把内嵌子会话转录恢复为完整 TaskSession 面板。
+    #[test]
+    fn legacy_task_payload_ignores_embedded_conversation_state() {
+        let parent_session_id = SessionId::new_v4();
+        let task_id = SessionId::new_v4();
+        let payload = json!({
+            "task_id": "legacy-task",
+            "task_session_id": task_id.to_string(),
+            "execution_status": "completed",
+            "description": "旧任务",
+            "subagent": "legacy-worker",
+            "result": "旧 payload 只保留返回摘要。",
+            "conversation_state": SessionConversationState::default(),
+        });
+
+        let state = parse_subagent_task_panel_payload(parent_session_id, &payload, None)
+            .expect("legacy subagent state");
+
+        assert_eq!(state.task_id, task_id);
+        assert_eq!(state.result_text, "旧 payload 只保留返回摘要。");
+        assert!(
+            state.conversation_state.is_none(),
+            "legacy payload snapshots must not become reviewable child transcripts"
+        );
+    }
+
+    /// Verifies file-backed TaskSession metadata can produce the same panel state used by both iced and WebUI.
+    /// 验证文件态 TaskSession 元数据可以生成 iced 与 WebUI 共用的同一面板状态。
+    #[test]
+    fn builds_panel_state_from_task_session_metadata() {
+        let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let mut metadata = TaskSessionMetadata::new(
+            root_session_id,
+            task_session_id,
+            ParentSessionRef::MainSession { root_session_id },
+            "audit-task",
+            "代码审核",
+            vulcan_session_core::SessionRequestedConfig::default(),
+            vulcan_session_core::SessionEffectiveConfig::default(),
+            1,
+            10,
+        );
+        metadata.status = TaskSessionStatus::Completed;
+        metadata.description = Some(String::from("审核当前代码"));
+        metadata.last_result_summary = Some(String::from("摘要结果"));
+        let context = SessionContextDocument {
+            schema_version: 1,
+            node_id: task_session_id,
+            provider_id: None,
+            model_id: None,
+            reasoning_effort: None,
+            system_prompt_layers: Vec::new(),
+            conversation_state: json!(SessionConversationState::default()),
+            compaction_anchor: None,
+            context_budget_fingerprint: None,
+            tool_catalog_snapshot: Value::Null,
+            provider_request_preview: None,
+        };
+
+        let state = subagent_task_panel_state_from_task_session(&metadata, Some(&context), None)
+            .expect("panel state");
+
+        assert_eq!(state.parent_session_id, root_session_id.as_uuid());
+        assert_eq!(state.task_id, task_session_id.as_uuid());
+        assert_eq!(state.public_task_id, "audit-task");
+        assert_eq!(state.subagent_label, "代码审核");
+        assert_eq!(state.run_state, SubagentTaskRunState::Completed);
+        assert!(state.conversation_state.is_some());
+    }
+
+    /// Verifies the shared store-to-panel route loads only direct child TaskSessions.
+    /// 验证共享 store 到面板状态的路由只加载直接子 TaskSession。
+    #[test]
+    fn loads_panel_states_from_task_session_store() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let store = vulcan_task_session::FileTaskSessionStore::new(temp_dir.path());
+        let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let metadata = TaskSessionMetadata::new(
+            root_session_id,
+            task_session_id,
+            ParentSessionRef::MainSession { root_session_id },
+            "audit-task",
+            "代码审核",
+            vulcan_session_core::SessionRequestedConfig::default(),
+            vulcan_session_core::SessionEffectiveConfig::default(),
+            1,
+            10,
+        );
+        store
+            .create_task_session(metadata)
+            .expect("create task session");
+
+        let states =
+            subagent_task_panel_states_from_task_session_store(&store, root_session_id.as_uuid());
+
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].task_id, task_session_id.as_uuid());
+    }
+
+    /// Verifies shared running-task collection walks nested child trees and skips terminal children.
+    /// 验证共享运行任务收集逻辑会遍历嵌套子树，并跳过已进入终态的子任务。
+    #[test]
+    fn collects_running_subagent_task_states_for_tree() {
+        let root_session_id = SessionId::new_v4();
+        let parent_task_id = SessionId::new_v4();
+        let running_child_task_id = SessionId::new_v4();
+        let completed_child_task_id = SessionId::new_v4();
+        let build_state =
+            |task_id: SessionId, run_state: SubagentTaskRunState| SubagentTaskPanelState {
+                task_id,
+                public_task_id: task_id.to_string(),
+                parent_session_id: root_session_id,
+                subagent_label: String::from("worker"),
+                description: None,
+                run_state,
+                result_text: String::new(),
+                conversation_state: None,
+            };
+
+        let running_states =
+            collect_running_subagent_task_states_for_tree(root_session_id, |parent_id| {
+                if parent_id == root_session_id {
+                    vec![build_state(parent_task_id, SubagentTaskRunState::Running)]
+                } else if parent_id == parent_task_id {
+                    vec![
+                        build_state(running_child_task_id, SubagentTaskRunState::Running),
+                        build_state(completed_child_task_id, SubagentTaskRunState::Completed),
+                    ]
+                } else {
+                    Vec::new()
+                }
+            });
+
+        assert_eq!(running_states.len(), 2);
+        assert_eq!(running_states[0].0, root_session_id);
+        assert_eq!(running_states[0].1.task_id, parent_task_id);
+        assert_eq!(running_states[1].0, parent_task_id);
+        assert_eq!(running_states[1].1.task_id, running_child_task_id);
+    }
+
+    /// Verifies shared cache merging preserves live entries while preferring file-backed TaskSession states over legacy payloads.
+    /// 验证共享缓存合并会保留实时条目，并优先使用文件态 TaskSession 状态而不是旧载荷。
+    #[test]
+    fn merges_subagent_task_panel_cache_with_file_backed_priority() {
+        let parent_session_id = SessionId::new_v4();
+        let live_task_id = SessionId::new_v4();
+        let stale_task_id = SessionId::new_v4();
+        let file_task_id = SessionId::new_v4();
+        let mut previous_states = BTreeMap::new();
+        previous_states.insert(
+            live_task_id,
+            test_subagent_state(
+                parent_session_id,
+                live_task_id,
+                SubagentTaskRunState::Running,
+            ),
+        );
+        previous_states.insert(
+            stale_task_id,
+            test_subagent_state(
+                parent_session_id,
+                stale_task_id,
+                SubagentTaskRunState::Running,
+            ),
+        );
+
+        let mut file_state = test_subagent_state(
+            parent_session_id,
+            file_task_id,
+            SubagentTaskRunState::Completed,
+        );
+        file_state.result_text = String::from("file-backed result");
+        let mut legacy_state = test_subagent_state(
+            parent_session_id,
+            file_task_id,
+            SubagentTaskRunState::Completed,
+        );
+        legacy_state.result_text = String::from("legacy result");
+
+        let merged = merge_subagent_task_panel_cache(
+            &previous_states,
+            vec![file_state],
+            vec![legacy_state],
+            |task_id| task_id == live_task_id,
+        );
+
+        assert_eq!(
+            merged.get(&live_task_id).map(|state| state.run_state),
+            Some(SubagentTaskRunState::Running)
+        );
+        assert_eq!(
+            merged.get(&stale_task_id).map(|state| state.run_state),
+            None
+        );
+        assert_eq!(
+            merged
+                .get(&file_task_id)
+                .map(|state| state.result_text.as_str()),
+            Some("file-backed result")
+        );
+    }
+
+    /// Verifies live runtime state wins over stale completed payloads.
+    /// 验证实时运行态优先于陈旧的已完成载荷。
+    #[test]
+    fn live_runtime_state_overrides_stale_completed_payload() {
+        let parent_session_id = SessionId::new_v4();
+        let task_id = SessionId::new_v4();
+        let mut completed_state =
+            test_subagent_state(parent_session_id, task_id, SubagentTaskRunState::Completed);
+        completed_state.result_text = String::from("stale completed result");
+
+        let normalized = normalize_subagent_task_panel_state(&completed_state, true, None);
+
+        assert_eq!(normalized.run_state, SubagentTaskRunState::Running);
+
+        let merged = merge_subagent_task_panel_cache(
+            &BTreeMap::new(),
+            vec![completed_state],
+            Vec::new(),
+            |candidate_task_id| candidate_task_id == task_id,
+        );
+
+        assert_eq!(
+            merged.get(&task_id).map(|state| state.run_state),
+            Some(SubagentTaskRunState::Running)
+        );
+    }
+
+    /// Verifies recoverable child conversations may come from protocol messages even when records are empty.
+    /// 验证即使 records 为空，也可以从协议 messages 判断子会话内容可复看。
+    #[test]
+    fn panel_state_recoverable_conversation_accepts_messages() {
+        let task_id = SessionId::new_v4();
+        let mut conversation_state = SessionConversationState::default();
+        vulcan_context::append_assistant_text_message(
+            &mut conversation_state,
+            "assistant-1",
+            "done",
+        );
+        let state = SubagentTaskPanelState {
+            task_id,
+            public_task_id: task_id.to_string(),
+            parent_session_id: SessionId::new_v4(),
+            subagent_label: String::from("worker"),
+            description: None,
+            run_state: SubagentTaskRunState::Completed,
+            result_text: String::new(),
+            conversation_state: Some(conversation_state),
+        };
+
+        assert!(subagent_task_panel_state_has_recoverable_conversation(
+            &state
+        ));
+    }
+
+    /// Verifies shared navigation selection keeps running tasks and the opened reviewable terminal task.
+    /// 验证共享导航选择会保留运行中任务以及当前打开且可复看的终态任务。
+    #[test]
+    fn selects_subagent_navigation_states_with_active_recoverable_terminal_task() {
+        let parent_session_id = SessionId::new_v4();
+        let running_task_id = SessionId::new_v4();
+        let completed_task_id = SessionId::new_v4();
+        let hidden_task_id = SessionId::new_v4();
+        let states = vec![
+            test_subagent_state(
+                parent_session_id,
+                running_task_id,
+                SubagentTaskRunState::Running,
+            ),
+            test_subagent_state(
+                parent_session_id,
+                completed_task_id,
+                SubagentTaskRunState::Completed,
+            ),
+            test_subagent_state(
+                parent_session_id,
+                hidden_task_id,
+                SubagentTaskRunState::Completed,
+            ),
+        ];
+
+        let (navigation_states, active_task_id) =
+            select_subagent_navigation_panel_states(&states, Some(completed_task_id), |state| {
+                state.task_id == completed_task_id
+            });
+
+        assert_eq!(active_task_id, Some(completed_task_id));
+        assert_eq!(navigation_states.len(), 2);
+        assert!(
+            navigation_states
+                .iter()
+                .any(|state| state.task_id == running_task_id)
+        );
+        assert!(
+            navigation_states
+                .iter()
+                .any(|state| state.task_id == completed_task_id)
+        );
+        assert!(
+            !navigation_states
+                .iter()
+                .any(|state| state.task_id == hidden_task_id)
+        );
+    }
+
+    /// Verifies the shared navigation visibility gate preserves the active child return route without keeping stale inactive history visible.
+    /// 验证共享导航可见性门禁会保留活动子界面的返回路径，同时不会让无活动历史常驻显示。
+    #[test]
+    fn subagent_navigation_surface_visibility_matches_current_round() {
+        assert!(!subagent_navigation_surface_is_visible(false, false, false));
+        assert!(subagent_navigation_surface_is_visible(true, false, false));
+        assert!(subagent_navigation_surface_is_visible(false, true, false));
+        assert!(subagent_navigation_surface_is_visible(false, false, true));
+    }
+
+    /// Verifies the shared round retention gate only keeps navigation while parent coordination work remains.
+    /// 验证共享轮次保留门禁只会在父级协调工作仍存在时继续保留导航。
+    #[test]
+    fn subagent_navigation_round_visibility_tracks_coordination_work() {
+        assert!(!subagent_navigation_round_should_remain_visible(
+            false, false, false
+        ));
+        assert!(subagent_navigation_round_should_remain_visible(
+            true, false, false
+        ));
+        assert!(subagent_navigation_round_should_remain_visible(
+            false, true, false
+        ));
+        assert!(subagent_navigation_round_should_remain_visible(
+            false, false, true
+        ));
+    }
+
+    /// Verifies the shared store route lists nested TaskSessions by their direct task-session parent.
+    /// 验证共享存储路由可以按直接 TaskSession 父级列出嵌套子代理。
+    #[test]
+    fn loads_nested_panel_states_from_task_session_store() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let store = vulcan_task_session::FileTaskSessionStore::new(temp_dir.path());
+        let root_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let parent_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        let child_task_session_id = vulcan_session_core::SessionNodeId::new_v4();
+        store
+            .create_task_session(TaskSessionMetadata::new(
+                root_session_id,
+                parent_task_session_id,
+                ParentSessionRef::MainSession { root_session_id },
+                "parent-task",
+                "父子代理",
+                vulcan_session_core::SessionRequestedConfig::default(),
+                vulcan_session_core::SessionEffectiveConfig::default(),
+                1,
+                10,
+            ))
+            .expect("create parent task session");
+        store
+            .create_task_session(TaskSessionMetadata::new(
+                root_session_id,
+                child_task_session_id,
+                ParentSessionRef::TaskSession {
+                    root_session_id,
+                    parent_task_session_id,
+                },
+                "child-task",
+                "嵌套子代理",
+                vulcan_session_core::SessionRequestedConfig::default(),
+                vulcan_session_core::SessionEffectiveConfig::default(),
+                2,
+                20,
+            ))
+            .expect("create child task session");
+
+        let root_states =
+            subagent_task_panel_states_from_task_session_store(&store, root_session_id.as_uuid());
+        let nested_states = subagent_task_panel_states_from_task_session_store(
+            &store,
+            parent_task_session_id.as_uuid(),
+        );
+
+        assert_eq!(root_states.len(), 1);
+        assert_eq!(root_states[0].task_id, parent_task_session_id.as_uuid());
+        assert_eq!(nested_states.len(), 1);
+        assert_eq!(
+            nested_states[0].parent_session_id,
+            parent_task_session_id.as_uuid()
+        );
+        assert_eq!(nested_states[0].task_id, child_task_session_id.as_uuid());
+    }
+
+    /// Builds one compact test panel state with the requested lifecycle state.
+    /// 构建一条带指定生命周期状态的紧凑测试面板状态。
+    fn test_subagent_state(
+        parent_session_id: SessionId,
+        task_id: SessionId,
+        run_state: SubagentTaskRunState,
+    ) -> SubagentTaskPanelState {
+        SubagentTaskPanelState {
+            task_id,
+            public_task_id: task_id.to_string(),
+            parent_session_id,
+            subagent_label: String::from("worker"),
+            description: None,
+            run_state,
+            result_text: String::new(),
+            conversation_state: None,
+        }
     }
 }

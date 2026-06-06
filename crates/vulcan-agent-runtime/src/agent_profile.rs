@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use vulcan_session_core::ExecutionRuntimePolicyRequest;
 
 /// Stable synthetic picker identifier representing the system-default model-routed agent.
 /// 表示系统默认模型路由代理的稳定合成选择标识。
@@ -75,6 +76,21 @@ pub struct UserAgentProfile {
     /// Optional max-turn override.
     /// 可选的最大轮次数覆盖值。
     pub max_turns: Option<u16>,
+    /// Prompt skill identifiers bound to this agent profile.
+    /// 绑定到该 Agent 配置的提示词技能标识集合。
+    pub skill_ids: Vec<String>,
+    /// Native tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的原生工具标识集合。
+    pub native_tools: Vec<String>,
+    /// MCP tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的 MCP 工具标识集合。
+    pub mcp_tools: Vec<String>,
+    /// Optional shared tool-policy identifier.
+    /// 可选的共享工具策略标识。
+    pub tool_policy: Option<String>,
+    /// Optional task-session runtime feature overrides.
+    /// 可选的子代理运行时能力覆盖。
+    pub runtime_policy: ExecutionRuntimePolicyRequest,
 }
 
 /// Aggregate user-agent catalog composed from one selection state and the visible markdown profiles.
@@ -112,6 +128,26 @@ struct UserAgentFrontmatter {
     /// Optional max-turn override.
     /// 可选的最大轮次数覆盖值。
     pub max_turns: Option<u16>,
+    /// Prompt skill identifiers bound to this agent profile.
+    /// 绑定到该 Agent 配置的提示词技能标识集合。
+    #[serde(default, alias = "skills", skip_serializing_if = "Vec::is_empty")]
+    pub skill_ids: Vec<String>,
+    /// Native tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的原生工具标识集合。
+    #[serde(default, alias = "tools", skip_serializing_if = "Vec::is_empty")]
+    pub native_tools: Vec<String>,
+    /// MCP tool identifiers directly exposed by this profile.
+    /// 该配置直接暴露的 MCP 工具标识集合。
+    #[serde(default, alias = "mcp", skip_serializing_if = "Vec::is_empty")]
+    pub mcp_tools: Vec<String>,
+    /// Optional shared tool-policy identifier.
+    /// 可选的共享工具策略标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_policy: Option<String>,
+    /// Optional task-session runtime feature overrides.
+    /// 可选的子代理运行时能力覆盖。
+    #[serde(default, skip_serializing_if = "runtime_policy_request_is_empty")]
+    pub runtime_policy: ExecutionRuntimePolicyRequest,
 }
 
 /// Returns the user-scoped root directory that stores agent profile state and markdown files.
@@ -390,6 +426,11 @@ fn load_user_agent_profile(path: &Path) -> Result<UserAgentProfile, String> {
         model: trim_to_option(frontmatter.model.as_deref()),
         temperature: frontmatter.temperature,
         max_turns: frontmatter.max_turns,
+        skill_ids: normalize_string_list(frontmatter.skill_ids),
+        native_tools: normalize_string_list(frontmatter.native_tools),
+        mcp_tools: normalize_string_list(frontmatter.mcp_tools),
+        tool_policy: trim_to_option(frontmatter.tool_policy.as_deref()),
+        runtime_policy: frontmatter.runtime_policy,
     })
 }
 
@@ -440,6 +481,11 @@ fn user_agent_profile_from_legacy_entry(
         model: trim_to_option(entry.model.as_deref()),
         temperature: entry.temperature,
         max_turns: entry.max_turns,
+        skill_ids: Vec::new(),
+        native_tools: Vec::new(),
+        mcp_tools: Vec::new(),
+        tool_policy: None,
+        runtime_policy: ExecutionRuntimePolicyRequest::default(),
     }
 }
 
@@ -455,6 +501,11 @@ fn save_user_agent_profile_markdown(profile: &UserAgentProfile) -> Result<(), St
         model: profile.model.clone(),
         temperature: profile.temperature,
         max_turns: profile.max_turns,
+        skill_ids: profile.skill_ids.clone(),
+        native_tools: profile.native_tools.clone(),
+        mcp_tools: profile.mcp_tools.clone(),
+        tool_policy: profile.tool_policy.clone(),
+        runtime_policy: profile.runtime_policy,
     };
     let frontmatter_text = serde_yaml::to_string(&frontmatter)
         .map_err(|error| format!("序列化用户 Agent frontmatter 失败：{}。", error))?;
@@ -495,6 +546,71 @@ fn trim_to_option(value: Option<&str>) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Parses a comma-or-newline separated profile list into stable unique entries.
+/// 将逗号或换行分隔的配置列表解析为稳定去重条目。
+pub fn parse_agent_profile_list_text(value: &str) -> Vec<String> {
+    normalize_string_list(
+        value
+            .split([',', '\n', '\r'])
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+/// Formats one profile list for compact form editing.
+/// 将配置列表格式化为适合表单编辑的紧凑文本。
+pub fn format_agent_profile_list_text(values: &[String]) -> String {
+    values.join(", ")
+}
+
+/// Parses an optional runtime-policy YAML object from one profile form field.
+/// 从配置表单字段解析可选运行时策略 YAML 对象。
+pub fn parse_runtime_policy_request_text(
+    value: &str,
+) -> Result<ExecutionRuntimePolicyRequest, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(ExecutionRuntimePolicyRequest::default());
+    }
+
+    serde_yaml::from_str(trimmed).map_err(|error| format!("解析 runtimePolicy 失败：{}。", error))
+}
+
+/// Formats runtime-policy overrides as YAML, or an empty field when no override exists.
+/// 将运行时策略覆盖格式化为 YAML；没有覆盖时返回空字段。
+pub fn format_runtime_policy_request_text(policy: ExecutionRuntimePolicyRequest) -> String {
+    if !policy.has_override() {
+        return String::new();
+    }
+
+    serde_yaml::to_string(&policy)
+        .unwrap_or_default()
+        .trim()
+        .to_string()
+}
+
+/// Normalizes one string list by trimming empties and preserving first-seen order.
+/// 通过裁剪空项并保留首次出现顺序来规范化字符串列表。
+fn normalize_string_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || normalized.iter().any(|item| item == trimmed) {
+            continue;
+        }
+        normalized.push(trimmed.to_string());
+    }
+    normalized
+}
+
+/// Returns whether a runtime-policy request has no explicit overrides.
+/// 返回运行时策略请求是否没有任何显式覆盖。
+fn runtime_policy_request_is_empty(policy: &ExecutionRuntimePolicyRequest) -> bool {
+    !policy.has_override()
+}
+
 /// Builds a compact stable identifier from one user-facing agent label.
 /// 根据某个人类可读 Agent 标签构建紧凑稳定标识。
 fn slugify_identifier(raw: &str) -> String {
@@ -516,7 +632,12 @@ fn slugify_identifier(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::is_reserved_agent_identifier;
+    use super::{
+        format_runtime_policy_request_text, is_reserved_agent_identifier, load_user_agent_profile,
+        parse_agent_profile_list_text, parse_runtime_policy_request_text,
+    };
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Verifies that the reserved-agent guard includes the built-in analysis entries.
     /// 验证保留 Agent 保护逻辑已包含内置分析类条目。
@@ -526,5 +647,84 @@ mod tests {
         assert!(is_reserved_agent_identifier("explore"));
         assert!(is_reserved_agent_identifier("__system_default__"));
         assert!(!is_reserved_agent_identifier("custom-agent"));
+    }
+
+    /// Verifies advanced profile frontmatter survives parsing into the runtime-facing profile model.
+    /// 验证高级 profile 前置元数据会被解析进面向运行时的配置模型。
+    #[test]
+    fn user_agent_profile_frontmatter_loads_subagent_overrides() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be valid")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("vulcan-agent-profile-{unique}.md"));
+        let content = r#"---
+id: review-agent
+name: Review Agent
+description: Reviews code changes
+model: deepseek/deepseek-chat
+temperature: 0.3
+maxTurns: 8
+skills:
+  - regular.review
+  - luaskills.bridge
+tools:
+  - shell_command
+  - shell_command
+mcp:
+  - server.tool
+toolPolicy: analysis-safe
+runtimePolicy:
+  hooksEnabled: true
+  memoryRecallEnabled: true
+  search_projection_enabled: true
+---
+
+Review code carefully.
+"#;
+        fs::write(&path, content).expect("profile fixture should write");
+
+        let profile = load_user_agent_profile(&path).expect("profile should parse");
+        let _ = fs::remove_file(&path);
+
+        assert_eq!(profile.id, "review-agent");
+        assert_eq!(
+            profile.skill_ids,
+            vec![
+                String::from("regular.review"),
+                String::from("luaskills.bridge")
+            ]
+        );
+        assert_eq!(profile.native_tools, vec![String::from("shell_command")]);
+        assert_eq!(profile.mcp_tools, vec![String::from("server.tool")]);
+        assert_eq!(profile.tool_policy.as_deref(), Some("analysis-safe"));
+        assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
+        assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
+        assert_eq!(profile.runtime_policy.search_projection_enabled, Some(true));
+    }
+
+    /// Verifies the shared form helpers preserve list and runtime-policy semantics.
+    /// 验证共享表单辅助函数会保持列表与运行时策略语义。
+    #[test]
+    fn profile_form_helpers_parse_lists_and_runtime_policy() {
+        let tools = parse_agent_profile_list_text("shell_command, vulcan_file_list\nshell_command");
+        assert_eq!(
+            tools,
+            vec![
+                String::from("shell_command"),
+                String::from("vulcan_file_list")
+            ]
+        );
+
+        let policy = parse_runtime_policy_request_text(
+            "hooksEnabled: true\nmemoryWritebackEnabled: false\n",
+        )
+        .expect("runtime policy yaml should parse");
+        assert_eq!(policy.hooks_enabled, Some(true));
+        assert_eq!(policy.memory_writeback_enabled, Some(false));
+
+        let formatted = format_runtime_policy_request_text(policy);
+        assert!(formatted.contains("hooksEnabled"));
+        assert!(formatted.contains("memoryWritebackEnabled"));
     }
 }

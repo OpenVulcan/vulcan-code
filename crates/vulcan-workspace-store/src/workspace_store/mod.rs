@@ -43,6 +43,7 @@ use self::event_store::{
 };
 pub use self::event_store::{
     persist_session_event_store_context_current as persist_session_context_current_document,
+    session_event_store_directory,
     snapshot_session_event_store_context_before_user_prompt as snapshot_session_context_before_user_prompt,
 };
 pub use history_search::search_workspace_history;

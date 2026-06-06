@@ -2590,6 +2590,7 @@ mod tests {
                 model: Some(String::from("anthropic/claude")),
                 temperature: Some(0.2),
                 max_turns: Some(9),
+                runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
             }],
             skills: vec![RuntimeSkillDefinition {
                 id: String::from("skill-a"),

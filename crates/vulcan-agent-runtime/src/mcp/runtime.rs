@@ -334,6 +334,32 @@ impl McpRuntimeToolBinding {
         self.view.args_schema()
     }
 
+    /// Returns the original runtime-qualified MCP tool identifier.
+    /// 返回原始运行时限定 MCP 工具标识。
+    pub fn origin_tool_id(&self) -> &str {
+        self.view.origin_tool_id()
+    }
+
+    /// Returns the source MCP server identifier parsed from the original tool id.
+    /// 返回从原始工具标识解析出的来源 MCP 服务标识。
+    pub fn server_id(&self) -> Option<&str> {
+        self.view
+            .origin_tool_id()
+            .split_once('/')
+            .map(|(server_id, _)| server_id)
+            .filter(|server_id| !server_id.is_empty())
+    }
+
+    /// Returns the source MCP tool name parsed from the original tool id.
+    /// 返回从原始工具标识解析出的来源 MCP 工具名称。
+    pub fn origin_tool_name(&self) -> Option<&str> {
+        self.view
+            .origin_tool_id()
+            .split_once('/')
+            .map(|(_, tool_name)| tool_name)
+            .filter(|tool_name| !tool_name.is_empty())
+    }
+
     /// Invokes the bound MCP tool through its stable host-facing tool identifier.
     /// 通过稳定宿主侧工具标识调用当前绑定的 MCP 工具。
     pub async fn invoke(&self, args: serde_json::Value) -> Result<serde_json::Value, String> {

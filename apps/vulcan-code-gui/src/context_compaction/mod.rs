@@ -6,7 +6,7 @@ use crate::skills::SessionDerivedRecord;
 pub use vulcan_context_compaction::{
     CompactionPlan, CompactionPlanInput as CompactionSkillInput,
     CompactionResult as CompactionSkillResult, CompactionSummaryRecord,
-    build_compaction_request_prompt, extract_compaction_previous_summary,
+    extract_compaction_previous_summary,
 };
 
 /// Plans one context-compaction window from the current transcript and runtime anchor.

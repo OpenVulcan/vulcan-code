@@ -6,7 +6,7 @@ use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::runtime_stream_bootstrap::RuntimeStreamBootstrap;
 use crate::agent_runtime::runtime_stream_delta::RuntimeStreamDeltaState;
-use crate::agent_runtime::task_runtime::TaskRuntime;
+use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntime};
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
@@ -19,6 +19,9 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
 /// 捕获准备阶段与启动阶段都成功后外层运行时流所需全部内容的启动载荷。
 pub struct RuntimeStreamLaunch {
+    /// Shared runtime context registered for task-tool child launches while this provider loop is alive.
+    /// 当前 Provider 循环存活期间为 task 工具子启动注册的共享运行时上下文。
+    pub(crate) task_execution_context: Option<TaskExecutionRuntimeContext>,
     /// Session identifier owned by the current runtime run.
     /// 当前运行时执行所属的会话标识。
     pub(crate) session_id: SessionId,
@@ -74,10 +77,12 @@ pub struct RuntimeStreamLaunch {
 pub(crate) fn build_runtime_stream_launch_payload(
     request: &ExecutionPreparationRequest,
     bootstrap: RuntimeStreamBootstrap,
+    task_execution_context: Option<TaskExecutionRuntimeContext>,
 ) -> RuntimeStreamLaunch {
     let effective_prompt =
         controller_effective_prompt_for_launch(request, &bootstrap.core_snapshot);
     RuntimeStreamLaunch {
+        task_execution_context,
         session_id: request.session_id,
         effective_prompt,
         preparation: bootstrap.preparation,
@@ -189,6 +194,7 @@ mod tests {
             agent_id: String::from("default-agent"),
             agent_name: String::from("默认代理"),
             agent_kind: String::from("内置"),
+            agent_system_prompt_override: None,
             model_blueprint: ProviderRuntimeBlueprint {
                 provider_id: String::from("openai"),
                 provider_name: String::from("OpenAI"),
@@ -209,6 +215,7 @@ mod tests {
             },
             prompt_preview: String::from("请分析代码"),
             workspace_path: String::from(r"D:\workspace"),
+            task_session_store_root: None,
             conversation_attachments: Vec::new(),
             context_history_count: 1,
             execution_mode: String::from("Build"),
@@ -243,6 +250,13 @@ mod tests {
     fn build_test_request() -> ExecutionPreparationRequest {
         ExecutionPreparationRequest {
             session_id: Uuid::nil(),
+            execution_scope: vulcan_session_core::ExecutionScope::MainSession {
+                session_id: vulcan_session_core::SessionNodeId::from(Uuid::nil()),
+            },
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicy::main_session(),
+            execution_agent_id: None,
+            agent_system_prompt_override: None,
+            task_session_store_root: None,
             session_title: String::from("测试会话"),
             workspace_path: String::from(r"D:\workspace"),
             prompt: String::from("  请分析主入口文件  "),
@@ -251,6 +265,7 @@ mod tests {
             temperature: Some(0.2),
             reasoning_effort: crate::provider_config::ReasoningEffortLevel::Off,
             ai_tool_configuration: PersistedAiToolConfiguration::default(),
+            tool_exposure_override: Default::default(),
             prompt_purpose: crate::agent_runtime::ExecutionPromptPurpose::UserTurn,
             project_prompt_skills: Default::default(),
             session_prompt_skill_overrides: Default::default(),
@@ -321,7 +336,7 @@ mod tests {
     #[test]
     fn launch_payload_assembly_trims_prompt_and_preserves_controller_seed() {
         let request = build_test_request();
-        let launch = build_runtime_stream_launch_payload(&request, build_test_bootstrap());
+        let launch = build_runtime_stream_launch_payload(&request, build_test_bootstrap(), None);
 
         assert_eq!(launch.session_id, request.session_id);
         assert_eq!(launch.effective_prompt, "请分析主入口文件");
@@ -352,7 +367,7 @@ mod tests {
             },
         }];
 
-        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
 
         assert_eq!(
             launch.effective_prompt,
@@ -374,7 +389,7 @@ mod tests {
             },
         }];
 
-        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
 
         assert_eq!(launch.effective_prompt, "请分析主入口文件");
     }
@@ -395,7 +410,7 @@ mod tests {
             },
         }];
 
-        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
 
         assert_eq!(
             launch.effective_prompt,
@@ -419,7 +434,7 @@ mod tests {
             },
         }];
 
-        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
 
         assert_eq!(
             launch.effective_prompt,
@@ -544,7 +559,7 @@ mod tests {
             core_controller,
         };
 
-        let launch = build_runtime_stream_launch_payload(&request, bootstrap);
+        let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);
 
         assert_eq!(launch.effective_prompt, expected_effective_prompt);
         assert_eq!(

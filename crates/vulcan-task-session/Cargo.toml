@@ -1,0 +1,17 @@
+[package]
+name = "vulcan-task-session"
+description = "File-backed task-session routing and scheduling boundaries."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+vulcan-context.workspace = true
+vulcan-context-compaction.workspace = true
+vulcan-session-core.workspace = true
