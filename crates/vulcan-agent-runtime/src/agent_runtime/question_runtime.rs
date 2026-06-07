@@ -535,6 +535,6 @@ mod tests {
             multiple: Some(false),
         }];
         let error = validate_question_prompts(&prompts).expect_err("duplicate label should fail");
-        assert!(error.contains("重复选项标签"));
+        assert!(error.contains("duplicate option label"));
     }
 }

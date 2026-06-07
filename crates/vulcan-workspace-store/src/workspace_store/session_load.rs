@@ -1,47 +1,51 @@
 //! Session-loading helpers extracted from the main workspace-store module.
 //! 从主工作区存储模块中抽取的会话加载辅助逻辑。
 
-#![allow(dead_code)]
-
-use super::event_store::PersistedSessionEventRow;
+use super::segmented_session_store::{
+    SegmentedSessionReplayResult, find_segmented_session_directory_by_id,
+    read_segmented_session_complete_tool_detail_turn, read_segmented_session_event_window,
+    read_segmented_session_tool_detail_window, read_segmented_session_turn_window, read_state,
+    replay_segmented_session_context, segmented_lines_to_session_messages,
+};
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
 use std::collections::BTreeSet;
+use std::path::PathBuf;
+use vulcan_codex_session_port::codex_events_to_vulcan_conversation_state;
 
-/// Lightweight persisted session locator row used to resolve the file-backed event store.
-/// 用于解析文件化事件存储的轻量持久化会话定位行。
+/// Lightweight persisted session locator row used to resolve segmented session directories.
+/// 用于解析分段会话目录的轻量持久化会话定位行。
 #[derive(Debug, Clone, Deserialize)]
-struct StoredSessionEventStoreLocatorRow {
-    /// Stable owning project identifier.
-    /// 稳定所属项目标识。
-    project_id: String,
+struct StoredSessionLocatorRow {
+    /// Absolute segmented session directory.
+    /// 绝对分段会话目录。
+    session_dir: PathBuf,
     /// Latest persisted canonical turn index mirrored from the event store.
     /// 从事件存储镜像回数据库的最近规范轮次索引。
     latest_turn_index: i64,
 }
 
-/// Lightweight persisted session turn row used for transcript paging.
-/// 用于转录分页的轻量持久化会话轮次行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredSessionTurnRow {
-    /// Stable turn identifier.
-    /// 稳定轮次标识。
-    turn_id: String,
-    /// Stable turn index.
-    /// 稳定轮次索引。
-    turn_index: i64,
-    /// First event sequence belonging to the turn.
-    /// 归属于该轮次的首个事件序号。
-    start_seq: i64,
-    /// Last event sequence belonging to the turn.
-    /// 归属于该轮次的最后一个事件序号。
-    end_seq: i64,
-    /// Stable terminal state label mirrored from the event store.
-    /// 从事件存储镜像而来的稳定终态标签。
-    turn_state: String,
-    /// Optional summary message identifier that closed the turn.
-    /// 闭合该轮次的可选摘要消息标识。
-    summary_message_id: Option<String>,
+/// Segmented transcript window ready for hydration or history paging.
+/// 可直接用于水合或历史分页的分段转录窗口。
+struct SegmentedWindowMessages {
+    /// Visible transcript messages projected from segmented JSONL lines.
+    /// 从分段 JSONL 行投影出的可见转录消息。
+    messages: Vec<SessionMessageEntry>,
+    /// Tool-detail messages split out for the existing GUI side channel.
+    /// 为现有 GUI 带外通道拆出的工具明细消息。
+    tool_detail_messages: Vec<SessionMessageEntry>,
+    /// Earliest event sequence included in this window.
+    /// 当前窗口包含的最早事件序号。
+    earliest_ordinal: Option<i64>,
+    /// Whether older segmented events exist before this window.
+    /// 当前窗口之前是否还存在更早的分段事件。
+    has_more_history: bool,
+    /// Full projected message window used by runtime-state hydration.
+    /// 供运行态水合使用的完整投影消息窗口。
+    full_messages: Vec<SessionMessageEntry>,
+    /// Canonical Codex-derived conversation state when the window came from Codex boundary events.
+    /// 当窗口来自 Codex 边界事件时对应的规范 Codex 投影会话状态。
+    codex_conversation_state: Option<SessionConversationState>,
 }
 
 /// Lazily loads the recent transcript window and lightweight runtime state for one session.
@@ -54,31 +58,57 @@ pub async fn load_session_hydration_snapshot(
     let requested_limit = requested_limit
         .max(1)
         .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
-    let locator = query_session_event_store_locator(&controller, session_id).await?;
-    let compactions = locator
-        .as_ref()
-        .map(|row| load_session_event_store_compactions(row.project_id.as_str(), session_id))
-        .transpose()?
-        .unwrap_or_default();
-    let runtime_state_row = query_session_runtime_state_row(&controller, session_id).await?;
+    let locator = query_session_locator(&controller, session_id).await?;
+    let compactions = Vec::new();
+    let runtime_state_row = None;
     let target_turn_count = resolve_initial_hydration_turn_count(
         requested_limit,
         &compactions,
         runtime_state_row.as_ref(),
         locator.as_ref(),
     );
-    let turn_rows =
-        query_session_turn_rows(&controller, session_id, None, target_turn_count).await?;
-    let has_more_history = turn_rows.first().is_some_and(|row| row.turn_index > 0);
-    let (mut messages, mut tool_detail_messages, earliest_ordinal, full_messages) =
-        load_event_store_window_messages(&locator, session_id, &turn_rows)?;
-    let runtime_state = hydrate_session_runtime_state(
+    let segmented_window = load_segmented_window_messages(
+        &controller,
         locator.as_ref(),
         session_id,
-        runtime_state_row,
-        &full_messages,
-    )
-    .await?;
+        None,
+        target_turn_count,
+    )?;
+    let (
+        has_more_history,
+        mut messages,
+        mut tool_detail_messages,
+        earliest_ordinal,
+        full_messages,
+        codex_conversation_state,
+    ) = segmented_window
+        .map(|window| {
+            (
+                window.has_more_history,
+                window.messages,
+                window.tool_detail_messages,
+                window.earliest_ordinal,
+                window.full_messages,
+                window.codex_conversation_state,
+            )
+        })
+        .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, Vec::new(), None));
+    let runtime_state =
+        match load_segmented_runtime_state(&controller, locator.as_ref(), session_id)? {
+            Some(runtime_state) => Some(runtime_state),
+            None => {
+                hydrate_session_runtime_state(session_id, runtime_state_row, &full_messages).await?
+            }
+        }
+        .map(|mut runtime_state| {
+            if let Some(codex_conversation_state) = codex_conversation_state {
+                apply_codex_conversation_projection_to_runtime_state(
+                    &mut runtime_state,
+                    codex_conversation_state,
+                );
+            }
+            runtime_state
+        });
     restore_hydration_window_from_runtime_state_if_empty(
         &mut messages,
         &mut tool_detail_messages,
@@ -137,24 +167,28 @@ pub async fn load_session_history_page(
     let requested_limit = requested_limit
         .max(1)
         .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
-    let locator = query_session_event_store_locator(&controller, session_id).await?;
-    let turn_rows = query_session_turn_rows_before_seq(
+    let locator = query_session_locator(&controller, session_id).await?;
+    if let Some(window) = load_segmented_window_messages(
         &controller,
+        locator.as_ref(),
         session_id,
-        before_ordinal,
+        Some(before_ordinal),
         requested_limit,
-    )
-    .await?;
-    let has_more_history = turn_rows.first().is_some_and(|row| row.turn_index > 0);
-    let (messages, tool_detail_messages, earliest_ordinal, _) =
-        load_event_store_window_messages(&locator, session_id, &turn_rows)?;
-
+    )? {
+        return Ok(SessionHistoryPage {
+            session_id,
+            messages: window.messages,
+            tool_detail_messages: window.tool_detail_messages,
+            earliest_ordinal: window.earliest_ordinal,
+            has_more_history: window.has_more_history,
+        });
+    }
     Ok(SessionHistoryPage {
         session_id,
-        messages,
-        tool_detail_messages,
-        earliest_ordinal,
-        has_more_history,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        earliest_ordinal: None,
+        has_more_history: false,
     })
 }
 
@@ -168,50 +202,21 @@ pub async fn load_session_tool_detail_page(
     requested_limit: usize,
 ) -> Result<SessionToolDetailPage, String> {
     let requested_limit = requested_limit.max(1).min(SESSION_TOOL_DETAIL_PAGE_LIMIT);
-    let locator = query_session_event_store_locator(&controller, session_id).await?;
-    let Some(locator) = locator else {
-        return Ok(SessionToolDetailPage {
-            messages: Vec::new(),
-            earliest_ordinal: None,
-            has_more_detail: false,
-        });
-    };
-    let load_result = load_session_event_store(locator.project_id.as_str(), session_id)?;
-    let mut tool_messages = load_result
-        .rows
-        .into_iter()
-        .filter(|row| row.turn_index == turn_index)
-        .filter(|row| {
-            matches!(
-                row.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )
-        })
-        .collect::<Vec<_>>();
-    tool_messages.sort_by_key(|row| row.seq);
-    if let Some(before_ordinal) = before_ordinal {
-        tool_messages.retain(|row| row.seq < before_ordinal);
+    let locator = query_session_locator(&controller, session_id).await?;
+    if let Some(page) = load_segmented_tool_detail_page(
+        &controller,
+        locator.as_ref(),
+        session_id,
+        turn_index,
+        before_ordinal,
+        requested_limit,
+    )? {
+        return Ok(page);
     }
-    let total_count = tool_messages.len();
-    let page_rows = if total_count > requested_limit {
-        tool_messages
-            .into_iter()
-            .skip(total_count.saturating_sub(requested_limit))
-            .collect::<Vec<_>>()
-    } else {
-        tool_messages
-    };
-    let earliest_ordinal = page_rows.first().map(|row| row.seq);
-    let has_more_detail = total_count > requested_limit && earliest_ordinal.is_some();
-
     Ok(SessionToolDetailPage {
-        messages: page_rows
-            .into_iter()
-            .map(persisted_event_row_to_session_message_entry)
-            .collect(),
-        earliest_ordinal,
-        has_more_detail,
+        messages: Vec::new(),
+        earliest_ordinal: None,
+        has_more_detail: false,
     })
 }
 
@@ -222,385 +227,482 @@ pub async fn load_complete_session_tool_detail_turn(
     session_id: SessionId,
     turn_index: i64,
 ) -> Result<SessionToolDetailPage, String> {
-    let locator = query_session_event_store_locator(&controller, session_id).await?;
-    let Some(locator) = locator else {
-        return Ok(SessionToolDetailPage {
-            messages: Vec::new(),
-            earliest_ordinal: None,
-            has_more_detail: false,
-        });
-    };
-    let load_result = load_session_event_store(locator.project_id.as_str(), session_id)?;
-    let mut rows = load_result
-        .rows
-        .into_iter()
-        .filter(|row| row.turn_index == turn_index)
-        .filter(|row| {
-            matches!(
-                row.record_kind,
-                SessionMessageRecordKind::ToolCallOutput
-                    | SessionMessageRecordKind::ToolResultOutput
-            )
-        })
-        .collect::<Vec<_>>();
-    rows.sort_by_key(|row| row.seq);
-    let earliest_ordinal = rows.first().map(|row| row.seq);
-
+    let locator = query_session_locator(&controller, session_id).await?;
+    if let Some(page) = load_segmented_complete_tool_detail_turn(
+        &controller,
+        locator.as_ref(),
+        session_id,
+        turn_index,
+    )? {
+        return Ok(page);
+    }
     Ok(SessionToolDetailPage {
-        messages: rows
-            .into_iter()
-            .map(persisted_event_row_to_session_message_entry)
-            .collect(),
-        earliest_ordinal,
+        messages: Vec::new(),
+        earliest_ordinal: None,
         has_more_detail: false,
     })
 }
 
-/// Queries the lightweight session locator needed to open one file-backed event store.
-/// 查询打开单个文件化事件存储所需的轻量会话定位信息。
-async fn query_session_event_store_locator(
+/// Finds the lightweight session locator needed to open one segmented session directory.
+/// 查找打开单个分段会话目录所需的轻量会话定位信息。
+async fn query_session_locator(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
-) -> Result<Option<StoredSessionEventStoreLocatorRow>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT project_id, latest_turn_index FROM sessions WHERE id = ?1 LIMIT 1;",
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询会话事件存储定位信息失败：{error}"))?;
-
+) -> Result<Option<StoredSessionLocatorRow>, String> {
     Ok(
-        decode_query_rows::<StoredSessionEventStoreLocatorRow>(&result.json_data)?
-            .into_iter()
-            .next(),
+        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
+            .map(|session_dir| StoredSessionLocatorRow {
+                session_dir,
+                latest_turn_index: -1,
+            }),
     )
 }
 
-/// Queries one session-scoped runtime-state row persisted in SQLite.
-/// 查询持久化在 SQLite 中的单条会话级运行时状态行。
+/// Loads one segmented transcript window when the new session directory exists.
+/// 当新会话目录存在时加载一个分段转录窗口。
+fn load_segmented_window_messages(
+    controller: &ControllerRuntimeHandle,
+    locator: Option<&StoredSessionLocatorRow>,
+    session_id: SessionId,
+    before_ordinal: Option<i64>,
+    requested_limit: usize,
+) -> Result<Option<SegmentedWindowMessages>, String> {
+    let Some(locator) = locator else {
+        return Ok(None);
+    };
+    let Some(session_dir) =
+        find_segmented_session_dir_for_locator(controller, locator, session_id)?
+    else {
+        return Ok(None);
+    };
+    let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
+    if let Some(window) =
+        load_segmented_codex_window_messages(&session_dir, before_seq, requested_limit)?
+    {
+        return Ok(Some(window));
+    }
+    let turn_window =
+        read_segmented_session_turn_window(&session_dir, before_seq, requested_limit)?;
+    if turn_window.lines.is_empty() {
+        return Ok(None);
+    }
+    let earliest_ordinal = turn_window
+        .lines
+        .first()
+        .and_then(|line| i64::try_from(line.seq).ok());
+    let messages = segmented_lines_to_session_messages(&turn_window.lines)?;
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    let tool_detail_messages = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolCallOutput
+                    | SessionMessageRecordKind::ToolResultOutput
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(Some(SegmentedWindowMessages {
+        messages: messages.clone(),
+        tool_detail_messages,
+        earliest_ordinal,
+        has_more_history: turn_window.has_more_history,
+        full_messages: messages,
+        codex_conversation_state: None,
+    }))
+}
+
+/// Loads a recent display window from Codex boundary events when the session has been migrated.
+/// 当会话已经迁移时，从 Codex 边界事件加载最近展示窗口。
+fn load_segmented_codex_window_messages(
+    session_dir: &std::path::Path,
+    before_seq: Option<u64>,
+    requested_limit: usize,
+) -> Result<Option<SegmentedWindowMessages>, String> {
+    let raw_limit = requested_limit
+        .saturating_mul(SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT)
+        .max(SESSION_TRANSCRIPT_MIN_ROW_LIMIT);
+    let raw_lines = read_segmented_session_event_window(session_dir, before_seq, raw_limit)?;
+    let has_more_history = raw_lines.len() >= raw_limit
+        && raw_lines
+            .first()
+            .is_some_and(|line| line.seq > 0 || before_seq.is_some());
+    let boundary_lines = raw_lines
+        .into_iter()
+        .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+        .collect::<Vec<_>>();
+    codex_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
+}
+
+/// Projects Codex boundary JSONL lines into the existing segmented transcript window shape.
+/// 将 Codex 边界 JSONL 行投影为现有分段转录窗口结构。
+fn codex_boundary_lines_to_window_messages(
+    lines: &[self::segmented_session_store::SegmentedSessionEventLine],
+    has_more_history: bool,
+) -> Result<Option<SegmentedWindowMessages>, String> {
+    if lines.is_empty() {
+        return Ok(None);
+    }
+    let events = lines
+        .iter()
+        .map(super::codex_boundary_event_from_segment_line)
+        .collect::<Result<Vec<_>, _>>()?;
+    if events.is_empty() {
+        return Ok(None);
+    }
+    let projection = codex_events_to_vulcan_conversation_state(&events);
+    let messages = conversation_state_to_session_messages(&projection.conversation_state);
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    let tool_detail_messages = messages
+        .iter()
+        .filter(|message| {
+            matches!(
+                message.record_kind,
+                SessionMessageRecordKind::ToolCallOutput
+                    | SessionMessageRecordKind::ToolResultOutput
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(Some(SegmentedWindowMessages {
+        messages: messages.clone(),
+        tool_detail_messages,
+        earliest_ordinal: lines.first().and_then(|line| i64::try_from(line.seq).ok()),
+        has_more_history,
+        full_messages: messages,
+        codex_conversation_state: Some(projection.conversation_state),
+    }))
+}
+
+/// Applies Codex-projected transcript records while preserving non-transcript runtime continuation state.
+/// 应用 Codex 投影出的转录记录，同时保留非转录运行时 continuation 状态。
+fn apply_codex_conversation_projection_to_runtime_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    codex_conversation_state: SessionConversationState,
+) {
+    runtime_state.conversation_state.messages = codex_conversation_state.messages;
+    runtime_state.conversation_state.records = codex_conversation_state.records;
+}
+
+/// Loads one segmented tool-detail page when the new session directory exists.
+/// 当新会话目录存在时加载一页分段工具详情。
+fn load_segmented_tool_detail_page(
+    controller: &ControllerRuntimeHandle,
+    locator: Option<&StoredSessionLocatorRow>,
+    session_id: SessionId,
+    turn_index: i64,
+    before_ordinal: Option<i64>,
+    requested_limit: usize,
+) -> Result<Option<SessionToolDetailPage>, String> {
+    let Some(locator) = locator else {
+        return Ok(None);
+    };
+    let Some(session_dir) =
+        find_segmented_session_dir_for_locator(controller, locator, session_id)?
+    else {
+        return Ok(None);
+    };
+    let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
+    let window = read_segmented_session_tool_detail_window(
+        &session_dir,
+        turn_index,
+        before_seq,
+        requested_limit,
+    )?;
+    let earliest_ordinal = window
+        .lines
+        .first()
+        .and_then(|line| i64::try_from(line.seq).ok());
+    let messages = segmented_lines_to_session_messages(&window.lines)?;
+    Ok(Some(SessionToolDetailPage {
+        messages,
+        earliest_ordinal,
+        has_more_detail: window.has_more_detail,
+    }))
+}
+
+/// Loads the complete segmented tool-detail stream for one turn when available.
+/// 可用时加载单个轮次的完整分段工具详情流。
+fn load_segmented_complete_tool_detail_turn(
+    controller: &ControllerRuntimeHandle,
+    locator: Option<&StoredSessionLocatorRow>,
+    session_id: SessionId,
+    turn_index: i64,
+) -> Result<Option<SessionToolDetailPage>, String> {
+    let Some(locator) = locator else {
+        return Ok(None);
+    };
+    let Some(session_dir) =
+        find_segmented_session_dir_for_locator(controller, locator, session_id)?
+    else {
+        return Ok(None);
+    };
+    let lines = read_segmented_session_complete_tool_detail_turn(&session_dir, turn_index)?;
+    let earliest_ordinal = lines.first().and_then(|line| i64::try_from(line.seq).ok());
+    let messages = segmented_lines_to_session_messages(&lines)?;
+    Ok(Some(SessionToolDetailPage {
+        messages,
+        earliest_ordinal,
+        has_more_detail: false,
+    }))
+}
+
+/// Loads the overwrite-only runtime state from the segmented session state file when available.
+/// 可用时从分段会话状态文件加载覆盖式运行态。
+fn load_segmented_runtime_state(
+    controller: &ControllerRuntimeHandle,
+    locator: Option<&StoredSessionLocatorRow>,
+    session_id: SessionId,
+) -> Result<Option<SessionRuntimeStateEntry>, String> {
+    let Some(locator) = locator else {
+        return Ok(None);
+    };
+    let Some(session_dir) =
+        find_segmented_session_dir_for_locator(controller, locator, session_id)?
+    else {
+        return Ok(None);
+    };
+    let Some(state_document) = read_state(&session_dir)? else {
+        return runtime_state_from_segmented_replay(session_id, &session_dir);
+    };
+    let has_runtime_state = !state_document.runtime_state.is_null();
+    if !has_runtime_state && state_document.current_context.is_null() {
+        return runtime_state_from_segmented_replay(session_id, &session_dir);
+    }
+    let mut runtime_state = if has_runtime_state {
+        serde_json::from_value::<SessionRuntimeStateEntry>(state_document.runtime_state)
+            .map_err(|error| format!("解析分段会话状态文件失败：{error}"))?
+    } else {
+        SessionRuntimeStateEntry::default()
+    };
+    let applied_context =
+        apply_segmented_current_context(&mut runtime_state, &state_document.current_context)?;
+    if runtime_state.updated_at.trim().is_empty() && !state_document.updated_at.trim().is_empty() {
+        runtime_state.updated_at = state_document.updated_at;
+    }
+    if !has_runtime_state && !applied_context {
+        return Ok(None);
+    }
+    let _ =
+        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
+    Ok(Some(runtime_state))
+}
+
+/// Rebuilds runtime state from segmented JSONL replay when state.json has no usable context.
+/// 当 state.json 没有可用上下文时，通过分段 JSONL 重放重建运行态。
+fn runtime_state_from_segmented_replay(
+    session_id: SessionId,
+    session_dir: &std::path::Path,
+) -> Result<Option<SessionRuntimeStateEntry>, String> {
+    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+        return Ok(None);
+    };
+    let mut runtime_state = runtime_state_entry_from_segmented_replay(replay);
+    let _ =
+        repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
+    Ok(Some(runtime_state))
+}
+
+/// Converts a segmented replay result into the existing runtime-state model.
+/// 将分段重放结果转换为现有运行态模型。
+fn runtime_state_entry_from_segmented_replay(
+    replay: SegmentedSessionReplayResult,
+) -> SessionRuntimeStateEntry {
+    let mut runtime_state = SessionRuntimeStateEntry::default();
+    runtime_state.conversation_state = replay.conversation_state;
+    runtime_state.last_compaction_id = replay.last_compaction_id;
+    runtime_state.context_start_message_id = replay.context_start_message_id;
+    if let Some(updated_at) = replay.updated_at {
+        runtime_state.updated_at = updated_at;
+    }
+    runtime_state
+}
+
+/// Applies a segmented current-context document onto one runtime-state entry.
+/// 将分段当前上下文文档应用到一条运行态记录上。
+fn apply_segmented_current_context(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    current_context: &serde_json::Value,
+) -> Result<bool, String> {
+    let Some(context_object) = current_context.as_object() else {
+        return Ok(false);
+    };
+    let mut applied = false;
+    if let Some(conversation_state_value) = context_object
+        .get("conversation_state")
+        .filter(|value| !value.is_null())
+    {
+        runtime_state.conversation_state =
+            serde_json::from_value::<SessionConversationState>(conversation_state_value.clone())
+                .map_err(|error| format!("解析分段当前上下文会话状态失败：{error}"))?;
+        applied = true;
+    }
+    if let Some(value) =
+        segmented_current_context_optional_string(current_context, "last_compaction_id")
+    {
+        runtime_state.last_compaction_id = value;
+        applied = true;
+    }
+    if let Some(value) =
+        segmented_current_context_optional_string(current_context, "context_start_message_id")
+    {
+        runtime_state.context_start_message_id = value;
+        applied = true;
+    }
+    if let Some(value) = segmented_current_context_optional_string(
+        current_context,
+        "live_context_budget_fingerprint",
+    ) {
+        runtime_state.live_context_budget_fingerprint = value;
+        applied = true;
+    }
+    if let Some(value) = segmented_current_context_optional_string(
+        current_context,
+        "live_context_assembly_fingerprint",
+    ) {
+        runtime_state.live_context_assembly_fingerprint = value;
+        applied = true;
+    }
+    if let Some(value) = segmented_current_context_optional_string(
+        current_context,
+        "anchor_context_budget_fingerprint",
+    ) {
+        runtime_state.anchor_context_budget_fingerprint = value;
+        applied = true;
+    }
+    if let Some(value) = segmented_current_context_optional_string(
+        current_context,
+        "anchor_context_assembly_fingerprint",
+    ) {
+        runtime_state.anchor_context_assembly_fingerprint = value;
+        applied = true;
+    }
+    if let Some(value) = segmented_current_context_optional_string(
+        current_context,
+        "last_provider_request_preview_markdown",
+    ) {
+        runtime_state.last_provider_request_preview_markdown = value;
+        applied = true;
+    }
+    if let Some(updated_at) = segmented_current_context_string(current_context, "updated_at") {
+        runtime_state.updated_at = updated_at;
+        applied = true;
+    }
+    Ok(applied)
+}
+
+/// Extracts one nullable string field from a segmented current-context value.
+/// 从分段当前上下文值中提取一个可空字符串字段。
+fn segmented_current_context_optional_string(
+    current_context: &serde_json::Value,
+    key: &str,
+) -> Option<Option<String>> {
+    let value = current_context.get(key)?;
+    if value.is_null() {
+        return Some(None);
+    }
+    Some(segmented_json_string(value))
+}
+
+/// Extracts one non-empty string field from a segmented current-context value.
+/// 从分段当前上下文值中提取一个非空字符串字段。
+fn segmented_current_context_string(
+    current_context: &serde_json::Value,
+    key: &str,
+) -> Option<String> {
+    current_context.get(key).and_then(segmented_json_string)
+}
+
+/// Converts one JSON value into a trimmed string when possible.
+/// 尽可能将一个 JSON 值转换为去除首尾空白后的字符串。
+fn segmented_json_string(value: &serde_json::Value) -> Option<String> {
+    value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Resolves the segmented session directory for an active or archived session locator.
+/// 根据活动或归档会话定位信息解析分段会话目录。
+fn find_segmented_session_dir_for_locator(
+    controller: &ControllerRuntimeHandle,
+    locator: &StoredSessionLocatorRow,
+    session_id: SessionId,
+) -> Result<Option<std::path::PathBuf>, String> {
+    let _ = (controller, session_id);
+    Ok(Some(locator.session_dir.clone()))
+}
+
+/// Returns no controller runtime document because segmented state files own hydration state.
+/// 不返回控制器运行态文档，因为分段 state 文件拥有水合状态。
 async fn query_session_runtime_state_row(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<Option<StoredRuntimeStateRow>, String> {
+    let _ = (controller, session_id);
+    Ok(None)
+}
+
+/// Queries compaction checkpoints from the SQLite mirror used by the new segmented loader.
+/// 从新分段加载器使用的 SQLite 镜像查询压缩检查点。
+async fn query_session_compaction_entries_for_load(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Vec<SessionCompactionEntry>, String> {
     let result = controller
         .client
         .query_sqlite_json_typed(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.vmm_profile_sync_json, r.updated_at
-FROM session_runtime_state AS r
-WHERE r.session_id = ?1
-LIMIT 1;
+SELECT c.id, c.source_until_message_id, c.source_until_turn_index, c.context_start_message_id, c.retained_tail_start_turn_index, c.summary_message_id, c.created_at
+FROM session_compactions AS c
+WHERE c.session_id = ?1
+ORDER BY c.created_at ASC;
 "#,
             vec![ControllerSqliteValue::String(session_id.to_string())],
         )
         .await
-        .map_err(|error| format!("查询会话完整运行时状态失败：{error}"))?;
+        .map_err(|error| format!("查询分段会话压缩检查点失败：{error}"))?;
 
-    Ok(
-        decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
-            .into_iter()
-            .next(),
-    )
+    Ok(decode_query_rows::<StoredCompactionRow>(&result.json_data)?
+        .into_iter()
+        .map(stored_compaction_row_to_entry)
+        .collect())
 }
 
-/// Queries the most recent session turn rows ordered by newest turn first.
-/// 查询最近的会话 turn 行，并按最新轮次优先排序。
-async fn query_session_turn_rows(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    before_turn_index: Option<i64>,
-    limit: usize,
-) -> Result<Vec<StoredSessionTurnRow>, String> {
-    let limit = limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT) as i64;
-    let (statement, params) = if let Some(before_turn_index) = before_turn_index {
-        (
-            r#"
-SELECT turn_id, turn_index, start_seq, end_seq, turn_state, summary_message_id
-FROM session_turn_index
-WHERE session_id = ?1 AND turn_index < ?2
-ORDER BY turn_index DESC
-LIMIT ?3;
-"#,
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::Int64(before_turn_index),
-                ControllerSqliteValue::Int64(limit),
-            ],
-        )
-    } else {
-        (
-            r#"
-SELECT turn_id, turn_index, start_seq, end_seq, turn_state, summary_message_id
-FROM session_turn_index
-WHERE session_id = ?1
-ORDER BY turn_index DESC
-LIMIT ?2;
-"#,
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::Int64(limit),
-            ],
-        )
-    };
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            statement,
-            params,
-        )
-        .await
-        .map_err(|error| format!("查询会话 turn 索引失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionTurnRow>(&result.json_data)
-}
-
-/// Queries the most recent session turn rows that end strictly before the provided event sequence cursor.
-/// 查询在给定事件序号游标之前严格结束的最近会话 turn 行。
-async fn query_session_turn_rows_before_seq(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    before_seq: i64,
-    limit: usize,
-) -> Result<Vec<StoredSessionTurnRow>, String> {
-    let limit = limit.max(1).min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT) as i64;
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT turn_id, turn_index, start_seq, end_seq, turn_state, summary_message_id
-FROM session_turn_index
-WHERE session_id = ?1 AND end_seq < ?2
-ORDER BY turn_index DESC
-LIMIT ?3;
-"#,
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::Int64(before_seq),
-                ControllerSqliteValue::Int64(limit),
-            ],
-        )
-        .await
-        .map_err(|error| format!("查询更早会话 turn 索引失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionTurnRow>(&result.json_data)
-}
-
-/// Loads the selected transcript/tool windows from the file-backed event store according to the requested turn rows.
-/// 按请求的 turn 行从文件化事件存储加载对应的转录与工具窗口。
-fn load_event_store_window_messages(
-    locator: &Option<StoredSessionEventStoreLocatorRow>,
-    session_id: SessionId,
-    turn_rows: &[StoredSessionTurnRow],
-) -> Result<
-    (
-        Vec<SessionMessageEntry>,
-        Vec<SessionMessageEntry>,
-        Option<i64>,
-        Vec<SessionMessageEntry>,
-    ),
-    String,
-> {
-    let Some(locator) = locator else {
-        return Ok((Vec::new(), Vec::new(), None, Vec::new()));
-    };
-    let load_result = load_session_event_store(locator.project_id.as_str(), session_id)?;
-    let mut selected_turn_ids = turn_rows
-        .iter()
-        .map(|row| row.turn_index)
-        .collect::<BTreeSet<_>>();
-    let earliest_ordinal = turn_rows.iter().map(|row| row.start_seq).min();
-    let mut visible_rows = Vec::new();
-    let mut tool_detail_rows = Vec::new();
-    let mut full_rows = Vec::new();
-
-    for row in load_result.rows {
-        let in_selected_turn = selected_turn_ids.contains(&row.turn_index);
-        full_rows.push(row.clone());
-        if !in_selected_turn {
-            continue;
-        }
-        if matches!(
-            row.record_kind,
-            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
-        ) {
-            visible_rows.push(row.clone());
-            tool_detail_rows.push(row);
-        } else {
-            visible_rows.push(row);
-        }
-    }
-
-    visible_rows.sort_by_key(|row| row.seq);
-    tool_detail_rows.sort_by_key(|row| row.seq);
-    full_rows.sort_by_key(|row| row.seq);
-    selected_turn_ids.clear();
-
-    Ok((
-        visible_rows
-            .into_iter()
-            .map(persisted_event_row_to_session_message_entry)
-            .collect(),
-        tool_detail_rows
-            .into_iter()
-            .map(persisted_event_row_to_session_message_entry)
-            .collect(),
-        earliest_ordinal,
-        full_rows
-            .into_iter()
-            .map(persisted_event_row_to_session_message_entry)
-            .collect(),
-    ))
-}
-
-/// Restores the hydrated runtime state for one session from the small runtime-state cache plus the canonical event stream.
-/// 通过小型运行时状态缓存和规范事件流为单个会话恢复水合后的运行时状态。
+/// Restores the hydrated runtime state for one session from the segmented checkpoint plus the canonical event stream.
+/// 通过分段检查点和规范事件流为单个会话恢复水合后的运行时状态。
 async fn hydrate_session_runtime_state(
-    locator: Option<&StoredSessionEventStoreLocatorRow>,
     session_id: SessionId,
     runtime_state_row: Option<StoredRuntimeStateRow>,
     full_messages: &[SessionMessageEntry],
 ) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    let Some(locator) = locator else {
-        return Ok(runtime_state_row.map(stored_runtime_state_row_to_entry));
+    let Some(mut runtime_state) = runtime_state_row.map(stored_runtime_state_row_to_entry) else {
+        if full_messages.is_empty() {
+            return Ok(None);
+        }
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state = conversation_state_from_session_messages(full_messages);
+        runtime_state.updated_at = current_unix_millis_text();
+        let _ = repair_duplicate_conversation_record_ids(
+            session_id,
+            &mut runtime_state.conversation_state,
+        );
+        return Ok(Some(runtime_state));
     };
-    let runtime_state_cache =
-        load_session_event_store_runtime_state(locator.project_id.as_str(), session_id)
-            .unwrap_or_default();
-    let current_context_document =
-        match load_session_event_store_context_current(locator.project_id.as_str(), session_id) {
-            Ok(document) => document,
-            Err(_) => load_latest_session_event_store_context_snapshot(
-                locator.project_id.as_str(),
-                session_id,
-            )?
-            .map(|snapshot| snapshot.context),
-        };
-    let mut runtime_state = runtime_state_row
-        .map(stored_runtime_state_row_to_entry)
-        .unwrap_or_default();
-    runtime_state.active_agent_id = runtime_state_cache
-        .active_agent_id
-        .or(runtime_state.active_agent_id);
-    runtime_state.active_provider_id = runtime_state_cache
-        .active_provider_id
-        .or(runtime_state.active_provider_id);
-    runtime_state.active_model_id = runtime_state_cache
-        .active_model_id
-        .or(runtime_state.active_model_id);
-    runtime_state.active_openrouter_endpoint_route = runtime_state_cache
-        .active_openrouter_endpoint_route
-        .or(runtime_state.active_openrouter_endpoint_route);
-    runtime_state.active_reasoning_effort = runtime_state_cache
-        .active_reasoning_effort
-        .or(runtime_state.active_reasoning_effort);
-    runtime_state.active_temperature = runtime_state_cache
-        .active_temperature
-        .or(runtime_state.active_temperature);
-    if !runtime_state_cache.prompt_skill_overrides.is_empty() {
-        runtime_state.prompt_skill_overrides = runtime_state_cache.prompt_skill_overrides;
+    if runtime_state.updated_at.trim().is_empty() {
+        runtime_state.updated_at = current_unix_millis_text();
     }
-    if !runtime_state_cache.context_injection_state.is_empty() {
-        runtime_state.context_injection_state = runtime_state_cache.context_injection_state;
+    if runtime_state.conversation_state.records.is_empty() && !full_messages.is_empty() {
+        runtime_state.conversation_state = conversation_state_from_session_messages(full_messages);
     }
-    if !runtime_state_cache.vmm.is_empty() {
-        runtime_state.vmm = runtime_state_cache.vmm;
-    }
-    if !runtime_state_cache.vmm_writeback_outbox.is_empty() {
-        runtime_state.vmm_writeback_outbox = runtime_state_cache.vmm_writeback_outbox;
-    }
-    if !runtime_state_cache.vmm_profile_sync.is_empty() {
-        runtime_state.vmm_profile_sync = runtime_state_cache.vmm_profile_sync;
-    }
-    runtime_state.last_compaction_id = runtime_state_cache
-        .last_compaction_id
-        .or(runtime_state.last_compaction_id);
-    runtime_state.context_start_message_id = runtime_state_cache
-        .context_start_message_id
-        .or(runtime_state.context_start_message_id);
-    runtime_state.live_context_budget_fingerprint = runtime_state_cache
-        .live_context_budget_fingerprint
-        .or(runtime_state.live_context_budget_fingerprint);
-    runtime_state.live_context_assembly_fingerprint = runtime_state_cache
-        .live_context_assembly_fingerprint
-        .or(runtime_state.live_context_assembly_fingerprint);
-    runtime_state.anchor_context_budget_fingerprint = runtime_state_cache
-        .anchor_context_budget_fingerprint
-        .or(runtime_state.anchor_context_budget_fingerprint);
-    runtime_state.anchor_context_assembly_fingerprint = runtime_state_cache
-        .anchor_context_assembly_fingerprint
-        .or(runtime_state.anchor_context_assembly_fingerprint);
-    runtime_state.last_provider_request_preview_markdown = runtime_state_cache
-        .last_provider_request_preview_markdown
-        .or(runtime_state.last_provider_request_preview_markdown);
-    runtime_state.ui_state = runtime_state_cache.ui_state;
-    let cached_provider_usage = runtime_state_cache.last_provider_usage.clone();
-    runtime_state.last_provider_usage = runtime_state_cache
-        .last_provider_usage
-        .or(runtime_state.last_provider_usage);
-    runtime_state.last_successful_provider_usage = runtime_state_cache
-        .last_successful_provider_usage
-        .or(cached_provider_usage)
-        .or(runtime_state.last_successful_provider_usage);
-    runtime_state.updated_at = if runtime_state_cache.updated_at.trim().is_empty() {
-        current_unix_millis_text()
-    } else {
-        runtime_state_cache.updated_at
-    };
-    runtime_state.conversation_state = current_context_document
-        .as_ref()
-        .map(|document| document.conversation_state.clone())
-        .unwrap_or_else(|| conversation_state_from_session_messages(full_messages));
-    runtime_state.last_compaction_id = current_context_document
-        .as_ref()
-        .and_then(|document| document.last_compaction_id.clone())
-        .or(runtime_state.last_compaction_id);
-    runtime_state.context_start_message_id = current_context_document
-        .as_ref()
-        .and_then(|document| document.context_start_message_id.clone())
-        .or(runtime_state.context_start_message_id);
-    runtime_state.live_context_budget_fingerprint = current_context_document
-        .as_ref()
-        .and_then(|document| document.live_context_budget_fingerprint.clone())
-        .or(runtime_state.live_context_budget_fingerprint);
-    runtime_state.live_context_assembly_fingerprint = current_context_document
-        .as_ref()
-        .and_then(|document| document.live_context_assembly_fingerprint.clone())
-        .or(runtime_state.live_context_assembly_fingerprint);
-    runtime_state.anchor_context_budget_fingerprint = current_context_document
-        .as_ref()
-        .and_then(|document| document.anchor_context_budget_fingerprint.clone())
-        .or(runtime_state.anchor_context_budget_fingerprint);
-    runtime_state.anchor_context_assembly_fingerprint = current_context_document
-        .as_ref()
-        .and_then(|document| document.anchor_context_assembly_fingerprint.clone())
-        .or(runtime_state.anchor_context_assembly_fingerprint);
-    runtime_state.last_provider_request_preview_markdown = current_context_document
-        .as_ref()
-        .and_then(|document| document.last_provider_request_preview_markdown.clone())
-        .or(runtime_state.last_provider_request_preview_markdown);
-    runtime_state.conversation_state.continuation =
-        if runtime_state_cache.continuation.provider_id.is_some()
-            || runtime_state_cache.continuation.model_id.is_some()
-            || runtime_state_cache
-                .continuation
-                .last_provider_message_id
-                .is_some()
-            || runtime_state_cache.continuation.updated_at.is_some()
-        {
-            runtime_state_cache.continuation
-        } else {
-            runtime_state.conversation_state.continuation
-        };
     let _ =
         repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
 
@@ -645,7 +747,7 @@ fn resolve_initial_hydration_turn_count(
     requested_turn_count: usize,
     compactions: &[SessionCompactionEntry],
     runtime_state_row: Option<&StoredRuntimeStateRow>,
-    locator: Option<&StoredSessionEventStoreLocatorRow>,
+    locator: Option<&StoredSessionLocatorRow>,
 ) -> usize {
     let mut effective_turn_count = requested_turn_count.max(1);
     let Some(boundary_turn_index) =
@@ -690,30 +792,18 @@ fn active_compaction_overlap_boundary_turn_index(
         })
 }
 
-/// Converts one persisted event row into the in-memory transcript entry shape.
-/// 将单条持久化事件行转换为内存中的转录消息结构。
-fn persisted_event_row_to_session_message_entry(
-    row: PersistedSessionEventRow,
-) -> SessionMessageEntry {
-    SessionMessageEntry {
-        id: row.event_id,
-        kind: row.kind,
-        record_kind: row.record_kind,
-        visible: row.visible,
-        title: row.title,
-        body: row.body,
-        metadata: row.metadata,
-        created_at: row.created_at,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    //! Session-load tests covering transcript hydration behavior for event-store backed sessions.
-    //! 面向事件流会话的转录水合行为测试。
+    //! Session-load tests covering transcript hydration behavior for segmented sessions.
+    //! 面向分段会话的转录水合行为测试。
 
     use super::*;
-    use crate::conversation_protocol::{SessionConversationRecord, append_assistant_text_message};
+    use crate::conversation_protocol::SessionConversationRecord;
+    use serde_json::json;
+    use vulcan_codex_session_port::{
+        CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
+    };
+    use vulcan_session_core::SessionNodeId;
 
     /// Builds one transcript message entry for session-load regression tests.
     /// 为会话加载回归测试构建一条转录消息项。
@@ -735,114 +825,212 @@ mod tests {
         }
     }
 
-    /// Verifies hydration keeps tool directives visible in the main transcript while also preserving full tool details out of band.
-    /// 验证水合时会在主转录中保留工具指令可见卡片，并同时在带外缓存中保留完整工具详情。
-    #[test]
-    fn load_event_store_window_messages_keeps_tool_rows_visible() {
-        let project_id = "session-load-project";
-        let session_id = SessionId::from_u128(42);
-        remove_session_event_store(project_id, session_id)
-            .expect("cleanup test session event-store");
-
-        let session = SessionSummary::new(
-            session_id,
-            Some(String::from(project_id)),
-            String::from("测试会话"),
-            String::new(),
-            SessionState::Draft,
-            0,
-            0,
-            String::from("刚刚"),
-        );
-        let messages = vec![
-            test_message(
-                "u1",
-                SessionMessageKind::User,
-                SessionMessageRecordKind::Transcript,
-                "读取文件",
-            ),
-            test_message(
-                "call-1",
-                SessionMessageKind::Assistant,
-                SessionMessageRecordKind::ToolCallOutput,
-                "调用 read_file",
-            ),
-            test_message(
-                "result-1",
-                SessionMessageKind::Assistant,
-                SessionMessageRecordKind::ToolResultOutput,
-                "文件内容",
-            ),
-        ];
-        persist_session_event_store(&session, &messages, None, &[])
-            .expect("persist session event store");
-
-        let locator = Some(StoredSessionEventStoreLocatorRow {
-            project_id: String::from(project_id),
-            latest_turn_index: 0,
-        });
-        let turn_rows = vec![StoredSessionTurnRow {
-            turn_id: String::from("turn-000000"),
-            turn_index: 0,
-            start_seq: 0,
-            end_seq: 2,
-            turn_state: String::from("open"),
-            summary_message_id: None,
-        }];
-
-        let (messages, tool_detail_messages, earliest_ordinal, _) =
-            load_event_store_window_messages(&locator, session_id, &turn_rows)
-                .expect("load event-store window");
-
-        assert_eq!(earliest_ordinal, Some(0));
-        assert_eq!(messages.len(), 3);
-        assert!(messages.iter().any(|message| message.id == "call-1"));
-        assert!(messages.iter().any(|message| message.id == "result-1"));
-        assert_eq!(tool_detail_messages.len(), 2);
-        assert!(tool_detail_messages.iter().all(|message| matches!(
-            message.record_kind,
-            SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
-        )));
-
-        remove_session_event_store(project_id, session_id).expect("cleanup persisted test session");
+    /// Builds one persisted Codex boundary line for session-load regression tests.
+    /// 为会话加载回归测试构建一条已持久化 Codex 边界行。
+    fn codex_boundary_line(
+        seq: u64,
+        thread_id: SessionNodeId,
+        kind: CodexSessionEventKind,
+        visibility: CodexEventVisibility,
+        text: &str,
+    ) -> super::super::segmented_session_store::SegmentedSessionEventLine {
+        super::super::segmented_session_store::SegmentedSessionEventLine {
+            seq,
+            timestamp: (1000 + seq).to_string(),
+            kind: SegmentedSessionEventKind::CodexBoundary,
+            payload: json!({
+                "event_id": format!("event-{seq}"),
+                "thread_id": thread_id,
+                "turn_id": "turn-1",
+                "item_id": serde_json::Value::Null,
+                "kind": kind,
+                "scope": CodexEventScope::Turn,
+                "visibility": visibility,
+                "sequence": seq,
+                "payload": { "text": text },
+            }),
+        }
     }
 
-    /// Verifies that hydration prefers the persisted current-context document instead of rebuilding the active conversation only from transcript rows.
-    /// 验证水合时会优先使用持久化当前上下文文档，而不是只根据转录行重建活动会话状态。
+    /// Verifies Codex boundary events become the primary hydrated transcript source.
+    /// 验证 Codex 边界事件会成为水合转录正文的首要来源。
     #[test]
-    fn hydrate_session_runtime_state_prefers_current_context_document() {
-        let project_id = "hydrate-context-project";
-        let session_id = SessionId::from_u128(99);
-        remove_session_event_store(project_id, session_id).expect("cleanup hydrate store");
+    fn codex_boundary_window_projects_visible_transcript() {
+        let thread_id = SessionNodeId::new_v4();
+        let window = codex_boundary_lines_to_window_messages(
+            &[
+                codex_boundary_line(
+                    1,
+                    thread_id,
+                    CodexSessionEventKind::UserInput,
+                    CodexEventVisibility::Visible,
+                    "用户输入",
+                ),
+                codex_boundary_line(
+                    2,
+                    thread_id,
+                    CodexSessionEventKind::AgentMessage,
+                    CodexEventVisibility::Visible,
+                    "助手输出",
+                ),
+            ],
+            false,
+        )
+        .expect("project codex boundary")
+        .expect("visible transcript");
 
-        let session = SessionSummary::new(
-            session_id,
-            Some(String::from(project_id)),
-            String::from("水合上下文测试"),
-            String::new(),
-            SessionState::Draft,
-            0,
-            0,
-            String::from("刚刚"),
+        assert_eq!(window.messages.len(), 2);
+        assert_eq!(window.messages[0].body, "用户输入");
+        assert_eq!(window.messages[1].body, "助手输出");
+        assert_eq!(window.earliest_ordinal, Some(1));
+        assert!(window.codex_conversation_state.is_some());
+    }
+
+    /// Verifies archived and restored session directories still hydrate display text from Codex boundary events.
+    /// 验证归档与恢复后的会话目录仍然从 Codex 边界事件水合显示正文。
+    #[test]
+    fn codex_boundary_archive_restore_keeps_display_projection() {
+        let root = std::env::temp_dir().join(format!(
+            "vulcan-codex-boundary-archive-restore-test-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let session_id = SessionId::from_u128(7005);
+        let thread_id = SessionNodeId::from(session_id);
+        let project_tag = "project-context";
+        let request = super::super::segmented_session_store::SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: project_tag.to_string(),
+            created_date: String::from("2026-06-07"),
+            created_at: String::from("100"),
+            project_id: Some(project_tag.to_string()),
+            title: Some(String::from("归档恢复")),
+            title_source: Some(String::from("test")),
+            segment_policy: super::super::segmented_session_store::SegmentPolicy::default(),
+        };
+        let session_dir =
+            super::super::segmented_session_store::create_segmented_session(&root, request.clone())
+                .expect("create segmented session");
+        let boundary_events = vec![
+            CodexSessionEvent::new(
+                "turn-1-user",
+                thread_id,
+                0,
+                CodexSessionEventKind::UserInput,
+                CodexEventScope::Turn,
+                CodexEventVisibility::Visible,
+                101,
+            )
+            .with_turn_id("turn-1")
+            .with_payload(json!({ "text": "用户归档前输入" })),
+            CodexSessionEvent::new(
+                "turn-1-agent",
+                thread_id,
+                0,
+                CodexSessionEventKind::AgentMessage,
+                CodexEventScope::Turn,
+                CodexEventVisibility::Visible,
+                102,
+            )
+            .with_turn_id("turn-1")
+            .with_payload(json!({ "text": "助手归档后输出" })),
+        ];
+        super::super::segmented_session_store::append_segmented_codex_boundary_events(
+            &session_dir,
+            &boundary_events,
+        )
+        .expect("append codex boundary events");
+
+        let archived_dir = super::super::segmented_session_store::archive_segmented_session_by_id(
+            &root,
+            project_tag,
+            &request.session_id,
+            "200",
+        )
+        .expect("archive session")
+        .expect("archived directory");
+        let archived_lines =
+            read_segmented_session_event_window(&archived_dir, None, 8).expect("read archived");
+        let archived_boundary_lines = archived_lines
+            .into_iter()
+            .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+            .collect::<Vec<_>>();
+        let archived_window =
+            codex_boundary_lines_to_window_messages(&archived_boundary_lines, false)
+                .expect("project archived boundary")
+                .expect("archived projection");
+        assert_eq!(archived_window.messages[0].body, "用户归档前输入");
+        assert_eq!(archived_window.messages[1].body, "助手归档后输出");
+
+        let restored_dir = super::super::segmented_session_store::restore_segmented_session_by_id(
+            &root,
+            project_tag,
+            &request.session_id,
+            "300",
+        )
+        .expect("restore session")
+        .expect("restored directory");
+        let restored_lines =
+            read_segmented_session_event_window(&restored_dir, None, 8).expect("read restored");
+        let restored_boundary_lines = restored_lines
+            .into_iter()
+            .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+            .collect::<Vec<_>>();
+        let restored_window =
+            codex_boundary_lines_to_window_messages(&restored_boundary_lines, false)
+                .expect("project restored boundary")
+                .expect("restored projection");
+        assert_eq!(restored_window.messages[0].body, "用户归档前输入");
+        assert_eq!(restored_window.messages[1].body, "助手归档后输出");
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies Codex projection overwrites transcript records while preserving runtime metadata.
+    /// 验证 Codex 投影会覆盖转录正文，同时保留运行时元数据。
+    #[test]
+    fn codex_projection_replaces_runtime_transcript_only() {
+        let mut runtime_state = SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("provider-a")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[test_message(
+                "old-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "旧正文",
+            )]);
+        let codex_state = conversation_state_from_session_messages(&[test_message(
+            "codex-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "Codex 正文",
+        )]);
+
+        apply_codex_conversation_projection_to_runtime_state(&mut runtime_state, codex_state);
+
+        assert_eq!(
+            runtime_state.active_provider_id.as_deref(),
+            Some("provider-a")
         );
+        assert_eq!(runtime_state.conversation_state.records.len(), 1);
+        assert_eq!(
+            runtime_state.conversation_state.records[0].body,
+            "Codex 正文"
+        );
+    }
+
+    /// Verifies hydration can rebuild runtime state from the segmented transcript window when no overwrite state exists.
+    /// 验证没有覆盖式状态时，水合能从分段转录窗口重建运行态。
+    #[test]
+    fn hydrate_session_runtime_state_rebuilds_from_segmented_window() {
+        let session_id = SessionId::from_u128(99);
         let transcript_messages = vec![test_message(
             "user-1",
             SessionMessageKind::User,
             SessionMessageRecordKind::Transcript,
             "仅转录消息",
         )];
-        let mut runtime_state = SessionRuntimeStateEntry::default();
-        append_assistant_text_message(
-            &mut runtime_state.conversation_state,
-            String::from("assistant-ctx"),
-            String::from("当前上下文正文"),
-        );
-        runtime_state.context_start_message_id = Some(String::from("summary-ctx"));
-        runtime_state.last_provider_request_preview_markdown =
-            Some(String::from("# Hydrated Provider Preview"));
-
-        persist_session_event_store(&session, &transcript_messages, Some(&runtime_state), &[])
-            .expect("persist hydrate context store");
 
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -850,10 +1038,6 @@ mod tests {
             .expect("build current-thread tokio runtime");
         let hydrated = runtime
             .block_on(hydrate_session_runtime_state(
-                Some(&StoredSessionEventStoreLocatorRow {
-                    project_id: String::from(project_id),
-                    latest_turn_index: 0,
-                }),
                 session_id,
                 None,
                 &transcript_messages,
@@ -862,62 +1046,23 @@ mod tests {
             .expect("expected hydrated runtime state");
 
         assert_eq!(hydrated.conversation_state.messages.len(), 1);
-        assert_eq!(
-            hydrated.context_start_message_id.as_deref(),
-            Some("summary-ctx")
-        );
-        assert_eq!(
-            hydrated.last_provider_request_preview_markdown.as_deref(),
-            Some("# Hydrated Provider Preview")
-        );
-        remove_session_event_store(project_id, session_id).expect("cleanup hydrate event-store");
+        assert_eq!(hydrated.conversation_state.records.len(), 1);
     }
 
-    /// Verifies that hydration falls back to the latest snapshot when the current-context document is unreadable.
-    /// 验证当当前上下文文档不可读时，水合过程会回退到最近的上下文快照。
+    /// Verifies hydration no longer falls back to legacy context snapshots when segmented state is absent.
+    /// 验证分段状态缺失时水合不再回退旧上下文快照。
     #[test]
-    fn hydrate_session_runtime_state_falls_back_to_latest_snapshot() {
-        let project_id = "hydrate-snapshot-fallback";
+    fn hydrate_session_runtime_state_without_segmented_inputs_returns_empty() {
         let session_id = SessionId::from_u128(119);
-        remove_session_event_store(project_id, session_id).expect("cleanup fallback store");
-
-        let mut runtime_state = SessionRuntimeStateEntry::default();
-        append_assistant_text_message(
-            &mut runtime_state.conversation_state,
-            String::from("assistant-snapshot"),
-            String::from("快照上下文正文"),
-        );
-        runtime_state.updated_at = String::from("777");
-        snapshot_session_context_before_user_prompt(project_id, session_id, &runtime_state)
-            .expect("capture fallback snapshot");
-        let current_path = crate::data_plane::application_data_root()
-            .join("sessions")
-            .join(project_id)
-            .join(session_id.to_string())
-            .join("context")
-            .join("current.json");
-        std::fs::write(&current_path, "{invalid-json")
-            .expect("write invalid current context document");
-
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("build current-thread tokio runtime");
         let hydrated = runtime
-            .block_on(hydrate_session_runtime_state(
-                Some(&StoredSessionEventStoreLocatorRow {
-                    project_id: String::from(project_id),
-                    latest_turn_index: 0,
-                }),
-                session_id,
-                None,
-                &[],
-            ))
-            .expect("hydrate runtime state from snapshot")
-            .expect("expected hydrated runtime state from snapshot");
+            .block_on(hydrate_session_runtime_state(session_id, None, &[]))
+            .expect("hydrate empty runtime state");
 
-        assert_eq!(hydrated.conversation_state.messages.len(), 1);
-        remove_session_event_store(project_id, session_id).expect("cleanup fallback event-store");
+        assert!(hydrated.is_none());
     }
 
     /// Verifies startup hydration rebuilds the visible transcript from runtime context when turn-window rows are temporarily absent.
@@ -952,6 +1097,87 @@ mod tests {
         assert_eq!(messages[0].body, "启动后要能看到我");
         assert_eq!(messages[1].body, "当然可以");
         assert!(tool_detail_messages.is_empty());
+    }
+
+    /// Verifies segmented current-context fallback can restore runtime conversation state without a full runtime-state blob.
+    /// 验证分段当前上下文兜底能在缺少完整运行态 blob 时恢复运行时会话状态。
+    #[test]
+    fn segmented_current_context_restores_runtime_state_without_full_blob() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let conversation_state = conversation_state_from_session_messages(&[test_message(
+            "assistant-context",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "分段上下文正文",
+        )]);
+        let current_context = serde_json::json!({
+            "conversation_state": conversation_state,
+            "last_compaction_id": "compaction-segment-1",
+            "context_start_message_id": "context-start-1",
+            "anchor_context_budget_fingerprint": "budget-fp",
+            "anchor_context_assembly_fingerprint": "assembly-fp",
+            "last_provider_request_preview_markdown": "# Segmented Preview",
+            "updated_at": "9001"
+        });
+
+        let applied = apply_segmented_current_context(&mut runtime_state, &current_context)
+            .expect("apply segmented current context");
+
+        assert!(applied);
+        assert_eq!(runtime_state.conversation_state.messages.len(), 1);
+        assert_eq!(
+            runtime_state.last_compaction_id.as_deref(),
+            Some("compaction-segment-1")
+        );
+        assert_eq!(
+            runtime_state.context_start_message_id.as_deref(),
+            Some("context-start-1")
+        );
+        assert_eq!(
+            runtime_state.anchor_context_budget_fingerprint.as_deref(),
+            Some("budget-fp")
+        );
+        assert_eq!(
+            runtime_state.anchor_context_assembly_fingerprint.as_deref(),
+            Some("assembly-fp")
+        );
+        assert_eq!(
+            runtime_state
+                .last_provider_request_preview_markdown
+                .as_deref(),
+            Some("# Segmented Preview")
+        );
+        assert_eq!(runtime_state.updated_at, "9001");
+    }
+
+    /// Verifies segmented replay results can hydrate the existing runtime-state structure.
+    /// 验证分段重放结果可以水合到现有运行态结构中。
+    #[test]
+    fn segmented_replay_result_maps_to_runtime_state() {
+        let conversation_state = conversation_state_from_session_messages(&[test_message(
+            "assistant-replay",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "重放正文",
+        )]);
+        let runtime_state =
+            runtime_state_entry_from_segmented_replay(SegmentedSessionReplayResult {
+                conversation_state,
+                last_compaction_id: Some("segmented-compaction-9".to_string()),
+                context_start_message_id: Some("assistant-replay".to_string()),
+                updated_at: Some("9900".to_string()),
+            });
+
+        assert_eq!(runtime_state.conversation_state.messages.len(), 1);
+        assert_eq!(
+            runtime_state.last_compaction_id.as_deref(),
+            Some("segmented-compaction-9")
+        );
+        assert_eq!(
+            runtime_state.context_start_message_id.as_deref(),
+            Some("assistant-replay")
+        );
+        assert_eq!(runtime_state.updated_at, "9900");
     }
 
     /// Verifies hydration repairs duplicate canonical record ids that were previously persisted by the broken runtime id generator.

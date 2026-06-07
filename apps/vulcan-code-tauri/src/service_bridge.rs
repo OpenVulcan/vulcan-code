@@ -51,7 +51,9 @@ use vulcan_agent_runtime::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
         stage_attachment_bytes, stage_attachment_file,
     },
-    conversation_protocol::conversation_state_to_session_messages,
+    conversation_protocol::{
+        conversation_state_from_session_messages, conversation_state_to_session_messages,
+    },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
     provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
@@ -78,6 +80,10 @@ use vulcan_agent_runtime::{
         continue_shared_prompt_turn_after_precheck, shared_prompt_precheck_plan,
     },
 };
+use vulcan_codex_session_port::{
+    CodexExternalStreamTurnRunner, CodexExternalTurnBeginRequest, CodexExternalTurnFinishRequest,
+    CodexHookAdapter, CodexSessionEvent, CodexTurnTerminalStatus,
+};
 use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
 };
@@ -95,37 +101,40 @@ use vulcan_service_api::{
     StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
     ToolCallSummary, WorkbenchSnapshot,
 };
-use vulcan_task_session::FileTaskSessionStore;
+use vulcan_session_core::SessionNodeId;
+use vulcan_task_session::SegmentedTaskSessionStore;
 use vulcan_workbench_model::{
     PENDING_PROMPT_QUEUE_LIMIT, PendingPromptBusyLaneContext, PendingPromptDispatchContext,
-    PendingPromptInternalQueueEnqueueError, PendingPromptModelReference,
-    PendingPromptPanelDropTarget, PendingPromptPanelEntry, PendingPromptPanelEntryState,
-    PendingPromptQueueRouteError, PendingPromptQueueRouteOutcome, PendingPromptRuntimeOptions,
-    PendingSessionPromptEntry, PendingSessionPromptSource, SUBAGENT_TASK_STOPPED_SUMMARY_TEXT,
-    SelectedSubagentTaskPanel, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, SessionTurnStatsStatus, SubagentTaskPanelState,
-    SubagentTaskRunState, TaskProjectSummary, apply_pending_prompt_panel_drop_target,
-    attach_tool_display_state_to_metadata, build_delegate_completion_followup_preview,
-    build_delegate_completion_followup_prompt, build_session_record_message_id,
-    build_stopped_task_session_metadata, clear_internal_pending_prompt_queue_and_restore_panel,
+    PendingPromptModelReference, PendingPromptPanelDropTarget, PendingPromptPanelEntry,
+    PendingPromptPanelEntryState, PendingPromptQueueRouteError, PendingPromptQueueRouteOutcome,
+    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
+    SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SessionId, SessionMessageEntry,
+    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
+    SessionState, SessionSummary, SessionTitleSource, SessionTurnStatsStatus,
+    SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
+    apply_pending_prompt_panel_drop_target, attach_tool_display_state_to_metadata,
+    build_session_record_message_id, build_stopped_task_session_metadata,
+    clear_internal_pending_prompt_queue_and_restore_panel,
     collect_running_subagent_task_states_for_tree, enqueue_pending_prompt_internal_queue_entry,
     find_task_session_tool_message_id_for_payload, merge_subagent_task_panel_cache,
     merge_tool_display_metadata, next_pending_prompt_dispatch_source,
     normalize_subagent_task_panel_state, parse_subagent_task_panel_metadata,
     parse_subagent_task_prompt_metadata, pending_prompt_dispatch_block_reason_for_source,
-    pending_prompt_dispatch_prefers_delegate_completion, pending_prompt_lane_is_busy,
-    remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
-    select_subagent_navigation_panel_states, subagent_navigation_round_should_remain_visible,
-    subagent_navigation_surface_is_visible, subagent_navigation_task_label,
-    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
-    subagent_task_panel_states_from_task_session_store, take_next_pending_prompt_entry,
+    pending_prompt_lane_is_busy, remove_pending_prompt_panel_entry,
+    route_pending_prompt_panel_entry_into_internal_queue, select_subagent_navigation_panel_states,
+    subagent_navigation_round_should_remain_visible, subagent_navigation_surface_is_visible,
+    subagent_navigation_task_label, subagent_task_panel_is_openable,
+    subagent_task_panel_state_detail_from_segmented_task_session_store,
+    subagent_task_panel_state_has_recoverable_conversation,
+    subagent_task_panel_states_from_segmented_task_session_store, take_next_pending_prompt_entry,
     take_runtime_intervention_guided_pending_prompt_entries,
     task_session_execution_status_from_tool_metadata, task_session_payload_from_tool_metadata,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
-    workspace_store::{SessionHydrationSnapshot, WorkspaceSnapshot},
+    workspace_store::{
+        SessionHydrationSnapshot, WorkspaceSegmentedCodexSessionStore, WorkspaceSnapshot,
+    },
 };
 
 use crate::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
@@ -171,6 +180,19 @@ struct AgentRuntimeBridge {
     vmm_hook_runtime: VmmHookRuntimeHandle,
 }
 
+/// No-op Codex hook used by the WebUI external stream lifecycle runner.
+/// WebUI 外部流生命周期 runner 使用的空 Codex hook。
+#[derive(Debug, Clone, Copy)]
+struct WebuiCodexLifecycleHook;
+
+impl CodexHookAdapter for WebuiCodexLifecycleHook {
+    /// Ignores Codex lifecycle events after durable append.
+    /// 在持久化追加后忽略 Codex 生命周期事件。
+    fn after_event_appended(&self, _event: &CodexSessionEvent) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// Number of recent turns loaded for the selected conversation.
 /// 为当前选中会话加载的最近轮次数量。
 const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 24;
@@ -192,6 +214,9 @@ struct ServiceBridgeState {
     /// Latest workbench snapshot.
     /// 最近一次工作台快照。
     workbench: WorkbenchSnapshot,
+    /// Monotonic version for workspace-driven workbench rebuilds.
+    /// 工作区驱动的工作台重建单调版本号。
+    workbench_generation: u64,
     /// Latest workspace snapshot retained for streaming turn updates.
     /// 为流式会话轮次更新保留的最近工作区快照。
     workspace_snapshot: Option<WorkspaceSnapshot>,
@@ -228,6 +253,12 @@ struct ServiceBridgeState {
     /// Detached child-task listeners already started by the WebUI bridge.
     /// WebUI 桥接层已经启动的分离子任务监听器集合。
     detached_subagent_task_listeners: BTreeSet<SessionId>,
+    /// Parent sessions currently blocked inside a model-requested wait_agent call.
+    /// 当前正阻塞在模型请求的 wait_agent 调用中的父会话集合。
+    parent_sessions_waiting_for_subagents: BTreeSet<SessionId>,
+    /// Parent sessions whose latest wait_agent already collected child-agent terminal results.
+    /// 最近一次 wait_agent 已经收集子代理终态结果的父会话集合。
+    parent_sessions_with_completed_wait_agent: BTreeSet<SessionId>,
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
     active_stream_tasks: BTreeMap<SessionId, tauri::async_runtime::JoinHandle<()>>,
@@ -263,6 +294,7 @@ pub fn run() {
     let state = Arc::new(Mutex::new(ServiceBridgeState {
         startup: startup_snapshot_with_phase("pending", Vec::new(), &[]),
         workbench: fallback_workbench_snapshot(&[]),
+        workbench_generation: 0,
         workspace_snapshot: None,
         agent_runtime: None,
         service_runtime: None,
@@ -275,6 +307,8 @@ pub fn run() {
         session_subagent_navigation_rounds: BTreeSet::new(),
         active_subagent_panel: None,
         detached_subagent_task_listeners: BTreeSet::new(),
+        parent_sessions_waiting_for_subagents: BTreeSet::new(),
+        parent_sessions_with_completed_wait_agent: BTreeSet::new(),
         active_stream_tasks: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
     }));
@@ -622,7 +656,7 @@ async fn service_session_messages(
         .await
         {
             Ok(snapshot) => snapshot,
-            Err(error) if is_missing_session_manifest_error(&error) => {
+            Err(error) if is_missing_segmented_session_file_error(&error) => {
                 return Ok(Vec::new());
             }
             Err(error) => return Err(error),
@@ -948,6 +982,17 @@ async fn service_submit_conversation_prompt(
     ) = runtime_parts_from_state(&state)?;
     let previous_workspace_snapshot = current_workspace_snapshot_from_state(&state)?;
     let submission_session_id = conversation_id.as_deref().and_then(parse_session_id);
+    let workspace_load_started_at = current_unix_millis_value();
+    let reused_retained_workspace = submission_session_id
+        .and_then(|session_id| {
+            previous_workspace_snapshot
+                .as_ref()
+                .filter(|workspace_snapshot| {
+                    retained_submission_snapshot_has_session_context(workspace_snapshot, session_id)
+                })
+                .map(|_| session_id)
+        })
+        .is_some();
     let mut workspace_snapshot = if let Some(session_id) = submission_session_id
         && let Some(workspace_snapshot) = previous_workspace_snapshot.clone()
         && retained_submission_snapshot_has_session_context(&workspace_snapshot, session_id)
@@ -957,24 +1002,40 @@ async fn service_submit_conversation_prompt(
         load_workspace_for_submission(controller_runtime.clone(), conversation_id.as_deref())
             .await?
     };
+    webui_trace(
+        "submit_prompt_workspace_ready",
+        format!(
+            "conversation_id={} reused_retained_workspace={reused_retained_workspace} elapsed_ms={}",
+            conversation_id.as_deref().unwrap_or("<draft>"),
+            current_unix_millis_value().saturating_sub(workspace_load_started_at)
+        ),
+    );
     preserve_active_session_run_state(
         previous_workspace_snapshot.as_ref(),
         &mut workspace_snapshot,
     );
     if let Some(session_id) = conversation_id.as_deref().and_then(parse_session_id) {
+        let blocking_check_started_at = current_unix_millis_value();
         let (has_active_stream_task, has_running_subagents) = {
             let mut guard = state
                 .lock()
                 .map_err(|error| format!("failed to lock service state: {error}"))?;
             (
                 guard.active_stream_tasks.contains_key(&session_id),
-                session_has_running_subagent_tasks_from_state(
+                session_has_running_subagent_tasks_from_cache(
                     &mut guard,
                     &workspace_snapshot,
                     session_id,
                 ),
             )
         };
+        webui_trace(
+            "submit_prompt_blocking_check",
+            format!(
+                "session={session_id} has_active_stream_task={has_active_stream_task} has_running_subagents={has_running_subagents} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(blocking_check_started_at)
+            ),
+        );
         if session_has_blocking_system_prompt_work(
             &workspace_snapshot,
             &agent_runtime.provider_configuration,
@@ -1042,6 +1103,7 @@ async fn service_submit_conversation_prompt(
             &prompt
         },
     )?;
+    ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None);
     if conversation_id.is_some() {
         let mut guard = state
             .lock()
@@ -1061,6 +1123,7 @@ async fn service_submit_conversation_prompt(
             session_title.chars().count()
         ),
     );
+    let submit_run_prepare_started_at = current_unix_millis_value();
     let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
         &agent_runtime.ai_tool_configuration,
         disabled_ai_capability_kinds.as_deref(),
@@ -1069,11 +1132,28 @@ async fn service_submit_conversation_prompt(
         parse_ai_capability_target_selectors(disabled_ai_capability_target_selectors);
     let ai_capability_target_order_overrides =
         parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
+    webui_trace(
+        "submit_prompt_runtime_options_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(submit_run_prepare_started_at)
+        ),
+    );
+    let context_snapshot_started_at = current_unix_millis_value();
     snapshot_webui_context_before_user_prompt(
+        &controller_runtime,
         &workspace_snapshot,
         session_id,
         PendingSessionPromptSource::UserFollowup,
     )?;
+    webui_trace(
+        "submit_prompt_context_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(context_snapshot_started_at)
+        ),
+    );
+    let turn_begin_started_at = current_unix_millis_value();
     let precheck_start = {
         let mut hook_runtime = agent_runtime
             .conversation_hook_runtime
@@ -1103,20 +1183,60 @@ async fn service_submit_conversation_prompt(
             },
         )
     }?;
-    apply_webui_prompt_begin_outer_steps(&mut workspace_snapshot, session_id, &session_title);
+    webui_trace(
+        "submit_prompt_turn_begin_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(turn_begin_started_at)
+        ),
+    );
+    let outer_steps_started_at = current_unix_millis_value();
+    apply_webui_prompt_begin_outer_steps(
+        &controller_runtime,
+        &mut workspace_snapshot,
+        session_id,
+        &session_title,
+    );
+    webui_trace(
+        "submit_prompt_outer_steps_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(outer_steps_started_at)
+        ),
+    );
+    let hook_snapshot_started_at = current_unix_millis_value();
     agent_runtime
         .vmm_hook_runtime
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
         ));
+    webui_trace(
+        "submit_prompt_hook_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(hook_snapshot_started_at)
+        ),
+    );
+    let precheck_plan_started_at = current_unix_millis_value();
     let precheck_plan = webui_shared_prompt_precheck_plan(
         &agent_runtime,
         &workspace_snapshot,
         session_id,
         &workspace_path,
     )?;
-    let mut workbench = store_and_emit_workbench_snapshot(
+    webui_trace(
+        "submit_prompt_precheck_plan_ready",
+        format!(
+            "session={session_id} has_hooks={} skip={} labels={} elapsed_ms={}",
+            precheck_plan.has_precheck_hooks,
+            precheck_plan.should_skip_precheck,
+            precheck_plan.progress_labels.len(),
+            current_unix_millis_value().saturating_sub(precheck_plan_started_at)
+        ),
+    );
+    let store_emit_started_at = current_unix_millis_value();
+    let mut workbench = store_and_emit_workbench_snapshot_preserving_subagent_navigation(
         &app,
         &state,
         &controller_runtime,
@@ -1128,6 +1248,13 @@ async fn service_submit_conversation_prompt(
         workspace_snapshot.clone(),
         &logs,
     )?;
+    webui_trace(
+        "submit_prompt_workbench_emitted",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(store_emit_started_at)
+        ),
+    );
     spawn_workspace_session_persist_task(
         state.inner().clone(),
         controller_runtime.clone(),
@@ -1136,6 +1263,7 @@ async fn service_submit_conversation_prompt(
         Some(String::from("submit_begin")),
     );
     let service_state = state.inner().clone();
+    let precheck_dispatch_started_at = current_unix_millis_value();
     if start_webui_precheck_or_continue(
         &app,
         &service_state,
@@ -1146,6 +1274,13 @@ async fn service_submit_conversation_prompt(
     )? {
         workbench = current_workbench_snapshot_from_state(&state)?;
     }
+    webui_trace(
+        "submit_prompt_precheck_dispatch_returned",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(precheck_dispatch_started_at)
+        ),
+    );
     Ok(workbench)
 }
 
@@ -1178,6 +1313,9 @@ async fn service_stop_conversation_run(
     if let Some(active_task) = active_task {
         active_task.abort();
     }
+    with_workspace_mutation(&app, state.inner(), |workspace| {
+        mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
+    })?;
     let mut workspace_snapshot =
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
@@ -1186,7 +1324,7 @@ async fn service_stop_conversation_run(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        running_webui_subagent_task_states_for_tree(
+        running_webui_subagent_task_states_for_tree_from_cache(
             &mut guard,
             &workspace_snapshot,
             selected_session_id,
@@ -1277,74 +1415,130 @@ async fn service_open_subagent_panel(
         "open_subagent_panel_requested",
         format!("parent={parent_session_id} task={task_session_id}"),
     );
+    {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if guard.active_subagent_panel
+            == Some(SelectedSubagentTaskPanel {
+                parent_session_id,
+                task_id: task_session_id,
+            })
+        {
+            webui_trace(
+                "open_subagent_panel_noop_active",
+                format!("parent={parent_session_id} task={task_session_id}"),
+            );
+            return Ok(guard.workbench.clone());
+        }
+    }
     let workspace_snapshot = current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
+    let opened_from_cache = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        open_webui_subagent_panel_from_cached_state(
+            &mut guard,
+            &workspace_snapshot,
+            parent_session_id,
+            task_session_id,
+        )?
+    };
+    if opened_from_cache {
+        return emit_subagent_display_route_workbench_snapshot(
+            &app,
+            state.inner(),
+            workspace_snapshot,
+        );
+    }
+    let detailed_state = segmented_webui_subagent_task_panel_state_for_task(
+        &workspace_snapshot,
+        parent_session_id,
+        task_session_id,
+    );
     {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        rebuild_webui_subagent_task_cache_for_session(
+        if let Some(detailed_state) = detailed_state {
+            merge_webui_subagent_task_cache_for_session(
+                &mut guard,
+                parent_session_id,
+                vec![detailed_state],
+            );
+        }
+        if !open_webui_subagent_panel_from_cached_state(
             &mut guard,
             &workspace_snapshot,
             parent_session_id,
-        );
-        if !guard
-            .session_subagent_tasks
-            .get(&parent_session_id)
-            .is_some_and(|tasks| tasks.contains_key(&task_session_id))
-        {
+            task_session_id,
+        )? {
             webui_trace(
                 "open_subagent_panel_missing",
                 format!("parent={parent_session_id} task={task_session_id}"),
             );
             return Err(String::from("没有找到可打开的子代理任务。"));
         }
-        let task_state = guard
-            .session_subagent_tasks
-            .get(&parent_session_id)
-            .and_then(|tasks| tasks.get(&task_session_id))
-            .cloned()
-            .ok_or_else(|| String::from("没有找到可打开的子代理任务。"))?;
-        let has_live_listener = guard
-            .detached_subagent_task_listeners
-            .contains(&task_session_id);
-        let task_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime);
-        let normalized = normalize_webui_subagent_task_state(
-            Some(&workspace_snapshot),
-            &task_state,
-            task_runtime,
-            has_live_listener,
-        );
-        let has_recoverable_detail =
-            webui_subagent_panel_has_recoverable_detail(&workspace_snapshot, &normalized);
-        let is_openable = subagent_task_panel_is_openable(&normalized, has_recoverable_detail);
-        webui_trace(
-            "open_subagent_panel_evaluated",
-            format!(
-                "parent={parent_session_id} task={task_session_id} run_state={} has_recoverable_detail={has_recoverable_detail} is_openable={is_openable} messages={}",
-                subagent_run_state_key(normalized.run_state),
-                workspace_snapshot
-                    .session_messages
-                    .get(&task_session_id)
-                    .map(Vec::len)
-                    .unwrap_or(0)
-            ),
-        );
-        if !is_openable {
-            return Err(String::from(
-                "当前子代理详情已不可恢复，请从 task 工具卡片查看返回信息。",
-            ));
-        }
-        guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
-            parent_session_id,
-            task_id: task_session_id,
-        });
     }
     emit_subagent_display_route_workbench_snapshot(&app, state.inner(), workspace_snapshot)
+}
+
+/// Opens a WebUI subagent panel from the in-memory task cache without touching disk.
+/// 从内存任务缓存打开 WebUI 子代理面板，不触碰磁盘。
+fn open_webui_subagent_panel_from_cached_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+    task_session_id: SessionId,
+) -> Result<bool, String> {
+    let Some(task_state) = guard
+        .session_subagent_tasks
+        .get(&parent_session_id)
+        .and_then(|tasks| tasks.get(&task_session_id))
+        .cloned()
+    else {
+        return Ok(false);
+    };
+    let has_live_listener = guard
+        .detached_subagent_task_listeners
+        .contains(&task_session_id);
+    let task_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime);
+    let is_live_running =
+        webui_subagent_task_has_live_run(task_runtime, has_live_listener, task_session_id);
+    let normalized = normalize_subagent_task_panel_state(&task_state, is_live_running, None);
+    let has_recoverable_detail =
+        webui_subagent_panel_has_recoverable_detail(workspace_snapshot, &normalized);
+    let is_openable = subagent_task_panel_is_openable(&normalized, has_recoverable_detail);
+    webui_trace(
+        "open_subagent_panel_evaluated",
+        format!(
+            "parent={parent_session_id} task={task_session_id} run_state={} has_recoverable_detail={has_recoverable_detail} is_openable={is_openable} messages={}",
+            subagent_run_state_key(normalized.run_state),
+            workspace_snapshot
+                .session_messages
+                .get(&task_session_id)
+                .map(Vec::len)
+                .unwrap_or(0)
+        ),
+    );
+    if !is_openable {
+        return Ok(false);
+    }
+    guard
+        .session_subagent_tasks
+        .entry(parent_session_id)
+        .or_default()
+        .insert(task_session_id, normalized);
+    guard.active_subagent_panel = Some(SelectedSubagentTaskPanel {
+        parent_session_id,
+        task_id: task_session_id,
+    });
+    Ok(true)
 }
 
 /// Closes the active subagent transcript surface and returns to the parent conversation.
@@ -1417,7 +1611,7 @@ async fn service_stop_subagent_task(
             .cloned();
         let mut task_states_to_mark = vec![(parent_session_id, task_session_id, root_state)];
         task_states_to_mark.extend(
-            running_webui_subagent_task_states_for_tree(
+            running_webui_subagent_task_states_for_tree_from_cache(
                 &mut guard,
                 &workspace_snapshot,
                 task_session_id,
@@ -2393,6 +2587,7 @@ async fn service_select_conversation(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
     }
@@ -2623,7 +2818,7 @@ async fn load_workspace_for_submission(
                 }
                 workspace_snapshot.hydrated_session_ids.insert(session_id);
             }
-            Err(error) if is_missing_session_manifest_error(&error) => {}
+            Err(error) if is_missing_segmented_session_file_error(&error) => {}
             Err(error) => return Err(error),
         }
     }
@@ -2683,6 +2878,66 @@ fn runtime_state_has_concrete_conversation_context(
 ) -> bool {
     !runtime_state.conversation_state.messages.is_empty()
         || !runtime_state.conversation_state.records.is_empty()
+}
+
+/// Ensures one WebUI session has an in-memory runtime-state document after SQLite runtime storage was removed.
+/// 在 SQLite 运行态存储移除后，确保单个 WebUI 会话拥有内存运行态文档。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the retained WebUI workspace snapshot that will be repaired in memory.
+/// `workspace_snapshot` 是将被内存修复的 WebUI 保留工作区快照。
+/// `session_id` selects the session that must be runnable.
+/// `session_id` 选择必须可运行的会话。
+/// `active_precheck_turn_id` optionally restores the turn id carried by the already-created precheck request.
+/// `active_precheck_turn_id` 可选恢复已创建 precheck 请求携带的回合标识。
+fn ensure_webui_session_runtime_state(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    active_precheck_turn_id: Option<&str>,
+) {
+    let now = current_unix_millis_text();
+    let projected_messages = workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .cloned();
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    if !runtime_state_has_concrete_conversation_context(runtime_state)
+        && let Some(messages) = projected_messages.as_deref()
+        && !messages.is_empty()
+    {
+        runtime_state.conversation_state = conversation_state_from_session_messages(messages);
+        runtime_state.updated_at = now.clone();
+    }
+    if let Some(turn_id) = active_precheck_turn_id
+        .map(str::trim)
+        .filter(|turn_id| !turn_id.is_empty())
+        && runtime_state
+            .active_precheck_turn_id
+            .as_deref()
+            .is_none_or(|current| current.trim().is_empty())
+    {
+        runtime_state.active_precheck_turn_id = Some(turn_id.to_string());
+        runtime_state.updated_at = now.clone();
+    }
+    if runtime_state_has_concrete_conversation_context(runtime_state) {
+        workspace_snapshot.session_messages.insert(
+            session_id,
+            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        );
+    } else {
+        workspace_snapshot
+            .session_messages
+            .entry(session_id)
+            .or_default();
+    }
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
 }
 
 /// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.
@@ -2748,14 +3003,15 @@ fn webui_pending_prompt_dispatch_context(
     }
 }
 
-/// Returns whether the shared task runtime still reports a child subagent as running.
-/// 判断共享任务运行时是否仍报告某个子代理正在运行。
-fn session_has_running_subagent_tasks_from_state(
+/// Returns whether cached WebUI state still reports a running child subagent.
+/// 返回 WebUI 缓存状态是否仍报告存在运行中的子代理。
+fn session_has_running_subagent_tasks_from_cache(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> bool {
-    !running_webui_subagent_task_states_for_tree(guard, workspace_snapshot, session_id).is_empty()
+    !running_webui_subagent_task_states_for_tree_from_cache(guard, workspace_snapshot, session_id)
+        .is_empty()
 }
 
 /// Gate state used to decide whether a completed model request closes the logical user turn.
@@ -2765,9 +3021,6 @@ struct WebuiTurnCompletionGate {
     /// Number of still-running descendant subagent tasks under this parent session.
     /// 该父会话下仍在运行的后代子代理任务数量。
     pending_subagent_count: usize,
-    /// Number of queued delegate-completion follow-ups that still need to be absorbed.
-    /// 仍需吸收的委派完成回流队列条目数量。
-    pending_delegate_completion_count: usize,
     /// Whether the shared hook runtime still has the original user turn open.
     /// 共享 hook 运行时是否仍保留原始用户回合。
     has_active_hook_turn: bool,
@@ -2777,7 +3030,7 @@ impl WebuiTurnCompletionGate {
     /// Returns whether the logical user turn still has unfinished subagent work.
     /// 返回逻辑用户回合是否仍有未完成的子代理工作。
     fn has_pending_work(self) -> bool {
-        self.pending_subagent_count > 0 || self.pending_delegate_completion_count > 0
+        self.pending_subagent_count > 0
     }
 
     /// Converts the gate into the hook payload completion status.
@@ -2791,26 +3044,6 @@ impl WebuiTurnCompletionGate {
     }
 }
 
-/// Counts queued delegate-completion prompts for one parent session.
-/// 统计一个父会话中排队的委派完成提示数量。
-fn webui_pending_delegate_completion_count(
-    workspace_snapshot: &WorkspaceSnapshot,
-    session_id: SessionId,
-) -> usize {
-    workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .map(|runtime_state| {
-            runtime_state
-                .ui_state
-                .pending_prompt_queue
-                .iter()
-                .filter(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
-                .count()
-        })
-        .unwrap_or(0)
-}
-
 /// Reads the shared turn-completion gate without mutating the transcript application path.
 /// 在不改变转录应用路径的情况下读取共享回合完成闸门。
 fn webui_turn_completion_gate_from_state(
@@ -2818,7 +3051,7 @@ fn webui_turn_completion_gate_from_state(
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
 ) -> Result<WebuiTurnCompletionGate, String> {
-    let (pending_subagent_count, pending_delegate_completion_count) = {
+    let pending_subagent_count = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -2826,15 +3059,12 @@ fn webui_turn_completion_gate_from_state(
             .workspace_snapshot
             .clone()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        (
-            running_webui_subagent_task_states_for_tree(
-                &mut guard,
-                &workspace_snapshot,
-                session_id,
-            )
-            .len(),
-            webui_pending_delegate_completion_count(&workspace_snapshot, session_id),
+        running_webui_subagent_task_states_for_tree_from_cache(
+            &mut guard,
+            &workspace_snapshot,
+            session_id,
         )
+        .len()
     };
     let has_active_hook_turn = agent_runtime
         .conversation_hook_runtime
@@ -2843,20 +3073,18 @@ fn webui_turn_completion_gate_from_state(
         .unwrap_or(false);
     Ok(WebuiTurnCompletionGate {
         pending_subagent_count,
-        pending_delegate_completion_count,
         has_active_hook_turn,
     })
 }
 
-/// Returns running child task states under one WebUI subagent parent tree with their direct parent identifiers.
-/// 返回某个 WebUI 子代理父级树下仍在运行的子任务状态，并携带其直接父级标识。
-fn running_webui_subagent_task_states_for_tree(
+/// Returns running child task states from the in-memory cache without segmented-store refresh.
+/// 不刷新分段存储，仅从内存缓存返回仍在运行的子任务状态。
+fn running_webui_subagent_task_states_for_tree_from_cache(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
     root_parent_session_id: SessionId,
 ) -> Vec<(SessionId, SubagentTaskPanelState)> {
     collect_running_subagent_task_states_for_tree(root_parent_session_id, |parent_session_id| {
-        rebuild_webui_subagent_task_cache_for_session(guard, workspace_snapshot, parent_session_id);
         let task_runtime = guard
             .agent_runtime
             .as_ref()
@@ -2991,6 +3219,28 @@ fn stop_webui_session_work(
         .insert(session_id, projected_messages);
     workspace_snapshot.hydrated_session_ids.insert(session_id);
     Ok(true)
+}
+
+/// Applies the immediate stopped gate before slower stop projection and persistence finish.
+/// 在较慢的停止投影与持久化完成前先应用即时停止门禁。
+fn mark_webui_session_stop_requested_in_workspace(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) {
+    let now = current_unix_millis_text();
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Stopped);
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    clear_internal_pending_prompt_queue_and_restore_panel(&mut runtime_state.ui_state);
+    runtime_state.active_precheck_turn_id = None;
+    runtime_state.updated_at = now;
 }
 
 /// Appends one canonical WebUI session message record and returns its materialized id.
@@ -3400,28 +3650,27 @@ fn owning_project_id_for_session(
 /// `workspace_snapshot` 包含当前运行态。
 /// `session_id` selects the prompt session.
 /// `session_id` 选择提示词会话。
-/// `source` identifies whether this prompt is visible user input or delegated completion.
-/// `source` 标识该提示词是可见用户输入还是委派完成回流。
+/// `_source` is retained only for temporary call-site stability.
+/// `_source` 仅为临时保持调用点稳定而保留。
 ///
 /// # Returns
 /// 返回值
 /// `Ok(())` after the snapshot either succeeds or is not needed.
 /// 快照成功或无需快照后返回 `Ok(())`。
 fn snapshot_webui_context_before_user_prompt(
+    controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
-    source: PendingSessionPromptSource,
+    _source: PendingSessionPromptSource,
 ) -> Result<(), String> {
-    if source == PendingSessionPromptSource::DelegateCompletion {
-        return Ok(());
-    }
     let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
         return Ok(());
     };
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
         return Ok(());
     };
-    vulcan_workspace_store::workspace_store::snapshot_session_context_before_user_prompt(
+    vulcan_workspace_store::workspace_store::snapshot_segmented_session_context_before_user_prompt(
+        &controller_runtime.data_root,
         &project_id,
         session_id,
         runtime_state,
@@ -3440,6 +3689,7 @@ fn snapshot_webui_context_before_user_prompt(
 /// `session_title` labels diagnostics.
 /// `session_title` 标记诊断信息。
 fn apply_webui_prompt_begin_outer_steps(
+    controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
     session_title: &str,
@@ -3453,7 +3703,12 @@ fn apply_webui_prompt_begin_outer_steps(
     {
         runtime_state.updated_at = current_unix_millis_text();
     }
-    persist_webui_context_current_document(workspace_snapshot, session_id, session_title);
+    persist_webui_context_current_document(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        session_title,
+    );
 }
 
 /// Persists the iced-equivalent current context document for a WebUI session when possible.
@@ -3468,6 +3723,7 @@ fn apply_webui_prompt_begin_outer_steps(
 /// `session_title` labels diagnostics.
 /// `session_title` 标记诊断信息。
 fn persist_webui_context_current_document(
+    controller_runtime: &ControllerRuntimeHandle,
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
     session_title: &str,
@@ -3479,7 +3735,8 @@ fn persist_webui_context_current_document(
         return;
     };
     if let Err(error) =
-        vulcan_workspace_store::workspace_store::persist_session_context_current_document(
+        vulcan_workspace_store::workspace_store::persist_segmented_session_context_current_document(
+            &controller_runtime.data_root,
             &project_id,
             session_id,
             runtime_state,
@@ -3859,8 +4116,8 @@ async fn persist_workspace_session_update_unlocked(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the id belongs to a normal active or archived session, not a file-backed TaskSession.
-/// 当该标识属于普通活动或归档会话、而不是文件态 TaskSession 时返回 `true`。
+/// `true` when the id belongs to a normal active or archived session, not a persisted TaskSession.
+/// 当该标识属于普通活动或归档会话、而不是持久化 TaskSession 时返回 `true`。
 fn workspace_snapshot_contains_regular_session(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
@@ -3921,8 +4178,8 @@ fn spawn_workspace_session_persist_task(
     });
 }
 
-/// Persists only one WebUI session runtime-state row in the background.
-/// 在后台仅持久化一个 WebUI 会话运行态行。
+/// Persists only one WebUI session runtime-state document in the background.
+/// 在后台仅持久化一个 WebUI 会话运行态文档。
 ///
 /// # Parameters
 /// 参数
@@ -3932,8 +4189,8 @@ fn spawn_workspace_session_persist_task(
 /// `controller_runtime` 持有工作区存储运行时桥。
 /// `workspace_snapshot` is the already-rendered snapshot containing the runtime state.
 /// `workspace_snapshot` 是已经渲染过且包含运行态的快照。
-/// `session_id` selects the session runtime-state row to persist.
-/// `session_id` 选择需要持久化的会话运行态行。
+/// `session_id` selects the session runtime-state document to persist.
+/// `session_id` 选择需要持久化的会话运行态文档。
 /// `reason` labels the write site for diagnostics.
 /// `reason` 标记写入来源，供诊断使用。
 fn spawn_workspace_session_runtime_state_persist_task(
@@ -4073,8 +4330,8 @@ fn invalidate_webui_session_persist_version(
 /// 参数
 /// `controller_runtime` owns the workspace store runtime bridge.
 /// `controller_runtime` 持有工作区存储运行时桥。
-/// `session_id` selects the runtime-state row to update.
-/// `session_id` 选择要更新的运行态记录。
+/// `session_id` selects the runtime-state document to update.
+/// `session_id` 选择要更新的运行态文档。
 /// `workspace_snapshot` carries the current complete session snapshot.
 /// `workspace_snapshot` 携带当前完整会话快照。
 ///
@@ -4233,16 +4490,114 @@ fn store_and_emit_workbench_snapshot(
     workspace_snapshot: WorkspaceSnapshot,
     logs: &[String],
 ) -> Result<WorkbenchSnapshot, String> {
+    store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
+        app,
+        state.inner(),
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        provider_configuration,
+        ai_tool_configuration,
+        workspace_snapshot,
+        logs,
+        SubagentNavigationRefreshMode::Rebuild,
+    )
+}
+
+/// Stores and emits one rebuilt workbench snapshot while preserving current subagent navigation.
+/// 存储并发出一份重建后的工作台快照，同时保留当前子代理导航。
+fn store_and_emit_workbench_snapshot_preserving_subagent_navigation(
+    app: &tauri::AppHandle,
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    controller_runtime: &ControllerRuntimeHandle,
+    luaskills_catalog: &TauriLuaSkillsCatalog,
+    token_budget_runtime: &TauriTokenBudgetRuntime,
+    mcp_catalog: &TauriMcpRuntimeCatalog,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+    workspace_snapshot: WorkspaceSnapshot,
+    logs: &[String],
+) -> Result<WorkbenchSnapshot, String> {
+    store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
+        app,
+        state.inner(),
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        provider_configuration,
+        ai_tool_configuration,
+        workspace_snapshot,
+        logs,
+        SubagentNavigationRefreshMode::Preserve,
+    )
+}
+
+/// Stores and emits one rebuilt workbench snapshot with an explicit subagent navigation refresh mode.
+/// 使用显式子代理导航刷新模式存储并发出一份重建后的工作台快照。
+fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    luaskills_catalog: &TauriLuaSkillsCatalog,
+    token_budget_runtime: &TauriTokenBudgetRuntime,
+    mcp_catalog: &TauriMcpRuntimeCatalog,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+    workspace_snapshot: WorkspaceSnapshot,
+    logs: &[String],
+    subagent_navigation_mode: SubagentNavigationRefreshMode,
+) -> Result<WorkbenchSnapshot, String> {
+    let trace_started_at = current_unix_millis_value();
+    let trace_lock_wait_started_at = current_unix_millis_value();
     let (live_context_budgets, surface_messages, subagent_navigation) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        (
-            guard.live_context_budgets.clone(),
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
-        )
+        webui_trace(
+            "store_workbench_lock_wait",
+            format!(
+                "mode={subagent_navigation_mode:?} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(trace_lock_wait_started_at)
+            ),
+        );
+        let trace_surface_started_at = current_unix_millis_value();
+        let live_context_budgets = guard.live_context_budgets.clone();
+        let (surface_messages, subagent_navigation) = match subagent_navigation_mode {
+            SubagentNavigationRefreshMode::Rebuild => (
+                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
+                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
+            ),
+            SubagentNavigationRefreshMode::Preserve => {
+                let subagent_navigation =
+                    subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+                let active_session_id = preserved_active_surface_session_id(
+                    &workspace_snapshot,
+                    subagent_navigation.as_ref(),
+                );
+                (
+                    surface_messages_for_session_without_subagent_navigation_refresh(
+                        &guard,
+                        &workspace_snapshot,
+                        active_session_id,
+                    ),
+                    subagent_navigation,
+                )
+            }
+        };
+        webui_trace(
+            "store_workbench_surface_ready",
+            format!(
+                "mode={subagent_navigation_mode:?} messages={} has_subagent_navigation={} elapsed_ms={}",
+                surface_messages.len(),
+                subagent_navigation.is_some(),
+                current_unix_millis_value().saturating_sub(trace_surface_started_at)
+            ),
+        );
+        (live_context_budgets, surface_messages, subagent_navigation)
     };
+    let trace_workbench_started_at = current_unix_millis_value();
     let workbench = workbench_from_runtime(
         controller_runtime,
         luaskills_catalog,
@@ -4256,16 +4611,43 @@ fn store_and_emit_workbench_snapshot(
         logs,
         &live_context_budgets,
     );
+    webui_trace(
+        "store_workbench_built",
+        format!(
+            "mode={subagent_navigation_mode:?} conversations={} messages={} elapsed_ms={}",
+            workbench.conversations.len(),
+            workbench.messages.len(),
+            current_unix_millis_value().saturating_sub(trace_workbench_started_at)
+        ),
+    );
+    let trace_commit_started_at = current_unix_millis_value();
     {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
     }
+    webui_trace(
+        "store_workbench_committed",
+        format!(
+            "mode={subagent_navigation_mode:?} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(trace_commit_started_at)
+        ),
+    );
+    let trace_emit_started_at = current_unix_millis_value();
     let _ = app.emit(
         "vulcan://service-event",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+    webui_trace(
+        "store_workbench_emitted",
+        format!(
+            "mode={subagent_navigation_mode:?} elapsed_ms={} total_elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(trace_emit_started_at),
+            current_unix_millis_value().saturating_sub(trace_started_at)
+        ),
     );
     Ok(workbench)
 }
@@ -4301,13 +4683,26 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
     precheck_outcome: ConversationPrecheckOutcome,
 ) -> Result<Option<ExecutionPreparationRequest>, String> {
     let session_id = start.session_id;
+    let continue_started_at = current_unix_millis_value();
+    webui_trace(
+        "precheck_continue_entered",
+        format!("session={session_id} source={:?}", start.source),
+    );
     let runs_user_prompt_precheck = start.source.runs_user_prompt_precheck();
+    let snapshot_lock_started_at = current_unix_millis_value();
     let mut workspace_snapshot = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .workspace_snapshot
         .clone()
         .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    webui_trace(
+        "precheck_continue_snapshot_loaded",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(snapshot_lock_started_at)
+        ),
+    );
     if workspace_snapshot.session_run_phases.get(&session_id) == Some(&SessionRunPhase::Stopped) {
         spawn_workspace_session_persist_task(
             state.clone(),
@@ -4318,6 +4713,11 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         );
         return Ok(None);
     }
+    ensure_webui_session_runtime_state(
+        &mut workspace_snapshot,
+        session_id,
+        Some(start.precheck_request.turn_id()),
+    );
     let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
         &agent_runtime.ai_tool_configuration,
         &start.disabled_ai_capability_kinds,
@@ -4330,6 +4730,7 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
     let session_title_for_context = start.session_title.clone();
+    let shared_continue_started_at = current_unix_millis_value();
     let continuation = continue_shared_prompt_turn_after_precheck(
         &mut workspace_snapshot,
         SharedPromptTurnContinueInput {
@@ -4344,12 +4745,27 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
             patch_visible_user_prompt_record: true,
         },
     )?;
+    webui_trace(
+        "precheck_continue_request_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(shared_continue_started_at)
+        ),
+    );
+    let vmm_snapshot_started_at = current_unix_millis_value();
     agent_runtime
         .vmm_hook_runtime
         .replace_snapshot(build_vmm_hook_config_snapshot(
             &agent_runtime.provider_configuration,
             &workspace_snapshot,
         ));
+    webui_trace(
+        "precheck_continue_hook_snapshot_ready",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(vmm_snapshot_started_at)
+        ),
+    );
     if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
         eprintln!("[tauri-service] precheck hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
@@ -4360,18 +4776,33 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         }
     }
     let mut request = continuation.request;
-    request.task_session_store_root =
-        owning_project_id_for_session(&workspace_snapshot, session_id).map(|project_id| {
-            vulcan_workspace_store::workspace_store::session_event_store_directory(
-                &project_id,
-                session_id,
-            )
-        });
+    request.task_session_store_root = owning_project_id_for_session(
+        &workspace_snapshot,
+        session_id,
+    )
+    .and_then(|project_id| {
+        vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store(
+            &controller_runtime.data_root,
+            &project_id,
+            &session_id.to_string(),
+        )
+        .ok()
+        .flatten()
+    });
     if runs_user_prompt_precheck {
+        let context_persist_started_at = current_unix_millis_value();
         persist_webui_context_current_document(
+            controller_runtime,
             &workspace_snapshot,
             session_id,
             &session_title_for_context,
+        );
+        webui_trace(
+            "precheck_continue_context_document_persisted",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(context_persist_started_at)
+            ),
         );
     }
     let now = current_unix_millis_text();
@@ -4393,6 +4824,7 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         session.focus = String::from("正在请求");
         session.last_updated_label = String::from("刚刚");
     }
+    let store_started_at = current_unix_millis_value();
     store_current_workbench_snapshot(
         app,
         state,
@@ -4400,6 +4832,13 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         agent_runtime,
         workspace_snapshot.clone(),
     )?;
+    webui_trace(
+        "precheck_continue_workbench_stored",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(store_started_at)
+        ),
+    );
     if runs_user_prompt_precheck {
         spawn_workspace_session_persist_task(
             state.clone(),
@@ -4409,6 +4848,13 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
             Some(String::from("precheck_continue")),
         );
     }
+    webui_trace(
+        "precheck_continue_finished",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(continue_started_at)
+        ),
+    );
     Ok(Some(request))
 }
 
@@ -4434,9 +4880,20 @@ fn spawn_webui_precheck_continue_task(
     agent_runtime: AgentRuntimeBridge,
     start: SharedPromptTurnStart,
 ) {
+    let session_id = start.session_id;
+    webui_trace("precheck_task_spawn", format!("session={session_id}"));
     tauri::async_runtime::spawn(async move {
-        let session_id = start.session_id;
+        let precheck_started_at = current_unix_millis_value();
+        webui_trace("precheck_task_run_start", format!("session={session_id}"));
         let precheck_outcome = start.precheck_request.clone().run().await;
+        webui_trace(
+            "precheck_task_run_finished",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(precheck_started_at)
+            ),
+        );
+        let continue_started_at = current_unix_millis_value();
         match continue_webui_prompt_turn_after_precheck_from_state(
             &app,
             &state,
@@ -4446,9 +4903,24 @@ fn spawn_webui_precheck_continue_task(
             precheck_outcome,
         ) {
             Ok(Some(request)) => {
+                webui_trace(
+                    "precheck_task_continue_finished",
+                    format!(
+                        "session={session_id} will_spawn_stream=true elapsed_ms={}",
+                        current_unix_millis_value().saturating_sub(continue_started_at)
+                    ),
+                );
                 spawn_agent_stream_task(app, state, controller_runtime, agent_runtime, request)
             }
-            Ok(None) => {}
+            Ok(None) => {
+                webui_trace(
+                    "precheck_task_continue_finished",
+                    format!(
+                        "session={session_id} will_spawn_stream=false elapsed_ms={}",
+                        current_unix_millis_value().saturating_sub(continue_started_at)
+                    ),
+                );
+            }
             Err(error) => {
                 eprintln!("[tauri-service] continue WebUI prompt after precheck failed: {error}");
                 if let Err(cleanup_error) = mark_webui_precheck_continuation_failed(
@@ -4498,7 +4970,19 @@ fn start_webui_precheck_or_continue(
     start: SharedPromptTurnStart,
     precheck_plan: SharedPromptPrecheckPlan,
 ) -> Result<bool, String> {
+    let session_id = start.session_id;
+    webui_trace(
+        "precheck_dispatch_entered",
+        format!(
+            "session={} has_hooks={} skip={} labels={}",
+            session_id,
+            precheck_plan.has_precheck_hooks,
+            precheck_plan.should_skip_precheck,
+            precheck_plan.progress_labels.len()
+        ),
+    );
     if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
+        let skipped_continue_started_at = current_unix_millis_value();
         let precheck_outcome = start.precheck_request.clone().skip();
         if let Some(request) = continue_webui_prompt_turn_after_precheck_from_state(
             app,
@@ -4515,8 +4999,24 @@ fn start_webui_precheck_or_continue(
                 agent_runtime.clone(),
                 request,
             );
+            webui_trace(
+                "precheck_dispatch_skipped_spawned_stream",
+                format!(
+                    "session={} elapsed_ms={}",
+                    session_id,
+                    current_unix_millis_value().saturating_sub(skipped_continue_started_at)
+                ),
+            );
             return Ok(true);
         }
+        webui_trace(
+            "precheck_dispatch_skipped_no_stream",
+            format!(
+                "session={} elapsed_ms={}",
+                session_id,
+                current_unix_millis_value().saturating_sub(skipped_continue_started_at)
+            ),
+        );
         return Ok(false);
     }
     spawn_webui_precheck_continue_task(
@@ -4625,6 +5125,8 @@ fn spawn_agent_stream_task(
     webui_trace("stream_task_spawn", format!("session={session_id}"));
     let task_state = state.clone();
     let handle = tauri::async_runtime::spawn(async move {
+        let stream_task_started_at = current_unix_millis_value();
+        webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut reached_finished_event = false;
         let prompt_intervention = build_webui_prompt_intervention(
@@ -4646,11 +5148,32 @@ fn spawn_agent_stream_task(
             Some(prompt_intervention),
         ));
 
+        webui_trace(
+            "stream_task_poll_start",
+            format!(
+                "session={session_id} elapsed_ms={}",
+                current_unix_millis_value().saturating_sub(stream_task_started_at)
+            ),
+        );
         while let Some(event) = stream.next().await {
             match event {
                 ExecutionStreamEvent::Prepared(preparation) => {
-                    if let Err(error) = apply_execution_preparation(&app, &task_state, &preparation)
-                    {
+                    webui_trace(
+                        "stream_prepared",
+                        format!(
+                            "session={} provider={} model={} elapsed_ms={}",
+                            preparation.session_id,
+                            preparation.model_blueprint.provider_id,
+                            preparation.model_blueprint.model_id,
+                            current_unix_millis_value().saturating_sub(stream_task_started_at)
+                        ),
+                    );
+                    if let Err(error) = apply_execution_preparation(
+                        &app,
+                        &task_state,
+                        &controller_runtime,
+                        &preparation,
+                    ) {
                         eprintln!("[tauri-service] apply preparation failed: {error}");
                     }
                 }
@@ -4666,14 +5189,6 @@ fn spawn_agent_stream_task(
                     }
                 }
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
-                    if let Err(error) = apply_session_phase(
-                        &app,
-                        &task_state,
-                        session_id,
-                        SessionRunPhase::Thinking,
-                    ) {
-                        eprintln!("[tauri-service] apply thinking phase failed: {error}");
-                    }
                     if let Err(error) = append_stream_delta_record(
                         &app,
                         &task_state,
@@ -4703,14 +5218,6 @@ fn spawn_agent_stream_task(
                     }
                 }
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
-                    if let Err(error) = apply_session_phase(
-                        &app,
-                        &task_state,
-                        session_id,
-                        SessionRunPhase::Requesting,
-                    ) {
-                        eprintln!("[tauri-service] apply output phase failed: {error}");
-                    }
                     if let Err(error) = append_stream_delta_record(
                         &app,
                         &task_state,
@@ -4745,6 +5252,7 @@ fn spawn_agent_stream_task(
                         record_ids.thinking_record_id = None;
                         record_ids.output_record_id = None;
                     }
+                    update_webui_wait_agent_runtime_state(&task_state, session_id, &event);
                     if matches!(event.kind, RuntimeEventKind::ToolStarted) {
                         if let Err(error) = apply_session_phase(
                             &app,
@@ -4874,6 +5382,47 @@ fn spawn_agent_stream_task(
                     );
                     if let Ok(mut guard) = task_state.lock() {
                         guard.active_stream_tasks.remove(&finished_session_id);
+                    }
+                    if let Some(codex_terminal_event) = report.codex_turn_completed_event(
+                        u64::try_from(current_unix_millis_value()).unwrap_or_default(),
+                    ) {
+                        let final_codex_events = report
+                            .codex_final_assistant_event(
+                                u64::try_from(current_unix_millis_value()).unwrap_or_default(),
+                            )
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        if let Err(error) = current_workspace_snapshot_from_shared_state(
+                            &task_state,
+                        )
+                        .and_then(|workspace_snapshot| {
+                            let Some(workspace_snapshot) = workspace_snapshot else {
+                                return Ok(());
+                            };
+                            let Some(project_id) = owning_project_id_for_session(
+                                &workspace_snapshot,
+                                finished_session_id,
+                            ) else {
+                                return Ok(());
+                            };
+                            let session_title = report
+                                .preparation
+                                .as_ref()
+                                .map(|preparation| preparation.session_title.as_str())
+                                .unwrap_or("Untitled");
+                            finish_codex_external_turn_lifecycle(
+                                &controller_runtime,
+                                &project_id,
+                                finished_session_id,
+                                session_title,
+                                final_codex_events,
+                                codex_terminal_event.clone(),
+                            )
+                        }) {
+                            eprintln!(
+                                "[tauri-service] append codex terminal boundary failed: {error}"
+                            );
+                        }
                     }
                     let final_report_apply = match apply_execution_report_to_memory(
                         &app,
@@ -5072,13 +5621,33 @@ async fn handle_webui_detached_subagent_task_event(
                     event.kind
                 ),
             );
-            let consumed = ingest_webui_subagent_runtime_event(
+            let parent_snapshot = current_workspace_snapshot_from_shared_state(state)?;
+            let parent_is_regular_session =
+                parent_snapshot.as_ref().is_some_and(|workspace_snapshot| {
+                    workspace_snapshot_contains_regular_session(
+                        workspace_snapshot,
+                        parent_session_id,
+                    )
+                });
+            let parent_is_stopped = parent_snapshot.as_ref().is_some_and(|workspace_snapshot| {
+                workspace_snapshot
+                    .session_run_phases
+                    .get(&parent_session_id)
+                    == Some(&SessionRunPhase::Stopped)
+            });
+            let consumed = match ingest_webui_subagent_runtime_event(
                 app,
                 state,
                 agent_runtime,
                 parent_session_id,
                 &event,
-            )?;
+            ) {
+                Ok(consumed) => consumed,
+                Err(error) => {
+                    eprintln!("[tauri-service] ingest subagent parent event failed: {error}");
+                    false
+                }
+            };
             webui_trace(
                 "detached_parent_event_ingested",
                 format!(
@@ -5089,14 +5658,6 @@ async fn handle_webui_detached_subagent_task_event(
             if !consumed {
                 append_runtime_event_projection(app, state, parent_session_id, &event)?;
             }
-            let parent_is_regular_session = current_workspace_snapshot_from_shared_state(state)?
-                .as_ref()
-                .is_some_and(|workspace_snapshot| {
-                    workspace_snapshot_contains_regular_session(
-                        workspace_snapshot,
-                        parent_session_id,
-                    )
-                });
             if is_finished {
                 {
                     let mut guard = state
@@ -5104,8 +5665,20 @@ async fn handle_webui_detached_subagent_task_event(
                         .map_err(|error| format!("failed to lock service state: {error}"))?;
                     guard.detached_subagent_task_listeners.remove(&task_id);
                 }
+                if let Err(error) = enqueue_webui_subagent_callback_prompt_if_needed(
+                    state,
+                    parent_session_id,
+                    &event,
+                    parent_is_regular_session,
+                    parent_is_stopped,
+                ) {
+                    eprintln!("[tauri-service] enqueue subagent callback failed: {error}");
+                }
             }
-            if parent_is_regular_session {
+            if webui_detached_parent_event_should_continue_pending_prompt(
+                parent_is_regular_session,
+                parent_is_stopped,
+            ) {
                 let started = maybe_prepare_next_webui_pending_prompt(
                     app,
                     state,
@@ -5121,11 +5694,18 @@ async fn handle_webui_detached_subagent_task_event(
                         "parent={parent_session_id} task={task_id} started_next_prompt={started}"
                     ),
                 );
+            } else if parent_is_regular_session && parent_is_stopped {
+                webui_trace(
+                    "detached_parent_event_pending_skip_stopped",
+                    format!("parent={parent_session_id} task={task_id}"),
+                );
             }
-            if is_finished
-                && parent_is_regular_session
-                && let Some(workspace_snapshot) =
-                    current_workspace_snapshot_from_shared_state(state)?
+            if webui_detached_parent_event_should_persist_terminal_projection(
+                is_finished,
+                parent_is_regular_session,
+                parent_is_stopped,
+            ) && let Some(workspace_snapshot) =
+                current_workspace_snapshot_from_shared_state(state)?
             {
                 refresh_webui_subagent_navigation_round_visibility(
                     state,
@@ -5149,6 +5729,151 @@ async fn handle_webui_detached_subagent_task_event(
     }
 }
 
+/// Enqueues one completed subagent result as an internal parent-model callback when no wait_agent owns it.
+/// 当没有 wait_agent 接管时，将单个已完成子代理结果作为父模型内部回调入队。
+fn enqueue_webui_subagent_callback_prompt_if_needed(
+    state: &SharedServiceBridgeState,
+    parent_session_id: SessionId,
+    event: &RuntimeEvent,
+    parent_is_regular_session: bool,
+    parent_is_stopped: bool,
+) -> Result<bool, String> {
+    if event.kind != RuntimeEventKind::DelegateFinished
+        || !parent_is_regular_session
+        || parent_is_stopped
+    {
+        return Ok(false);
+    }
+    let Some(metadata) = event.metadata.as_ref() else {
+        return Ok(false);
+    };
+    let Some(panel_state) = parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
+    else {
+        return Ok(false);
+    };
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if guard
+        .parent_sessions_waiting_for_subagents
+        .contains(&parent_session_id)
+    {
+        webui_trace(
+            "subagent_callback_skip_wait_agent",
+            format!(
+                "parent={parent_session_id} task={} public_task_id={}",
+                panel_state.task_id, panel_state.public_task_id
+            ),
+        );
+        return Ok(false);
+    }
+    if guard
+        .parent_sessions_with_completed_wait_agent
+        .contains(&parent_session_id)
+    {
+        webui_trace(
+            "subagent_callback_skip_completed_wait_agent",
+            format!(
+                "parent={parent_session_id} task={} public_task_id={}",
+                panel_state.task_id, panel_state.public_task_id
+            ),
+        );
+        return Ok(false);
+    }
+    let workspace = guard
+        .workspace_snapshot
+        .as_mut()
+        .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
+    let now = current_unix_millis_text();
+    let runtime_state = workspace
+        .session_runtime_state
+        .entry(parent_session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: now.clone(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    let entry_id = format!("webui-subagent-callback-{}", panel_state.task_id);
+    if runtime_state
+        .ui_state
+        .pending_prompt_queue
+        .iter()
+        .any(|entry| entry.id == entry_id)
+    {
+        return Ok(false);
+    }
+    let entry = PendingSessionPromptEntry {
+        id: entry_id,
+        prompt: webui_subagent_callback_prompt(&panel_state),
+        preview: format!("子代理完成：{}", panel_state.subagent_label),
+        attachments: Vec::new(),
+        model_reference: None,
+        runtime_options: PendingPromptRuntimeOptions::default(),
+        source: PendingSessionPromptSource::SubagentCallback,
+        task_id: Some(panel_state.task_id.to_string()),
+        panel_entry_id: None,
+        created_at: now.clone(),
+    };
+    let queued =
+        enqueue_pending_prompt_internal_queue_entry(&mut runtime_state.ui_state, entry, false)
+            .map(|outcome| {
+                !matches!(
+                    outcome,
+                    vulcan_workbench_model::PendingPromptInternalQueueEnqueueOutcome::AlreadyQueued
+                )
+            })
+            .unwrap_or(false);
+    runtime_state.updated_at = now;
+    if queued {
+        webui_trace(
+            "subagent_callback_queued",
+            format!(
+                "parent={parent_session_id} task={} public_task_id={} result_chars={}",
+                panel_state.task_id,
+                panel_state.public_task_id,
+                panel_state.result_text.chars().count()
+            ),
+        );
+    }
+    Ok(queued)
+}
+
+/// Builds the model-visible callback text for one completed subagent task.
+/// 构建单个已完成子代理任务回流给模型的可见文本。
+fn webui_subagent_callback_prompt(state: &SubagentTaskPanelState) -> String {
+    let result_text = if state.result_text.trim().is_empty() {
+        "The subagent completed without returning visible final text."
+    } else {
+        state.result_text.trim()
+    };
+    format!(
+        "A child agent task has completed and returned a result.\n\nTask name: {}\nTask session id: {}\nTask label: {}\nStatus: completed\n\nResult:\n{}",
+        state.public_task_id, state.task_id, state.subagent_label, result_text
+    )
+}
+
+/// Returns whether a detached subagent parent event may dispatch the next queued prompt.
+/// 返回分离子代理父级事件是否可以调度下一条排队提示词。
+fn webui_detached_parent_event_should_continue_pending_prompt(
+    parent_is_regular_session: bool,
+    parent_is_stopped: bool,
+) -> bool {
+    parent_is_regular_session && !parent_is_stopped
+}
+
+/// Returns whether one detached terminal event may refresh and persist the parent projection.
+/// 返回一条分离终态事件是否可以刷新并持久化父级投影。
+fn webui_detached_parent_event_should_persist_terminal_projection(
+    is_finished: bool,
+    parent_is_regular_session: bool,
+    parent_is_stopped: bool,
+) -> bool {
+    is_finished
+        && webui_detached_parent_event_should_continue_pending_prompt(
+            parent_is_regular_session,
+            parent_is_stopped,
+        )
+}
+
 /// Applies one child execution stream event using the same projection functions as root WebUI turns.
 /// 使用与根 WebUI 回合相同的投影函数应用单条子执行流事件。
 async fn handle_webui_detached_child_execution_event(
@@ -5164,36 +5889,30 @@ async fn handle_webui_detached_child_execution_event(
         ExecutionStreamEvent::RequestStarted { session_id } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
-        ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
-            apply_session_phase(app, state, session_id, SessionRunPhase::Thinking)?;
-            append_stream_delta_record(
-                app,
-                state,
-                session_id,
-                &mut record_ids.thinking_record_id,
-                SessionMessageRecordKind::ThinkingOutput,
-                "思考",
-                &delta,
-                true,
-            )
-        }
+        ExecutionStreamEvent::ThinkingDelta { session_id, delta } => append_stream_delta_record(
+            app,
+            state,
+            session_id,
+            &mut record_ids.thinking_record_id,
+            SessionMessageRecordKind::ThinkingOutput,
+            "思考",
+            &delta,
+            true,
+        ),
         ExecutionStreamEvent::ThinkingCompleted { session_id } => {
             collapse_streaming_thinking(app, state, session_id, record_ids)?;
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
-        ExecutionStreamEvent::OutputDelta { session_id, delta } => {
-            apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)?;
-            append_stream_delta_record(
-                app,
-                state,
-                session_id,
-                &mut record_ids.output_record_id,
-                SessionMessageRecordKind::AssistantOutput,
-                "输出",
-                &delta,
-                false,
-            )
-        }
+        ExecutionStreamEvent::OutputDelta { session_id, delta } => append_stream_delta_record(
+            app,
+            state,
+            session_id,
+            &mut record_ids.output_record_id,
+            SessionMessageRecordKind::AssistantOutput,
+            "输出",
+            &delta,
+            false,
+        ),
         ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
             if is_provider_tool_boundary_runtime_event(&event) {
                 record_ids.thinking_record_id = None;
@@ -5274,6 +5993,71 @@ fn build_webui_prompt_intervention(
             }
         }
     })
+}
+
+/// Updates the parent-session wait_agent guard from provider runtime tool events.
+/// 根据 Provider 运行时工具事件更新父会话 wait_agent 等待闸门。
+fn update_webui_wait_agent_runtime_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    event: &RuntimeEvent,
+) {
+    let Some(tool_name) = runtime_event_tool_name(event) else {
+        return;
+    };
+    let Ok(mut guard) = state.lock() else {
+        return;
+    };
+    match (tool_name, event.kind) {
+        ("spawn_agent", RuntimeEventKind::ToolStarted) => {
+            guard
+                .parent_sessions_with_completed_wait_agent
+                .remove(&session_id);
+        }
+        ("wait_agent", RuntimeEventKind::ToolStarted) => {
+            guard
+                .parent_sessions_waiting_for_subagents
+                .insert(session_id);
+            guard
+                .parent_sessions_with_completed_wait_agent
+                .remove(&session_id);
+        }
+        ("wait_agent", RuntimeEventKind::ToolFinished) => {
+            guard
+                .parent_sessions_waiting_for_subagents
+                .remove(&session_id);
+            if wait_agent_runtime_event_completed(event) {
+                guard
+                    .parent_sessions_with_completed_wait_agent
+                    .insert(session_id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns whether one wait_agent tool-finished event collected all selected child agents.
+/// 返回一次 wait_agent 工具完成事件是否已经收集了所有选中的子代理。
+fn wait_agent_runtime_event_completed(event: &RuntimeEvent) -> bool {
+    event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("host_result"))
+        .and_then(|host_result| host_result.get("payload"))
+        .and_then(|payload| payload.get("completed"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Extracts the canonical tool name carried by one runtime event metadata payload.
+/// 提取单条运行时事件元数据中携带的规范工具名称。
+fn runtime_event_tool_name(event: &RuntimeEvent) -> Option<&str> {
+    event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_name"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
 }
 
 /// Normalizes one dynamically interjected WebUI prompt through the same provider/model capability gate used by request bootstrap.
@@ -5370,7 +6154,7 @@ fn take_webui_internal_guidance_prompts(
         let Some(workspace_snapshot) = guard.workspace_snapshot.clone() else {
             return Ok(guided_entries);
         };
-        session_has_running_subagent_tasks_from_state(&mut guard, &workspace_snapshot, session_id)
+        session_has_running_subagent_tasks_from_cache(&mut guard, &workspace_snapshot, session_id)
     };
     with_workspace_mutation(app, state, |workspace| {
         let dispatch_context = webui_pending_prompt_dispatch_context(
@@ -5416,7 +6200,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
             .workspace_snapshot
             .clone()
             .ok_or_else(|| String::from("workspace snapshot is not ready"))?;
-        let has_running_subagents = session_has_running_subagent_tasks_from_state(
+        let has_running_subagents = session_has_running_subagent_tasks_from_cache(
             &mut guard,
             &workspace_snapshot,
             session_id,
@@ -5434,8 +6218,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
         has_active_stream_task,
         has_running_subagents,
     );
-    let prefer_delegate_completion =
-        pending_prompt_dispatch_prefers_delegate_completion(dispatch_context);
+    let priority_override = false;
     let (internal_queue_len, visible_queue_len, run_phase) = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -5453,14 +6236,14 @@ async fn maybe_prepare_next_webui_pending_prompt(
     webui_trace(
         "pending_prompt_prepare_check",
         format!(
-            "session={session_id} has_active_stream_task={has_active_stream_task} has_running_subagents={has_running_subagents} prefer_delegate_completion={prefer_delegate_completion} internal_queue_len={internal_queue_len} visible_queue_len={visible_queue_len} run_phase={run_phase:?} allow_from_stopped_phase={allow_from_stopped_phase}"
+            "session={session_id} has_active_stream_task={has_active_stream_task} has_running_subagents={has_running_subagents} priority_override={priority_override} internal_queue_len={internal_queue_len} visible_queue_len={visible_queue_len} run_phase={run_phase:?} allow_from_stopped_phase={allow_from_stopped_phase}"
         ),
     );
     let Some(next_source) = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
         .and_then(|runtime_state| {
-            next_pending_prompt_dispatch_source(&runtime_state.ui_state, prefer_delegate_completion)
+            next_pending_prompt_dispatch_source(&runtime_state.ui_state, priority_override)
         })
     else {
         webui_trace(
@@ -5498,15 +6281,13 @@ async fn maybe_prepare_next_webui_pending_prompt(
         );
         return Ok(false);
     };
-    let Some(entry) = take_next_webui_pending_prompt(
-        &mut workspace_snapshot,
-        session_id,
-        prefer_delegate_completion,
-    ) else {
+    let Some(entry) =
+        take_next_webui_pending_prompt(&mut workspace_snapshot, session_id, priority_override)
+    else {
         webui_trace(
             "pending_prompt_prepare_take_none",
             format!(
-                "session={session_id} next_source={next_source:?} prefer_delegate_completion={prefer_delegate_completion}"
+                "session={session_id} next_source={next_source:?} priority_override={priority_override}"
             ),
         );
         return Ok(false);
@@ -5544,7 +6325,12 @@ async fn maybe_prepare_next_webui_pending_prompt(
         .copied()
         .collect::<BTreeSet<_>>();
     if entry.source.runs_user_prompt_precheck() {
-        snapshot_webui_context_before_user_prompt(&workspace_snapshot, session_id, entry.source)?;
+        snapshot_webui_context_before_user_prompt(
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+            entry.source,
+        )?;
     }
     let precheck_start = {
         let mut hook_runtime = entry_agent_runtime
@@ -5562,8 +6348,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
                 prompt: &entry.prompt,
                 attachments: entry.attachments,
                 append_canonical_user_message: true,
-                append_visible_user_prompt_record: entry.source
-                    != PendingSessionPromptSource::DelegateCompletion,
+                append_visible_user_prompt_record: entry.source.starts_user_parent_turn(),
                 source: entry.source,
                 execution_mode: String::from("build"),
                 reasoning_effort: Some(runtime_options.reasoning_effort),
@@ -5573,7 +6358,12 @@ async fn maybe_prepare_next_webui_pending_prompt(
             },
         )
     }?;
-    apply_webui_prompt_begin_outer_steps(&mut workspace_snapshot, session_id, &session_title);
+    apply_webui_prompt_begin_outer_steps(
+        controller_runtime,
+        &mut workspace_snapshot,
+        session_id,
+        &session_title,
+    );
     entry_agent_runtime
         .vmm_hook_runtime
         .replace_snapshot(build_vmm_hook_config_snapshot(
@@ -5588,7 +6378,11 @@ async fn maybe_prepare_next_webui_pending_prompt(
             &workspace_path,
         )?
     } else {
-        SharedPromptPrecheckPlan::internal_continuation()
+        SharedPromptPrecheckPlan {
+            has_precheck_hooks: false,
+            should_skip_precheck: true,
+            progress_labels: Vec::new(),
+        }
     };
     if let Some(panel_entry_id) = panel_entry_id.as_deref()
         && let Some(runtime_state) = workspace_snapshot
@@ -5634,7 +6428,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
 fn take_next_webui_pending_prompt(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
-    prefer_delegate_completion: bool,
+    priority_override: bool,
 ) -> Option<PendingSessionPromptEntry> {
     let runtime_state = workspace_snapshot
         .session_runtime_state
@@ -5643,7 +6437,7 @@ fn take_next_webui_pending_prompt(
     let internal_entry_id = format!("webui-pending-internal-{}", SessionId::new_v4());
     let entry = take_next_pending_prompt_entry(
         &mut runtime_state.ui_state,
-        prefer_delegate_completion,
+        priority_override,
         internal_entry_id,
         created_at,
     )?;
@@ -5711,6 +6505,7 @@ fn store_current_workbench_snapshot(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
     }
@@ -5732,10 +6527,15 @@ fn emit_subagent_display_route_workbench_snapshot(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let surface_messages =
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
         let subagent_navigation =
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot);
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot);
+        let active_session_id =
+            preserved_active_surface_session_id(&workspace_snapshot, subagent_navigation.as_ref());
+        let surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
+            &guard,
+            &workspace_snapshot,
+            active_session_id,
+        );
         let mut workbench = guard.workbench.clone();
         let active_conversation_id = subagent_navigation
             .as_ref()
@@ -5751,6 +6551,7 @@ fn emit_subagent_display_route_workbench_snapshot(
             })
             .unwrap_or_default();
         workbench.subagent_navigation = subagent_navigation;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.workbench = workbench.clone();
         workbench
@@ -5767,6 +6568,7 @@ fn emit_subagent_display_route_workbench_snapshot(
 fn apply_execution_preparation(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
     preparation: &ExecutionPreparation,
 ) -> Result<(), String> {
     if let Some(context_budget) = preparation.context_budget.clone() {
@@ -5776,6 +6578,7 @@ fn apply_execution_preparation(
             .live_context_budgets
             .insert(preparation.session_id, context_budget);
     }
+    let mut boundary_project_id: Option<String> = None;
     with_workspace_mutation(app, state, |workspace| {
         let runtime_state = workspace
             .session_runtime_state
@@ -5803,11 +6606,85 @@ fn apply_execution_preparation(
             .as_ref()
             .map(|baseline| baseline.fingerprint.clone());
         runtime_state.updated_at = current_unix_millis_text();
+        boundary_project_id = owning_project_id_for_session(workspace, preparation.session_id);
         workspace
             .session_run_phases
             .insert(preparation.session_id, SessionRunPhase::Preparing);
     })
-    .map(|_| ())
+    .map(|_| ())?;
+    if let Some(project_id) = boundary_project_id {
+        begin_codex_external_turn_lifecycle(controller_runtime, &project_id, preparation)?;
+    }
+    Ok(())
+}
+
+/// Begins the Codex lifecycle for one WebUI provider-stream turn.
+/// 开始单个 WebUI provider 流式轮次的 Codex 生命周期。
+fn begin_codex_external_turn_lifecycle(
+    controller_runtime: &ControllerRuntimeHandle,
+    project_id: &str,
+    preparation: &ExecutionPreparation,
+) -> Result<(), String> {
+    let Some(turn_id) = preparation
+        .codex_boundary_events
+        .first()
+        .and_then(|event| event.turn_id.clone())
+    else {
+        return Ok(());
+    };
+    let store = WorkspaceSegmentedCodexSessionStore::new(
+        &controller_runtime.data_root,
+        project_id,
+        preparation.session_id,
+        &preparation.session_title,
+    );
+    let runner = CodexExternalStreamTurnRunner::new(store, WebuiCodexLifecycleHook);
+    runner.begin_turn(CodexExternalTurnBeginRequest {
+        thread_id: SessionNodeId::from(preparation.session_id),
+        turn_id,
+        accepted_events: preparation.codex_boundary_events.clone(),
+    })
+}
+
+/// Finishes the Codex lifecycle for one WebUI provider-stream turn.
+/// 结束单个 WebUI provider 流式轮次的 Codex 生命周期。
+fn finish_codex_external_turn_lifecycle(
+    controller_runtime: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+    session_title: &str,
+    final_events: Vec<CodexSessionEvent>,
+    terminal_event: CodexSessionEvent,
+) -> Result<(), String> {
+    let Some(turn_id) = terminal_event.turn_id.clone() else {
+        return Ok(());
+    };
+    let terminal_status = terminal_event
+        .payload
+        .get("status")
+        .and_then(Value::as_str)
+        .map(|status| {
+            if status == "completed" {
+                CodexTurnTerminalStatus::Completed
+            } else {
+                CodexTurnTerminalStatus::Failed
+            }
+        })
+        .unwrap_or(CodexTurnTerminalStatus::Completed);
+    let store = WorkspaceSegmentedCodexSessionStore::new(
+        &controller_runtime.data_root,
+        project_id,
+        session_id,
+        session_title,
+    );
+    let runner = CodexExternalStreamTurnRunner::new(store, WebuiCodexLifecycleHook);
+    runner.finish_turn(CodexExternalTurnFinishRequest {
+        thread_id: SessionNodeId::from(session_id),
+        turn_id,
+        terminal_status,
+        final_events,
+        terminal_event: Some(terminal_event),
+    })
 }
 
 /// Updates one session phase in the retained workspace snapshot.
@@ -5839,7 +6716,7 @@ fn append_stream_delta_record(
     if delta.is_empty() {
         return Ok(());
     }
-    with_workspace_mutation(app, state, |workspace| {
+    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
         let now = current_unix_millis_text();
         let runtime_state = workspace
             .session_runtime_state
@@ -5882,7 +6759,7 @@ fn collapse_streaming_thinking(
     session_id: SessionId,
     record_ids: &SessionStreamingRecordIds,
 ) -> Result<(), String> {
-    with_workspace_mutation(app, state, |workspace| {
+    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
         let now = current_unix_millis_text();
         let runtime_state = workspace
             .session_runtime_state
@@ -5910,7 +6787,7 @@ fn append_runtime_event_projection(
     ) {
         return Ok(());
     }
-    with_workspace_mutation(app, state, |workspace| {
+    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
         let now = current_unix_millis_text();
         let runtime_state = workspace
             .session_runtime_state
@@ -5935,7 +6812,7 @@ fn append_runtime_event_projection(
 fn ingest_webui_subagent_runtime_event(
     app: &tauri::AppHandle,
     state: &SharedServiceBridgeState,
-    agent_runtime: &AgentRuntimeBridge,
+    _agent_runtime: &AgentRuntimeBridge,
     parent_session_id: SessionId,
     event: &RuntimeEvent,
 ) -> Result<bool, String> {
@@ -5965,18 +6842,9 @@ fn ingest_webui_subagent_runtime_event(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let task_runtime = guard
-            .agent_runtime
-            .as_ref()
-            .map(|runtime| &runtime.task_runtime);
         let workspace_snapshot = guard.workspace_snapshot.as_ref();
         let normalized = if is_finished {
-            normalize_webui_subagent_task_state(
-                workspace_snapshot,
-                &panel_state,
-                task_runtime,
-                false,
-            )
+            normalize_webui_subagent_task_state(workspace_snapshot, &panel_state, None, false)
         } else {
             panel_state.clone()
         };
@@ -6006,7 +6874,7 @@ fn ingest_webui_subagent_runtime_event(
         ),
     );
 
-    let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
+    with_workspace_mutation(app, state, |workspace| {
         attach_webui_task_session_metadata_to_parent_tool_message(
             workspace,
             parent_session_id,
@@ -6022,48 +6890,12 @@ fn ingest_webui_subagent_runtime_event(
                 conversation_state,
             );
         }
-        if is_finished {
-            // Completed child callbacks only belong to an open parent user turn.
-            // 子代理完成回调只属于仍打开的父级用户回合。
-            let parent_turn_is_open = agent_runtime
-                .conversation_hook_runtime
-                .lock()
-                .map(|hook_runtime| hook_runtime.has_active_turn(parent_session_id))
-                .unwrap_or(false);
-            if !parent_turn_is_open {
-                webui_trace(
-                    "delegate_completion_enqueue_skip_no_active_turn",
-                    format!(
-                        "parent={parent_session_id} task={}",
-                        normalized_state.task_id
-                    ),
-                );
-                return;
-            }
-            enqueue_webui_delegate_completion_followup_if_needed(
-                workspace,
-                parent_session_id,
-                &normalized_state,
-            );
-        }
     })?;
     if is_finished {
-        let pending_delegate_count = workspace_snapshot
-            .session_runtime_state
-            .get(&parent_session_id)
-            .map(|runtime_state| {
-                runtime_state
-                    .ui_state
-                    .pending_prompt_queue
-                    .iter()
-                    .filter(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
-                    .count()
-            })
-            .unwrap_or(0);
         webui_trace(
-            "subagent_runtime_event_delegate_queue",
+            "subagent_runtime_event_projection_finished",
             format!(
-                "parent={parent_session_id} task={} pending_delegate_count={pending_delegate_count}",
+                "parent={parent_session_id} task={}",
                 normalized_state.task_id
             ),
         );
@@ -6340,76 +7172,6 @@ fn replace_webui_subagent_task_conversation_state(
     workspace_snapshot.hydrated_session_ids.insert(task_id);
 }
 
-/// Enqueues the shared delegated-completion follow-up into the parent session internal queue.
-/// 将共享委派完成跟进提示词放入父会话内部队列。
-fn enqueue_webui_delegate_completion_followup_if_needed(
-    workspace_snapshot: &mut WorkspaceSnapshot,
-    parent_session_id: SessionId,
-    state: &SubagentTaskPanelState,
-) {
-    if !workspace_snapshot_contains_regular_session(workspace_snapshot, parent_session_id) {
-        webui_trace(
-            "delegate_completion_enqueue_skip_non_regular",
-            format!("parent={parent_session_id} task={}", state.task_id),
-        );
-        return;
-    }
-    if workspace_snapshot
-        .session_run_phases
-        .get(&parent_session_id)
-        .is_some_and(|phase| *phase == SessionRunPhase::Stopped)
-    {
-        webui_trace(
-            "delegate_completion_enqueue_skip_stopped",
-            format!("parent={parent_session_id} task={}", state.task_id),
-        );
-        return;
-    }
-    let now = current_unix_millis_text();
-    let runtime_state = workspace_snapshot
-        .session_runtime_state
-        .entry(parent_session_id)
-        .or_insert_with(|| SessionRuntimeStateEntry {
-            updated_at: now.clone(),
-            ..SessionRuntimeStateEntry::default()
-        });
-    let enqueue_result = enqueue_pending_prompt_internal_queue_entry(
-        &mut runtime_state.ui_state,
-        PendingSessionPromptEntry {
-            id: format!("webui-delegate-completion-{}", SessionId::new_v4()),
-            prompt: build_delegate_completion_followup_prompt(state),
-            preview: build_delegate_completion_followup_preview(state),
-            attachments: Vec::new(),
-            model_reference: None,
-            runtime_options: PendingPromptRuntimeOptions::default(),
-            source: PendingSessionPromptSource::DelegateCompletion,
-            task_id: Some(state.task_id.to_string()),
-            panel_entry_id: None,
-            created_at: now.clone(),
-        },
-        false,
-    );
-    match enqueue_result {
-        Ok(_) => {
-            runtime_state.updated_at = now;
-            webui_trace(
-                "delegate_completion_enqueued",
-                format!(
-                    "parent={parent_session_id} task={} queue_len={}",
-                    state.task_id,
-                    runtime_state.ui_state.pending_prompt_queue.len()
-                ),
-            );
-        }
-        Err(PendingPromptInternalQueueEnqueueError::QueueFull) => {
-            eprintln!(
-                "[tauri-service] delegate completion queue full for subagent `{}` ({})",
-                state.subagent_label, state.task_id
-            );
-        }
-    }
-}
-
 /// Hides the selected parent subagent navigation round once iced-equivalent blocking work has settled.
 /// 当与 iced 等价的阻塞工作全部收敛后，隐藏该轮子代理导航。
 fn refresh_webui_subagent_navigation_round_visibility(
@@ -6420,7 +7182,7 @@ fn refresh_webui_subagent_navigation_round_visibility(
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let has_running = !running_webui_subagent_task_states_for_tree(
+    let has_running = !running_webui_subagent_task_states_for_tree_from_cache(
         &mut guard,
         workspace_snapshot,
         parent_session_id,
@@ -6432,25 +7194,15 @@ fn refresh_webui_subagent_navigation_round_visibility(
         .get(&parent_session_id)
         .copied()
         .is_some_and(is_active_session_run_phase);
-    let has_pending_delegate_completion = workspace_snapshot
-        .session_runtime_state
-        .get(&parent_session_id)
-        .is_some_and(|runtime_state| {
-            runtime_state
-                .ui_state
-                .pending_prompt_queue
-                .iter()
-                .any(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
-        });
     let should_remain_visible = subagent_navigation_round_should_remain_visible(
         has_active_stream_task || has_active_phase,
         has_running,
-        has_pending_delegate_completion,
+        false,
     );
     webui_trace(
         "subagent_navigation_round_visibility",
         format!(
-            "parent={parent_session_id} has_active_stream_task={has_active_stream_task} has_active_phase={has_active_phase} has_running={has_running} has_pending_delegate_completion={has_pending_delegate_completion} should_remain_visible={should_remain_visible}"
+            "parent={parent_session_id} has_active_stream_task={has_active_stream_task} has_active_phase={has_active_phase} has_running={has_running} should_remain_visible={should_remain_visible}"
         ),
     );
     if !should_remain_visible {
@@ -6473,35 +7225,36 @@ fn apply_conversation_checkpoint(
     provider_request_count: usize,
 ) -> Result<(), String> {
     let mut is_main_session = false;
-    let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
-        let now = current_unix_millis_text();
-        // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
-        // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
-        is_main_session = workspace
-            .sessions
-            .iter()
-            .any(|candidate| candidate.id == session_id);
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        apply_checkpoint_conversation_state(runtime_state, conversation_state, &now);
-        if let Some(usage) = last_successful_provider_usage {
-            runtime_state.last_provider_usage = Some(usage.clone());
-            runtime_state.last_successful_provider_usage = Some(usage);
-        }
-        if provider_request_count > 0 {
-            runtime_state.last_safe_provider_request_count = Some(provider_request_count);
-        }
-        workspace.session_messages.insert(
-            session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
-        );
-        workspace.hydrated_session_ids.insert(session_id);
-    })?;
+    let workspace_snapshot =
+        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+            let now = current_unix_millis_text();
+            // Only main-session checkpoints may persist through workspace-store; TaskSession checkpoints stay in memory here.
+            // 只有主会话 checkpoint 可以通过 workspace-store 持久化；TaskSession checkpoint 在这里仅更新内存显示态。
+            is_main_session = workspace
+                .sessions
+                .iter()
+                .any(|candidate| candidate.id == session_id);
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: now.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            apply_checkpoint_conversation_state(runtime_state, conversation_state, &now);
+            if let Some(usage) = last_successful_provider_usage {
+                runtime_state.last_provider_usage = Some(usage.clone());
+                runtime_state.last_successful_provider_usage = Some(usage);
+            }
+            if provider_request_count > 0 {
+                runtime_state.last_safe_provider_request_count = Some(provider_request_count);
+            }
+            workspace.session_messages.insert(
+                session_id,
+                conversation_state_to_session_messages(&runtime_state.conversation_state),
+            );
+            workspace.hydrated_session_ids.insert(session_id);
+        })?;
     if is_main_session {
         spawn_workspace_session_runtime_state_persist_task(
             state.clone(),
@@ -6672,46 +7425,43 @@ fn apply_execution_report_to_memory(
         .map(|preparation| preparation.prompt_purpose)
         .unwrap_or(ExecutionPromptPurpose::UserTurn);
     let runs_completed_turn_hooks = prompt_purpose.runs_completed_turn_hooks();
-    let is_delegate_completion =
-        matches!(prompt_purpose, ExecutionPromptPurpose::DelegateCompletion);
     let completion_gate = webui_turn_completion_gate_from_state(state, agent_runtime, session_id)?;
     let mut completion_request = None;
-    let workspace_snapshot = with_workspace_mutation(app, state, |workspace| {
-        let now = current_unix_millis_text();
-        // Main-session membership decides whether completion hooks and VMM side effects may run.
-        // 主会话成员关系决定完成 hook 与 VMM 副作用是否允许执行。
-        let is_main_session = workspace
-            .sessions
-            .iter()
-            .any(|candidate| candidate.id == session_id);
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        let apply_result =
-            apply_terminal_execution_report_to_state(runtime_state, session_id, &now, &report);
-        let project_id = workspace
-            .sessions
-            .iter()
-            .find(|candidate| candidate.id == session_id)
-            .and_then(|session| session.project_id.clone());
-        let conversation_state = runtime_state.conversation_state.clone();
-        let should_dispatch_completion_hook = is_main_session
-            && apply_result.is_success
-            && (runs_completed_turn_hooks
-                || (is_delegate_completion && completion_gate.has_active_hook_turn));
-        let should_terminate_completion_hook = is_main_session
-            && !apply_result.is_success
-            && (runs_completed_turn_hooks
-                || (is_delegate_completion && completion_gate.has_active_hook_turn));
-        let completion_status = completion_gate.completion_status();
-        if should_dispatch_completion_hook {
-            let hook_turn_id =
-                if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
-                    let (hook_turn_id, request) = hook_runtime
+    let workspace_snapshot =
+        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+            let now = current_unix_millis_text();
+            // Main-session membership decides whether completion hooks and VMM side effects may run.
+            // 主会话成员关系决定完成 hook 与 VMM 副作用是否允许执行。
+            let is_main_session = workspace
+                .sessions
+                .iter()
+                .any(|candidate| candidate.id == session_id);
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: now.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            let apply_result =
+                apply_terminal_execution_report_to_state(runtime_state, session_id, &now, &report);
+            let project_id = workspace
+                .sessions
+                .iter()
+                .find(|candidate| candidate.id == session_id)
+                .and_then(|session| session.project_id.clone());
+            let conversation_state = runtime_state.conversation_state.clone();
+            let should_dispatch_completion_hook = is_main_session
+                && apply_result.is_success
+                && (runs_completed_turn_hooks || completion_gate.has_active_hook_turn);
+            let should_terminate_completion_hook = is_main_session
+                && !apply_result.is_success
+                && (runs_completed_turn_hooks || completion_gate.has_active_hook_turn);
+            let completion_status = completion_gate.completion_status();
+            if should_dispatch_completion_hook {
+                let hook_turn_id =
+                    if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
+                        let (hook_turn_id, request) = hook_runtime
                         .prepare_turn_completion_dispatch_with_status(
                         session_id,
                         project_id.clone(),
@@ -6722,74 +7472,73 @@ fn apply_execution_report_to_memory(
                         &conversation_state,
                         completion_status,
                         completion_gate.pending_subagent_count,
-                        completion_gate.pending_delegate_completion_count,
                     );
-                    completion_request = Some(request);
-                    hook_turn_id
+                        completion_request = Some(request);
+                        hook_turn_id
+                    } else {
+                        String::new()
+                    };
+                if completion_status.is_final() {
+                    runtime_state
+                        .context_injection_state
+                        .consume_turn(&hook_turn_id, &now);
+                    runtime_state.vmm_profile_sync.record_completed_turn();
+                    let profile_sync = runtime_state.vmm_profile_sync.clone();
+                    agent_runtime
+                        .vmm_hook_runtime
+                        .store_profile_sync_state(session_id, profile_sync);
+                }
+            } else if should_terminate_completion_hook
+                && let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock()
+            {
+                hook_runtime.terminate_turn(
+                    session_id,
+                    project_id,
+                    "execution_failed",
+                    report.provider_request_count,
+                );
+            }
+            workspace.session_messages.insert(
+                session_id,
+                conversation_state_to_session_messages(&runtime_state.conversation_state),
+            );
+            if let Some(session) = workspace
+                .sessions
+                .iter_mut()
+                .find(|candidate| candidate.id == session_id)
+            {
+                session.status = if apply_result.is_success {
+                    SessionState::Completed
                 } else {
-                    String::new()
+                    SessionState::Blocked
                 };
-            if completion_status.is_final() {
-                runtime_state
-                    .context_injection_state
-                    .consume_turn(&hook_turn_id, &now);
-                runtime_state.vmm_profile_sync.record_completed_turn();
-                let profile_sync = runtime_state.vmm_profile_sync.clone();
+                session.last_updated_label = String::from("刚刚");
+            }
+            if workspace.selected_session != session_id {
+                runtime_state.ui_state.unread = true;
+            }
+            workspace.session_run_phases.insert(
+                session_id,
+                if apply_result.is_success {
+                    SessionRunPhase::Ready
+                } else {
+                    SessionRunPhase::Failed
+                },
+            );
+            workspace.hydrated_session_ids.insert(session_id);
+            if is_main_session {
                 agent_runtime
                     .vmm_hook_runtime
-                    .store_profile_sync_state(session_id, profile_sync);
+                    .replace_snapshot(build_vmm_hook_config_snapshot(
+                        &agent_runtime.provider_configuration,
+                        workspace,
+                    ));
             }
-        } else if should_terminate_completion_hook
-            && let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock()
-        {
-            hook_runtime.terminate_turn(
-                session_id,
-                project_id,
-                "execution_failed",
-                report.provider_request_count,
-            );
-        }
-        workspace.session_messages.insert(
-            session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
-        );
-        if let Some(session) = workspace
-            .sessions
-            .iter_mut()
-            .find(|candidate| candidate.id == session_id)
-        {
-            session.status = if apply_result.is_success {
-                SessionState::Completed
-            } else {
-                SessionState::Blocked
-            };
-            session.last_updated_label = String::from("刚刚");
-        }
-        if workspace.selected_session != session_id {
-            runtime_state.ui_state.unread = true;
-        }
-        workspace.session_run_phases.insert(
-            session_id,
-            if apply_result.is_success {
-                SessionRunPhase::Ready
-            } else {
-                SessionRunPhase::Failed
-            },
-        );
-        workspace.hydrated_session_ids.insert(session_id);
-        if is_main_session {
-            agent_runtime
-                .vmm_hook_runtime
-                .replace_snapshot(build_vmm_hook_config_snapshot(
-                    &agent_runtime.provider_configuration,
-                    workspace,
-                ));
-        }
-    })?;
+        })?;
     webui_trace(
         "execution_report_applied",
         format!(
-            "session={session_id} is_main_session={} prompt_purpose={} runs_completed_turn_hooks={} completion_status={} pending_subagents={} pending_delegate_completions={} has_active_hook_turn={} error={} provider_requests={} output_chars={}",
+            "session={session_id} is_main_session={} prompt_purpose={} runs_completed_turn_hooks={} completion_status={} pending_subagents={} has_active_hook_turn={} error={} provider_requests={} output_chars={}",
             workspace_snapshot
                 .sessions
                 .iter()
@@ -6798,7 +7547,6 @@ fn apply_execution_report_to_memory(
             runs_completed_turn_hooks,
             completion_gate.completion_status().as_str(),
             completion_gate.pending_subagent_count,
-            completion_gate.pending_delegate_completion_count,
             completion_gate.has_active_hook_turn,
             report.error.is_some(),
             report.provider_request_count,
@@ -7008,6 +7756,19 @@ impl StableVmmOutboxHasher {
 }
 
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
+/// Controls whether one workbench refresh rebuilds structural subagent navigation.
+/// 控制一次工作台刷新是否重建结构性的子代理导航。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubagentNavigationRefreshMode {
+    /// Rebuild subagent navigation from runtime and segmented state.
+    /// 从运行时和分段状态重建子代理导航。
+    Rebuild,
+    /// Preserve the current subagent navigation while refreshing transcript content.
+    /// 刷新转录内容时保留当前子代理导航。
+    Preserve,
+}
+
+/// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
 /// 修改保留的工作区快照并发出重建后的工作台快照。
 fn with_workspace_mutation<F>(
     app: &tauri::AppHandle,
@@ -7017,18 +7778,68 @@ fn with_workspace_mutation<F>(
 where
     F: FnOnce(&mut WorkspaceSnapshot),
 {
+    with_workspace_mutation_with_subagent_navigation_mode(
+        app,
+        state,
+        SubagentNavigationRefreshMode::Rebuild,
+        mutate,
+    )
+}
+
+/// Mutates the retained workspace snapshot without rebuilding subagent task navigation.
+/// 修改保留的工作区快照但不重建子代理任务导航。
+fn with_workspace_mutation_preserving_subagent_navigation<F>(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    mutate: F,
+) -> Result<WorkspaceSnapshot, String>
+where
+    F: FnOnce(&mut WorkspaceSnapshot),
+{
+    with_workspace_mutation_with_subagent_navigation_mode(
+        app,
+        state,
+        SubagentNavigationRefreshMode::Preserve,
+        mutate,
+    )
+}
+
+/// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot using the requested navigation mode.
+/// 按指定导航模式修改保留的工作区快照并发出重建后的工作台快照。
+fn with_workspace_mutation_with_subagent_navigation_mode<F>(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    subagent_navigation_refresh_mode: SubagentNavigationRefreshMode,
+    mutate: F,
+) -> Result<WorkspaceSnapshot, String>
+where
+    F: FnOnce(&mut WorkspaceSnapshot),
+{
+    let trace_started_at = current_unix_millis_value();
     let (
+        workspace_snapshot,
+        rebuild_generation,
         controller_runtime,
         luaskills_catalog,
         token_budget_runtime,
         mcp_catalog,
-        logs,
+        provider_configuration,
         ai_tool_configuration,
-        workspace_snapshot,
+        surface_messages,
+        subagent_navigation,
+        logs,
+        live_context_budgets,
     ) = {
+        let trace_lock_wait_started_at = current_unix_millis_value();
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        webui_trace_if_slow(
+            "workspace_mutation_lock_wait",
+            trace_lock_wait_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?}"),
+        );
+        let trace_prepare_started_at = current_unix_millis_value();
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
@@ -7060,47 +7871,129 @@ where
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
         let live_context_budgets = guard.live_context_budgets.clone();
-        mutate(&mut workspace_snapshot);
-        let surface_messages =
-            active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot);
-        let subagent_navigation =
-            subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot);
-        let workbench = workbench_from_runtime(
-            &controller_runtime,
-            &luaskills_catalog,
-            &token_budget_runtime,
-            &mcp_catalog,
-            &provider_configuration,
-            &ai_tool_configuration,
-            &workspace_snapshot,
-            surface_messages.as_slice(),
-            subagent_navigation,
-            &logs,
-            &live_context_budgets,
+        webui_trace_if_slow(
+            "workspace_mutation_prepare",
+            trace_prepare_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?}"),
         );
+        let trace_mutate_started_at = current_unix_millis_value();
+        mutate(&mut workspace_snapshot);
+        webui_trace_if_slow(
+            "workspace_mutation_apply",
+            trace_mutate_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?}"),
+        );
+        let trace_surface_started_at = current_unix_millis_value();
+        let (surface_messages, subagent_navigation) = match subagent_navigation_refresh_mode {
+            SubagentNavigationRefreshMode::Rebuild => (
+                active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
+                subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
+            ),
+            SubagentNavigationRefreshMode::Preserve => {
+                let subagent_navigation = guard.workbench.subagent_navigation.clone();
+                let active_session_id = preserved_active_surface_session_id(
+                    &workspace_snapshot,
+                    subagent_navigation.as_ref(),
+                );
+                (
+                    surface_messages_for_session_without_subagent_navigation_refresh(
+                        &guard,
+                        &workspace_snapshot,
+                        active_session_id,
+                    ),
+                    subagent_navigation,
+                )
+            }
+        };
+        webui_trace_if_slow(
+            "workspace_mutation_surface",
+            trace_surface_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?}"),
+        );
+        let trace_workbench_started_at = current_unix_millis_value();
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let rebuild_generation = guard.workbench_generation;
         guard.workspace_snapshot = Some(workspace_snapshot.clone());
-        guard.workbench = workbench.clone();
-        let _ = app.emit(
-            "vulcan://service-event",
-            ServiceEvent::Workbench(Box::new(workbench)),
+        webui_trace_if_slow(
+            "workspace_mutation_commit_workspace",
+            trace_workbench_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation}"),
         );
         (
+            workspace_snapshot,
+            rebuild_generation,
             controller_runtime,
             luaskills_catalog,
             token_budget_runtime,
             mcp_catalog,
-            logs,
+            provider_configuration,
             ai_tool_configuration,
-            workspace_snapshot,
+            surface_messages,
+            subagent_navigation,
+            logs,
+            live_context_budgets,
         )
     };
-    let _ = (
-        controller_runtime,
-        luaskills_catalog,
-        token_budget_runtime,
-        mcp_catalog,
-        logs,
-        ai_tool_configuration,
+    let trace_workbench_started_at = current_unix_millis_value();
+    let workbench = workbench_from_runtime(
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &provider_configuration,
+        &ai_tool_configuration,
+        &workspace_snapshot,
+        surface_messages.as_slice(),
+        subagent_navigation,
+        &logs,
+        &live_context_budgets,
+    );
+    webui_trace_if_slow(
+        "workspace_mutation_workbench",
+        trace_workbench_started_at,
+        format!("mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation}"),
+    );
+    let should_emit = {
+        let trace_commit_started_at = current_unix_millis_value();
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let is_current_generation = guard.workbench_generation == rebuild_generation;
+        if is_current_generation {
+            guard.workbench = workbench.clone();
+        }
+        webui_trace_if_slow(
+            "workspace_mutation_commit_workbench",
+            trace_commit_started_at,
+            format!(
+                "mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation} current={is_current_generation}"
+            ),
+        );
+        is_current_generation
+    };
+    if should_emit {
+        let trace_emit_started_at = current_unix_millis_value();
+        let _ = app.emit(
+            "vulcan://service-event",
+            ServiceEvent::Workbench(Box::new(workbench)),
+        );
+        webui_trace_if_slow(
+            "workspace_mutation_emit",
+            trace_emit_started_at,
+            format!("mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation}"),
+        );
+    } else {
+        webui_trace(
+            "workspace_mutation_emit_skipped",
+            format!(
+                "mode={subagent_navigation_refresh_mode:?} generation={rebuild_generation} reason=stale_generation"
+            ),
+        );
+    }
+    webui_trace_if_slow(
+        "workspace_mutation_total",
+        trace_started_at,
+        format!("mode={subagent_navigation_refresh_mode:?}"),
     );
     Ok(workspace_snapshot)
 }
@@ -7116,36 +8009,17 @@ fn selected_session_messages_from_workspace(
     )
 }
 
-/// Normalizes one subagent task state against the shared task runtime.
-/// 根据共享任务运行时归一化单条子代理任务状态。
+/// Normalizes one subagent task state against the shared task runtime without disk fallback scans.
+/// 根据共享任务运行时归一化单条子代理任务状态，且不执行磁盘回退扫描。
 fn normalize_webui_subagent_task_state(
-    workspace_snapshot: Option<&WorkspaceSnapshot>,
+    _workspace_snapshot: Option<&WorkspaceSnapshot>,
     state: &SubagentTaskPanelState,
     task_runtime: Option<&Arc<TaskRuntime>>,
     has_live_listener: bool,
 ) -> SubagentTaskPanelState {
     let is_live_running =
         webui_subagent_task_has_live_run(task_runtime, has_live_listener, state.task_id);
-    let terminal_persisted_state = (!is_live_running && state.run_state.is_running())
-        .then(|| terminal_persisted_webui_subagent_task_panel_state(workspace_snapshot, state))
-        .flatten();
-    normalize_subagent_task_panel_state(state, is_live_running, terminal_persisted_state.as_ref())
-}
-
-/// Returns a terminal persisted subagent snapshot for one WebUI task when available.
-/// 在可用时返回单个 WebUI 子任务的终态持久化快照。
-fn terminal_persisted_webui_subagent_task_panel_state(
-    workspace_snapshot: Option<&WorkspaceSnapshot>,
-    state: &SubagentTaskPanelState,
-) -> Option<SubagentTaskPanelState> {
-    workspace_snapshot.and_then(|workspace_snapshot| {
-        persisted_webui_subagent_task_panel_state_snapshot(
-            workspace_snapshot,
-            state.parent_session_id,
-            state.task_id,
-        )
-        .filter(|persisted_state| !persisted_state.run_state.is_running())
-    })
+    normalize_subagent_task_panel_state(state, is_live_running, None)
 }
 
 /// Returns whether one child task still has a live WebUI listener or shared runtime abort handle.
@@ -7159,12 +8033,12 @@ fn webui_subagent_task_has_live_run(
         || task_runtime.is_some_and(|runtime| runtime.is_task_running(task_id).unwrap_or(false))
 }
 
-/// Builds the shared file-backed TaskSession store for one direct WebUI parent when its selected root session belongs to a project.
-/// 当 WebUI 直接父级所属的选中根会话属于项目时构建共享文件态 TaskSession 存储。
+/// Builds the shared segmented TaskSession store for one direct WebUI parent when its selected root session belongs to a project.
+/// 当 WebUI 直接父级所属的选中根会话属于项目时构建共享分段 TaskSession 存储。
 fn webui_task_session_store_for_parent_session(
     workspace_snapshot: &WorkspaceSnapshot,
     parent_session_id: SessionId,
-) -> Option<FileTaskSessionStore> {
+) -> Option<SegmentedTaskSessionStore> {
     let (root_session_id, project_id) = if let Some(project_id) =
         owning_project_id_for_session(workspace_snapshot, parent_session_id)
     {
@@ -7177,17 +8051,20 @@ fn webui_task_session_store_for_parent_session(
         let project_id = owning_project_id_for_session(workspace_snapshot, root_session_id)?;
         (root_session_id, project_id)
     };
-    Some(FileTaskSessionStore::new(
-        vulcan_workspace_store::workspace_store::session_event_store_directory(
+    let session_dir =
+        vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store(
+            &vulcan_workspace_store::data_plane::application_data_root(),
             &project_id,
-            root_session_id,
-        ),
-    ))
+            &root_session_id.to_string(),
+        )
+        .ok()
+        .flatten()?;
+    Some(SegmentedTaskSessionStore::new(session_dir))
 }
 
-/// Loads direct child TaskSession panel states from the shared file-backed store for one WebUI direct parent session.
-/// 从共享文件态存储加载某个 WebUI 直接父会话下的直接子 TaskSession 面板状态。
-fn file_backed_webui_subagent_task_panel_states_for_session(
+/// Loads direct child TaskSession panel states from the shared segmented store for one WebUI direct parent session.
+/// 从共享分段存储加载某个 WebUI 直接父会话下的直接子 TaskSession 面板状态。
+fn segmented_webui_subagent_task_panel_states_for_session(
     workspace_snapshot: &WorkspaceSnapshot,
     parent_session_id: SessionId,
 ) -> Vec<SubagentTaskPanelState> {
@@ -7196,7 +8073,22 @@ fn file_backed_webui_subagent_task_panel_states_for_session(
     else {
         return Vec::new();
     };
-    subagent_task_panel_states_from_task_session_store(&store, parent_session_id)
+    subagent_task_panel_states_from_segmented_task_session_store(&store, parent_session_id)
+}
+
+/// Loads one WebUI subagent task detail from the shared segmented store without scanning sibling task details.
+/// 从共享分段存储加载单个 WebUI 子代理详情，避免扫描兄弟任务详情。
+fn segmented_webui_subagent_task_panel_state_for_task(
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+    task_session_id: SessionId,
+) -> Option<SubagentTaskPanelState> {
+    let store = webui_task_session_store_for_parent_session(workspace_snapshot, parent_session_id)?;
+    subagent_task_panel_state_detail_from_segmented_task_session_store(
+        &store,
+        SessionNodeId::from(task_session_id),
+    )
+    .filter(|state| state.parent_session_id == parent_session_id)
 }
 
 /// Finds one cached WebUI subagent task state by child task identifier across direct-parent buckets.
@@ -7211,73 +8103,35 @@ fn webui_subagent_task_state_by_task_id(
         .find_map(|tasks| tasks.get(&task_id))
 }
 
-/// Returns one best-effort persisted WebUI task-panel snapshot by scanning file-backed state before visible parent records.
-/// 通过先扫描文件态再扫描父级可见记录，为 WebUI 返回一份最佳努力的持久化任务面板快照。
-///
-/// # Parameters
-/// 参数
-/// `workspace_snapshot` is the current WebUI workspace projection used to resolve file and transcript state.
-/// `workspace_snapshot` 是当前 WebUI 工作区投影，用于解析文件态与转录状态。
-/// `parent_session_id` is the direct parent session that owns the task card.
-/// `parent_session_id` 是拥有该 task 卡片的直接父会话。
-/// `task_id` is the child task-session identifier being normalized.
-/// `task_id` 是正在归一化的子 task-session 标识。
-///
-/// # Returns
-/// 返回值
-/// The newest recoverable panel snapshot when one can be found; otherwise `None`.
-/// 找到时返回最新可恢复的面板快照；否则返回 `None`。
-fn persisted_webui_subagent_task_panel_state_snapshot(
-    workspace_snapshot: &WorkspaceSnapshot,
-    parent_session_id: SessionId,
-    task_id: SessionId,
-) -> Option<SubagentTaskPanelState> {
-    file_backed_webui_subagent_task_panel_states_for_session(workspace_snapshot, parent_session_id)
-        .into_iter()
-        .find(|state| state.task_id == task_id)
-        .or_else(|| {
-            workspace_snapshot
-                .session_runtime_state
-                .get(&parent_session_id)
-                .and_then(|runtime_state| {
-                    runtime_state
-                        .conversation_state
-                        .records
-                        .iter()
-                        .rev()
-                        .find_map(|record| {
-                            record.metadata.as_ref().and_then(|metadata| {
-                                parse_subagent_task_panel_metadata(
-                                    parent_session_id,
-                                    metadata,
-                                    None,
-                                )
-                                .filter(|state| state.task_id == task_id)
-                            })
-                        })
-                })
-        })
-        .or_else(|| {
-            workspace_snapshot
-                .session_messages
-                .get(&parent_session_id)
-                .and_then(|messages| {
-                    messages.iter().rev().find_map(|message| {
-                        message.metadata.as_ref().and_then(|metadata| {
-                            parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
-                                .filter(|state| state.task_id == task_id)
-                        })
-                    })
-                })
-        })
-}
-
 /// Rebuilds the selected parent session subagent cache from shared task-session metadata.
 /// 从共享 task-session 元数据重建当前父会话的子代理缓存。
 fn rebuild_webui_subagent_task_cache_for_session(
     guard: &mut ServiceBridgeState,
     workspace_snapshot: &WorkspaceSnapshot,
     parent_session_id: SessionId,
+) {
+    if parent_session_id == SessionId::nil() {
+        return;
+    }
+    if guard
+        .session_subagent_tasks
+        .contains_key(&parent_session_id)
+    {
+        return;
+    }
+    let segmented_states = segmented_webui_subagent_task_panel_states_for_session(
+        workspace_snapshot,
+        parent_session_id,
+    );
+    merge_webui_subagent_task_cache_for_session(guard, parent_session_id, segmented_states);
+}
+
+/// Merges preloaded segmented task states into the in-memory WebUI subagent cache.
+/// 将预加载的分段任务状态合并到 WebUI 内存子代理缓存。
+fn merge_webui_subagent_task_cache_for_session(
+    guard: &mut ServiceBridgeState,
+    parent_session_id: SessionId,
+    segmented_states: Vec<SubagentTaskPanelState>,
 ) {
     if parent_session_id == SessionId::nil() {
         return;
@@ -7292,40 +8146,14 @@ fn rebuild_webui_subagent_task_cache_for_session(
         .get(&parent_session_id)
         .cloned()
         .unwrap_or_default();
-    let file_backed_states = file_backed_webui_subagent_task_panel_states_for_session(
-        workspace_snapshot,
-        parent_session_id,
-    );
-    let mut legacy_states = workspace_snapshot
-        .session_runtime_state
-        .get(&parent_session_id)
-        .into_iter()
-        .flat_map(|runtime_state| runtime_state.conversation_state.records.iter())
-        .filter_map(|record| {
-            record.metadata.as_ref().and_then(|metadata| {
-                parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
-            })
-        })
-        .collect::<Vec<_>>();
-    if let Some(projected_messages) = workspace_snapshot.session_messages.get(&parent_session_id) {
-        legacy_states.extend(projected_messages.iter().filter_map(|message| {
-            message.metadata.as_ref().and_then(|metadata| {
-                parse_subagent_task_panel_metadata(parent_session_id, metadata, None)
-            })
-        }));
-    }
-    let merged_states = merge_subagent_task_panel_cache(
-        &previous_states,
-        file_backed_states,
-        legacy_states,
-        |task_id| {
+    let merged_states =
+        merge_subagent_task_panel_cache(&previous_states, segmented_states, |task_id| {
             webui_subagent_task_has_live_run(
                 task_runtime,
                 live_listener_task_ids.contains(&task_id),
                 task_id,
             )
-        },
-    );
+        });
     if merged_states.is_empty() {
         guard.session_subagent_tasks.remove(&parent_session_id);
     } else {
@@ -7333,13 +8161,12 @@ fn rebuild_webui_subagent_task_cache_for_session(
             .session_subagent_tasks
             .insert(parent_session_id, merged_states);
     }
-    if guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id == parent_session_id)
+    if let Some(selection) = guard.active_subagent_panel
+        && selection.parent_session_id == parent_session_id
         && !guard
             .session_subagent_tasks
             .get(&parent_session_id)
-            .is_some_and(|tasks| tasks.contains_key(&guard.active_subagent_panel.unwrap().task_id))
+            .is_some_and(|tasks| tasks.contains_key(&selection.task_id))
     {
         guard.active_subagent_panel = None;
     }
@@ -7352,13 +8179,22 @@ fn active_surface_session_id_from_state(
     workspace_snapshot: &WorkspaceSnapshot,
 ) -> SessionId {
     let root_session_id = workspace_snapshot.selected_session;
-    rebuild_webui_subagent_task_cache_for_session(guard, workspace_snapshot, root_session_id);
     if guard
         .active_subagent_panel
         .is_some_and(|selection| selection.parent_session_id != root_session_id)
     {
         guard.active_subagent_panel = None;
     }
+    let has_visible_round = guard
+        .session_subagent_navigation_rounds
+        .contains(&root_session_id);
+    let has_active_panel = guard
+        .active_subagent_panel
+        .is_some_and(|selection| selection.parent_session_id == root_session_id);
+    if !has_visible_round && !has_active_panel {
+        return root_session_id;
+    }
+    rebuild_webui_subagent_task_cache_for_session(guard, workspace_snapshot, root_session_id);
     if let Some(selection) = guard.active_subagent_panel {
         rebuild_webui_subagent_task_cache_for_session(
             guard,
@@ -7420,6 +8256,41 @@ fn active_surface_messages_from_workspace_and_state(
         .unwrap_or_default()
 }
 
+/// Returns the active surface id from preserved navigation without recomputing task lists.
+/// 不重算任务列表，直接从已保留导航中返回活动界面标识。
+fn preserved_active_surface_session_id(
+    workspace_snapshot: &WorkspaceSnapshot,
+    subagent_navigation: Option<&SubagentNavigationSnapshot>,
+) -> SessionId {
+    subagent_navigation
+        .and_then(|navigation| navigation.active_conversation_id.parse::<SessionId>().ok())
+        .unwrap_or(workspace_snapshot.selected_session)
+}
+
+/// Returns messages for one active surface without refreshing subagent navigation.
+/// 不刷新子代理导航，返回指定活动界面的消息。
+fn surface_messages_for_session_without_subagent_navigation_refresh(
+    guard: &ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+    active_session_id: SessionId,
+) -> Vec<SessionMessageEntry> {
+    if active_session_id != workspace_snapshot.selected_session
+        && let Some(messages) =
+            in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+        && !messages.is_empty()
+    {
+        return messages;
+    }
+    if active_session_id != workspace_snapshot.selected_session
+        && let Some(state) = webui_subagent_task_state_by_task_id(guard, active_session_id)
+        && let Some(conversation_state) = state.conversation_state.as_ref()
+    {
+        return conversation_state_to_session_messages(conversation_state);
+    }
+    in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+        .unwrap_or_default()
+}
+
 /// Returns whether one WebUI subagent panel has enough persisted transcript detail for review.
 /// 返回 WebUI 子代理面板是否拥有足够的持久转录详情可供复看。
 fn webui_subagent_panel_has_recoverable_detail(
@@ -7448,6 +8319,15 @@ fn subagent_navigation_snapshot_from_state(
         guard.active_subagent_panel = None;
     }
     let parent_session_id = root_session_id;
+    let has_visible_round = guard
+        .session_subagent_navigation_rounds
+        .contains(&parent_session_id);
+    let has_active_panel = guard
+        .active_subagent_panel
+        .is_some_and(|selection| selection.parent_session_id == parent_session_id);
+    if !has_visible_round && !has_active_panel {
+        return None;
+    }
     rebuild_webui_subagent_task_cache_for_session(guard, workspace_snapshot, parent_session_id);
     let requested_active_task_id = guard.active_subagent_panel.and_then(|selection| {
         (selection.parent_session_id == parent_session_id).then_some(selection.task_id)
@@ -7474,15 +8354,9 @@ fn subagent_navigation_snapshot_from_state(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let has_visible_round = guard
-        .session_subagent_navigation_rounds
-        .contains(&parent_session_id);
     let has_running_subagents = normalized_states
         .iter()
         .any(|state| state.run_state.is_running());
-    let has_active_panel = guard
-        .active_subagent_panel
-        .is_some_and(|selection| selection.parent_session_id == parent_session_id);
     if !subagent_navigation_surface_is_visible(
         has_visible_round,
         has_running_subagents,
@@ -7506,6 +8380,86 @@ fn subagent_navigation_snapshot_from_state(
     Some(SubagentNavigationSnapshot {
         parent_conversation_id: parent_session_id.to_string(),
         active_conversation_id,
+        active_task_id: active_task_id.map(|task_id| task_id.to_string()),
+        tasks,
+    })
+}
+
+/// Builds the subagent navigation snapshot from the current cache without refreshing segmented storage.
+/// 仅从当前缓存构建子代理导航快照，不刷新分段存储。
+fn subagent_navigation_snapshot_from_cached_state(
+    guard: &mut ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
+) -> Option<SubagentNavigationSnapshot> {
+    let parent_session_id = workspace_snapshot.selected_session;
+    if parent_session_id == SessionId::nil() {
+        return None;
+    }
+    if guard
+        .active_subagent_panel
+        .is_some_and(|selection| selection.parent_session_id != parent_session_id)
+    {
+        guard.active_subagent_panel = None;
+    }
+    let has_visible_round = guard
+        .session_subagent_navigation_rounds
+        .contains(&parent_session_id);
+    let has_active_panel = guard
+        .active_subagent_panel
+        .is_some_and(|selection| selection.parent_session_id == parent_session_id);
+    if !has_visible_round && !has_active_panel {
+        return None;
+    }
+    let requested_active_task_id = guard.active_subagent_panel.and_then(|selection| {
+        (selection.parent_session_id == parent_session_id).then_some(selection.task_id)
+    });
+    let task_runtime = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| &runtime.task_runtime);
+    let live_listener_task_ids = guard.detached_subagent_task_listeners.clone();
+    let normalized_states = guard
+        .session_subagent_tasks
+        .get(&parent_session_id)
+        .map(|entries| {
+            entries
+                .values()
+                .map(|state| {
+                    let is_live_running = webui_subagent_task_has_live_run(
+                        task_runtime,
+                        live_listener_task_ids.contains(&state.task_id),
+                        state.task_id,
+                    );
+                    normalize_subagent_task_panel_state(state, is_live_running, None)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let has_running_subagents = normalized_states
+        .iter()
+        .any(|state| state.run_state.is_running());
+    if !subagent_navigation_surface_is_visible(
+        has_visible_round,
+        has_running_subagents,
+        has_active_panel,
+    ) {
+        return None;
+    }
+    let (navigation_states, active_task_id) = select_subagent_navigation_panel_states(
+        &normalized_states,
+        requested_active_task_id,
+        |state| webui_subagent_panel_has_recoverable_detail(workspace_snapshot, state),
+    );
+    if navigation_states.is_empty() {
+        return None;
+    }
+    let tasks = navigation_states
+        .iter()
+        .map(|state| subagent_task_summary_from_state(state, active_task_id))
+        .collect::<Vec<_>>();
+    Some(SubagentNavigationSnapshot {
+        parent_conversation_id: parent_session_id.to_string(),
+        active_conversation_id: active_task_id.unwrap_or(parent_session_id).to_string(),
         active_task_id: active_task_id.map(|task_id| task_id.to_string()),
         tasks,
     })
@@ -7628,7 +8582,7 @@ async fn refresh_workbench_snapshot(
             .await
             {
                 Ok(snapshot) => snapshot,
-                Err(error) if is_missing_session_manifest_error(&error) => None,
+                Err(error) if is_missing_segmented_session_file_error(&error) => None,
                 Err(error) => return Err(error),
             };
             hydration_snapshot
@@ -7644,6 +8598,10 @@ async fn refresh_workbench_snapshot(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        preserve_active_session_run_state(
+            guard.workspace_snapshot.as_ref(),
+            &mut refreshed_snapshot,
+        );
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
@@ -7666,6 +8624,7 @@ async fn refresh_workbench_snapshot(
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
@@ -7895,10 +8854,13 @@ async fn load_selected_session_hydration(
     .map(Some)
 }
 
-/// Returns whether a hydration failure is caused by an empty draft row without an event-store manifest.
-/// 判断水合失败是否源自空草稿行缺少事件存储 manifest。
-fn is_missing_session_manifest_error(error: &str) -> bool {
-    error.contains("manifest.json")
+/// Returns whether a hydration failure is caused by missing segmented session files.
+/// 判断水合失败是否源自缺失分段会话文件。
+fn is_missing_segmented_session_file_error(error: &str) -> bool {
+    (error.contains("metadata.json")
+        || error.contains("state.json")
+        || error.contains("s001.jsonl")
+        || error.contains("s000001.jsonl"))
         && (error.contains("os error 3")
             || error.contains("os error 2")
             || error.contains("系统找不到指定的路径")
@@ -7914,6 +8876,15 @@ fn current_unix_millis_text() -> String {
         .checked_div(1_000_000)
         .unwrap_or_default()
         .to_string()
+}
+
+/// Returns the current Unix timestamp as a millisecond integer for hot-path timing.
+/// 返回当前 Unix 毫秒整数，用于热路径计时。
+fn current_unix_millis_value() -> i128 {
+    OffsetDateTime::now_utc()
+        .unix_timestamp_nanos()
+        .checked_div(1_000_000)
+        .unwrap_or_default()
 }
 
 /// Returns a UTC timestamp suitable for human-readable diagnostic traces.
@@ -7959,6 +8930,18 @@ fn webui_trace(stage: &str, detail: impl AsRef<str>) {
     );
 }
 
+/// Emits one WebUI timing trace when a supposedly hot path exceeds the 20ms budget.
+/// 当本应为热路径的步骤超过 20ms 预算时输出 WebUI 计时日志。
+fn webui_trace_if_slow(stage: &str, started_at_ms: i128, detail: impl AsRef<str>) {
+    let elapsed_ms = current_unix_millis_value().saturating_sub(started_at_ms);
+    if elapsed_ms > 20 {
+        webui_trace(
+            stage,
+            format!("elapsed_ms={elapsed_ms} {}", detail.as_ref()),
+        );
+    }
+}
+
 /// Builds compact RuntimeEvent metadata for WebUI trace logs.
 /// 为 WebUI 跟踪日志构建紧凑的 RuntimeEvent 元数据。
 fn runtime_event_trace_detail(event: &RuntimeEvent) -> String {
@@ -7991,6 +8974,26 @@ fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent) -> String 
             ..
         }) => runtime_event_trace_detail(event),
         DetachedTaskRuntimeEvent::ParentRuntime { event, .. } => runtime_event_trace_detail(event),
+        DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::ThinkingDelta {
+            session_id,
+            delta,
+        }) => format!("session={session_id} delta_chars={}", delta.chars().count()),
+        DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::OutputDelta {
+            session_id,
+            delta,
+        }) => format!("session={session_id} delta_chars={}", delta.chars().count()),
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ConversationCheckpoint {
+                session_id,
+                conversation_state,
+                provider_request_count,
+                ..
+            },
+        ) => format!(
+            "session={session_id} records={} messages={} provider_requests={provider_request_count}",
+            conversation_state.records.len(),
+            conversation_state.messages.len()
+        ),
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Finished(report)) => {
             format!(
                 "provider_requests={} output_chars={} error={}",
@@ -8481,6 +9484,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), String> {
         && let Ok(mut guard) = state.lock()
     {
         guard.startup = startup.clone();
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();
         guard.workspace_snapshot = Some(workspace_snapshot);
         guard.agent_runtime = Some(agent_runtime);
@@ -8592,6 +9596,7 @@ fn update_service_failure(app: &tauri::AppHandle, error: String) {
         && let Ok(mut guard) = state.lock()
     {
         guard.startup = startup.clone();
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();
     }
     emit_service_snapshots(app, &startup, &workbench);
@@ -8743,7 +9748,7 @@ fn workbench_from_runtime(
         conversations: workspace
             .sessions
             .iter()
-            .filter(|session| session_event_manifest_exists(session))
+            .filter(|session| session_segmented_metadata_exists(session))
             .map(|session| {
                 let run_phase = workspace
                     .session_run_phases
@@ -9172,33 +10177,20 @@ fn composer_message_attachments_from_metadata(
         .collect()
 }
 
-/// Returns whether a persisted session has a readable event-store manifest on disk.
-/// 返回持久化会话在磁盘上是否存在可读取的事件存储 manifest。
-fn session_event_manifest_exists(session: &vulcan_workbench_model::SessionSummary) -> bool {
+/// Returns whether a persisted session has readable segmented metadata on disk.
+/// 返回持久化会话在磁盘上是否存在可读取的分段元数据。
+fn session_segmented_metadata_exists(session: &vulcan_workbench_model::SessionSummary) -> bool {
     let Some(project_id) = session.project_id.as_deref() else {
         return false;
     };
-    user_vulcan_code_sessions_dir()
-        .join(sanitize_session_store_component(project_id))
-        .join(session.id.to_string())
-        .join("manifest.json")
-        .is_file()
-}
-
-/// Sanitizes one session-store path component with the same rules as the workspace event store.
-/// 使用与工作区事件存储一致的规则清洗一个会话存储路径片段。
-fn sanitize_session_store_component(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::from("_");
-    }
-    trimmed
-        .chars()
-        .map(|character| match character {
-            ':' | '\\' | '/' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
-            _ => character,
-        })
-        .collect()
+    vulcan_workspace_store::workspace_store::find_segmented_session_directory_for_task_store(
+        &vulcan_workspace_store::data_plane::application_data_root(),
+        project_id,
+        &session.id.to_string(),
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|session_dir| session_dir.join("metadata.json").is_file())
 }
 
 /// Returns a trimmed string only when it contains visible content.
@@ -9911,24 +10903,6 @@ fn slugify_identifier(value: &str) -> String {
     slug.trim_matches('-').to_string()
 }
 
-/// Returns the user-level Vulcan Code session event-store directory.
-/// 返回用户级 Vulcan Code 会话事件存储目录。
-fn user_vulcan_code_sessions_dir() -> PathBuf {
-    user_home_dir()
-        .join(".vulcan")
-        .join("code")
-        .join("sessions")
-}
-
-/// Returns the current user's home directory using platform environment variables.
-/// 使用平台环境变量返回当前用户主目录。
-fn user_home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 /// Returns the first existing path from a workspace-relative candidate list.
 /// 从工作区相对候选列表中返回第一个存在的路径。
 #[allow(dead_code)]
@@ -9959,8 +10933,73 @@ mod tests {
         assert!(webui_pending_prompt_has_precheck_progress(&runtime_state));
     }
 
-    /// Verifies WebUI regular-session detection excludes file-backed TaskSession identifiers from workspace-store writes.
-    /// 验证 WebUI 普通会话检测会把文件态 TaskSession 标识排除在 workspace-store 写入之外。
+    /// Verifies WebUI can rebuild runnable runtime state from visible messages after SQLite runtime storage is removed.
+    /// 验证移除 SQLite 运行态存储后，WebUI 可从可见消息重建可运行的运行态。
+    #[test]
+    fn ensure_webui_session_runtime_state_rebuilds_missing_precheck_state() {
+        let session_id = SessionId::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "新会话",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![SessionMessageEntry::new(
+                    SessionMessageKind::User,
+                    "用户",
+                    "第一条提示词",
+                )],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::MemoryRecall)]),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, Some("turn-1"));
+
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should be rebuilt");
+        assert_eq!(
+            runtime_state.active_precheck_turn_id.as_deref(),
+            Some("turn-1")
+        );
+        assert!(runtime_state_has_concrete_conversation_context(
+            runtime_state
+        ));
+        assert!(
+            workspace_snapshot
+                .hydrated_session_ids
+                .contains(&session_id)
+        );
+        assert_eq!(
+            workspace_snapshot
+                .session_messages
+                .get(&session_id)
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    /// Verifies WebUI regular-session detection excludes persisted TaskSession identifiers from workspace-store writes.
+    /// 验证 WebUI 普通会话检测会把持久化 TaskSession 标识排除在 workspace-store 写入之外。
     #[test]
     fn webui_regular_session_detection_excludes_task_session_ids() {
         let active_session_id = SessionId::new_v4();
@@ -10015,6 +11054,103 @@ mod tests {
         ));
     }
 
+    /// Verifies stale workspace refreshes cannot drop an in-memory prompt turn that has not reached disk.
+    /// 验证陈旧工作区刷新不能丢弃尚未落盘的内存提示词回合。
+    #[test]
+    fn preserve_active_session_run_state_keeps_new_precheck_runtime_state() {
+        let session_id = SessionId::new_v4();
+        let project_id = String::from("project-a");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.active_precheck_turn_id = Some(String::from("turn-1"));
+        let previous_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id.clone(),
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(project_id.clone()),
+                "新会话",
+                "正在回忆",
+                SessionState::Running,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![SessionMessageEntry::new(
+                    SessionMessageKind::User,
+                    "用户",
+                    "新提示词",
+                )],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::MemoryRecall)]),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+        let mut refreshed_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id,
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        preserve_active_session_run_state(Some(&previous_snapshot), &mut refreshed_snapshot);
+
+        assert_eq!(refreshed_snapshot.selected_session, session_id);
+        assert!(
+            refreshed_snapshot
+                .sessions
+                .iter()
+                .any(|session| session.id == session_id)
+        );
+        assert_eq!(
+            refreshed_snapshot
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|state| state.active_precheck_turn_id.as_deref()),
+            Some("turn-1")
+        );
+        assert_eq!(
+            refreshed_snapshot.session_run_phases.get(&session_id),
+            Some(&SessionRunPhase::MemoryRecall)
+        );
+    }
+
     /// Verifies TaskSession terminal reports use the memory-only fast path without completed-turn hooks.
     /// 验证 TaskSession 终态报告使用仅内存快路径且不会生成完成回合 hook。
     #[test]
@@ -10049,6 +11185,7 @@ mod tests {
         let state = Arc::new(Mutex::new(ServiceBridgeState {
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
             workspace_snapshot: Some(workspace_snapshot),
             agent_runtime: None,
             service_runtime: None,
@@ -10061,6 +11198,8 @@ mod tests {
             session_subagent_navigation_rounds: BTreeSet::new(),
             active_subagent_panel: None,
             detached_subagent_task_listeners: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
             active_stream_tasks: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
         }));
@@ -10121,6 +11260,7 @@ mod tests {
         let mut guard = ServiceBridgeState {
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
@@ -10148,6 +11288,8 @@ mod tests {
             session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
             active_subagent_panel: None,
             detached_subagent_task_listeners: BTreeSet::from([task_session_id]),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
             active_stream_tasks: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
         };
@@ -10191,11 +11333,497 @@ mod tests {
         assert_eq!(navigation.tasks.len(), 1);
         assert_eq!(navigation.tasks[0].task_id, task_session_id.to_string());
         assert!(navigation.tasks[0].is_running);
-        assert!(session_has_running_subagent_tasks_from_state(
+        assert!(session_has_running_subagent_tasks_from_cache(
             &mut guard,
             &workspace_snapshot,
             parent_session_id
         ));
+    }
+
+    /// Verifies two detached WebUI subagents stop blocking the parent turn after both reach terminal states.
+    /// 验证两个 WebUI 分离子代理全部进入终态后不再阻塞父级回合收尾。
+    #[test]
+    fn webui_completion_gate_clears_after_two_detached_subagents_finish() {
+        let parent_session_id = SessionId::new_v4();
+        let first_task_session_id = SessionId::new_v4();
+        let second_task_session_id = SessionId::new_v4();
+        let mut guard = ServiceBridgeState {
+            startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+            workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
+            workspace_snapshot: None,
+            agent_runtime: None,
+            service_runtime: None,
+            controller_runtime: None,
+            luaskills_runtime: None,
+            token_budget_runtime: None,
+            mcp_runtime: None,
+            live_context_budgets: BTreeMap::new(),
+            session_subagent_tasks: BTreeMap::from([(
+                parent_session_id,
+                BTreeMap::from([
+                    (
+                        first_task_session_id,
+                        SubagentTaskPanelState {
+                            task_id: first_task_session_id,
+                            public_task_id: String::from("image-worker-a"),
+                            parent_session_id,
+                            subagent_label: String::from("图片子代理 A"),
+                            description: Some(String::from("生成第一张图片")),
+                            run_state: SubagentTaskRunState::Running,
+                            result_text: String::new(),
+                            conversation_state: None,
+                        },
+                    ),
+                    (
+                        second_task_session_id,
+                        SubagentTaskPanelState {
+                            task_id: second_task_session_id,
+                            public_task_id: String::from("image-worker-b"),
+                            parent_session_id,
+                            subagent_label: String::from("图片子代理 B"),
+                            description: Some(String::from("生成第二张图片")),
+                            run_state: SubagentTaskRunState::Running,
+                            result_text: String::new(),
+                            conversation_state: None,
+                        },
+                    ),
+                ]),
+            )]),
+            session_subagent_navigation_rounds: BTreeSet::from([parent_session_id]),
+            active_subagent_panel: None,
+            detached_subagent_task_listeners: BTreeSet::from([
+                first_task_session_id,
+                second_task_session_id,
+            ]),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
+            active_stream_tasks: BTreeMap::new(),
+            session_persist_versions: BTreeMap::new(),
+        };
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                parent_session_id,
+                Some(String::from("project-a")),
+                "父会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::from([(parent_session_id, SessionRunPhase::Ready)]),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: parent_session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        let running_tasks = running_webui_subagent_task_states_for_tree_from_cache(
+            &mut guard,
+            &workspace_snapshot,
+            parent_session_id,
+        );
+        assert_eq!(running_tasks.len(), 2);
+        let running_gate = WebuiTurnCompletionGate {
+            pending_subagent_count: running_tasks.len(),
+            has_active_hook_turn: false,
+        };
+        assert!(matches!(
+            running_gate.completion_status(),
+            ConversationTurnCompletionStatus::AwaitingSubagents
+        ));
+
+        for task_session_id in [first_task_session_id, second_task_session_id] {
+            let task_state = guard
+                .session_subagent_tasks
+                .get_mut(&parent_session_id)
+                .and_then(|tasks| tasks.get_mut(&task_session_id))
+                .expect("test subagent state should exist");
+            task_state.run_state = SubagentTaskRunState::Completed;
+            task_state.result_text = format!("任务 {task_session_id} 已完成");
+            guard
+                .detached_subagent_task_listeners
+                .remove(&task_session_id);
+        }
+
+        let finished_tasks = running_webui_subagent_task_states_for_tree_from_cache(
+            &mut guard,
+            &workspace_snapshot,
+            parent_session_id,
+        );
+        assert!(finished_tasks.is_empty());
+        assert!(!session_has_running_subagent_tasks_from_cache(
+            &mut guard,
+            &workspace_snapshot,
+            parent_session_id
+        ));
+        let finished_gate = WebuiTurnCompletionGate {
+            pending_subagent_count: finished_tasks.len(),
+            has_active_hook_turn: false,
+        };
+        assert!(matches!(
+            finished_gate.completion_status(),
+            ConversationTurnCompletionStatus::Completed
+        ));
+    }
+
+    /// Verifies stopped parents never dispatch queued work when detached subagents report terminal events.
+    /// 验证已停止父会话收到分离子代理终态事件时绝不会调度排队工作。
+    #[test]
+    fn stopped_detached_parent_event_skips_pending_prompt_dispatch() {
+        assert!(webui_detached_parent_event_should_continue_pending_prompt(
+            true, false
+        ));
+        assert!(!webui_detached_parent_event_should_continue_pending_prompt(
+            true, true
+        ));
+        assert!(!webui_detached_parent_event_should_continue_pending_prompt(
+            false, false
+        ));
+        assert!(webui_detached_parent_event_should_persist_terminal_projection(true, true, false));
+        assert!(!webui_detached_parent_event_should_persist_terminal_projection(true, true, true));
+        assert!(
+            !webui_detached_parent_event_should_persist_terminal_projection(false, true, false)
+        );
+    }
+
+    /// Verifies detached subagent completion enqueues a parent callback when no wait_agent owns the result.
+    /// 验证没有 wait_agent 接管时，分离子代理完成会向父会话加入回流回调。
+    #[test]
+    fn subagent_completion_queues_callback_without_wait_agent() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+            parent_session_id,
+        )));
+        let event = test_delegate_finished_event(task_session_id, "image-a", "生成完成：a.jpg");
+
+        let queued = enqueue_webui_subagent_callback_prompt_if_needed(
+            &state,
+            parent_session_id,
+            &event,
+            true,
+            false,
+        )
+        .expect("enqueue callback");
+
+        assert!(queued);
+        let guard = state.lock().expect("state lock");
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id))
+            .expect("runtime state");
+        assert_eq!(runtime_state.ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(
+            runtime_state.ui_state.pending_prompt_queue[0].source,
+            PendingSessionPromptSource::SubagentCallback
+        );
+        assert!(
+            runtime_state.ui_state.pending_prompt_queue[0]
+                .prompt
+                .contains("生成完成：a.jpg")
+        );
+    }
+
+    /// Verifies detached subagent completion does not enqueue callbacks while wait_agent is active.
+    /// 验证 wait_agent 活跃期间，分离子代理完成不会额外加入回流回调。
+    #[test]
+    fn subagent_completion_skips_callback_during_wait_agent() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let mut service_state = test_service_state_with_parent_session(parent_session_id);
+        service_state
+            .parent_sessions_waiting_for_subagents
+            .insert(parent_session_id);
+        let state = Arc::new(Mutex::new(service_state));
+        let event = test_delegate_finished_event(task_session_id, "image-b", "生成完成：b.jpg");
+
+        let queued = enqueue_webui_subagent_callback_prompt_if_needed(
+            &state,
+            parent_session_id,
+            &event,
+            true,
+            false,
+        )
+        .expect("skip callback");
+
+        assert!(!queued);
+        let guard = state.lock().expect("state lock");
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id));
+        assert!(runtime_state.is_none_or(|entry| entry.ui_state.pending_prompt_queue.is_empty()));
+    }
+
+    /// Verifies child completion callbacks stay suppressed after a completed wait_agent result.
+    /// 验证 wait_agent 已完成收集后，子代理完成回调仍保持抑制。
+    #[test]
+    fn subagent_completion_skips_callback_after_completed_wait_agent() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let mut service_state = test_service_state_with_parent_session(parent_session_id);
+        service_state
+            .parent_sessions_with_completed_wait_agent
+            .insert(parent_session_id);
+        let state = Arc::new(Mutex::new(service_state));
+        let event = test_delegate_finished_event(task_session_id, "image-c", "生成完成：c.jpg");
+
+        let queued = enqueue_webui_subagent_callback_prompt_if_needed(
+            &state,
+            parent_session_id,
+            &event,
+            true,
+            false,
+        )
+        .expect("skip callback");
+
+        assert!(!queued);
+        let guard = state.lock().expect("state lock");
+        let runtime_state = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&parent_session_id));
+        assert!(runtime_state.is_none_or(|entry| entry.ui_state.pending_prompt_queue.is_empty()));
+    }
+
+    /// Builds a minimal service state containing one regular parent session.
+    /// 构建只包含一个常规父会话的最小服务状态。
+    fn test_service_state_with_parent_session(parent_session_id: SessionId) -> ServiceBridgeState {
+        ServiceBridgeState {
+            startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+            workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
+            workspace_snapshot: Some(WorkspaceSnapshot {
+                task_projects: Vec::new(),
+                archived_task_projects: Vec::new(),
+                sessions: vec![SessionSummary::new(
+                    parent_session_id,
+                    Some(String::from("project-a")),
+                    "父会话",
+                    "",
+                    SessionState::Completed,
+                    0,
+                    0,
+                    "刚刚",
+                )],
+                archived_sessions: Vec::new(),
+                session_messages: BTreeMap::new(),
+                archived_session_messages: BTreeMap::new(),
+                session_compactions: BTreeMap::new(),
+                archived_session_compactions: BTreeMap::new(),
+                session_runtime_state: BTreeMap::new(),
+                archived_session_runtime_state: BTreeMap::new(),
+                session_run_phases: BTreeMap::from([(parent_session_id, SessionRunPhase::Ready)]),
+                expanded_task_projects: BTreeSet::new(),
+                selected_session: parent_session_id,
+                hydrated_session_ids: BTreeSet::new(),
+            }),
+            agent_runtime: None,
+            service_runtime: None,
+            controller_runtime: None,
+            luaskills_runtime: None,
+            token_budget_runtime: None,
+            mcp_runtime: None,
+            live_context_budgets: BTreeMap::new(),
+            session_subagent_tasks: BTreeMap::new(),
+            session_subagent_navigation_rounds: BTreeSet::new(),
+            active_subagent_panel: None,
+            detached_subagent_task_listeners: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
+            active_stream_tasks: BTreeMap::new(),
+            session_persist_versions: BTreeMap::new(),
+        }
+    }
+
+    /// Builds one delegate-finished runtime event carrying task-session metadata.
+    /// 构建一条携带 task-session 元数据的委派完成运行时事件。
+    fn test_delegate_finished_event(
+        task_session_id: SessionId,
+        public_task_id: &str,
+        result: &str,
+    ) -> RuntimeEvent {
+        RuntimeEvent::new(
+            RuntimeEventKind::DelegateFinished,
+            "子代理完成",
+            "子代理任务完成。",
+        )
+        .with_metadata(Some(serde_json::json!({
+            "kind": "task_session",
+            "payload": {
+                "task_id": public_task_id,
+                "task_session_id": task_session_id.to_string(),
+                "execution_status": "completed",
+                "description": "生成图片",
+                "subagent": "image-worker",
+                "result": result,
+            }
+        })))
+    }
+
+    /// Verifies token-refresh projection can reuse existing subagent navigation without rebuilding the task list.
+    /// 验证 token 刷新投影可以复用现有子代理导航而不重建任务列表。
+    #[test]
+    fn preserved_subagent_navigation_refresh_reads_child_surface_without_task_list_rebuild() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let guard = ServiceBridgeState {
+            startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+            workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
+            workspace_snapshot: None,
+            agent_runtime: None,
+            service_runtime: None,
+            controller_runtime: None,
+            luaskills_runtime: None,
+            token_budget_runtime: None,
+            mcp_runtime: None,
+            live_context_budgets: BTreeMap::new(),
+            session_subagent_tasks: BTreeMap::new(),
+            session_subagent_navigation_rounds: BTreeSet::new(),
+            active_subagent_panel: None,
+            detached_subagent_task_listeners: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
+            active_stream_tasks: BTreeMap::new(),
+            session_persist_versions: BTreeMap::new(),
+        };
+        let child_message =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "子代理增量")
+                .with_runtime_metadata("child-output", "1000");
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                parent_session_id,
+                Some(String::from("project-a")),
+                "父会话",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(task_session_id, vec![child_message.clone()])]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: parent_session_id,
+            hydrated_session_ids: BTreeSet::from([task_session_id]),
+        };
+        let navigation = SubagentNavigationSnapshot {
+            parent_conversation_id: parent_session_id.to_string(),
+            active_conversation_id: task_session_id.to_string(),
+            active_task_id: Some(task_session_id.to_string()),
+            tasks: Vec::new(),
+        };
+
+        let active_session_id =
+            preserved_active_surface_session_id(&workspace_snapshot, Some(&navigation));
+        let surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
+            &guard,
+            &workspace_snapshot,
+            active_session_id,
+        );
+
+        assert_eq!(active_session_id, task_session_id);
+        assert_eq!(surface_messages, vec![child_message]);
+        assert!(guard.session_subagent_tasks.is_empty());
+    }
+
+    /// Verifies historical cached subagents do not slow or hijack a normal parent-session surface.
+    /// 验证历史缓存子代理不会拖慢或劫持普通父会话界面。
+    #[test]
+    fn historical_subagent_cache_without_visible_round_does_not_build_navigation() {
+        let parent_session_id = SessionId::new_v4();
+        let task_session_id = SessionId::new_v4();
+        let mut guard = ServiceBridgeState {
+            startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
+            workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
+            workspace_snapshot: None,
+            agent_runtime: None,
+            service_runtime: None,
+            controller_runtime: None,
+            luaskills_runtime: None,
+            token_budget_runtime: None,
+            mcp_runtime: None,
+            live_context_budgets: BTreeMap::new(),
+            session_subagent_tasks: BTreeMap::from([(
+                parent_session_id,
+                BTreeMap::from([(
+                    task_session_id,
+                    SubagentTaskPanelState {
+                        task_id: task_session_id,
+                        public_task_id: String::from("historical-task"),
+                        parent_session_id,
+                        subagent_label: String::from("历史子代理"),
+                        description: None,
+                        run_state: SubagentTaskRunState::Running,
+                        result_text: String::new(),
+                        conversation_state: None,
+                    },
+                )]),
+            )]),
+            session_subagent_navigation_rounds: BTreeSet::new(),
+            active_subagent_panel: None,
+            detached_subagent_task_listeners: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
+            active_stream_tasks: BTreeMap::new(),
+            session_persist_versions: BTreeMap::new(),
+        };
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                parent_session_id,
+                Some(String::from("project-a")),
+                "父会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: parent_session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        assert_eq!(
+            active_surface_session_id_from_state(&mut guard, &workspace_snapshot),
+            parent_session_id
+        );
+        assert!(subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot).is_none());
+        assert!(
+            subagent_navigation_snapshot_from_cached_state(&mut guard, &workspace_snapshot)
+                .is_none()
+        );
     }
 
     /// Verifies a stale WebUI subagent panel cannot hijack another selected conversation surface.
@@ -10208,6 +11836,7 @@ mod tests {
         let mut guard = ServiceBridgeState {
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
+            workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
@@ -10238,6 +11867,8 @@ mod tests {
                 task_id: previous_task_id,
             }),
             detached_subagent_task_listeners: BTreeSet::new(),
+            parent_sessions_waiting_for_subagents: BTreeSet::new(),
+            parent_sessions_with_completed_wait_agent: BTreeSet::new(),
             active_stream_tasks: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
         };

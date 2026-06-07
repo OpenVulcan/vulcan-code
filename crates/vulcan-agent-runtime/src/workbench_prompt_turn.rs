@@ -8,12 +8,16 @@ use std::{
 
 use serde_json::Value;
 use time::OffsetDateTime;
+use vulcan_codex_session_port::{
+    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
+};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_hooks::HookRegistrationSnapshot;
 use vulcan_provider_config::config::{
     AiToolKind, PersistedAiToolConfiguration, ProjectVulcanCodeConfigurationFile,
     ReasoningEffortLevel,
 };
+use vulcan_session_core::SessionNodeId;
 use vulcan_vmm::{VmmConfigDiagnostic, VmmEffectiveConfig};
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageEntry, SessionMessageKind,
@@ -59,18 +63,6 @@ pub struct SharedPromptPrecheckPlan {
     pub progress_labels: Vec<String>,
 }
 
-impl SharedPromptPrecheckPlan {
-    /// Builds the no-hook plan used by internal delegate-result continuations.
-    /// 构建内部委派结果回流使用的无 hook 计划。
-    pub fn internal_continuation() -> Self {
-        Self {
-            has_precheck_hooks: false,
-            should_skip_precheck: true,
-            progress_labels: Vec::new(),
-        }
-    }
-}
-
 /// Prepared prompt turn that must continue after precheck completes.
 /// 需要在 precheck 完成后继续的提示词回合。
 #[derive(Clone)]
@@ -111,6 +103,9 @@ pub struct SharedPromptTurnStart {
     /// AI capability target order overrides requested by this prompt turn.
     /// 本次提示词回合请求的 AI 能力目标顺序覆盖。
     pub ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
+    /// Codex-compatible boundary events produced when this prompt turn is accepted.
+    /// 当前提示词回合被接受时生成的 Codex 兼容边界事件。
+    pub codex_boundary_events: Vec<CodexSessionEvent>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -137,6 +132,7 @@ impl fmt::Debug for SharedPromptTurnStart {
                 "ai_capability_target_order_overrides",
                 &self.ai_capability_target_order_overrides,
             )
+            .field("codex_boundary_events", &self.codex_boundary_events.len())
             .finish_non_exhaustive()
     }
 }
@@ -397,23 +393,20 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
                 crate::conversation_protocol::conversation_state_from_session_messages(messages);
         }
     }
-    if input.append_canonical_user_message
-        && input.append_visible_user_prompt_record
-        && input.source != PendingSessionPromptSource::DelegateCompletion
-    {
+    if input.append_canonical_user_message && input.append_visible_user_prompt_record {
         append_shared_user_prompt_record_with_attachments(
             runtime_state,
             input.session_id,
             &now,
             &sanitized_prompt,
-            input.attachments,
+            input.attachments.clone(),
         );
     } else if input.append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,
             format!("session-{}-protocol-user-{now}", input.session_id),
             sanitized_prompt.clone(),
-            input.attachments,
+            input.attachments.clone(),
         );
         runtime_state.updated_at = now.clone();
     }
@@ -426,29 +419,16 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             .as_deref(),
     );
     let hook_conversation_state = runtime_state.conversation_state.clone();
-    let precheck_request = if input.source.runs_user_prompt_precheck() {
-        conversation_hook_runtime.prepare_user_prompt_precheck(
-            input.session_id,
-            &input.prompt_entry_id,
-            input.owning_project_id,
-            input.workspace_path.to_string(),
-            input.source,
-            system_prompt_hook_phase,
-            &sanitized_prompt,
-            &hook_conversation_state,
-        )
-    } else {
-        conversation_hook_runtime.prepare_internal_prompt_continuation(
-            input.session_id,
-            &input.prompt_entry_id,
-            input.owning_project_id,
-            input.workspace_path.to_string(),
-            input.source,
-            system_prompt_hook_phase,
-            &sanitized_prompt,
-            &hook_conversation_state,
-        )
-    };
+    let precheck_request = conversation_hook_runtime.prepare_user_prompt_precheck(
+        input.session_id,
+        &input.prompt_entry_id,
+        input.owning_project_id.clone(),
+        input.workspace_path.to_string(),
+        input.source,
+        system_prompt_hook_phase,
+        &sanitized_prompt,
+        &hook_conversation_state,
+    );
     let precheck_turn_id = precheck_request.turn_id().to_string();
     runtime_state.active_precheck_turn_id = Some(precheck_turn_id.clone());
     if !injection_ops.is_empty() {
@@ -457,6 +437,13 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
         runtime_state.updated_at = now.clone();
     }
+    let codex_boundary_events = codex_prompt_turn_boundary_events(
+        &input,
+        &precheck_turn_id,
+        &sanitized_prompt,
+        &start_attachments,
+        &now,
+    );
     Ok(SharedPromptTurnStart {
         session_id: input.session_id,
         session_title: input.session_title.to_string(),
@@ -470,7 +457,66 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
         disabled_ai_capability_target_selectors: input.disabled_ai_capability_target_selectors,
         ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
+        codex_boundary_events,
     })
+}
+
+/// Builds Codex-compatible prompt-turn boundary events from the shared reducer input.
+/// 从共享归约器输入构建 Codex 兼容的提示词轮次边界事件。
+fn codex_prompt_turn_boundary_events(
+    input: &SharedPromptTurnRuntimeBeginInput<'_>,
+    turn_id: &str,
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+    now: &str,
+) -> Vec<CodexSessionEvent> {
+    let thread_id = SessionNodeId::from(input.session_id);
+    let timestamp_ms = unix_millis_text_to_u64(now);
+    let user_input_visibility = if input.append_visible_user_prompt_record {
+        CodexEventVisibility::Visible
+    } else {
+        CodexEventVisibility::Hidden
+    };
+    let turn_started = CodexSessionEvent::new(
+        format!("{}:{turn_id}:turn-started", input.session_id),
+        thread_id,
+        0,
+        CodexSessionEventKind::TurnStarted,
+        CodexEventScope::Turn,
+        CodexEventVisibility::Hidden,
+        timestamp_ms,
+    )
+    .with_turn_id(turn_id.to_string())
+    .with_payload(serde_json::json!({
+        "prompt_entry_id": &input.prompt_entry_id,
+        "source": input.source,
+        "execution_mode": &input.execution_mode,
+        "workspace_path": input.workspace_path,
+        "session_title": input.session_title,
+    }));
+    let user_input = CodexSessionEvent::new(
+        format!("{}:{turn_id}:user-input", input.session_id),
+        thread_id,
+        1,
+        CodexSessionEventKind::UserInput,
+        CodexEventScope::Turn,
+        user_input_visibility,
+        timestamp_ms,
+    )
+    .with_turn_id(turn_id.to_string())
+    .with_payload(serde_json::json!({
+        "prompt": prompt,
+        "attachments": attachments,
+        "source": input.source,
+        "canonical": input.append_canonical_user_message,
+    }));
+    vec![turn_started, user_input]
+}
+
+/// Parses Unix-milliseconds text into the Codex event timestamp domain.
+/// 将 Unix 毫秒文本解析到 Codex 事件时间戳域。
+fn unix_millis_text_to_u64(value: &str) -> u64 {
+    value.trim().parse::<u64>().unwrap_or_default()
 }
 
 /// Continues one prompt turn after precheck using shared iced/WebUI semantics.
@@ -563,14 +609,12 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
                 .filter(|content| *content != request_prompt)
             {
                 request_prompt = rewritten_prompt.to_string();
-                if input.start.source != PendingSessionPromptSource::DelegateCompletion {
-                    patch_latest_prechecked_user_prompt_record(
-                        runtime_state,
-                        &request_prompt,
-                        &request_attachments,
-                        input.patch_visible_user_prompt_record,
-                    );
-                }
+                patch_latest_prechecked_user_prompt_record(
+                    runtime_state,
+                    &request_prompt,
+                    &request_attachments,
+                    input.patch_visible_user_prompt_record,
+                );
             }
             if !report.injections.is_empty() {
                 let now = current_unix_millis_text();
@@ -603,24 +647,12 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             precheck_failure_detail = Some(detail);
         }
     }
-    let prompt_purpose = if input.start.source.runs_user_prompt_precheck() {
-        ExecutionPromptPurpose::UserTurn
-    } else {
-        ExecutionPromptPurpose::DelegateCompletion
-    };
-    let runtime_policy = if input.start.source.runs_user_prompt_precheck() {
-        vulcan_session_core::ExecutionRuntimePolicy::main_session()
-    } else {
-        vulcan_session_core::ExecutionRuntimePolicy::main_session_internal_continuation()
-    };
-    let context_injection = if input.start.source.runs_user_prompt_precheck() {
-        core_provider_context_injection_from_state_for_turn(
-            &runtime_state.context_injection_state,
-            Some(&input.precheck_outcome.turn_id),
-        )
-    } else {
-        None
-    };
+    let prompt_purpose = ExecutionPromptPurpose::UserTurn;
+    let runtime_policy = vulcan_session_core::ExecutionRuntimePolicy::main_session();
+    let context_injection = core_provider_context_injection_from_state_for_turn(
+        &runtime_state.context_injection_state,
+        Some(&input.precheck_outcome.turn_id),
+    );
     let request = ExecutionPreparationRequest {
         session_id,
         execution_scope: vulcan_session_core::ExecutionScope::MainSession {
@@ -651,6 +683,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         system_prompt_hook_blocks,
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
+        codex_boundary_events: input.start.codex_boundary_events.clone(),
     };
     Ok(SharedPromptTurnContinuation {
         request,
@@ -896,25 +929,23 @@ mod tests {
 
     use super::*;
 
-    /// Builds one delegate-completion prompt start used by continuation routing tests.
-    /// 构建一条供续跑路由测试使用的委派完成提示词启动态。
-    fn begin_delegate_completion_prompt(
-        runtime_state: &mut SessionRuntimeStateEntry,
-    ) -> SharedPromptTurnStart {
+    /// Begins one user-authored prompt turn used by Codex boundary tests.
+    /// 启动一条供 Codex 边界测试使用的用户提示词回合。
+    fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedPromptTurnStart {
         let mut hook_runtime = ConversationHookRuntime::new();
         begin_shared_prompt_turn_with_runtime_state(
             runtime_state,
             &mut hook_runtime,
             SharedPromptTurnRuntimeBeginInput {
-                session_id: SessionId::from_u128(901),
+                session_id: SessionId::from_u128(902),
                 session_title: "主会话",
                 workspace_path: "D:/workspace",
-                prompt_entry_id: String::from("delegate-entry"),
-                prompt: "子代理完成",
+                prompt_entry_id: String::from("user-entry"),
+                prompt: "生成一张图片",
                 attachments: Vec::new(),
                 append_canonical_user_message: true,
-                append_visible_user_prompt_record: false,
-                source: PendingSessionPromptSource::DelegateCompletion,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::UserFollowup,
                 execution_mode: String::from("Build"),
                 reasoning_effort: None,
                 disabled_ai_capability_kinds: BTreeSet::new(),
@@ -924,40 +955,36 @@ mod tests {
                 prior_session_messages: None,
             },
         )
-        .expect("delegate completion prompt should start")
+        .expect("user prompt should start")
     }
 
-    /// Verifies delegate completions become internal continuations instead of user-turn executions.
-    /// 验证委派完成回流会变成内部续跑，而不是普通用户回合执行。
+    /// Verifies user prompt begins expose visible Codex user-input boundary events.
+    /// 验证用户提示词开始时会暴露可见的 Codex 用户输入边界事件。
     #[test]
-    fn delegate_completion_continuation_uses_internal_runtime_policy() {
+    fn user_prompt_begin_exports_visible_codex_boundary_events() {
         let mut runtime_state = SessionRuntimeStateEntry::default();
-        let start = begin_delegate_completion_prompt(&mut runtime_state);
-        let precheck_outcome = start.precheck_request.clone().skip();
+        let start = begin_user_prompt(&mut runtime_state);
 
-        let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
-            &mut runtime_state,
-            SharedPromptTurnContinueInput {
-                start,
-                precheck_outcome,
-                ai_tool_configuration: PersistedAiToolConfiguration::default(),
-                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
-                runtime_reasoning_effort: None,
-                provider_reasoning_effort: None,
-                patch_visible_user_prompt_record: false,
-            },
-        )
-        .expect("delegate completion prompt should continue");
-
+        assert_eq!(start.codex_boundary_events.len(), 2);
         assert_eq!(
-            continuation.request.prompt_purpose,
-            ExecutionPromptPurpose::DelegateCompletion
+            start.codex_boundary_events[0].kind,
+            CodexSessionEventKind::TurnStarted
         );
-        assert!(!continuation.request.runtime_policy.hooks_enabled);
-        assert!(continuation.request.runtime_policy.vmm_enabled);
-        assert!(!continuation.request.runtime_policy.memory_recall_enabled);
-        assert!(!continuation.request.runtime_policy.memory_writeback_enabled);
-        assert!(continuation.request.context_injection.is_none());
-        assert!(runtime_state.active_precheck_turn_id.is_none());
+        assert_eq!(
+            start.codex_boundary_events[0].visibility,
+            CodexEventVisibility::Hidden
+        );
+        assert_eq!(
+            start.codex_boundary_events[1].kind,
+            CodexSessionEventKind::UserInput
+        );
+        assert_eq!(
+            start.codex_boundary_events[1].visibility,
+            CodexEventVisibility::Visible
+        );
+        assert_eq!(
+            start.codex_boundary_events[1].payload["source"],
+            serde_json::json!("user_followup")
+        );
     }
 }

@@ -64,8 +64,8 @@ pub enum SessionNodeKind {
     /// Main user-facing conversation session.
     /// 面向用户的主会话。
     MainSession,
-    /// File-backed delegated task session.
-    /// 文件态保存的委派子代理会话。
+    /// Segmented delegated task session.
+    /// 分段保存的委派子代理会话。
     TaskSession,
 }
 

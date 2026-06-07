@@ -15,24 +15,9 @@ pub(crate) mod conversation_protocol {
     };
 
     #[cfg(test)]
-    pub use vulcan_context::{
-        SessionConversationMessage, SessionConversationRecord, append_assistant_text_message,
-        append_user_text_message,
-    };
+    pub use vulcan_context::{SessionConversationMessage, SessionConversationRecord};
 }
 
 pub(crate) use vulcan_provider_config::config as provider_config;
 pub(crate) use vulcan_runtime_assets as runtime_assets;
 pub(crate) use vulcan_workbench_model as model;
-
-pub(crate) mod tooling {
-    //! Minimal crate-local compatibility facade for reused `change_set` helpers.
-    //! 复用 `change_set` 辅助逻辑使用的最小 crate 内兼容门面。
-
-    pub mod change_set {
-        //! Re-export of compact `change_set` persistence helpers.
-        //! 紧凑 `change_set` 持久化辅助逻辑的转发导出。
-
-        pub use vulcan_change_set::compact_change_set_host_result;
-    }
-}

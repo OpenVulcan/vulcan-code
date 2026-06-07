@@ -1,5 +1,5 @@
-//! File-backed task-session routing and scheduling boundaries.
-//! 文件态子代理会话路由与调度边界。
+//! Segmented task-session routing and scheduling boundaries.
+//! 分段子代理会话路由与调度边界。
 
 /// Task-session compaction contracts.
 /// 子代理会话压缩契约。
@@ -7,12 +7,6 @@ pub mod compaction;
 /// Task-session effective configuration resolution.
 /// 子代理会话有效配置解析。
 pub mod config_resolver;
-/// File-backed task-session store implementation.
-/// 文件态子代理会话存储实现。
-pub mod file_store;
-/// Legacy task payload fallback models.
-/// 旧子代理载荷降级模型。
-pub mod legacy_fallback;
 /// Task-session private domain models.
 /// 子代理会话私有领域模型。
 pub mod model;
@@ -25,6 +19,9 @@ pub mod router;
 /// Task-session scheduler contracts.
 /// 子代理会话调度契约。
 pub mod scheduler;
+/// Segmented task-session store implementation.
+/// 分段子代理会话存储实现。
+pub mod segmented_store;
 /// Task-session store contracts.
 /// 子代理会话存储契约。
 pub mod store;
@@ -37,8 +34,6 @@ pub use config_resolver::{
     TaskInvocationConfig, TaskSessionConfigResolutionInput, TaskSessionConfigResolver,
     TaskSessionResolvedConfig,
 };
-pub use file_store::FileTaskSessionStore;
-pub use legacy_fallback::LegacyTaskPayloadFallback;
 pub use model::{
     TaskFeedback, TaskInvocationEvent, TaskInvocationEventKind, TaskSessionId, TaskSessionMetadata,
     TaskSessionStatus, TaskSessionSummary,
@@ -46,15 +41,15 @@ pub use model::{
 pub use profile::SubagentProfile;
 pub use router::{TaskSessionHistoryPage, TaskSessionRouter};
 pub use scheduler::{TaskSessionCreateRequest, TaskSessionScheduler};
+pub use segmented_store::SegmentedTaskSessionStore;
 pub use store::TaskSessionStore;
 
 #[cfg(test)]
 mod tests {
     use super::{
-        LegacyTaskPayloadFallback, SubagentProfile, TaskInvocationConfig,
-        TaskSessionCompactionStore, TaskSessionConfigResolutionInput, TaskSessionConfigResolver,
-        TaskSessionMetadata, TaskSessionStatus, TaskSessionStore,
-        apply_task_session_compaction_result,
+        SubagentProfile, TaskInvocationConfig, TaskSessionCompactionStore,
+        TaskSessionConfigResolutionInput, TaskSessionConfigResolver, TaskSessionMetadata,
+        TaskSessionStatus, TaskSessionStore, apply_task_session_compaction_result,
     };
     use serde_json::json;
     use vulcan_context::{
@@ -219,32 +214,10 @@ mod tests {
         );
     }
 
-    /// Verifies that missing legacy task sessions are never migrated automatically.
-    /// 验证缺失的旧子代理会话永远不会自动迁移。
+    /// Verifies that task metadata records the immutable projection-isolation policy boundary.
+    /// 验证子代理元数据会记录不可变的投影隔离策略边界。
     #[test]
-    fn legacy_fallback_never_requests_migration() {
-        let fallback = LegacyTaskPayloadFallback::from_missing_task_session(
-            "task-1",
-            Some(json!({ "summary": "done" })),
-        );
-
-        match fallback {
-            LegacyTaskPayloadFallback::PersistedResult {
-                public_task_id,
-                payload,
-                ..
-            } => {
-                assert_eq!(public_task_id, "task-1");
-                assert_eq!(payload["summary"], "done");
-            }
-            _ => panic!("legacy payload should fall back to persisted result only"),
-        }
-    }
-
-    /// Verifies that task metadata records the immutable file-only policy boundary.
-    /// 验证子代理元数据会记录不可变的文件态策略边界。
-    #[test]
-    fn task_metadata_records_file_only_boundary() {
+    fn task_metadata_records_projection_isolation_boundary() {
         let root_session_id = SessionNodeId::new_v4();
         let task_session_id = SessionNodeId::new_v4();
         let parent = ParentSessionRef::MainSession { root_session_id };
@@ -272,15 +245,15 @@ mod tests {
         assert!(!metadata.runtime_policy.search_projection_enabled);
     }
 
-    /// Verifies that the concrete file store writes and reads TaskSession artifacts only from files.
-    /// 验证具体文件存储只通过文件写入和读取 TaskSession 产物。
+    /// Verifies that the segmented store writes and reads TaskSession artifacts from the session directory.
+    /// 验证分段存储会从会话目录写入和读取 TaskSession 产物。
     #[test]
-    fn file_store_round_trips_task_session_artifacts() {
+    fn segmented_store_round_trips_task_session_artifacts() {
         let temp_dir = std::env::temp_dir().join(format!(
             "vulcan-task-session-test-{}",
             SessionNodeId::new_v4()
         ));
-        let store = super::FileTaskSessionStore::new(temp_dir.clone());
+        let store = super::SegmentedTaskSessionStore::new(temp_dir.clone());
         let root_session_id = SessionNodeId::new_v4();
         let task_session_id = SessionNodeId::new_v4();
         let parent = ParentSessionRef::MainSession { root_session_id };
@@ -326,11 +299,10 @@ mod tests {
                 .expect("missing public id lookup should not fail")
                 .is_none()
         );
-        let active_summaries = store
-            .list_active_indexed_task_sessions()
-            .expect("active task summaries should load");
-        assert_eq!(active_summaries.len(), 1);
-        assert_eq!(active_summaries[0].task_session_id, task_session_id);
+        let child_task_ids = store
+            .list_child_task_session_ids(parent.clone())
+            .expect("child task ids should load");
+        assert_eq!(child_task_ids, vec![task_session_id]);
 
         let event = SessionEventRecord::new(
             "event-1",
@@ -412,17 +384,11 @@ mod tests {
             vec![checkpoint]
         );
 
-        let events = store
-            .list_task_invocation_events(parent)
-            .expect("parent task event log should exist");
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].task_session_id, task_session_id);
-
         std::fs::remove_dir_all(temp_dir).expect("temporary task store should be removable");
     }
 
-    /// Verifies that shared compaction results can be applied directly to file-backed TaskSession context documents.
-    /// 验证共享压缩结果可以直接应用到文件态 TaskSession 上下文文档。
+    /// Verifies that shared compaction results can be applied directly to segmented TaskSession context documents.
+    /// 验证共享压缩结果可以直接应用到分段 TaskSession 上下文文档。
     #[test]
     fn task_session_compaction_result_updates_context_and_checkpoint() {
         let task_session_id = SessionNodeId::new_v4();

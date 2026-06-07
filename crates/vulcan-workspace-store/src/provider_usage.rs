@@ -24,6 +24,7 @@ pub fn latest_provider_usage_from_conversation_state(
 
 /// Serializes one provider usage snapshot into compact JSON when it contains concrete token counts.
 /// 当用量快照包含具体 Token 数量时，将其序列化为紧凑 JSON。
+#[cfg(test)]
 pub(crate) fn serialize_provider_usage_to_json(
     usage: Option<&ProviderUsageSnapshot>,
 ) -> Option<String> {

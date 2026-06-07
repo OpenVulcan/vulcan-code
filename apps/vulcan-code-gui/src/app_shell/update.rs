@@ -50,10 +50,6 @@ impl VulcanWorkbench {
                 self.session_history_has_more.clear();
                 self.loading_older_session_history_ids.clear();
                 self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                self.background_legacy_maintenance_queue.clear();
-                self.background_legacy_maintenance_in_flight = None;
-                self.background_legacy_maintenance_completed_count = 0;
-                self.background_legacy_maintenance_failed_count = 0;
                 self.pending_archived_delete_confirmation = None;
                 self.session_runtime_events.clear();
                 self.collapsed_runtime_event_ids.clear();
@@ -281,8 +277,6 @@ impl VulcanWorkbench {
                             .map(|session| session.id)
                             .map(|session_id| self.schedule_session_hydration(session_id))
                             .unwrap_or_else(Task::none);
-                        let legacy_maintenance_task =
-                            self.schedule_next_background_legacy_session_maintenance();
                         let persist_cleanup_task = if legacy_profile_cleanup_session_ids.is_empty()
                         {
                             Task::none()
@@ -299,7 +293,6 @@ impl VulcanWorkbench {
                         return Task::batch([
                             self.schedule_project_temp_cleanup_for_all_projects(),
                             hydration_task,
-                            legacy_maintenance_task,
                             persist_cleanup_task,
                         ]);
                     }
@@ -341,7 +334,7 @@ impl VulcanWorkbench {
                             )]);
                     }
                     Err(error) => {
-                        if session_event_store_missing_error(&error) {
+                        if segmented_session_files_missing_error(&error) {
                             let session_title = self
                                 .sessions
                                 .iter()
@@ -418,56 +411,6 @@ impl VulcanWorkbench {
 
                 Task::none()
             }
-            Message::BackgroundLegacySessionMaintenanceFinished(session_id, result) => {
-                if self.background_legacy_maintenance_in_flight == Some(session_id) {
-                    self.background_legacy_maintenance_in_flight = None;
-                }
-                match result {
-                    Ok(report) => {
-                        self.background_legacy_maintenance_completed_count = self
-                            .background_legacy_maintenance_completed_count
-                            .saturating_add(1);
-                        self.record_session_legacy_chunk_migration_activity(
-                            "后台旧版超大消息已迁移",
-                            &report,
-                        );
-                    }
-                    Err(error) => {
-                        self.background_legacy_maintenance_failed_count = self
-                            .background_legacy_maintenance_failed_count
-                            .saturating_add(1);
-                        self.push_activity(
-                            ActivityLevel::Warning,
-                            "后台旧会话维护失败",
-                            format!("session_id={session_id}，{error}"),
-                        );
-                    }
-                }
-
-                let next_task = self.schedule_next_background_legacy_session_maintenance();
-                if self.background_legacy_maintenance_in_flight.is_none()
-                    && self.background_legacy_maintenance_queue.is_empty()
-                    && (self.background_legacy_maintenance_completed_count > 0
-                        || self.background_legacy_maintenance_failed_count > 0)
-                {
-                    let level = if self.background_legacy_maintenance_failed_count == 0 {
-                        ActivityLevel::Success
-                    } else {
-                        ActivityLevel::Warning
-                    };
-                    self.push_activity(
-                        level,
-                        "后台旧会话维护完成",
-                        format!(
-                            "已处理 {} 个会话，失败 {} 个。后台维护只执行轻量迁移与旧状态清理，未水合完整正文。",
-                            self.background_legacy_maintenance_completed_count,
-                            self.background_legacy_maintenance_failed_count
-                        ),
-                    );
-                }
-
-                next_task
-            }
             Message::ProjectTempMaintenanceFinished(result) => {
                 if let Err(error) = result {
                     self.push_activity(
@@ -491,11 +434,11 @@ impl VulcanWorkbench {
                 match result {
                     Ok(outcome) if !outcome.is_clean() => {
                         self.status_message =
-                            String::from("工作台状态已保存，但历史搜索索引同步被延后。");
+                            String::from("工作台状态已保存，但分段会话文件同步被延后。");
                         for warning in outcome.warnings {
                             self.push_activity(
                                 ActivityLevel::Warning,
-                                "工作台历史搜索延后同步",
+                                "工作台分段会话延后同步",
                                 warning,
                             );
                         }
@@ -513,11 +456,11 @@ impl VulcanWorkbench {
                 match result {
                     Ok(outcome) if !outcome.is_clean() => {
                         self.status_message =
-                            String::from("会话状态已保存，但历史搜索索引同步被延后。");
+                            String::from("会话状态已保存，但分段会话文件同步被延后。");
                         for warning in outcome.warnings {
                             self.push_activity(
                                 ActivityLevel::Warning,
-                                "会话历史搜索延后同步",
+                                "会话分段文件延后同步",
                                 warning,
                             );
                         }
@@ -3508,6 +3451,10 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WorkspaceHistorySearchQueryChanged(query) => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.query =
                     sanitize_workspace_history_search_query_input(&query);
                 self.workspace_history_search.error = None;
@@ -3518,6 +3465,12 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::SubmitWorkspaceHistorySearch => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    self.status_message =
+                        String::from("历史搜索已下线，后续将按新全文搜索方案重新接入。");
+                    return Task::none();
+                }
                 if self.workspace_history_search.loading {
                     self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
                     return Task::none();
@@ -3538,6 +3491,10 @@ impl VulcanWorkbench {
                 self.schedule_workspace_history_search(false)
             }
             Message::LoadMoreWorkspaceHistorySearchResults => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 if self.workspace_history_search.loading {
                     self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
                     return Task::none();
@@ -3560,6 +3517,10 @@ impl VulcanWorkbench {
                 self.schedule_workspace_history_search(true)
             }
             Message::WorkspaceHistorySearchLoaded { append, result } => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.loading = false;
                 self.workspace_history_search.loading_more = false;
                 match result {
@@ -3655,6 +3616,10 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::ToggleWorkspaceHistorySearchProjectPicker => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.panel_open = true;
                 let next_open = !self.workspace_history_search.project_picker_open;
                 self.workspace_history_search.project_picker_open = next_open;
@@ -3667,10 +3632,18 @@ impl VulcanWorkbench {
                 }
             }
             Message::WorkspaceHistorySearchProjectFilterChanged(value) => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.project_filter = value;
                 Task::none()
             }
             Message::WorkspaceHistorySearchScopeSelected(scope) => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.scope = scope;
                 self.workspace_history_search.project_picker_open = false;
                 self.workspace_history_search.project_filter.clear();
@@ -3678,6 +3651,10 @@ impl VulcanWorkbench {
                 operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
             }
             Message::ConfirmWorkspaceHistorySearchScopeSelection => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 let Some(option) = self
                     .filtered_workspace_history_search_scope_options()
                     .into_iter()
@@ -3699,6 +3676,10 @@ impl VulcanWorkbench {
                 ordinal,
                 turn_index,
             } => {
+                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+                    return Task::none();
+                }
                 self.workspace_history_search.active_highlight = None;
                 self.workspace_history_search.pending_navigation =
                     Some(PendingWorkspaceHistorySearchNavigation {

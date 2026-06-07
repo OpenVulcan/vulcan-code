@@ -264,8 +264,8 @@ fn overlay_runtime_policy(
     }
 }
 
-/// Enforces the TaskSession file-only projection boundary after all overrides.
-/// 在所有覆盖之后强制执行 TaskSession 文件态投影边界。
+/// Enforces the TaskSession projection-isolation boundary after all overrides.
+/// 在所有覆盖之后强制执行 TaskSession 投影隔离边界。
 fn enforce_task_session_projection_boundary(target: &mut ExecutionRuntimePolicy) {
     target.search_projection_enabled = false;
     target.database_projection_enabled = false;

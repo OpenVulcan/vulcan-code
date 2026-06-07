@@ -24,9 +24,9 @@ impl Default for MainSessionProjectionPolicy {
     fn default() -> Self {
         Self {
             database_projection_enabled: true,
-            search_projection_enabled: true,
-            bm25_enabled: true,
-            fts_enabled: true,
+            search_projection_enabled: false,
+            bm25_enabled: false,
+            fts_enabled: false,
         }
     }
 }

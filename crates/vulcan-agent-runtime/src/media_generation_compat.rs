@@ -2015,6 +2015,7 @@ mod tests {
             output.attachment.local_path.replace('\\', "/")
         );
         assert_eq!(output.attachment.file_name, "poster.png");
+        let expected_source_path = output.model_local_path.replace('\\', "/");
         assert_eq!(
             output
                 .attachment
@@ -2022,7 +2023,7 @@ mod tests {
                 .as_deref()
                 .map(|value| value.replace('\\', "/"))
                 .as_deref(),
-            Some(output.model_local_path.as_str())
+            Some(expected_source_path.as_str())
         );
 
         cleanup_workspace_directory(&workspace_directory);

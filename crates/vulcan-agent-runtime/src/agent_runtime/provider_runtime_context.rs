@@ -136,9 +136,7 @@ fn build_runtime_prompt_assembly_input(
 
     PromptAssemblyInput {
         mode: match preparation.prompt_purpose {
-            ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::DelegateCompletion => {
-                PromptAssemblyMode::Primary
-            }
+            ExecutionPromptPurpose::UserTurn => PromptAssemblyMode::Primary,
             ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompaction,
         },
         model: ModelDescriptor {
@@ -182,7 +180,7 @@ fn build_runtime_prompt_assembly_input(
 /// 构建特殊提示词用途所需的开发者侧运行时指令。
 fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
     match purpose {
-        ExecutionPromptPurpose::UserTurn | ExecutionPromptPurpose::DelegateCompletion => Vec::new(),
+        ExecutionPromptPurpose::UserTurn => Vec::new(),
         ExecutionPromptPurpose::ContextCompaction => {
             vec![build_context_compaction_developer_segment()]
         }
@@ -849,6 +847,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
+            codex_boundary_events: Vec::new(),
         }
     }
 

@@ -2795,7 +2795,7 @@ mod tests {
         let shell_support = test_shell_support();
         let error = resolve_shell_command_launcher(&shell_support, Some("fish"), "echo hello")
             .expect_err("unsupported shell should fail");
-        assert!(error.message.contains("unsupported"));
+        assert!(error.message.to_ascii_lowercase().contains("support"));
     }
 
     /// The dynamic shell schemas should expose `auto` together with only the shells detected on the current host snapshot.

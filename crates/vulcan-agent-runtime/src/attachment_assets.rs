@@ -850,11 +850,11 @@ mod tests {
                 .expect("attachment should stage successfully");
         std::fs::remove_file(&attachment.local_path).expect("managed copy should remove");
 
+        let resolved_replay_path =
+            resolve_attachment_replay_path(&attachment).expect("source fallback should resolve");
         assert_eq!(
-            resolve_attachment_replay_path(&attachment)
-                .as_deref()
-                .map(std::path::Path::new),
-            Some(canonicalize_workspace_path(&source_path).as_path())
+            canonicalize_workspace_path(&resolved_replay_path),
+            canonicalize_workspace_path(&source_path)
         );
 
         let _ = std::fs::remove_file(&source_path);

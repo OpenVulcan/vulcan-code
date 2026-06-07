@@ -9,8 +9,8 @@ use vulcan_session_core::{
 /// 稳定子代理会话标识符。
 pub type TaskSessionId = SessionNodeId;
 
-/// Runtime status for a file-backed task session.
-/// 文件态子代理会话的运行状态。
+/// Runtime status for a segmented task session.
+/// 分段子代理会话的运行状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskSessionStatus {
@@ -88,8 +88,8 @@ pub struct TaskSessionSummary {
     pub last_result_summary: Option<String>,
 }
 
-/// Persistent metadata stored in task-session.json.
-/// 保存在 task-session.json 中的持久元数据。
+/// Persistent metadata stored in the segmented task session metadata.json file.
+/// 保存在分段子代理会话 metadata.json 文件中的持久元数据。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskSessionMetadata {
     /// Schema version for task-session metadata.

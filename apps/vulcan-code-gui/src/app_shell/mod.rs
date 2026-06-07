@@ -207,13 +207,13 @@ use crate::model::{
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
     SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
     SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
-    build_delegate_completion_followup_preview, build_delegate_completion_followup_prompt,
     build_session_record_message_id, collect_running_subagent_task_states_for_tree,
     merge_subagent_task_panel_cache, normalize_subagent_task_panel_state,
     pending_prompt_dispatch_index, select_subagent_navigation_panel_states,
     subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
-    subagent_task_panel_states_from_task_session_store, task_session_arguments_from_tool_metadata,
-    task_session_display_title_from_payload, task_session_display_title_from_tool_metadata,
+    subagent_task_panel_states_from_segmented_task_session_store,
+    task_session_arguments_from_tool_metadata, task_session_display_title_from_payload,
+    task_session_display_title_from_tool_metadata,
     task_session_execution_status_from_tool_metadata, task_session_internal_id_from_payload,
     task_session_payload_from_tool_metadata, task_session_public_id_from_payload,
 };
@@ -258,8 +258,8 @@ use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
     self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
-    SessionHistoryPage, SessionHydrationSnapshot, SessionMaintenanceReport,
-    WorkspaceHistorySearchPage, WorkspaceSnapshot, WorkspaceSnapshotPersistOutcome,
+    SessionHistoryPage, SessionHydrationSnapshot, WorkspaceHistorySearchPage, WorkspaceSnapshot,
+    WorkspaceSnapshotPersistOutcome,
 };
 use crate::{AppLocale, I18nArg, I18nKey, LanguageManager};
 use iced::advanced::widget::operation::focusable::unfocus;
@@ -282,7 +282,7 @@ use rodio::{Decoder, OutputStream, Sink};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::borrow::Borrow;
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, BTreeSet, HashSet, hash_map::DefaultHasher};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::io::BufReader;
@@ -629,6 +629,10 @@ const DIFF_HUNK_VIRTUAL_OVERSCAN_LINES: usize = 48;
 /// Stable scrollable identifier used by the structured diff review flow.
 /// 结构化 diff 审查流使用的稳定滚动容器标识。
 const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
+
+/// Whether the legacy workspace-history search UI may be opened.
+/// 旧工作台历史搜索界面是否允许打开。
+const WORKSPACE_HISTORY_SEARCH_ENABLED: bool = false;
 
 /// Stable widget identifier shared by the main prompt composer editor across compact and expanded surfaces.
 /// 主提示词编辑器在紧凑态与展开态之间共用的稳定部件标识。
@@ -1027,26 +1031,6 @@ fn composer_input_has_submittable_content(
     composer_parts_have_submittable_content(&parts)
 }
 
-/// Builds the low-priority legacy maintenance queue from visible and archived sessions.
-/// 根据可见会话与归档会话构建低优先级旧数据维护队列。
-fn build_background_legacy_maintenance_queue(
-    sessions: &[SessionSummary],
-    archived_sessions: &[SessionSummary],
-) -> VecDeque<SessionId> {
-    let mut seen = BTreeSet::new();
-    sessions
-        .iter()
-        .chain(archived_sessions.iter())
-        .filter_map(|session| {
-            if session.id.is_nil() || !seen.insert(session.id) {
-                None
-            } else {
-                Some(session.id)
-            }
-        })
-        .collect()
-}
-
 /// Returns whether the given composer selection payload contains any effective text.
 /// 返回给定提示词选区载荷是否包含任何有效文本。
 fn composer_selection_has_content(selection: Option<&str>) -> bool {
@@ -1144,15 +1128,16 @@ fn sanitize_workspace_history_search_query_input(query: &str) -> String {
     sanitized
 }
 
-/// Returns whether one session-hydration error is caused by missing canonical event-store files on disk.
-/// 返回某条会话水合错误是否由磁盘上缺失规范事件存储文件导致。
-fn session_event_store_missing_error(error: &str) -> bool {
+/// Returns whether one session-hydration error is caused by missing segmented session files on disk.
+/// 返回某条会话水合错误是否由磁盘上缺失分段会话文件导致。
+fn segmented_session_files_missing_error(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     let mentions_session_store = normalized.contains(".vulcan\\code\\sessions")
         || normalized.contains(".vulcan/code/sessions")
-        || normalized.contains("manifest.json")
-        || normalized.contains("events/000001.jsonl")
-        || normalized.contains("events\\000001.jsonl");
+        || normalized.contains("metadata.json")
+        || normalized.contains("state.json")
+        || normalized.contains("s001.jsonl")
+        || normalized.contains("s000001.jsonl");
     let is_not_found = normalized.contains("os error 3")
         || normalized.contains("os error 2")
         || normalized.contains("系统找不到指定的路径")
@@ -1532,18 +1517,6 @@ pub struct VulcanWorkbench {
     /// Aggregated left-panel workspace-history search UI state shared across projects and sessions.
     /// 跨项目与会话共享的左侧面板工作台历史搜索聚合界面状态。
     workspace_history_search: WorkspaceHistorySearchPanelState,
-    /// Low-priority legacy maintenance queue that scans sessions without hydrating transcripts.
-    /// 不水合转录正文的低优先级旧数据维护会话队列。
-    background_legacy_maintenance_queue: VecDeque<SessionId>,
-    /// Session identifier currently being processed by the background legacy maintenance queue.
-    /// 当前正在被后台旧数据维护队列处理的会话标识。
-    background_legacy_maintenance_in_flight: Option<SessionId>,
-    /// Number of sessions completed by the current background legacy maintenance queue.
-    /// 当前后台旧数据维护队列已完成的会话数量。
-    background_legacy_maintenance_completed_count: usize,
-    /// Number of sessions that failed in the current background legacy maintenance queue.
-    /// 当前后台旧数据维护队列中维护失败的会话数量。
-    background_legacy_maintenance_failed_count: usize,
     /// Whether one workspace snapshot persistence task is currently writing to SQLite.
     /// 当前是否已有一条工作台快照持久化任务正在写入 SQLite。
     workspace_snapshot_persist_in_flight: bool,
@@ -2452,10 +2425,6 @@ impl VulcanWorkbench {
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
             workspace_history_search: WorkspaceHistorySearchPanelState::default(),
-            background_legacy_maintenance_queue: VecDeque::new(),
-            background_legacy_maintenance_in_flight: None,
-            background_legacy_maintenance_completed_count: 0,
-            background_legacy_maintenance_failed_count: 0,
             workspace_snapshot_persist_in_flight: false,
             workspace_snapshot_persist_pending: false,
             pending_archived_delete_confirmation: None,
@@ -2899,7 +2868,7 @@ impl VulcanWorkbench {
             || self.workbench_model_picker_open
             || self.workbench_openrouter_endpoint_picker.open
             || self.workbench_reasoning_picker_open
-            || self.workspace_history_search.panel_open
+            || (WORKSPACE_HISTORY_SEARCH_ENABLED && self.workspace_history_search.panel_open)
             || self.about_license_active_document_id.is_some()
             || self.workbench_context_menu.is_some()
     }
@@ -3296,7 +3265,6 @@ impl VulcanWorkbench {
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
-            self.remove_session_from_background_legacy_maintenance(session_id);
             if self.hovered_task_session == Some(session_id) {
                 self.hovered_task_session = None;
             }
@@ -3332,7 +3300,6 @@ impl VulcanWorkbench {
             self.session_history_earliest_ordinals.remove(&session_id);
             self.session_history_has_more.remove(&session_id);
             self.loading_older_session_history_ids.remove(&session_id);
-            self.remove_session_from_background_legacy_maintenance(session_id);
         }
 
         self.ensure_valid_selected_session();
@@ -3511,82 +3478,6 @@ impl VulcanWorkbench {
         snapshot
     }
 
-    /// Schedules the next low-priority legacy session maintenance task if the queue is idle.
-    /// 当队列空闲时调度下一条低优先级旧会话维护任务。
-    fn schedule_next_background_legacy_session_maintenance(&mut self) -> Task<Message> {
-        if self.background_legacy_maintenance_in_flight.is_some() {
-            return Task::none();
-        }
-        let Some(controller_runtime) = self.controller_runtime.clone() else {
-            return Task::none();
-        };
-
-        while let Some(session_id) = self.background_legacy_maintenance_queue.pop_front() {
-            if session_id.is_nil() {
-                continue;
-            }
-            self.background_legacy_maintenance_in_flight = Some(session_id);
-            return Task::perform(
-                async move {
-                    let result = workspace_store::maintain_legacy_session_storage(
-                        controller_runtime,
-                        session_id,
-                    )
-                    .await;
-                    (session_id, result)
-                },
-                |(session_id, result)| {
-                    Message::BackgroundLegacySessionMaintenanceFinished(session_id, result)
-                },
-            );
-        }
-
-        Task::none()
-    }
-
-    /// Rebuilds the background legacy maintenance queue for the currently loaded workspace.
-    /// 为当前已加载工作台重建后台旧数据维护队列。
-    fn reset_background_legacy_session_maintenance_queue(&mut self) {
-        self.background_legacy_maintenance_queue =
-            build_background_legacy_maintenance_queue(&self.sessions, &self.archived_sessions);
-        self.background_legacy_maintenance_in_flight = None;
-        self.background_legacy_maintenance_completed_count = 0;
-        self.background_legacy_maintenance_failed_count = 0;
-    }
-
-    /// Removes one session from any background legacy maintenance bookkeeping.
-    /// 从后台旧数据维护状态中移除单个会话。
-    fn remove_session_from_background_legacy_maintenance(&mut self, session_id: SessionId) {
-        self.background_legacy_maintenance_queue
-            .retain(|queued_session_id| *queued_session_id != session_id);
-        if self.background_legacy_maintenance_in_flight == Some(session_id) {
-            self.background_legacy_maintenance_in_flight = None;
-        }
-    }
-
-    /// Records a user-visible activity entry when a maintenance pass migrated legacy chunks.
-    /// 当维护过程迁移了旧版分片时记录一条用户可见活动日志。
-    fn record_session_legacy_chunk_migration_activity(
-        &mut self,
-        title: &'static str,
-        report: &SessionMaintenanceReport,
-    ) {
-        if report.legacy_chunk_migration.migrated_message_count == 0 {
-            return;
-        }
-
-        self.push_activity(
-            ActivityLevel::Success,
-            title,
-            format!(
-                "session_id={}，已迁移 {} 条旧版内联消息，生成约 {} 个正文分片。",
-                report.legacy_chunk_migration.session_id,
-                report.legacy_chunk_migration.migrated_message_count,
-                report.legacy_chunk_migration.inserted_chunk_count
-            ),
-        );
-    }
-
     /// Prunes one hydrated session's in-memory transcript cache without deleting persisted history.
     /// 在不删除持久化历史的前提下裁剪单个已水合会话的内存转录缓存。
     fn prune_session_message_cache_to_limit(&mut self, session_id: SessionId) -> usize {
@@ -3681,7 +3572,6 @@ impl VulcanWorkbench {
         self.session_history_has_more.clear();
         self.loading_older_session_history_ids.clear();
         self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-        self.reset_background_legacy_session_maintenance_queue();
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
         self.active_runs.clear();
@@ -4046,8 +3936,8 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Builds one asynchronous persistence task for only a single session runtime-state row.
-    /// 为单个会话运行时状态行构建一次异步持久化任务。
+    /// Builds one asynchronous persistence task for only a single session runtime-state document.
+    /// 为单个会话运行时状态文档构建一次异步持久化任务。
     fn persist_single_session_runtime_state_task(
         &mut self,
         session_id: SessionId,
@@ -4484,11 +4374,6 @@ impl VulcanWorkbench {
         }
         if is_finished {
             self.detached_subagent_task_listeners.remove(&state.task_id);
-            // Completed child callbacks only belong to an open parent user turn.
-            // 子代理完成回调只属于仍打开的父级用户回合。
-            if self.conversation_hook_runtime.has_active_turn(session_id) {
-                self.enqueue_delegate_completion_followup_if_needed(session_id, &state);
-            }
         }
         self.upsert_subagent_task_panel_state(state);
         if is_finished {

@@ -531,7 +531,9 @@ impl VulcanWorkbench {
         if let Some(overlay) = self.view_workbench_context_menu_overlay() {
             layered_surfaces.push(overlay);
         }
-        if let Some(overlay) = self.view_workspace_history_search_modal() {
+        if WORKSPACE_HISTORY_SEARCH_ENABLED
+            && let Some(overlay) = self.view_workspace_history_search_modal()
+        {
             layered_surfaces.push(overlay);
         }
         if let Some(overlay) = self.view_task_project_settings_modal() {
@@ -1428,7 +1430,7 @@ impl VulcanWorkbench {
     /// Builds the in-app workspace-history search modal shown above the main workbench when history lookup is requested.
     /// 构建在请求历史检索时显示在主工作台之上的内嵌工作台历史搜索弹窗。
     pub(super) fn view_workspace_history_search_modal(&self) -> Option<Element<'_, Message>> {
-        if !self.workspace_history_search.panel_open {
+        if !WORKSPACE_HISTORY_SEARCH_ENABLED || !self.workspace_history_search.panel_open {
             return None;
         }
 
@@ -1909,6 +1911,9 @@ impl VulcanWorkbench {
     /// Builds the dedicated workspace-history search surface shown at the top of the left task drawer.
     /// 构建显示在左侧任务抽屉顶部的专用工作台历史搜索表面。
     fn view_main_task_search_panel(&self) -> Element<'_, Message> {
+        if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+            return space::vertical().height(0).into();
+        }
         let trigger = button(
             row![
                 lucide::search().size(15).line_height(1.0),
@@ -3624,7 +3629,8 @@ impl VulcanWorkbench {
                     keyboard::Key::Character("f") | keyboard::Key::Character("F")
                         if !modifiers.shift() =>
                     {
-                        Some(Message::OpenWorkspaceHistorySearchPanel)
+                        WORKSPACE_HISTORY_SEARCH_ENABLED
+                            .then_some(Message::OpenWorkspaceHistorySearchPanel)
                     }
                     _ => None,
                 }

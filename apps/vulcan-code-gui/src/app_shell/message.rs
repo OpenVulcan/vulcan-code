@@ -40,9 +40,6 @@ pub(super) enum Message {
     /// Applies one older transcript page loaded before the current session window.
     /// 应用在当前会话窗口之前加载的一页更早转录历史。
     OlderSessionHistoryLoaded(SessionId, Result<SessionHistoryPage, String>),
-    /// Applies the completed background legacy-storage maintenance result for one session.
-    /// 应用单个会话的后台旧存储维护结果。
-    BackgroundLegacySessionMaintenanceFinished(SessionId, Result<SessionMaintenanceReport, String>),
     /// Applies the completed project-scoped temp cleanup result after startup or one project-load action.
     /// 应用启动后或单次项目载入动作后已完成的项目级临时目录清理结果。
     ProjectTempMaintenanceFinished(Result<(), String>),

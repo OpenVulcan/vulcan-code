@@ -321,7 +321,14 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
 /// 验证顶层工作台构建路径不会在运行时基础架构边界之外手工装配 MCP 运行时访问对象。
 #[test]
 fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
-    let src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("agent-runtime manifest should live under crates");
+    let src_root = workspace_root
+        .join("apps")
+        .join("vulcan-code-gui")
+        .join("src");
     let app_path = src_root.join("app_shell").join("mod.rs");
     let app_configuration_path = src_root.join("app_shell").join("configuration.rs");
 

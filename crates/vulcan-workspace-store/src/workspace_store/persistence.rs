@@ -3,262 +3,15 @@
 
 #![allow(dead_code)]
 
+use super::segmented_session_store::{
+    SegmentPolicy, SegmentedSessionCreateRequest, append_segmented_session_message_update,
+    archive_segmented_session_by_id, create_segmented_session_in_location,
+    delete_segmented_session_by_id, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, list_segmented_session_catalog,
+    restore_segmented_session_by_id, state_document_from_runtime_state, write_state,
+};
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
-
-/// Maintains the storage shape for one already hydrated session without scanning unrelated history.
-/// 在不扫描无关历史的前提下维护单个已水合会话的存储形态。
-pub async fn maintain_hydrated_session_storage(
-    _controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-    _messages: Vec<SessionMessageEntry>,
-) -> Result<SessionMaintenanceReport, String> {
-    Ok(SessionMaintenanceReport {
-        session_id,
-        upserted_message_count: 0,
-        runtime_state_persistence_ok: true,
-        legacy_chunk_migration: SessionLegacyChunkMigrationReport {
-            session_id,
-            ..SessionLegacyChunkMigrationReport::default()
-        },
-    })
-}
-
-/// Maintains legacy storage shape for one session without hydrating transcript messages.
-/// 在不水合转录消息的前提下维护单个会话的旧存储形态。
-pub async fn maintain_legacy_session_storage(
-    _controller: ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<SessionMaintenanceReport, String> {
-    Ok(SessionMaintenanceReport {
-        session_id,
-        upserted_message_count: 0,
-        runtime_state_persistence_ok: true,
-        legacy_chunk_migration: SessionLegacyChunkMigrationReport {
-            session_id,
-            ..SessionLegacyChunkMigrationReport::default()
-        },
-    })
-}
-
-/// Migrates legacy oversized inline message bodies into chunk rows without returning full bodies to Rust.
-/// 在不向 Rust 返回完整正文的前提下，将旧版超大内联消息正文迁移为分片行。
-pub(super) async fn migrate_legacy_oversized_session_messages(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<SessionLegacyChunkMigrationReport, String> {
-    let mut report = SessionLegacyChunkMigrationReport {
-        session_id,
-        ..SessionLegacyChunkMigrationReport::default()
-    };
-
-    while report.migrated_message_count < SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS {
-        let remaining_limit = SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS
-            .saturating_sub(report.migrated_message_count)
-            .min(SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT);
-        let candidates =
-            query_legacy_oversized_message_candidates(controller, session_id, remaining_limit)
-                .await?;
-        if candidates.is_empty() {
-            break;
-        }
-
-        let candidate_count = candidates.len();
-        for candidate in candidates {
-            let chunk_count = legacy_inline_message_chunk_count(candidate.content_chars)?;
-            if chunk_count > SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE {
-                return Err(format!(
-                    "旧版超大消息分片数量超出安全上限：session_id={session_id}, message_id={}, content_bytes={}, chunks={}, limit={}",
-                    candidate.id,
-                    candidate.content_bytes,
-                    chunk_count,
-                    SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE
-                ));
-            }
-            let script = legacy_inline_message_chunk_migration_script(session_id, &candidate.id);
-            controller
-                .client
-                .execute_sqlite_script_typed(
-                    APP_SPACE_ID,
-                    app_sqlite_binding_id(controller),
-                    script,
-                    Vec::<ControllerSqliteValue>::new(),
-                )
-                .await
-                .map_err(|error| {
-                    format!(
-                        "迁移旧版超大内联消息失败：session_id={session_id}, message_id={}, error={error}",
-                        candidate.id
-                    )
-                })?;
-            report.migrated_message_count += 1;
-            report.inserted_chunk_count = report.inserted_chunk_count.saturating_add(chunk_count);
-        }
-
-        if candidate_count < remaining_limit {
-            break;
-        }
-    }
-
-    Ok(report)
-}
-
-/// Returns whether the session still contains any legacy oversized inline message candidates that have not been chunk-migrated yet.
-/// 返回该会话是否仍包含尚未迁移为分片存储的旧版超大内联消息候选。
-pub(super) async fn session_has_legacy_oversized_message_candidates(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<bool, String> {
-    Ok(
-        !query_legacy_oversized_message_candidates(controller, session_id, 1)
-            .await?
-            .is_empty(),
-    )
-}
-
-/// Queries legacy oversized inline-message candidates without selecting their full content.
-/// 在不选择完整正文的前提下查询旧版超大内联消息候选。
-async fn query_legacy_oversized_message_candidates(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    limit: usize,
-) -> Result<Vec<StoredLegacyOversizedMessageCandidateRow>, String> {
-    if limit == 0 {
-        return Ok(Vec::new());
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            legacy_oversized_message_candidate_query(),
-            vec![
-                ControllerSqliteValue::String(session_id.to_string()),
-                ControllerSqliteValue::Int64(SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES as i64),
-                ControllerSqliteValue::Int64(
-                    limit.min(SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT) as i64,
-                ),
-            ],
-        )
-        .await
-        .map_err(|error| format!("查询旧版超大内联消息候选失败：{error}"))?;
-
-    decode_query_rows::<StoredLegacyOversizedMessageCandidateRow>(&result.json_data)
-}
-
-/// Returns the lightweight candidate query used by legacy inline-message migration.
-/// 返回旧版内联消息迁移使用的轻量候选查询。
-pub(super) fn legacy_oversized_message_candidate_query() -> &'static str {
-    r#"
-SELECT
-    m.id,
-    length(CAST(m.content AS BLOB)) AS content_bytes,
-    length(m.content) AS content_chars
-FROM session_messages AS m
-WHERE m.session_id = ?1
-  AND length(CAST(m.content AS BLOB)) > ?2
-  AND NOT EXISTS (
-      SELECT 1
-      FROM session_message_chunks AS c
-      WHERE c.message_id = m.id
-      LIMIT 1
-  )
-ORDER BY m.ordinal DESC
-LIMIT ?3;
-"#
-}
-
-/// Builds one SQLite-side migration script for a legacy oversized inline message.
-/// 为单条旧版超大内联消息构建 SQLite 侧迁移脚本。
-pub(super) fn legacy_inline_message_chunk_migration_script(
-    session_id: SessionId,
-    message_id: &str,
-) -> String {
-    let escaped_session_id = sqlite_escape_text(&session_id.to_string());
-    let escaped_message_id = sqlite_escape_text(message_id);
-    format!(
-        r#"
-BEGIN IMMEDIATE TRANSACTION;
-
-WITH
-digits(n) AS (
-    VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)
-),
-numbers(n) AS (
-    SELECT d0.n + d1.n * 10 + d2.n * 100 + d3.n * 1000 + d4.n * 10000
-    FROM digits AS d0
-    CROSS JOIN digits AS d1
-    CROSS JOIN digits AS d2
-    CROSS JOIN digits AS d3
-    CROSS JOIN digits AS d4
-),
-source(content_text, content_chars) AS (
-    SELECT content, length(content)
-    FROM session_messages
-    WHERE session_id = '{session_id}'
-      AND id = '{message_id}'
-      AND length(CAST(content AS BLOB)) > {inline_budget_bytes}
-      AND NOT EXISTS (
-          SELECT 1
-          FROM session_message_chunks
-          WHERE message_id = '{message_id}'
-          LIMIT 1
-      )
-)
-INSERT OR REPLACE INTO session_message_chunks (
-    session_id,
-    message_id,
-    chunk_index,
-    content
-)
-SELECT
-    '{session_id}',
-    '{message_id}',
-    numbers.n,
-    substr(source.content_text, numbers.n * {chunk_chars} + 1, {chunk_chars})
-FROM source
-JOIN numbers ON numbers.n * {chunk_chars} < source.content_chars
-ORDER BY numbers.n;
-
-UPDATE session_messages
-SET content = substr(content, 1, {preview_chars})
-WHERE session_id = '{session_id}'
-  AND id = '{message_id}'
-  AND length(CAST(content AS BLOB)) > {inline_budget_bytes}
-  AND EXISTS (
-      SELECT 1
-      FROM session_message_chunks
-      WHERE message_id = '{message_id}'
-      LIMIT 1
-  );
-
-COMMIT;
-"#,
-        session_id = escaped_session_id,
-        message_id = escaped_message_id,
-        chunk_chars = SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS,
-        inline_budget_bytes = SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES,
-        preview_chars = SESSION_MESSAGE_CHUNK_PREVIEW_CHARS
-    )
-}
-
-/// Estimates how many chunk rows a legacy inline message will produce from its character length.
-/// 根据旧版内联消息的字符长度估算其会生成多少分片行。
-pub(super) fn legacy_inline_message_chunk_count(content_chars: i64) -> Result<usize, String> {
-    if content_chars <= 0 {
-        return Ok(0);
-    }
-
-    let content_chars = content_chars as u128;
-    let chunk_chars = SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS.max(1) as u128;
-    let chunk_count = content_chars.div_ceil(chunk_chars);
-    if chunk_count > usize::MAX as u128 {
-        return Err(format!("旧版超大消息字符长度无法安全转换：{content_chars}"));
-    }
-
-    Ok(chunk_count as usize)
-}
 
 /// Persists the current visible workspace snapshot back into the controller-backed SQLite database.
 /// 将当前可见工作台快照回写到控制器承载的 SQLite 数据库。
@@ -268,16 +21,10 @@ pub async fn persist_workspace_snapshot(
 ) -> Result<WorkspaceSnapshotPersistOutcome, String> {
     let mut warnings = Vec::new();
     let existing_active_project_ids = query_active_project_ids(&controller).await?;
-    let existing_active_session_ids = query_active_session_ids(&controller).await?;
     let visible_project_ids = snapshot
         .task_projects
         .iter()
         .map(|project| project.id.clone())
-        .collect::<BTreeSet<_>>();
-    let visible_session_ids = snapshot
-        .sessions
-        .iter()
-        .map(|session| session.id.to_string())
         .collect::<BTreeSet<_>>();
     let all_projects = snapshot
         .task_projects
@@ -292,73 +39,125 @@ pub async fn persist_workspace_snapshot(
                 .map(|project| (project, true)),
         )
         .collect::<Vec<_>>();
-    let all_sessions = snapshot
-        .sessions
-        .iter()
-        .cloned()
-        .map(|session| (session, false))
-        .chain(
-            snapshot
-                .archived_sessions
-                .iter()
-                .cloned()
-                .map(|session| (session, true)),
-        )
-        .collect::<Vec<_>>();
-    let all_task_projects = snapshot
-        .task_projects
-        .iter()
-        .cloned()
-        .chain(snapshot.archived_task_projects.iter().cloned())
-        .collect::<Vec<_>>();
-
     upsert_projects(&controller, &all_projects).await?;
-    upsert_sessions(&controller, &all_task_projects, &all_sessions).await?;
+    persist_segmented_snapshot_session_stores(
+        &controller,
+        &snapshot.sessions,
+        &snapshot.session_messages,
+        &snapshot.session_runtime_state,
+        &snapshot.archived_sessions,
+        &snapshot.archived_session_messages,
+        &snapshot.archived_session_runtime_state,
+        &snapshot.hydrated_session_ids,
+        &mut warnings,
+    )
+    .await;
     archive_missing_projects(
         &controller,
         &existing_active_project_ids,
         &visible_project_ids,
     )
     .await?;
-    archive_missing_sessions(
-        &controller,
-        &existing_active_session_ids,
-        &visible_session_ids,
-        &mut warnings,
-    )
-    .await?;
-    replace_session_event_stores(
-        &controller,
-        &snapshot.sessions,
-        &snapshot.session_messages,
-        &snapshot.session_compactions,
-        &snapshot.session_runtime_state,
-        &snapshot.archived_sessions,
-        &snapshot.archived_session_messages,
-        &snapshot.archived_session_compactions,
-        &snapshot.archived_session_runtime_state,
-        &mut warnings,
-    )
-    .await?;
-    replace_session_compactions(
-        &controller,
-        &snapshot.sessions,
-        &snapshot.session_compactions,
-        &snapshot.archived_sessions,
-        &snapshot.archived_session_compactions,
-    )
-    .await?;
-    replace_session_runtime_state(
-        &controller,
-        &snapshot.sessions,
-        &snapshot.session_runtime_state,
-        &snapshot.archived_sessions,
-        &snapshot.archived_session_runtime_state,
-        &snapshot.hydrated_session_ids,
-    )
-    .await?;
 
     Ok(WorkspaceSnapshotPersistOutcome { warnings })
+}
+
+/// Mirrors all loaded snapshot sessions into segmented append-only directories.
+/// 将所有已加载的快照会话镜像到分段追加式目录。
+async fn persist_segmented_snapshot_session_stores(
+    controller: &ControllerRuntimeHandle,
+    sessions: &[SessionSummary],
+    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    archived_sessions: &[SessionSummary],
+    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    hydrated_session_ids: &BTreeSet<SessionId>,
+    warnings: &mut Vec<String>,
+) {
+    persist_segmented_snapshot_session_group(
+        controller,
+        sessions,
+        false,
+        session_messages,
+        session_runtime_state,
+        hydrated_session_ids,
+        warnings,
+    )
+    .await;
+    persist_segmented_snapshot_session_group(
+        controller,
+        archived_sessions,
+        true,
+        archived_session_messages,
+        archived_session_runtime_state,
+        hydrated_session_ids,
+        warnings,
+    )
+    .await;
+}
+
+/// Mirrors one active or archived snapshot session group into segmented storage.
+/// 将一组活动或归档快照会话镜像到分段存储。
+async fn persist_segmented_snapshot_session_group(
+    controller: &ControllerRuntimeHandle,
+    sessions: &[SessionSummary],
+    archived: bool,
+    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
+    hydrated_session_ids: &BTreeSet<SessionId>,
+    warnings: &mut Vec<String>,
+) {
+    let empty_messages = Vec::<SessionMessageEntry>::new();
+    for session in sessions {
+        let runtime_state = session_runtime_state.get(&session.id);
+        if !snapshot_session_transcript_is_loaded(
+            session.id,
+            session_messages,
+            hydrated_session_ids,
+        ) {
+            continue;
+        }
+        let rebuilt_messages;
+        let stored_messages = session_messages.get(&session.id).unwrap_or(&empty_messages);
+        let effective_messages = if let Some(runtime_state) = runtime_state {
+            rebuilt_messages =
+                conversation_state_to_session_messages(&runtime_state.conversation_state);
+            if rebuilt_messages.is_empty() && !stored_messages.is_empty() {
+                stored_messages.as_slice()
+            } else {
+                rebuilt_messages.as_slice()
+            }
+        } else {
+            stored_messages.as_slice()
+        };
+        if let Err(error) = persist_segmented_session_tail_update(
+            controller,
+            session,
+            session.project_id.as_deref().unwrap_or("untagged"),
+            archived,
+            effective_messages,
+            runtime_state,
+        )
+        .await
+        {
+            warnings.push(segmented_session_persist_warning(
+                "同步快照分段会话失败",
+                1,
+                &error,
+            ));
+        }
+    }
+}
+
+/// Returns whether a snapshot session has a loaded transcript window that is safe to mirror into JSONL.
+/// 返回快照会话是否已有可安全镜像到 JSONL 的已加载转录窗口。
+fn snapshot_session_transcript_is_loaded(
+    session_id: SessionId,
+    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
+    hydrated_session_ids: &BTreeSet<SessionId>,
+) -> bool {
+    session_messages.contains_key(&session_id) || hydrated_session_ids.contains(&session_id)
 }
 
 /// Persists one session and its runtime artifacts without rewriting unrelated workspace sessions.
@@ -374,32 +173,15 @@ pub async fn persist_single_session_update(
 ) -> Result<WorkspaceSnapshotPersistOutcome, String> {
     let mut warnings = Vec::new();
     let session_owner_map = session_owner_map_from_projects(task_projects);
-    let Some((project_id, sort_order)) = session_owner_map.get(&session.id) else {
+    let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
         return Err(format!(
             "单会话保存失败：未找到会话所属项目：{}",
             session.id
         ));
     };
 
-    upsert_session_rows(
-        &controller,
-        vec![build_session_upsert_row(
-            session,
-            project_id,
-            *sort_order,
-            archived,
-        )],
-    )
-    .await?;
-
     let sessions = std::slice::from_ref(session);
     let archived_sessions = Vec::<SessionSummary>::new();
-    let archived_session_compactions = BTreeMap::<SessionId, Vec<SessionCompactionEntry>>::new();
-    let archived_session_runtime_state = BTreeMap::<SessionId, SessionRuntimeStateEntry>::new();
-    let hydrated_session_ids = BTreeSet::<SessionId>::new();
-    let mut session_compactions = BTreeMap::new();
-    let mut session_runtime_state = BTreeMap::new();
-    let retained_compactions;
     let rebuilt_messages;
     let effective_messages = if let Some(runtime_state) = runtime_state {
         rebuilt_messages =
@@ -412,90 +194,49 @@ pub async fn persist_single_session_update(
     } else {
         messages
     };
-    let effective_compactions = if let Some(compactions) = compactions {
-        compactions
-    } else {
-        retained_compactions = query_session_compaction_entries(&controller, session.id).await?;
-        retained_compactions.as_slice()
-    };
-    session_compactions.insert(session.id, effective_compactions.to_vec());
-    if let Some(runtime_state) = runtime_state {
-        session_runtime_state.insert(session.id, runtime_state.clone());
-    }
+    let _ = (sessions, archived_sessions, compactions);
 
-    let persist_result = persist_session_event_store(
+    if let Err(error) = persist_segmented_session_tail_update(
+        &controller,
         session,
+        project_id,
+        archived,
         effective_messages,
         runtime_state,
-        effective_compactions,
-    )?;
-    if let Err(error) =
-        persist_single_session_event_store_projection(&controller, session, &persist_result).await
+    )
+    .await
     {
-        warnings.push(workspace_history_search_sync_warning(
-            "增量同步单会话事件投影失败",
+        warnings.push(segmented_session_persist_warning(
+            "同步分段会话追加流失败",
             1,
             &error,
         ));
     }
-    if compactions.is_some() {
-        replace_session_compactions(
-            &controller,
-            sessions,
-            &session_compactions,
-            &archived_sessions,
-            &archived_session_compactions,
-        )
-        .await?;
-    }
-    replace_session_runtime_state(
-        &controller,
-        sessions,
-        &session_runtime_state,
-        &archived_sessions,
-        &archived_session_runtime_state,
-        &hydrated_session_ids,
-    )
-    .await?;
 
     Ok(WorkspaceSnapshotPersistOutcome { warnings })
 }
 
-/// Persists only one session runtime-state row without rewriting transcript or project rows.
-/// 仅持久化单个会话运行时状态行，不重写转录或项目行。
+/// Persists only one session runtime-state document without rewriting transcript or project rows.
+/// 仅持久化单个会话运行时状态文档，不重写转录或项目行。
 pub async fn persist_single_session_runtime_state_update(
     controller: ControllerRuntimeHandle,
     session_id: SessionId,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<(), String> {
-    let rewrite_session_ids = vec![session_id.to_string()];
-    delete_session_scoped_rows(
-        &controller,
-        "session_runtime_state",
-        &rewrite_session_ids,
-        "删除单个会话旧运行时状态失败",
-    )
-    .await?;
-
-    insert_session_runtime_state_rows(
-        &controller,
-        vec![build_session_runtime_state_batch_row(
-            session_id,
-            runtime_state,
-        )],
-    )
-    .await?;
+    persist_segmented_session_runtime_state_checkpoint(&controller, session_id, runtime_state)
+        .await?;
 
     Ok(())
 }
 
-/// Marks one visible session as archived without rewriting transcript or runtime-state rows.
-/// 将单个可见会话标记为已归档，不重写转录或运行时状态行。
+/// Marks one visible session as archived without rewriting transcript or runtime-state documents.
+/// 将单个可见会话标记为已归档，不重写转录或运行时状态文档。
 pub async fn archive_single_session(
     controller: ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<(), String> {
-    update_session_archive_flags(controller, &[session_id], true).await
+    archive_segmented_session_directory_if_present(&controller, session_id).await?;
+    Ok(())
 }
 
 /// Restores one archived session summary into the visible project binding.
@@ -505,7 +246,14 @@ pub async fn restore_single_session(
     task_projects: &[TaskProjectSummary],
     session: &SessionSummary,
 ) -> Result<(), String> {
-    persist_single_session_summary_update(controller, task_projects, session, false).await
+    restore_segmented_session_directory_if_present(
+        &controller,
+        session.id,
+        session.project_id.as_deref(),
+    )
+    .await?;
+    let _ = task_projects;
+    Ok(())
 }
 
 /// Marks one visible project and all of its child sessions as archived.
@@ -515,9 +263,14 @@ pub async fn archive_project_with_sessions(
     project_id: &str,
     session_ids: &[SessionId],
 ) -> Result<(), String> {
+    for session_id in session_ids {
+        archive_segmented_session_directory_for_project_if_present(
+            &controller,
+            project_id,
+            *session_id,
+        )?;
+    }
     update_project_archive_flag(&controller, project_id, true).await?;
-    update_session_archive_flags(controller, session_ids, true).await?;
-
     Ok(())
 }
 
@@ -529,14 +282,104 @@ pub async fn restore_project_with_sessions(
     project: &TaskProjectSummary,
     sessions: &[SessionSummary],
 ) -> Result<(), String> {
+    for session in sessions {
+        restore_segmented_session_directory_for_project_if_present(
+            &controller,
+            &project.id,
+            session.id,
+        )?;
+    }
     upsert_projects(&controller, &[(project.clone(), false)]).await?;
-    let session_rows = sessions
-        .iter()
-        .cloned()
-        .map(|session| (session, false))
-        .collect::<Vec<_>>();
-    upsert_sessions(&controller, task_projects, &session_rows).await?;
+    let _ = task_projects;
+    Ok(())
+}
 
+/// Archives a segmented session directory using the persisted session locator when present.
+/// 存在持久化会话定位信息时归档对应分段会话目录。
+async fn archive_segmented_session_directory_if_present(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let Some(entry) = list_segmented_session_catalog(&controller.data_root)?
+        .into_iter()
+        .find(|entry| !entry.archived && entry.metadata.session_id == session_id_text)
+    else {
+        return Ok(());
+    };
+    archive_segmented_session_directory_for_project_if_present(
+        controller,
+        &entry.metadata.project_tag,
+        session_id,
+    )
+}
+
+/// Archives a segmented session directory for a known project id when present.
+/// 在已知项目标识时归档对应分段会话目录。
+fn archive_segmented_session_directory_for_project_if_present(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let archived_at = current_unix_millis_text();
+    let _ = archive_segmented_session_by_id(
+        &controller.data_root,
+        project_id,
+        &session_id.to_string(),
+        &archived_at,
+    )?;
+    Ok(())
+}
+
+/// Restores a segmented session directory using the persisted locator or the provided project id.
+/// 使用持久化定位信息或给定项目标识恢复对应分段会话目录。
+async fn restore_segmented_session_directory_if_present(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    fallback_project_id: Option<&str>,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let project_id = list_segmented_session_catalog(&controller.data_root)?
+        .into_iter()
+        .find(|entry| entry.archived && entry.metadata.session_id == session_id_text)
+        .map(|entry| entry.metadata.project_tag)
+        .or_else(|| fallback_project_id.map(ToOwned::to_owned))
+        .unwrap_or_default();
+    if project_id.trim().is_empty() {
+        return Ok(());
+    }
+    restore_segmented_session_directory_for_project_if_present(controller, &project_id, session_id)
+}
+
+/// Restores a segmented session directory for a known project id when present.
+/// 在已知项目标识时恢复对应分段会话目录。
+fn restore_segmented_session_directory_for_project_if_present(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let restored_at = current_unix_millis_text();
+    let _ = restore_segmented_session_by_id(
+        &controller.data_root,
+        project_id,
+        &session_id.to_string(),
+        &restored_at,
+    )?;
+    Ok(())
+}
+
+/// Deletes active and archived segmented session directories for one known project when present.
+/// 在已知项目标识时删除活动与归档树中存在的分段会话目录。
+fn delete_segmented_session_directories_for_project_if_present(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let _ =
+        delete_segmented_session_by_id(&controller.data_root, true, project_id, &session_id_text)?;
+    let _ =
+        delete_segmented_session_by_id(&controller.data_root, false, project_id, &session_id_text)?;
     Ok(())
 }
 
@@ -547,34 +390,6 @@ pub async fn persist_new_project(
     project: &TaskProjectSummary,
 ) -> Result<(), String> {
     upsert_projects(&controller, &[(project.clone(), false)]).await
-}
-
-/// Persists only one session summary row without touching artifacts owned by that session.
-/// 仅持久化单个会话摘要行，不触碰该会话拥有的运行工件。
-async fn persist_single_session_summary_update(
-    controller: ControllerRuntimeHandle,
-    task_projects: &[TaskProjectSummary],
-    session: &SessionSummary,
-    archived: bool,
-) -> Result<(), String> {
-    let session_owner_map = session_owner_map_from_projects(task_projects);
-    let Some((project_id, sort_order)) = session_owner_map.get(&session.id) else {
-        return Err(format!(
-            "单会话摘要保存失败：未找到会话所属项目：{}",
-            session.id
-        ));
-    };
-
-    upsert_session_rows(
-        &controller,
-        vec![build_session_upsert_row(
-            session,
-            project_id,
-            *sort_order,
-            archived,
-        )],
-    )
-    .await
 }
 
 /// Updates the archived flag for one project row without changing its metadata.
@@ -896,8 +711,8 @@ async fn query_persisted_session_summary(
     }))
 }
 
-/// Queries all compaction checkpoints currently mirrored for one session so single-session maintenance can persist the matching file-backed checkpoint set.
-/// 查询单个会话当前镜像保存的全部压缩检查点，以便单会话维护时同步持久化对应的文件化检查点集合。
+/// Queries all compaction checkpoints currently mirrored for one session so single-session updates can persist the matching segmented checkpoint set.
+/// 查询单个会话当前镜像保存的全部压缩检查点，以便单会话更新时同步持久化对应的分段检查点集合。
 async fn query_session_compaction_entries(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
@@ -924,119 +739,168 @@ ORDER BY c.created_at ASC;
         .collect())
 }
 
-/// Queries one persisted runtime-state entry so single-session maintenance can mirror the small runtime cache beside the event stream.
-/// 查询单条持久化运行时状态项，使单会话维护可以同步写出事件流旁边的小型运行时缓存。
-async fn query_session_runtime_state_entry(
+/// Stores runtime checkpoints only in segmented state files.
+/// 仅在分段 state 文件中存储运行态检查点。
+/// Mirrors a runtime-state checkpoint into the segmented session state file without touching append-only JSONL segments.
+/// 将运行时状态检查点镜像到分段会话状态文件，且不触碰追加式 JSONL 分段。
+async fn persist_segmented_session_runtime_state_checkpoint(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
-) -> Result<Option<SessionRuntimeStateEntry>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, r.conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.vmm_profile_sync_json, r.updated_at
-FROM session_runtime_state AS r
-WHERE r.session_id = ?1
-LIMIT 1;
-"#,
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
-
-    Ok(
-        decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)?
-            .into_iter()
-            .next()
-            .map(stored_runtime_state_row_to_entry),
-    )
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let Some(session_dir) =
+        find_segmented_session_directory_by_id(&controller.data_root, &session_id_text)?
+    else {
+        return Ok(());
+    };
+    let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
+    write_state(&session_dir, &state_document)
 }
 
-/// Mirrors one already persisted event-store rewrite back into SQLite using incremental projection updates.
-/// 使用增量投影更新将单个已写出的事件存储重写结果镜像回 SQLite。
-async fn persist_single_session_event_store_projection(
+/// Mirrors one full session update into the segmented append-only stream and overwrite state file.
+/// 将一次完整会话更新镜像到分段追加流与覆盖式状态文件。
+async fn persist_segmented_session_tail_update(
     controller: &ControllerRuntimeHandle,
     session: &SessionSummary,
-    persist_result: &SessionEventStorePersistResult,
+    project_id: &str,
+    archived: bool,
+    messages: &[SessionMessageEntry],
+    runtime_state: Option<&SessionRuntimeStateEntry>,
 ) -> Result<(), String> {
-    let trace_started_at = Instant::now();
-    workspace_store_projection_trace(
-        session.id,
-        "projection_start",
-        format!(
-            "turn_rows={} search_docs={}",
-            persist_result.turn_rows.len(),
-            persist_result.search_documents.len()
-        ),
-    );
-    let single_result = vec![(session.clone(), persist_result.clone())];
-    upsert_session_event_store_session_rows(controller, &single_result).await?;
-    workspace_store_projection_trace(
-        session.id,
-        "session_position_upserted",
-        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
-    );
-    upsert_session_turn_index_rows(controller, &single_result).await?;
-    delete_stale_session_turn_index_rows(controller, session.id, persist_result.latest_turn_index)
-        .await?;
-    workspace_store_projection_trace(
-        session.id,
-        "turn_index_upserted",
-        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
-    );
-    delete_stale_workspace_history_search_documents_for_session(
-        controller,
-        session.id,
-        persist_result,
-    )
-    .await?;
-    workspace_store_projection_trace(
-        session.id,
-        "stale_search_docs_deleted",
-        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
-    );
-    upsert_session_event_search_documents(controller, &single_result).await?;
-    workspace_store_projection_trace(
-        session.id,
-        "search_docs_upserted",
-        format!("elapsed_ms={}", trace_started_at.elapsed().as_millis()),
-    );
+    let locator = segmented_session_locator_from_summary(session, project_id, archived);
+    let session_id_text = session.id.to_string();
+    let session_dir =
+        ensure_segmented_session_directory_for_locator(controller, &session_id_text, &locator)?;
+    append_segmented_session_message_update(&session_dir, messages)?;
+    if let Some(runtime_state) = runtime_state {
+        let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
+        write_state(&session_dir, &state_document)?;
+    }
     Ok(())
 }
 
-/// Queries the current project ownership and title needed to route one session into workspace-history search indexes.
-/// 查询将某个会话路由到工作台历史搜索索引所需的当前项目归属与标题。
-async fn query_session_workspace_history_search_routing(
+/// Builds a segmented-session locator directly from the in-memory session summary.
+/// 直接从内存会话摘要构建分段会话定位信息。
+fn segmented_session_locator_from_summary(
+    session: &SessionSummary,
+    project_id: &str,
+    archived: bool,
+) -> SegmentedSessionLocator {
+    SegmentedSessionLocator {
+        project_id: project_id.to_string(),
+        title: session.title.clone(),
+        title_source: session.title_source.as_persisted_key().to_string(),
+        archived,
+        created_at: if session.updated_at.trim().is_empty() {
+            current_unix_millis_text()
+        } else {
+            session.updated_at.clone()
+        },
+    }
+}
+
+/// Resolves or creates the segmented directory described by one persisted session locator.
+/// 解析或创建一条持久化会话定位信息描述的分段目录。
+fn ensure_segmented_session_directory_for_locator(
+    controller: &ControllerRuntimeHandle,
+    session_id_text: &str,
+    locator: &SegmentedSessionLocator,
+) -> Result<std::path::PathBuf, String> {
+    match find_segmented_session_directory(
+        &controller.data_root,
+        locator.archived,
+        &locator.project_id,
+        session_id_text,
+    )? {
+        Some(session_dir) => Ok(session_dir),
+        None => create_segmented_session_in_location(
+            &controller.data_root,
+            locator.archived,
+            SegmentedSessionCreateRequest {
+                session_id: session_id_text.to_string(),
+                project_tag: locator.project_id.clone(),
+                created_date: segmented_session_date_from_unix_millis_text(&locator.created_at),
+                created_at: locator.created_at.clone(),
+                project_id: Some(locator.project_id.clone()),
+                title: Some(locator.title.clone()),
+                title_source: Some(locator.title_source.clone()),
+                segment_policy: SegmentPolicy::default(),
+            },
+        ),
+    }
+}
+
+/// Stores the minimal persisted session routing data needed to place a segmented session directory.
+/// 保存定位分段会话目录所需的最小持久化会话路由数据。
+#[derive(Debug, Deserialize)]
+struct SegmentedSessionLocatorRow {
+    /// Stable owning project identifier used as the project tag.
+    /// 作为项目标签使用的稳定所属项目标识。
+    project_id: String,
+    /// Visible session title mirrored into metadata when the segmented directory is first created.
+    /// 首次创建分段目录时镜像到 metadata 的可见会话标题。
+    title: String,
+    /// Persisted title-source key mirrored into metadata.
+    /// 镜像到 metadata 的持久化标题来源键。
+    title_source: String,
+    /// SQLite archived flag encoded as an integer.
+    /// 以整数编码的 SQLite 归档标记。
+    archived: i64,
+    /// Creation timestamp stored as Unix milliseconds text.
+    /// 以 Unix 毫秒文本存储的创建时间。
+    created_at: String,
+}
+
+/// Stores normalized locator data after SQLite scalar decoding.
+/// 保存 SQLite 标量解码后的规范化定位数据。
+struct SegmentedSessionLocator {
+    /// Stable owning project identifier used as the project tag.
+    /// 作为项目标签使用的稳定所属项目标识。
+    project_id: String,
+    /// Visible session title mirrored into metadata when the segmented directory is first created.
+    /// 首次创建分段目录时镜像到 metadata 的可见会话标题。
+    title: String,
+    /// Persisted title-source key mirrored into metadata.
+    /// 镜像到 metadata 的持久化标题来源键。
+    title_source: String,
+    /// Whether the segmented directory belongs under archived_sessions.
+    /// 分段目录是否属于 archived_sessions。
+    archived: bool,
+    /// Creation timestamp stored as Unix milliseconds text.
+    /// 以 Unix 毫秒文本存储的创建时间。
+    created_at: String,
+}
+
+/// Queries the persisted session row used to route segmented state writes.
+/// 查询用于路由分段状态写入的持久化会话行。
+async fn query_segmented_session_locator(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
-) -> Result<Option<(String, String)>, String> {
-    #[derive(Debug, Deserialize)]
-    struct SessionRoutingRow {
-        /// Stable project identifier owning the session.
-        /// 拥有该会话的稳定项目标识。
-        project_id: String,
-        /// Human-readable session title.
-        /// 人类可读的会话标题。
-        title: String,
-    }
-
+) -> Result<Option<SegmentedSessionLocator>, String> {
     let result = controller
         .client
         .query_sqlite_json_typed(
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
-            "SELECT project_id, title FROM sessions WHERE id = ?1 LIMIT 1;",
+            "SELECT project_id, title, title_source, archived, created_at FROM sessions WHERE id = ?1 LIMIT 1;",
             vec![ControllerSqliteValue::String(session_id.to_string())],
         )
         .await
-        .map_err(|error| format!("查询会话搜索索引归属失败：{error}"))?;
+        .map_err(|error| format!("查询分段会话定位信息失败：{error}"))?;
 
-    Ok(decode_query_rows::<SessionRoutingRow>(&result.json_data)?
-        .into_iter()
-        .next()
-        .map(|row| (row.project_id, row.title)))
+    Ok(
+        decode_query_rows::<SegmentedSessionLocatorRow>(&result.json_data)?
+            .into_iter()
+            .next()
+            .map(|row| SegmentedSessionLocator {
+                project_id: row.project_id,
+                title: row.title,
+                title_source: row.title_source,
+                archived: row.archived != 0,
+                created_at: row.created_at,
+            }),
+    )
 }
 
 /// Upserts all visible project rows while clearing the archive flag.
@@ -1260,7 +1124,7 @@ async fn archive_missing_sessions(
     controller: &ControllerRuntimeHandle,
     existing_active_ids: &BTreeSet<String>,
     visible_ids: &BTreeSet<String>,
-    warnings: &mut Vec<String>,
+    _warnings: &mut Vec<String>,
 ) -> Result<(), String> {
     let missing_ids = existing_active_ids
         .iter()
@@ -1294,207 +1158,26 @@ async fn archive_missing_sessions(
         )
         .await
         .map_err(|error| format!("软归档会话失败：{error}"))?;
-    if let Err(error) = delete_workspace_history_search_documents_for_session_ids(
-        controller,
-        &missing_ids,
-        "删除已软归档会话的搜索索引失败",
-    )
-    .await
-    {
-        warnings.push(workspace_history_search_sync_warning(
-            "软归档缺失会话后清理历史搜索索引失败",
-            missing_ids.len(),
-            &error,
-        ));
-    }
 
     Ok(())
 }
 
-/// Rewrites canonical session event stores, mirrors turn/search indexes into SQLite, and clears obsolete message-table payloads.
-/// 重写规范会话事件存储，将 turn 与搜索索引镜像进 SQLite，并清理过时的消息表载荷。
-async fn replace_session_event_stores(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    archived_sessions: &[SessionSummary],
-    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    archived_session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    warnings: &mut Vec<String>,
-) -> Result<(), String> {
-    let all_sessions = sessions
-        .iter()
-        .cloned()
-        .chain(archived_sessions.iter().cloned())
-        .collect::<Vec<_>>();
-    if all_sessions.is_empty() {
-        return Ok(());
-    }
-
-    let rewrite_session_ids = collect_session_event_store_rewrite_ids(
-        &all_sessions,
-        session_messages,
-        session_compactions,
-        session_runtime_state,
-        archived_session_messages,
-        archived_session_compactions,
-        archived_session_runtime_state,
-    );
-    if rewrite_session_ids.is_empty() {
-        return Ok(());
-    }
-
-    let mut persisted_results = Vec::with_capacity(rewrite_session_ids.len());
-    for session in all_sessions
-        .iter()
-        .filter(|session| rewrite_session_ids.contains(&session.id))
-    {
-        let messages = session_messages
-            .get(&session.id)
-            .or_else(|| archived_session_messages.get(&session.id))
-            .map(Vec::as_slice);
-        let runtime_state = session_runtime_state
-            .get(&session.id)
-            .or_else(|| archived_session_runtime_state.get(&session.id));
-        let compactions = session_compactions
-            .get(&session.id)
-            .or_else(|| archived_session_compactions.get(&session.id))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let rebuilt_messages;
-        let messages = if let Some(messages) = messages {
-            messages
-        } else if let Some(runtime_state) = runtime_state {
-            rebuilt_messages =
-                conversation_state_to_session_messages(&runtime_state.conversation_state);
-            rebuilt_messages.as_slice()
-        } else {
-            &[]
-        };
-        let persist_result =
-            persist_session_event_store(session, messages, runtime_state, compactions)?;
-        persisted_results.push((session.clone(), persist_result));
-    }
-
-    let session_ids = all_sessions
-        .iter()
-        .filter(|session| rewrite_session_ids.contains(&session.id))
-        .map(|session| session.id.to_string())
-        .collect::<Vec<_>>();
-    let mut search_projection_ready = true;
-    if let Err(error) = delete_workspace_history_search_documents_for_session_ids(
-        controller,
-        &session_ids,
-        "删除旧工作台历史搜索索引失败",
-    )
-    .await
-    {
-        warnings.push(workspace_history_search_sync_warning(
-            "重写会话事件存储前清理历史搜索索引失败",
-            session_ids.len(),
-            &error,
-        ));
-        search_projection_ready = false;
-    }
-    delete_session_scoped_rows(
-        controller,
-        "workspace_history_search_docs",
-        &session_ids,
-        "删除旧工作台历史搜索投影失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_turn_index",
-        &session_ids,
-        "删除旧会话 turn 索引失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_message_chunks",
-        &session_ids,
-        "删除旧会话消息分片失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        controller,
-        "session_messages",
-        &session_ids,
-        "删除旧会话消息正文失败",
-    )
-    .await?;
-
-    upsert_session_event_store_session_rows(controller, &persisted_results).await?;
-    upsert_session_turn_index_rows(controller, &persisted_results).await?;
-    if search_projection_ready {
-        if let Err(error) =
-            upsert_session_event_search_documents(controller, &persisted_results).await
-        {
-            warnings.push(workspace_history_search_sync_warning(
-                "重写会话事件存储后补写历史搜索索引失败",
-                session_ids.len(),
-                &error,
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-/// Builds one non-fatal warning describing that auxiliary workspace-history search synchronization lagged behind a successful snapshot save.
-/// 构建一条非致命告警，用于描述辅助工作台历史搜索同步落后于一次成功的快照保存。
-fn workspace_history_search_sync_warning(
-    operation: &str,
-    session_count: usize,
-    error: &str,
-) -> String {
+/// Builds one non-fatal warning describing that segmented session persistence lagged behind a successful snapshot save.
+/// 构建一条非致命告警，用于描述分段会话持久化落后于一次成功的快照保存。
+fn segmented_session_persist_warning(operation: &str, session_count: usize, error: &str) -> String {
     format!(
-        "{operation}：涉及 {session_count} 个会话。核心工作台状态已继续保存，但历史搜索索引需要稍后重建。原始错误：{error}"
+        "{operation}：涉及 {session_count} 个会话。核心工作台状态已继续保存，但分段会话文件需要稍后重新同步。原始错误：{error}"
     )
 }
 
-/// Emits one optional workspace-store projection trace line when the diagnostic environment flag is enabled.
-/// 当诊断环境开关启用时输出一条可选的工作区存储投影跟踪日志。
-fn workspace_store_projection_trace(session_id: SessionId, stage: &str, detail: impl AsRef<str>) {
-    let enabled = std::env::var("VULCAN_WORKSPACE_STORE_PROJECTION_TRACE")
-        .ok()
-        .map(|value| {
-            let normalized = value.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false);
-    if enabled {
-        let (timestamp, unix_ms) = workspace_store_trace_timestamp();
-        eprintln!(
-            "[workspace-store][projection] timestamp={timestamp} unix_ms={unix_ms} session={session_id} stage={stage} {}",
-            detail.as_ref()
-        );
-    }
-}
-
-/// Returns one UTC trace timestamp plus Unix milliseconds using only standard-library time.
-/// 仅使用标准库时间返回一组 UTC 跟踪时间戳与 Unix 毫秒。
-fn workspace_store_trace_timestamp() -> (String, u128) {
-    let unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let seconds = (unix_ms / 1_000) as i64;
-    let millis = unix_ms % 1_000;
+/// Converts Unix-milliseconds text into the UTC date segment used by segmented session directories.
+/// 将 Unix 毫秒文本转换为分段会话目录使用的 UTC 日期片段。
+fn segmented_session_date_from_unix_millis_text(value: &str) -> String {
+    let millis = value.trim().parse::<i64>().unwrap_or_default();
+    let seconds = millis.div_euclid(1_000);
     let days = seconds.div_euclid(86_400);
-    let seconds_of_day = seconds.rem_euclid(86_400);
     let (year, month, day) = civil_date_from_unix_days(days);
-    let hour = seconds_of_day / 3_600;
-    let minute = (seconds_of_day % 3_600) / 60;
-    let second = seconds_of_day % 60;
-    (
-        format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}.{millis:03}Z"),
-        unix_ms,
-    )
+    format!("{year:04}-{month:02}-{day:02}")
 }
 
 /// Converts days since the Unix epoch into one proleptic Gregorian UTC date.
@@ -1520,31 +1203,6 @@ fn civil_date_from_unix_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
     (year, month, day)
 }
 
-/// Collects the session identifiers whose canonical event-store files must actually be rewritten during one snapshot flush.
-/// 收集一次快照刷新期间确实需要重写规范事件存储文件的会话标识集合。
-fn collect_session_event_store_rewrite_ids(
-    all_sessions: &[SessionSummary],
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    archived_session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-) -> BTreeSet<SessionId> {
-    all_sessions
-        .iter()
-        .filter(|session| {
-            session_messages.contains_key(&session.id)
-                || session_compactions.contains_key(&session.id)
-                || session_runtime_state.contains_key(&session.id)
-                || archived_session_messages.contains_key(&session.id)
-                || archived_session_compactions.contains_key(&session.id)
-                || archived_session_runtime_state.contains_key(&session.id)
-        })
-        .map(|session| session.id)
-        .collect()
-}
-
 /// Permanently deletes one archived session together with all persisted transcript and runtime artifacts.
 /// 彻底删除一个已归档会话及其全部已持久化的转录与运行时工件。
 pub async fn permanently_delete_archived_session(
@@ -1557,38 +1215,19 @@ pub async fn permanently_delete_archived_session(
         .await?
         .and_then(|session| session.project_id);
 
-    delete_session_scoped_rows(
-        &controller,
-        "session_message_chunks",
-        &session_ids,
-        "删除归档会话转录消息分片失败",
-    )
-    .await?;
-    delete_workspace_history_search_documents_for_session_ids(
-        &controller,
-        &session_ids,
-        "删除归档会话搜索索引失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        &controller,
-        "session_messages",
-        &session_ids,
-        "删除归档会话转录消息失败",
-    )
-    .await?;
+    if let Some(project_id) = project_id.as_deref() {
+        delete_segmented_session_directories_for_project_if_present(
+            &controller,
+            project_id,
+            session_id,
+        )?;
+    }
+
     delete_session_scoped_rows(
         &controller,
         "session_compactions",
         &session_ids,
         "删除归档会话压缩检查点失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        &controller,
-        "session_runtime_state",
-        &session_ids,
-        "删除归档会话运行时状态失败",
     )
     .await?;
 
@@ -1602,10 +1241,6 @@ pub async fn permanently_delete_archived_session(
         )
         .await
         .map_err(|error| format!("删除归档会话记录失败：{error}"))?;
-    if let Some(project_id) = project_id.as_deref() {
-        remove_session_event_store(project_id, session_id)?;
-    }
-
     Ok(())
 }
 
@@ -1616,45 +1251,25 @@ pub async fn permanently_delete_archived_project(
     project_id: String,
     session_ids: Vec<SessionId>,
 ) -> Result<(), String> {
-    let project_index_name = workspace_history_search_project_index_name(&project_id);
     let session_id_texts = session_ids
         .iter()
         .copied()
         .map(|session_id| session_id.to_string())
         .collect::<Vec<_>>();
 
-    delete_session_scoped_rows(
-        &controller,
-        "session_message_chunks",
-        &session_id_texts,
-        "删除归档项目下的转录消息分片失败",
-    )
-    .await?;
-    delete_workspace_history_search_documents_for_session_ids(
-        &controller,
-        &session_id_texts,
-        "删除归档项目下的搜索索引失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        &controller,
-        "session_messages",
-        &session_id_texts,
-        "删除归档项目下的转录消息失败",
-    )
-    .await?;
+    for session_id in &session_ids {
+        delete_segmented_session_directories_for_project_if_present(
+            &controller,
+            &project_id,
+            *session_id,
+        )?;
+    }
+
     delete_session_scoped_rows(
         &controller,
         "session_compactions",
         &session_id_texts,
         "删除归档项目下的压缩检查点失败",
-    )
-    .await?;
-    delete_session_scoped_rows(
-        &controller,
-        "session_runtime_state",
-        &session_id_texts,
-        "删除归档项目下的运行时状态失败",
     )
     .await?;
 
@@ -1685,301 +1300,7 @@ pub async fn permanently_delete_archived_project(
         )
         .await
         .map_err(|error| format!("删除归档项目记录失败：{error}"))?;
-    drop_workspace_history_search_indexes(
-        &controller,
-        &[project_index_name],
-        "删除归档项目对应的搜索索引失败",
-    )
-    .await?;
-    for session_id in &session_ids {
-        remove_session_event_store(project_id.as_str(), *session_id)?;
-    }
-
     Ok(())
-}
-
-/// Upserts loaded transcript message rows while leaving not-yet-loaded history intact.
-/// 在保留尚未加载历史的前提下上写已加载的转录消息行。
-async fn replace_session_messages(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-    archived_sessions: &[SessionSummary],
-    archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-) -> Result<(), String> {
-    let mut message_batch_params = Vec::new();
-    let mut chunk_batch_params = Vec::new();
-    let mut search_batch_params = Vec::new();
-    push_session_message_batch_rows(
-        controller,
-        &mut message_batch_params,
-        &mut chunk_batch_params,
-        &mut search_batch_params,
-        true,
-        sessions,
-        session_messages,
-    )
-    .await?;
-    push_session_message_batch_rows(
-        controller,
-        &mut message_batch_params,
-        &mut chunk_batch_params,
-        &mut search_batch_params,
-        false,
-        archived_sessions,
-        archived_session_messages,
-    )
-    .await?;
-
-    upsert_session_message_batches(
-        controller,
-        message_batch_params,
-        chunk_batch_params,
-        search_batch_params,
-    )
-    .await
-}
-
-/// Mirrors latest turn/event positions from the file-backed event store back into the lightweight SQLite session rows.
-/// 将文件化事件存储中的最近 turn 与事件位置镜像回轻量 SQLite 会话行。
-async fn upsert_session_event_store_session_rows(
-    controller: &ControllerRuntimeHandle,
-    persisted_results: &[(SessionSummary, SessionEventStorePersistResult)],
-) -> Result<(), String> {
-    let params = persisted_results
-        .iter()
-        .map(|(session, result)| {
-            vec![
-                ControllerSqliteValue::Int64(result.latest_turn_index),
-                ControllerSqliteValue::Int64(result.latest_event_seq),
-                ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(session.id.to_string()),
-            ]
-        })
-        .collect::<Vec<_>>();
-    execute_sqlite_batch_safely(
-        controller,
-        "sessions",
-        "UPDATE sessions SET latest_turn_index = ?1, latest_event_seq = ?2, updated_at = ?3 WHERE id = ?4;",
-        params,
-        "更新会话事件存储镜像位置失败",
-    )
-    .await
-}
-
-/// Mirrors canonical turn-index rows derived from the file-backed event store into SQLite for paging and checkpoint routing.
-/// 将文件化事件存储派生出的规范 turn 索引行镜像到 SQLite，以支持分页与检查点路由。
-async fn upsert_session_turn_index_rows(
-    controller: &ControllerRuntimeHandle,
-    persisted_results: &[(SessionSummary, SessionEventStorePersistResult)],
-) -> Result<(), String> {
-    let params = persisted_results
-        .iter()
-        .flat_map(|(session, result)| {
-            result.turn_rows.iter().map(move |row| {
-                vec![
-                    ControllerSqliteValue::String(session.id.to_string()),
-                    ControllerSqliteValue::String(row.turn_id.clone()),
-                    ControllerSqliteValue::Int64(row.turn_index),
-                    ControllerSqliteValue::Int64(row.start_seq),
-                    ControllerSqliteValue::Int64(row.end_seq),
-                    ControllerSqliteValue::String(row.turn_state.clone()),
-                    optional_sqlite_string(&row.summary_message_id),
-                ]
-            })
-        })
-        .collect::<Vec<_>>();
-    if params.is_empty() {
-        return Ok(());
-    }
-
-    execute_sqlite_batch_safely(
-        controller,
-        "session_turn_index",
-        r#"
-INSERT INTO session_turn_index (
-    session_id,
-    turn_id,
-    turn_index,
-    start_seq,
-    end_seq,
-    turn_state,
-    summary_message_id
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-ON CONFLICT(session_id, turn_index) DO UPDATE SET
-    turn_id = excluded.turn_id,
-    start_seq = excluded.start_seq,
-    end_seq = excluded.end_seq,
-    turn_state = excluded.turn_state,
-    summary_message_id = excluded.summary_message_id;
-"#,
-        params,
-        "写入会话事件 turn 索引失败",
-    )
-    .await
-}
-
-/// Deletes turn-index rows that no longer exist after an incremental single-session rewrite.
-/// 删除增量单会话重写后已经不存在的轮次索引行。
-async fn delete_stale_session_turn_index_rows(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    latest_turn_index: i64,
-) -> Result<(), String> {
-    let statement = if latest_turn_index < 0 {
-        "DELETE FROM session_turn_index WHERE session_id = ?1;".to_string()
-    } else {
-        "DELETE FROM session_turn_index WHERE session_id = ?1 AND turn_index > ?2;".to_string()
-    };
-    let params = if latest_turn_index < 0 {
-        vec![vec![ControllerSqliteValue::String(session_id.to_string())]]
-    } else {
-        vec![vec![
-            ControllerSqliteValue::String(session_id.to_string()),
-            ControllerSqliteValue::Int64(latest_turn_index),
-        ]]
-    };
-    execute_sqlite_batch_safely(
-        controller,
-        "session_turn_index",
-        &statement,
-        params,
-        "删除陈旧会话 turn 索引失败",
-    )
-    .await
-}
-
-/// Mirrors search projection documents derived from the file-backed event store into controller-managed FTS and the lightweight metadata table.
-/// 将文件化事件存储派生出的搜索投影文档镜像到控制器托管 FTS 与轻量元数据表。
-async fn upsert_session_event_search_documents(
-    controller: &ControllerRuntimeHandle,
-    persisted_results: &[(SessionSummary, SessionEventStorePersistResult)],
-) -> Result<(), String> {
-    let documents = persisted_results
-        .iter()
-        .flat_map(|(_, result)| {
-            result.search_documents.iter().cloned().map(|document| {
-                WorkspaceHistorySearchDocumentUpsert {
-                    message_id: document.document_id,
-                    session_id: document.session_id,
-                    project_id: document.project_id,
-                    event_id: document.event_id,
-                    turn_index: document.turn_index,
-                    ordinal: document.ordinal,
-                    role: document.role,
-                    created_at: document.created_at,
-                    content: document.content,
-                }
-            })
-        })
-        .collect::<Vec<_>>();
-    upsert_workspace_history_search_documents(controller, documents).await
-}
-
-/// Deletes search documents whose canonical event ids disappeared from the latest single-session event store.
-/// 删除最近单会话事件存储中已经消失的规范事件搜索文档。
-async fn delete_stale_workspace_history_search_documents_for_session(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    persist_result: &SessionEventStorePersistResult,
-) -> Result<(), String> {
-    let session_ids = vec![session_id.to_string()];
-    let existing_rows =
-        query_workspace_history_search_document_state_for_session_ids(controller, &session_ids)
-            .await?;
-    if existing_rows.is_empty() {
-        return Ok(());
-    }
-
-    let current_document_ids = persist_result
-        .search_documents
-        .iter()
-        .map(|document| document.document_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let stale_message_ids = existing_rows
-        .iter()
-        .filter(|row| !current_document_ids.contains(row.message_id.as_str()))
-        .map(|row| row.message_id.clone())
-        .collect::<Vec<_>>();
-    delete_workspace_history_search_documents_for_message_ids(
-        controller,
-        &stale_message_ids,
-        "删除陈旧工作台历史搜索索引失败",
-    )
-    .await
-}
-
-/// Upserts prepared transcript rows and rewrites only their own chunk rows.
-/// 上写已预处理的转录行，并且只重写这些消息自身的分片行。
-async fn upsert_session_message_batches(
-    controller: &ControllerRuntimeHandle,
-    message_batch_params: Vec<Vec<ControllerSqliteValue>>,
-    chunk_batch_params: Vec<Vec<ControllerSqliteValue>>,
-    search_batch_params: Vec<WorkspaceHistorySearchDocumentUpsert>,
-) -> Result<(), String> {
-    if message_batch_params.is_empty() {
-        return Ok(());
-    }
-
-    let message_ids = message_batch_params
-        .iter()
-        .filter_map(|row| match row.first() {
-            Some(ControllerSqliteValue::String(message_id)) => Some(message_id.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    delete_session_message_chunks_for_message_ids(
-        controller,
-        &message_ids,
-        "删除当前窗口消息的旧正文分片失败",
-    )
-    .await?;
-    delete_workspace_history_search_documents_for_message_ids(
-        controller,
-        &message_ids,
-        "删除当前窗口消息的旧搜索索引失败",
-    )
-    .await?;
-
-    execute_sqlite_batch_safely(
-        controller,
-        "session_messages",
-        session_message_upsert_statement(),
-        message_batch_params,
-        "写入会话转录消息失败",
-    )
-    .await?;
-
-    if !chunk_batch_params.is_empty() {
-        execute_sqlite_batch_safely(
-            controller,
-            "session_message_chunks",
-            session_message_chunk_upsert_statement(),
-            chunk_batch_params,
-            "写入会话转录消息分片失败",
-        )
-        .await?;
-    }
-
-    upsert_workspace_history_search_documents(controller, search_batch_params).await?;
-
-    Ok(())
-}
-
-/// Returns the upsert SQL used to persist chunk rows safely across overlapping maintenance tasks.
-/// 返回用于在重叠维护任务间安全持久化分片行的 upsert SQL。
-pub(super) fn session_message_chunk_upsert_statement() -> &'static str {
-    r#"
-INSERT INTO session_message_chunks (
-    session_id,
-    message_id,
-    chunk_index,
-    content
-) VALUES (?1, ?2, ?3, ?4)
-ON CONFLICT(message_id, chunk_index) DO UPDATE SET
-    session_id = excluded.session_id,
-    content = excluded.content;
-"#
 }
 
 /// Replaces all compaction checkpoint rows for the currently visible sessions while leaving archived sessions intact.
@@ -2044,516 +1365,6 @@ INSERT INTO session_compactions (
     Ok(())
 }
 
-/// Replaces all runtime-state rows for the currently visible sessions while leaving archived sessions intact.
-/// 在保留已归档会话数据的前提下替换当前可见会话的全部运行时状态行。
-async fn replace_session_runtime_state(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    archived_sessions: &[SessionSummary],
-    archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    _hydrated_session_ids: &BTreeSet<SessionId>,
-) -> Result<(), String> {
-    let mut batch_params = Vec::new();
-    let mut pushed_session_ids = BTreeSet::new();
-    push_session_runtime_state_batch_rows_with_seen(
-        &mut batch_params,
-        sessions,
-        session_runtime_state,
-        &mut pushed_session_ids,
-    );
-    push_session_runtime_state_batch_rows_with_seen(
-        &mut batch_params,
-        archived_sessions,
-        archived_session_runtime_state,
-        &mut pushed_session_ids,
-    );
-
-    let rewrite_session_ids = pushed_session_ids
-        .iter()
-        .map(SessionId::to_string)
-        .collect::<Vec<_>>();
-    delete_session_scoped_rows(
-        controller,
-        "session_runtime_state",
-        &rewrite_session_ids,
-        "删除当前可见会话的旧运行时状态失败",
-    )
-    .await?;
-
-    if batch_params.is_empty() {
-        return Ok(());
-    }
-
-    insert_session_runtime_state_rows(controller, batch_params).await?;
-
-    Ok(())
-}
-
-/// Inserts prepared runtime-state batch rows into the session runtime-state table.
-/// 将已准备好的运行时状态批量行插入会话运行时状态表。
-async fn insert_session_runtime_state_rows(
-    controller: &ControllerRuntimeHandle,
-    batch_params: Vec<Vec<ControllerSqliteValue>>,
-) -> Result<(), String> {
-    if batch_params.is_empty() {
-        return Ok(());
-    }
-
-    execute_sqlite_batch_safely(
-        controller,
-        "session_runtime_state",
-        r#"
-INSERT INTO session_runtime_state (
-    session_id,
-    active_agent_id,
-    active_provider_id,
-    active_model_id,
-    last_compaction_id,
-    context_start_message_id,
-    ui_state_json,
-    provider_usage_json,
-    conversation_state_json,
-    continuation_json,
-    context_injection_json,
-    vmm_json,
-    vmm_writeback_outbox_json,
-    vmm_profile_sync_json,
-    updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15);
-"#,
-        batch_params,
-        "写入会话运行时状态失败",
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Queries existing ordinals and turn indexes for loaded entries so partial upserts keep their positions.
-/// 查询已加载消息已有的序号与轮次索引，确保局部上写保留原位置。
-async fn query_session_message_positions_for_entries(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    messages: &[SessionMessageEntry],
-) -> Result<BTreeMap<String, StoredSessionMessagePositionRow>, String> {
-    let message_ids = messages
-        .iter()
-        .filter_map(|message| {
-            let message_id = message.id.trim();
-            (!message_id.is_empty()).then(|| message_id.to_string())
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    let mut positions = BTreeMap::new();
-    for chunk in message_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
-        let chunk_positions =
-            query_session_message_positions_for_ids(controller, session_id, chunk).await?;
-        positions.extend(
-            chunk_positions
-                .into_iter()
-                .map(|position| (position.id.clone(), position)),
-        );
-    }
-
-    Ok(positions)
-}
-
-/// Queries existing persisted positions for a bounded set of message identifiers.
-/// 查询一组有界消息标识对应的已持久化位置。
-async fn query_session_message_positions_for_ids(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    message_ids: &[String],
-) -> Result<Vec<StoredSessionMessagePositionRow>, String> {
-    if message_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let placeholders = (2..message_ids.len() + 2)
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let statement = format!(
-        r#"
-SELECT id, ordinal, turn_index
-FROM session_messages
-WHERE session_id = ?1 AND id IN ({placeholders})
-ORDER BY ordinal ASC;
-"#
-    );
-    let mut params = Vec::with_capacity(message_ids.len() + 1);
-    params.push(ControllerSqliteValue::String(session_id.to_string()));
-    params.extend(
-        message_ids
-            .iter()
-            .cloned()
-            .map(ControllerSqliteValue::String),
-    );
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            statement,
-            params,
-        )
-        .await
-        .map_err(|error| format!("查询会话消息持久化位置失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionMessagePositionRow>(&result.json_data)
-}
-
-/// Queries the maximum persisted ordinal and turn index for one session without loading bodies.
-/// 在不加载正文的前提下查询单个会话已持久化的最大序号与轮次索引。
-async fn query_session_message_max_position(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<(i64, i64), String> {
-    #[derive(Deserialize)]
-    struct MaxPositionRow {
-        /// Maximum persisted ordinal or -1 when the session has no rows.
-        /// 最大已持久化序号；会话没有行时为 -1。
-        max_ordinal: i64,
-        /// Maximum persisted turn index or -1 when the session has no rows.
-        /// 最大已持久化轮次索引；会话没有行时为 -1。
-        max_turn_index: i64,
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT
-    COALESCE(MAX(ordinal), -1) AS max_ordinal,
-    COALESCE(MAX(turn_index), -1) AS max_turn_index
-FROM session_messages
-WHERE session_id = ?1;
-"#,
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询会话消息最大位置失败：{error}"))?;
-
-    let rows = decode_query_rows::<MaxPositionRow>(&result.json_data)?;
-    let row = rows.into_iter().next().unwrap_or(MaxPositionRow {
-        max_ordinal: -1,
-        max_turn_index: -1,
-    });
-    Ok((row.max_ordinal, row.max_turn_index))
-}
-
-/// Pushes transcript-message batch rows for one session slice into the shared SQLite batch payload.
-/// 将某个会话切片的转录消息批量行推入共享 SQLite 批处理载荷。
-async fn push_session_message_batch_rows(
-    controller: &ControllerRuntimeHandle,
-    message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    search_batch_params: &mut Vec<WorkspaceHistorySearchDocumentUpsert>,
-    index_search_documents: bool,
-    sessions: &[SessionSummary],
-    session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
-) -> Result<(), String> {
-    for session in sessions {
-        if let Some(messages) = session_messages.get(&session.id) {
-            let persisted_positions =
-                query_session_message_positions_for_entries(controller, session.id, messages)
-                    .await?;
-            let (max_ordinal, max_turn_index) =
-                query_session_message_max_position(controller, session.id).await?;
-            let project_id = session.project_id.as_deref().unwrap_or_default();
-            push_session_message_rows_for_session(
-                &persisted_positions,
-                max_ordinal,
-                max_turn_index,
-                message_batch_params,
-                chunk_batch_params,
-                search_batch_params,
-                project_id,
-                index_search_documents && !project_id.trim().is_empty(),
-                session.id,
-                session.title.as_str(),
-                messages,
-            );
-        }
-    }
-
-    Ok(())
-}
-
-/// Pushes transcript-message batch rows for one concrete session identifier.
-/// 为一个明确的会话标识推入转录消息批处理行。
-pub(super) fn push_session_message_rows_for_session(
-    persisted_positions: &BTreeMap<String, StoredSessionMessagePositionRow>,
-    max_persisted_ordinal: i64,
-    max_persisted_turn_index: i64,
-    message_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    chunk_batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    search_batch_params: &mut Vec<WorkspaceHistorySearchDocumentUpsert>,
-    project_id: &str,
-    index_search_documents: bool,
-    session_id: SessionId,
-    _session_title: &str,
-    messages: &[SessionMessageEntry],
-) {
-    let mut next_new_ordinal = max_persisted_ordinal.saturating_add(1).max(0);
-    let mut current_turn_index = max_persisted_turn_index.max(0);
-    let mut has_prior_turn_context = max_persisted_turn_index >= 0;
-    for (local_index, message) in messages.iter().enumerate() {
-        let meta_json = serialize_session_message_meta_to_json(message);
-        let message_id = if message.id.trim().is_empty() {
-            format!("session-{}-message-{}", session_id, local_index)
-        } else {
-            message.id.clone()
-        };
-        let (ordinal, turn_index) = if let Some(position) = persisted_positions.get(&message_id) {
-            current_turn_index = position.turn_index.max(0);
-            has_prior_turn_context = true;
-            (position.ordinal, position.turn_index)
-        } else {
-            if session_message_starts_new_turn(message) && has_prior_turn_context {
-                current_turn_index = current_turn_index.saturating_add(1);
-            }
-            has_prior_turn_context = true;
-            let ordinal = next_new_ordinal;
-            next_new_ordinal = next_new_ordinal.saturating_add(1);
-            (ordinal, current_turn_index)
-        };
-        let prepared_body = prepare_session_message_body_for_storage(&message.body);
-
-        message_batch_params.push(vec![
-            ControllerSqliteValue::String(message_id.clone()),
-            ControllerSqliteValue::String(session_id.to_string()),
-            ControllerSqliteValue::Int64(ordinal),
-            ControllerSqliteValue::String(role_from_session_kind(message.kind).to_string()),
-            ControllerSqliteValue::String(message.record_kind.as_persisted_key().to_string()),
-            ControllerSqliteValue::Int64(i64::from(message.visible)),
-            ControllerSqliteValue::Int64(turn_index),
-            ControllerSqliteValue::String(prepared_body.inline_content),
-            optional_sqlite_string(&meta_json),
-            ControllerSqliteValue::String(non_empty_timestamp_text(&message.created_at)),
-        ]);
-
-        chunk_batch_params.extend(prepared_body.chunks.into_iter().enumerate().map(
-            |(chunk_index, chunk)| {
-                vec![
-                    ControllerSqliteValue::String(session_id.to_string()),
-                    ControllerSqliteValue::String(message_id.clone()),
-                    ControllerSqliteValue::Int64(chunk_index as i64),
-                    ControllerSqliteValue::String(chunk),
-                ]
-            },
-        ));
-
-        if index_search_documents
-            && session_message_is_workspace_history_search_indexable(message)
-            && !message.body.trim().is_empty()
-        {
-            search_batch_params.push(WorkspaceHistorySearchDocumentUpsert {
-                message_id,
-                session_id: session_id.to_string(),
-                project_id: project_id.to_string(),
-                event_id: String::new(),
-                turn_index,
-                ordinal,
-                role: role_from_session_kind(message.kind).to_string(),
-                created_at: non_empty_timestamp_text(&message.created_at),
-                content: message.body.clone(),
-            });
-        }
-    }
-}
-
-/// Returns the upsert SQL used to persist loaded transcript rows without deleting unloaded history.
-/// 返回用于持久化已加载转录行且不删除未加载历史的 upsert SQL。
-pub(super) fn session_message_upsert_statement() -> &'static str {
-    r#"
-INSERT INTO session_messages (
-    id,
-    session_id,
-    ordinal,
-    role,
-    kind,
-    visible,
-    turn_index,
-    content,
-    meta_json,
-    created_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-ON CONFLICT(id) DO UPDATE SET
-    session_id = excluded.session_id,
-    ordinal = excluded.ordinal,
-    role = excluded.role,
-    kind = excluded.kind,
-    visible = excluded.visible,
-    turn_index = excluded.turn_index,
-    content = excluded.content,
-    meta_json = excluded.meta_json,
-    created_at = excluded.created_at;
-"#
-}
-
-/// Returns the upsert SQL used to persist workspace-history document ownership rows.
-/// 返回用于持久化工作台历史文档归属状态行的 upsert SQL。
-fn workspace_history_search_state_upsert_statement() -> &'static str {
-    r#"
-INSERT INTO workspace_history_search_docs (
-    message_id,
-    session_id,
-    project_id,
-    event_id,
-    turn_index,
-    ordinal,
-    role,
-    created_at,
-    content_hash,
-    index_version,
-    event_seq,
-    updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-ON CONFLICT(message_id) DO UPDATE SET
-    session_id = excluded.session_id,
-    project_id = excluded.project_id,
-    event_id = excluded.event_id,
-    turn_index = excluded.turn_index,
-    ordinal = excluded.ordinal,
-    role = excluded.role,
-    created_at = excluded.created_at,
-    content_hash = excluded.content_hash,
-    index_version = excluded.index_version,
-    event_seq = excluded.event_seq,
-    updated_at = excluded.updated_at;
-"#
-}
-
-/// Returns the insert SQL used to persist controller-managed workspace-history FTS documents.
-/// 返回用于持久化控制器托管工作台历史 FTS 文档的插入 SQL。
-fn workspace_history_search_index_insert_statement(index_name: &str) -> String {
-    format!(
-        r#"
-INSERT INTO {} (
-    id,
-    file_path,
-    title,
-    content
-) VALUES (?1, ?2, ?3, ?4);
-"#,
-        quote_sqlite_identifier(index_name)
-    )
-}
-
-/// Returns the delete SQL used to remove controller-managed workspace-history FTS documents by id.
-/// 返回用于按文档 ID 删除控制器托管工作台历史 FTS 文档的 SQL。
-fn workspace_history_search_index_delete_statement(index_name: &str) -> String {
-    format!(
-        "DELETE FROM {} WHERE id = ?1;",
-        quote_sqlite_identifier(index_name)
-    )
-}
-
-/// Assigns stable turn indexes to one ordered transcript slice.
-/// 为一段有序转录消息分配稳定轮次索引。
-#[cfg(test)]
-pub(super) fn assign_session_message_turn_indexes(messages: &[SessionMessageEntry]) -> Vec<i64> {
-    let mut turn_indexes = Vec::with_capacity(messages.len());
-    let mut current_turn_index = 0_i64;
-    let mut has_seen_user_turn = false;
-
-    for message in messages {
-        if session_message_starts_new_turn(message) {
-            if has_seen_user_turn {
-                current_turn_index = current_turn_index.saturating_add(1);
-            } else {
-                has_seen_user_turn = true;
-            }
-        }
-        turn_indexes.push(current_turn_index);
-    }
-
-    turn_indexes
-}
-
-/// Returns whether one transcript message should open a new user-driven dialogue turn.
-/// 返回一条转录消息是否应开启新的用户驱动对话轮次。
-fn session_message_starts_new_turn(message: &SessionMessageEntry) -> bool {
-    matches!(message.kind, SessionMessageKind::User)
-        && message.visible
-        && message.contributes_to_context()
-}
-
-/// Returns whether one visible transcript message should participate in workspace BM25 search indexing.
-/// 返回某条可见转录消息是否应参与工作台 BM25 搜索索引。
-pub(super) fn session_message_is_workspace_history_search_indexable(
-    message: &SessionMessageEntry,
-) -> bool {
-    matches!(
-        (message.kind, message.record_kind, message.visible),
-        (
-            SessionMessageKind::User,
-            SessionMessageRecordKind::Transcript,
-            true
-        ) | (
-            SessionMessageKind::Assistant,
-            SessionMessageRecordKind::AssistantOutput,
-            true,
-        )
-    )
-}
-
-/// Prepared persistence payload for one transcript message body.
-/// 单条转录消息正文的预处理持久化载荷。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct PreparedSessionMessageBody {
-    /// Inline content stored directly on the lightweight `session_messages` row.
-    /// 直接存储在轻量 `session_messages` 行上的内联内容。
-    pub(super) inline_content: String,
-    /// External body chunks stored in `session_message_chunks` when the body is oversized.
-    /// 正文过大时存储在 `session_message_chunks` 中的外部分片。
-    pub(super) chunks: Vec<String>,
-}
-
-/// Prepares one message body for inline storage or chunked external storage.
-/// 将单条消息正文预处理为内联存储或外部分片存储。
-pub(super) fn prepare_session_message_body_for_storage(body: &str) -> PreparedSessionMessageBody {
-    if body.len() <= SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES {
-        return PreparedSessionMessageBody {
-            inline_content: body.to_string(),
-            chunks: Vec::new(),
-        };
-    }
-
-    PreparedSessionMessageBody {
-        inline_content: truncate_preview_lines(body, 4, SESSION_MESSAGE_CHUNK_PREVIEW_CHARS),
-        chunks: split_text_into_byte_chunks(body, SESSION_MESSAGE_CHUNK_CONTENT_BYTES),
-    }
-}
-
-/// Splits UTF-8 text into chunks that do not exceed the requested byte limit.
-/// 将 UTF-8 文本拆分为不超过指定字节上限的分片。
-fn split_text_into_byte_chunks(value: &str, max_bytes: usize) -> Vec<String> {
-    let max_bytes = max_bytes.max(4);
-    let mut chunks = Vec::new();
-    let mut chunk_start = 0usize;
-
-    for (char_start, ch) in value.char_indices() {
-        let char_end = char_start + ch.len_utf8();
-        if char_end.saturating_sub(chunk_start) > max_bytes && char_start > chunk_start {
-            chunks.push(value[chunk_start..char_start].to_string());
-            chunk_start = char_start;
-        }
-    }
-
-    if chunk_start < value.len() {
-        chunks.push(value[chunk_start..].to_string());
-    }
-
-    chunks
-}
-
 /// Pushes compaction-checkpoint batch rows for one session slice into the shared SQLite batch payload.
 /// 将某个会话切片的压缩检查点批量行推入共享 SQLite 批处理载荷。
 fn push_session_compaction_batch_rows(
@@ -2579,76 +1390,6 @@ fn push_session_compaction_batch_rows(
     }
 }
 
-/// Pushes runtime-state batch rows for one session slice into the shared SQLite batch payload.
-/// 将某个会话切片的运行时状态批量行推入共享 SQLite 批处理载荷。
-pub(super) fn push_session_runtime_state_batch_rows(
-    batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    sessions: &[SessionSummary],
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-) {
-    let mut pushed_session_ids = BTreeSet::new();
-    push_session_runtime_state_batch_rows_with_seen(
-        batch_params,
-        sessions,
-        session_runtime_state,
-        &mut pushed_session_ids,
-    );
-}
-
-/// Pushes runtime-state batch rows while skipping session ids that have already been emitted by an earlier slice.
-/// 在推入运行时状态批量行时跳过早前切片已经写出的会话标识。
-fn push_session_runtime_state_batch_rows_with_seen(
-    batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    sessions: &[SessionSummary],
-    session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
-    pushed_session_ids: &mut BTreeSet<SessionId>,
-) {
-    for session in sessions {
-        if let Some(entry) = session_runtime_state.get(&session.id) {
-            if !pushed_session_ids.insert(session.id) {
-                continue;
-            }
-            batch_params.push(build_session_runtime_state_batch_row(session.id, entry));
-        }
-    }
-}
-
-/// Builds one runtime-state SQLite batch row for a single session.
-/// 为单个会话构建一条运行时状态 SQLite 批处理行。
-pub(super) fn build_session_runtime_state_batch_row(
-    session_id: SessionId,
-    entry: &SessionRuntimeStateEntry,
-) -> Vec<ControllerSqliteValue> {
-    vec![
-        ControllerSqliteValue::String(session_id.to_string()),
-        optional_sqlite_string(&entry.active_agent_id),
-        optional_sqlite_string(&entry.active_provider_id),
-        optional_sqlite_string(&entry.active_model_id),
-        optional_sqlite_string(&entry.last_compaction_id),
-        optional_sqlite_string(&entry.context_start_message_id),
-        optional_sqlite_string(&serialize_session_ui_state_to_json(&entry.ui_state)),
-        optional_sqlite_string(&serialize_provider_usage_to_json(
-            entry
-                .last_successful_provider_usage
-                .as_ref()
-                .or(entry.last_provider_usage.as_ref()),
-        )),
-        ControllerSqliteValue::Null,
-        optional_sqlite_string(&serialize_session_continuation_to_json(
-            &entry.conversation_state.continuation,
-        )),
-        optional_sqlite_string(&serialize_context_injection_state_to_json(
-            &entry.context_injection_state,
-        )),
-        optional_sqlite_string(&serialize_vmm_config_layer_to_json(&entry.vmm)),
-        optional_sqlite_string(&serialize_vmm_writeback_outbox_to_json(
-            &entry.vmm_writeback_outbox,
-        )),
-        optional_sqlite_string(&serialize_vmm_profile_sync_to_json(&entry.vmm_profile_sync)),
-        ControllerSqliteValue::String(non_empty_timestamp_text(&entry.updated_at)),
-    ]
-}
-
 /// Deletes all rows from one session-scoped table for the provided active session identifiers.
 /// 删除某个会话作用域表中指定激活会话标识对应的全部行。
 async fn delete_session_scoped_rows(
@@ -2671,398 +1412,6 @@ async fn delete_session_scoped_rows(
     execute_sqlite_batch_safely(controller, table_name, &statement, params, error_prefix).await?;
 
     Ok(())
-}
-
-/// Deletes chunk rows for the provided message identifiers before those messages are upserted.
-/// 在对应消息被上写前，删除这些消息标识关联的正文分片行。
-async fn delete_session_message_chunks_for_message_ids(
-    controller: &ControllerRuntimeHandle,
-    message_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if message_ids.is_empty() {
-        return Ok(());
-    }
-
-    let params = message_ids
-        .iter()
-        .cloned()
-        .map(|message_id| vec![ControllerSqliteValue::String(message_id)])
-        .collect::<Vec<_>>();
-
-    execute_sqlite_batch_safely(
-        controller,
-        "session_message_chunks",
-        "DELETE FROM session_message_chunks WHERE message_id = ?1;",
-        params,
-        error_prefix,
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Upserts controller-managed workspace-history FTS documents together with their ownership state rows.
-/// 上写控制器托管工作台历史 FTS 文档，并同步更新对应的归属状态行。
-async fn upsert_workspace_history_search_documents(
-    controller: &ControllerRuntimeHandle,
-    documents: Vec<WorkspaceHistorySearchDocumentUpsert>,
-) -> Result<(), String> {
-    if documents.is_empty() {
-        return Ok(());
-    }
-
-    ensure_workspace_history_search_index(controller, WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME)
-        .await?;
-    let message_ids = documents
-        .iter()
-        .map(|document| document.message_id.clone())
-        .collect::<Vec<_>>();
-    let existing_rows =
-        query_workspace_history_search_document_state_for_message_ids(controller, &message_ids)
-            .await?;
-    let existing_by_message_id = existing_rows
-        .iter()
-        .cloned()
-        .map(|row| (row.message_id.clone(), row))
-        .collect::<BTreeMap<_, _>>();
-    let mut project_index_rows = BTreeMap::<String, Vec<Vec<ControllerSqliteValue>>>::new();
-    let mut global_index_rows = Vec::with_capacity(documents.len());
-    let mut state_rows = Vec::with_capacity(documents.len());
-    let mut stale_rows_to_delete = Vec::new();
-    let mut ensured_project_indexes = BTreeSet::new();
-
-    for document in documents {
-        let content_hash = workspace_history_search_document_content_hash(&document);
-        let event_seq = document.ordinal;
-        if let Some(existing_row) = existing_by_message_id.get(&document.message_id) {
-            if workspace_history_search_document_matches_state(
-                &document,
-                &content_hash,
-                event_seq,
-                existing_row,
-            ) {
-                continue;
-            }
-            stale_rows_to_delete.push(existing_row.clone());
-        }
-
-        let project_index_name = workspace_history_search_project_index_name(&document.project_id);
-        if ensured_project_indexes.insert(project_index_name.clone()) {
-            ensure_workspace_history_search_index(controller, &project_index_name).await?;
-        }
-
-        let file_path =
-            workspace_history_search_document_file_path(&document.project_id, &document.session_id);
-        let index_row = vec![
-            ControllerSqliteValue::String(document.message_id.clone()),
-            ControllerSqliteValue::String(file_path),
-            ControllerSqliteValue::String(String::new()),
-            ControllerSqliteValue::String(document.content.clone()),
-        ];
-        global_index_rows.push(index_row.clone());
-        project_index_rows
-            .entry(project_index_name)
-            .or_default()
-            .push(index_row);
-        state_rows.push(vec![
-            ControllerSqliteValue::String(document.message_id),
-            ControllerSqliteValue::String(document.session_id),
-            ControllerSqliteValue::String(document.project_id),
-            ControllerSqliteValue::String(document.event_id),
-            ControllerSqliteValue::Int64(document.turn_index),
-            ControllerSqliteValue::Int64(document.ordinal),
-            ControllerSqliteValue::String(document.role),
-            ControllerSqliteValue::String(document.created_at),
-            ControllerSqliteValue::String(content_hash),
-            ControllerSqliteValue::Int64(WORKSPACE_HISTORY_SEARCH_INDEX_VERSION),
-            ControllerSqliteValue::Int64(event_seq),
-            ControllerSqliteValue::String(current_unix_millis_text()),
-        ]);
-    }
-
-    if global_index_rows.is_empty() && state_rows.is_empty() {
-        return Ok(());
-    }
-
-    delete_workspace_history_search_documents_from_rows(
-        controller,
-        &stale_rows_to_delete,
-        "删除已变化工作台历史搜索索引失败",
-    )
-    .await?;
-
-    execute_sqlite_batch_safely(
-        controller,
-        WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
-        &workspace_history_search_index_insert_statement(
-            WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
-        ),
-        global_index_rows,
-        "写入全局工作台历史搜索索引失败",
-    )
-    .await?;
-    for (index_name, params) in project_index_rows {
-        execute_sqlite_batch_safely(
-            controller,
-            &index_name,
-            &workspace_history_search_index_insert_statement(&index_name),
-            params,
-            "写入项目工作台历史搜索索引失败",
-        )
-        .await?;
-    }
-    execute_sqlite_batch_safely(
-        controller,
-        "workspace_history_search_docs",
-        workspace_history_search_state_upsert_statement(),
-        state_rows,
-        "写入工作台历史搜索归属状态失败",
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Returns whether one prepared search document is already represented by its persisted state row.
-/// 返回一条预处理搜索文档是否已经被持久化状态行完整表示。
-fn workspace_history_search_document_matches_state(
-    document: &WorkspaceHistorySearchDocumentUpsert,
-    content_hash: &str,
-    event_seq: i64,
-    existing_row: &StoredWorkspaceHistorySearchDocumentStateRow,
-) -> bool {
-    existing_row.session_id == document.session_id
-        && existing_row.project_id == document.project_id
-        && existing_row.event_id == document.event_id
-        && existing_row.turn_index == document.turn_index
-        && existing_row.ordinal == document.ordinal
-        && existing_row.role == document.role
-        && existing_row.created_at == document.created_at
-        && existing_row.content_hash == content_hash
-        && existing_row.index_version == WORKSPACE_HISTORY_SEARCH_INDEX_VERSION
-        && existing_row.event_seq == event_seq
-}
-
-/// Deletes controller-managed workspace-history FTS documents for the provided message identifiers.
-/// 删除这些消息标识关联的控制器托管工作台历史 FTS 文档。
-async fn delete_workspace_history_search_documents_for_message_ids(
-    controller: &ControllerRuntimeHandle,
-    message_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    let state_rows =
-        query_workspace_history_search_document_state_for_message_ids(controller, message_ids)
-            .await?;
-    delete_workspace_history_search_documents_from_rows(controller, &state_rows, error_prefix)
-        .await?;
-    delete_workspace_history_search_document_state_for_message_ids(
-        controller,
-        message_ids,
-        error_prefix,
-    )
-    .await
-}
-
-/// Deletes controller-managed workspace-history FTS documents for the provided session identifiers.
-/// 删除这些会话标识关联的控制器托管工作台历史 FTS 文档。
-async fn delete_workspace_history_search_documents_for_session_ids(
-    controller: &ControllerRuntimeHandle,
-    session_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    let state_rows =
-        query_workspace_history_search_document_state_for_session_ids(controller, session_ids)
-            .await?;
-    delete_workspace_history_search_documents_from_rows(controller, &state_rows, error_prefix)
-        .await?;
-    delete_workspace_history_search_document_state_for_session_ids(
-        controller,
-        session_ids,
-        error_prefix,
-    )
-    .await
-}
-
-/// Queries workspace-history document ownership rows for the provided message identifiers.
-/// 查询给定消息标识对应的工作台历史文档归属状态行。
-async fn query_workspace_history_search_document_state_for_message_ids(
-    controller: &ControllerRuntimeHandle,
-    message_ids: &[String],
-) -> Result<Vec<StoredWorkspaceHistorySearchDocumentStateRow>, String> {
-    if message_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut rows = Vec::new();
-    for chunk in message_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
-        let placeholders = (1..=chunk.len())
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let statement = format!(
-            "SELECT message_id, session_id, project_id, event_id, turn_index, ordinal, role, created_at, content_hash, index_version, event_seq, updated_at FROM workspace_history_search_docs WHERE message_id IN ({placeholders});"
-        );
-        let result = controller
-            .client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
-                statement,
-                chunk
-                    .iter()
-                    .cloned()
-                    .map(ControllerSqliteValue::String)
-                    .collect(),
-            )
-            .await
-            .map_err(|error| format!("查询工作台历史搜索文档归属失败：{error}"))?;
-        rows.extend(decode_query_rows::<
-            StoredWorkspaceHistorySearchDocumentStateRow,
-        >(&result.json_data)?);
-    }
-
-    Ok(rows)
-}
-
-/// Queries workspace-history document ownership rows for the provided session identifiers.
-/// 查询给定会话标识对应的工作台历史文档归属状态行。
-async fn query_workspace_history_search_document_state_for_session_ids(
-    controller: &ControllerRuntimeHandle,
-    session_ids: &[String],
-) -> Result<Vec<StoredWorkspaceHistorySearchDocumentStateRow>, String> {
-    if session_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut rows = Vec::new();
-    for chunk in session_ids.chunks(SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT) {
-        let placeholders = (1..=chunk.len())
-            .map(|index| format!("?{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let statement = format!(
-            "SELECT message_id, session_id, project_id, event_id, turn_index, ordinal, role, created_at, content_hash, index_version, event_seq, updated_at FROM workspace_history_search_docs WHERE session_id IN ({placeholders});"
-        );
-        let result = controller
-            .client
-            .query_sqlite_json_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(controller),
-                statement,
-                chunk
-                    .iter()
-                    .cloned()
-                    .map(ControllerSqliteValue::String)
-                    .collect(),
-            )
-            .await
-            .map_err(|error| format!("查询工作台历史搜索会话归属失败：{error}"))?;
-        rows.extend(decode_query_rows::<
-            StoredWorkspaceHistorySearchDocumentStateRow,
-        >(&result.json_data)?);
-    }
-
-    Ok(rows)
-}
-
-/// Deletes controller-managed workspace-history FTS documents using preloaded ownership rows.
-/// 基于预加载归属状态行删除控制器托管工作台历史 FTS 文档。
-async fn delete_workspace_history_search_documents_from_rows(
-    controller: &ControllerRuntimeHandle,
-    state_rows: &[StoredWorkspaceHistorySearchDocumentStateRow],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if state_rows.is_empty() {
-        return Ok(());
-    }
-
-    let global_params = state_rows
-        .iter()
-        .map(|row| vec![ControllerSqliteValue::String(row.message_id.clone())])
-        .collect::<Vec<_>>();
-    execute_sqlite_batch_safely(
-        controller,
-        WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
-        &workspace_history_search_index_delete_statement(
-            WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME,
-        ),
-        global_params,
-        error_prefix,
-    )
-    .await?;
-
-    let mut project_params = BTreeMap::<String, Vec<Vec<ControllerSqliteValue>>>::new();
-    for row in state_rows {
-        project_params
-            .entry(workspace_history_search_project_index_name(&row.project_id))
-            .or_default()
-            .push(vec![ControllerSqliteValue::String(row.message_id.clone())]);
-    }
-    for (index_name, params) in project_params {
-        execute_sqlite_batch_safely(
-            controller,
-            &index_name,
-            &workspace_history_search_index_delete_statement(&index_name),
-            params,
-            error_prefix,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-/// Deletes workspace-history document ownership rows for the provided message identifiers.
-/// 删除给定消息标识对应的工作台历史文档归属状态行。
-async fn delete_workspace_history_search_document_state_for_message_ids(
-    controller: &ControllerRuntimeHandle,
-    message_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if message_ids.is_empty() {
-        return Ok(());
-    }
-
-    let params = message_ids
-        .iter()
-        .cloned()
-        .map(|message_id| vec![ControllerSqliteValue::String(message_id)])
-        .collect::<Vec<_>>();
-    execute_sqlite_batch_safely(
-        controller,
-        "workspace_history_search_docs",
-        "DELETE FROM workspace_history_search_docs WHERE message_id = ?1;",
-        params,
-        error_prefix,
-    )
-    .await
-}
-
-/// Deletes workspace-history document ownership rows for the provided session identifiers.
-/// 删除给定会话标识对应的工作台历史文档归属状态行。
-async fn delete_workspace_history_search_document_state_for_session_ids(
-    controller: &ControllerRuntimeHandle,
-    session_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if session_ids.is_empty() {
-        return Ok(());
-    }
-
-    let params = session_ids
-        .iter()
-        .cloned()
-        .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
-        .collect::<Vec<_>>();
-    execute_sqlite_batch_safely(
-        controller,
-        "workspace_history_search_docs",
-        "DELETE FROM workspace_history_search_docs WHERE session_id = ?1;",
-        params,
-        error_prefix,
-    )
-    .await
 }
 
 /// Executes a typed SQLite batch in safe chunks estimated against the full gRPC protobuf frame.
@@ -3207,196 +1556,49 @@ mod tests {
         )
     }
 
-    /// Verifies event-store rewrites only target sessions that actually carry payload snapshots in the current persistence flush.
-    /// 验证事件存储重写只会命中当前持久化刷新中确实携带载荷快照的会话。
+    /// Verifies segmented session directory dates are derived from stable Unix-milliseconds text.
+    /// 验证分段会话目录日期由稳定的 Unix 毫秒文本推导。
     #[test]
-    fn collect_session_event_store_rewrite_ids_skips_unloaded_sessions() {
-        let session_a = test_session_summary(SessionId::from_u128(101), "project-a", "会话 A");
-        let session_b = test_session_summary(SessionId::from_u128(202), "project-a", "会话 B");
-        let all_sessions = vec![session_a.clone(), session_b.clone()];
-
-        let mut session_runtime_state = BTreeMap::new();
-        session_runtime_state.insert(
-            session_a.id,
-            SessionRuntimeStateEntry {
-                updated_at: String::from("1"),
-                ..SessionRuntimeStateEntry::default()
-            },
+    fn segmented_session_date_uses_unix_millis_text() {
+        assert_eq!(
+            segmented_session_date_from_unix_millis_text("0"),
+            "1970-01-01"
         );
-
-        let rewrite_ids = collect_session_event_store_rewrite_ids(
-            &all_sessions,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &session_runtime_state,
-            &BTreeMap::new(),
-            &BTreeMap::new(),
-            &BTreeMap::new(),
+        assert_eq!(
+            segmented_session_date_from_unix_millis_text("86400000"),
+            "1970-01-02"
         );
-
-        assert!(rewrite_ids.contains(&session_a.id));
-        assert!(!rewrite_ids.contains(&session_b.id));
+        assert_eq!(
+            segmented_session_date_from_unix_millis_text(" 1722470400000 "),
+            "2024-08-01"
+        );
     }
 
-    /// Verifies duplicate runtime-state ids are skipped across active and archived slices while preserving the first emitted row.
-    /// 验证活动与归档切片之间重复的运行时状态标识会被跳过，并保留第一条已发出的行。
+    /// Verifies bulk snapshot mirroring only touches sessions with a loaded transcript window.
+    /// 验证批量快照镜像只会处理已有已加载转录窗口的会话。
     #[test]
-    fn runtime_state_batch_rows_skip_duplicate_session_ids_across_slices() {
-        let session_id = SessionId::from_u128(303);
-        let session = test_session_summary(session_id, "project-a", "重复会话");
-        let mut active_runtime_states = BTreeMap::new();
-        active_runtime_states.insert(
-            session_id,
-            SessionRuntimeStateEntry {
-                active_agent_id: Some(String::from("active-agent")),
-                updated_at: String::from("1"),
-                ..SessionRuntimeStateEntry::default()
-            },
-        );
-        let mut archived_runtime_states = BTreeMap::new();
-        archived_runtime_states.insert(
-            session_id,
-            SessionRuntimeStateEntry {
-                active_agent_id: Some(String::from("archived-agent")),
-                updated_at: String::from("2"),
-                ..SessionRuntimeStateEntry::default()
-            },
-        );
-        let mut rows = Vec::new();
-        let mut pushed_session_ids = BTreeSet::new();
+    fn snapshot_session_transcript_is_loaded_requires_messages_or_hydration() {
+        let loaded_by_messages = SessionId::from_u128(401);
+        let loaded_by_hydration = SessionId::from_u128(402);
+        let not_loaded = SessionId::from_u128(403);
+        let mut session_messages = BTreeMap::new();
+        session_messages.insert(loaded_by_messages, Vec::new());
+        let hydrated_session_ids = BTreeSet::from([loaded_by_hydration]);
 
-        push_session_runtime_state_batch_rows_with_seen(
-            &mut rows,
-            std::slice::from_ref(&session),
-            &active_runtime_states,
-            &mut pushed_session_ids,
-        );
-        push_session_runtime_state_batch_rows_with_seen(
-            &mut rows,
-            &[session],
-            &archived_runtime_states,
-            &mut pushed_session_ids,
-        );
-
-        assert_eq!(rows.len(), 1);
-        assert!(matches!(
-            &rows[0][1],
-            ControllerSqliteValue::String(value) if value == "active-agent"
+        assert!(snapshot_session_transcript_is_loaded(
+            loaded_by_messages,
+            &session_messages,
+            &hydrated_session_ids
         ));
-    }
-
-    /// Verifies runtime-state rewrite ids are derived from emitted batch rows rather than the hydration set.
-    /// 验证运行时状态重写标识来自实际发出的批量行，而不是来自水合会话集合。
-    #[test]
-    fn runtime_state_rewrite_ids_follow_emitted_rows_without_hydration() {
-        let session_id = SessionId::from_u128(404);
-        let session = test_session_summary(session_id, "project-a", "未水合会话");
-        let mut runtime_states = BTreeMap::new();
-        runtime_states.insert(
-            session_id,
-            SessionRuntimeStateEntry {
-                active_agent_id: Some(String::from("runtime-agent")),
-                updated_at: String::from("1"),
-                ..SessionRuntimeStateEntry::default()
-            },
-        );
-        let mut rows = Vec::new();
-        let mut pushed_session_ids = BTreeSet::new();
-
-        push_session_runtime_state_batch_rows_with_seen(
-            &mut rows,
-            &[session],
-            &runtime_states,
-            &mut pushed_session_ids,
-        );
-
-        assert_eq!(rows.len(), 1);
-        assert!(pushed_session_ids.contains(&session_id));
-    }
-
-    /// Verifies unchanged search documents are recognized before FTS writes are scheduled.
-    /// 验证未变化搜索文档会在安排 FTS 写入前被识别出来。
-    #[test]
-    fn search_document_state_match_skips_unchanged_projection() {
-        let document = test_workspace_history_search_document();
-        let content_hash = workspace_history_search_document_content_hash(&document);
-        let row = StoredWorkspaceHistorySearchDocumentStateRow {
-            message_id: document.message_id.clone(),
-            session_id: document.session_id.clone(),
-            project_id: document.project_id.clone(),
-            event_id: document.event_id.clone(),
-            turn_index: document.turn_index,
-            ordinal: document.ordinal,
-            role: document.role.clone(),
-            created_at: document.created_at.clone(),
-            content_hash: content_hash.clone(),
-            index_version: WORKSPACE_HISTORY_SEARCH_INDEX_VERSION,
-            event_seq: document.ordinal,
-            updated_at: String::from("123"),
-        };
-
-        assert!(workspace_history_search_document_matches_state(
-            &document,
-            &content_hash,
-            document.ordinal,
-            &row,
+        assert!(snapshot_session_transcript_is_loaded(
+            loaded_by_hydration,
+            &session_messages,
+            &hydrated_session_ids
         ));
-    }
-
-    /// Verifies index-version changes force a search projection refresh.
-    /// 验证索引版本变化会强制刷新搜索投影。
-    #[test]
-    fn search_document_state_match_rejects_stale_index_version() {
-        let document = test_workspace_history_search_document();
-        let content_hash = workspace_history_search_document_content_hash(&document);
-        let row = StoredWorkspaceHistorySearchDocumentStateRow {
-            message_id: document.message_id.clone(),
-            session_id: document.session_id.clone(),
-            project_id: document.project_id.clone(),
-            event_id: document.event_id.clone(),
-            turn_index: document.turn_index,
-            ordinal: document.ordinal,
-            role: document.role.clone(),
-            created_at: document.created_at.clone(),
-            content_hash: content_hash.clone(),
-            index_version: WORKSPACE_HISTORY_SEARCH_INDEX_VERSION.saturating_sub(1),
-            event_seq: document.ordinal,
-            updated_at: String::from("123"),
-        };
-
-        assert!(!workspace_history_search_document_matches_state(
-            &document,
-            &content_hash,
-            document.ordinal,
-            &row,
+        assert!(!snapshot_session_transcript_is_loaded(
+            not_loaded,
+            &session_messages,
+            &hydrated_session_ids
         ));
-    }
-
-    /// Verifies the search ownership upsert stores projection change-tracking fields.
-    /// 验证搜索归属上写语句会保存投影变化跟踪字段。
-    #[test]
-    fn search_state_upsert_statement_tracks_projection_changes() {
-        let statement = workspace_history_search_state_upsert_statement();
-
-        assert!(statement.contains("content_hash"));
-        assert!(statement.contains("index_version"));
-        assert!(statement.contains("event_seq"));
-        assert!(statement.contains("updated_at"));
-    }
-
-    /// Builds one representative search document for pure projection tests.
-    /// 为纯投影测试构造一条代表性搜索文档。
-    fn test_workspace_history_search_document() -> WorkspaceHistorySearchDocumentUpsert {
-        WorkspaceHistorySearchDocumentUpsert {
-            message_id: String::from("event-0001"),
-            session_id: String::from("session-a"),
-            project_id: String::from("project-a"),
-            event_id: String::from("event-0001"),
-            turn_index: 1,
-            ordinal: 2,
-            role: String::from("assistant"),
-            created_at: String::from("1000"),
-            content: String::from("hello indexed world"),
-        }
     }
 }

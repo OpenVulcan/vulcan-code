@@ -110,6 +110,7 @@ impl VulcanWorkbench {
             system_prompt_hook_blocks,
             project_vmm,
             session_vmm,
+            codex_boundary_events: Vec::new(),
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

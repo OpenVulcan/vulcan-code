@@ -1800,10 +1800,6 @@ impl VulcanWorkbench {
             .map(|preparation| preparation.prompt_purpose)
             .unwrap_or(crate::agent_runtime::ExecutionPromptPurpose::UserTurn);
         let runs_completed_turn_hooks = prompt_purpose.runs_completed_turn_hooks();
-        let is_delegate_completion = matches!(
-            prompt_purpose,
-            crate::agent_runtime::ExecutionPromptPurpose::DelegateCompletion
-        );
         let mut perf_trace = TranscriptPerfTrace::begin(
             "apply_execution_run_report",
             format!(
@@ -1981,21 +1977,16 @@ impl VulcanWorkbench {
         let pending_subagent_count = self
             .running_subagent_task_states_for_tree_after_refresh(session_id)
             .len();
-        let pending_delegate_completion_count =
-            self.session_pending_delegate_completion_prompt_count(session_id);
         let has_active_hook_turn = self.conversation_hook_runtime.has_active_turn(session_id);
-        let completion_status =
-            if pending_subagent_count > 0 || pending_delegate_completion_count > 0 {
-                super::conversation_hooks::ConversationTurnCompletionStatus::AwaitingSubagents
-            } else {
-                super::conversation_hooks::ConversationTurnCompletionStatus::Completed
-            };
-        let should_dispatch_completion_hook = is_main_session
-            && is_success
-            && (runs_completed_turn_hooks || (is_delegate_completion && has_active_hook_turn));
-        let should_terminate_completion_hook = is_main_session
-            && !is_success
-            && (runs_completed_turn_hooks || (is_delegate_completion && has_active_hook_turn));
+        let completion_status = if pending_subagent_count > 0 {
+            super::conversation_hooks::ConversationTurnCompletionStatus::AwaitingSubagents
+        } else {
+            super::conversation_hooks::ConversationTurnCompletionStatus::Completed
+        };
+        let should_dispatch_completion_hook =
+            is_main_session && is_success && (runs_completed_turn_hooks || has_active_hook_turn);
+        let should_terminate_completion_hook =
+            is_main_session && !is_success && (runs_completed_turn_hooks || has_active_hook_turn);
         if is_success {
             let summary_message_id = self.append_session_summary_output(
                 session_id,
@@ -2026,7 +2017,6 @@ impl VulcanWorkbench {
                         &conversation_state,
                         completion_status,
                         pending_subagent_count,
-                        pending_delegate_completion_count,
                     );
                 if completion_status.is_final() {
                     let runtime_state = self.ensure_session_runtime_state_mut(session_id);

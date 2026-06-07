@@ -11,6 +11,7 @@ use crate::types::{
     CoreEventKind, ProviderTurnDelta, ProviderTurnResponse, ProviderUsageSnapshot,
     ToolInvocationRequest, ToolInvocationResult, TranscriptRecordKind, TranscriptRole,
 };
+use futures_util::future::join_all;
 use serde_json::{Map as JsonMap, Value, json};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -271,6 +272,71 @@ impl VulcanCoreController {
         Ok(result)
     }
 
+    /// Executes one provider-emitted tool-call batch concurrently while preserving transcript append order.
+    /// 并发执行一批 Provider 产出的工具调用，同时保留转录追加顺序。
+    async fn execute_tool_batch<E, P>(
+        &mut self,
+        executor: &E,
+        policy: &P,
+        requests: Vec<ToolInvocationRequest>,
+    ) -> Result<Vec<ToolInvocationResult>, CoreError>
+    where
+        E: VulcanToolExecutor,
+        P: VulcanToolPolicy,
+    {
+        let mut skipped_results = Vec::<Option<ToolInvocationResult>>::new();
+        let mut executable_requests = Vec::<ToolInvocationRequest>::new();
+        let policy_snapshot = self.snapshot.clone();
+        for request in requests {
+            self.record_tool_started(&request);
+            if policy.should_execute(&request, &policy_snapshot) {
+                skipped_results.push(None);
+                executable_requests.push(request);
+            } else {
+                let skipped_result = ToolInvocationResult {
+                    tool_call_id: request.tool_call_id.clone(),
+                    tool_name: request.tool_name.clone(),
+                    model_output: String::from("Tool execution was skipped by the host policy."),
+                    host_result: Some(json!({
+                        "tool_call_id": request.tool_call_id,
+                        "tool_name": request.tool_name,
+                        "status": "skipped_by_policy",
+                        "arguments": request.arguments,
+                    })),
+                    is_error: false,
+                };
+                skipped_results.push(Some(skipped_result));
+            }
+        }
+
+        let executable_results =
+            join_all(executable_requests.iter().map(|request| async move {
+                let result = executor.execute_tool(request).await.map_err(|error| {
+                    CoreError::ToolFailure {
+                        tool_name: request.tool_name.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok::<ToolInvocationResult, CoreError>(result)
+            }))
+            .await;
+        let mut executable_results = executable_results.into_iter();
+        let mut ordered_results = Vec::with_capacity(skipped_results.len());
+        for skipped_result in skipped_results {
+            let result = match skipped_result {
+                Some(result) => result,
+                None => executable_results.next().ok_or_else(|| CoreError::InvalidState {
+                    message: String::from(
+                        "Tool batch execution lost one executable result before transcript append.",
+                    ),
+                })??,
+            };
+            self.record_tool_finished(&result);
+            ordered_results.push(result);
+        }
+        Ok(ordered_results)
+    }
+
     /// Executes one provider turn and updates the controller phase according to the outcome.
     /// 执行一次 Provider 回合，并根据结果更新控制器阶段。
     pub async fn execute_once<A>(&mut self, adapter: &A) -> Result<A::Response, CoreError>
@@ -386,19 +452,23 @@ impl VulcanCoreController {
                 });
             }
 
-            for tool_call in &response.tool_calls {
-                let request = ToolInvocationRequest {
+            let requests = response
+                .tool_calls
+                .iter()
+                .map(|tool_call| ToolInvocationRequest {
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
-                };
-                let result = match self.execute_tool(executor, policy, &request).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        self.mark_failed(error.to_string());
-                        return Err(error);
-                    }
-                };
+                })
+                .collect::<Vec<_>>();
+            let results = match self.execute_tool_batch(executor, policy, requests).await {
+                Ok(results) => results,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    return Err(error);
+                }
+            };
+            for result in results {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
             }
@@ -527,19 +597,23 @@ impl VulcanCoreController {
                 });
             }
 
-            for tool_call in &response.tool_calls {
-                let request = ToolInvocationRequest {
+            let requests = response
+                .tool_calls
+                .iter()
+                .map(|tool_call| ToolInvocationRequest {
                     tool_call_id: resolved_tool_call_id(tool_call),
                     tool_name: tool_call.tool_name.clone(),
                     arguments: tool_call.arguments.clone(),
-                };
-                let result = match self.execute_tool(executor, policy, &request).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        self.mark_failed(error.to_string());
-                        return Err(error);
-                    }
-                };
+                })
+                .collect::<Vec<_>>();
+            let results = match self.execute_tool_batch(executor, policy, requests).await {
+                Ok(results) => results,
+                Err(error) => {
+                    self.mark_failed(error.to_string());
+                    return Err(error);
+                }
+            };
+            for result in results {
                 tool_calls_processed += 1;
                 self.append_tool_result_message(&result);
                 on_safe_checkpoint(&self.snapshot, self.last_successful_provider_usage.as_ref());
@@ -972,6 +1046,7 @@ mod tests {
     };
     use async_trait::async_trait;
     use std::collections::{BTreeMap, VecDeque};
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     /// Captures pre-planned provider turn responses and records the built request snapshots.
@@ -1297,6 +1372,40 @@ mod tests {
         }
     }
 
+    /// Records overlapping tool execution so batch-level concurrency is directly observable.
+    /// 记录重叠的工具执行，使批量工具并发可以被直接观察。
+    #[derive(Debug, Clone, Default)]
+    struct ConcurrentToolExecutor {
+        /// Number of tool calls currently inside the mock executor.
+        /// 当前进入模拟执行器的工具调用数量。
+        current_running: Arc<AtomicUsize>,
+        /// Maximum number of simultaneously running tool calls observed by the mock executor.
+        /// 模拟执行器观测到的最大同时运行工具调用数量。
+        max_running: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl VulcanToolExecutor for ConcurrentToolExecutor {
+        /// Executes one delayed tool request while tracking concurrent in-flight calls.
+        /// 执行一次带延迟的工具请求，同时跟踪并发中的调用数量。
+        async fn execute_tool(
+            &self,
+            request: &ToolInvocationRequest,
+        ) -> Result<ToolInvocationResult, CoreError> {
+            let current = self.current_running.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_running.fetch_max(current, Ordering::SeqCst);
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            self.current_running.fetch_sub(1, Ordering::SeqCst);
+            Ok(ToolInvocationResult {
+                tool_call_id: request.tool_call_id.clone(),
+                tool_name: request.tool_name.clone(),
+                model_output: format!("{} done", request.tool_name),
+                host_result: None,
+                is_error: false,
+            })
+        }
+    }
+
     /// Builds one baseline controller configuration for loop tests.
     /// 为循环测试构建一份基线控制器配置。
     fn build_test_config(max_turns: usize) -> ControllerConfig {
@@ -1501,10 +1610,10 @@ mod tests {
         });
     }
 
-    /// Emits safe checkpoints after completed streaming tool results even when a later tool fails.
-    /// 即使后续工具失败，也会在已完成流式工具结果后发出安全检查点。
+    /// Avoids checkpointing a partial streaming tool batch when a later tool in that batch fails.
+    /// 当同一批次中的后续工具失败时，避免为部分完成的流式工具批次建立检查点。
     #[test]
-    fn run_user_turn_streaming_checkpoint_preserves_completed_tool_before_later_failure() {
+    fn run_user_turn_streaming_skips_partial_checkpoint_when_batch_tool_fails() {
         let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
         runtime.block_on(async {
             let adapter = MockStreamingProviderAdapter::new(vec![(
@@ -1570,20 +1679,30 @@ mod tests {
                 .await;
 
             assert!(result.is_err());
-            assert_eq!(checkpoints.len(), 1);
-            let (checkpoint, usage) = checkpoints.pop().expect("checkpoint should exist");
-            assert_eq!(usage.and_then(|usage| usage.total_tokens), Some(13));
-            assert!(checkpoint.messages.iter().any(|message| matches!(
-                &message.payload,
-                ConversationPayload::ToolResult { text, tool_call_id, .. }
-                    if text == "第一个工具已完成。"
-                        && tool_call_id.as_deref() == Some("call-1")
-            )));
-            assert!(!checkpoint.messages.iter().any(|message| matches!(
-                &message.payload,
-                ConversationPayload::ToolResult { tool_call_id, .. }
-                    if tool_call_id.as_deref() == Some("call-2")
-            )));
+            assert!(checkpoints.is_empty());
+            assert!(
+                !controller
+                    .snapshot()
+                    .messages
+                    .iter()
+                    .any(|message| matches!(
+                        &message.payload,
+                        ConversationPayload::ToolResult { text, tool_call_id, .. }
+                            if text == "第一个工具已完成。"
+                                && tool_call_id.as_deref() == Some("call-1")
+                    ))
+            );
+            assert!(
+                !controller
+                    .snapshot()
+                    .messages
+                    .iter()
+                    .any(|message| matches!(
+                        &message.payload,
+                        ConversationPayload::ToolResult { tool_call_id, .. }
+                            if tool_call_id.as_deref() == Some("call-2")
+                    ))
+            );
         });
     }
 
@@ -1856,6 +1975,80 @@ mod tests {
                 ConversationPayload::ToolResult { tool_call_id, .. }
                     if tool_call_id.as_deref() == Some("call-2")
             )));
+        });
+    }
+
+    /// Verifies one provider tool-call batch executes concurrently while preserving ordered tool-result replay.
+    /// 验证单个 Provider 工具调用批次会并发执行，同时保留有序工具结果回放。
+    #[test]
+    fn run_user_turn_streaming_executes_tool_batch_concurrently() {
+        let runtime = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        runtime.block_on(async {
+            let adapter = MockStreamingProviderAdapter::new(vec![
+                (
+                    Vec::new(),
+                    ProviderTurnResponse {
+                        assistant_text: String::new(),
+                        assistant_reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-batch-concurrent")),
+                        provider_message_state: None,
+                        tool_calls: vec![
+                            ConversationToolCall {
+                                id: String::from("tool-item-a"),
+                                tool_call_id: Some(String::from("call-a")),
+                                tool_name: String::from("slow_a"),
+                                arguments: json!({"step": "a"}),
+                            },
+                            ConversationToolCall {
+                                id: String::from("tool-item-b"),
+                                tool_call_id: Some(String::from("call-b")),
+                                tool_name: String::from("slow_b"),
+                                arguments: json!({"step": "b"}),
+                            },
+                        ],
+                        continuation: None,
+                        usage: None,
+                    },
+                ),
+                (
+                    Vec::new(),
+                    ProviderTurnResponse {
+                        assistant_text: String::from("两个工具已完成。"),
+                        assistant_reasoning: String::new(),
+                        provider_message_id: Some(String::from("resp-final")),
+                        provider_message_state: None,
+                        tool_calls: Vec::new(),
+                        continuation: None,
+                        usage: None,
+                    },
+                ),
+            ]);
+            let executor = ConcurrentToolExecutor::default();
+            let mut controller =
+                VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+
+            let result = controller
+                .run_user_turn_streaming(
+                    &adapter,
+                    &executor,
+                    &AllowAllToolPolicy,
+                    "并发调用两个工具",
+                )
+                .await
+                .expect("run concurrent tool batch");
+
+            assert_eq!(result.tool_calls_processed, 2);
+            assert_eq!(executor.max_running.load(Ordering::SeqCst), 2);
+            let tool_result_ids = controller
+                .snapshot()
+                .messages
+                .iter()
+                .filter_map(|message| match &message.payload {
+                    ConversationPayload::ToolResult { tool_call_id, .. } => tool_call_id.as_deref(),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(tool_result_ids, vec!["call-a", "call-b"]);
         });
     }
 

@@ -12,6 +12,9 @@ use crate::provider_config::{
 };
 use serde_json::Value;
 use std::path::PathBuf;
+use vulcan_codex_session_port::{
+    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
+};
 use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent,
@@ -95,6 +98,9 @@ pub struct ExecutionPreparationRequest {
     /// Session-level VMM configuration captured for the current conversation.
     /// 为当前会话捕获的会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
+    /// Codex-compatible boundary events accepted before this provider execution starts.
+    /// 本次 Provider 执行开始前已经接受的 Codex 兼容边界事件。
+    pub codex_boundary_events: Vec<CodexSessionEvent>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -104,9 +110,6 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
-    /// Internal continuation used when a delegated child task reports back.
-    /// 委派子任务回报时使用的内部续跑。
-    DelegateCompletion,
     /// Internal context-compaction summary request.
     /// 内部上下文压缩摘要请求。
     ContextCompaction,
@@ -130,7 +133,7 @@ impl ExecutionPromptPurpose {
     /// Returns whether this purpose may use normal user-turn tool affordances.
     /// 返回该用途是否可以使用普通用户回合的工具能力。
     pub const fn supports_user_turn_tooling(self) -> bool {
-        matches!(self, Self::UserTurn | Self::DelegateCompletion)
+        matches!(self, Self::UserTurn)
     }
 
     /// Returns whether this purpose should run completed-turn hooks.
@@ -143,7 +146,7 @@ impl ExecutionPromptPurpose {
     /// 返回该用途要求的最大 Provider 回合数覆盖值。
     pub const fn max_turns_override(self) -> Option<usize> {
         match self {
-            Self::UserTurn | Self::DelegateCompletion => None,
+            Self::UserTurn => None,
             Self::ContextCompaction => Some(1),
         }
     }
@@ -153,7 +156,6 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
-            Self::DelegateCompletion => "delegate-completion",
             Self::ContextCompaction => "context-compaction",
         }
     }
@@ -271,6 +273,9 @@ pub struct ExecutionPreparation {
     /// Effective session-level VMM configuration captured for this run.
     /// 为本次运行捕获的有效会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
+    /// Codex-compatible boundary events accepted before this prepared execution starts.
+    /// 本次已准备执行开始前已经接受的 Codex 兼容边界事件。
+    pub codex_boundary_events: Vec<CodexSessionEvent>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.
@@ -583,5 +588,71 @@ impl ExecutionRunReport {
     /// 返回当前报告是否成功完成。
     pub const fn is_success(&self) -> bool {
         self.error.is_none()
+    }
+
+    /// Builds the Codex-compatible final assistant event for this report when output exists.
+    /// 当输出存在时，为当前报告构建 Codex 兼容的最终助手事件。
+    pub fn codex_final_assistant_event(&self, timestamp_ms: u64) -> Option<CodexSessionEvent> {
+        let preparation = self.preparation.as_ref()?;
+        let boundary_event = preparation.codex_boundary_events.first()?;
+        let turn_id = boundary_event.turn_id.clone()?;
+        let assistant_output = self.assistant_output.as_ref()?;
+        if assistant_output.is_empty() {
+            return None;
+        }
+        Some(
+            CodexSessionEvent::new(
+                format!("{}:{turn_id}:assistant-final", self.session_id),
+                boundary_event.thread_id,
+                0,
+                CodexSessionEventKind::AgentMessage,
+                CodexEventScope::Turn,
+                CodexEventVisibility::Visible,
+                timestamp_ms,
+            )
+            .with_turn_id(turn_id)
+            .with_payload(serde_json::json!({
+                "text": assistant_output,
+                "source": "provider_final_output",
+                "provider_request_count": self.provider_request_count,
+            })),
+        )
+    }
+
+    /// Builds the Codex-compatible terminal turn event for this report when boundary data exists.
+    /// 当边界数据存在时，为当前报告构建 Codex 兼容的终态轮次事件。
+    pub fn codex_turn_completed_event(&self, timestamp_ms: u64) -> Option<CodexSessionEvent> {
+        let preparation = self.preparation.as_ref()?;
+        let boundary_event = preparation.codex_boundary_events.first()?;
+        let turn_id = boundary_event.turn_id.clone()?;
+        let sequence = preparation
+            .codex_boundary_events
+            .iter()
+            .map(|event| event.sequence)
+            .max()
+            .unwrap_or_default()
+            .saturating_add(1);
+        Some(
+            CodexSessionEvent::new(
+                format!("{}:{turn_id}:turn-completed", self.session_id),
+                boundary_event.thread_id,
+                sequence,
+                CodexSessionEventKind::TurnCompleted,
+                CodexEventScope::Turn,
+                CodexEventVisibility::Hidden,
+                timestamp_ms,
+            )
+            .with_turn_id(turn_id)
+            .with_payload(serde_json::json!({
+                "status": if self.is_success() { "completed" } else { "failed" },
+                "provider_request_count": self.provider_request_count,
+                "assistant_output_chars": self
+                    .assistant_output
+                    .as_deref()
+                    .map(|value| value.chars().count())
+                    .unwrap_or_default(),
+                "error": &self.error,
+            })),
+        )
     }
 }

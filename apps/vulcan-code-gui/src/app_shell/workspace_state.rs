@@ -325,6 +325,11 @@ impl VulcanWorkbench {
     /// Opens the dedicated left-panel workspace-history search surface and focuses the main query input.
     /// 打开左侧专用工作台历史搜索表面，并聚焦主查询输入框。
     pub(super) fn open_workspace_history_search_panel(&mut self) -> Task<Message> {
+        if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+            self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+            self.status_message = String::from("历史搜索已下线，后续将按新全文搜索方案重新接入。");
+            return Task::none();
+        }
         let should_reset_scope = !self.workspace_history_search.panel_open
             || matches!(
                 &self.workspace_history_search.scope,
@@ -454,6 +459,11 @@ impl VulcanWorkbench {
     /// Schedules one workspace-scoped BM25 history search for the left task panel.
     /// 为左侧任务面板调度一次工作区级 BM25 历史搜索。
     pub(super) fn schedule_workspace_history_search(&mut self, append: bool) -> Task<Message> {
+        if !WORKSPACE_HISTORY_SEARCH_ENABLED {
+            self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
+            self.status_message = String::from("历史搜索已下线，后续将按新全文搜索方案重新接入。");
+            return Task::none();
+        }
         if self.workspace_history_search.loading {
             return Task::none();
         }

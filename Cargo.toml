@@ -4,6 +4,7 @@ members = [
     "apps/vulcan-code-tauri",
     "crates/vulcan-agent-runtime",
     "crates/vulcan-session-core",
+    "crates/vulcan-codex-session-port",
     "crates/vulcan-main-session",
     "crates/vulcan-task-session",
     "crates/vulcan-service-api",
@@ -50,6 +51,7 @@ iced_aw = { git = "https://github.com/lingeasy/iced_aw.git", branch = "vulcan-co
 iced_fonts = { git = "https://github.com/lingeasy/iced_fonts.git", branch = "vulcan-code", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
 vulcan-agent-runtime = { path = "crates/vulcan-agent-runtime" }
 vulcan-session-core = { path = "crates/vulcan-session-core" }
+vulcan-codex-session-port = { path = "crates/vulcan-codex-session-port" }
 vulcan-main-session = { path = "crates/vulcan-main-session" }
 vulcan-task-session = { path = "crates/vulcan-task-session" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }

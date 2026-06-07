@@ -13,8 +13,8 @@ pub enum ExecutionScope {
         /// 主会话标识符。
         session_id: RootSessionId,
     },
-    /// File-backed task session execution.
-    /// 文件态子代理会话执行。
+    /// Segmented task session execution.
+    /// 分段子代理会话执行。
     TaskSession {
         /// Root main session identifier.
         /// 根主会话标识符。
@@ -133,20 +133,7 @@ impl ExecutionRuntimePolicy {
             vmm_enabled: true,
             memory_recall_enabled: true,
             memory_writeback_enabled: true,
-            search_projection_enabled: true,
-            database_projection_enabled: true,
-        }
-    }
-
-    /// Builds the main-session policy for internal delegate-result continuations.
-    /// 构建主会话内部委派结果回流使用的运行时策略。
-    pub const fn main_session_internal_continuation() -> Self {
-        Self {
-            hooks_enabled: false,
-            vmm_enabled: true,
-            memory_recall_enabled: false,
-            memory_writeback_enabled: false,
-            search_projection_enabled: true,
+            search_projection_enabled: false,
             database_projection_enabled: true,
         }
     }

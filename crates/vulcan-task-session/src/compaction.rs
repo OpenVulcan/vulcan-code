@@ -8,11 +8,11 @@ use vulcan_session_core::{
 /// 将一次压缩结果应用到 TaskSession 上下文文档后产出的结果。
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskSessionCompactionApplication {
-    /// Compacted API-facing context document ready to be saved as context/current.json.
-    /// 准备保存为 context/current.json 的压缩后 API 实际上下文文档。
+    /// Compacted API-facing context document ready to be saved as the persisted state document.
+    /// 准备保存为持久状态文档的压缩后 API 实际上下文文档。
     pub context: SessionContextDocument,
-    /// File-backed checkpoint describing the applied compaction boundary.
-    /// 描述已应用压缩边界的文件态检查点。
+    /// Persisted checkpoint describing the applied compaction boundary.
+    /// 描述已应用压缩边界的持久检查点。
     pub checkpoint: SessionCompactionCheckpoint,
 }
 

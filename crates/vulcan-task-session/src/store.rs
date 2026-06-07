@@ -3,8 +3,8 @@ use vulcan_session_core::{
     ParentSessionRef, SessionCompactionCheckpoint, SessionNodeStore, SessionStoreError,
 };
 
-/// File-backed storage contract for task sessions.
-/// 文件态子代理会话存储契约。
+/// Segmented storage contract for task sessions.
+/// 分段子代理会话存储契约。
 pub trait TaskSessionStore: SessionNodeStore {
     /// Creates a task-session directory and writes its metadata.
     /// 创建子代理会话目录并写入元数据。

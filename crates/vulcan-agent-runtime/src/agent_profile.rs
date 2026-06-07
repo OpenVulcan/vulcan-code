@@ -677,7 +677,7 @@ toolPolicy: analysis-safe
 runtimePolicy:
   hooksEnabled: true
   memoryRecallEnabled: true
-  search_projection_enabled: true
+  databaseProjectionEnabled: true
 ---
 
 Review code carefully.
@@ -700,7 +700,11 @@ Review code carefully.
         assert_eq!(profile.tool_policy.as_deref(), Some("analysis-safe"));
         assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
         assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
-        assert_eq!(profile.runtime_policy.search_projection_enabled, Some(true));
+        assert_eq!(profile.runtime_policy.search_projection_enabled, None);
+        assert_eq!(
+            profile.runtime_policy.database_projection_enabled,
+            Some(true)
+        );
     }
 
     /// Verifies the shared form helpers preserve list and runtime-policy semantics.

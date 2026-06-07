@@ -65,8 +65,8 @@ const COMPLETION_DISPATCH_TIMEOUT_MS: u64 = 120_000;
 /// 单个逻辑会话回合的完成状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConversationTurnCompletionStatus {
-    /// The model response finished, but child subagents or delegate follow-ups still belong to the same user turn.
-    /// 模型响应已经结束，但子代理或委派回流仍属于同一个用户回合。
+    /// The model response finished, but child subagents still belong to the same user turn.
+    /// 模型响应已经结束，但子代理仍属于同一个用户回合。
     AwaitingSubagents,
     /// The full logical user turn is complete and can be submitted to completed-turn consumers.
     /// 完整逻辑用户回合已经结束，可以提交给完成回合消费方。
@@ -347,42 +347,6 @@ impl ConversationHookRuntime {
         ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
     }
 
-    /// Prepares an internal continuation without opening a user logical turn or dispatching precheck hooks.
-    /// 准备一条内部续跑请求，不打开用户逻辑回合，也不调度 precheck hook。
-    pub fn prepare_internal_prompt_continuation(
-        &mut self,
-        session_id: SessionId,
-        prompt_entry_id: &str,
-        project_id: Option<String>,
-        workspace_path: String,
-        source: PendingSessionPromptSource,
-        system_prompt_hook_phase: SystemPromptHookPhase,
-        prompt: &str,
-        conversation_state: &SessionConversationState,
-    ) -> ConversationPrecheckRequest {
-        self.next_turn_sequence = self.next_turn_sequence.saturating_add(1);
-        let turn_id = format!(
-            "session-{session_id}-internal-continuation-{}",
-            self.next_turn_sequence
-        );
-        let event_kind = pending_prompt_source_event_kind(source);
-        let payload = json!({
-            "session_id": session_id.to_string(),
-            "project_id": project_id,
-            "workspace_path": workspace_path,
-            "turn_id": turn_id,
-            "event_kind": event_kind,
-            "internal_continuation": true,
-            "prompt_entry_id": prompt_entry_id,
-            "system_prompt_hook_phase": system_prompt_hook_phase.as_str(),
-            "user_content": prompt,
-            "visible_history_count": visible_history_count(conversation_state),
-            "message_count": conversation_state.messages.len(),
-            "record_count": conversation_state.records.len(),
-        });
-        ConversationPrecheckRequest::new(self.dispatcher.clone(), session_id, payload, turn_id)
-    }
-
     /// Records a queued user prompt as timeline-only input without running precheck.
     /// 将已排队用户提示记录为仅 timeline 输入，不运行 precheck。
     pub fn record_queued_user_prompt(
@@ -587,7 +551,6 @@ impl ConversationHookRuntime {
             conversation_state,
             ConversationTurnCompletionStatus::Completed,
             0,
-            0,
         )
     }
 
@@ -602,7 +565,6 @@ impl ConversationHookRuntime {
         conversation_state: &SessionConversationState,
         completion_status: ConversationTurnCompletionStatus,
         pending_subagent_count: usize,
-        pending_delegate_completion_count: usize,
     ) -> (String, Vec<VmmWritebackHookEffect>) {
         let (completed_turn_id, request) = self.prepare_turn_completion_dispatch_with_status(
             session_id,
@@ -612,7 +574,6 @@ impl ConversationHookRuntime {
             conversation_state,
             completion_status,
             pending_subagent_count,
-            pending_delegate_completion_count,
         );
         let report = request.run_blocking();
         (
@@ -642,7 +603,6 @@ impl ConversationHookRuntime {
             conversation_state,
             ConversationTurnCompletionStatus::Completed,
             0,
-            0,
         )
     }
 
@@ -657,7 +617,6 @@ impl ConversationHookRuntime {
         conversation_state: &SessionConversationState,
         completion_status: ConversationTurnCompletionStatus,
         pending_subagent_count: usize,
-        pending_delegate_completion_count: usize,
     ) -> (String, ConversationCompletionRequest) {
         let turn = if completion_status.is_final() {
             self.active_turns
@@ -683,7 +642,6 @@ impl ConversationHookRuntime {
             "completion_status": completion_status.as_str(),
             "turn_complete": turn_complete,
             "pending_subagent_count": pending_subagent_count,
-            "pending_delegate_completion_count": pending_delegate_completion_count,
             "message_count": conversation_state.messages.len(),
             "record_count": conversation_state.records.len(),
             "turn_messages": &conversation_state.messages,
@@ -1269,7 +1227,7 @@ fn pending_prompt_source_event_kind(source: PendingSessionPromptSource) -> &'sta
     match source {
         PendingSessionPromptSource::UserFollowup => "user_followup",
         PendingSessionPromptSource::UserInterrupt => "user_interrupt",
-        PendingSessionPromptSource::DelegateCompletion => "delegate_completion",
+        PendingSessionPromptSource::SubagentCallback => "subagent_callback",
     }
 }
 
@@ -1368,30 +1326,6 @@ mod tests {
         assert_eq!(turn.timeline[0].content, "supplement");
     }
 
-    /// Verifies internal delegate continuations never open a user hook turn.
-    /// 验证内部委派续跑不会打开用户 hook 回合。
-    #[test]
-    fn internal_continuation_does_not_open_user_turn() {
-        let mut runtime = ConversationHookRuntime::new();
-        let session_id = SessionId::from_u128(142);
-        let request = runtime.prepare_internal_prompt_continuation(
-            session_id,
-            "entry-1",
-            Some(String::from("project")),
-            String::from("D:/workspace"),
-            PendingSessionPromptSource::DelegateCompletion,
-            SystemPromptHookPhase::SubsequentSession,
-            "delegate finished",
-            &SessionConversationState::default(),
-        );
-
-        assert!(!runtime.active_turns.contains_key(&session_id));
-        assert!(request.turn_id().contains("internal-continuation"));
-        let outcome = request.skip();
-        assert!(!runtime.active_turns.contains_key(&session_id));
-        assert_eq!(outcome.session_id, session_id);
-    }
-
     /// Verifies orphan tool events do not synthesize empty user turns.
     /// 验证孤立工具事件不会合成空用户回合。
     #[test]
@@ -1476,7 +1410,6 @@ mod tests {
                 &state,
                 ConversationTurnCompletionStatus::AwaitingSubagents,
                 2,
-                1,
             );
 
         assert!(runtime.has_active_turn(session_id));

@@ -2083,6 +2083,7 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 6px 12px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -4113,8 +4114,8 @@ button {
   grid-column: 1;
   grid-row: 3;
   min-width: 0;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   gap: 16px;
   padding: 0 18px;
@@ -4131,11 +4132,49 @@ button {
   white-space: nowrap;
 }
 
+.statusbar > :first-child {
+  justify-self: start;
+}
+
+.statusbar-runtime-activities {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  justify-self: center;
+}
+
+.statusbar-runtime-activity {
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--secondary);
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.statusbar-runtime-activity svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+.statusbar-runtime-activity.subagent svg {
+  color: color-mix(in oklch, var(--primary) 78%, var(--foreground));
+}
+
 .repository-link {
   min-width: 0;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  justify-self: end;
   gap: 6px;
   color: var(--muted-foreground);
   text-decoration: none;

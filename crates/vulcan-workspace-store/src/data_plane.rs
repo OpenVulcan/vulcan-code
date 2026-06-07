@@ -27,11 +27,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 7;
-
-/// One-shot metadata key that marks the non-compatible session reset required by the protocol refactor.
-/// 标记协议重构所需一次性不兼容会话清理已经完成的元数据键。
-const SESSION_PROTOCOL_RESET_MARKER_KEY: &str = "session-protocol-v4-reset";
+pub const APP_SCHEMA_VERSION: i64 = 8;
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -269,54 +265,6 @@ async fn ensure_application_schema_migrations(
     client: &ControllerClient,
     sqlite_binding_id: &str,
 ) -> Result<(), String> {
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN ui_state_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN provider_usage_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN conversation_state_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN continuation_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN context_injection_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN vmm_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN vmm_writeback_outbox_json TEXT;",
-    )
-    .await?;
-    ensure_optional_runtime_state_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_runtime_state ADD COLUMN vmm_profile_sync_json TEXT;",
-    )
-    .await?;
     ensure_optional_session_compaction_column(
         client,
         sqlite_binding_id,
@@ -327,12 +275,6 @@ async fn ensure_application_schema_migrations(
         client,
         sqlite_binding_id,
         "ALTER TABLE session_compactions ADD COLUMN retained_tail_start_turn_index INTEGER;",
-    )
-    .await?;
-    ensure_optional_session_message_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_messages ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0;",
     )
     .await?;
     ensure_optional_session_column(
@@ -359,75 +301,7 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE projects ADD COLUMN icon_key TEXT;",
     )
     .await?;
-    ensure_session_message_chunk_table(client, sqlite_binding_id).await?;
-    ensure_workspace_history_search_state_table(client, sqlite_binding_id).await?;
-    ensure_session_message_turn_index(client, sqlite_binding_id).await?;
-    ensure_session_event_turn_index_table(client, sqlite_binding_id).await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN event_id TEXT;",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN turn_index INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN ordinal INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN role TEXT NOT NULL DEFAULT 'assistant';",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN created_at TEXT NOT NULL DEFAULT '';",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN content_hash TEXT NOT NULL DEFAULT '';",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN index_version INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN event_seq INTEGER NOT NULL DEFAULT 0;",
-    )
-    .await?;
-    ensure_optional_workspace_history_search_doc_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE workspace_history_search_docs ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
-    )
-    .await?;
-    ensure_protocol_reset_applied(client, sqlite_binding_id).await
-}
-
-/// Applies one idempotent session-message column migration and ignores duplicate-column failures.
-/// 执行一条幂等会话消息列迁移，并忽略重复列失败。
-async fn ensure_optional_session_message_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+    Ok(())
 }
 
 /// Applies one idempotent session column migration and ignores duplicate-column failures.
@@ -437,7 +311,7 @@ async fn ensure_optional_session_column(
     sqlite_binding_id: &str,
     statement: &str,
 ) -> Result<(), String> {
-    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
 }
 
 /// Applies one idempotent project column migration and ignores duplicate-column failures.
@@ -447,7 +321,7 @@ async fn ensure_optional_project_column(
     sqlite_binding_id: &str,
     statement: &str,
 ) -> Result<(), String> {
-    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
 }
 
 /// Executes one idempotent session-compaction column migration and ignores duplicate-column failures.
@@ -457,107 +331,12 @@ async fn ensure_optional_session_compaction_column(
     sqlite_binding_id: &str,
     statement: &str,
 ) -> Result<(), String> {
-    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
+    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
 }
 
-/// Applies one idempotent workspace-history search document column migration and ignores duplicate-column failures.
-/// 执行一条幂等工作台历史搜索文档列迁移，并忽略重复列失败。
-async fn ensure_optional_workspace_history_search_doc_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_runtime_state_column(client, sqlite_binding_id, statement).await
-}
-
-/// Ensures the additive session-message chunk table exists for large transcript bodies.
-/// 确保用于大型转录正文的追加式会话消息分片表已经存在。
-async fn ensure_session_message_chunk_table(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            session_message_chunk_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("执行会话消息分片结构迁移失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Ensures the additive workspace-history search state table exists for controller-managed FTS ownership tracking.
-/// 确保控制器托管 FTS 归属跟踪使用的工作台历史搜索状态表已经存在。
-async fn ensure_workspace_history_search_state_table(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            workspace_history_search_state_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("执行工作台历史搜索状态结构迁移失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Ensures the turn-index lookup index exists for turn-level transcript pagination.
-/// 确保用于轮次级转录分页的 turn-index 查询索引已经存在。
-async fn ensure_session_message_turn_index(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            String::from(session_message_turn_index_statement()),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("执行会话消息轮次索引迁移失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Ensures the canonical session turn-index table exists for event-store hydration, paging, and context reconstruction.
-/// 确保规范会话 turn 索引表已经存在，以支持事件流水合、分页与上下文重建。
-async fn ensure_session_event_turn_index_table(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            session_event_turn_index_schema_script(),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("执行会话事件 turn 索引结构迁移失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Returns the additive turn-index lookup statement run after the column is guaranteed to exist.
-/// 返回在确认列存在后执行的追加式轮次索引语句。
-fn session_message_turn_index_statement() -> &'static str {
-    r#"
-CREATE INDEX IF NOT EXISTS idx_session_messages_session_turn_ordinal
-ON session_messages(session_id, turn_index, ordinal);
-"#
-}
-
-/// Applies one idempotent runtime-state column migration and ignores duplicate-column failures.
-/// 执行一条幂等运行时状态列迁移，并忽略重复列失败。
-async fn ensure_optional_runtime_state_column(
+/// Applies one idempotent optional column migration and ignores duplicate-column failures.
+/// 执行一条幂等可选列迁移，并忽略重复列失败。
+async fn ensure_optional_schema_column(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -580,77 +359,6 @@ async fn ensure_optional_runtime_state_column(
             }
         }
     }
-}
-
-/// Applies the one-shot non-compatible session reset required by the protocol refactor while preserving projects.
-/// 在保留项目数据的前提下，执行协议重构所需的一次性不兼容会话清理。
-async fn ensure_protocol_reset_applied(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-) -> Result<(), String> {
-    if query_metadata_flag(client, sqlite_binding_id, SESSION_PROTOCOL_RESET_MARKER_KEY).await? {
-        return Ok(());
-    }
-
-    client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            format!(
-                r#"
-DELETE FROM session_runtime_state;
-DELETE FROM session_compactions;
-DELETE FROM session_message_chunks;
-DELETE FROM session_messages;
-DELETE FROM sessions;
-INSERT INTO app_metadata (key, value)
-VALUES ('{marker_key}', '1')
-ON CONFLICT(key) DO UPDATE SET value = excluded.value;
-"#,
-                marker_key = SESSION_PROTOCOL_RESET_MARKER_KEY
-            ),
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("执行协议升级会话清理失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Queries one metadata-flag key and returns whether it has already been written to the app metadata table.
-/// 查询单个元数据标记键，并返回它是否已经写入应用元数据表。
-async fn query_metadata_flag(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    key: &str,
-) -> Result<bool, String> {
-    #[derive(serde::Deserialize)]
-    /// Typed metadata row used by the reset-marker lookup query.
-    /// 供重置标记查询使用的带类型元数据行。
-    struct MetadataRow {
-        /// Persisted metadata value.
-        /// 持久化元数据值。
-        value: String,
-    }
-
-    let result = client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            sqlite_binding_id,
-            "SELECT value FROM app_metadata WHERE key = ?1 LIMIT 1;",
-            vec![vldb_controller_client::ControllerSqliteValue::String(
-                key.to_string(),
-            )],
-        )
-        .await
-        .map_err(|error| format!("查询协议升级元数据标记失败：{error}"))?;
-    let rows = serde_json::from_str::<Vec<MetadataRow>>(&result.json_data)
-        .map_err(|error| format!("解析协议升级元数据标记失败：{error}"))?;
-
-    Ok(rows
-        .first()
-        .map(|row| row.value.trim() == "1")
-        .unwrap_or(false))
 }
 
 /// Returns one best-effort Unix epoch timestamp in milliseconds for controller client naming.
@@ -737,27 +445,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS session_messages (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    ordinal INTEGER NOT NULL,
-    role TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    visible INTEGER NOT NULL DEFAULT 1,
-    turn_index INTEGER NOT NULL DEFAULT 0,
-    content TEXT NOT NULL,
-    meta_json TEXT,
-    created_at TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_session_messages_session_ordinal
-ON session_messages(session_id, ordinal);
-
-{session_message_chunk_schema}
-{session_event_turn_index_schema}
-
-{workspace_history_search_state_schema}
-
 CREATE TABLE IF NOT EXISTS session_compactions (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -767,24 +454,6 @@ CREATE TABLE IF NOT EXISTS session_compactions (
     retained_tail_start_turn_index INTEGER,
     summary_message_id TEXT,
     created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_runtime_state (
-    session_id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE,
-    active_agent_id TEXT,
-    active_provider_id TEXT,
-    active_model_id TEXT,
-    last_compaction_id TEXT,
-    context_start_message_id TEXT,
-    ui_state_json TEXT,
-    provider_usage_json TEXT,
-    conversation_state_json TEXT,
-    continuation_json TEXT,
-    context_injection_json TEXT,
-    vmm_json TEXT,
-    vmm_writeback_outbox_json TEXT,
-    vmm_profile_sync_json TEXT,
-    updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_sort
@@ -797,111 +466,44 @@ CREATE INDEX IF NOT EXISTS idx_session_compactions_session
 ON session_compactions(session_id, created_at DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
-        session_message_chunk_schema = session_message_chunk_schema_script(),
-        session_event_turn_index_schema = session_event_turn_index_schema_script(),
-        workspace_history_search_state_schema = workspace_history_search_state_schema_script()
     )
-}
-
-/// Builds the additive schema objects used to split large transcript message bodies.
-/// 构建用于拆分大型转录消息正文的追加式结构对象。
-fn session_message_chunk_schema_script() -> String {
-    r#"
-CREATE TABLE IF NOT EXISTS session_message_chunks (
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    message_id TEXT NOT NULL REFERENCES session_messages(id) ON DELETE CASCADE,
-    chunk_index INTEGER NOT NULL,
-    content TEXT NOT NULL,
-    PRIMARY KEY(message_id, chunk_index)
-);
-
-CREATE INDEX IF NOT EXISTS idx_session_message_chunks_session_message
-ON session_message_chunks(session_id, message_id, chunk_index);
-"#
-    .to_string()
-}
-
-/// Builds the additive state table used to track controller-managed workspace-history FTS ownership.
-/// 构建用于跟踪控制器托管工作台历史 FTS 归属关系的追加式状态表。
-fn workspace_history_search_state_schema_script() -> String {
-    r#"
-CREATE TABLE IF NOT EXISTS workspace_history_search_docs (
-    message_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    event_id TEXT,
-    turn_index INTEGER NOT NULL DEFAULT 0,
-    ordinal INTEGER NOT NULL DEFAULT 0,
-    role TEXT NOT NULL DEFAULT 'assistant',
-    created_at TEXT NOT NULL DEFAULT '',
-    content_hash TEXT NOT NULL DEFAULT '',
-    index_version INTEGER NOT NULL DEFAULT 0,
-    event_seq INTEGER NOT NULL DEFAULT 0,
-    updated_at TEXT NOT NULL DEFAULT ''
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_history_search_docs_session
-ON workspace_history_search_docs(session_id, project_id);
-"#
-    .to_string()
-}
-
-/// Builds the canonical session turn-index schema mirrored from the file-backed event store.
-/// 构建与文件化事件存储镜像同步的规范会话 turn 索引结构。
-fn session_event_turn_index_schema_script() -> String {
-    r#"
-CREATE TABLE IF NOT EXISTS session_turn_index (
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    turn_id TEXT NOT NULL,
-    turn_index INTEGER NOT NULL,
-    start_seq INTEGER NOT NULL,
-    end_seq INTEGER NOT NULL,
-    turn_state TEXT NOT NULL,
-    summary_message_id TEXT,
-    PRIMARY KEY(session_id, turn_index)
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_session_turn_index_session_turn_id
-ON session_turn_index(session_id, turn_id);
-
-CREATE INDEX IF NOT EXISTS idx_session_turn_index_session_seq
-ON session_turn_index(session_id, start_seq, end_seq);
-"#
-    .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Verifies that the base schema does not create turn-index objects before additive migrations run.
-    /// 验证基础结构不会在追加迁移执行前创建依赖 turn_index 的对象。
+    /// Verifies that the base schema no longer creates legacy SQLite transcript tables.
+    /// 验证基础结构不再创建旧版 SQLite 转录表。
     #[test]
-    fn base_schema_defers_turn_index_lookup_index_to_migration() {
+    fn base_schema_excludes_legacy_session_message_tables() {
         let schema = build_application_schema_script();
 
-        assert!(schema.contains("turn_index INTEGER NOT NULL DEFAULT 0"));
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_messages"));
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_message_chunks"));
+        assert!(!schema.contains("idx_session_messages_session_ordinal"));
         assert!(!schema.contains("idx_session_messages_session_turn_ordinal"));
     }
 
-    /// Verifies that the turn-index migration creates the lookup index after the column migration.
-    /// 验证轮次索引迁移会在列迁移之后创建查询索引。
+    /// Verifies that the base schema no longer includes the legacy global workspace-history search table.
+    /// 验证基础结构不再包含旧全局工作台历史搜索表。
     #[test]
-    fn turn_index_migration_defines_lookup_index() {
-        let statement = session_message_turn_index_statement();
-
-        assert!(statement.contains("idx_session_messages_session_turn_ordinal"));
-        assert!(statement.contains("turn_index"));
-    }
-
-    /// Verifies that the base schema includes the workspace-history search ownership state table.
-    /// 验证基础结构已经包含工作台历史搜索归属状态表定义。
-    #[test]
-    fn base_schema_includes_workspace_history_search_state_table() {
+    fn base_schema_excludes_legacy_workspace_history_search_state_table() {
         let schema = build_application_schema_script();
 
-        assert!(schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
-        assert!(schema.contains("idx_workspace_history_search_docs_session"));
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
+        assert!(!schema.contains("idx_workspace_history_search_docs_session"));
+    }
+
+    /// Verifies that runtime checkpoints are no longer duplicated into the application SQLite schema.
+    /// 验证运行态检查点不再被重复写入应用 SQLite 结构。
+    #[test]
+    fn base_schema_excludes_session_runtime_state_table() {
+        let schema = build_application_schema_script();
+
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_runtime_state"));
+        assert!(!schema.contains("conversation_state_json"));
+        assert!(!schema.contains("vmm_writeback_outbox_json"));
     }
 
     /// Verifies that each bootstrap receives one distinct SQLite binding id while preserving the stable diagnostic tag prefix.

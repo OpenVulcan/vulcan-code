@@ -14,46 +14,43 @@ use crate::model::{
     SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
     VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
-use crate::provider_usage::{parse_provider_usage_from_json, serialize_provider_usage_to_json};
-use crate::tooling::change_set::compact_change_set_host_result;
-use serde::{Deserialize, Serialize};
+use crate::provider_usage::parse_provider_usage_from_json;
+use serde::Deserialize;
 use serde_json::Value;
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use vldb_controller_client::{
-    ControllerSqliteSearchFtsHit, ControllerSqliteTokenizerMode, ControllerSqliteValue,
+use vldb_controller_client::ControllerSqliteValue;
+use vulcan_codex_session_port::{
+    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
+    CodexSessionStateStore, CodexSessionStore, CodexStorageWrite,
 };
 use vulcan_context_injection::ContextInjectionState;
+use vulcan_session_core::SessionNodeId;
 use vulcan_vmm::VmmConfigLayer;
 
-mod event_store;
 mod history_search;
 mod persistence;
+mod segmented_session_store;
 mod session_load;
 
-use self::event_store::{
-    SessionEventStorePersistResult, clear_all_session_event_stores,
-    load_latest_session_event_store_context_snapshot, load_session_event_store,
-    load_session_event_store_compactions, load_session_event_store_context_current,
-    load_session_event_store_runtime_state, persist_session_event_store,
-    remove_session_event_store,
-};
-pub use self::event_store::{
-    persist_session_event_store_context_current as persist_session_context_current_document,
-    session_event_store_directory,
-    snapshot_session_event_store_context_before_user_prompt as snapshot_session_context_before_user_prompt,
+pub use self::segmented_session_store::find_segmented_session_directory_for_task_store;
+use self::segmented_session_store::{
+    SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
+    SegmentedSessionEventKind, append_segmented_codex_boundary_events,
+    append_segmented_session_events, clear_all_segmented_session_roots,
+    create_segmented_session_in_location, find_segmented_session_directory,
+    list_segmented_session_catalog, load_codex_thread_state, read_segmented_session_event_window,
+    read_state, replace_codex_thread_state, state_document_from_runtime_state, write_state,
 };
 pub use history_search::search_workspace_history;
 pub use persistence::{
-    archive_project_with_sessions, archive_single_session, maintain_legacy_session_storage,
-    permanently_delete_archived_project, permanently_delete_archived_session,
-    persist_collapsed_task_project_ids, persist_new_project, persist_project_order_update,
-    persist_project_pinned_and_order_update, persist_single_session_runtime_state_update,
-    persist_single_session_update, persist_workspace_snapshot, rename_project,
-    restore_project_with_sessions, restore_single_session, toggle_project_pinned,
+    archive_project_with_sessions, archive_single_session, permanently_delete_archived_project,
+    permanently_delete_archived_session, persist_collapsed_task_project_ids, persist_new_project,
+    persist_project_order_update, persist_project_pinned_and_order_update,
+    persist_single_session_runtime_state_update, persist_single_session_update,
+    persist_workspace_snapshot, rename_project, restore_project_with_sessions,
+    restore_single_session, toggle_project_pinned,
 };
 pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
 
@@ -73,16 +70,6 @@ impl WorkspaceSnapshotPersistOutcome {
         self.warnings.is_empty()
     }
 }
-
-#[cfg(test)]
-use self::persistence::{
-    assign_session_message_turn_indexes, build_session_runtime_state_batch_row,
-    legacy_inline_message_chunk_count, legacy_inline_message_chunk_migration_script,
-    legacy_oversized_message_candidate_query, prepare_session_message_body_for_storage,
-    push_session_message_rows_for_session, push_session_runtime_state_batch_rows,
-    session_message_chunk_upsert_statement, session_message_is_workspace_history_search_indexable,
-    session_message_upsert_statement,
-};
 
 /// Target request frame budget used before protobuf/gRPC overhead approaches tonic's default limit.
 /// 在 protobuf/gRPC 结构开销接近 tonic 默认限制前使用的请求帧目标预算。
@@ -114,57 +101,12 @@ pub const SESSION_HISTORY_SEARCH_RESULT_LIMIT: usize = 20;
 /// Maximum characters retained from one user-provided history-search query.
 /// 单条用户提供的历史搜索词允许保留的最大字符数。
 pub const SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS: usize = 512;
-/// Stable global index name used by controller-managed workspace-history FTS search.
-/// 控制器托管工作台历史 FTS 搜索使用的稳定全局索引名。
-const WORKSPACE_HISTORY_SEARCH_GLOBAL_INDEX_NAME: &str = "workspace_history_search_all";
-/// Stable project-index prefix used by controller-managed workspace-history FTS search.
-/// 控制器托管工作台历史 FTS 搜索使用的稳定项目索引前缀。
-const WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX: &str = "workspace_history_search_project_";
-/// SQLite name filter used to enumerate controller-managed workspace-history FTS virtual tables.
-/// 用于枚举控制器托管工作台历史 FTS 虚表的 SQLite 名称过滤模式。
-const WORKSPACE_HISTORY_SEARCH_INDEX_NAME_LIKE_PATTERN: &str = "workspace_history_search_%";
-/// Search projection schema version used to invalidate stale unchanged rows.
-/// 用于使旧版未变化行失效的搜索投影结构版本。
-const WORKSPACE_HISTORY_SEARCH_INDEX_VERSION: i64 = 1;
 /// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
 /// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
 const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
-/// Minimum message-row cap retained for legacy data whose turn index has not been rebuilt yet.
-/// 为尚未重建轮次索引的旧数据保留的最小消息行上限。
-const SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT: usize = 100;
-/// Maximum persisted metadata JSON size before large host payload fields are stripped.
-/// 触发剥离大型宿主载荷字段前允许持久化的最大 metadata JSON 大小。
-const SESSION_MESSAGE_METADATA_BUDGET_BYTES: usize = 64 * 1024;
-/// Maximum compact metadata preview length retained for oversized argument-like fields.
-/// 超大参数类字段被压缩后保留的最大预览长度。
-const SESSION_MESSAGE_METADATA_PREVIEW_CHARS: usize = 1024;
-/// Maximum body size kept inline in `session_messages.content` before chunk storage is used.
-/// 在启用分片存储前允许内联保留在 `session_messages.content` 中的最大正文大小。
-const SESSION_MESSAGE_INLINE_CONTENT_BUDGET_BYTES: usize = 48 * 1024;
-/// Maximum raw text bytes stored in one session-message chunk row.
-/// 单条会话消息分片行允许保存的最大原始文本字节数。
-const SESSION_MESSAGE_CHUNK_CONTENT_BYTES: usize = 128 * 1024;
-/// Maximum legacy oversized inline messages migrated during one maintenance pass.
-/// 单次维护最多迁移的旧版超大内联消息数量。
-const SESSION_LEGACY_INLINE_MIGRATION_MAX_MESSAGES_PER_PASS: usize = 32;
-/// Number of legacy inline-message candidates fetched per lightweight detection query.
-/// 单次轻量检测查询最多获取的旧版内联消息候选数量。
-const SESSION_LEGACY_INLINE_MIGRATION_CANDIDATE_LIMIT: usize = 4;
-/// Character chunk size used by SQLite-side legacy migration to stay safe for UTF-8 text.
-/// SQLite 侧旧数据迁移使用的字符分片大小，用于兼容 UTF-8 文本安全边界。
-const SESSION_LEGACY_INLINE_MIGRATION_CHUNK_CHARS: usize = SESSION_MESSAGE_CHUNK_CONTENT_BYTES / 4;
-/// Maximum chunk rows generated for one legacy message by the fixed-width SQLite number CTE.
-/// 固定宽度 SQLite 数字 CTE 为单条旧消息最多生成的分片行数。
-const SESSION_LEGACY_INLINE_MIGRATION_MAX_CHUNKS_PER_MESSAGE: usize = 100_000;
-/// Maximum chunk rows fetched in one query response while rebuilding one oversized message.
-/// 重建单条超大消息时单次查询响应最多拉取的分片行数。
-const SESSION_MESSAGE_CHUNK_QUERY_LIMIT: usize = 8;
-/// Maximum preview characters retained in the inline message row for a chunked body.
-/// 分片正文在内联消息行中保留的最大预览字符数。
-const SESSION_MESSAGE_CHUNK_PREVIEW_CHARS: usize = 2048;
-/// Maximum characters returned for one lightweight history-search preview.
-/// 单条轻量历史搜索预览允许返回的最大字符数。
-const SESSION_HISTORY_SEARCH_PREVIEW_CHARS: usize = 240;
+/// Minimum message-row floor used when one segmented turn window contains dense rows.
+/// 当单个分段轮次窗口包含密集行时使用的最小消息行下限。
+const SESSION_TRANSCRIPT_MIN_ROW_LIMIT: usize = 100;
 /// App metadata key used to persist collapsed task-project identifiers.
 /// 用于持久化已折叠任务项目标识的应用元数据键。
 const COLLAPSED_TASK_PROJECTS_METADATA_KEY: &str = "workspace.collapsed_task_projects";
@@ -265,21 +207,21 @@ pub struct SessionHistoryPage {
     pub has_more_history: bool,
 }
 
-/// Workspace-scoped BM25 search results returned for one left-panel history query.
-/// 左侧面板历史查询返回的工作区级 BM25 搜索结果。
+/// Workspace-scoped history-search results returned for one left-panel query.
+/// 左侧面板历史查询返回的工作区级历史搜索结果。
 #[derive(Debug, Clone)]
 pub struct WorkspaceHistorySearchPage {
     /// Normalized user query used to produce the result page.
     /// 生成该结果页时使用的规范化用户查询。
     pub query: String,
-    /// Search hits ordered by BM25 score and recency.
-    /// 按 BM25 分数与时间新旧排序的搜索命中集合。
+    /// Search hits returned by the active history-search implementation.
+    /// 当前历史搜索实现返回的命中集合。
     pub hits: Vec<WorkspaceHistorySearchHit>,
     /// Whether the result count reached the requested limit.
     /// 结果数量是否已经达到请求上限。
     pub limit_reached: bool,
-    /// Total match count reported by SQLite FTS for the current query and scope.
-    /// SQLite FTS 针对当前查询与范围返回的总命中数量。
+    /// Total match count reported for the current query and scope.
+    /// 当前查询与范围返回的总命中数量。
     pub total_hits: usize,
     /// Next result offset that should be requested when the user asks to load more.
     /// 用户请求继续加载时应使用的下一页偏移量。
@@ -289,8 +231,8 @@ pub struct WorkspaceHistorySearchPage {
     pub has_more: bool,
 }
 
-/// One workspace-scoped BM25 history-search hit.
-/// 单条工作区级 BM25 历史搜索命中。
+/// One workspace-scoped history-search hit.
+/// 单条工作区级历史搜索命中。
 #[derive(Debug, Clone)]
 pub struct WorkspaceHistorySearchHit {
     /// Human-readable project name rendered in the left search panel.
@@ -314,17 +256,17 @@ pub struct WorkspaceHistorySearchHit {
     /// High-level message kind reconstructed from the persisted role.
     /// 根据持久化角色恢复出的高层消息类型。
     pub message_kind: SessionMessageKind,
-    /// Compact preview fragment extracted by the FTS snippet helper.
-    /// 由 FTS snippet 辅助函数提取出的紧凑预览片段。
+    /// Compact preview fragment for the matched content.
+    /// 命中内容的紧凑预览片段。
     pub preview: String,
-    /// Raw preview markup returned by the FTS snippet helper, including optional `<mark>` tags.
-    /// FTS snippet 辅助函数返回的原始预览标记片段，可能包含 `<mark>` 标签。
+    /// Raw preview markup that the UI may render with highlights.
+    /// UI 可用于渲染高亮的原始预览标记。
     pub preview_markup: String,
     /// Created-at timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本形式存储的创建时间。
     pub created_at: String,
-    /// Raw BM25 score returned by SQLite for tie-break visibility.
-    /// SQLite 返回的原始 BM25 分值，用于并列诊断。
+    /// Implementation-specific score used for tie-break visibility.
+    /// 用于并列诊断的实现相关分值。
     pub score: f64,
 }
 
@@ -341,39 +283,6 @@ pub struct SessionToolDetailPage {
     /// Whether more older tool-detail rows probably still exist in this turn.
     /// 当前轮次内是否大概率仍存在更多更早的工具明细行。
     pub has_more_detail: bool,
-}
-
-/// Result summary produced after one hydrated session receives legacy-storage maintenance.
-/// 单个已水合会话完成旧存储维护后产生的结果摘要。
-#[derive(Debug, Clone)]
-pub struct SessionMaintenanceReport {
-    /// Session identifier that was maintained.
-    /// 已执行维护的会话标识。
-    pub session_id: SessionId,
-    /// Number of currently loaded transcript messages upserted through the new storage path.
-    /// 通过新存储路径重新 upsert 的当前已加载转录消息数量。
-    pub upserted_message_count: usize,
-    /// Whether runtime-state persistence stayed internally consistent during the maintenance pass.
-    /// 本次维护过程中运行时状态持久化是否保持了内部一致性。
-    pub runtime_state_persistence_ok: bool,
-    /// Legacy oversized inline-message migration summary for this maintenance pass.
-    /// 本次维护中旧版超大内联消息迁移的结果摘要。
-    pub legacy_chunk_migration: SessionLegacyChunkMigrationReport,
-}
-
-/// Result summary produced by one legacy oversized inline-message migration pass.
-/// 单次旧版超大内联消息迁移产生的结果摘要。
-#[derive(Debug, Clone, Default)]
-pub struct SessionLegacyChunkMigrationReport {
-    /// Session identifier whose legacy messages were inspected.
-    /// 被检查旧消息的会话标识。
-    pub session_id: SessionId,
-    /// Number of oversized inline messages migrated into chunk rows.
-    /// 已迁移到分片行的超大内联消息数量。
-    pub migrated_message_count: usize,
-    /// Number of chunk rows estimated from character lengths for migrated messages.
-    /// 根据字符长度估算出的已迁移分片行数量。
-    pub inserted_chunk_count: usize,
 }
 
 /// Raw project row decoded from the controller SQLite query payload.
@@ -442,40 +351,6 @@ struct StoredSessionRow {
     updated_at: String,
 }
 
-/// Raw session message row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始会话消息行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredSessionMessageRow {
-    /// Stable message identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定消息标识。
-    id: String,
-    /// Stable ordinal inside one transcript stream.
-    /// 单个转录流内部的稳定序号。
-    ordinal: i64,
-    /// Persisted message role used to reconstruct the message kind.
-    /// 用于重建消息类型的持久化消息角色。
-    role: String,
-    /// Persisted record kind key.
-    /// 持久化记录类型键。
-    kind: String,
-    /// SQLite numeric visible flag.
-    /// SQLite 数值型可见标记。
-    visible: i64,
-    /// Stable conversation-turn index derived from user-authored prompts.
-    /// 根据用户提示词派生出的稳定对话轮次索引。
-    #[serde(default)]
-    turn_index: i64,
-    /// Persisted primary text body.
-    /// 持久化后的主要正文文本。
-    content: String,
-    /// Optional structured JSON metadata.
-    /// 可选的结构化 JSON 元数据。
-    meta_json: Option<String>,
-    /// Created-at timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的创建时间。
-    created_at: String,
-}
-
 /// Lightweight session turn-index row used by tool-detail hydration lookups.
 /// 工具明细水合查询使用的轻量会话轮次索引行。
 #[derive(Debug, Clone, Deserialize)]
@@ -483,183 +358,6 @@ struct StoredSessionTurnIndexRow {
     /// Stable conversation-turn index already stored in SQLite.
     /// 已持久化到 SQLite 中的稳定对话轮次索引。
     turn_index: i64,
-}
-
-/// Raw session-message chunk row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始会话消息分片行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredSessionMessageChunkRow {
-    /// Stable message identifier owning this chunk.
-    /// 拥有该分片的稳定消息标识。
-    message_id: String,
-    /// Stable chunk order inside one message body.
-    /// 单条消息正文内部的稳定分片顺序。
-    chunk_index: i64,
-    /// Persisted chunk body.
-    /// 持久化后的分片正文。
-    content: String,
-}
-
-/// Lightweight legacy oversized inline-message candidate row.
-/// 轻量旧版超大内联消息候选行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredLegacyOversizedMessageCandidateRow {
-    /// Stable message identifier selected for migration.
-    /// 被选中迁移的稳定消息标识。
-    id: String,
-    /// Inline body size measured by SQLite as UTF-8 bytes.
-    /// SQLite 以 UTF-8 字节计量出的内联正文大小。
-    content_bytes: i64,
-    /// Inline body length measured by SQLite as text characters.
-    /// SQLite 以文本字符计量出的内联正文长度。
-    content_chars: i64,
-}
-
-/// Lightweight persisted message position used to preserve partial-window upsert order.
-/// 用于保留局部窗口上写顺序的轻量持久化消息位置。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredSessionMessagePositionRow {
-    /// Stable message identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定消息标识。
-    id: String,
-    /// Stable ordinal already assigned inside one session transcript.
-    /// 已经在单个会话转录中分配的稳定序号。
-    ordinal: i64,
-    /// Stable turn index already assigned inside one session transcript.
-    /// 已经在单个会话转录中分配的稳定轮次索引。
-    turn_index: i64,
-}
-
-/// Maximum persisted message identifiers looked up in one position query.
-/// 单次位置查询最多查找的持久化消息标识数量。
-const SESSION_MESSAGE_POSITION_QUERY_ID_LIMIT: usize = 128;
-
-/// Raw workspace-history search metadata row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始工作台历史搜索元数据行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredWorkspaceHistorySearchMetadataRow {
-    /// Human-readable project name stored on the project row.
-    /// 存储在项目行中的项目名称。
-    project_name: String,
-    /// Stable session identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定会话标识。
-    session_id: String,
-    /// Human-readable session title stored on the session row.
-    /// 存储在会话行中的会话标题。
-    session_title: String,
-    /// Stable message identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定消息标识。
-    message_id: String,
-    /// Stable ordinal inside one transcript stream.
-    /// 单个转录流内部的稳定序号。
-    ordinal: i64,
-    /// Stable turn index inside one transcript stream.
-    /// 单个转录流内部的稳定轮次索引。
-    turn_index: i64,
-    /// Persisted message role used to reconstruct the user-facing label.
-    /// 用于重建用户界面标签的持久化消息角色。
-    role: String,
-    /// Created-at timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的创建时间。
-    created_at: String,
-}
-
-/// Raw workspace-history search ownership row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始工作台历史搜索归属行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredWorkspaceHistorySearchDocumentStateRow {
-    /// Stable message identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定消息标识。
-    message_id: String,
-    /// Stable session identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定会话标识。
-    session_id: String,
-    /// Stable project identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定项目标识。
-    project_id: String,
-    /// Stable canonical event identifier backing the indexed document.
-    /// 作为索引文档后端来源的稳定规范事件标识。
-    #[serde(default)]
-    event_id: String,
-    /// Stable turn index used by search-hit reconstruction.
-    /// 用于搜索命中重建的稳定轮次索引。
-    #[serde(default)]
-    turn_index: i64,
-    /// Stable event sequence used as the ordinal-like search anchor.
-    /// 作为类 ordinal 搜索锚点使用的稳定事件序号。
-    #[serde(default)]
-    ordinal: i64,
-    /// Persisted role label used by search-hit projection.
-    /// 供搜索命中投影使用的持久化角色标签。
-    #[serde(default)]
-    role: String,
-    /// Event creation timestamp used by result metadata.
-    /// 供结果元数据使用的事件创建时间戳。
-    #[serde(default)]
-    created_at: String,
-    /// Stable hash of the indexed content and routing metadata.
-    /// 已索引正文与路由元数据的稳定哈希值。
-    #[serde(default)]
-    content_hash: String,
-    /// Projection version used to invalidate stale index rows.
-    /// 用于使旧投影行失效的索引版本。
-    #[serde(default)]
-    index_version: i64,
-    /// Stable event sequence stored beside the search projection.
-    /// 与搜索投影一同保存的稳定事件序号。
-    #[serde(default)]
-    event_seq: i64,
-    /// Last update timestamp for the search projection row.
-    /// 搜索投影行的最近更新时间戳。
-    #[serde(default)]
-    updated_at: String,
-}
-
-/// One prepared workspace-history search document awaiting controller-managed FTS synchronization.
-/// 一条等待同步到控制器托管 FTS 的预处理工作台历史搜索文档。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct WorkspaceHistorySearchDocumentUpsert {
-    /// Stable message identifier used as the document id.
-    /// 作为文档标识使用的稳定消息 ID。
-    message_id: String,
-    /// Stable session identifier owning the document.
-    /// 拥有该文档的稳定会话标识。
-    session_id: String,
-    /// Stable project identifier used to route the document into its project index.
-    /// 用于将文档路由到所属项目索引的稳定项目标识。
-    project_id: String,
-    /// Stable canonical event identifier backing the indexed document.
-    /// 作为索引文档后端来源的稳定规范事件标识。
-    event_id: String,
-    /// Stable turn index used by transcript paging and search-hit reconstruction.
-    /// 被转录分页与搜索命中重建使用的稳定轮次索引。
-    turn_index: i64,
-    /// Stable event sequence used as the persisted ordinal-like anchor.
-    /// 作为持久化类 ordinal 锚点使用的稳定事件序号。
-    ordinal: i64,
-    /// Persisted role label used to rebuild the high-level message kind.
-    /// 用于重建高层消息类型的持久化角色标签。
-    role: String,
-    /// Created-at timestamp stored beside the search projection.
-    /// 与搜索投影一同保存的创建时间戳。
-    created_at: String,
-    /// Final transcript body indexed by controller-managed FTS search.
-    /// 由控制器托管 FTS 搜索建立索引的最终转录正文。
-    content: String,
-}
-
-/// Structured transcript-message metadata payload persisted inside the SQLite `meta_json` column.
-/// 持久化在 SQLite `meta_json` 列中的结构化转录消息元数据载荷。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct StoredSessionMessageMeta {
-    /// Optional user-visible transcript card title.
-    /// 可选的用户可见转录卡片标题。
-    #[serde(default)]
-    title: Option<String>,
-    /// Optional structured transcript metadata used only by host-side UI surfaces.
-    /// 仅供宿主侧界面表面使用的可选结构化转录元数据。
-    #[serde(default)]
-    metadata: Option<Value>,
 }
 
 /// Raw compaction checkpoint row decoded from the controller SQLite query payload.
@@ -691,8 +389,8 @@ struct StoredCompactionRow {
     created_at: String,
 }
 
-/// Raw runtime-state row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始运行时状态行。
+/// Disabled legacy runtime-state shape retained for migration-free loader boundaries.
+/// 为无旧兼容加载边界保留的已禁用旧运行态形状。
 #[derive(Debug, Clone, Deserialize)]
 struct StoredRuntimeStateRow {
     /// Stable session identifier.
@@ -754,32 +452,16 @@ struct StoredRuntimeStateRow {
 pub async fn load_or_seed_workspace(
     controller: ControllerRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
-    let existing_project_count = query_project_count(&controller).await?;
-
-    if existing_project_count == 0 {
-        return Ok(build_empty_workspace_snapshot());
-    }
-
-    let snapshot = load_workspace_snapshot(controller.clone()).await?;
-    if is_legacy_seed_workspace(&snapshot) {
-        clear_workspace_storage(&controller).await?;
-        return Ok(build_empty_workspace_snapshot());
-    }
-
-    Ok(snapshot)
+    load_workspace_snapshot(controller).await
 }
 
-/// Loads the current persisted workspace snapshot from the controller-backed SQLite database.
-/// 从控制器承载的 SQLite 数据库中加载当前持久化工作台快照。
+/// Loads the current persisted workspace snapshot from project config and segmented text metadata.
+/// 从项目配置与分段文本元数据加载当前持久化工作台快照。
 pub async fn load_workspace_snapshot(
     controller: ControllerRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
     let project_rows = query_project_rows(&controller).await?;
-    let mut session_rows = query_session_rows(&controller).await?;
-    if migrate_legacy_session_ids_if_needed(&controller, &session_rows).await? {
-        session_rows = query_session_rows(&controller).await?;
-    }
-    let runtime_state_rows = query_session_runtime_state_shell_rows(&controller).await?;
+    let session_entries = list_segmented_session_catalog(&controller.data_root)?;
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -802,12 +484,6 @@ pub async fn load_workspace_snapshot(
         }
     }
 
-    let archived_session_ids = session_rows
-        .iter()
-        .filter(|row| row.archived != 0)
-        .filter_map(|row| parse_session_id(&row.id).ok())
-        .collect::<BTreeSet<_>>();
-
     let transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
     let archived_transcript_map: BTreeMap<SessionId, Vec<SessionMessageEntry>> = BTreeMap::new();
     let compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
@@ -816,143 +492,124 @@ pub async fn load_workspace_snapshot(
     let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let mut archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> =
         BTreeMap::new();
-    for row in runtime_state_rows {
-        let session_id = parse_session_id(&row.session_id)?;
-        let provider_usage = row
-            .provider_usage_json
-            .as_deref()
-            .and_then(parse_provider_usage_from_json);
-        let entry = SessionRuntimeStateEntry {
-            active_agent_id: row.active_agent_id,
-            active_provider_id: row.active_provider_id,
-            active_model_id: row.active_model_id,
-            active_openrouter_endpoint_route: None,
-            active_reasoning_effort: None,
-            active_temperature: None,
-            prompt_skill_overrides: Default::default(),
-            context_injection_state: row
-                .context_injection_json
-                .as_deref()
-                .and_then(parse_context_injection_state_from_json)
-                .unwrap_or_default(),
-            vmm: row
-                .vmm_json
-                .as_deref()
-                .and_then(parse_vmm_config_layer_from_json)
-                .unwrap_or_default(),
-            vmm_writeback_outbox: row
-                .vmm_writeback_outbox_json
-                .as_deref()
-                .and_then(parse_vmm_writeback_outbox_from_json)
-                .unwrap_or_default(),
-            vmm_profile_sync: row
-                .vmm_profile_sync_json
-                .as_deref()
-                .and_then(parse_vmm_profile_sync_from_json)
-                .unwrap_or_default(),
-            last_compaction_id: row.last_compaction_id,
-            context_start_message_id: row.context_start_message_id,
-            live_context_budget_fingerprint: None,
-            live_context_assembly_fingerprint: None,
-            anchor_context_budget_fingerprint: None,
-            anchor_context_assembly_fingerprint: None,
-            last_provider_request_preview_markdown: None,
-            ui_state: row
-                .ui_state_json
-                .as_deref()
-                .and_then(parse_session_ui_state_from_json)
-                .unwrap_or_default(),
-            conversation_state: persisted_conversation_state_or_continuation(
-                row.conversation_state_json,
-                row.continuation_json,
-            ),
-            last_provider_usage: provider_usage.clone(),
-            last_successful_provider_usage: provider_usage,
-            last_safe_provider_request_count: None,
-            active_precheck_turn_id: None,
-            updated_at: row.updated_at,
-        };
-
-        if archived_session_ids.contains(&session_id) {
-            archived_runtime_state_map.insert(session_id, entry);
-        } else {
-            runtime_state_map.insert(session_id, entry);
-        }
-    }
-
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
-    for row in &session_rows {
-        let session_id = parse_session_id(&row.id)?;
+    let mut session_updated_at = BTreeMap::new();
+    for entry in &session_entries {
+        let session_id = parse_session_id(&entry.metadata.session_id)?;
+        let project_id = entry
+            .metadata
+            .project_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&entry.metadata.project_tag)
+            .to_string();
+        let project_name = project_rows
+            .iter()
+            .find(|row| row.id == project_id)
+            .map(|row| row.name.clone())
+            .unwrap_or_else(|| project_id.clone());
+        if entry.archived {
+            ensure_project_summary_for_session(
+                &mut archived_task_projects,
+                &project_id,
+                &project_name,
+                session_id,
+            );
+        } else {
+            ensure_project_summary_for_session(
+                &mut task_projects,
+                &project_id,
+                &project_name,
+                session_id,
+            );
+        }
+        if let Some(state_document) = read_state(&entry.session_dir)? {
+            if !state_document.runtime_state.is_null() {
+                let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
+                    state_document.runtime_state,
+                )
+                .map_err(|error| {
+                    format!(
+                        "解析分段会话 `{}` 的 state.json 失败：{error}",
+                        entry.metadata.session_id
+                    )
+                })?;
+                if runtime_state.updated_at.trim().is_empty()
+                    && !state_document.updated_at.trim().is_empty()
+                {
+                    runtime_state.updated_at = state_document.updated_at;
+                }
+                if entry.archived {
+                    archived_runtime_state_map.insert(session_id, runtime_state);
+                } else {
+                    runtime_state_map.insert(session_id, runtime_state);
+                }
+            }
+        }
         let focus = session_focus_preview(&[]);
+        let title = entry
+            .metadata
+            .title
+            .clone()
+            .unwrap_or_else(|| String::from("Untitled"));
         let session_summary = SessionSummary::new(
             session_id,
-            Some(row.project_id.clone()),
-            row.title.clone(),
+            Some(project_id),
+            title,
             focus,
             SessionState::Draft,
             0,
             0,
-            relative_time_label_from_unix_millis_text(&row.updated_at),
+            relative_time_label_from_unix_millis_text(&entry.metadata.updated_at),
         )
-        .with_title_source(SessionTitleSource::from_persisted_key(&row.title_source))
-        .with_updated_at(row.updated_at.clone());
+        .with_title_source(SessionTitleSource::from_persisted_key(
+            entry.metadata.title_source.as_deref().unwrap_or("manual"),
+        ))
+        .with_updated_at(entry.metadata.updated_at.clone());
+        session_updated_at.insert(
+            session_id,
+            entry.metadata.updated_at.parse::<i64>().unwrap_or_default(),
+        );
 
-        if row.archived != 0 {
-            if let Some(project) = archived_task_projects
-                .iter_mut()
-                .find(|project| project.id == row.project_id)
-            {
-                project.session_ids.push(session_id.clone());
-            }
+        if entry.archived {
             archived_sessions.push(session_summary);
         } else {
-            if let Some(project) = task_projects
-                .iter_mut()
-                .find(|project| project.id == row.project_id)
-            {
-                project.session_ids.push(session_id.clone());
-            }
             visible_sessions.push(session_summary);
         }
     }
 
     for project in &mut task_projects {
         project.session_ids.sort_unstable_by_key(|session_id| {
-            session_rows
-                .iter()
-                .find(|row| row.id == session_id.to_string())
-                .map(|row| row.sort_order)
-                .unwrap_or(i64::MAX)
+            -session_updated_at
+                .get(session_id)
+                .copied()
+                .unwrap_or_default()
         });
     }
 
     for project in &mut archived_task_projects {
         project.session_ids.sort_unstable_by_key(|session_id| {
-            session_rows
-                .iter()
-                .find(|row| row.id == session_id.to_string())
-                .map(|row| row.sort_order)
-                .unwrap_or(i64::MAX)
+            -session_updated_at
+                .get(session_id)
+                .copied()
+                .unwrap_or_default()
         });
     }
 
     visible_sessions.sort_by_key(|session| {
-        session_rows
-            .iter()
-            .find(|row| row.id == session.id.to_string())
-            .and_then(|row| row.updated_at.parse::<i64>().ok())
-            .map(|timestamp| -timestamp)
-            .unwrap_or(i64::MIN)
+        -session_updated_at
+            .get(&session.id)
+            .copied()
+            .unwrap_or_default()
     });
 
     archived_sessions.sort_by_key(|session| {
-        session_rows
-            .iter()
-            .find(|row| row.id == session.id.to_string())
-            .and_then(|row| row.updated_at.parse::<i64>().ok())
-            .map(|timestamp| -timestamp)
-            .unwrap_or(i64::MIN)
+        -session_updated_at
+            .get(&session.id)
+            .copied()
+            .unwrap_or_default()
     });
 
     let collapsed_task_projects = query_collapsed_task_project_ids(&controller)
@@ -1011,42 +668,30 @@ fn build_empty_workspace_snapshot() -> WorkspaceSnapshot {
     }
 }
 
-/// Returns whether one restored snapshot still exactly matches the old prototype seed workspace.
-/// 返回一份已恢复快照是否仍然与旧原型种子工作台完全一致。
-fn is_legacy_seed_workspace(snapshot: &WorkspaceSnapshot) -> bool {
-    if !snapshot.archived_task_projects.is_empty()
-        || !snapshot.archived_sessions.is_empty()
-        || !snapshot.archived_session_messages.is_empty()
-        || !snapshot.archived_session_compactions.is_empty()
-    {
-        return false;
+/// Ensures a project summary exists and owns the provided session id exactly once.
+/// 确保项目摘要存在，并且只拥有一次给定会话标识。
+fn ensure_project_summary_for_session(
+    projects: &mut Vec<TaskProjectSummary>,
+    project_id: &str,
+    project_name: &str,
+    session_id: SessionId,
+) {
+    if let Some(project) = projects.iter_mut().find(|project| project.id == project_id) {
+        if !project.session_ids.contains(&session_id) {
+            project.session_ids.push(session_id);
+        }
+        return;
     }
-
-    let seeded_projects = TaskProjectSummary::seeded();
-    let seeded_sessions = SessionSummary::seeded();
-
-    snapshot.task_projects.len() == seeded_projects.len()
-        && snapshot.sessions.len() == seeded_sessions.len()
-        && snapshot
-            .task_projects
-            .iter()
-            .zip(seeded_projects.iter())
-            .all(|(current, seeded)| {
-                current.id == seeded.id
-                    && current.title == seeded.title
-                    && current.path == seeded.path
-                    && current.session_ids == seeded.session_ids
-            })
-        && snapshot
-            .sessions
-            .iter()
-            .zip(seeded_sessions.iter())
-            .all(|(current, seeded)| {
-                current.id == seeded.id
-                    && current.project_id == seeded.project_id
-                    && current.title == seeded.title
-                    && current.title_source == seeded.title_source
-            })
+    projects.push(TaskProjectSummary::new(
+        project_id.to_string(),
+        project_name.to_string(),
+        String::new(),
+        false,
+        projects.len(),
+        None,
+        None,
+        vec![session_id],
+    ));
 }
 
 /// Clears all workspace business tables so the application can rebuild from a clean empty state.
@@ -1058,12 +703,7 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-DELETE FROM workspace_history_search_docs;
-DELETE FROM session_turn_index;
-DELETE FROM session_runtime_state;
 DELETE FROM session_compactions;
-DELETE FROM session_message_chunks;
-DELETE FROM session_messages;
 DELETE FROM sessions;
 DELETE FROM projects;
 DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
@@ -1072,105 +712,329 @@ DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
         )
         .await
         .map_err(|error| format!("清理旧原型工作台数据失败：{error}"))?;
-    clear_all_session_event_stores()?;
-
-    let index_names = query_workspace_history_search_index_names(controller).await?;
-    drop_workspace_history_search_indexes(controller, &index_names, "清理工作台历史搜索索引失败")
-        .await?;
+    clear_all_segmented_session_roots(&controller.data_root)?;
 
     Ok(())
+}
+
+/// Persists the latest current context into the segmented session state file when the directory exists.
+/// 当分段会话目录存在时，将最新当前上下文写入分段会话状态文件。
+pub fn persist_segmented_session_context_current_document(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let Some(session_dir) =
+        find_existing_segmented_context_session_dir(data_root, project_id, session_id)?
+    else {
+        return Ok(());
+    };
+    let state_document = state_document_from_runtime_state(&session_id.to_string(), runtime_state)?;
+    write_state(&session_dir, &state_document)
+}
+
+/// Appends a pre-prompt turn-context anchor to the segmented session stream when available.
+/// 可用时在分段会话流中追加用户提示词前的轮次上下文锚点。
+pub fn snapshot_segmented_session_context_before_user_prompt(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    let state_document = state_document_from_runtime_state(&session_id.to_string(), runtime_state)?;
+    if state_document.current_context.is_null() {
+        return Ok(());
+    }
+    let Some(session_dir) =
+        find_existing_segmented_context_session_dir(data_root, project_id, session_id)?
+    else {
+        return Ok(());
+    };
+    append_segmented_session_events(
+        &session_dir,
+        &[SegmentedSessionEventInput {
+            timestamp: current_unix_millis_text(),
+            kind: SegmentedSessionEventKind::TurnContext,
+            payload: serde_json::json!({
+                "reason": "before_user_prompt",
+                "current_context": state_document.current_context,
+                "runtime_state": state_document.runtime_state,
+                "source_updated_at": state_document.updated_at,
+            }),
+            turn_index: None,
+        }],
+    )?;
+    Ok(())
+}
+
+/// Codex store adapter backed by one workspace segmented session directory.
+/// 由单个工作区分段会话目录支撑的 Codex 存储适配器。
+#[derive(Debug, Clone)]
+pub struct WorkspaceSegmentedCodexSessionStore {
+    /// Vulcan code data root.
+    /// Vulcan Code 数据根目录。
+    data_root: std::path::PathBuf,
+    /// Owning project identifier and project tag.
+    /// 所属项目标识与项目标签。
+    project_id: String,
+    /// Owning session identifier.
+    /// 所属会话标识。
+    session_id: SessionId,
+    /// Human-readable session title used when the directory must be created.
+    /// 需要创建目录时使用的人类可读会话标题。
+    session_title: String,
+}
+
+impl WorkspaceSegmentedCodexSessionStore {
+    /// Creates one Codex store adapter for a workspace segmented session.
+    /// 为工作区分段会话创建一个 Codex 存储适配器。
+    pub fn new(
+        data_root: impl Into<std::path::PathBuf>,
+        project_id: impl Into<String>,
+        session_id: SessionId,
+        session_title: impl Into<String>,
+    ) -> Self {
+        Self {
+            data_root: data_root.into(),
+            project_id: project_id.into(),
+            session_id,
+            session_title: session_title.into(),
+        }
+    }
+
+    /// Resolves or creates the backing segmented session directory.
+    /// 解析或创建背后的分段会话目录。
+    fn ensure_session_dir(&self) -> Result<std::path::PathBuf, String> {
+        ensure_codex_boundary_session_dir(
+            &self.data_root,
+            &self.project_id,
+            self.session_id,
+            &self.session_title,
+        )
+    }
+}
+
+impl CodexSessionStore for WorkspaceSegmentedCodexSessionStore {
+    /// Appends one Codex event into the segmented session stream.
+    /// 向分段会话流追加一条 Codex 事件。
+    fn append_event(&self, write: CodexStorageWrite) -> Result<(), String> {
+        if write.thread_id != SessionNodeId::from(self.session_id) {
+            return Err(format!(
+                "Codex write thread `{}` does not match workspace session `{}`.",
+                write.thread_id, self.session_id
+            ));
+        }
+        let session_dir = self.ensure_session_dir()?;
+        append_segmented_codex_boundary_events(&session_dir, std::slice::from_ref(&write.event))?;
+        Ok(())
+    }
+
+    /// Reads Codex events from the segmented session stream.
+    /// 从分段会话流读取 Codex 事件。
+    fn read_events(&self, thread_id: SessionNodeId) -> Result<Vec<CodexSessionEvent>, String> {
+        if thread_id != SessionNodeId::from(self.session_id) {
+            return Ok(Vec::new());
+        }
+        load_segmented_session_codex_boundary_events(
+            &self.data_root,
+            &self.project_id,
+            self.session_id,
+            None,
+            usize::MAX,
+        )
+    }
+}
+
+impl CodexSessionStateStore for WorkspaceSegmentedCodexSessionStore {
+    /// Replaces only the Codex runner state inside state.json.
+    /// 仅覆盖 state.json 内的 Codex runner 状态。
+    fn replace_state(&self, thread_id: SessionNodeId, state: Value) -> Result<(), String> {
+        if thread_id != SessionNodeId::from(self.session_id) {
+            return Err(format!(
+                "Codex state thread `{}` does not match workspace session `{}`.",
+                thread_id, self.session_id
+            ));
+        }
+        let session_dir = self.ensure_session_dir()?;
+        replace_codex_thread_state(&session_dir, state)
+    }
+
+    /// Loads the Codex runner state from state.json.
+    /// 从 state.json 读取 Codex runner 状态。
+    fn load_state(&self, thread_id: SessionNodeId) -> Result<Option<Value>, String> {
+        if thread_id != SessionNodeId::from(self.session_id) {
+            return Ok(None);
+        }
+        let session_id_text = self.session_id.to_string();
+        let Some(session_dir) = find_segmented_session_directory(
+            &self.data_root,
+            false,
+            &self.project_id,
+            &session_id_text,
+        )?
+        else {
+            return Ok(None);
+        };
+        load_codex_thread_state(&session_dir)
+    }
+}
+
+/// Appends accepted Codex boundary events into the segmented session stream.
+/// 将已接受的 Codex 边界事件追加到分段会话流。
+pub fn append_segmented_session_codex_boundary_events(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+    session_title: &str,
+    events: &[CodexSessionEvent],
+) -> Result<(), String> {
+    if events.is_empty() {
+        return Ok(());
+    }
+    let session_dir =
+        ensure_codex_boundary_session_dir(data_root, project_id, session_id, session_title)?;
+    append_segmented_codex_boundary_events(&session_dir, events)?;
+    Ok(())
+}
+
+/// Resolves or creates the segmented session directory used by Codex boundary storage.
+/// 解析或创建 Codex 边界存储使用的分段会话目录。
+fn ensure_codex_boundary_session_dir(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+    session_title: &str,
+) -> Result<std::path::PathBuf, String> {
+    let session_id_text = session_id.to_string();
+    let now = current_unix_millis_text();
+    match find_segmented_session_directory(data_root, false, project_id, &session_id_text)? {
+        Some(session_dir) => Ok(session_dir),
+        None => create_segmented_session_in_location(
+            data_root,
+            false,
+            SegmentedSessionCreateRequest {
+                session_id: session_id_text,
+                project_tag: project_id.to_string(),
+                created_date: segmented_session_date_from_unix_millis_text(&now),
+                created_at: now,
+                project_id: Some(project_id.to_string()),
+                title: Some(session_title.to_string()),
+                title_source: Some(String::from("codex_boundary")),
+                segment_policy: SegmentPolicy::default(),
+            },
+        ),
+    }
+}
+
+/// Loads Codex boundary events from one segmented session window.
+/// 从一个分段会话窗口读取 Codex 边界事件。
+pub fn load_segmented_session_codex_boundary_events(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+    before_seq: Option<u64>,
+    limit: usize,
+) -> Result<Vec<CodexSessionEvent>, String> {
+    let session_id_text = session_id.to_string();
+    let Some(session_dir) =
+        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?
+    else {
+        return Ok(Vec::new());
+    };
+    read_segmented_session_event_window(&session_dir, before_seq, limit)?
+        .iter()
+        .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+        .map(codex_boundary_event_from_segment_line)
+        .collect()
+}
+
+/// Rebuilds one Codex boundary event from a segmented JSONL line.
+/// 从分段 JSONL 行重建一条 Codex 边界事件。
+fn codex_boundary_event_from_segment_line(
+    line: &self::segmented_session_store::SegmentedSessionEventLine,
+) -> Result<CodexSessionEvent, String> {
+    let payload = &line.payload;
+    let event_id = required_string(payload, "event_id")?;
+    let thread_id = serde_json::from_value::<SessionNodeId>(required_value(payload, "thread_id")?)
+        .map_err(|error| format!("invalid codex boundary thread_id: {error}"))?;
+    let kind = serde_json::from_value::<CodexSessionEventKind>(required_value(payload, "kind")?)
+        .map_err(|error| format!("invalid codex boundary kind: {error}"))?;
+    let scope = serde_json::from_value::<CodexEventScope>(required_value(payload, "scope")?)
+        .map_err(|error| format!("invalid codex boundary scope: {error}"))?;
+    let visibility =
+        serde_json::from_value::<CodexEventVisibility>(required_value(payload, "visibility")?)
+            .map_err(|error| format!("invalid codex boundary visibility: {error}"))?;
+    let timestamp_ms = line.timestamp.parse::<u64>().unwrap_or_default();
+    Ok(CodexSessionEvent {
+        event_id,
+        thread_id,
+        turn_id: optional_string(payload, "turn_id"),
+        item_id: optional_string(payload, "item_id"),
+        sequence: payload
+            .get("sequence")
+            .and_then(Value::as_u64)
+            .unwrap_or(line.seq),
+        kind,
+        scope,
+        visibility,
+        timestamp_ms,
+        payload: payload.get("payload").cloned().unwrap_or(Value::Null),
+    })
+}
+
+/// Finds the active or archived segmented session directory used by context persistence.
+/// 查找上下文持久化使用的活动或归档分段会话目录。
+fn find_existing_segmented_context_session_dir(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Option<std::path::PathBuf>, String> {
+    match find_segmented_session_directory(data_root, false, project_id, &session_id.to_string())? {
+        Some(session_dir) => Ok(Some(session_dir)),
+        None => {
+            find_segmented_session_directory(data_root, true, project_id, &session_id.to_string())
+        }
+    }
+}
+
+/// Converts Unix-milliseconds text into the UTC date segment used by segmented session directories.
+/// 将 Unix 毫秒文本转换为分段会话目录使用的 UTC 日期片段。
+fn segmented_session_date_from_unix_millis_text(value: &str) -> String {
+    let millis = value.trim().parse::<i64>().unwrap_or_default();
+    let seconds = millis.div_euclid(1_000);
+    let days = seconds.div_euclid(86_400);
+    let (year, month, day) = civil_date_from_unix_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// Converts days since the Unix epoch into one proleptic Gregorian UTC date.
+/// 将 Unix 纪元以来的天数转换为一个前推格里高利 UTC 日期。
+fn civil_date_from_unix_days(days_since_unix_epoch: i64) -> (i64, i64, i64) {
+    let shifted_days = days_since_unix_epoch + 719_468;
+    let era = if shifted_days >= 0 {
+        shifted_days
+    } else {
+        shifted_days - 146_096
+    } / 146_097;
+    let day_of_era = shifted_days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    if month <= 2 {
+        year += 1;
+    }
+    (year, month, day)
 }
 
 /// Returns the current controller-scoped SQLite binding identifier used by the application workspace tables.
 /// 返回应用工作台表当前使用的控制器作用域 SQLite 绑定标识符。
 fn app_sqlite_binding_id(controller: &ControllerRuntimeHandle) -> &str {
     controller.sqlite_binding_id.as_str()
-}
-
-/// Queries all controller-managed workspace-history FTS virtual table names currently stored in SQLite.
-/// 查询当前 SQLite 中存储的全部控制器托管工作台历史 FTS 虚表名称。
-async fn query_workspace_history_search_index_names(
-    controller: &ControllerRuntimeHandle,
-) -> Result<Vec<String>, String> {
-    #[derive(Debug, Deserialize)]
-    struct IndexNameRow {
-        /// Virtual-table name.
-        /// 虚表名称。
-        name: String,
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?1 AND sql LIKE 'CREATE VIRTUAL TABLE%' ORDER BY name ASC;",
-            vec![ControllerSqliteValue::String(
-                WORKSPACE_HISTORY_SEARCH_INDEX_NAME_LIKE_PATTERN.to_string(),
-            )],
-        )
-        .await
-        .map_err(|error| format!("查询工作台历史搜索索引列表失败：{error}"))?;
-
-    Ok(decode_query_rows::<IndexNameRow>(&result.json_data)?
-        .into_iter()
-        .map(|row| row.name)
-        .collect())
-}
-
-/// Drops the provided controller-managed workspace-history FTS virtual tables.
-/// 删除给定的控制器托管工作台历史 FTS 虚表。
-async fn drop_workspace_history_search_indexes(
-    controller: &ControllerRuntimeHandle,
-    index_names: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if index_names.is_empty() {
-        return Ok(());
-    }
-
-    let script = index_names
-        .iter()
-        .map(|index_name| {
-            format!(
-                "DROP TABLE IF EXISTS {};",
-                quote_sqlite_identifier(index_name)
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            script,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("{error_prefix}：{error}"))?;
-
-    Ok(())
-}
-
-/// Ensures one controller-managed workspace-history FTS index exists with Jieba tokenization enabled.
-/// 确保某个控制器托管工作台历史 FTS 索引已经启用 Jieba 分词并存在。
-async fn ensure_workspace_history_search_index(
-    controller: &ControllerRuntimeHandle,
-    index_name: &str,
-) -> Result<(), String> {
-    controller
-        .client
-        .ensure_sqlite_fts_index(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            index_name.to_string(),
-            ControllerSqliteTokenizerMode::Jieba,
-        )
-        .await
-        .map_err(|error| format!("确保工作台历史搜索索引 `{index_name}` 失败：{error}"))?;
-
-    Ok(())
 }
 
 /// Queries the number of visible project rows currently stored in the application database.
@@ -1332,7 +1196,7 @@ async fn query_active_session_ids(
 /// Returns the maximum message rows fetched for one turn-level transcript window.
 /// 返回单个轮次级转录窗口允许拉取的最大消息行数。
 fn session_transcript_row_limit_for_turns(turn_limit: usize) -> usize {
-    SESSION_TRANSCRIPT_LEGACY_ROW_LIMIT
+    SESSION_TRANSCRIPT_MIN_ROW_LIMIT
         .max(turn_limit.saturating_mul(SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT))
 }
 
@@ -1350,47 +1214,13 @@ fn persisted_kind_in_tool_detail_stream(kind: &str) -> bool {
     matches!(kind, "tool-call-output" | "tool-result-output")
 }
 
-/// Queries lightweight runtime-state rows for startup without the large canonical conversation JSON.
-/// 启动时查询不含大型规范会话 JSON 的轻量运行时状态行。
+/// Returns no controller runtime documents because segmented state files are now the startup source.
+/// 不再返回控制器运行态文档，因为分段 state 文件已经是启动事实源。
 async fn query_session_runtime_state_shell_rows(
     controller: &ControllerRuntimeHandle,
 ) -> Result<Vec<StoredRuntimeStateRow>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT r.session_id, r.active_agent_id, r.active_provider_id, r.active_model_id, r.last_compaction_id, r.context_start_message_id, r.ui_state_json, r.provider_usage_json, NULL AS conversation_state_json, r.continuation_json, r.context_injection_json, r.vmm_json, r.vmm_writeback_outbox_json, r.vmm_profile_sync_json, r.updated_at
-FROM session_runtime_state AS r
-INNER JOIN sessions AS s ON s.id = r.session_id
-ORDER BY r.session_id ASC;
-"#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("查询会话运行时状态失败：{error}"))?;
-
-    decode_query_rows::<StoredRuntimeStateRow>(&result.json_data)
-}
-
-/// Merges generated-media tool-result rows into one visible transcript window while keeping row ordering stable.
-/// 将生成媒体工具结果行合并进一个可见转录窗口，同时保持行顺序稳定。
-fn merge_generated_media_rows_into_transcript_window(
-    transcript_rows: &mut Vec<StoredSessionMessageRow>,
-    generated_media_rows: Vec<StoredSessionMessageRow>,
-) -> Option<i64> {
-    let existing_ids = transcript_rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<BTreeSet<_>>();
-    transcript_rows.extend(
-        generated_media_rows
-            .into_iter()
-            .filter(|row| !existing_ids.contains(&row.id)),
-    );
-    transcript_rows.sort_by_key(|row| row.ordinal);
-    transcript_rows.first().map(|row| row.ordinal)
+    let _ = controller;
+    Ok(Vec::new())
 }
 
 /// Returns whether one controller error looks like tonic's protobuf message-size guard.
@@ -1412,65 +1242,6 @@ where
         .map_err(|error| format!("解析控制器 SQLite 查询结果失败：{error}"))
 }
 
-/// Converts one persisted message row into the in-memory transcript entry shape.
-/// 将一条持久化消息行转换为内存中的转录消息结构。
-fn stored_session_message_row_to_entry(
-    row: StoredSessionMessageRow,
-    message_body_chunks: &BTreeMap<String, String>,
-) -> SessionMessageEntry {
-    let persisted_meta = row
-        .meta_json
-        .as_deref()
-        .and_then(parse_session_message_meta_from_json)
-        .unwrap_or_default();
-    let title = persisted_meta
-        .title
-        .unwrap_or_else(|| default_message_title(&row.role).to_string());
-    let body = message_body_chunks
-        .get(&row.id)
-        .cloned()
-        .unwrap_or_else(|| row.content.clone());
-
-    SessionMessageEntry {
-        id: row.id,
-        kind: session_kind_from_role(&row.role),
-        record_kind: SessionMessageRecordKind::from_persisted_key(&row.kind),
-        visible: row.visible != 0,
-        title,
-        body,
-        metadata: persisted_meta.metadata,
-        created_at: row.created_at,
-    }
-}
-
-/// Rebuilds one oversized message body from ordered chunk rows and validates ownership.
-/// 从有序分片行重建单条超大消息正文，并校验归属关系。
-fn rebuild_session_message_body_from_chunks(
-    message_id: &str,
-    mut chunk_rows: Vec<StoredSessionMessageChunkRow>,
-) -> Result<String, String> {
-    chunk_rows.sort_by_key(|row| row.chunk_index);
-
-    let mut rebuilt_body = String::new();
-    for (expected_index, row) in chunk_rows.into_iter().enumerate() {
-        if row.message_id != message_id {
-            return Err(format!(
-                "会话消息分片归属不一致：期望 `{message_id}`，实际 `{}`。",
-                row.message_id
-            ));
-        }
-        if row.chunk_index != expected_index as i64 {
-            return Err(format!(
-                "会话消息 `{message_id}` 分片序号不连续：期望 {expected_index}，实际 {}。",
-                row.chunk_index
-            ));
-        }
-        rebuilt_body.push_str(&row.content);
-    }
-
-    Ok(rebuilt_body)
-}
-
 /// Converts one persisted compaction row into the in-memory checkpoint shape.
 /// 将一条持久化压缩行转换为内存中的检查点结构。
 fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompactionEntry {
@@ -1487,8 +1258,8 @@ fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompaction
     }
 }
 
-/// Converts one persisted runtime row into the in-memory runtime-state shape.
-/// 将一条持久化运行时行转换为内存中的运行时状态结构。
+/// Converts one legacy runtime document into the in-memory runtime-state shape.
+/// 将一个旧运行态文档转换为内存中的运行时状态结构。
 fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRuntimeStateEntry {
     let provider_usage = row
         .provider_usage_json
@@ -1578,326 +1349,8 @@ fn parse_session_id(value: &str) -> Result<SessionId, String> {
         return Err(String::from("解析持久化会话标识失败：会话标识不能为空。"));
     }
 
-    if let Ok(uuid) = Uuid::parse_str(normalized) {
-        return Ok(uuid);
-    }
-
-    Ok(legacy_session_id_fallback(normalized))
-}
-
-/// Migrates legacy non-UUID persisted session identifiers to canonical UUID text so scoped deletes keep working.
-/// 将旧版非 UUID 持久化会话标识迁移为规范 UUID 文本，确保后续按会话范围删除旧行时能够正确命中。
-async fn migrate_legacy_session_ids_if_needed(
-    controller: &ControllerRuntimeHandle,
-    session_rows: &[StoredSessionRow],
-) -> Result<bool, String> {
-    let legacy_mappings = session_rows
-        .iter()
-        .filter(|row| !is_uuid_session_id_text(&row.id))
-        .map(|row| {
-            (
-                row.id.clone(),
-                legacy_session_id_fallback(&row.id).to_string(),
-            )
-        })
-        .collect::<Vec<_>>();
-
-    if legacy_mappings.is_empty() {
-        return Ok(false);
-    }
-
-    let mut migration_script =
-        String::from("PRAGMA foreign_keys = OFF;\nBEGIN IMMEDIATE TRANSACTION;\n");
-    for (legacy_id, canonical_id) in &legacy_mappings {
-        let escaped_legacy_id = sqlite_escape_text(legacy_id);
-        let escaped_canonical_id = sqlite_escape_text(canonical_id);
-        migration_script.push_str(&format!(
-            "UPDATE session_messages SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
-        ));
-        migration_script.push_str(&format!(
-            "UPDATE session_message_chunks SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
-        ));
-        migration_script.push_str(&format!(
-            "UPDATE session_compactions SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
-        ));
-        migration_script.push_str(&format!(
-            "UPDATE session_runtime_state SET session_id = '{escaped_canonical_id}' WHERE session_id = '{escaped_legacy_id}';\n"
-        ));
-        migration_script.push_str(&format!(
-            "UPDATE sessions SET id = '{escaped_canonical_id}' WHERE id = '{escaped_legacy_id}';\n"
-        ));
-    }
-    migration_script.push_str("COMMIT;\nPRAGMA foreign_keys = ON;\n");
-
-    controller
-        .client
-        .execute_sqlite_script_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            migration_script,
-            Vec::<ControllerSqliteValue>::new(),
-        )
-        .await
-        .map_err(|error| format!("迁移旧版会话 UUID 标识失败：{error}"))?;
-
-    Ok(true)
-}
-
-/// Returns whether one persisted session identifier already matches UUID text.
-/// 返回一条持久化会话标识是否已经符合 UUID 文本格式。
-fn is_uuid_session_id_text(value: &str) -> bool {
-    Uuid::parse_str(value.trim()).is_ok()
-}
-
-/// Builds one deterministic UUID fallback from one legacy non-UUID session identifier.
-/// 根据旧版非 UUID 会话标识构建一条确定性的 UUID 兼容回退值。
-fn legacy_session_id_fallback(value: &str) -> SessionId {
-    let mut high_hasher = DefaultHasher::new();
-    "vulcan-legacy-session-id-high".hash(&mut high_hasher);
-    value.hash(&mut high_hasher);
-    let high = high_hasher.finish() as u128;
-
-    let mut low_hasher = DefaultHasher::new();
-    "vulcan-legacy-session-id-low".hash(&mut low_hasher);
-    value.hash(&mut low_hasher);
-    let low = low_hasher.finish() as u128;
-
-    Uuid::from_u128((high << 64) | low)
-}
-
-/// Escapes one SQLite text literal used inside a migration script.
-/// 转义迁移脚本中使用的一条 SQLite 文本字面量。
-fn sqlite_escape_text(value: &str) -> String {
-    value.replace('\'', "''")
-}
-
-/// Quotes one SQLite identifier after the caller has already constrained its allowed character set.
-/// 在调用方已约束允许字符集后，为一条 SQLite 标识符添加引号。
-fn quote_sqlite_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
-
-/// Builds the stable project-scoped controller FTS index name used for workspace-history search.
-/// 构建工作台历史搜索使用的稳定项目级控制器 FTS 索引名。
-fn workspace_history_search_project_index_name(project_id: &str) -> String {
-    format!(
-        "{WORKSPACE_HISTORY_SEARCH_PROJECT_INDEX_PREFIX}{:016x}",
-        stable_workspace_history_search_hash(project_id)
-    )
-}
-
-/// Builds the logical controller FTS file-path field used only for deterministic tie-breaking.
-/// 构建仅用于稳定并列排序的逻辑控制器 FTS file_path 字段。
-fn workspace_history_search_document_file_path(project_id: &str, session_id: &str) -> String {
-    format!("project/{project_id}/session/{session_id}")
-}
-
-/// Returns one stable hash used to compress long workspace-history search routing identifiers.
-/// 返回一个用于压缩长工作台历史搜索路由标识的稳定哈希值。
-fn stable_workspace_history_search_hash(value: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    "workspace-history-search".hash(&mut hasher);
-    value.hash(&mut hasher);
-    hasher.finish()
-}
-
-/// Returns one stable content hash for an indexed workspace-history document.
-/// 返回一个用于索引工作台历史文档的稳定内容哈希。
-fn workspace_history_search_document_content_hash(
-    document: &WorkspaceHistorySearchDocumentUpsert,
-) -> String {
-    let mut hasher = DefaultHasher::new();
-    "workspace-history-search-document".hash(&mut hasher);
-    WORKSPACE_HISTORY_SEARCH_INDEX_VERSION.hash(&mut hasher);
-    document.session_id.hash(&mut hasher);
-    document.project_id.hash(&mut hasher);
-    document.event_id.hash(&mut hasher);
-    document.turn_index.hash(&mut hasher);
-    document.ordinal.hash(&mut hasher);
-    document.role.hash(&mut hasher);
-    document.created_at.hash(&mut hasher);
-    document.content.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
-
-/// Converts one persisted message-role string back into the session message kind.
-/// 将一条持久化消息角色字符串转换回会话消息类型。
-fn session_kind_from_role(role: &str) -> SessionMessageKind {
-    match role {
-        "user" => SessionMessageKind::User,
-        "assistant" => SessionMessageKind::Assistant,
-        "error" => SessionMessageKind::Error,
-        _ => SessionMessageKind::Assistant,
-    }
-}
-
-/// Returns the persisted text role used for one session message kind.
-/// 返回某个会话消息类型使用的持久化文本角色。
-fn role_from_session_kind(kind: SessionMessageKind) -> &'static str {
-    match kind {
-        SessionMessageKind::User => "user",
-        SessionMessageKind::Assistant => "assistant",
-        SessionMessageKind::Error => "error",
-    }
-}
-
-/// Parses one persisted transcript-message metadata JSON payload into the structured helper shape.
-/// 将一条持久化转录消息元数据 JSON 载荷解析为结构化辅助形状。
-fn parse_session_message_meta_from_json(meta_json: &str) -> Option<StoredSessionMessageMeta> {
-    serde_json::from_str(meta_json).ok()
-}
-
-/// Returns whether one persisted message row still carries the generated-media host-result metadata needed for transcript recovery.
-/// 返回单条持久化消息行是否仍携带转录恢复所需的生成媒体宿主结果元数据。
-fn stored_session_message_row_contains_generated_attachment_host_result(
-    row: &StoredSessionMessageRow,
-) -> bool {
-    row.meta_json
-        .as_deref()
-        .and_then(parse_session_message_meta_from_json)
-        .and_then(|meta| meta.metadata)
-        .as_ref()
-        .and_then(resolve_generated_attachment_host_result_from_metadata)
-        .is_some()
-}
-
-/// Resolves one generated-media host-result payload from persisted transcript metadata, accepting nested and flattened shapes.
-/// 从持久化转录元数据中解析一份生成媒体宿主结果载荷，同时兼容嵌套与扁平两种形状。
-fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> Option<&Value> {
-    let nested_host_result = metadata
-        .get("host_result")
-        .filter(|value| value.is_object())
-        .filter(|value| value.get("kind").and_then(Value::as_str) == Some("generated_attachments"));
-    nested_host_result.or_else(|| {
-        (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments")
-            && metadata.get("payload").is_some())
-        .then_some(metadata)
-    })
-}
-
-/// Serializes one transcript-message entry into the optional SQLite metadata JSON payload.
-/// 将单条转录消息项序列化为可选的 SQLite 元数据 JSON 载荷。
-fn serialize_session_message_meta_to_json(message: &SessionMessageEntry) -> Option<String> {
-    let metadata = StoredSessionMessageMeta {
-        title: (!message.title.trim().is_empty()).then(|| message.title.clone()),
-        metadata: sanitize_session_message_metadata_for_persistence(message.metadata.clone()),
-    };
-    if metadata.title.is_none() && metadata.metadata.is_none() {
-        None
-    } else {
-        serde_json::to_string(&metadata).ok()
-    }
-}
-
-/// Normalizes a user-provided session-history search query before it reaches SQLite.
-/// 在用户提供的会话历史搜索词进入 SQLite 前进行规范化。
-fn normalize_session_history_search_query(query: &str) -> String {
-    normalize_sqlite_fts_literal_terms(query).join(" ")
-}
-
-/// Collects literal SQLite FTS terms while discarding parser punctuation and operators.
-/// 收集字面量 SQLite FTS 词项，同时丢弃解析器标点与操作符。
-fn normalize_sqlite_fts_literal_terms(query: &str) -> Vec<String> {
-    // Keep only tokenizer-friendly literal characters so pasted text like `50 TOPS (NPU)` cannot trip FTS syntax parsing.
-    // 仅保留分词器友好的字面字符，这样 `50 TOPS (NPU)` 一类粘贴文本就不会触发 FTS 语法解析。
-    let mut terms = Vec::new();
-    let mut current = String::new();
-    for ch in query.chars().take(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS) {
-        if sqlite_fts_query_char_is_literal(ch) {
-            current.push(ch);
-        } else {
-            push_normalized_sqlite_fts_literal_term(&mut terms, &mut current);
-        }
-    }
-    push_normalized_sqlite_fts_literal_term(&mut terms, &mut current);
-    terms
-}
-
-/// Pushes one completed literal SQLite FTS term after downgrading reserved operators to plain text.
-/// 在将保留操作符降级为普通文本后推入一条完整的字面量 SQLite FTS 词项。
-fn push_normalized_sqlite_fts_literal_term(terms: &mut Vec<String>, current: &mut String) {
-    if current.is_empty() {
-        return;
-    }
-    let normalized_term = normalize_sqlite_fts_reserved_term(current);
-    terms.push(normalized_term);
-    current.clear();
-}
-
-/// Rewrites reserved SQLite FTS operator keywords into lowercase literals so user text stays searchable.
-/// 将 SQLite FTS 保留操作符关键字改写为小写字面量，确保用户文本仍可被检索。
-fn normalize_sqlite_fts_reserved_term(term: &str) -> String {
-    match term {
-        "AND" | "OR" | "NOT" | "NEAR" => term.to_ascii_lowercase(),
-        _ => term.to_string(),
-    }
-}
-
-/// Returns whether one character may stay inside a literal SQLite FTS token.
-/// 返回某个字符是否可以保留在字面量 SQLite FTS 词元内部。
-fn sqlite_fts_query_char_is_literal(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
-/// Builds an escaped SQLite LIKE pattern for a normalized session-history query.
-/// 为规范化后的会话历史查询构建已转义的 SQLite LIKE 模式。
-#[cfg(test)]
-fn session_history_search_like_pattern(query: &str) -> String {
-    format!("%{}%", escape_sqlite_like_pattern(query))
-}
-
-/// Escapes SQLite LIKE wildcard characters while preserving literal user text.
-/// 转义 SQLite LIKE 通配符，同时保留用户文本的字面含义。
-#[cfg(test)]
-fn escape_sqlite_like_pattern(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '\\' | '%' | '_' => {
-                escaped.push('\\');
-                escaped.push(ch);
-            }
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
-/// Produces a compact search preview from one SQL-selected content fragment.
-/// 从 SQL 选出的正文字段片段生成紧凑搜索预览。
-#[cfg(test)]
-fn session_history_search_preview(value: &str) -> String {
-    let preview = truncate_preview_lines(value, 3, SESSION_HISTORY_SEARCH_PREVIEW_CHARS);
-    if preview.trim().is_empty() {
-        String::from("（该命中位于分片正文或元数据中，当前仅显示轻量定位信息。）")
-    } else {
-        preview
-    }
-}
-
-/// Produces a compact workspace-history preview from one FTS snippet fragment.
-/// 从一段 FTS snippet 片段生成紧凑的工作台历史预览。
-fn workspace_history_search_preview(value: &str) -> String {
-    let preview = truncate_preview_lines(
-        &value.replace("<mark>", "").replace("</mark>", ""),
-        3,
-        SESSION_HISTORY_SEARCH_PREVIEW_CHARS,
-    );
-    if preview.trim().is_empty() {
-        String::from("（该命中缺少可展示预览，但仍可定位到对应会话位置。）")
-    } else {
-        preview
-    }
-}
-
-/// Preserves the original FTS preview markup so the UI can render highlighted spans without losing the fallback plain preview.
-/// 保留原始 FTS 预览标记片段，便于 UI 渲染高亮片段，同时不丢失纯文本回退预览。
-fn workspace_history_search_preview_markup(value: &str) -> String {
-    if value.trim().is_empty() {
-        String::from("（该命中缺少可展示预览，但仍可定位到对应会话位置。）")
-    } else {
-        value.to_string()
-    }
+    Uuid::parse_str(normalized)
+        .map_err(|error| format!("解析持久化会话标识失败：{normalized}，{error}"))
 }
 
 /// Returns the inclusive turn-index bounds used for one search-result context load.
@@ -1910,267 +1363,6 @@ fn session_history_context_turn_bounds(anchor_turn_index: i64, radius: i64) -> (
         safe_anchor.saturating_sub(safe_radius).max(0),
         safe_anchor.saturating_add(safe_radius),
     )
-}
-
-/// Sanitizes transcript metadata before persistence so oversized host payloads do not dominate gRPC frames.
-/// 持久化前清洗转录元数据，避免超大宿主载荷主导 gRPC 帧大小。
-fn sanitize_session_message_metadata_for_persistence(metadata: Option<Value>) -> Option<Value> {
-    let metadata = metadata?;
-    let sanitized = strip_large_metadata_fields(metadata);
-    if estimate_json_value_bytes(&sanitized) <= SESSION_MESSAGE_METADATA_BUDGET_BYTES {
-        return Some(sanitized);
-    }
-
-    compact_metadata_to_essential_fields(&sanitized)
-}
-
-/// Removes known large host-result and argument payload fields while preserving display metadata.
-/// 移除已知的大型宿主结果与参数载荷字段，同时保留展示所需元数据。
-fn strip_large_metadata_fields(value: Value) -> Value {
-    if let Some(preserved) = preserve_compactable_host_result(&value) {
-        return preserved;
-    }
-
-    match value {
-        Value::Object(mut object) => {
-            for key in [
-                "host_result",
-                "payload",
-                "raw_payload",
-                "raw_result",
-                "result_payload",
-                "conversation_state",
-                "provider_message_state",
-            ] {
-                if let Some(value) = object.get_mut(key) {
-                    *value = preserve_or_compact_large_metadata_field(key, value.clone());
-                }
-            }
-            for key in ["arguments", "input", "request", "response"] {
-                if let Some(value) = object.get_mut(key) {
-                    if estimate_json_value_bytes(value) > SESSION_MESSAGE_METADATA_BUDGET_BYTES / 4
-                    {
-                        *value = preserve_or_compact_large_metadata_field(key, value.clone());
-                    }
-                }
-            }
-            Value::Object(
-                object
-                    .into_iter()
-                    .map(|(key, value)| (key, strip_large_metadata_fields(value)))
-                    .collect(),
-            )
-        }
-        Value::Array(values) => Value::Array(
-            values
-                .into_iter()
-                .map(strip_large_metadata_fields)
-                .collect(),
-        ),
-        other => other,
-    }
-}
-
-/// Preserves compact generated-media host payloads whenever they are needed for later transcript reconstruction.
-/// 在后续转录重建确有需要时保留紧凑生成媒体宿主载荷。
-fn preserve_or_compact_large_metadata_field(key: &str, value: Value) -> Value {
-    preserve_compactable_host_result(&value)
-        .filter(|_| key == "host_result")
-        .unwrap_or_else(|| compact_large_metadata_field(key, value))
-}
-
-/// Preserves compact host-result payloads whose semantics must survive restart and transcript reconstruction.
-/// 保留那些在重启与转录重建后仍必须保留语义的紧凑宿主结果载荷。
-fn preserve_compactable_host_result(value: &Value) -> Option<Value> {
-    preserve_generated_attachment_host_result(value)
-        .or_else(|| preserve_change_set_host_result(value))
-}
-
-/// Preserves the minimal generated-attachments host-result shape required to rebuild inline media cards after restart.
-/// 保留重启后重建内联媒体卡片所需的最小 generated-attachments 宿主结果结构。
-fn preserve_generated_attachment_host_result(value: &Value) -> Option<Value> {
-    let host_result = value.as_object()?;
-    if host_result.get("kind").and_then(Value::as_str) != Some("generated_attachments") {
-        return None;
-    }
-
-    let outputs = host_result
-        .get("payload")
-        .and_then(|payload| payload.get("outputs"))
-        .and_then(Value::as_array)?;
-    let compact_outputs = outputs
-        .iter()
-        .filter_map(compact_generated_attachment_output)
-        .collect::<Vec<_>>();
-    if compact_outputs.is_empty() {
-        return None;
-    }
-
-    Some(serde_json::json!({
-        "kind": "generated_attachments",
-        "payload": {
-            "outputs": compact_outputs,
-        },
-    }))
-}
-
-/// Preserves the minimal `change_set` host-result shape required to rebuild change statistics and file lists after restart without reviving stale filesystem verification warnings.
-/// 保留重启后重建变更统计与文件清单所需的最小 `change_set` 宿主结果形态，并避免复活过期的文件系统校验警告。
-fn preserve_change_set_host_result(value: &Value) -> Option<Value> {
-    compact_change_set_host_result(value)
-}
-
-/// Compacts one generated attachment output down to the fields required by transcript rendering and direct host actions.
-/// 将单条生成附件输出压缩到转录渲染与直接宿主动作所需的字段集合。
-fn compact_generated_attachment_output(output: &Value) -> Option<Value> {
-    let output_object = output.as_object()?;
-    let kind = output_object
-        .get("kind")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let file_name = output_object
-        .get("file_name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let local_path = output_object
-        .get("local_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-
-    let mut compact = serde_json::Map::new();
-    compact.insert(String::from("kind"), Value::String(kind.to_string()));
-    compact.insert(
-        String::from("file_name"),
-        Value::String(file_name.to_string()),
-    );
-    compact.insert(
-        String::from("local_path"),
-        Value::String(local_path.to_string()),
-    );
-
-    if let Some(mime_type) = output_object
-        .get("mime_type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        compact.insert(
-            String::from("mime_type"),
-            Value::String(mime_type.to_string()),
-        );
-    }
-    if let Some(byte_len) = output_object.get("byte_len").cloned() {
-        compact.insert(String::from("byte_len"), byte_len);
-    }
-    if let Some(source_path) = output_object
-        .get("source_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        compact.insert(
-            String::from("source_path"),
-            Value::String(source_path.to_string()),
-        );
-    }
-    if let Some(preview_local_path) = output_object
-        .get("preview_local_path")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        compact.insert(
-            String::from("preview_local_path"),
-            Value::String(preview_local_path.to_string()),
-        );
-    }
-    if let Some(asset_id) = output_object
-        .get("asset_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        compact.insert(
-            String::from("asset_id"),
-            Value::String(asset_id.to_string()),
-        );
-    }
-
-    Some(Value::Object(compact))
-}
-
-/// Compacts one oversized metadata field into a small audit-friendly placeholder.
-/// 将一个超大元数据字段压缩为便于审计的小型占位结构。
-fn compact_large_metadata_field(key: &str, value: Value) -> Value {
-    let estimated_bytes = estimate_json_value_bytes(&value);
-    let preview = match &value {
-        Value::String(text) => {
-            truncate_preview_lines(text, 4, SESSION_MESSAGE_METADATA_PREVIEW_CHARS)
-        }
-        _ => serde_json::to_string(&value)
-            .ok()
-            .map(|text| truncate_preview_lines(&text, 4, SESSION_MESSAGE_METADATA_PREVIEW_CHARS))
-            .unwrap_or_default(),
-    };
-
-    serde_json::json!({
-        "omitted": true,
-        "field": key,
-        "estimated_bytes": estimated_bytes,
-        "preview": preview,
-    })
-}
-
-/// Falls back to a small allow-list when metadata remains too large after structural pruning.
-/// 当结构化裁剪后元数据仍过大时，回退到一个小型白名单。
-fn compact_metadata_to_essential_fields(metadata: &Value) -> Option<Value> {
-    let object = metadata.as_object()?;
-    let mut compact = serde_json::Map::new();
-    for key in [
-        "tool_call_id",
-        "tool_result_id",
-        "tool_name",
-        "name",
-        "title",
-        "display_title",
-        "status",
-        "execution_status",
-        "run_state",
-        "task_id",
-        "session_id",
-        "parent_session_id",
-        "public_id",
-    ] {
-        if let Some(value) = object.get(key) {
-            compact.insert(key.to_string(), value.clone());
-        }
-    }
-    if let Some(host_result) = object
-        .get("host_result")
-        .and_then(preserve_compactable_host_result)
-    {
-        compact.insert(String::from("host_result"), host_result);
-    }
-    if compact.is_empty() {
-        None
-    } else {
-        compact.insert(
-            "metadata_omitted".to_string(),
-            Value::String(String::from("oversized")),
-        );
-        Some(Value::Object(compact))
-    }
-}
-
-/// Estimates a JSON value's serialized byte size for persistence-budget decisions.
-/// 为持久化预算判断估算 JSON 值序列化后的字节大小。
-fn estimate_json_value_bytes(value: &Value) -> usize {
-    serde_json::to_string(value)
-        .map(|text| text.len())
-        .unwrap_or_default()
 }
 
 /// Parses one persisted transcript UI-state JSON payload into the typed runtime-state structure.
@@ -2351,6 +1543,31 @@ fn non_empty_timestamp_text(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Returns a required cloned JSON value from a Codex boundary wrapper.
+/// 从 Codex 边界包装对象中返回一个必需的 JSON 值副本。
+fn required_value(payload: &Value, key: &str) -> Result<Value, String> {
+    payload
+        .get(key)
+        .cloned()
+        .ok_or_else(|| format!("codex boundary payload missing `{key}`"))
+}
+
+/// Returns a required string from a Codex boundary wrapper.
+/// 从 Codex 边界包装对象中返回一个必需字符串。
+fn required_string(payload: &Value, key: &str) -> Result<String, String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| format!("codex boundary payload missing string `{key}`"))
+}
+
+/// Returns an optional string from a Codex boundary wrapper.
+/// 从 Codex 边界包装对象中返回一个可选字符串。
+fn optional_string(payload: &Value, key: &str) -> Option<String> {
+    payload.get(key)?.as_str().map(str::to_string)
 }
 
 /// Converts one optional string into the nullable SQLite value expected by the controller SDK.

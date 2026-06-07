@@ -2,47 +2,24 @@
 //! 主工作台的子代理面板状态与运行时协调辅助逻辑。
 
 use super::*;
-use vulcan_task_session::FileTaskSessionStore;
+use vulcan_task_session::SegmentedTaskSessionStore;
 use vulcan_workbench_model::subagent_navigation_surface_is_visible;
 
 impl VulcanWorkbench {
-    /// Rebuilds one session-scoped subagent task cache from persisted task tool-result metadata while preserving in-flight running entries.
-    /// 根据持久化 task 工具结果元数据重建单个会话的子代理任务缓存，同时保留仍在运行中的活动条目。
+    /// Rebuilds one session-scoped subagent task cache from segmented task metadata while preserving in-flight running entries.
+    /// 根据分段 task 元数据重建单个会话的子代理任务缓存，同时保留仍在运行中的活动条目。
     pub(super) fn rebuild_subagent_task_cache_for_session(&mut self, session_id: SessionId) {
-        let file_backed_states =
-            self.file_backed_subagent_task_panel_states_for_session(session_id);
-        let detail_messages = self
-            .session_tool_detail_messages
-            .get(&session_id)
-            .into_iter()
-            .flat_map(|messages| messages.values());
-        let projected_messages = self
-            .session_messages
-            .get(&session_id)
-            .or_else(|| self.archived_session_messages.get(&session_id))
-            .into_iter()
-            .flat_map(|messages| messages.iter());
-        let legacy_states = detail_messages
-            .chain(projected_messages)
-            .filter_map(|message| {
-                message
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| parse_subagent_task_panel_metadata(session_id, metadata))
-            })
-            .collect::<Vec<_>>();
+        let segmented_states = self.segmented_subagent_task_panel_states_for_session(session_id);
         let previous_states = self
             .session_subagent_tasks
             .get(&session_id)
             .cloned()
             .unwrap_or_default();
         let task_runtime = self.runtime_foundation.task_runtime();
-        let merged_states = merge_subagent_task_panel_cache(
-            &previous_states,
-            file_backed_states,
-            legacy_states,
-            |task_id| task_runtime.is_task_running(task_id).unwrap_or(false),
-        );
+        let merged_states =
+            merge_subagent_task_panel_cache(&previous_states, segmented_states, |task_id| {
+                task_runtime.is_task_running(task_id).unwrap_or(false)
+            });
         if merged_states.is_empty() {
             self.session_subagent_tasks.remove(&session_id);
         } else {
@@ -58,23 +35,23 @@ impl VulcanWorkbench {
             self.active_subagent_panel = None;
         }
     }
-    /// Loads all direct child TaskSession panel states from the shared file-backed store for one direct parent session.
-    /// 从共享文件态存储加载某个直接父会话下的所有直接子 TaskSession 面板状态。
-    fn file_backed_subagent_task_panel_states_for_session(
+    /// Loads all direct child TaskSession panel states from the shared segmented store for one direct parent session.
+    /// 从共享分段存储加载某个直接父会话下的所有直接子 TaskSession 面板状态。
+    fn segmented_subagent_task_panel_states_for_session(
         &self,
         parent_session_id: SessionId,
     ) -> Vec<SubagentTaskPanelState> {
         let Some(store) = self.task_session_store_for_parent_session(parent_session_id) else {
             return Vec::new();
         };
-        subagent_task_panel_states_from_task_session_store(&store, parent_session_id)
+        subagent_task_panel_states_from_segmented_task_session_store(&store, parent_session_id)
     }
-    /// Builds the shared file-backed TaskSession store for a direct parent session when the root session belongs to a project.
-    /// 当根会话属于项目时，为某个直接父会话构建共享文件态 TaskSession 存储。
+    /// Builds the shared segmented TaskSession store for a direct parent session when the root session belongs to a project.
+    /// 当根会话属于项目时，为某个直接父会话构建共享分段 TaskSession 存储。
     fn task_session_store_for_parent_session(
         &self,
         parent_session_id: SessionId,
-    ) -> Option<FileTaskSessionStore> {
+    ) -> Option<SegmentedTaskSessionStore> {
         let (root_session_id, project_id) = if let Some(project_id) = self
             .session_by_id(parent_session_id)
             .and_then(|session| session.project_id.clone())
@@ -87,9 +64,15 @@ impl VulcanWorkbench {
                 .and_then(|session| session.project_id.clone())?;
             (root_session_id, project_id)
         };
-        Some(FileTaskSessionStore::new(
-            crate::workspace_store::session_event_store_directory(&project_id, root_session_id),
-        ))
+        let controller_runtime = self.controller_runtime.as_ref()?;
+        let session_dir = crate::workspace_store::find_segmented_session_directory_for_task_store(
+            &controller_runtime.data_root,
+            &project_id,
+            &root_session_id.to_string(),
+        )
+        .ok()
+        .flatten()?;
+        Some(SegmentedTaskSessionStore::new(session_dir))
     }
     /// Inserts or updates one cached subagent task panel state under its owning parent session.
     /// 将一条缓存子代理任务面板状态写入或更新到所属父会话之下。
@@ -101,8 +84,8 @@ impl VulcanWorkbench {
             .insert(state.task_id, state);
     }
 
-    /// Refreshes the cached TaskSession tree from the shared file-backed store before execution-chain decisions inspect running children.
-    /// 在执行链条决策检查运行中子节点前，从共享文件态存储刷新缓存的 TaskSession 树。
+    /// Refreshes the cached TaskSession tree from the shared segmented store before execution-chain decisions inspect running children.
+    /// 在执行链条决策检查运行中子节点前，从共享分段存储刷新缓存的 TaskSession 树。
     pub(super) fn refresh_subagent_task_tree_cache_for_session(
         &mut self,
         root_parent_session_id: SessionId,
@@ -129,8 +112,8 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Returns running subagent tasks after first refreshing the shared file-backed TaskSession tree.
-    /// 先刷新共享文件态 TaskSession 树，再返回运行中的子代理任务。
+    /// Returns running subagent tasks after first refreshing the shared segmented TaskSession tree.
+    /// 先刷新共享分段 TaskSession 树，再返回运行中的子代理任务。
     pub(super) fn running_subagent_task_states_for_tree_after_refresh(
         &mut self,
         root_parent_session_id: SessionId,
@@ -139,42 +122,6 @@ impl VulcanWorkbench {
         self.running_subagent_task_states_for_tree(root_parent_session_id)
     }
 
-    /// Returns one best-effort persisted task-panel snapshot for the provided parent/task pair by scanning the latest visible task-card metadata first.
-    /// 通过优先扫描最近的可见 task 卡片元数据，为给定父会话与任务组合返回一份最佳努力的持久化任务面板快照。
-    pub(super) fn persisted_subagent_task_panel_state_snapshot(
-        &self,
-        parent_session_id: SessionId,
-        task_id: SessionId,
-    ) -> Option<SubagentTaskPanelState> {
-        self.file_backed_subagent_task_panel_states_for_session(parent_session_id)
-            .into_iter()
-            .find(|state| state.task_id == task_id)
-            .or_else(|| {
-                self.session_tool_detail_messages
-                    .get(&parent_session_id)
-                    .and_then(|messages| {
-                        messages.values().rev().find_map(|message| {
-                            message.metadata.as_ref().and_then(|metadata| {
-                                parse_subagent_task_panel_metadata(parent_session_id, metadata)
-                                    .filter(|state| state.task_id == task_id)
-                            })
-                        })
-                    })
-            })
-            .or_else(|| {
-                self.session_messages
-                    .get(&parent_session_id)
-                    .or_else(|| self.archived_session_messages.get(&parent_session_id))
-                    .and_then(|messages| {
-                        messages.iter().rev().find_map(|message| {
-                            message.metadata.as_ref().and_then(|metadata| {
-                                parse_subagent_task_panel_metadata(parent_session_id, metadata)
-                                    .filter(|state| state.task_id == task_id)
-                            })
-                        })
-                    })
-            })
-    }
     /// Returns whether one cached child task is still truly running according to the shared runtime registry rather than the possibly stale UI metadata snapshot.
     /// 根据共享运行时注册表而非可能陈旧的界面元数据快照，返回某个缓存子任务当前是否仍在真实执行中。
     pub(super) fn subagent_task_is_actively_running(&self, task_id: SessionId) -> bool {
@@ -183,8 +130,8 @@ impl VulcanWorkbench {
             .is_task_running(task_id)
             .unwrap_or(false)
     }
-    /// Normalizes one cached subagent panel state against the live task runtime so stale `running` snapshots collapse into terminal states as soon as execution has really ended.
-    /// 将一条缓存子代理面板状态与实时任务运行时对齐，使陈旧的 `running` 快照在真实执行结束后立即收敛为终态。
+    /// Normalizes one cached subagent panel state against the live task runtime without repeated disk scans.
+    /// 将一条缓存子代理面板状态与实时任务运行时对齐，且不重复扫描磁盘。
     pub(super) fn normalized_subagent_task_panel_state(
         &self,
         state: &SubagentTaskPanelState,
@@ -192,11 +139,7 @@ impl VulcanWorkbench {
         normalize_subagent_task_panel_state(
             state,
             self.subagent_task_is_actively_running(state.task_id),
-            self.persisted_subagent_task_panel_state_snapshot(
-                state.parent_session_id,
-                state.task_id,
-            )
-            .as_ref(),
+            None,
         )
     }
     /// Seeds one live child-session transcript with its initial task prompt so the subagent panel has the same conversation opening shape as the main panel.

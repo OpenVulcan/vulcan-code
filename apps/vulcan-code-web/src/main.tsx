@@ -738,6 +738,28 @@ interface ConversationBlock {
   mediaAttachments?: GeneratedMediaAttachment[];
 }
 
+// RuntimeCue describes the compact running-state badge shown above the composer.
+// RuntimeCue 描述输入区上方展示的紧凑运行状态徽标。
+interface RuntimeCue {
+  // Stable cue family used to pick the icon and visual treatment.
+  // 用于选择图标与视觉表现的稳定提示类型。
+  kind: "default";
+  // Localized text shown in the badge.
+  // 徽标中展示的本地化文本。
+  text: string;
+}
+
+// StatusbarRuntimeActivity describes one centered footer runtime activity badge.
+// StatusbarRuntimeActivity 描述底部栏居中的单个运行活动徽标。
+interface StatusbarRuntimeActivity {
+  // Stable activity family used to pick the footer icon.
+  // 用于选择底部栏图标的稳定活动类型。
+  kind: "tool" | "subagent";
+  // Localized status text.
+  // 本地化状态文本。
+  text: string;
+}
+
 // ConversationRenderItem describes one row rendered after transcript projection.
 // ConversationRenderItem 描述转录投影后的单条渲染行。
 interface ConversationRenderItem {
@@ -1796,6 +1818,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // subagentRoutePreferenceRef stores the last user-selected subagent display route for WebUI-only routing.
   // subagentRoutePreferenceRef 保存用户最后选择的子代理显示路由，仅用于 WebUI 显示路由。
   const subagentRoutePreferenceRef = React.useRef<SubagentRoutePreference | null>(null);
+  // inflightSubagentOpenRequestRef coalesces duplicate backend open commands for the same route.
+  // inflightSubagentOpenRequestRef 合并同一路由的重复后端打开命令。
+  const inflightSubagentOpenRequestRef = React.useRef<InflightSubagentOpenRequest | null>(null);
   // draftConversation stores the local-only conversation opened before the first user message is sent.
   // draftConversation 保存发送第一条用户消息前打开的本地草稿会话。
   const [draftConversation, setDraftConversation] = React.useState<DraftConversationSelection | null>(null);
@@ -1839,6 +1864,19 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
+  // statusbarRuntimeActivities stores bottom-bar tool and subagent runtime badges for the selected parent conversation.
+  // statusbarRuntimeActivities 保存当前选中父会话的底部工具与子代理运行徽标。
+  const statusbarRuntimeActivities = React.useMemo(
+    () => buildStatusbarRuntimeActivities(
+      selectedConversation,
+      workbenchState.messages.filter((message) => message.conversationId === selectedConversationId),
+      workbenchState.subagentNavigation?.parentConversationId === selectedConversationId
+        ? workbenchState.subagentNavigation
+        : null,
+      i18n.t,
+    ),
+    [i18n.t, selectedConversation, selectedConversationId, workbenchState.messages, workbenchState.subagentNavigation],
+  );
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
   const selectedDraftConversation = selectedConversationId === draftConversation?.id ? draftConversation : null;
@@ -2177,13 +2215,26 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
   // handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
   const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
+    const routeKey = `${parentConversationId}:${taskId}`;
+    const existingRequest = inflightSubagentOpenRequestRef.current;
+    if (existingRequest?.key === routeKey) {
+      subagentRoutePreferenceRef.current = { parentConversationId, taskId };
+      webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
+      setWorkbenchState((current) => openSubagentSurfaceForConversation(current, parentConversationId, taskId));
+      return true;
+    }
     const requestSeq = subagentNavigationRequestSeqRef.current + 1;
     subagentNavigationRequestSeqRef.current = requestSeq;
     subagentRoutePreferenceRef.current = { parentConversationId, taskId };
-    webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq });
+    webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
     setWorkbenchState((current) => openSubagentSurfaceForConversation(current, parentConversationId, taskId));
+    const requestPromise = openSubagentPanel(parentConversationId, taskId);
+    inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
     try {
-      const snapshot = await openSubagentPanel(parentConversationId, taskId);
+      const snapshot = await requestPromise;
+      if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
+        inflightSubagentOpenRequestRef.current = null;
+      }
       if (snapshot) {
         if (subagentNavigationRequestSeqRef.current !== requestSeq) {
           webuiClickTrace("subagent.open.stale_result", {
@@ -2210,6 +2261,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       });
       return Boolean(snapshot);
     } catch (nextError) {
+      if (inflightSubagentOpenRequestRef.current?.promise === requestPromise) {
+        inflightSubagentOpenRequestRef.current = null;
+      }
       const message = nextError instanceof Error ? nextError.message : String(nextError);
       webuiClickTrace("subagent.open.error", { parentConversationId, taskId, message });
       if (message.includes("不可恢复") || message.includes("没有找到可打开的子代理任务")) {
@@ -2224,6 +2278,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleCloseSubagentPanel 请求后端返回父会话界面。
   const handleCloseSubagentPanel = React.useCallback(async (): Promise<void> => {
     const parentConversationId = selectedConversationIdRef.current;
+    inflightSubagentOpenRequestRef.current = null;
     const requestSeq = subagentNavigationRequestSeqRef.current + 1;
     subagentNavigationRequestSeqRef.current = requestSeq;
     if (parentConversationId) {
@@ -2639,7 +2694,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       </main>
       <footer className="statusbar">
         <span>版本 {props.workbench.appVersion}</span>
-        <span>Core Service: {props.startup.phase}</span>
+        <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
         <RepositoryLink />
       </footer>
       <RenameDialog
@@ -2659,6 +2714,28 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         onCancel={() => setArchiveProjectTarget(null)}
         onConfirm={handleArchiveProjectConfirm}
       />
+    </div>
+  );
+}
+
+// StatusbarRuntimeActivities renders centered tool/subagent activities in the footer.
+// StatusbarRuntimeActivities 在底部栏居中渲染工具与子代理活动。
+function StatusbarRuntimeActivities(props: {
+  // Activity badges currently visible for the selected conversation.
+  // 当前选中会话可见的活动徽标。
+  activities: StatusbarRuntimeActivity[];
+}) {
+  return (
+    <div className="statusbar-runtime-activities" aria-live="polite">
+      {props.activities.map((activity) => {
+        const Icon = activity.kind === "subagent" ? Bot : Wrench;
+        return (
+          <span className={cn("statusbar-runtime-activity", activity.kind)} key={activity.kind}>
+            <Icon size={13} />
+            <span>{activity.text}</span>
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -2804,6 +2881,17 @@ interface SubagentRoutePreference {
   // Child task id to display, or null when the parent conversation is displayed.
   // 要显示的子任务标识；为 null 时显示父会话。
   taskId: string | null;
+}
+
+// InflightSubagentOpenRequest tracks one backend route command that duplicate clicks can share.
+// InflightSubagentOpenRequest 跟踪一条可被重复点击复用的后端路由命令。
+interface InflightSubagentOpenRequest {
+  // Stable parent/task route key for request coalescing.
+  // 用于请求合并的稳定父级/任务路由键。
+  key: string;
+  // Backend command promise for the route change.
+  // 路由变更对应的后端命令 Promise。
+  promise: Promise<WorkbenchSnapshot | null>;
 }
 
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
@@ -6593,8 +6681,8 @@ function ChatArea(props: {
   // emptyPromptLeaving marks the empty prompt exit animation.
   // emptyPromptLeaving 标记空会话提示退出动画。
   const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
-  // runtimeCueText stores the compact in-progress label shown above the composer.
-  // runtimeCueText 保存显示在输入区上方的紧凑进行中提示。
+  // runtimeCue stores the compact in-progress label shown above the composer.
+  // runtimeCue 保存显示在输入区上方的紧凑进行中提示。
   const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, messages);
   const displayedStreamingThinkingBlock = thinkingOverlayEnabled ? streamingThinkingBlock : null;
   // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
@@ -6608,10 +6696,10 @@ function ChatArea(props: {
     ? thinkingOverlayBlockSignature(displayedStreamingThinkingBlock)
     : null;
   const retainedStreamingThinkingOverlayId = streamingThinkingOverlayBlock?.id ?? null;
-  const runtimeCueText = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCueText(surfaceConversation, messages, t);
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
+  const runtimeCue = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCue(surfaceConversation, messages, t);
   const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
@@ -6810,7 +6898,7 @@ function ChatArea(props: {
             isConversationRunning={isConversationRunning}
             thinkingOverlayEnabled={thinkingOverlayEnabled}
             reasoningSelection={props.workbench.reasoningSelection ?? null}
-            runtimeCueText={isEmptyConversation ? null : runtimeCueText}
+            runtimeCue={isEmptyConversation ? null : runtimeCue}
             showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
             onEditPendingPrompt={props.onEditPendingPrompt}
             onInsertPendingPrompt={props.onInsertPendingPrompt}
@@ -8352,31 +8440,31 @@ function StreamingThinkingOverlay(props: {
   );
 }
 
-// conversationRuntimeCueText resolves the compact active-state cue shown above the composer.
-// conversationRuntimeCueText 解析显示在输入区上方的紧凑运行状态提示。
-function conversationRuntimeCueText(
+// conversationRuntimeCue resolves the compact active-state cue shown above the composer.
+// conversationRuntimeCue 解析显示在输入区上方的紧凑运行状态提示。
+function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
   messages: ConversationMessage[],
   t: ReturnType<typeof useI18n>["t"],
-): string | null {
-  if (!conversation || conversation.status.toLowerCase() !== "running") {
+): RuntimeCue | null {
+  if (!conversation) {
     return null;
   }
-  const phaseCue = sessionRunPhaseCueText(conversation.runPhase, t);
+  if (conversation.status.toLowerCase() !== "running") {
+    return null;
+  }
+  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
+  const phaseCue = sessionRunPhaseCue(conversation.runPhase, t);
   if (phaseCue) {
     return phaseCue;
   }
-  const blocks = projectConversationRenderItems(messages)
-    .filter((item) => item.role !== "user")
-    .flatMap((item) => item.blocks);
-  const lastMeaningfulBlock = [...blocks].reverse().find((block) => block.kind !== "turn-stats");
   if (!lastMeaningfulBlock) {
-    return t("runtime.memoryRecall");
+    return { kind: "default", text: t("runtime.memoryRecall") };
   }
   if (blockLooksLikeMemoryRecall(lastMeaningfulBlock)) {
-    return t("runtime.memoryRecall");
+    return { kind: "default", text: t("runtime.memoryRecall") };
   }
-  return t("runtime.requesting");
+  return { kind: "default", text: t("runtime.requesting") };
 }
 
 // conversationIsRunning derives the send-button stop state from backend session status.
@@ -8392,26 +8480,61 @@ function conversationIsRunning(conversation: ConversationSummary | undefined): b
   return conversation.status.trim().toLowerCase() === "running";
 }
 
-// sessionRunPhaseCueText maps the backend per-session phase to a reusable active cue.
-// sessionRunPhaseCueText 将后端会话级阶段映射为可复用的活动提示。
-function sessionRunPhaseCueText(
+// sessionRunPhaseCue maps the backend per-session phase to a reusable active cue.
+// sessionRunPhaseCue 将后端会话级阶段映射为可复用的活动提示。
+function sessionRunPhaseCue(
   runPhase: string | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
-): string | null {
+): RuntimeCue | null {
   const normalized = normalizedSessionRunPhase(runPhase);
   if (!normalized || normalized === "idle" || normalized === "ready" || normalized === "failed" || normalized === "stopped") {
     return null;
   }
   if (normalized === "memoryrecall") {
-    return t("runtime.memoryRecall");
+    return { kind: "default", text: t("runtime.memoryRecall") };
   }
   if (normalized === "thinking") {
-    return t("runtime.thinking");
+    return null;
   }
   if (normalized === "toolrunning") {
-    return t("runtime.toolRunning");
+    return null;
   }
-  return t("runtime.requesting");
+  return { kind: "default", text: t("runtime.requesting") };
+}
+
+// buildStatusbarRuntimeActivities derives footer-only tool and subagent activities for the selected session.
+// buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的工具与子代理活动。
+function buildStatusbarRuntimeActivities(
+  conversation: ConversationSummary | undefined,
+  messages: ConversationMessage[],
+  subagentNavigation: WorkbenchSnapshot["subagentNavigation"] | null | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): StatusbarRuntimeActivity[] {
+  if (!conversation || conversation.status.toLowerCase() !== "running") {
+    return [];
+  }
+  const normalized = normalizedSessionRunPhase(conversation.runPhase);
+  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
+  const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
+  const hasSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
+  const hasToolRunning = normalized === "toolrunning" && !hasSubagentTool;
+  const activities: StatusbarRuntimeActivity[] = [];
+  if (hasToolRunning) {
+    activities.push({ kind: "tool", text: t("runtime.toolActivity") });
+  }
+  if (hasRunningSubagents || (normalized === "toolrunning" && hasSubagentTool)) {
+    activities.push({ kind: "subagent", text: t("runtime.subagentRunning") });
+  }
+  return activities;
+}
+
+// lastMeaningfulAssistantBlock returns the newest non-stat assistant/system block for state inference.
+// lastMeaningfulAssistantBlock 返回用于状态推断的最新非统计助手或系统块。
+function lastMeaningfulAssistantBlock(messages: ConversationMessage[]): ConversationBlock | null {
+  const blocks = projectConversationRenderItems(messages)
+    .filter((item) => item.role !== "user")
+    .flatMap((item) => item.blocks);
+  return [...blocks].reverse().find((block) => block.kind !== "turn-stats") ?? null;
 }
 
 // buildConversationStreamSignature returns a compact content signature for tail-follow decisions.
@@ -8448,6 +8571,16 @@ function blockLooksLikeMemoryRecall(block: ConversationBlock): boolean {
     || source.includes("记忆")
     || source.includes("画像")
     || source.includes("recall");
+}
+
+// blockLooksLikeSubagentTool detects Codex-style child-agent coordination tools.
+// blockLooksLikeSubagentTool 检测 Codex 风格的子代理协调工具。
+function blockLooksLikeSubagentTool(block: ConversationBlock): boolean {
+  const toolName = block.toolName?.trim().toLowerCase();
+  return toolName === "spawn_agent"
+    || toolName === "wait_agent"
+    || toolName === "list_agents"
+    || toolName === "close_agent";
 }
 
 // ComposerDock renders composer-related floating controls.
@@ -8528,9 +8661,9 @@ function ComposerDock(props: {
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
-  // runtimeCueText shows the current session in-progress activity near the composer.
-  // runtimeCueText 在输入区附近显示当前会话的进行中活动。
-  runtimeCueText: string | null;
+  // runtimeCue shows the current session in-progress activity near the composer.
+  // runtimeCue 在输入区附近显示当前会话的进行中活动。
+  runtimeCue: RuntimeCue | null;
 }) {
   // dockRef measures the full composer stack, including pending queue rows and runtime cues.
   // dockRef 测量完整输入区堆栈，包括待发送队列行与运行提示。
@@ -8571,9 +8704,9 @@ function ComposerDock(props: {
           <TooltipContent side="top">滚动到底部</TooltipContent>
         </Tooltip>
       ) : null}
-      {props.runtimeCueText ? (
+      {props.runtimeCue ? (
         <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-          <ShinyText text={props.runtimeCueText} />
+          <ShinyText text={props.runtimeCue.text} />
         </div>
       ) : null}
       <ComposerPanel

@@ -2,7 +2,6 @@
 //! 从主工作台模块中抽取的待发送提示词队列与派发辅助实现。
 
 use super::*;
-use vulcan_agent_runtime::workbench_prompt_turn::SharedPromptPrecheckPlan;
 use vulcan_workbench_model::{
     PendingPromptBusyLaneContext, PendingPromptDispatchBlockReason, PendingPromptDispatchContext,
     PendingPromptInternalQueueEnqueueError, PendingPromptInternalQueueEnqueueOutcome,
@@ -10,8 +9,7 @@ use vulcan_workbench_model::{
     apply_pending_prompt_internal_queue_enqueue_plan,
     apply_pending_prompt_panel_drop_target as apply_shared_pending_prompt_panel_drop_target,
     next_pending_prompt_dispatch_source, pending_prompt_dispatch_block_reason,
-    pending_prompt_dispatch_block_reason_for_source,
-    pending_prompt_dispatch_prefers_delegate_completion, pending_prompt_lane_is_busy,
+    pending_prompt_dispatch_block_reason_for_source, pending_prompt_lane_is_busy,
     plan_pending_prompt_internal_queue_enqueue, subagent_navigation_round_should_remain_visible,
 };
 
@@ -54,8 +52,8 @@ impl VulcanWorkbench {
             .is_empty()
     }
 
-    /// Returns whether a parent session has running subagents after refreshing the shared file-backed TaskSession tree.
-    /// 刷新共享文件态 TaskSession 树后，返回某个父会话是否仍有运行中的子代理。
+    /// Returns whether a parent session has running subagents after refreshing the shared segmented TaskSession tree.
+    /// 刷新共享分段 TaskSession 树后，返回某个父会话是否仍有运行中的子代理。
     pub(super) fn session_has_running_subagent_tasks_after_refresh(
         &mut self,
         session_id: SessionId,
@@ -63,27 +61,6 @@ impl VulcanWorkbench {
         !self
             .running_subagent_task_states_for_tree_after_refresh(session_id)
             .is_empty()
-    }
-
-    /// Counts delegated subagent completion callbacks still queued for the provided parent session.
-    /// 统计给定父会话内部队列中仍等待吸收的子代理完成回流回调数量。
-    pub(super) fn session_pending_delegate_completion_prompt_count(
-        &self,
-        session_id: SessionId,
-    ) -> usize {
-        self.session_pending_prompt_queue(session_id)
-            .iter()
-            .filter(|entry| entry.source == PendingSessionPromptSource::DelegateCompletion)
-            .count()
-    }
-
-    /// Returns whether the internal prompt queue still contains delegated subagent completion callbacks for the provided parent session.
-    /// 返回给定父会话的内部提示词队列中是否仍包含子代理完成回流回调。
-    pub(super) fn session_has_pending_delegate_completion_prompt(
-        &self,
-        session_id: SessionId,
-    ) -> bool {
-        self.session_pending_delegate_completion_prompt_count(session_id) > 0
     }
 
     /// Returns whether one session should keep showing its subagent navigation round even after individual child tasks reach terminal states.
@@ -95,7 +72,7 @@ impl VulcanWorkbench {
         subagent_navigation_round_should_remain_visible(
             self.session_has_active_run(session_id),
             self.session_has_running_subagent_tasks(session_id),
-            self.session_has_pending_delegate_completion_prompt(session_id),
+            false,
         )
     }
 
@@ -136,8 +113,8 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Builds the dispatch context after refreshing TaskSession file-backed state for execution decisions.
-    /// 为执行决策刷新 TaskSession 文件态后，构建待发送提示词分发上下文。
+    /// Builds the dispatch context after refreshing segmented TaskSession state for execution decisions.
+    /// 为执行决策刷新分段 TaskSession 状态后，构建待发送提示词分发上下文。
     fn pending_prompt_dispatch_context_after_refresh(
         &mut self,
         session_id: SessionId,
@@ -150,8 +127,8 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Collapses and hides the subagent navigation round once the parent run, child tasks, and delegated callbacks have all settled.
-    /// 当父运行、子任务与委派回调全部收敛后，折叠并隐藏子代理导航轮次。
+    /// Collapses and hides the subagent navigation round once the parent run and child tasks have all settled.
+    /// 当父运行与子任务全部收敛后，折叠并隐藏子代理导航轮次。
     pub(super) fn refresh_subagent_navigation_round_visibility(&mut self, session_id: SessionId) {
         self.refresh_subagent_task_tree_cache_for_session(session_id);
         if self.session_should_keep_subagent_navigation_round(session_id) {
@@ -163,8 +140,8 @@ impl VulcanWorkbench {
         }
     }
 
-    /// Returns whether the internal system execution lane is still busy for the provided session, including active runs, internal queued callbacks, and running subagents.
-    /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、内部排队回调以及运行中的子代理。
+    /// Returns whether the internal system execution lane is still busy for the provided session, including active runs, queued prompts, and running subagents.
+    /// 返回给定会话的内部系统执行通道当前是否仍然繁忙，包括活动运行、排队提示词以及运行中的子代理。
     pub(super) fn session_has_blocking_system_prompt_work(&self, session_id: SessionId) -> bool {
         let Some(runtime_state) = self.session_runtime_state(session_id) else {
             return self.session_has_active_run(session_id)
@@ -180,8 +157,8 @@ impl VulcanWorkbench {
         )
     }
 
-    /// Returns whether a session has blocking work after refreshing TaskSession file-backed state for send/stop decisions.
-    /// 为发送和停止决策刷新 TaskSession 文件态后，返回会话是否存在阻塞中的系统工作。
+    /// Returns whether a session has blocking work after refreshing segmented TaskSession state for send/stop decisions.
+    /// 为发送和停止决策刷新分段 TaskSession 状态后，返回会话是否存在阻塞中的系统工作。
     pub(super) fn session_has_blocking_system_prompt_work_after_refresh(
         &mut self,
         session_id: SessionId,
@@ -391,9 +368,7 @@ impl VulcanWorkbench {
         session_id: SessionId,
     ) -> Option<PendingSessionPromptEntry> {
         let now = current_unix_millis_text();
-        let prefer_delegate_completion = pending_prompt_dispatch_prefers_delegate_completion(
-            self.pending_prompt_dispatch_context_after_refresh(session_id),
-        );
+        let priority_override = false;
         let next_entry = {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
             if runtime_state.ui_state.pending_prompt_queue.is_empty() {
@@ -401,7 +376,7 @@ impl VulcanWorkbench {
             } else {
                 let dispatch_index = pending_prompt_dispatch_index(
                     runtime_state.ui_state.pending_prompt_queue.as_slice(),
-                    prefer_delegate_completion,
+                    priority_override,
                 );
                 let entry = runtime_state
                     .ui_state
@@ -934,12 +909,13 @@ impl VulcanWorkbench {
             .session_by_id(session_id)
             .and_then(|session| session.project_id.clone())
             .filter(|project_id| !project_id.trim().is_empty());
-        if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion
-            && let (Some(project_id), Some(runtime_state)) = (
-                owning_project_id.as_deref(),
-                self.session_runtime_state(session_id).cloned(),
-            )
-            && let Err(error) = crate::workspace_store::snapshot_session_context_before_user_prompt(
+        if let (Some(project_id), Some(runtime_state), Some(controller_runtime)) = (
+            owning_project_id.as_deref(),
+            self.session_runtime_state(session_id).cloned(),
+            self.controller_runtime.as_ref(),
+        ) && let Err(error) =
+            crate::workspace_store::snapshot_segmented_session_context_before_user_prompt(
+                &controller_runtime.data_root,
                 project_id,
                 session_id,
                 &runtime_state,
@@ -1054,17 +1030,15 @@ impl VulcanWorkbench {
         let removed_legacy_profile_injection =
             self.remove_legacy_vmm_profile_context_injection_for_session(session_id);
         let precheck_hook_snapshots = self.conversation_hook_runtime.precheck_hook_snapshots();
-        let precheck_plan = if prompt_entry.source.runs_user_prompt_precheck() {
-            shared_prompt_precheck_plan(&effective_vmm_config, &precheck_hook_snapshots)
-        } else {
-            SharedPromptPrecheckPlan::internal_continuation()
-        };
-        if prompt_entry.source.runs_user_prompt_precheck()
-            && let (Some(project_id), Some(runtime_state)) = (
-                owning_project_id.as_deref(),
-                self.session_runtime_state(session_id).cloned(),
-            )
-            && let Err(error) = crate::workspace_store::persist_session_context_current_document(
+        let precheck_plan =
+            shared_prompt_precheck_plan(&effective_vmm_config, &precheck_hook_snapshots);
+        if let (Some(project_id), Some(runtime_state), Some(controller_runtime)) = (
+            owning_project_id.as_deref(),
+            self.session_runtime_state(session_id).cloned(),
+            self.controller_runtime.as_ref(),
+        ) && let Err(error) =
+            crate::workspace_store::persist_segmented_session_context_current_document(
+                &controller_runtime.data_root,
                 project_id,
                 session_id,
                 &runtime_state,
@@ -1094,29 +1068,22 @@ impl VulcanWorkbench {
             }
         }
 
-        if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
-            self.push_visible_session_record_message_with_metadata(
-                session_id,
-                SessionMessageKind::User,
-                SessionMessageRecordKind::Transcript,
-                "用户指令",
-                build_user_prompt_transcript_body(&prompt_entry.prompt, &prompt_entry.attachments),
-                build_user_prompt_transcript_metadata(
-                    &prompt_entry.prompt,
-                    &prompt_entry.attachments,
-                ),
-                false,
-            );
-            if composer_text_has_submittable_content(&prompt_entry.prompt)
-                && self.session_user_turn_count(session_id) == 1
-            {
-                let _ = self.maybe_generate_session_title_from_prompt(
-                    session_id,
-                    prompt_entry.prompt.as_str(),
-                );
-            }
-            self.materialize_session_after_first_user_turn(session_id);
+        self.push_visible_session_record_message_with_metadata(
+            session_id,
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "用户指令",
+            build_user_prompt_transcript_body(&prompt_entry.prompt, &prompt_entry.attachments),
+            build_user_prompt_transcript_metadata(&prompt_entry.prompt, &prompt_entry.attachments),
+            false,
+        );
+        if composer_text_has_submittable_content(&prompt_entry.prompt)
+            && self.session_user_turn_count(session_id) == 1
+        {
+            let _ = self
+                .maybe_generate_session_title_from_prompt(session_id, prompt_entry.prompt.as_str());
         }
+        self.materialize_session_after_first_user_turn(session_id);
         if precheck_plan.should_skip_precheck || !precheck_plan.has_precheck_hooks {
             return self.continue_session_run_after_precheck(
                 session_id,
@@ -1253,30 +1220,42 @@ impl VulcanWorkbench {
             prompt_entry.prompt = request.prompt.clone();
             prompt_entry.preview =
                 pending_prompt_preview_text(&prompt_entry.prompt, &prompt_entry.attachments);
-            if prompt_entry.source != PendingSessionPromptSource::DelegateCompletion {
-                self.patch_latest_prechecked_user_prompt(
-                    session_id,
-                    &prompt_entry.prompt,
-                    &prompt_entry.attachments,
-                );
-            }
+            self.patch_latest_prechecked_user_prompt(
+                session_id,
+                &prompt_entry.prompt,
+                &prompt_entry.attachments,
+            );
             request.conversation_state = self.session_conversation_state(session_id);
         }
         let owning_project_id = self
             .session_by_id(session_id)
             .and_then(|session| session.project_id.clone())
             .filter(|project_id| !project_id.trim().is_empty());
-        request.task_session_store_root = owning_project_id.as_deref().map(|project_id| {
-            crate::workspace_store::session_event_store_directory(project_id, session_id)
+        request.task_session_store_root = owning_project_id.as_deref().and_then(|project_id| {
+            self.controller_runtime
+                .as_ref()
+                .and_then(|controller_runtime| {
+                    crate::workspace_store::find_segmented_session_directory_for_task_store(
+                        &controller_runtime.data_root,
+                        project_id,
+                        &session_id.to_string(),
+                    )
+                    .ok()
+                    .flatten()
+                })
         });
-        if let (Some(project_id), Some(runtime_state)) = (
+        if let (Some(project_id), Some(runtime_state), Some(controller_runtime)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
-        ) && let Err(error) = crate::workspace_store::persist_session_context_current_document(
-            project_id,
-            session_id,
-            &runtime_state,
-        ) {
+            self.controller_runtime.as_ref(),
+        ) && let Err(error) =
+            crate::workspace_store::persist_segmented_session_context_current_document(
+                &controller_runtime.data_root,
+                project_id,
+                session_id,
+                &runtime_state,
+            )
+        {
             self.push_activity(
                 ActivityLevel::Warning,
                 "当前上下文持久化失败",
@@ -1420,11 +1399,10 @@ impl VulcanWorkbench {
         allow_from_stopped_phase: bool,
     ) -> Task<Message> {
         let dispatch_context = self.pending_prompt_dispatch_context_after_refresh(session_id);
-        let prefer_delegate_completion =
-            pending_prompt_dispatch_prefers_delegate_completion(dispatch_context);
-        let Some(next_source) = self.session_runtime_state(session_id).and_then(|state| {
-            next_pending_prompt_dispatch_source(&state.ui_state, prefer_delegate_completion)
-        }) else {
+        let Some(next_source) = self
+            .session_runtime_state(session_id)
+            .and_then(|state| next_pending_prompt_dispatch_source(&state.ui_state, false))
+        else {
             return Task::none();
         };
         if pending_prompt_dispatch_block_reason_for_source(
@@ -1462,9 +1440,6 @@ impl VulcanWorkbench {
             return Task::none();
         };
         self.status_message = match prompt_entry.source {
-            PendingSessionPromptSource::DelegateCompletion => {
-                String::from("子代理结果已回流，正在继续协调主流程。")
-            }
             PendingSessionPromptSource::UserInterrupt => String::from("正在优先处理插队消息。"),
             PendingSessionPromptSource::UserFollowup => {
                 if prompt_entry.panel_entry_id.is_some() {
@@ -1472,6 +1447,9 @@ impl VulcanWorkbench {
                 } else {
                     String::from("正在处理排队消息。")
                 }
+            }
+            PendingSessionPromptSource::SubagentCallback => {
+                String::from("正在处理子代理回流结果。")
             }
         };
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
@@ -1806,37 +1784,5 @@ impl VulcanWorkbench {
         }
         self.clear_composer_input();
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
-    }
-
-    /// Enqueues one delegated subagent completion follow-up so the parent coordinator can absorb the result on the next available turn.
-    /// 将一条子代理完成后的跟进消息排入队列，以便父协调代理在下一次可用回合吸收该结果。
-    pub(super) fn enqueue_delegate_completion_followup_if_needed(
-        &mut self,
-        parent_session_id: SessionId,
-        state: &SubagentTaskPanelState,
-    ) {
-        if self.session_run_phase_for(parent_session_id) == SessionRunPhase::Stopped {
-            return;
-        }
-        let prompt_entry = self.build_pending_prompt_entry(
-            build_delegate_completion_followup_prompt(state),
-            Vec::new(),
-            PendingSessionPromptSource::DelegateCompletion,
-            Some(state.task_id),
-            Some(build_delegate_completion_followup_preview(state)),
-            None,
-        );
-        if let Err(error) =
-            self.enqueue_session_pending_prompt(parent_session_id, prompt_entry, false)
-        {
-            self.push_activity(
-                ActivityLevel::Warning,
-                "子代理回流排队失败",
-                format!(
-                    "子代理 `{}` 的结果未能加入后续处理队列：{error}",
-                    state.subagent_label
-                ),
-            );
-        }
     }
 }

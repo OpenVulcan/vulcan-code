@@ -4,7 +4,7 @@
 use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::agent_runtime::question_runtime::{QuestionRuntime, build_question_tool_candidate};
-use crate::agent_runtime::task_runtime::{TaskRuntime, build_task_tool_candidate};
+use crate::agent_runtime::task_runtime::{TaskRuntime, build_subagent_tool_candidates};
 use crate::image_understanding_compat::{
     configured_understand_image_parameters_schema, execute_configured_understand_image,
 };
@@ -124,9 +124,10 @@ pub fn build_vulcan_tools_manager(
     let vmm_ai_tools_enabled = vmm_effective.ai_tools_enabled
         && vmm_effective.diagnose_memory_flow(true) == vulcan_vmm::VmmConfigDiagnostic::Ready;
 
-    let task_candidate = build_task_tool_candidate(task_runtime);
-    occupied_public_tool_ids.insert(task_candidate.descriptor.id.clone());
-    candidates.push(task_candidate);
+    for subagent_candidate in build_subagent_tool_candidates(task_runtime) {
+        occupied_public_tool_ids.insert(subagent_candidate.descriptor.id.clone());
+        candidates.push(subagent_candidate);
+    }
     let ask_candidate = build_question_tool_candidate(question_runtime, "ask");
     occupied_public_tool_ids.insert(ask_candidate.descriptor.id.clone());
     candidates.push(ask_candidate);

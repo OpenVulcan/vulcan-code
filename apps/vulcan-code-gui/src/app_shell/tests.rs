@@ -5,15 +5,14 @@ use super::workbench_model_state::{
 use super::{
     ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
     PromptCompactionExecution, SessionPromptCompactionTrigger, ToolModalPresentation,
-    VulcanWorkbench, build_background_legacy_maintenance_queue,
-    build_command_session_stop_result_metadata, build_composer_slash_command_state,
-    build_session_record_message_id, build_session_turn_stats_from_state,
-    clear_selectable_transcript_render_cache_stash, compact_tool_detail_message_for_projection,
-    composer_text_has_submittable_content, composer_visible_line_count,
-    generated_attachments_from_tool_metadata,
+    VulcanWorkbench, build_command_session_stop_result_metadata,
+    build_composer_slash_command_state, build_session_record_message_id,
+    build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
+    compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
+    composer_visible_line_count, generated_attachments_from_tool_metadata,
     merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
     pending_prompt_dispatch_index, prune_session_messages_to_limit,
-    sanitize_workspace_history_search_query_input, session_event_store_missing_error,
+    sanitize_workspace_history_search_query_input, segmented_session_files_missing_error,
     task_session_payload_from_tool_metadata, tool_modal_presentation_from_agent_view_attributes,
 };
 use crate::app_shell::markdown;
@@ -74,8 +73,7 @@ fn test_pending_prompt_entry(
         model_reference: None,
         runtime_options: PendingPromptRuntimeOptions::default(),
         source,
-        task_id: (source == PendingSessionPromptSource::DelegateCompletion)
-            .then(|| format!("task-{prompt}")),
+        task_id: None,
         panel_entry_id: None,
         created_at: String::from("1"),
     }
@@ -398,13 +396,13 @@ fn session_title_generation_runs_only_for_first_user_turn() {
     );
 }
 
-/// Verifies missing event-store file errors are recognized so the workbench can offer a rebuild path instead of only showing a passive status line.
-/// 验证缺失事件存储文件错误能够被识别，从而让工作台提供重建路径，而不是只显示被动状态栏报错。
+/// Verifies missing segmented-session file errors are recognized so the workbench can offer a rebuild path instead of only showing a passive status line.
+/// 验证缺失分段会话文件错误能够被识别，从而让工作台提供重建路径，而不是只显示被动状态栏报错。
 #[test]
-fn session_event_store_missing_error_detects_manifest_not_found() {
-    let error = "读取 JSON 文档失败（C:\\Users\\20000\\.vulcan\\code\\sessions\\project\\session\\manifest.json）：系统找不到指定的路径。 (os error 3)";
-    assert!(session_event_store_missing_error(error));
-    assert!(!session_event_store_missing_error(
+fn segmented_session_files_missing_error_detects_metadata_not_found() {
+    let error = "读取 JSON 文档失败（C:\\Users\\20000\\.vulcan\\code\\sessions\\project\\session\\metadata.json）：系统找不到指定的路径。 (os error 3)";
+    assert!(segmented_session_files_missing_error(error));
+    assert!(!segmented_session_files_missing_error(
         "解析 JSON 文档失败：unexpected eof"
     ));
 }
@@ -491,6 +489,19 @@ fn sanitize_workspace_history_search_query_input_limits_pasted_text() {
         sanitized.chars().count(),
         SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS
     );
+}
+
+/// Verifies the legacy workspace-history search panel stays disabled while search is downlined.
+/// 验证搜索下线期间旧工作台历史搜索面板保持禁用。
+#[test]
+fn disabled_workspace_history_search_panel_does_not_open() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+
+    let _ = workbench.update(Message::OpenWorkspaceHistorySearchPanel);
+
+    assert!(!workbench.workspace_history_search.panel_open);
+    assert!(workbench.workspace_history_search.query.is_empty());
+    assert!(workbench.status_message.contains("历史搜索已下线"));
 }
 
 /// Verifies that one long logical line expands into multiple visible lines when the composer width becomes narrow enough.
@@ -648,7 +659,7 @@ fn apply_session_history_compaction_result_creates_checkpoint_for_prompt_summary
         Some(crate::conversation_protocol::SessionConversationPayload::UserText {
             text,
             ..
-        }) if text.contains("Earlier context summary")
+        }) if text.contains("<previous-summary>")
     ));
     assert_eq!(compacted_conversation.messages.len(), 3);
     assert!(
@@ -1495,41 +1506,6 @@ fn finish_prompt_compaction_collapses_boundary_row() {
     );
 }
 
-/// Verifies that the background legacy-maintenance queue includes visible and archived sessions once.
-/// 验证后台旧数据维护队列会将可见与归档会话各纳入一次。
-#[test]
-fn background_legacy_maintenance_queue_deduplicates_sessions() {
-    let first_session_id = SessionId::from_u128(101);
-    let second_session_id = SessionId::from_u128(102);
-    let visible_sessions = vec![test_session_summary(first_session_id, "可见会话")];
-    let archived_sessions = vec![
-        test_session_summary(first_session_id, "重复归档会话"),
-        test_session_summary(second_session_id, "归档会话"),
-    ];
-
-    let queue = build_background_legacy_maintenance_queue(&visible_sessions, &archived_sessions);
-
-    assert_eq!(
-        queue.into_iter().collect::<Vec<_>>(),
-        vec![first_session_id, second_session_id]
-    );
-}
-
-/// Verifies that the background legacy-maintenance queue ignores nil draft identifiers.
-/// 验证后台旧数据维护队列会忽略空的草稿标识。
-#[test]
-fn background_legacy_maintenance_queue_skips_nil_sessions() {
-    let session_id = SessionId::from_u128(103);
-    let visible_sessions = vec![
-        test_session_summary(SessionId::nil(), "空会话"),
-        test_session_summary(session_id, "正常会话"),
-    ];
-
-    let queue = build_background_legacy_maintenance_queue(&visible_sessions, &[]);
-
-    assert_eq!(queue.into_iter().collect::<Vec<_>>(), vec![session_id]);
-}
-
 /// Verifies switching GUI locale only rebuilds transcript projections and never mutates canonical context state or persisted transcript rows.
 /// 验证切换图形界面语言只会重建转录投影，不会改动规范上下文状态或已持久化转录行。
 #[test]
@@ -1632,20 +1608,16 @@ fn locale_refresh_rebuilds_projection_without_mutating_context_state() {
     );
 }
 
-/// Verifies Anthropic queue dispatch prefers delegated completion callbacks over user-authored follow-ups once background subagents have fully settled.
-/// 验证在后台子代理全部收敛后，Anthropic 队列分发会优先选择子代理完成回流项，而不是优先处理用户跟进消息。
+/// Verifies queue dispatch uses FIFO ordering even when the legacy priority flag is set.
+/// 验证即使传入旧优先级标记，队列分发仍使用 FIFO 顺序。
 #[test]
-fn pending_prompt_dispatch_index_prefers_delegate_completion_for_anthropic() {
+fn pending_prompt_dispatch_index_uses_fifo_ordering() {
     let queue = vec![
         test_pending_prompt_entry(PendingSessionPromptSource::UserInterrupt, "interrupt"),
-        test_pending_prompt_entry(
-            PendingSessionPromptSource::DelegateCompletion,
-            "delegate-finished",
-        ),
         test_pending_prompt_entry(PendingSessionPromptSource::UserFollowup, "followup"),
     ];
 
-    assert_eq!(pending_prompt_dispatch_index(&queue, true), 1);
+    assert_eq!(pending_prompt_dispatch_index(&queue, true), 0);
     assert_eq!(pending_prompt_dispatch_index(&queue, false), 0);
 }
 

@@ -8472,6 +8472,7 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-change-set",
+ "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-context-injection",
@@ -8596,6 +8597,7 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-runtime",
+ "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",
@@ -8609,6 +8611,16 @@ dependencies = [
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
+]
+
+[[package]]
+name = "vulcan-codex-session-port"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-context",
+ "vulcan-session-core",
 ]
 
 [[package]]
@@ -8643,6 +8655,7 @@ name = "vulcan-core"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
  "serde",
  "serde_json",
  "tokio",
@@ -8859,11 +8872,13 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-change-set",
+ "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-session-core",
  "vulcan-vmm",
  "vulcan-workbench-model",
 ]
