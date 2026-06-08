@@ -126,6 +126,14 @@ pub struct WorkbenchSnapshot {
     /// Plugin summaries shown in the plugin center.
     /// 插件中心展示的插件摘要。
     pub plugins: Vec<PluginSummary>,
+    /// Lua Skills catalog shown in the skill management area.
+    /// 技能管理区域展示的 Lua Skills 目录。
+    #[serde(default)]
+    pub lua_skills: LuaSkillsCatalogSummary,
+    /// Agent Skills catalog shown in the skill management area.
+    /// 技能管理区域展示的 Agent Skills 目录。
+    #[serde(default)]
+    pub agent_skills: AgentSkillsCatalogSummary,
     /// Setting sections shown in the settings area.
     /// 设置区域展示的设置分组。
     pub settings: Vec<SettingSectionSummary>,
@@ -159,6 +167,10 @@ pub struct WorkbenchSnapshot {
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
+    /// Detailed VMM memory management snapshot shown in the VMM area.
+    /// VMM 区域展示的详细记忆管理快照。
+    #[serde(default)]
+    pub vmm_memory: VmmMemorySnapshot,
     /// Command sessions shown in the command area.
     /// 命令区域展示的命令会话。
     pub command_sessions: Vec<CommandSessionSummary>,
@@ -173,6 +185,171 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Full WebUI summary for the embedded Lua Skills catalog.
+/// 嵌入式 Lua Skills 目录的完整 WebUI 摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillsCatalogSummary {
+    /// Runtime root used by the embedded Lua Skills host.
+    /// 嵌入式 Lua Skills 宿主使用的运行时根目录。
+    pub runtime_root: String,
+    /// System Lua library directory used by Lua Skills.
+    /// Lua Skills 使用的系统 Lua 库目录。
+    pub system_lua_lib: String,
+    /// Total visible runtime entry count.
+    /// 可见运行时入口总数。
+    pub entry_count: usize,
+    /// Human-readable notice for the current catalog state.
+    /// 当前目录状态的人类可读提示。
+    pub notice: String,
+    /// Skill package rows visible to the host.
+    /// 宿主当前可见的技能包行。
+    pub skills: Vec<LuaSkillSummary>,
+}
+
+/// One Lua Skill package row projected for the WebUI.
+/// 投影给 WebUI 的单个 Lua Skill 包行。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillSummary {
+    /// Stable skill identifier.
+    /// 稳定技能标识。
+    pub skill_id: String,
+    /// Human-facing display name.
+    /// 面向用户的显示名称。
+    pub display_name: String,
+    /// Skill package version.
+    /// 技能包版本。
+    pub version: String,
+    /// Runtime root layer name that owns this effective skill.
+    /// 拥有该生效技能的运行时根层名称。
+    pub root_name: String,
+    /// Filesystem directory that contains this skill.
+    /// 包含该技能的文件系统目录。
+    pub skill_dir: String,
+    /// Whether this skill is currently enabled.
+    /// 该技能当前是否已启用。
+    pub enabled: bool,
+    /// Optional disabled reason from the lifecycle record.
+    /// 生命周期记录中的可选停用原因。
+    pub disabled_reason: Option<String>,
+    /// Whether this skill has a managed install record.
+    /// 该技能是否拥有受管安装记录。
+    pub managed: bool,
+    /// Optional install source type label.
+    /// 可选安装来源类型标签。
+    pub source_type: Option<String>,
+    /// Optional install source locator.
+    /// 可选安装来源定位值。
+    pub source_locator: Option<String>,
+    /// Number of visible runtime entries owned by this skill.
+    /// 该技能拥有的可见运行时入口数量。
+    pub entry_count: usize,
+    /// Whether this skill belongs to the host-owned ROOT layer.
+    /// 该技能是否属于宿主自有 ROOT 层。
+    pub system_owned: bool,
+    /// Tool rows exposed by this skill.
+    /// 该技能暴露的工具行。
+    pub tools: Vec<LuaSkillToolSummary>,
+}
+
+/// One Lua Skill runtime tool row with registration state.
+/// 带注册状态的单个 Lua Skill 运行时工具行。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LuaSkillToolSummary {
+    /// Canonical host-visible tool name.
+    /// 宿主可见的规范工具名称。
+    pub canonical_name: String,
+    /// Local tool name inside the skill package.
+    /// 技能包内部的本地工具名称。
+    pub local_name: String,
+    /// Tool description from the runtime entry descriptor.
+    /// 来自运行时入口描述符的工具说明。
+    pub description: String,
+    /// Persisted registration state key.
+    /// 持久化注册状态键。
+    pub registration_state: String,
+    /// Human-readable registration state label.
+    /// 人类可读的注册状态标签。
+    pub registration_label: String,
+    /// Short help text for the current registration state.
+    /// 当前注册状态的简短说明。
+    pub registration_help: String,
+}
+
+/// Full WebUI summary for prompt-based Agent Skills.
+/// 基于提示词的 Agent Skills 完整 WebUI 摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillsCatalogSummary {
+    /// Whether Agent Skills are globally enabled.
+    /// Agent Skills 是否已全局启用。
+    pub global_enabled: bool,
+    /// System skill root used by host-managed Agent Skills.
+    /// 宿主管理 Agent Skills 使用的系统技能根目录。
+    pub system_root: String,
+    /// User skill root used by user-installed Agent Skills.
+    /// 用户安装 Agent Skills 使用的用户技能根目录。
+    pub user_root: String,
+    /// Human-readable notice for the current catalog state.
+    /// 当前目录状态的人类可读提示。
+    pub notice: String,
+    /// Parsed Agent Skill rows.
+    /// 已解析的 Agent Skill 行。
+    pub skills: Vec<AgentSkillSummary>,
+    /// Non-fatal loading issues.
+    /// 非致命加载问题。
+    pub errors: Vec<AgentSkillLoadIssueSummary>,
+}
+
+/// One prompt-based Agent Skill row projected for the WebUI.
+/// 投影给 WebUI 的单个提示词 Agent Skill 行。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillSummary {
+    /// Stable skill name from frontmatter.
+    /// 来自 frontmatter 的稳定技能名称。
+    pub name: String,
+    /// Human-facing display name.
+    /// 面向用户的显示名称。
+    pub display_name: String,
+    /// Human-facing short description.
+    /// 面向用户的简短说明。
+    pub description: String,
+    /// Source scope label.
+    /// 来源作用域标签。
+    pub scope: String,
+    /// Whether this Agent Skill is enabled after global configuration is applied.
+    /// 应用全局配置后该 Agent Skill 是否启用。
+    pub enabled: bool,
+    /// Filesystem path to the SKILL.md file.
+    /// 指向 SKILL.md 文件的文件系统路径。
+    pub skill_file: String,
+    /// Directory that owns this Agent Skill and bundled resources.
+    /// 拥有该 Agent Skill 与附带资源的目录。
+    pub base_dir: String,
+    /// Optional resolved icon path that the WebUI can render.
+    /// WebUI 可渲染的可选解析图标路径。
+    pub icon_path: Option<String>,
+    /// Markdown body without YAML frontmatter.
+    /// 去除 YAML frontmatter 后的 Markdown 正文。
+    pub body: String,
+}
+
+/// One Agent Skill loading issue projected for diagnostics.
+/// 投影给诊断界面的单个 Agent Skill 加载问题。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSkillLoadIssueSummary {
+    /// Path related to the loading issue.
+    /// 与加载问题相关的路径。
+    pub path: String,
+    /// Human-readable diagnostic message.
+    /// 人类可读诊断信息。
+    pub message: String,
 }
 
 /// Describes one pending ask-tool request mirrored into the WebUI.
@@ -824,6 +1001,278 @@ pub struct MemorySummary {
     /// Memory state summary.
     /// 记忆状态摘要。
     pub state: String,
+}
+
+/// Full VMM memory page snapshot used by the WebUI.
+/// WebUI 使用的完整 VMM 记忆页面快照。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmMemorySnapshot {
+    /// Effective VMM configuration for the selected session.
+    /// 当前选中会话的最终 VMM 配置。
+    pub effective: VmmEffectiveSummary,
+    /// Global VMM editable draft.
+    /// 全局 VMM 可编辑草稿。
+    pub global_draft: VmmConfigDraftSummary,
+    /// Project VMM editable draft for the selected project.
+    /// 当前选中项目的 VMM 可编辑草稿。
+    pub project_draft: VmmConfigDraftSummary,
+    /// Available project scopes for project-level VMM settings.
+    /// 可用于项目级 VMM 设置的项目作用域。
+    pub project_scopes: Vec<VmmProjectScopeSummary>,
+    /// Current selected project scope id when available.
+    /// 当前可用的选中项目作用域标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_project_id: Option<String>,
+    /// Current selected conversation id when available.
+    /// 当前可用的选中会话标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_conversation_id: Option<String>,
+    /// Runtime side-effect summary for VMM hooks.
+    /// VMM hook 运行时副作用摘要。
+    pub runtime: VmmRuntimeSummary,
+    /// Management sections available in the VMM page.
+    /// VMM 页面可用的管理分区。
+    pub sections: Vec<VmmManagementSectionSummary>,
+    /// Human-readable notice for the current VMM page.
+    /// 当前 VMM 页面的可读提示。
+    pub notice: String,
+}
+
+/// Effective VMM configuration summary.
+/// VMM 最终配置摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmEffectiveSummary {
+    /// Whether memory flow is enabled by configuration.
+    /// 配置是否启用记忆链路。
+    pub enabled: bool,
+    /// Configured gRPC target.
+    /// 已配置的 gRPC 目标。
+    pub grpc_target: String,
+    /// Whether gRPC target is present.
+    /// 是否存在 gRPC 目标。
+    pub grpc_configured: bool,
+    /// Effective user id.
+    /// 最终用户标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<u64>,
+    /// Effective project id.
+    /// 最终项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<u64>,
+    /// Effective memory flow diagnostic key.
+    /// 最终记忆链路诊断键。
+    pub diagnostic: String,
+    /// Effective automatic precheck diagnostic key.
+    /// 最终自动前置召回诊断键。
+    pub precheck_diagnostic: String,
+    /// Whether VMM AI-only tools are exposed.
+    /// 是否暴露 VMM AI 专属工具。
+    pub ai_tools_enabled: bool,
+    /// Whether automatic precheck recall is enabled.
+    /// 是否启用自动前置召回。
+    pub precheck_enabled: bool,
+    /// Transient recall TTL in turns.
+    /// 临时召回持续回合数。
+    pub implicit_memory_turns: u32,
+    /// Profile refresh interval in turns.
+    /// 画像刷新间隔回合数。
+    pub profile_refresh_turns: u32,
+    /// Per-target profile node limit.
+    /// 每目标画像节点上限。
+    pub profile_node_limit: u32,
+    /// Context injection tag.
+    /// 上下文注入标签。
+    pub injection_tag: String,
+    /// Context injection description.
+    /// 上下文注入说明。
+    pub injection_description: String,
+}
+
+/// Editable VMM configuration draft summary.
+/// 可编辑 VMM 配置草稿摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmConfigDraftSummary {
+    /// Whether this layer has explicit overrides.
+    /// 当前层是否存在显式覆盖。
+    pub has_override: bool,
+    /// Whether memory is enabled on this layer.
+    /// 当前层是否启用记忆。
+    pub enabled: bool,
+    /// Editable gRPC target.
+    /// 可编辑 gRPC 目标。
+    pub grpc_target: String,
+    /// Editable gRPC API key.
+    /// 可编辑 gRPC API key。
+    pub grpc_api_key: String,
+    /// Editable user id text.
+    /// 可编辑用户标识文本。
+    pub user_id: String,
+    /// Editable project id text.
+    /// 可编辑项目标识文本。
+    pub project_id: String,
+    /// Editable receive timeout text.
+    /// 可编辑请求超时文本。
+    pub receive_timeout_ms: String,
+    /// Editable handshake timeout text.
+    /// 可编辑握手超时文本。
+    pub handshake_timeout_ms: String,
+    /// Editable max receive bytes text.
+    /// 可编辑最大接收字节数文本。
+    pub max_receive_message_bytes: String,
+    /// Editable gRPC keepalive interval text.
+    /// 可编辑 gRPC keepalive 间隔文本。
+    pub grpc_keepalive_time_ms: String,
+    /// Editable gRPC keepalive timeout text.
+    /// 可编辑 gRPC keepalive 超时文本。
+    pub grpc_keepalive_timeout_ms: String,
+    /// Whether idle keepalive is enabled.
+    /// 是否启用空闲 keepalive。
+    pub grpc_keepalive_permit_without_calls: bool,
+    /// Editable transient recall TTL text.
+    /// 可编辑临时召回 TTL 文本。
+    pub implicit_memory_turns: String,
+    /// Editable profile refresh interval text.
+    /// 可编辑画像刷新间隔文本。
+    pub profile_refresh_turns: String,
+    /// Editable per-target profile node limit text.
+    /// 可编辑每目标画像节点上限文本。
+    pub profile_node_limit: String,
+    /// Whether VMM AI-only tools are exposed.
+    /// 是否暴露 VMM AI 专属工具。
+    pub ai_tools_enabled: bool,
+    /// Whether automatic precheck recall is enabled.
+    /// 是否启用自动前置召回。
+    pub precheck_enabled: bool,
+    /// Editable injection tag.
+    /// 可编辑注入标签。
+    pub injection_tag: String,
+    /// Editable injection description.
+    /// 可编辑注入说明。
+    pub injection_description: String,
+}
+
+/// Project scope row available to VMM project settings.
+/// VMM 项目设置可用的项目作用域行。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmProjectScopeSummary {
+    /// Stable task project id.
+    /// 稳定任务项目标识。
+    pub project_id: String,
+    /// Project display name.
+    /// 项目显示名称。
+    pub name: String,
+    /// Absolute workspace path.
+    /// 绝对工作区路径。
+    pub path: String,
+    /// Whether this project has explicit VMM overrides.
+    /// 该项目是否存在显式 VMM 覆盖。
+    pub has_override: bool,
+}
+
+/// Runtime state summary for VMM hooks.
+/// VMM hook 运行态摘要。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmRuntimeSummary {
+    /// Pending VMM writeback outbox count.
+    /// 待处理 VMM 写回 outbox 数量。
+    pub outbox_count: usize,
+    /// Profile sync node count.
+    /// 画像同步节点数量。
+    pub profile_sync_count: usize,
+    /// Completed turn count recorded by profile sync.
+    /// 画像同步记录的已完成回合数。
+    pub completed_turns: u32,
+    /// Latest profile update timestamp.
+    /// 最近画像更新时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Profile base content preview.
+    /// 画像基点内容预览。
+    pub profile_preview: String,
+}
+
+/// VMM management section descriptor.
+/// VMM 管理分区描述。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmManagementSectionSummary {
+    /// Stable section id.
+    /// 稳定分区标识。
+    pub id: String,
+    /// OpenCode-style section key.
+    /// OpenCode 风格分区键。
+    pub key: String,
+    /// User-facing section label.
+    /// 面向用户的分区标签。
+    pub label: String,
+    /// Compact section description.
+    /// 紧凑分区说明。
+    pub description: String,
+}
+
+/// Request body for one WebUI VMM management action.
+/// WebUI 单次 VMM 管理动作的请求体。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmMemoryActionRequest {
+    /// Stable action id.
+    /// 稳定动作标识。
+    pub action: String,
+    /// Scope key, either global or project.
+    /// 作用域键，可为 global 或 project。
+    pub scope: String,
+    /// Optional task project id used by project scope.
+    /// 项目作用域使用的可选任务项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Action-specific JSON payload.
+    /// 动作专用 JSON 载荷。
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+/// Result body returned by one WebUI VMM management action.
+/// WebUI 单次 VMM 管理动作返回的结果体。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmMemoryActionResult {
+    /// Stable action id.
+    /// 稳定动作标识。
+    pub action: String,
+    /// Compact user-facing summary.
+    /// 紧凑用户可见摘要。
+    pub summary: String,
+    /// Structured response kind.
+    /// 结构化响应类型。
+    pub kind: String,
+    /// Raw request preview JSON.
+    /// 原始请求预览 JSON。
+    pub request: serde_json::Value,
+    /// Raw response preview JSON.
+    /// 原始响应预览 JSON。
+    pub response: serde_json::Value,
+}
+
+/// Request body for saving a WebUI VMM configuration draft.
+/// 保存 WebUI VMM 配置草稿的请求体。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmConfigSaveRequest {
+    /// Scope key, either global or project.
+    /// 作用域键，可为 global 或 project。
+    pub scope: String,
+    /// Optional task project id used by project scope.
+    /// 项目作用域使用的可选任务项目标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_id: Option<String>,
+    /// Draft data to persist.
+    /// 需要持久化的草稿数据。
+    pub draft: VmmConfigDraftSummary,
 }
 
 /// Summarizes one long-running command session.

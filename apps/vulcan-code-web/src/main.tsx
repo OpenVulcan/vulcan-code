@@ -127,6 +127,9 @@ import type {
   SettingsSubAreaId,
   StartupStepSnapshot,
   StartupSnapshot,
+  VmmConfigSaveRequest,
+  VmmMemoryActionRequest,
+  VmmMemoryActionResult,
   WorkbenchSnapshot,
 } from "@/types";
 import { toast } from "sonner";
@@ -976,6 +979,50 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "vulcan-testkit", name: "Vulcan TestKit", kind: "LuaSkill", status: "预览", capability: "构建、测试、日志压缩与诊断" },
     { id: "ai-short-drama", name: "AI 短剧工作流", kind: "Workflow WebUI", status: "规划中", capability: "脚本、素材、播放器与工作流控制面板" },
   ],
+  luaSkills: {
+    runtimeRoot: "D:/openvulcan/vulcan-code/output/lua_runtime",
+    systemLuaLib: "D:/openvulcan/vulcan-code/output/lua_runtime/system_lua_lib",
+    entryCount: 3,
+    notice: "浏览器预览模式展示 Lua Skills 样例目录。",
+    skills: [
+      {
+        skillId: "vulcan-codekit",
+        displayName: "Vulcan CodeKit",
+        version: "0.1.0",
+        rootName: "ROOT",
+        skillDir: "D:/openvulcan/vulcan-code/output/lua_runtime/skills/vulcan-codekit",
+        enabled: true,
+        managed: true,
+        sourceType: "github",
+        sourceLocator: "LuaSkills/vulcan-codekit",
+        entryCount: 2,
+        systemOwned: true,
+        tools: [
+          { canonicalName: "vulcan_codekit_rg", localName: "rg", description: "搜索代码并返回结构化上下文。", registrationState: "explicit", registrationLabel: "显式启用", registrationHelp: "工具会作为独立函数 Schema 暴露给模型。" },
+          { canonicalName: "vulcan_codekit_patch", localName: "patch", description: "按结构选择器替换函数。", registrationState: "implicit", registrationLabel: "隐式启用", registrationHelp: "工具保留宿主调用能力，但不暴露独立 Schema。" },
+        ],
+      },
+    ],
+  },
+  agentSkills: {
+    globalEnabled: true,
+    systemRoot: "C:/Users/20000/.vulcan/skills/.system",
+    userRoot: "C:/Users/20000/.vulcan/skills",
+    notice: "浏览器预览模式展示 Agent Skills 样例目录。",
+    errors: [],
+    skills: [
+      {
+        name: "security-review",
+        displayName: "Security Review",
+        description: "按安全最佳实践检查 JavaScript、Python 和 Go 代码。",
+        scope: "系统",
+        enabled: true,
+        skillFile: "C:/Users/20000/.vulcan/skills/.system/security-review/SKILL.md",
+        baseDir: "C:/Users/20000/.vulcan/skills/.system/security-review",
+        body: "Use this skill when the user explicitly requests a security review.",
+      },
+    ],
+  },
   settings: [
     { id: "runtime", label: "运行时", description: "Core Service、LuaSkills、VLDB、MCP", items: ["启动模式", "运行时目录", "MCP 工具策略"] },
     { id: "providers", label: "模型与 Provider", description: "模型供应商、默认模型、工具能力与推理配置", items: ["默认 Provider", "默认模型", "工具调用", "推理强度"] },
@@ -1050,6 +1097,88 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "conversation-memory", title: "会话记忆", category: "Conversation", state: "等待真实 VMM 节点接入" },
     { id: "conflict-review", title: "冲突审计", category: "Review", state: "等待真实 VMM 冲突视图接入" },
   ],
+  vmmMemory: {
+    effective: {
+      enabled: true,
+      grpcTarget: "127.0.0.1:50051",
+      grpcConfigured: true,
+      userId: 20000,
+      projectId: 1001,
+      diagnostic: "ready",
+      precheckDiagnostic: "ready",
+      aiToolsEnabled: true,
+      precheckEnabled: true,
+      implicitMemoryTurns: 5,
+      profileRefreshTurns: 3,
+      profileNodeLimit: 24,
+      injectionTag: "vmm_inject",
+      injectionDescription: "VMM recalled memory",
+    },
+    globalDraft: {
+      hasOverride: true,
+      enabled: true,
+      grpcTarget: "127.0.0.1:50051",
+      grpcApiKey: "",
+      userId: "20000",
+      projectId: "1001",
+      receiveTimeoutMs: "30000",
+      handshakeTimeoutMs: "8000",
+      maxReceiveMessageBytes: "",
+      grpcKeepaliveTimeMs: "30000",
+      grpcKeepaliveTimeoutMs: "10000",
+      grpcKeepalivePermitWithoutCalls: true,
+      implicitMemoryTurns: "5",
+      profileRefreshTurns: "3",
+      profileNodeLimit: "24",
+      aiToolsEnabled: true,
+      precheckEnabled: true,
+      injectionTag: "vmm_inject",
+      injectionDescription: "VMM recalled memory",
+    },
+    projectDraft: {
+      hasOverride: false,
+      enabled: true,
+      grpcTarget: "127.0.0.1:50051",
+      grpcApiKey: "",
+      userId: "20000",
+      projectId: "1001",
+      receiveTimeoutMs: "30000",
+      handshakeTimeoutMs: "8000",
+      maxReceiveMessageBytes: "",
+      grpcKeepaliveTimeMs: "30000",
+      grpcKeepaliveTimeoutMs: "10000",
+      grpcKeepalivePermitWithoutCalls: true,
+      implicitMemoryTurns: "5",
+      profileRefreshTurns: "3",
+      profileNodeLimit: "24",
+      aiToolsEnabled: true,
+      precheckEnabled: true,
+      injectionTag: "vmm_inject",
+      injectionDescription: "VMM recalled memory",
+    },
+    projectScopes: [
+      { projectId: "vulcan-workmem", name: "Vulcan Code", path: "D:/openvulcan/vulcan-code", hasOverride: false },
+    ],
+    selectedProjectId: "vulcan-workmem",
+    selectedConversationId: "preview-session",
+    runtime: {
+      outboxCount: 0,
+      profileSyncCount: 3,
+      completedTurns: 1,
+      updatedAt: "1780908377000",
+      profilePreview: "用户偏好：偏向工程化闭环。\n项目画像：WebUI 正在迁移 iced 功能。",
+    },
+    sections: [
+      { id: "user_manager", key: "USER MANAGER", label: "用户管理", description: "解析、创建预检和删除长期用户。" },
+      { id: "project_manager", key: "PROJECT MANAGER", label: "项目管理", description: "解析、创建预检、删除和迁移项目路径。" },
+      { id: "profile_center", key: "PROFILE CENTER", label: "画像中心", description: "查看 active profile nodes 并应用手工画像指令。" },
+      { id: "profile_bundle", key: "PROFILE BUNDLE TEST", label: "画像 Bundle 测试", description: "读取当前 user/project 的完整画像 Bundle。" },
+      { id: "tools_debug", key: "TOOLS DEBUG", label: "工具调试", description: "模拟 AI 专属工具检索、详情展开和主动写入。" },
+      { id: "memory_settings", key: "MEMORY SETTINGS", label: "记忆设置", description: "配置记忆开关、TTL、画像刷新和注入策略。" },
+      { id: "grpc_transport", key: "GRPC TRANSPORT", label: "gRPC 传输", description: "配置全局 VMM 连接和传输参数。" },
+    ],
+    notice: "当前项目：Vulcan Code；诊断：ready；用户/项目：20000/1001。",
+  },
   commandSessions: [
     { id: "preview-command", command: "pnpm --dir apps\\vulcan-code-web run build", status: "preview", preview: "前端预览命令会话" },
     { id: "preview-cargo", command: "cargo check -p vulcan-code-tauri", status: "preview", preview: "Tauri 桌面壳检查入口" },
@@ -1059,6 +1188,43 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "preview-legacy", level: "info", source: "iced", message: "旧 iced GUI 保留为 reference 入口" },
   ],
 };
+
+// browserFallbackWorkbenchState stores mutable preview data for non-Tauri browser development.
+// browserFallbackWorkbenchState 保存非 Tauri 浏览器开发模式下的可变预览数据。
+let browserFallbackWorkbenchState: WorkbenchSnapshot = cloneWorkbenchSnapshot(browserFallbackWorkbench);
+
+// cloneWorkbenchSnapshot returns a detached workbench snapshot for React state updates.
+// cloneWorkbenchSnapshot 返回用于 React 状态更新的脱离引用工作台快照。
+function cloneWorkbenchSnapshot(snapshot: WorkbenchSnapshot): WorkbenchSnapshot {
+  return structuredClone(snapshot) as WorkbenchSnapshot;
+}
+
+// browserFallbackSnapshot returns the current browser-preview snapshot.
+// browserFallbackSnapshot 返回当前浏览器预览快照。
+function browserFallbackSnapshot(): WorkbenchSnapshot {
+  return cloneWorkbenchSnapshot(browserFallbackWorkbenchState);
+}
+
+// updateBrowserFallbackWorkbench mutates preview state and returns a fresh snapshot.
+// updateBrowserFallbackWorkbench 修改预览状态并返回新的快照。
+function updateBrowserFallbackWorkbench(mutator: (snapshot: WorkbenchSnapshot) => void): WorkbenchSnapshot {
+  mutator(browserFallbackWorkbenchState);
+  browserFallbackWorkbenchState.luaSkills.entryCount = browserFallbackWorkbenchState.luaSkills.skills
+    .reduce((total, skill) => total + (skill.enabled ? skill.entryCount : 0), 0);
+  return browserFallbackSnapshot();
+}
+
+// luaSkillRegistrationLabel returns the preview label for one LuaSkill tool registration state.
+// luaSkillRegistrationLabel 返回单个 LuaSkill 工具注册状态的预览标签。
+function luaSkillRegistrationLabel(registrationState: string): string {
+  if (registrationState === "explicit") {
+    return "显式启用";
+  }
+  if (registrationState === "implicit") {
+    return "隐式启用";
+  }
+  return "禁用";
+}
 
 // isTauriRuntime returns whether the WebUI is hosted by the desktop Tauri shell.
 // isTauriRuntime 返回 WebUI 是否运行在 Tauri 桌面壳中。
@@ -1114,9 +1280,229 @@ async function loadStartupSnapshot(): Promise<StartupSnapshot> {
 async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return browserFallbackWorkbench;
+    return browserFallbackSnapshot();
   }
   return invoke<WorkbenchSnapshot>("service_workbench_snapshot");
+}
+
+// refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the Tauri service.
+// refreshLuaSkillsCatalog 通过 Tauri 服务刷新 Lua Skills 目录。
+async function refreshLuaSkillsCatalog(): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return browserFallbackSnapshot();
+  }
+  return invoke<WorkbenchSnapshot>("service_refresh_luaskills_catalog");
+}
+
+// installLuaSkill installs one Lua Skill package through the Tauri service.
+// installLuaSkill 通过 Tauri 服务安装单个 Lua Skill 包。
+async function installLuaSkill(skillId: string, source: string, sourceType: string): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    const normalizedSkillId = skillId.trim() || source.split("/").filter(Boolean).pop() || "preview-skill";
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      if (snapshot.luaSkills.skills.some((skill) => skill.skillId === normalizedSkillId)) {
+        return;
+      }
+      snapshot.luaSkills.skills.push({
+        skillId: normalizedSkillId,
+        displayName: normalizedSkillId,
+        version: "0.1.0",
+        rootName: "USER",
+        skillDir: `C:/Users/20000/.vulcan/code/luaskills-user/skills/${normalizedSkillId}`,
+        enabled: true,
+        managed: true,
+        sourceType,
+        sourceLocator: source,
+        entryCount: 0,
+        systemOwned: false,
+        tools: [],
+      });
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
+}
+
+// updateLuaSkill updates one managed Lua Skill package.
+// updateLuaSkill 更新单个受管 Lua Skill 包。
+async function updateLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
+      if (skill) {
+        skill.version = skill.version || "0.1.0";
+      }
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_update_luaskill", { skillId });
+}
+
+// setLuaSkillEnabled toggles one Lua Skill package lifecycle state.
+// setLuaSkillEnabled 切换单个 Lua Skill 包生命周期状态。
+async function setLuaSkillEnabled(skillId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
+      if (skill) {
+        skill.enabled = enabled;
+        skill.disabledReason = enabled ? null : "disabled from browser preview";
+      }
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_set_luaskill_enabled", { skillId, enabled });
+}
+
+// uninstallLuaSkill removes one ordinary Lua Skill package.
+// uninstallLuaSkill 移除单个普通 Lua Skill 包。
+async function uninstallLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.luaSkills.skills = snapshot.luaSkills.skills.filter((skill) => skill.skillId !== skillId || skill.systemOwned);
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_uninstall_luaskill", { skillId });
+}
+
+// setLuaSkillToolRegistrationState persists one Lua Skill tool visibility state.
+// setLuaSkillToolRegistrationState 持久化单个 Lua Skill 工具可见性状态。
+async function setLuaSkillToolRegistrationState(skillId: string, localName: string, registrationState: string): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
+      const tool = skill?.tools.find((item) => item.localName === localName);
+      if (tool) {
+        tool.registrationState = registrationState as "explicit" | "implicit" | "disabled";
+        tool.registrationLabel = luaSkillRegistrationLabel(registrationState);
+      }
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_set_luaskill_tool_registration_state", { skillId, localName, registrationState });
+}
+
+// refreshAgentSkillsCatalog refreshes prompt-based Agent Skills through the Tauri service.
+// refreshAgentSkillsCatalog 通过 Tauri 服务刷新基于提示词的 Agent Skills。
+async function refreshAgentSkillsCatalog(): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return browserFallbackSnapshot();
+  }
+  return invoke<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
+}
+
+// installSystemAgentSkills syncs bundled system Agent Skills.
+// installSystemAgentSkills 同步内置系统 Agent Skills。
+async function installSystemAgentSkills(): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return browserFallbackSnapshot();
+  }
+  return invoke<WorkbenchSnapshot>("service_install_system_agent_skills");
+}
+
+// setAgentSkillsEnabled persists the global Agent Skills switch.
+// setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
+async function setAgentSkillsEnabled(enabled: boolean): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.agentSkills.globalEnabled = enabled;
+      snapshot.agentSkills.skills = snapshot.agentSkills.skills.map((skill) => ({ ...skill, enabled }));
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_set_agent_skills_enabled", { enabled });
+}
+
+// setAgentSkillEnabled persists one global Agent Skill state.
+// setAgentSkillEnabled 持久化单个全局 Agent Skill 状态。
+async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      const skill = snapshot.agentSkills.skills.find((item) => item.name === name);
+      if (skill) {
+        skill.enabled = enabled && snapshot.agentSkills.globalEnabled;
+      }
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_set_agent_skill_enabled", { name, enabled });
+}
+
+// runVmmMemoryAction executes one VMM memory workbench action.
+// runVmmMemoryAction 执行单个 VMM 记忆工作台动作。
+async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promise<VmmMemoryActionResult> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return {
+      action: request.action,
+      summary: `预览模式已执行 ${request.action}`,
+      kind: request.action,
+      request,
+      response: previewVmmActionResponse(request.action),
+    };
+  }
+  return invoke<VmmMemoryActionResult>("service_run_vmm_memory_action", { request });
+}
+
+// saveVmmMemoryConfig persists one VMM memory configuration draft.
+// saveVmmMemoryConfig 持久化单个 VMM 记忆配置草稿。
+async function saveVmmMemoryConfig(request: VmmConfigSaveRequest): Promise<WorkbenchSnapshot> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      if (request.scope === "project") {
+        snapshot.vmmMemory.projectDraft = { ...request.draft, hasOverride: true };
+      } else {
+        snapshot.vmmMemory.globalDraft = { ...request.draft, hasOverride: true };
+      }
+      snapshot.vmmMemory.effective = {
+        ...snapshot.vmmMemory.effective,
+        enabled: request.draft.enabled,
+        grpcTarget: request.draft.grpcTarget,
+        grpcConfigured: request.draft.grpcTarget.trim().length > 0,
+        userId: Number(request.draft.userId) || null,
+        projectId: Number(request.draft.projectId) || null,
+        aiToolsEnabled: request.draft.aiToolsEnabled,
+        precheckEnabled: request.draft.precheckEnabled,
+        implicitMemoryTurns: Number(request.draft.implicitMemoryTurns) || snapshot.vmmMemory.effective.implicitMemoryTurns,
+        profileRefreshTurns: Number(request.draft.profileRefreshTurns) || snapshot.vmmMemory.effective.profileRefreshTurns,
+        profileNodeLimit: Number(request.draft.profileNodeLimit) || snapshot.vmmMemory.effective.profileNodeLimit,
+        injectionTag: request.draft.injectionTag,
+        injectionDescription: request.draft.injectionDescription,
+      };
+    });
+  }
+  return invoke<WorkbenchSnapshot>("service_save_vmm_memory_config", { request });
+}
+
+// previewVmmActionResponse returns a compact browser-preview result for one VMM action.
+// previewVmmActionResponse 返回单个 VMM 动作的紧凑浏览器预览结果。
+function previewVmmActionResponse(action: string): unknown {
+  if (action === "load_users_projects") {
+    return {
+      users: [{ userId: 20000, userName: "preview-user" }],
+      projects: [{ projectId: 1001, displayPath: "OpenVulcan/Vulcan/Code" }],
+    };
+  }
+  if (action === "load_profile_nodes") {
+    return {
+      nodes: [
+        { profileNodeId: 1, content: "用户偏好工程化闭环。", priority: "high", level: "user", bindId: 20000 },
+        { profileNodeId: 2, content: "当前项目正在迁移 WebUI。", priority: "normal", level: "project", bindId: 1001 },
+      ],
+    };
+  }
+  if (action === "search_memory_events") {
+    return {
+      results: [{ query: "webui", hits: [{ memoryId: 1, sourceTurnId: 42, abstractText: "技能页迁移到 WebUI。" }] }],
+      traceId: "preview-trace",
+    };
+  }
+  return { ok: true, preview: true };
 }
 
 // loadConversationMessages loads one conversation body from the Tauri service.
@@ -1124,7 +1510,7 @@ async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {
 async function loadConversationMessages(sessionId: string): Promise<ConversationMessage[]> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return browserFallbackWorkbench.messages.filter((message) => message.conversationId === sessionId);
+    return browserFallbackWorkbenchState.messages.filter((message) => message.conversationId === sessionId);
   }
   return invoke<ConversationMessage[]>("service_session_messages", { sessionId });
 }
@@ -1880,6 +2266,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     messages,
     subagentSurfaceMessageCacheRef.current,
   ), []);
+  // applySkillWorkbenchAction runs one skill-page service action and merges the returned snapshot.
+  // applySkillWorkbenchAction 执行单个技能页面服务动作并合并返回快照。
+  const applySkillWorkbenchAction = React.useCallback(async (action: () => Promise<WorkbenchSnapshot>) => {
+    const snapshot = await action();
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+  }, [mergeWorkbenchWithLocalCaches]);
   // loadingConversationId stores the conversation currently loading from the service.
   // loadingConversationId 保存当前正在从服务加载正文的会话标识。
   const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
@@ -2791,6 +3183,22 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             activeFeature={activeFeature}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
+            skillActions={{
+              onRefreshLuaSkills: () => applySkillWorkbenchAction(refreshLuaSkillsCatalog),
+              onInstallLuaSkill: (skillId, source, sourceType) => applySkillWorkbenchAction(() => installLuaSkill(skillId, source, sourceType)),
+              onUpdateLuaSkill: (skillId) => applySkillWorkbenchAction(() => updateLuaSkill(skillId)),
+              onSetLuaSkillEnabled: (skillId, enabled) => applySkillWorkbenchAction(() => setLuaSkillEnabled(skillId, enabled)),
+              onUninstallLuaSkill: (skillId) => applySkillWorkbenchAction(() => uninstallLuaSkill(skillId)),
+              onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState)),
+              onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
+              onInstallSystemAgentSkills: () => applySkillWorkbenchAction(installSystemAgentSkills),
+              onSetAgentSkillsEnabled: (enabled) => applySkillWorkbenchAction(() => setAgentSkillsEnabled(enabled)),
+              onSetAgentSkillEnabled: (name, enabled) => applySkillWorkbenchAction(() => setAgentSkillEnabled(name, enabled)),
+            }}
+            memoryActions={{
+              onRunVmmAction: runVmmMemoryAction,
+              onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
+            }}
             startup={props.startup}
             workbench={workbenchState}
           />

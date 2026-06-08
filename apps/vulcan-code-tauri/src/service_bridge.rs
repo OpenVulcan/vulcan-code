@@ -86,16 +86,24 @@ use vulcan_context::{
 use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_provider_config::config::{
+    PersistedLuaSkillToolRegistrationState, PersistedPromptSkillState,
+};
 use vulcan_service_api::{
-    AiCapabilitySummary, AiCapabilityTargetSummary, CommandSessionSummary,
-    ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
-    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
-    ConversationMessage, ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary,
-    MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
-    PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
+    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
+    AiCapabilityTargetSummary, CommandSessionSummary, ComposerAttachmentCapabilitySummary,
+    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionItemSummary,
+    ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage, ConversationSummary,
+    FeatureAreaSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
+    LuaSkillsCatalogSummary, MemorySummary, MessageRole, PendingPromptSummary,
+    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
+    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
     ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
     ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, WorkbenchSnapshot,
+    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
+    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
+    WorkbenchSnapshot,
 };
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionLifecycleBeginRequest, SessionLifecycleFinishRequest,
@@ -916,6 +924,18 @@ pub fn run() {
             service_health,
             service_startup_snapshot,
             service_workbench_snapshot,
+            service_refresh_luaskills_catalog,
+            service_install_luaskill,
+            service_update_luaskill,
+            service_set_luaskill_enabled,
+            service_uninstall_luaskill,
+            service_set_luaskill_tool_registration_state,
+            service_refresh_agent_skills_catalog,
+            service_install_system_agent_skills,
+            service_set_agent_skills_enabled,
+            service_set_agent_skill_enabled,
+            service_run_vmm_memory_action,
+            service_save_vmm_memory_config,
             service_session_messages,
             service_pick_composer_attachments,
             service_stage_composer_attachment_paths,
@@ -1215,6 +1235,228 @@ fn service_workbench_snapshot(
         .lock()
         .map(|guard| workbench_with_live_pending_question(&guard))
         .map_err(|error| format!("failed to lock service workbench state: {error}"))
+}
+
+/// Runs a LuaSkills management operation on a blocking worker and returns its result.
+/// 在阻塞工作线程运行 LuaSkills 管理操作并返回结果。
+async fn run_luaskills_management_blocking<T, F>(
+    label: &'static str,
+    operation: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("LuaSkills 管理操作 `{label}` 任务异常结束：{error}"))?
+}
+
+/// Refreshes the LuaSkills catalog used by the WebUI skill page.
+/// 刷新 WebUI 技能页面使用的 LuaSkills 目录。
+#[tauri::command]
+async fn service_refresh_luaskills_catalog(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let catalog = run_luaskills_management_blocking("refresh catalog", move || {
+        crate::luaskills_bridge::refresh_luaskills_catalog(&handle)
+    })
+    .await?;
+    store_luaskills_catalog(&state, catalog)?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Installs one LuaSkill package into the USER layer and refreshes the WebUI snapshot.
+/// 将单个 LuaSkill 包安装到 USER 层并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_install_luaskill(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    skill_id: Option<String>,
+    source: String,
+    source_type: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let (message, catalog) = run_luaskills_management_blocking("install skill", move || {
+        crate::luaskills_bridge::install_luaskill(&handle, skill_id, source, source_type)
+    })
+    .await?;
+    store_luaskills_catalog_with_log(&state, catalog, message)?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
+/// 更新单个受管 LuaSkill 包并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_update_luaskill(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    skill_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let (message, catalog) = run_luaskills_management_blocking("update skill", move || {
+        crate::luaskills_bridge::update_luaskill(&handle, skill_id)
+    })
+    .await?;
+    store_luaskills_catalog_with_log(&state, catalog, message)?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Enables or disables one LuaSkill package and refreshes the WebUI snapshot.
+/// 启用或停用单个 LuaSkill 包并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_set_luaskill_enabled(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    skill_id: String,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let (message, catalog) = run_luaskills_management_blocking("set skill enabled", move || {
+        crate::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
+    })
+    .await?;
+    store_luaskills_catalog_with_log(&state, catalog, message)?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
+/// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_uninstall_luaskill(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    skill_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let handle = service_luaskills_handle(&state)?;
+    let (message, catalog) = run_luaskills_management_blocking("uninstall skill", move || {
+        crate::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
+    })
+    .await?;
+    store_luaskills_catalog_with_log(&state, catalog, message)?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Persists one LuaSkill tool registration state and refreshes the WebUI snapshot.
+/// 持久化单个 LuaSkill 工具注册状态并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_set_luaskill_tool_registration_state(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    skill_id: String,
+    local_name: String,
+    registration_state: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let next_state = parse_luaskill_tool_registration_state(&registration_state)?;
+    mutate_provider_configuration(&state, |configuration| {
+        configuration
+            .luaskills
+            .set_tool_registration_state(&skill_id, &local_name, next_state);
+        Ok(())
+    })?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Refreshes Agent Skills by rebuilding the current WebUI workbench snapshot.
+/// 通过重建当前 WebUI 工作台快照刷新 Agent Skills。
+#[tauri::command]
+async fn service_refresh_agent_skills_catalog(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    refresh_workbench_snapshot(state).await
+}
+
+/// Installs embedded system Agent Skills and refreshes the WebUI snapshot.
+/// 安装内置系统 Agent Skills 并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_install_system_agent_skills(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<WorkbenchSnapshot, String> {
+    let configuration = provider_configuration_from_state(&state)?;
+    let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+        &configuration.prompt_skills,
+    );
+    let source_root = vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory();
+    if source_root.is_dir() {
+        vulcan_prompt_skills::install_system_prompt_skills_from_source(
+            source_root,
+            vulcan_prompt_skills::configured_system_skill_root(&runtime_config),
+        )
+    } else {
+        vulcan_prompt_skills::install_embedded_system_prompt_skills(&runtime_config)
+    }
+    .map_err(|error| {
+        format!(
+            "同步系统 Agent Skills 失败（{}）：{}",
+            error.path.display(),
+            error.message
+        )
+    })?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Persists the Agent Skills global switch and refreshes the WebUI snapshot.
+/// 持久化 Agent Skills 全局开关并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_set_agent_skills_enabled(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    mutate_provider_configuration(&state, |configuration| {
+        configuration.prompt_skills.enabled = enabled;
+        Ok(())
+    })?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Persists one global Agent Skill state and refreshes the WebUI snapshot.
+/// 持久化单个全局 Agent Skill 状态并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_set_agent_skill_enabled(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    name: String,
+    enabled: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    let state_override = if enabled {
+        PersistedPromptSkillState::Enabled
+    } else {
+        PersistedPromptSkillState::Disabled
+    };
+    mutate_provider_configuration(&state, |configuration| {
+        configuration
+            .prompt_skills
+            .set_skill_state(&name, Some(state_override));
+        Ok(())
+    })?;
+    refresh_workbench_snapshot(state).await
+}
+
+/// Runs one VMM memory management action and returns its structured result.
+/// 执行单个 VMM 记忆管理动作并返回结构化结果。
+#[tauri::command]
+async fn service_run_vmm_memory_action(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: VmmMemoryActionRequest,
+) -> Result<VmmMemoryActionResult, String> {
+    let (layer, management_user_ref, management_project_ref, session_id) =
+        vmm_action_context(&state, &request)?;
+    let action = parse_vmm_memory_action(&request, session_id)?;
+    let request_preview = vmm_action_request_preview(&action)?;
+    let outcome = crate::vmm_management::run_vmm_workbench_action(
+        action,
+        layer,
+        management_user_ref,
+        management_project_ref,
+    )
+    .await?;
+    vmm_memory_action_result(&request.action, request_preview, outcome)
+}
+
+/// Saves one VMM memory configuration draft and refreshes the WebUI snapshot.
+/// 保存单个 VMM 记忆配置草稿并刷新 WebUI 快照。
+#[tauri::command]
+async fn service_save_vmm_memory_config(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: VmmConfigSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    save_vmm_memory_config(&state, request)?;
+    refresh_workbench_snapshot(state).await
 }
 
 /// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
@@ -3699,6 +3941,731 @@ fn current_workbench_snapshot_from_state(
         .map(|guard| guard.workbench.clone())
 }
 
+/// Returns the retained LuaSkills handle for WebUI management commands.
+/// 返回 WebUI 管理命令使用的保留 LuaSkills 句柄。
+fn service_luaskills_handle(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<TauriLuaSkillsHandle, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard
+        .luaskills_runtime
+        .clone()
+        .ok_or_else(|| String::from("service is still starting; LuaSkills runtime is not ready"))
+}
+
+/// Stores a refreshed LuaSkills catalog in the shared service state.
+/// 在共享服务状态中存储刷新后的 LuaSkills 目录。
+fn store_luaskills_catalog(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    catalog: TauriLuaSkillsCatalog,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    sync_agent_luaskills_tool_cache(&mut guard)?;
+    guard.cached_luaskills_catalog = Some(catalog);
+    Ok(())
+}
+
+/// Stores a refreshed LuaSkills catalog and appends a diagnostic log line.
+/// 存储刷新后的 LuaSkills 目录并追加诊断日志行。
+fn store_luaskills_catalog_with_log(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    catalog: TauriLuaSkillsCatalog,
+    message: String,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    sync_agent_luaskills_tool_cache(&mut guard)?;
+    guard.cached_luaskills_catalog = Some(catalog);
+    guard
+        .startup
+        .recent_logs
+        .push(format!("[tauri-service] luaskills: {message}"));
+    Ok(())
+}
+
+/// Synchronizes the Agent Runtime LuaSkills tool cache from the shared LuaEngine.
+/// 从共享 LuaEngine 同步 Agent Runtime 的 LuaSkills 工具缓存。
+fn sync_agent_luaskills_tool_cache(guard: &mut ServiceBridgeState) -> Result<(), String> {
+    let Some(runtime_handle) = guard
+        .agent_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.luaskills_runtime.as_ref())
+        .cloned()
+    else {
+        return Ok(());
+    };
+    let entries = {
+        let tauri_handle = guard.luaskills_runtime.as_ref().ok_or_else(|| {
+            String::from("service is still starting; LuaSkills runtime is not ready")
+        })?;
+        let engine = tauri_handle.engine.lock().map_err(|_| {
+            String::from("LuaSkills 引擎锁已损坏，无法同步 Agent Runtime 工具缓存。")
+        })?;
+        engine.list_entries_for_authority(::luaskills::SkillManagementAuthority::System)
+    };
+    let entry_count = entries.len();
+    let mut tool_entries = runtime_handle.tool_entries.lock().map_err(|_| {
+        String::from("LuaSkills 工具缓存锁已损坏，无法同步 Agent Runtime 工具缓存。")
+    })?;
+    *tool_entries = entries;
+    guard.startup.recent_logs.push(format!(
+        "[tauri-service] luaskills: synced {entry_count} agent-runtime tool entries"
+    ));
+    Ok(())
+}
+
+/// Returns the current provider configuration stored by the agent runtime bridge.
+/// 返回 Agent 运行时桥当前保存的 Provider 配置。
+fn provider_configuration_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<ProviderConfigurationFile, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.provider_configuration.clone())
+        .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))
+}
+
+/// Mutates, persists, and stores provider configuration for WebUI skill commands.
+/// 为 WebUI 技能命令变更、持久化并存储 Provider 配置。
+fn mutate_provider_configuration<F>(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    mutate: F,
+) -> Result<(), String>
+where
+    F: FnOnce(&mut ProviderConfigurationFile) -> Result<(), String>,
+{
+    let mut configuration = provider_configuration_from_state(state)?;
+    mutate(&mut configuration)?;
+    vulcan_provider_config::config::save_configuration_file(&configuration)?;
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(runtime) = guard.agent_runtime.as_mut() {
+        runtime.provider_configuration = configuration;
+    }
+    Ok(())
+}
+
+/// Parses a persisted LuaSkills tool registration state key from the WebUI.
+/// 从 WebUI 解析持久化 LuaSkills 工具注册状态键。
+fn parse_luaskill_tool_registration_state(
+    value: &str,
+) -> Result<PersistedLuaSkillToolRegistrationState, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "explicit" => Ok(PersistedLuaSkillToolRegistrationState::Explicit),
+        "implicit" => Ok(PersistedLuaSkillToolRegistrationState::Implicit),
+        "disabled" => Ok(PersistedLuaSkillToolRegistrationState::Disabled),
+        other => Err(format!("不支持的 LuaSkills 工具注册状态：{other}")),
+    }
+}
+
+/// Builds the VMM action context for one WebUI management request.
+/// 为单个 WebUI 管理请求构建 VMM 动作上下文。
+fn vmm_action_context(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    request: &VmmMemoryActionRequest,
+) -> Result<(vulcan_vmm::VmmConfigLayer, String, String, Option<String>), String> {
+    let (provider_configuration, workspace_snapshot) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .clone()
+            .ok_or_else(|| String::from("工作区尚未载入，无法执行 VMM 管理动作。"))?;
+        let provider_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.provider_configuration.clone())
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        (provider_configuration, workspace_snapshot)
+    };
+    let selected_session = selected_workspace_session(&workspace_snapshot);
+    let session_id = selected_session.map(|session| session.id.to_string());
+    let scope = request.scope.trim().to_ascii_lowercase();
+    if scope == "project" {
+        let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
+            .ok_or_else(|| String::from("请先选择一个项目作用域。"))?;
+        let project_layer = load_project_configuration(&project.path).vmm;
+        let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+            &provider_configuration.vmm,
+            Some(&project_layer),
+            None,
+        );
+        let layer = vmm_action_layer_from_effective(&effective);
+        let management_user_ref = vmm_payload_text(&request.payload, "userRef")
+            .or_else(|| project_layer.user_id.map(|value| value.to_string()))
+            .or_else(|| layer.user_id.map(|value| value.to_string()))
+            .unwrap_or_default();
+        let management_project_ref = vmm_payload_text(&request.payload, "projectRef")
+            .or_else(|| project_layer.project_id.map(|value| value.to_string()))
+            .or_else(|| layer.project_id.map(|value| value.to_string()))
+            .unwrap_or_default();
+        return Ok((
+            layer,
+            management_user_ref,
+            management_project_ref,
+            session_id,
+        ));
+    }
+    let layer = provider_configuration.vmm;
+    let management_user_ref = vmm_payload_text(&request.payload, "userRef")
+        .or_else(|| layer.user_id.map(|value| value.to_string()))
+        .unwrap_or_default();
+    let management_project_ref = vmm_payload_text(&request.payload, "projectRef")
+        .or_else(|| layer.project_id.map(|value| value.to_string()))
+        .unwrap_or_default();
+    Ok((
+        layer,
+        management_user_ref,
+        management_project_ref,
+        session_id,
+    ))
+}
+
+/// Converts an effective VMM configuration into a standalone action layer.
+/// 将 VMM 最终配置转换为独立动作配置层。
+fn vmm_action_layer_from_effective(
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+) -> vulcan_vmm::VmmConfigLayer {
+    vulcan_vmm::VmmConfigLayer {
+        enabled: Some(effective.enabled),
+        grpc_target: (!effective.grpc_target.trim().is_empty())
+            .then(|| effective.grpc_target.clone()),
+        grpc_api_key: effective.grpc_api_key.clone(),
+        handshake_timeout_ms: Some(effective.handshake_timeout_ms),
+        receive_timeout_ms: Some(effective.receive_timeout_ms),
+        max_receive_message_bytes: effective.max_receive_message_bytes,
+        grpc_keepalive_time_ms: Some(effective.grpc_keepalive_time_ms),
+        grpc_keepalive_timeout_ms: Some(effective.grpc_keepalive_timeout_ms),
+        grpc_keepalive_permit_without_calls: Some(effective.grpc_keepalive_permit_without_calls),
+        user_id: effective.user_id,
+        project_id: effective.project_id,
+        visible_memory_injection: Some(effective.visible_memory_injection),
+        implicit_memory_turns: Some(effective.implicit_memory_turns),
+        profile_refresh_turns: Some(effective.profile_refresh_turns),
+        profile_node_limit: Some(effective.profile_node_limit),
+        session_compact_recall: Some(effective.session_compact_recall),
+        precheck_enabled: Some(effective.precheck_enabled),
+        ai_tools_enabled: Some(effective.ai_tools_enabled),
+        injection_tag: Some(effective.injection_tag.clone()),
+        injection_description: Some(effective.injection_description.clone()),
+        install: Some(effective.install.clone()),
+    }
+}
+
+/// Parses one WebUI VMM action request into the runtime action enum.
+/// 将单个 WebUI VMM 动作请求解析为运行时动作枚举。
+fn parse_vmm_memory_action(
+    request: &VmmMemoryActionRequest,
+    selected_session_id: Option<String>,
+) -> Result<crate::vmm_management::VmmWorkbenchAction, String> {
+    let payload = &request.payload;
+    match request.action.trim() {
+        "healthz" => Ok(crate::vmm_management::VmmWorkbenchAction::Healthz),
+        "load_users_projects" => {
+            Ok(crate::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects)
+        }
+        "resolve_user_project" => {
+            Ok(crate::vmm_management::VmmWorkbenchAction::ResolveUserAndProject)
+        }
+        "ensure_project_preview" => {
+            Ok(crate::vmm_management::VmmWorkbenchAction::EnsureProjectPreview)
+        }
+        "load_profile_nodes" => Ok(
+            crate::vmm_management::VmmWorkbenchAction::LoadProfileNodes {
+                target: parse_vmm_profile_target(
+                    vmm_payload_text(payload, "target")
+                        .as_deref()
+                        .unwrap_or("user"),
+                )?,
+            },
+        ),
+        "load_profile_bundle" => Ok(crate::vmm_management::VmmWorkbenchAction::LoadProfileBundle),
+        "apply_profile_instruction" => Ok(
+            crate::vmm_management::VmmWorkbenchAction::ApplyProfileInstruction {
+                target: parse_vmm_profile_target(
+                    vmm_payload_text(payload, "target")
+                        .as_deref()
+                        .unwrap_or("user"),
+                )?,
+                instruction: vmm_payload_text(payload, "instruction").unwrap_or_default(),
+            },
+        ),
+        "resolve_user" => Ok(crate::vmm_management::VmmWorkbenchAction::ResolveUser {
+            user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
+            confirm_create: vmm_payload_bool(payload, "confirmCreate"),
+        }),
+        "delete_user" => Ok(crate::vmm_management::VmmWorkbenchAction::DeleteUser {
+            user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
+            confirmation_code: vmm_payload_text(payload, "confirmationCode").unwrap_or_default(),
+        }),
+        "ensure_project" => Ok(crate::vmm_management::VmmWorkbenchAction::EnsureProject {
+            project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
+            confirm_create: vmm_payload_bool(payload, "confirmCreate"),
+        }),
+        "delete_project" => Ok(crate::vmm_management::VmmWorkbenchAction::DeleteProject {
+            project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
+            confirm_delete: vmm_payload_bool(payload, "confirmDelete"),
+        }),
+        "migrate_project" => Ok(crate::vmm_management::VmmWorkbenchAction::MigrateProject {
+            source_project_path: vmm_payload_text(payload, "sourceProjectPath").unwrap_or_default(),
+            target_project_path: vmm_payload_text(payload, "targetProjectPath").unwrap_or_default(),
+            confirm_migrate: vmm_payload_bool(payload, "confirmMigrate"),
+        }),
+        "search_memory_events" => Ok(
+            crate::vmm_management::VmmWorkbenchAction::SearchMemoryEvents {
+                queries: vmm_payload_string_list(payload, "queries"),
+                top_k: vmm_payload_u32(payload, "topK").unwrap_or(5),
+            },
+        ),
+        "get_turn_details" => Ok(crate::vmm_management::VmmWorkbenchAction::GetTurnDetails {
+            turn_ids: vmm_payload_u64_list(payload, "turnIds")?,
+        }),
+        "write_memories" => Ok(crate::vmm_management::VmmWorkbenchAction::WriteMemories {
+            session_id: vmm_payload_text(payload, "sessionId")
+                .or(selected_session_id)
+                .unwrap_or_else(|| String::from("webui-vmm-memory")),
+            item: vulcan_vmm::WriteMemoryItem {
+                scope_level: vmm_payload_i32(payload, "scopeLevel").unwrap_or(2),
+                abstract_text: vmm_payload_text(payload, "abstractText").unwrap_or_default(),
+                details: vmm_payload_text(payload, "details").unwrap_or_default(),
+                category: vmm_payload_i32(payload, "category").unwrap_or(1),
+                priority: vmm_payload_i32(payload, "priority").unwrap_or(2),
+                memory_level: vmm_payload_i32(payload, "memoryLevel").unwrap_or(2),
+            },
+        }),
+        other => Err(format!("不支持的 VMM 记忆动作：{other}")),
+    }
+}
+
+/// Builds a JSON request preview for one VMM action.
+/// 为单个 VMM 动作构建 JSON 请求预览。
+fn vmm_action_request_preview(
+    action: &crate::vmm_management::VmmWorkbenchAction,
+) -> Result<Value, String> {
+    serde_json::to_value(format!("{action:?}"))
+        .map(|debug| json!({ "action": debug }))
+        .map_err(|error| format!("序列化 VMM 请求预览失败：{error}"))
+}
+
+/// Projects one VMM management outcome into the WebUI action result shape.
+/// 将单个 VMM 管理结果投影为 WebUI 动作结果结构。
+fn vmm_memory_action_result(
+    action: &str,
+    request: Value,
+    outcome: crate::vmm_management::VmmManagementOutcome,
+) -> Result<VmmMemoryActionResult, String> {
+    let summary = outcome.summary();
+    let (kind, response) = match outcome {
+        crate::vmm_management::VmmManagementOutcome::Healthz(status) => {
+            ("healthz", json!({ "status": status }))
+        }
+        crate::vmm_management::VmmManagementOutcome::UsersAndProjects { users, projects } => (
+            "users_projects",
+            json!({ "users": users.users, "projects": projects.projects }),
+        ),
+        crate::vmm_management::VmmManagementOutcome::Resolved { user, project } => {
+            ("resolved", json!({ "user": user, "project": project }))
+        }
+        crate::vmm_management::VmmManagementOutcome::EnsureProject(response) => (
+            "ensure_project",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::DeleteUser(response) => (
+            "delete_user",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::DeleteProject(response) => (
+            "delete_project",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::MigrateProject(response) => (
+            "migrate_project",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::ProfileNodes(response) => (
+            "profile_nodes",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::ProfileBundle(response) => (
+            "profile_bundle",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::ProfileInstruction(response) => (
+            "profile_instruction",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::ResolveUser(response) => (
+            "resolve_user",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::SearchMemoryEvents(response) => (
+            "search_memory_events",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::GetTurnDetails(response) => (
+            "get_turn_details",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        crate::vmm_management::VmmManagementOutcome::WriteMemories(response) => (
+            "write_memories",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+    };
+    Ok(VmmMemoryActionResult {
+        action: action.to_string(),
+        summary,
+        kind: kind.to_string(),
+        request,
+        response,
+    })
+}
+
+/// Formats a JSON projection error for VMM responses.
+/// 格式化 VMM 响应 JSON 投影错误。
+fn vmm_json_error(error: serde_json::Error) -> String {
+    format!("序列化 VMM 响应失败：{error}")
+}
+
+/// Saves one VMM memory configuration draft.
+/// 保存单个 VMM 记忆配置草稿。
+fn save_vmm_memory_config(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    request: VmmConfigSaveRequest,
+) -> Result<(), String> {
+    let scope = request.scope.trim().to_ascii_lowercase();
+    if scope == "project" {
+        let project_path = vmm_project_scope_path(state, request.project_id.as_deref())?;
+        let mut project_configuration =
+            vulcan_provider_config::config::load_project_configuration_file(&PathBuf::from(
+                &project_path,
+            ))
+            .unwrap_or_default();
+        project_configuration.vmm = vmm_config_layer_from_draft(&request.draft, false)?;
+        vulcan_provider_config::config::save_project_configuration_file(
+            &PathBuf::from(&project_path),
+            &project_configuration,
+        )?;
+        refresh_service_vmm_hook_snapshot(state)?;
+        return Ok(());
+    }
+    let mut configuration = provider_configuration_from_state(state)?;
+    configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
+    vulcan_provider_config::config::save_configuration_file(&configuration)?;
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(runtime) = guard.agent_runtime.as_mut() {
+        runtime.provider_configuration = configuration.clone();
+    }
+    refresh_guard_vmm_hook_snapshot(&mut guard, &configuration);
+    Ok(())
+}
+
+/// Refreshes the retained VMM hook snapshot from shared service state.
+/// 从共享服务状态刷新保留的 VMM hook 快照。
+fn refresh_service_vmm_hook_snapshot(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let configuration = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.provider_configuration.clone());
+    if let Some(configuration) = configuration {
+        refresh_guard_vmm_hook_snapshot(&mut guard, &configuration);
+    }
+    Ok(())
+}
+
+/// Refreshes the VMM hook snapshot for one locked service state.
+/// 为单个已加锁服务状态刷新 VMM hook 快照。
+fn refresh_guard_vmm_hook_snapshot(
+    guard: &mut ServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+) {
+    if let (Some(agent_runtime), Some(workspace_snapshot)) = (
+        guard.agent_runtime.as_ref(),
+        guard.workspace_snapshot.as_ref(),
+    ) {
+        agent_runtime
+            .vmm_hook_runtime
+            .replace_snapshot(build_vmm_hook_config_snapshot(
+                provider_configuration,
+                workspace_snapshot,
+            ));
+    }
+}
+
+/// Converts a WebUI VMM draft into a persisted configuration layer.
+/// 将 WebUI VMM 草稿转换为持久化配置层。
+fn vmm_config_layer_from_draft(
+    draft: &VmmConfigDraftSummary,
+    include_transport: bool,
+) -> Result<vulcan_vmm::VmmConfigLayer, String> {
+    Ok(vulcan_vmm::VmmConfigLayer {
+        enabled: Some(draft.enabled),
+        grpc_target: include_transport
+            .then(|| vmm_non_empty_text(&draft.grpc_target))
+            .flatten(),
+        grpc_api_key: include_transport
+            .then(|| vmm_non_empty_text(&draft.grpc_api_key))
+            .flatten(),
+        handshake_timeout_ms: include_transport
+            .then(|| vmm_parse_optional_u64(&draft.handshake_timeout_ms, "VMM 握手超时"))
+            .transpose()?
+            .flatten(),
+        receive_timeout_ms: include_transport
+            .then(|| vmm_parse_optional_u64(&draft.receive_timeout_ms, "VMM 请求超时"))
+            .transpose()?
+            .flatten(),
+        max_receive_message_bytes: include_transport
+            .then(|| {
+                vmm_parse_optional_usize(&draft.max_receive_message_bytes, "VMM 最大接收字节数")
+            })
+            .transpose()?
+            .flatten(),
+        grpc_keepalive_time_ms: include_transport
+            .then(|| vmm_parse_optional_u64(&draft.grpc_keepalive_time_ms, "VMM keepalive 间隔"))
+            .transpose()?
+            .flatten(),
+        grpc_keepalive_timeout_ms: include_transport
+            .then(|| vmm_parse_optional_u64(&draft.grpc_keepalive_timeout_ms, "VMM keepalive 超时"))
+            .transpose()?
+            .flatten(),
+        grpc_keepalive_permit_without_calls: include_transport
+            .then_some(draft.grpc_keepalive_permit_without_calls),
+        user_id: vmm_parse_optional_u64(&draft.user_id, "VMM 用户 ID")?,
+        project_id: vmm_parse_optional_u64(&draft.project_id, "VMM 项目 ID")?,
+        visible_memory_injection: Some(false),
+        implicit_memory_turns: vmm_parse_optional_u32(
+            &draft.implicit_memory_turns,
+            "临时记忆 TTL",
+        )?,
+        profile_refresh_turns: vmm_parse_optional_u32(
+            &draft.profile_refresh_turns,
+            "画像刷新间隔",
+        )?,
+        profile_node_limit: vmm_parse_optional_u32(&draft.profile_node_limit, "画像节点上限")?,
+        session_compact_recall: Some(true),
+        precheck_enabled: Some(draft.precheck_enabled),
+        ai_tools_enabled: Some(draft.ai_tools_enabled),
+        injection_tag: vmm_non_empty_text(&draft.injection_tag),
+        injection_description: vmm_non_empty_text(&draft.injection_description),
+        install: None,
+    })
+}
+
+/// Returns the selected project path for a VMM request scope.
+/// 返回 VMM 请求作用域选中的项目路径。
+fn vmm_project_scope_path(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<&str>,
+) -> Result<String, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区尚未载入，无法保存项目 VMM 配置。"))?;
+    vmm_request_project_scope(workspace_snapshot, project_id)
+        .map(|project| project.path.clone())
+        .ok_or_else(|| String::from("选中的项目已不存在，请重新选择。"))
+}
+
+/// Finds the project scope requested by WebUI or implied by the selected session.
+/// 查找 WebUI 请求或当前选中会话隐含的项目作用域。
+fn vmm_request_project_scope<'a>(
+    workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    project_id: Option<&str>,
+) -> Option<&'a TaskProjectSummary> {
+    project_id
+        .and_then(|project_id| {
+            workspace
+                .task_projects
+                .iter()
+                .find(|project| project.id == project_id)
+        })
+        .or_else(|| {
+            selected_workspace_session(workspace)
+                .and_then(|session| session.project_id.as_deref())
+                .and_then(|project_id| {
+                    workspace
+                        .task_projects
+                        .iter()
+                        .find(|project| project.id == project_id)
+                })
+        })
+        .or_else(|| workspace.task_projects.first())
+}
+
+/// Returns the currently selected workspace session when it exists.
+/// 返回当前选中的工作区会话（若存在）。
+fn selected_workspace_session<'a>(
+    workspace: &'a vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+) -> Option<&'a SessionSummary> {
+    workspace
+        .sessions
+        .iter()
+        .find(|session| session.id == workspace.selected_session)
+}
+
+/// Parses one profile target key from WebUI.
+/// 从 WebUI 解析单个画像目标键。
+fn parse_vmm_profile_target(value: &str) -> Result<vulcan_vmm::ProfileTarget, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "user" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetUser),
+        "project" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetProject),
+        "team" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetTeam),
+        "space" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetSpace),
+        other => Err(format!("不支持的 VMM 画像目标：{other}")),
+    }
+}
+
+/// Reads one optional string from an action payload.
+/// 从动作载荷读取一个可选字符串。
+fn vmm_payload_text(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Reads one boolean from an action payload.
+/// 从动作载荷读取一个布尔值。
+fn vmm_payload_bool(payload: &Value, key: &str) -> bool {
+    payload.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// Reads one optional u32 from an action payload.
+/// 从动作载荷读取一个可选 u32。
+fn vmm_payload_u32(payload: &Value, key: &str) -> Option<u32> {
+    payload
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+        })
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+/// Reads one optional i32 from an action payload.
+/// 从动作载荷读取一个可选 i32。
+fn vmm_payload_i32(payload: &Value, key: &str) -> Option<i32> {
+    payload
+        .get(key)
+        .and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_str()?.trim().parse::<i64>().ok())
+        })
+        .and_then(|value| i32::try_from(value).ok())
+}
+
+/// Reads a string list from an action payload.
+/// 从动作载荷读取字符串列表。
+fn vmm_payload_string_list(payload: &Value, key: &str) -> Vec<String> {
+    if let Some(values) = payload.get(key).and_then(Value::as_array) {
+        return values
+            .iter()
+            .filter_map(Value::as_str)
+            .flat_map(vmm_split_text_list)
+            .collect();
+    }
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(vmm_split_text_list)
+        .unwrap_or_default()
+}
+
+/// Reads a u64 list from an action payload.
+/// 从动作载荷读取 u64 列表。
+fn vmm_payload_u64_list(payload: &Value, key: &str) -> Result<Vec<u64>, String> {
+    let values = vmm_payload_string_list(payload, key);
+    values
+        .into_iter()
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|_| format!("无法解析 VMM turn id：{value}"))
+        })
+        .collect()
+}
+
+/// Splits compact text list syntax used by the WebUI forms.
+/// 拆分 WebUI 表单使用的紧凑文本列表语法。
+fn vmm_split_text_list(value: &str) -> Vec<String> {
+    value
+        .split(['|', ',', '\n'])
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Returns normalized non-empty text.
+/// 返回规范化后的非空文本。
+fn vmm_non_empty_text(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+/// Parses an optional u64 draft field.
+/// 解析可选 u64 草稿字段。
+fn vmm_parse_optional_u64(value: &str, label: &str) -> Result<Option<u64>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
+/// Parses an optional u32 draft field.
+/// 解析可选 u32 草稿字段。
+fn vmm_parse_optional_u32(value: &str, label: &str) -> Result<Option<u32>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<u32>()
+        .map(Some)
+        .map_err(|_| format!("{label} 必须是 32 位非负整数。"))
+}
+
+/// Parses an optional usize draft field.
+/// 解析可选 usize 草稿字段。
+fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Option<usize>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    trimmed
+        .parse::<usize>()
+        .map(Some)
+        .map_err(|_| format!("{label} 必须是非负整数。"))
+}
+
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 fn runtime_parts_from_state(
@@ -5387,6 +6354,7 @@ async fn persist_webui_session_runtime_state_update(
 fn empty_luaskills_catalog() -> TauriLuaSkillsCatalog {
     TauriLuaSkillsCatalog {
         runtime_root: PathBuf::new(),
+        system_lua_lib_dir: PathBuf::new(),
         skills: Vec::new(),
         entry_count: 0,
     }
@@ -12524,6 +13492,8 @@ fn workbench_from_runtime(
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
         plugins: plugins_from_luaskills(luaskills_catalog),
+        lua_skills: lua_skills_catalog_summary(luaskills_catalog, provider_configuration),
+        agent_skills: agent_skills_catalog_summary(provider_configuration),
         settings: settings(),
         providers: providers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
@@ -12545,6 +13515,7 @@ fn workbench_from_runtime(
             .unwrap_or_default(),
         pending_question,
         memories: memories(workspace),
+        vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
         command_sessions: command_sessions(controller),
         logs: logs
             .iter()
@@ -13029,6 +14000,11 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
         plugins: Vec::new(),
+        lua_skills: lua_skills_catalog_summary(
+            &empty_luaskills_catalog(),
+            &ProviderConfigurationFile::default(),
+        ),
+        agent_skills: agent_skills_catalog_summary(&ProviderConfigurationFile::default()),
         settings: settings(),
         providers: providers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
@@ -13041,6 +14017,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         pending_prompts: Vec::new(),
         pending_question: None,
         memories: Vec::new(),
+        vmm_memory: VmmMemorySnapshot::default(),
         command_sessions: Vec::new(),
         logs: logs
             .iter()
@@ -13119,6 +14096,200 @@ fn plugins_from_luaskills(catalog: &TauriLuaSkillsCatalog) -> Vec<PluginSummary>
             capability: format!("{} 个入口：{}", skill.entry_count, skill.capability),
         })
         .collect()
+}
+
+/// Projects the retained LuaSkills catalog into the WebUI service API shape.
+/// 将保留的 LuaSkills 目录投影为 WebUI service API 结构。
+fn lua_skills_catalog_summary(
+    catalog: &TauriLuaSkillsCatalog,
+    provider_configuration: &ProviderConfigurationFile,
+) -> LuaSkillsCatalogSummary {
+    LuaSkillsCatalogSummary {
+        runtime_root: catalog.runtime_root.display().to_string(),
+        system_lua_lib: catalog.system_lua_lib_dir.display().to_string(),
+        entry_count: catalog.entry_count,
+        notice: if catalog.runtime_root.as_os_str().is_empty() {
+            String::from("LuaSkills 技能目录尚未载入。")
+        } else {
+            format!(
+                "可见技能 {} 个，运行时入口 {} 个。",
+                catalog.skills.len(),
+                catalog.entry_count
+            )
+        },
+        skills: catalog
+            .skills
+            .iter()
+            .map(|skill| LuaSkillSummary {
+                skill_id: skill.skill_id.clone(),
+                display_name: skill.display_name.clone(),
+                version: skill.version.clone(),
+                root_name: skill.root_name.clone(),
+                skill_dir: skill.skill_dir.display().to_string(),
+                enabled: skill.enabled,
+                disabled_reason: skill.disabled_reason.clone(),
+                managed: skill.managed,
+                source_type: skill.source_type.clone(),
+                source_locator: skill.source_locator.clone(),
+                entry_count: skill.entry_count,
+                system_owned: skill.system_owned,
+                tools: skill
+                    .tools
+                    .iter()
+                    .map(|tool| {
+                        let state = provider_configuration
+                            .luaskills
+                            .tool_registration_state(&skill.skill_id, &tool.local_name);
+                        LuaSkillToolSummary {
+                            canonical_name: tool.canonical_name.clone(),
+                            local_name: tool.local_name.clone(),
+                            description: tool.description.clone(),
+                            registration_state: luaskill_tool_registration_state_key(state)
+                                .to_string(),
+                            registration_label: state.to_string(),
+                            registration_help: luaskill_tool_registration_state_help(state)
+                                .to_string(),
+                        }
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
+/// Projects prompt-based Agent Skills into the WebUI service API shape.
+/// 将基于提示词的 Agent Skills 投影为 WebUI service API 结构。
+fn agent_skills_catalog_summary(
+    provider_configuration: &ProviderConfigurationFile,
+) -> AgentSkillsCatalogSummary {
+    let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
+        &provider_configuration.prompt_skills,
+    );
+    let catalog = vulcan_prompt_skills::load_prompt_skills(&runtime_config);
+    let global_enabled = provider_configuration.prompt_skills.enabled;
+    AgentSkillsCatalogSummary {
+        global_enabled,
+        system_root: catalog.system_root.display().to_string(),
+        user_root: catalog.user_root.display().to_string(),
+        notice: format!(
+            "系统技能 {}，用户技能 {}，加载警告 {}。",
+            catalog
+                .skills
+                .iter()
+                .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::System)
+                .count(),
+            catalog
+                .skills
+                .iter()
+                .filter(|skill| skill.scope == vulcan_prompt_skills::PromptSkillScope::User)
+                .count(),
+            catalog.errors.len()
+        ),
+        skills: catalog
+            .skills
+            .iter()
+            .map(|skill| agent_skill_summary(skill, provider_configuration, global_enabled))
+            .collect(),
+        errors: catalog
+            .errors
+            .iter()
+            .map(|error| AgentSkillLoadIssueSummary {
+                path: error.path.display().to_string(),
+                message: error.message.clone(),
+            })
+            .collect(),
+    }
+}
+
+/// Projects one prompt skill into a compact WebUI card row.
+/// 将单个提示词技能投影为紧凑 WebUI 卡片行。
+fn agent_skill_summary(
+    skill: &vulcan_prompt_skills::PromptSkill,
+    provider_configuration: &ProviderConfigurationFile,
+    global_enabled: bool,
+) -> AgentSkillSummary {
+    let local_enabled = provider_configuration
+        .prompt_skills
+        .skill_overrides
+        .get(&skill.name)
+        .copied()
+        .unwrap_or(provider_configuration.prompt_skills.default_skill_state)
+        .is_enabled();
+    AgentSkillSummary {
+        name: skill.name.clone(),
+        display_name: prompt_skill_display_name(skill).to_string(),
+        description: prompt_skill_short_description(skill).to_string(),
+        scope: skill.scope.zh_label().to_string(),
+        enabled: global_enabled && local_enabled,
+        skill_file: skill.skill_file.display().to_string(),
+        base_dir: skill.base_dir.display().to_string(),
+        icon_path: prompt_skill_icon_path(skill),
+        body: skill.body.trim().to_string(),
+    }
+}
+
+/// Returns the display name for one prompt skill.
+/// 返回单个提示词技能的显示名称。
+fn prompt_skill_display_name(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.display_name.as_deref())
+        .unwrap_or(skill.name.as_str())
+}
+
+/// Returns the short description for one prompt skill.
+/// 返回单个提示词技能的简短说明。
+fn prompt_skill_short_description(skill: &vulcan_prompt_skills::PromptSkill) -> &str {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.short_description.as_deref())
+        .filter(|description| !description.trim().is_empty())
+        .or_else(|| (!skill.description.trim().is_empty()).then_some(skill.description.as_str()))
+        .unwrap_or("该技能没有提供描述。")
+}
+
+/// Resolves an optional prompt skill icon path when it exists on disk.
+/// 在图标文件存在时解析可选提示词技能图标路径。
+fn prompt_skill_icon_path(skill: &vulcan_prompt_skills::PromptSkill) -> Option<String> {
+    skill
+        .interface
+        .as_ref()
+        .and_then(|interface| interface.icon_small.as_ref())
+        .map(|path| skill.base_dir.join(path))
+        .filter(|path| path.is_file())
+        .map(|path| path.display().to_string())
+}
+
+/// Returns a stable key for one persisted LuaSkills tool registration state.
+/// 返回单个持久化 LuaSkills 工具注册状态的稳定键。
+fn luaskill_tool_registration_state_key(
+    state: PersistedLuaSkillToolRegistrationState,
+) -> &'static str {
+    match state {
+        PersistedLuaSkillToolRegistrationState::Explicit => "explicit",
+        PersistedLuaSkillToolRegistrationState::Implicit => "implicit",
+        PersistedLuaSkillToolRegistrationState::Disabled => "disabled",
+    }
+}
+
+/// Returns the help text shown for one LuaSkills tool registration state.
+/// 返回单个 LuaSkills 工具注册状态展示的说明文本。
+fn luaskill_tool_registration_state_help(
+    state: PersistedLuaSkillToolRegistrationState,
+) -> &'static str {
+    match state {
+        PersistedLuaSkillToolRegistrationState::Explicit => {
+            "显式启用：工具会作为独立函数 Schema 暴露给模型。"
+        }
+        PersistedLuaSkillToolRegistrationState::Implicit => {
+            "隐式启用：工具保留宿主调用能力，但不暴露独立 Schema。"
+        }
+        PersistedLuaSkillToolRegistrationState::Disabled => {
+            "禁用：工具不会注册给模型，也不应被宿主调度调用。"
+        }
+    }
 }
 
 /// Creates first-version settings sections.
@@ -13360,6 +14531,284 @@ fn memories(
             ),
         },
     ]
+}
+
+/// Creates the detailed VMM memory snapshot for the WebUI memory area.
+/// 为 WebUI 记忆区域创建详细 VMM 记忆快照。
+fn vmm_memory_snapshot(
+    workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
+    provider_configuration: &ProviderConfigurationFile,
+    selected_runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> VmmMemorySnapshot {
+    let selected_session = selected_workspace_session(workspace);
+    let selected_project = vmm_request_project_scope(
+        workspace,
+        selected_session.and_then(|session| session.project_id.as_deref()),
+    );
+    let project_layer = selected_project
+        .map(|project| load_project_configuration(&project.path).vmm)
+        .unwrap_or_default();
+    let effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+        &provider_configuration.vmm,
+        Some(&project_layer),
+        selected_runtime_state.map(|state| &state.vmm),
+    );
+    let global_effective =
+        vulcan_vmm::VmmEffectiveConfig::resolve(&provider_configuration.vmm, None, None);
+    let project_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+        &provider_configuration.vmm,
+        Some(&project_layer),
+        None,
+    );
+    VmmMemorySnapshot {
+        effective: vmm_effective_summary(&effective),
+        global_draft: vmm_config_draft_summary(
+            &provider_configuration.vmm,
+            &global_effective,
+            !provider_configuration.vmm.is_empty(),
+        ),
+        project_draft: vmm_config_draft_summary(
+            &project_layer,
+            &project_effective,
+            !project_layer.is_empty(),
+        ),
+        project_scopes: workspace
+            .task_projects
+            .iter()
+            .map(|project| {
+                let project_vmm = load_project_configuration(&project.path).vmm;
+                VmmProjectScopeSummary {
+                    project_id: project.id.clone(),
+                    name: project.title.clone(),
+                    path: project.path.clone(),
+                    has_override: !project_vmm.is_empty(),
+                }
+            })
+            .collect(),
+        selected_project_id: selected_project.map(|project| project.id.clone()),
+        selected_conversation_id: selected_session.map(|session| session.id.to_string()),
+        runtime: vmm_runtime_summary(selected_runtime_state),
+        sections: vmm_management_sections(),
+        notice: vmm_memory_notice(&effective, selected_project),
+    }
+}
+
+/// Projects one effective VMM configuration into WebUI summary fields.
+/// 将单个 VMM 最终配置投影为 WebUI 摘要字段。
+fn vmm_effective_summary(effective: &vulcan_vmm::VmmEffectiveConfig) -> VmmEffectiveSummary {
+    let grpc_configured = !effective.grpc_target.trim().is_empty();
+    VmmEffectiveSummary {
+        enabled: effective.enabled,
+        grpc_target: effective.grpc_target.clone(),
+        grpc_configured,
+        user_id: effective.user_id,
+        project_id: effective.project_id,
+        diagnostic: vmm_diagnostic_key(effective.diagnose_memory_flow(grpc_configured)),
+        precheck_diagnostic: vmm_diagnostic_key(effective.diagnose_precheck_flow(grpc_configured)),
+        ai_tools_enabled: effective.ai_tools_enabled,
+        precheck_enabled: effective.precheck_enabled,
+        implicit_memory_turns: effective.implicit_memory_turns,
+        profile_refresh_turns: effective.profile_refresh_turns,
+        profile_node_limit: effective.profile_node_limit,
+        injection_tag: effective.injection_tag.clone(),
+        injection_description: effective.injection_description.clone(),
+    }
+}
+
+/// Projects one VMM config layer and effective fallback into an editable draft.
+/// 将单个 VMM 配置层与最终回退值投影为可编辑草稿。
+fn vmm_config_draft_summary(
+    layer: &vulcan_vmm::VmmConfigLayer,
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    has_override: bool,
+) -> VmmConfigDraftSummary {
+    VmmConfigDraftSummary {
+        has_override,
+        enabled: layer.enabled.unwrap_or(effective.enabled),
+        grpc_target: layer
+            .grpc_target
+            .clone()
+            .unwrap_or_else(|| effective.grpc_target.clone()),
+        grpc_api_key: layer
+            .grpc_api_key
+            .clone()
+            .or_else(|| effective.grpc_api_key.clone())
+            .unwrap_or_default(),
+        user_id: layer
+            .user_id
+            .or(effective.user_id)
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        project_id: layer
+            .project_id
+            .or(effective.project_id)
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        receive_timeout_ms: layer
+            .receive_timeout_ms
+            .unwrap_or(effective.receive_timeout_ms)
+            .to_string(),
+        handshake_timeout_ms: layer
+            .handshake_timeout_ms
+            .unwrap_or(effective.handshake_timeout_ms)
+            .to_string(),
+        max_receive_message_bytes: layer
+            .max_receive_message_bytes
+            .or(effective.max_receive_message_bytes)
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        grpc_keepalive_time_ms: layer
+            .grpc_keepalive_time_ms
+            .unwrap_or(effective.grpc_keepalive_time_ms)
+            .to_string(),
+        grpc_keepalive_timeout_ms: layer
+            .grpc_keepalive_timeout_ms
+            .unwrap_or(effective.grpc_keepalive_timeout_ms)
+            .to_string(),
+        grpc_keepalive_permit_without_calls: layer
+            .grpc_keepalive_permit_without_calls
+            .unwrap_or(effective.grpc_keepalive_permit_without_calls),
+        implicit_memory_turns: layer
+            .implicit_memory_turns
+            .unwrap_or(effective.implicit_memory_turns)
+            .to_string(),
+        profile_refresh_turns: layer
+            .profile_refresh_turns
+            .unwrap_or(effective.profile_refresh_turns)
+            .to_string(),
+        profile_node_limit: layer
+            .profile_node_limit
+            .unwrap_or(effective.profile_node_limit)
+            .to_string(),
+        ai_tools_enabled: layer.ai_tools_enabled.unwrap_or(effective.ai_tools_enabled),
+        precheck_enabled: layer.precheck_enabled.unwrap_or(effective.precheck_enabled),
+        injection_tag: layer
+            .injection_tag
+            .clone()
+            .unwrap_or_else(|| effective.injection_tag.clone()),
+        injection_description: layer
+            .injection_description
+            .clone()
+            .unwrap_or_else(|| effective.injection_description.clone()),
+    }
+}
+
+/// Summarizes selected-session VMM runtime state.
+/// 汇总当前选中会话的 VMM 运行态。
+fn vmm_runtime_summary(runtime_state: Option<&SessionRuntimeStateEntry>) -> VmmRuntimeSummary {
+    let Some(runtime_state) = runtime_state else {
+        return VmmRuntimeSummary::default();
+    };
+    VmmRuntimeSummary {
+        outbox_count: runtime_state.vmm_writeback_outbox.len(),
+        profile_sync_count: runtime_state.vmm_profile_sync.nodes_by_id.len(),
+        completed_turns: runtime_state.vmm_profile_sync.completed_turns_since_sync,
+        updated_at: runtime_state.vmm_profile_sync.updated_at.clone(),
+        profile_preview: runtime_state
+            .vmm_profile_sync
+            .base_profile_content
+            .as_deref()
+            .map(compact_panel_preview)
+            .unwrap_or_default(),
+    }
+}
+
+/// Returns the VMM management sections mirrored from the iced workbench.
+/// 返回从 iced 工作台镜像而来的 VMM 管理分区。
+fn vmm_management_sections() -> Vec<VmmManagementSectionSummary> {
+    [
+        (
+            "user_manager",
+            "USER MANAGER",
+            "用户管理",
+            "解析、创建预检和删除长期用户。",
+        ),
+        (
+            "project_manager",
+            "PROJECT MANAGER",
+            "项目管理",
+            "解析、创建预检、删除和迁移项目路径。",
+        ),
+        (
+            "profile_center",
+            "PROFILE CENTER",
+            "画像中心",
+            "查看 active profile nodes 并应用手工画像指令。",
+        ),
+        (
+            "profile_bundle",
+            "PROFILE BUNDLE TEST",
+            "画像 Bundle 测试",
+            "读取当前 user/project 的完整画像 Bundle。",
+        ),
+        (
+            "tools_debug",
+            "TOOLS DEBUG",
+            "工具调试",
+            "模拟 AI 专属工具检索、详情展开和主动写入。",
+        ),
+        (
+            "memory_settings",
+            "MEMORY SETTINGS",
+            "记忆设置",
+            "配置记忆开关、TTL、画像刷新和注入策略。",
+        ),
+        (
+            "grpc_transport",
+            "GRPC TRANSPORT",
+            "gRPC 传输",
+            "配置全局 VMM 连接和传输参数。",
+        ),
+    ]
+    .into_iter()
+    .map(
+        |(id, key, label, description)| VmmManagementSectionSummary {
+            id: id.to_string(),
+            key: key.to_string(),
+            label: label.to_string(),
+            description: description.to_string(),
+        },
+    )
+    .collect()
+}
+
+/// Builds a compact VMM page notice.
+/// 构建紧凑的 VMM 页面提示。
+fn vmm_memory_notice(
+    effective: &vulcan_vmm::VmmEffectiveConfig,
+    selected_project: Option<&TaskProjectSummary>,
+) -> String {
+    format!(
+        "当前项目：{}；诊断：{}；用户/项目：{}/{}。",
+        selected_project
+            .map(|project| project.title.as_str())
+            .unwrap_or("未选择项目"),
+        vmm_diagnostic_key(
+            effective.diagnose_memory_flow(!effective.grpc_target.trim().is_empty())
+        ),
+        effective
+            .user_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("-")),
+        effective
+            .project_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| String::from("-")),
+    )
+}
+
+/// Returns a stable key for one VMM diagnostic.
+/// 返回单个 VMM 诊断的稳定键。
+fn vmm_diagnostic_key(diagnostic: vulcan_vmm::VmmConfigDiagnostic) -> String {
+    match diagnostic {
+        vulcan_vmm::VmmConfigDiagnostic::Ready => "ready",
+        vulcan_vmm::VmmConfigDiagnostic::DisabledByConfig => "disabled_by_config",
+        vulcan_vmm::VmmConfigDiagnostic::MissingGrpcTarget => "missing_grpc_target",
+        vulcan_vmm::VmmConfigDiagnostic::GrpcOffline => "grpc_offline",
+        vulcan_vmm::VmmConfigDiagnostic::MissingUserId => "missing_user_id",
+        vulcan_vmm::VmmConfigDiagnostic::MissingProjectId => "missing_project_id",
+    }
+    .to_string()
 }
 
 /// Creates basic tool call summaries for service bridge commands.

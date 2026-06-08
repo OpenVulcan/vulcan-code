@@ -30,6 +30,7 @@ vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-mcp-runtime.workspace = true
 vulcan-provider-config.workspace = true
+vulcan-prompt-skills.workspace = true
 vulcan-runtime-assets.workspace = true
 vulcan-service-api = { path = "../../crates/vulcan-service-api" }
 vulcan-session-core.workspace = true

@@ -1836,8 +1836,19 @@ button {
 .feature-content {
   min-width: 0;
   min-height: 0;
+  flex: 1 1 auto;
   height: 100%;
   padding: 14px;
+  overflow: hidden;
+}
+
+.feature-main-shell {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1912,6 +1923,539 @@ button {
   border-radius: 8px;
   padding: 14px;
   overflow: auto;
+}
+
+.skill-management-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.skill-page-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-tabs,
+.skill-actions-row,
+.skill-toolbar {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.skill-tabs button,
+.skill-action-button {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.skill-tabs button.active,
+.skill-action-button:not(.secondary) {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.skill-action-button.secondary {
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+}
+
+.skill-tabs button:disabled,
+.skill-action-button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.skill-page-body {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.skill-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 11px;
+}
+
+.skill-summary-card,
+.skill-empty-card,
+.skill-card,
+.skill-warning-row,
+.skill-meta-grid,
+.skill-tool-row > div,
+.agent-skill-title > div {
+  display: grid;
+  gap: 6px;
+}
+
+.skill-summary-card span,
+.skill-summary-card small,
+.skill-meta-grid span,
+.skill-card small,
+.skill-empty-card span,
+.skill-warning-row span,
+.skill-tool-row span {
+  min-width: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.skill-toolbar {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 9px;
+  background: var(--muted);
+}
+
+.skill-toolbar input,
+.skill-toolbar select,
+.skill-tool-row select {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.skill-toolbar input {
+  flex: 1 1 210px;
+}
+
+.skill-card-list {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.skill-card {
+  gap: 10px;
+}
+
+.skill-card-header {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-card-header strong {
+  font-size: 14px;
+}
+
+.skill-card-header strong span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.skill-card p,
+.skill-tool-row p,
+.skill-body-preview {
+  margin: 0;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.skill-tool-list,
+.skill-warning-list {
+  display: grid;
+  gap: 8px;
+}
+
+.skill-tool-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(130px, 160px);
+  align-items: start;
+  gap: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  padding: 9px;
+}
+
+.skill-tool-control {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-sync-status {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-align: right;
+}
+
+.agent-skill-title {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+}
+
+.agent-skill-icon {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  font-weight: 750;
+}
+
+.skill-body-preview {
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 10px;
+  font-family: "JetBrains Mono", "Cascadia Code", monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.vmm-memory-page {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.vmm-memory-shell {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(260px, 340px);
+  gap: 14px;
+  min-height: 0;
+  height: 100%;
+}
+
+.vmm-memory-rail,
+.vmm-memory-main,
+.vmm-memory-result {
+  min-width: 0;
+  min-height: 0;
+}
+
+.vmm-memory-rail,
+.vmm-memory-result,
+.vmm-memory-main,
+.vmm-memory-status,
+.vmm-overview-card,
+.vmm-section-panel,
+.vmm-side-card,
+.vmm-data-row,
+.vmm-json-preview {
+  display: flex;
+  flex-direction: column;
+}
+
+.vmm-memory-rail,
+.vmm-memory-result {
+  gap: 10px;
+}
+
+.vmm-memory-main {
+  gap: 12px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.vmm-memory-status,
+.vmm-section-button,
+.vmm-section-panel,
+.vmm-side-card,
+.vmm-overview-card,
+.vmm-data-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.vmm-memory-status,
+.vmm-section-panel,
+.vmm-side-card {
+  padding: 12px;
+}
+
+.vmm-memory-status,
+.vmm-overview-card,
+.vmm-data-row,
+.vmm-side-card,
+.vmm-json-preview {
+  gap: 7px;
+}
+
+.vmm-memory-status span,
+.vmm-section-button span,
+.vmm-overview-card span,
+.vmm-muted,
+.vmm-data-row span,
+.vmm-data-row small,
+.vmm-panel-heading span,
+.vmm-stat-list dt {
+  color: var(--muted-foreground);
+}
+
+.vmm-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  overflow: auto;
+}
+
+.vmm-section-button {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px;
+  text-align: left;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.vmm-section-button.active {
+  border-color: var(--primary);
+  background: var(--accent);
+}
+
+.vmm-section-button small {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+
+.vmm-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vmm-overview-card {
+  min-height: 112px;
+  padding: 10px;
+}
+
+.vmm-scope-bar,
+.vmm-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.vmm-scope-bar {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 55%, transparent);
+}
+
+.vmm-scope-bar label,
+.vmm-field {
+  display: flex;
+  flex: 1;
+  min-width: 160px;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.vmm-scope-bar label span,
+.vmm-field span {
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.vmm-scope-bar select,
+.vmm-field input,
+.vmm-field select {
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+}
+
+.vmm-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--secondary);
+  color: var(--secondary-foreground);
+  padding: 0 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.vmm-icon-button.danger {
+  border-color: color-mix(in oklch, var(--destructive) 48%, var(--border));
+  color: var(--destructive);
+}
+
+.vmm-icon-button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.vmm-section-panel {
+  gap: 12px;
+  padding: 14px;
+}
+
+.vmm-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.vmm-panel-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vmm-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.vmm-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 0 4px;
+}
+
+.vmm-row-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.vmm-data-row {
+  padding: 10px;
+}
+
+.vmm-stat-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0;
+}
+
+.vmm-stat-list div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vmm-stat-list dd {
+  margin: 0;
+  font-size: 12px;
+}
+
+.vmm-preview-text,
+.vmm-json-preview pre,
+.vmm-bundle-preview pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 7px;
+  background: var(--muted);
+  color: var(--foreground);
+  padding: 9px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.vmm-json-preview pre {
+  font-size: 11px;
+}
+
+.vmm-result-kind {
+  font-size: 12px;
+}
+
+.vmm-bundle-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+@media (max-width: 1180px) {
+  .vmm-memory-shell {
+    grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+  }
+
+  .vmm-memory-result {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .vmm-overview-grid,
+  .vmm-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .vmm-memory-shell,
+  .vmm-memory-result,
+  .vmm-overview-grid,
+  .vmm-form-grid,
+  .vmm-row-list {
+    grid-template-columns: 1fr;
+  }
 }
 
 .full-height {

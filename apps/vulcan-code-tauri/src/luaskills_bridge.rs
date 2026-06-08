@@ -10,8 +10,9 @@ use std::{
 use luaskills::skill::manager::collect_effective_skill_instances_from_roots;
 use luaskills::{
     LuaEngine, LuaEngineOptions, LuaRuntimeDatabaseProviderMode, LuaRuntimeHostOptions,
-    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeSkillRoot, SkillInstallRequest,
-    SkillInstallSourceType, SkillManagementAuthority, SkillManager, SkillManagerConfig, SkillMeta,
+    LuaRuntimeSpaceControllerProcessMode, LuaVmPoolConfig, RuntimeEntryDescriptor,
+    RuntimeSkillRoot, SkillInstallRequest, SkillInstallSourceType, SkillManagementAuthority,
+    SkillManager, SkillManagerConfig, SkillMeta, SkillUninstallOptions,
 };
 use vulcan_provider_config::config::{
     PersistedControllerConfiguration, PersistedControllerProcessMode,
@@ -71,6 +72,7 @@ impl RootSkillBootstrapSourceType {
 
 /// Long-lived LuaSkills handle retained by the Tauri backend.
 /// 由 Tauri 后端保留的长生命周期 LuaSkills 句柄。
+#[derive(Clone)]
 pub struct TauriLuaSkillsHandle {
     /// Shared LuaSkills engine kept alive for later plugin panels and hooks.
     /// 为后续插件面板与 hook 保持存活的共享 LuaSkills 引擎。
@@ -102,6 +104,9 @@ pub struct TauriLuaSkillsCatalog {
     /// Runtime root used by the embedded LuaSkills host.
     /// 嵌入式 LuaSkills 宿主使用的运行时根目录。
     pub runtime_root: PathBuf,
+    /// System Lua library directory used by the embedded host.
+    /// 嵌入式宿主使用的系统 Lua 库目录。
+    pub system_lua_lib_dir: PathBuf,
     /// Effective skill rows resolved from mounted skill roots.
     /// 从已挂载技能根解析出的生效技能行。
     pub skills: Vec<TauriLuaSkillSummary>,
@@ -120,18 +125,57 @@ pub struct TauriLuaSkillSummary {
     /// Human-facing skill display name.
     /// 面向用户的技能显示名称。
     pub display_name: String,
+    /// Skill package version.
+    /// 技能包版本。
+    pub version: String,
     /// Layer name that owns the effective skill.
     /// 拥有该生效技能的层名称。
     pub root_name: String,
+    /// Filesystem directory that owns the skill package.
+    /// 拥有该技能包的文件系统目录。
+    pub skill_dir: PathBuf,
     /// Whether the skill is currently enabled.
     /// 该技能当前是否已启用。
     pub enabled: bool,
+    /// Optional disabled reason captured by the lifecycle manager.
+    /// 生命周期管理器捕获的可选停用原因。
+    pub disabled_reason: Option<String>,
+    /// Whether the skill is backed by a managed install record.
+    /// 该技能是否由受管安装记录支撑。
+    pub managed: bool,
+    /// Optional managed install source type.
+    /// 可选受管安装来源类型。
+    pub source_type: Option<String>,
+    /// Optional managed install source locator.
+    /// 可选受管安装来源定位值。
+    pub source_locator: Option<String>,
     /// Number of visible tool entries belonging to this skill.
     /// 该技能拥有的可见工具入口数量。
     pub entry_count: usize,
     /// Short capability text assembled from visible tool names.
     /// 根据可见工具名称拼接出的简要能力文本。
     pub capability: String,
+    /// Runtime tools exposed by this skill.
+    /// 该技能暴露的运行时工具集合。
+    pub tools: Vec<TauriLuaSkillToolSummary>,
+    /// Whether this skill belongs to the host-owned ROOT layer.
+    /// 该技能是否属于宿主自有 ROOT 层。
+    pub system_owned: bool,
+}
+
+/// Lightweight runtime tool summary for one LuaSkill package.
+/// 单个 LuaSkill 包的轻量运行时工具摘要。
+#[derive(Debug, Clone)]
+pub struct TauriLuaSkillToolSummary {
+    /// Canonical tool name registered by the runtime.
+    /// 运行时注册的规范工具名称。
+    pub canonical_name: String,
+    /// Local tool name inside the skill package.
+    /// 技能包内部的本地工具名称。
+    pub local_name: String,
+    /// Tool description from the runtime descriptor.
+    /// 来自运行时描述符的工具说明。
+    pub description: String,
 }
 
 /// Bootstraps LuaSkills using the same controller-backed database mode as the iced GUI.
@@ -186,15 +230,180 @@ pub fn load_luaskills_catalog(
         .engine
         .lock()
         .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法读取插件目录。"))?;
-    let visible_entries = engine.list_entries_for_authority(SkillManagementAuthority::System);
-    let entry_count = visible_entries.len();
-    let mut entry_names_by_skill = std::collections::BTreeMap::<String, Vec<String>>::new();
-    for entry in visible_entries {
-        entry_names_by_skill
-            .entry(entry.skill_id)
-            .or_default()
-            .push(entry.local_name);
+    build_luaskills_catalog(handle, &engine)
+}
+
+/// Performs one LuaSkills management action and returns the refreshed catalog.
+/// 执行一次 LuaSkills 管理动作并返回刷新后的目录。
+pub fn refresh_luaskills_catalog(
+    handle: &TauriLuaSkillsHandle,
+) -> Result<TauriLuaSkillsCatalog, String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法刷新插件目录。"))?;
+    engine
+        .reload_from_roots(&handle.skill_roots)
+        .map_err(|error| format!("刷新 LuaSkills 运行时失败：{error}"))?;
+    build_luaskills_catalog(handle, &engine)
+}
+
+/// Installs one LuaSkills package into the ordinary USER root.
+/// 将单个 LuaSkills 包安装到普通 USER 根。
+pub fn install_luaskill(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: Option<String>,
+    source: String,
+    source_type: String,
+) -> Result<(String, TauriLuaSkillsCatalog), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法安装技能。"))?;
+    let user_root = ordinary_user_root(handle)?;
+    let request = SkillInstallRequest {
+        skill_id: normalize_optional_field(skill_id),
+        source: normalize_optional_field(Some(source)),
+        source_type: parse_skill_install_source_type(&source_type)?,
+    };
+    let result = engine
+        .install_skill_in_root(&handle.skill_roots, &user_root, &request)
+        .map_err(|error| format!("安装 LuaSkills 技能失败：{error}"))?;
+    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    Ok((result.message, catalog))
+}
+
+/// Updates one managed LuaSkills package in its owning root.
+/// 在所属根中更新单个受管 LuaSkills 包。
+pub fn update_luaskill(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: String,
+) -> Result<(String, TauriLuaSkillsCatalog), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法更新技能。"))?;
+    let target_root = target_root_for_skill(handle, &skill_id)?;
+    let request = SkillInstallRequest {
+        skill_id: Some(skill_id),
+        source: None,
+        source_type: SkillInstallSourceType::Github,
+    };
+    let result = if target_root.name.eq_ignore_ascii_case("ROOT") {
+        engine
+            .system_update_skill_in_root(
+                &handle.skill_roots,
+                &target_root,
+                SkillManagementAuthority::System,
+                &request,
+            )
+            .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+    } else {
+        engine
+            .update_skill_in_root(&handle.skill_roots, &target_root, &request)
+            .map_err(|error| format!("更新 LuaSkills 技能失败：{error}"))?
+    };
+    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    Ok((result.message, catalog))
+}
+
+/// Enables or disables one LuaSkills package in its owning root.
+/// 在所属根中启用或停用单个 LuaSkills 包。
+pub fn set_luaskill_enabled(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: String,
+    enabled: bool,
+) -> Result<(String, TauriLuaSkillsCatalog), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法切换技能状态。"))?;
+    let target_root = target_root_for_skill(handle, &skill_id)?;
+    if enabled {
+        if target_root.name.eq_ignore_ascii_case("ROOT") {
+            engine
+                .system_enable_skill(
+                    &handle.skill_roots,
+                    SkillManagementAuthority::System,
+                    &skill_id,
+                )
+                .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+        } else {
+            engine
+                .enable_skill(&handle.skill_roots, &skill_id)
+                .map_err(|error| format!("启用 LuaSkills 技能失败：{error}"))?;
+        }
+    } else if target_root.name.eq_ignore_ascii_case("ROOT") {
+        engine
+            .system_disable_skill_in_roots(
+                &handle.skill_roots,
+                SkillManagementAuthority::System,
+                &skill_id,
+                Some("disabled from vulcan-code-web"),
+            )
+            .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
+    } else {
+        engine
+            .disable_skill_in_roots(
+                &handle.skill_roots,
+                &skill_id,
+                Some("disabled from vulcan-code-web"),
+            )
+            .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
     }
+    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    let message = if enabled {
+        format!("已启用技能 `{skill_id}`。")
+    } else {
+        format!("已停用技能 `{skill_id}`。")
+    };
+    Ok((message, catalog))
+}
+
+/// Uninstalls one ordinary LuaSkills package from its owning root.
+/// 从所属根卸载单个普通 LuaSkills 包。
+pub fn uninstall_luaskill(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: String,
+) -> Result<(String, TauriLuaSkillsCatalog), String> {
+    let mut engine = handle
+        .engine
+        .lock()
+        .map_err(|_| String::from("LuaSkills 引擎锁已损坏，无法卸载技能。"))?;
+    let target_root = ordinary_uninstall_target_root_for_skill(handle, &skill_id)?;
+    let result = engine
+        .uninstall_skill_in_root(
+            &handle.skill_roots,
+            &target_root,
+            &skill_id,
+            &SkillUninstallOptions::default(),
+        )
+        .map_err(|error| format!("卸载 LuaSkills 技能失败：{error}"))?;
+    let catalog = reload_catalog_after_management(handle, &mut engine)?;
+    Ok((result.message, catalog))
+}
+
+/// Builds a full WebUI LuaSkills catalog from the retained runtime engine.
+/// 从保留的运行时引擎构建完整 WebUI LuaSkills 目录。
+fn build_luaskills_catalog(
+    handle: &TauriLuaSkillsHandle,
+    engine: &LuaEngine,
+) -> Result<TauriLuaSkillsCatalog, String> {
+    let visible_entries = engine.list_entries_for_authority(SkillManagementAuthority::System);
+    let mut tools_by_skill = visible_entries.into_iter().fold(
+        std::collections::BTreeMap::<String, Vec<TauriLuaSkillToolSummary>>::new(),
+        |mut grouped_tools, entry: RuntimeEntryDescriptor| {
+            grouped_tools
+                .entry(entry.skill_id.clone())
+                .or_default()
+                .push(TauriLuaSkillToolSummary {
+                    canonical_name: entry.canonical_name,
+                    local_name: entry.local_name,
+                    description: entry.description,
+                });
+            grouped_tools
+        },
+    );
 
     let resolved_skills = collect_effective_skill_instances_from_roots(&handle.skill_roots)
         .map_err(|error| format!("解析 LuaSkills 生效技能目录失败：{error}"))?;
@@ -205,22 +414,55 @@ pub fn load_luaskills_catalog(
         let enabled = manager
             .is_skill_enabled(&resolved.skill_id)
             .map_err(|error| format!("读取技能启用状态失败（{}）：{error}", resolved.skill_id))?;
-        let mut entry_names = entry_names_by_skill
+        let disabled_reason = manager
+            .disabled_record(&resolved.skill_id)
+            .map_err(|error| format!("读取技能停用记录失败（{}）：{error}", resolved.skill_id))?
+            .and_then(|record| record.reason);
+        let install_record = manager
+            .install_record(&resolved.skill_id)
+            .map_err(|error| format!("读取技能安装记录失败（{}）：{error}", resolved.skill_id))?;
+        let (managed, source_type, source_locator) = match install_record {
+            Some(record) => (
+                record.managed,
+                Some(skill_install_source_type_label(record.source.source_type).to_string()),
+                Some(record.source.locator),
+            ),
+            None => (false, None, None),
+        };
+        let mut tools = tools_by_skill
             .remove(&resolved.skill_id)
             .unwrap_or_default();
-        entry_names.sort();
-        let capability = if entry_names.is_empty() {
+        tools.sort_by(|left, right| {
+            left.local_name
+                .cmp(&right.local_name)
+                .then_with(|| left.canonical_name.cmp(&right.canonical_name))
+        });
+        let capability = if tools.is_empty() {
             String::from("未暴露可见工具入口")
         } else {
-            entry_names.join(" / ")
+            tools
+                .iter()
+                .map(|tool| tool.local_name.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
         };
+        let system_owned = resolved.root_name.eq_ignore_ascii_case("ROOT");
+        let version = meta.version().to_string();
         skills.push(TauriLuaSkillSummary {
             skill_id: resolved.skill_id,
             display_name: meta.name,
+            version,
             root_name: resolved.root_name,
+            skill_dir: resolved.actual_dir,
             enabled,
-            entry_count: entry_names.len(),
+            disabled_reason,
+            managed,
+            source_type,
+            source_locator,
+            entry_count: tools.len(),
             capability,
+            tools,
+            system_owned,
         });
     }
     skills.sort_by(|left, right| {
@@ -231,8 +473,9 @@ pub fn load_luaskills_catalog(
 
     Ok(TauriLuaSkillsCatalog {
         runtime_root: handle.runtime_root.clone(),
+        system_lua_lib_dir: handle.runtime_root.join("system_lua_lib"),
+        entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
-        entry_count,
     })
 }
 
@@ -425,6 +668,83 @@ fn resolve_named_skill_root(
         .find(|root| root.name == root_name)
         .cloned()
         .ok_or_else(|| format!("未找到 LuaSkills `{root_name}` 技能根。"))
+}
+
+/// Parses a WebUI source type key into the LuaSkills install source enum.
+/// 将 WebUI 来源类型键解析为 LuaSkills 安装来源枚举。
+fn parse_skill_install_source_type(source_type: &str) -> Result<SkillInstallSourceType, String> {
+    match source_type.trim().to_ascii_lowercase().as_str() {
+        "github" => Ok(SkillInstallSourceType::Github),
+        "url" => Ok(SkillInstallSourceType::Url),
+        other => Err(format!("不支持的 LuaSkills 安装来源类型：{other}")),
+    }
+}
+
+/// Returns a stable display key for one LuaSkills install source type.
+/// 返回单个 LuaSkills 安装来源类型的稳定显示键。
+fn skill_install_source_type_label(source_type: SkillInstallSourceType) -> &'static str {
+    match source_type {
+        SkillInstallSourceType::Github => "github",
+        SkillInstallSourceType::Url => "url",
+        SkillInstallSourceType::OfficialHub => "officialHub",
+        SkillInstallSourceType::PrivateUrlManifest => "privateUrlManifest",
+    }
+}
+
+/// Normalizes an optional text field by trimming blanks and dropping empty values.
+/// 通过裁剪空白并丢弃空值来归一化可选文本字段。
+fn normalize_optional_field(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let stable = value.trim();
+        (!stable.is_empty()).then(|| stable.to_string())
+    })
+}
+
+/// Reloads the LuaSkills runtime after a package management mutation.
+/// 在包管理变更后重新加载 LuaSkills 运行时。
+fn reload_catalog_after_management(
+    handle: &TauriLuaSkillsHandle,
+    engine: &mut LuaEngine,
+) -> Result<TauriLuaSkillsCatalog, String> {
+    engine
+        .reload_from_roots(&handle.skill_roots)
+        .map_err(|error| format!("同步 LuaSkills 管理操作后的运行时入口失败：{error}"))?;
+    build_luaskills_catalog(handle, engine)
+}
+
+/// Resolves the ordinary USER root used by WebUI install actions.
+/// 解析 WebUI 安装动作使用的普通 USER 根。
+fn ordinary_user_root(handle: &TauriLuaSkillsHandle) -> Result<RuntimeSkillRoot, String> {
+    resolve_named_skill_root(&handle.skill_roots, "USER")
+}
+
+/// Resolves the effective root that currently owns one visible skill.
+/// 解析当前拥有单个可见技能的生效根。
+fn target_root_for_skill(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+) -> Result<RuntimeSkillRoot, String> {
+    let resolved = collect_effective_skill_instances_from_roots(&handle.skill_roots)
+        .map_err(|error| format!("解析技能目录失败：{error}"))?
+        .into_iter()
+        .find(|instance| instance.skill_id == skill_id)
+        .ok_or_else(|| format!("未找到技能 `{skill_id}` 对应的生效目录。"))?;
+    resolve_named_skill_root(&handle.skill_roots, &resolved.root_name)
+}
+
+/// Resolves the uninstall target root and rejects host-owned ROOT skills.
+/// 解析卸载目标根，并拒绝宿主自有 ROOT 技能。
+fn ordinary_uninstall_target_root_for_skill(
+    handle: &TauriLuaSkillsHandle,
+    skill_id: &str,
+) -> Result<RuntimeSkillRoot, String> {
+    let resolved = target_root_for_skill(handle, skill_id)?;
+    if resolved.name.eq_ignore_ascii_case("ROOT") {
+        return Err(format!(
+            "技能 `{skill_id}` 当前位于 ROOT 层，由宿主内建控制，不允许卸载。"
+        ));
+    }
+    Ok(resolved)
 }
 
 /// Builds LuaSkills host options backed by the shared VLDB controller.

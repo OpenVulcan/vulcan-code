@@ -5,6 +5,7 @@ mod luaskills_bridge;
 mod mcp_bridge;
 mod service_bridge;
 mod token_budget_bridge;
+mod vmm_management;
 
 /// Starts the Tauri desktop application.
 /// 启动 Tauri 桌面应用。
