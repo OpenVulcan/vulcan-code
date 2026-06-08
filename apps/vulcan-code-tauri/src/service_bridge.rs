@@ -15166,6 +15166,7 @@ fn conversation_messages_from_session(
                 message.id.clone()
             },
             conversation_id: conversation_id.to_string(),
+            created_at: message.created_at.clone(),
             role: match message.kind {
                 SessionMessageKind::User => MessageRole::User,
                 SessionMessageKind::Assistant => MessageRole::Assistant,

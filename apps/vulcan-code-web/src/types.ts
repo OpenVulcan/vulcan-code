@@ -168,6 +168,9 @@ export interface ConversationMessage {
   // Stable conversation identifier that owns this message.
   // 拥有该消息的稳定会话标识。
   conversationId: string;
+  // Unix-millisecond creation timestamp used for turn duration labels.
+  // 用于轮次耗时标签的 Unix 毫秒创建时间戳。
+  createdAt?: string;
   // Message role.
   // 消息角色。
   role: "user" | "assistant" | "system";

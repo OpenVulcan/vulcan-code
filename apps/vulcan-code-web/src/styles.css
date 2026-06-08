@@ -4593,6 +4593,68 @@ button {
   border-color: var(--border);
 }
 
+.work-process-group {
+  width: 100%;
+  display: grid;
+  gap: 8px;
+}
+
+.work-process-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.work-process-toggle::before,
+.work-process-toggle::after {
+  min-width: 18px;
+  height: 1px;
+  flex: 1 1 auto;
+  background: var(--border);
+  content: "";
+}
+
+.work-process-toggle:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.work-process-toggle:not(:disabled):hover,
+.work-process-toggle:not(:disabled):focus-visible {
+  color: var(--foreground);
+}
+
+.work-process-toggle > span {
+  white-space: nowrap;
+}
+
+.work-process-icon {
+  flex: 0 0 auto;
+  color: currentColor;
+}
+
+.work-process-guidance,
+.work-process-body {
+  display: grid;
+  gap: 12px;
+}
+
+.work-process-stopped-note {
+  justify-self: end;
+  padding: 4px 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
 .thinking-block {
   min-width: 0;
   display: grid;
@@ -4644,6 +4706,11 @@ button {
   max-width: none;
   color: inherit;
   font-size: inherit;
+}
+
+.thinking-body .markdown-message p:first-child > strong:first-child {
+  color: var(--foreground);
+  font-weight: 700;
 }
 
 .context-compaction-block {

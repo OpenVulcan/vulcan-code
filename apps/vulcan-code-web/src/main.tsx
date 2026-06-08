@@ -798,10 +798,51 @@ interface ConversationRenderItem {
   // Blocks rendered inside this projected row.
   // 在该投影行中渲染的块集合。
   blocks: ConversationBlock[];
+  // Original transcript message used for timing and fallback projection.
+  // 用于耗时与兜底投影的原始转录消息。
+  sourceMessage?: ConversationMessage;
   // Original user message when this row is a user bubble.
   // 当该行为用户气泡时对应的原始用户消息。
   userMessage?: ConversationMessage;
 }
+
+// ConversationProcessRenderItem describes one collapsible per-turn processing group.
+// ConversationProcessRenderItem 描述单个可折叠的轮次处理过程分组。
+interface ConversationProcessRenderItem {
+  // Stable process row identifier.
+  // 稳定过程行标识。
+  id: string;
+  // Process rows that belong to the current turn before final assistant output.
+  // 属于当前轮次最终助手输出前的过程行。
+  items: ConversationRenderItem[];
+  // User guidance rows shown under the process header but outside the folded process body.
+  // 显示在过程标题下且不进入折叠正文的用户引导行。
+  guidanceItems: ConversationRenderItem[];
+  // Whether the process body may be manually collapsed.
+  // 过程正文是否允许手动折叠。
+  collapsible: boolean;
+  // Whether the process should start collapsed.
+  // 过程是否应默认折叠。
+  defaultCollapsed: boolean;
+  // Whether the turn is still running.
+  // 当前轮次是否仍在运行。
+  running: boolean;
+  // Whether the user stopped this turn.
+  // 当前轮次是否由用户停止。
+  stopped: boolean;
+  // Turn start timestamp in Unix milliseconds.
+  // 轮次开始的 Unix 毫秒时间戳。
+  startedAtMs: number | null;
+  // Final fixed duration in milliseconds when available.
+  // 可用时的固定最终耗时毫秒数。
+  durationMs: number | null;
+}
+
+// ConversationTimelineItem describes either one normal row or one grouped process row.
+// ConversationTimelineItem 描述单条普通行或单条分组过程行。
+type ConversationTimelineItem =
+  | { kind: "item"; item: ConversationRenderItem }
+  | { kind: "process"; process: ConversationProcessRenderItem };
 
 // ConversationDetail describes the modal payload opened from one special block.
 // ConversationDetail 描述从特殊块打开的弹窗载荷。
@@ -4798,6 +4839,42 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
   const items: ConversationRenderItem[] = [];
   const toolCallItems = new Map<string, ConversationRenderItem>();
   const compactionItems = new Map<string, ConversationRenderItem>();
+  let activeCompactionSectionId: string | null = null;
+
+  const drainTrailingCompactionThinkingBlocks = (sectionId: string): ConversationBlock[] => {
+    const collected: ConversationBlock[] = [];
+    while (items.length > 0) {
+      const candidate = items[items.length - 1];
+      if (!candidate || candidate.role !== "assistant" || !candidate.blocks.every((block) => block.kind === "thinking")) {
+        break;
+      }
+      items.pop();
+      collected.unshift(...candidate.blocks.map((block) => ({
+        ...block,
+        compactionSectionId: sectionId,
+        compactionRole: "thinking",
+      })));
+    }
+    return collected;
+  };
+
+  const appendCompactionBlock = (sectionId: string, block: ConversationBlock, message: ConversationMessage) => {
+    const existing = compactionItems.get(sectionId);
+    if (existing) {
+      existing.blocks = mergeContextCompactionBlocks(existing.blocks, block);
+      return existing;
+    }
+    const leadingThinkingBlocks = drainTrailingCompactionThinkingBlocks(sectionId);
+    const item: ConversationRenderItem = {
+      id: `context-compaction-${sectionId}`,
+      role: message.role === "system" ? "system" : "assistant",
+      blocks: mergeContextCompactionBlocks(leadingThinkingBlocks, block),
+      sourceMessage: message,
+    };
+    items.push(item);
+    compactionItems.set(sectionId, item);
+    return item;
+  };
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -4805,6 +4882,7 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
         id: message.id,
         role: "user",
         blocks: [],
+        sourceMessage: message,
         userMessage: message,
       });
       continue;
@@ -4814,18 +4892,22 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
     for (const block of blocks) {
       if (isContextCompactionBlock(block)) {
         const sectionId = block.compactionSectionId ?? block.id;
-        const existing = compactionItems.get(sectionId);
-        if (existing) {
-          existing.blocks = mergeContextCompactionBlocks(existing.blocks, block);
-          continue;
+        appendCompactionBlock(sectionId, block, message);
+        if (block.compactionRole === "start") {
+          activeCompactionSectionId = sectionId;
         }
-        const item: ConversationRenderItem = {
-          id: `context-compaction-${sectionId}`,
-          role: message.role === "system" ? "system" : "assistant",
-          blocks: [block],
-        };
-        items.push(item);
-        compactionItems.set(sectionId, item);
+        if (block.compactionRole === "end") {
+          activeCompactionSectionId = activeCompactionSectionId === sectionId ? null : activeCompactionSectionId;
+        }
+        continue;
+      }
+
+      if (activeCompactionSectionId && block.kind === "thinking") {
+        appendCompactionBlock(activeCompactionSectionId, {
+          ...block,
+          compactionSectionId: activeCompactionSectionId,
+          compactionRole: "thinking",
+        }, message);
         continue;
       }
 
@@ -4841,6 +4923,7 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
           id: block.id,
           role: message.role === "system" ? "system" : "assistant",
           blocks: [block],
+          sourceMessage: message,
         };
         items.push(item);
         registerToolMergeItem(toolCallItems, item);
@@ -4851,6 +4934,7 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
         id: block.id,
         role: message.role === "system" ? "system" : "assistant",
         blocks: [block],
+        sourceMessage: message,
       });
     }
   }
@@ -4876,9 +4960,147 @@ function mergeContextCompactionBlocks(blocks: ConversationBlock[], block: Conver
 // contextCompactionRoleOrder 返回合并压缩行的展示顺序。
 function contextCompactionRoleOrder(role?: string): number {
   if (role === "start") return 0;
-  if (role === "body") return 1;
-  if (role === "end") return 2;
-  return 3;
+  if (role === "thinking") return 1;
+  if (role === "body") return 2;
+  if (role === "end") return 3;
+  return 4;
+}
+
+// projectConversationTimelineItems groups each user turn into a visible processing shell.
+// projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
+function projectConversationTimelineItems(
+  renderItems: ConversationRenderItem[],
+  conversation: ConversationSummary | undefined,
+  nowMs: number,
+): ConversationTimelineItem[] {
+  const timeline: ConversationTimelineItem[] = [];
+  let currentTurn: {
+    userItem: ConversationRenderItem;
+    bodyItems: ConversationRenderItem[];
+    guidanceItems: ConversationRenderItem[];
+    statsItem: ConversationRenderItem | null;
+  } | null = null;
+
+  const flushTurn = (forceRunning: boolean) => {
+    if (!currentTurn) {
+      return;
+    }
+    timeline.push({ kind: "item", item: currentTurn.userItem });
+    const stats = currentTurn.statsItem?.blocks[0]?.rawMetadata;
+    const statsStatus = turnStatsStatus(stats);
+    const stopped = statsStatus === "stopped";
+    const terminal = Boolean(currentTurn.statsItem);
+    const running = forceRunning && !terminal;
+    const bodyItems = [...currentTurn.bodyItems];
+    const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
+    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item));
+    const startedAtMs = conversationMessageUnixMillis(currentTurn.userItem.sourceMessage ?? currentTurn.userItem.userMessage);
+    const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
+    const projectedDurationMs = startedAtMs && terminalMessageMs
+      ? Math.max(0, terminalMessageMs - startedAtMs)
+      : null;
+    if (processItems.length > 0 || running || stopped || currentTurn.guidanceItems.length > 0) {
+      timeline.push({
+        kind: "process",
+        process: {
+          id: `process-${currentTurn.userItem.id}`,
+          items: processItems,
+          guidanceItems: currentTurn.guidanceItems,
+          collapsible: Boolean(finalItem) && !running && !stopped,
+          defaultCollapsed: Boolean(finalItem) && !running && !stopped,
+          running,
+          stopped,
+          startedAtMs,
+          durationMs: turnStatsDurationMs(stats) ?? (running ? Math.max(0, nowMs - (startedAtMs ?? nowMs)) : projectedDurationMs),
+        },
+      });
+    }
+    if (finalItem) {
+      timeline.push({ kind: "item", item: finalItem });
+    }
+    currentTurn = null;
+  };
+
+  for (const item of renderItems) {
+    if (item.role === "user") {
+      if (!currentTurn || currentTurn.statsItem) {
+        flushTurn(false);
+        currentTurn = { userItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
+        continue;
+      }
+      currentTurn.guidanceItems.push(item);
+      continue;
+    }
+    if (!currentTurn) {
+      timeline.push({ kind: "item", item });
+      continue;
+    }
+    if (isTurnStatsRenderItem(item)) {
+      currentTurn.statsItem = item;
+      flushTurn(false);
+      continue;
+    }
+    currentTurn.bodyItems.push(item);
+  }
+
+  flushTurn(conversationIsRunning(conversation));
+  return timeline;
+}
+
+// isTurnStatsRenderItem returns whether one projected row is the terminal turn-statistics row.
+// isTurnStatsRenderItem 返回单条投影行是否为终态轮次统计行。
+function isTurnStatsRenderItem(item: ConversationRenderItem): boolean {
+  return item.blocks.some((block) => block.kind === "turn-stats");
+}
+
+// popFinalAssistantItem removes and returns the final assistant markdown row when present.
+// popFinalAssistantItem 在存在最终助手 Markdown 行时移除并返回它。
+function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRenderItem | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.role === "assistant" && item.blocks.length === 1 && item.blocks[0]?.kind === "markdown") {
+      items.splice(index, 1);
+      return item;
+    }
+  }
+  return null;
+}
+
+// conversationMessageUnixMillis parses the optional Unix-millis timestamp carried by one message.
+// conversationMessageUnixMillis 解析单条消息携带的可选 Unix 毫秒时间戳。
+function conversationMessageUnixMillis(message?: ConversationMessage): number | null {
+  const raw = message?.createdAt?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+// turnStatsDurationMs reads the total turn duration from structured turn statistics.
+// turnStatsDurationMs 从结构化轮次统计中读取总轮次耗时。
+function turnStatsDurationMs(metadata: unknown): number | null {
+  const stats = turnStatsObject(metadata);
+  return numericMetadata(stats?.duration_ms ?? stats?.durationMs);
+}
+
+// formatWorkProcessDuration formats elapsed duration for the process header.
+// formatWorkProcessDuration 格式化过程标题使用的处理耗时。
+function formatWorkProcessDuration(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs)) {
+    return "";
+  }
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}小时${minutes}分钟${seconds}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分钟${seconds}秒`;
+  }
+  return `${seconds}秒`;
 }
 
 // latestThinkingBlockIdAfterLastUser returns the newest thinking block that belongs to the active user turn.
@@ -9210,11 +9432,24 @@ function ConversationWorkspace(props: {
   // mediaPlayer stores the generated media currently opened in the independent player window.
   // mediaPlayer 保存当前在独立播放窗口中打开的生成媒体。
   const [mediaPlayer, setMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
   const sessionRunning = conversationIsRunning(props.conversation);
+  const timelineItems = React.useMemo(
+    () => projectConversationTimelineItems(renderItems, props.conversation, nowMs),
+    [renderItems, props.conversation, nowMs],
+  );
   const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
     ? latestThinkingBlockIdAfterLastUser(renderItems)
     : null;
+
+  React.useEffect(() => {
+    if (!sessionRunning) {
+      return;
+    }
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [sessionRunning]);
 
   return (
     <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
@@ -9231,13 +9466,25 @@ function ConversationWorkspace(props: {
             <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
           </article>
         ) : null}
-        {renderItems.map((item) => (
+        {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
           <ConversationRenderItemView
-            item={item}
-            key={item.id}
+            item={timelineItem.item}
+            key={timelineItem.item.id}
             autoExpandThinkingBlockId={autoExpandThinkingBlockId}
             hiddenThinkingBlockId={props.hiddenThinkingBlockId}
             parentConversationId={props.parentConversationId}
+            sessionRunning={sessionRunning}
+            onOpenDetail={setDetail}
+            onOpenMedia={setMediaPlayer}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+          />
+        ) : (
+          <ConversationProcessGroup
+            autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+            key={timelineItem.process.id}
+            parentConversationId={props.parentConversationId}
+            process={timelineItem.process}
             sessionRunning={sessionRunning}
             onOpenDetail={setDetail}
             onOpenMedia={setMediaPlayer}
@@ -9254,6 +9501,96 @@ function ConversationWorkspace(props: {
       ) : null}
       {mediaPlayer ? (
         <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
+      ) : null}
+    </section>
+  );
+}
+
+// ConversationProcessGroup renders one per-turn process header and its foldable rows.
+// ConversationProcessGroup 渲染单个轮次过程标题及其可折叠处理行。
+function ConversationProcessGroup(props: {
+  // autoExpandThinkingBlockId keeps parity with normal block rendering.
+  // autoExpandThinkingBlockId 保持与普通块渲染一致。
+  autoExpandThinkingBlockId: string | null;
+  // hiddenThinkingBlockId hides the block currently shown in the floating thinking overlay.
+  // hiddenThinkingBlockId 隐藏当前在浮动思考面板中展示的块。
+  hiddenThinkingBlockId: string | null;
+  // Parent conversation id used by subagent navigation.
+  // 子代理导航使用的父会话标识。
+  parentConversationId: string | null;
+  // Process group payload.
+  // 过程分组载荷。
+  process: ConversationProcessRenderItem;
+  // Whether the owning session is currently running.
+  // 所属会话是否正在运行。
+  sessionRunning: boolean;
+  // Detail modal opener.
+  // 详情弹窗打开器。
+  onOpenDetail: (detail: ConversationDetail) => void;
+  // Generated media opener.
+  // 生成媒体打开器。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Subagent panel opener.
+  // 子代理面板打开器。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+}) {
+  const [collapsed, setCollapsed] = React.useState(props.process.defaultCollapsed);
+  React.useEffect(() => {
+    setCollapsed(props.process.defaultCollapsed);
+  }, [props.process.defaultCollapsed, props.process.id]);
+  const durationLabel = formatWorkProcessDuration(props.process.durationMs);
+  const headerText = durationLabel ? `处理过程 ${durationLabel}` : "处理过程";
+  const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
+  const bodyVisible = !props.process.collapsible || !collapsed;
+  return (
+    <section className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}>
+      <button
+        aria-expanded={bodyVisible}
+        className="work-process-toggle"
+        disabled={!props.process.collapsible}
+        onClick={() => props.process.collapsible && setCollapsed((current) => !current)}
+        type="button"
+      >
+        <Clock3 className="work-process-icon" size={14} />
+        <span>{headerText}</span>
+        {props.process.collapsible ? (collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />) : null}
+      </button>
+      <div className="work-process-guidance">
+        {props.process.guidanceItems.map((item) => (
+          <ConversationRenderItemView
+            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+            item={item}
+            key={item.id}
+            parentConversationId={props.parentConversationId}
+            sessionRunning={props.sessionRunning}
+            onOpenDetail={props.onOpenDetail}
+            onOpenMedia={props.onOpenMedia}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+          />
+        ))}
+      </div>
+      {bodyVisible ? (
+        <div className="work-process-body">
+          {props.process.items.map((item) => (
+            <ConversationRenderItemView
+              autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+              item={item}
+              key={item.id}
+              parentConversationId={props.parentConversationId}
+              sessionRunning={props.sessionRunning}
+              onOpenDetail={props.onOpenDetail}
+              onOpenMedia={props.onOpenMedia}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+            />
+          ))}
+          {props.process.stopped ? (
+            <div className="work-process-stopped-note">
+              {stoppedText}
+            </div>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );
@@ -9528,6 +9865,7 @@ function ContextCompactionBlock(props: {
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const startBlock = props.blocks.find((block) => block.compactionRole === "start") ?? props.blocks[0];
+  const thinkingBlocks = props.blocks.filter((block) => block.compactionRole === "thinking" && block.kind === "thinking");
   const bodyBlock = props.blocks.find((block) => block.compactionRole === "body");
   const endBlock = props.blocks.find((block) => block.compactionRole === "end");
   const state = endBlock?.compactionState ?? bodyBlock?.compactionState ?? startBlock?.compactionState ?? "running";
@@ -9550,6 +9888,7 @@ function ContextCompactionBlock(props: {
 
   const title = running ? (startBlock?.title ?? "上下文正在压缩") : (endBlock?.title ?? "上下文已压缩");
   const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? endBlock?.body?.trim() ?? "" : "");
+  const hasExpandedContent = thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
     <section className={cn("context-compaction-block", displayStatus)}>
@@ -9567,11 +9906,21 @@ function ContextCompactionBlock(props: {
       </button>
       {expanded ? (
         <div className="context-compaction-body">
+          {thinkingBlocks.map((block) => {
+            const content = block.body.trim() || block.summary || "暂无思考内容";
+            return (
+              <div className="context-compaction-thinking thinking-block" key={block.id}>
+                <div className="thinking-body">
+                  <MarkdownMessage content={`**Thinking:** ${content}`} onOpenMedia={props.onOpenMedia} />
+                </div>
+              </div>
+            );
+          })}
           {detailBody ? (
             <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} />
-          ) : (
+          ) : !hasExpandedContent ? (
             <span>正在生成上下文压缩总结。</span>
-          )}
+          ) : null}
           <div className="context-compaction-end-line" aria-hidden="true" />
         </div>
       ) : null}
@@ -9579,8 +9928,8 @@ function ContextCompactionBlock(props: {
   );
 }
 
-// ThinkingBlock renders an inline collapsible thinking row matching the native iced transcript.
-// ThinkingBlock 渲染与 iced 原生转录一致的行内可折叠思考块。
+// ThinkingBlock renders thinking content directly inside the transcript.
+// ThinkingBlock 在会话转录中直接渲染思考内容。
 function ThinkingBlock(props: {
   // autoExpanded requests the current turn thinking block to open after the floating stream hides.
   // autoExpanded 请求当前 turn 的思考块在流式浮层隐藏后自动展开。
@@ -9595,48 +9944,12 @@ function ThinkingBlock(props: {
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const [expanded, setExpanded] = React.useState(props.autoExpanded);
-  const manualOverrideRef = React.useRef(false);
-  const blockIdRef = React.useRef(props.block.id);
   const content = props.block.body.trim() || props.block.summary || "暂无思考内容";
-  React.useEffect(() => {
-    if (blockIdRef.current !== props.block.id) {
-      blockIdRef.current = props.block.id;
-      manualOverrideRef.current = false;
-      setExpanded(props.autoExpanded);
-      return;
-    }
-    if (!props.sessionRunning) {
-      manualOverrideRef.current = false;
-      setExpanded(false);
-      return;
-    }
-    if (props.autoExpanded && !manualOverrideRef.current) {
-      setExpanded(true);
-    }
-  }, [props.autoExpanded, props.block.id, props.sessionRunning]);
   return (
-    <section className={cn("thinking-block", expanded ? "expanded" : "collapsed")}>
-      <button
-        aria-expanded={expanded}
-        className="thinking-toggle"
-        onClick={() => {
-          manualOverrideRef.current = true;
-          setExpanded((current) => !current);
-        }}
-        type="button"
-      >
-        <span className="thinking-toggle-label">
-          <BrainCircuit size={15} />
-          <span>思考过程</span>
-        </span>
-        {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      </button>
-      {expanded ? (
-        <div className="thinking-body">
-          <MarkdownMessage content={content} onOpenMedia={props.onOpenMedia} />
-        </div>
-      ) : null}
+    <section className="thinking-block">
+      <div className="thinking-body">
+        <MarkdownMessage content={`**Thinking:** ${content}`} onOpenMedia={props.onOpenMedia} />
+      </div>
     </section>
   );
 }

@@ -753,6 +753,10 @@ pub struct ConversationMessage {
     /// Stable conversation identifier that owns this message.
     /// 拥有该消息的稳定会话标识。
     pub conversation_id: String,
+    /// Unix-millisecond creation timestamp for turn duration projection.
+    /// 用于轮次耗时投影的 Unix 毫秒创建时间戳。
+    #[serde(default)]
+    pub created_at: String,
     /// Message author role.
     /// 消息作者角色。
     pub role: MessageRole,
