@@ -1669,9 +1669,6 @@ pub(super) enum Message {
         /// Human-readable budget note captured when the compaction task was scheduled.
         /// 在调度压缩任务时捕获的人类可读预算说明。
         budget_note: String,
-        /// Planned compaction window used to build a fallback result when the model summary is unavailable.
-        /// 当模型总结不可用时用于构建回退结果的已规划压缩窗口。
-        plan: CompactionPlan,
         /// Incremental compaction event returned by the internal summary task.
         /// 由内部总结任务返回的增量压缩事件。
         event: PromptCompactionStreamEvent,

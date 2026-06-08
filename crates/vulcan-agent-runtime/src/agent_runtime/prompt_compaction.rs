@@ -121,8 +121,8 @@ pub struct PromptCompactionExecution {
     /// Final prompt-shaped compaction result ready to be applied to the session state.
     /// 准备好应用到会话状态的最终提示词形态压缩结果。
     pub compaction_result: CompactionResult,
-    /// Whether the model request failed and the legacy host-side summary had to be used as a fallback.
-    /// 是否因模型请求失败而不得不使用旧版宿主侧总结作为回退。
+    /// Whether the model request fell back; prompt compaction now treats this as an invalid terminal state.
+    /// 模型请求是否发生回退；提示词压缩现在将其视为无效终态。
     pub fallback_used: bool,
     /// Number of provider requests dispatched while producing the summary.
     /// 产出该总结期间发出的 Provider 请求次数。
@@ -174,8 +174,8 @@ pub fn stream_prompt_compaction_job(
         let launch = match launch {
             Ok(launch) => launch,
             Err(report) => {
-                yield PromptCompactionStreamEvent::Finished(Ok(fallback_execution_from_report(
-                    &request.plan,
+                yield PromptCompactionStreamEvent::Finished(Err(build_prompt_compaction_failure_message(
+                    request.model_label.as_deref(),
                     &report,
                 )));
                 return;
@@ -201,11 +201,9 @@ pub fn stream_prompt_compaction_job(
             }
         }
 
-        yield PromptCompactionStreamEvent::Finished(Ok(PromptCompactionExecution {
-            compaction_result: CompactionResult::from_legacy_plan(&request.plan),
-            fallback_used: true,
-            provider_request_count: 0,
-        }));
+        yield PromptCompactionStreamEvent::Finished(Err(String::from(
+            "Prompt compaction stream ended without a terminal execution report.",
+        )));
     }
 }
 
@@ -234,21 +232,8 @@ pub fn stream_prompt_compaction_foundation_job(
         ) {
             Ok(preparation) => preparation,
             Err(error) => {
-                let report = ExecutionRunReport::failure(
-                    request.session_id,
-                    None,
-                    0,
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    error,
-                );
-                yield PromptCompactionStreamEvent::Finished(Ok(fallback_execution_from_report(
-                    &request.plan,
-                    &report,
+                yield PromptCompactionStreamEvent::Finished(Err(format!(
+                    "Prompt compaction preparation failed: {error}"
                 )));
                 return;
             }
@@ -281,11 +266,9 @@ pub fn stream_prompt_compaction_foundation_job(
             }
         }
 
-        yield PromptCompactionStreamEvent::Finished(Ok(PromptCompactionExecution {
-            compaction_result: CompactionResult::from_legacy_plan(&request.plan),
-            fallback_used: true,
-            provider_request_count: 0,
-        }));
+        yield PromptCompactionStreamEvent::Finished(Err(String::from(
+            "Prompt compaction stream ended without a terminal execution report.",
+        )));
     }
 }
 
@@ -349,20 +332,7 @@ fn finalize_prompt_compaction_report(
         });
     }
 
-    Ok(fallback_execution_from_report(plan, &report))
-}
-
-/// Builds one fallback prompt-compaction execution from a failed model report while preserving request count diagnostics.
-/// 根据失败的模型报告构建回退提示词压缩结果，并保留请求次数诊断。
-fn fallback_execution_from_report(
-    plan: &CompactionPlan,
-    report: &ExecutionRunReport,
-) -> PromptCompactionExecution {
-    PromptCompactionExecution {
-        compaction_result: CompactionResult::from_legacy_plan(plan),
-        fallback_used: true,
-        provider_request_count: report.provider_request_count,
-    }
+    Err(build_prompt_compaction_failure_message(model_label, &report))
 }
 
 /// Builds one human-readable failure message for prompt-based compaction without usable plain-text summary output.

@@ -4173,7 +4173,6 @@ impl VulcanWorkbench {
                 session_id,
                 trigger,
                 budget_note,
-                plan,
                 event,
             } => {
                 let Some(active_session_id) = self.active_compaction_session_id_for_run_id(run_id)
@@ -4266,25 +4265,20 @@ impl VulcanWorkbench {
                             Err(error) => {
                                 self.push_activity(
                                     ActivityLevel::Warning,
-                                    "提示词压缩回退",
+                                    "上下文压缩失败",
                                     format!(
-                                        "会话 #{session_id} 的提示词式压缩未返回可用总结，已回退到宿主侧摘要：{error}"
+                                        "会话 #{session_id} 的提示词式压缩失败，未改写上下文锚点：{error}"
                                     ),
                                 );
-                                self.finish_session_prompt_compaction(
-                                    session_id,
-                                    trigger,
-                                    budget_note,
-                                    active_state.previous_phase,
-                                    PromptCompactionExecution {
-                                        compaction_result: CompactionSkillResult::from_legacy_plan(
-                                            &plan,
-                                        ),
-                                        fallback_used: true,
-                                        provider_request_count: 0,
-                                    },
-                                    active_state.status_message_id,
-                                )
+                                self.set_session_run_phase(session_id, active_state.previous_phase);
+                                self.status_message = format!(
+                                    "上下文压缩失败，未改写上下文锚点，请重新触发 /compact：{error}"
+                                );
+                                Task::batch([
+                                    self.persist_single_session_update_task(session_id),
+                                    self.maybe_follow_selected_session_transcript_tail(session_id),
+                                    self.maybe_start_next_pending_prompt(session_id, false),
+                                ])
                             }
                         }
                     }

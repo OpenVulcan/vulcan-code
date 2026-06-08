@@ -105,9 +105,6 @@ pub(super) enum ContextCompactionStatusPanelState {
     /// Prompt-based compaction completed with a model-produced summary.
     /// 提示词式压缩已通过模型生成摘要完成。
     Completed,
-    /// Prompt-based compaction completed by falling back to the host-side legacy summary.
-    /// 提示词式压缩已通过回退到宿主侧旧摘要完成。
-    CompletedWithFallback,
     /// Prompt-based compaction was stopped before it could rewrite the context anchor.
     /// 提示词式压缩在改写上下文锚点前被停止。
     Stopped,

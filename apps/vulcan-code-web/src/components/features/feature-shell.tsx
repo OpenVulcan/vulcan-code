@@ -1675,8 +1675,7 @@ function MemoryArea(props: {
 
   if (props.activeSection === "status") {
     return (
-      <section className="panel full-height vmm-memory-page">
-        <PanelTitle icon={<BrainCircuit size={17} />} title="VMM 记忆" />
+      <section className="vmm-memory-page">
         <div className="vmm-memory-shell status-only">
           <main className="vmm-memory-main vmm-status-page">
             <VmmEffectiveOverview memories={props.memories} snapshot={props.snapshot} />
@@ -1691,8 +1690,7 @@ function MemoryArea(props: {
   }
 
   return (
-    <section className="panel full-height vmm-memory-page">
-      <PanelTitle icon={<BrainCircuit size={17} />} title="VMM 记忆" />
+    <section className="vmm-memory-page">
       <div className="vmm-memory-shell">
         <main className="vmm-memory-main">
           <div className="vmm-scope-bar">

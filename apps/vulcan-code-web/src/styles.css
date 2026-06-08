@@ -1874,6 +1874,7 @@ button {
 
 .feature-content > .panel,
 .feature-content > .skill-management-surface,
+.feature-content > .vmm-memory-page,
 .feature-content > .area-grid {
   min-height: 0;
   height: 100%;
@@ -1886,6 +1887,7 @@ button {
 
 .vcn-sidebar-inset .chat-grid {
   --console-scrollbar-gutter: 18px;
+  --composer-default-height: 108px;
   position: relative;
   min-height: 0;
   overflow: hidden;
@@ -1898,7 +1900,7 @@ button {
   bottom: 0;
   left: 0;
   z-index: 4;
-  height: 250px;
+  height: min(var(--composer-dock-height, 132px), var(--composer-default-height));
   pointer-events: none;
   background: linear-gradient(
     to bottom,
@@ -2473,15 +2475,15 @@ button {
 
 .vmm-memory-page {
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .vmm-memory-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
   gap: 14px;
-  min-height: 0;
-  height: 100%;
+  min-height: 100%;
 }
 
 .vmm-memory-shell.status-only {
@@ -2515,8 +2517,8 @@ button {
 
 .vmm-memory-main {
   gap: 12px;
-  overflow: auto;
-  padding-right: 2px;
+  overflow: visible;
+  padding-right: 0;
 }
 
 .vmm-status-page {
@@ -4642,6 +4644,79 @@ button {
   max-width: none;
   color: inherit;
   font-size: inherit;
+}
+
+.context-compaction-block {
+  width: 100%;
+  display: block;
+}
+
+.context-compaction-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.context-compaction-toggle::before,
+.context-compaction-toggle::after {
+  min-width: 18px;
+  height: 1px;
+  flex: 1 1 auto;
+  background: var(--border);
+  content: "";
+}
+
+.context-compaction-toggle:hover,
+.context-compaction-toggle:focus-visible {
+  color: var(--foreground);
+}
+
+.context-compaction-title {
+  max-width: min(100%, 520px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.context-compaction-title strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.context-compaction-body {
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+  margin: 6px auto 0;
+  padding: 0 18px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.context-compaction-body .markdown-message {
+  max-width: none;
+  color: inherit;
+  font-size: inherit;
+}
+
+.context-compaction-end-line {
+  height: 1px;
+  margin: 14px -18px 0;
+  background: var(--border);
 }
 
 .thinking-detail-modal .detail-title-icon {

@@ -747,6 +747,21 @@ interface ConversationBlock {
   // Generated media outputs resolved from host tool metadata.
   // 从宿主工具元数据解析出的生成媒体输出。
   mediaAttachments?: GeneratedMediaAttachment[];
+  // Optional context-compaction section id used to merge status rows.
+  // 用于合并状态行的可选上下文压缩分段标识。
+  compactionSectionId?: string;
+  // Optional context-compaction role inside a merged section.
+  // 合并分段内的可选上下文压缩角色。
+  compactionRole?: string;
+  // Optional context-compaction state label.
+  // 可选上下文压缩状态标签。
+  compactionState?: string;
+  // Optional context-compaction trigger label.
+  // 可选上下文压缩触发来源标签。
+  compactionTrigger?: string;
+  // Optional context-compaction budget note.
+  // 可选上下文压缩预算摘要。
+  compactionBudgetNote?: string;
 }
 
 // RuntimeCue describes the compact running-state badge shown above the composer.
@@ -1620,6 +1635,16 @@ async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
     return null;
   }
   return invoke<WorkbenchSnapshot>("service_stop_conversation_run");
+}
+
+// compactSelectedConversationContext starts backend context compaction for the selected conversation.
+// compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
+async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_compact_selected_conversation_context");
 }
 
 // replyPendingQuestion submits ask-tool answers to the blocked backend runtime.
@@ -2776,6 +2801,24 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     }
   }, []);
 
+  // handleCompactSelectedConversationContext starts manual compaction from slash commands.
+  // handleCompactSelectedConversationContext 从斜杠指令启动手动上下文压缩。
+  const handleCompactSelectedConversationContext = React.useCallback(async (): Promise<boolean> => {
+    webuiClickTrace("conversation.compact.invoke");
+    try {
+      const snapshot = await compactSelectedConversationContext();
+      if (!snapshot) {
+        toast.info("浏览器预览模式下无法执行真实上下文压缩。");
+        return false;
+      }
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
   // handleOpenSubagentPanel asks the backend to display one child task surface and reports whether it succeeded.
   // handleOpenSubagentPanel 请求后端显示单个子任务界面，并返回是否打开成功。
   const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
@@ -3231,12 +3274,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         setActiveArea("skills");
         return { handled: true };
       case "compact":
-        toast.info("WebUI 上下文压缩路由尚未接入。");
+        void handleCompactSelectedConversationContext();
         return { handled: true };
       default:
         return { handled: false };
     }
-  }, []);
+  }, [handleCompactSelectedConversationContext]);
 
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
@@ -4754,6 +4797,7 @@ const detailEligibleBlockKinds = new Set<ConversationBlockKind>(["tool-call", "t
 function projectConversationRenderItems(messages: ConversationMessage[]): ConversationRenderItem[] {
   const items: ConversationRenderItem[] = [];
   const toolCallItems = new Map<string, ConversationRenderItem>();
+  const compactionItems = new Map<string, ConversationRenderItem>();
 
   for (const message of messages) {
     if (message.role === "user") {
@@ -4768,6 +4812,23 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
 
     const blocks = parseConversationBlocks(message);
     for (const block of blocks) {
+      if (isContextCompactionBlock(block)) {
+        const sectionId = block.compactionSectionId ?? block.id;
+        const existing = compactionItems.get(sectionId);
+        if (existing) {
+          existing.blocks = mergeContextCompactionBlocks(existing.blocks, block);
+          continue;
+        }
+        const item: ConversationRenderItem = {
+          id: `context-compaction-${sectionId}`,
+          role: message.role === "system" ? "system" : "assistant",
+          blocks: [block],
+        };
+        items.push(item);
+        compactionItems.set(sectionId, item);
+        continue;
+      }
+
       if (isMergeableToolBlock(block)) {
         const existing = block.kind !== "tool-call" ? findToolMergeItem(toolCallItems, block) : undefined;
         if (existing) {
@@ -4795,6 +4856,29 @@ function projectConversationRenderItems(messages: ConversationMessage[]): Conver
   }
 
   return items;
+}
+
+// isContextCompactionBlock detects host-provided context-compaction status rows.
+// isContextCompactionBlock 检测宿主提供的上下文压缩状态行。
+function isContextCompactionBlock(block: ConversationBlock): boolean {
+  return block.kind === "notice" && Boolean(block.compactionSectionId || block.compactionRole || block.compactionState);
+}
+
+// mergeContextCompactionBlocks keeps one start/body/end order for a compaction section.
+// mergeContextCompactionBlocks 为单个压缩分段保持 start/body/end 顺序。
+function mergeContextCompactionBlocks(blocks: ConversationBlock[], block: ConversationBlock): ConversationBlock[] {
+  const next = blocks.filter((candidate) => candidate.id !== block.id);
+  next.push(block);
+  return next.sort((left, right) => contextCompactionRoleOrder(left.compactionRole) - contextCompactionRoleOrder(right.compactionRole));
+}
+
+// contextCompactionRoleOrder returns the display order for merged compaction rows.
+// contextCompactionRoleOrder 返回合并压缩行的展示顺序。
+function contextCompactionRoleOrder(role?: string): number {
+  if (role === "start") return 0;
+  if (role === "body") return 1;
+  if (role === "end") return 2;
+  return 3;
 }
 
 // latestThinkingBlockIdAfterLastUser returns the newest thinking block that belongs to the active user turn.
@@ -5400,6 +5484,11 @@ function conversationSpecialBlock(
   const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "") ?? extractToolNameFromText(body);
   const title = attributes.title ?? blockTitle(kind, toolName);
   const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
+  const compactionSectionId = metadataString(rawMetadata, ["context_compaction_section_id"]);
+  const compactionRole = metadataString(rawMetadata, ["context_compaction_role"]);
+  const compactionState = metadataString(rawMetadata, ["context_compaction_state"]);
+  const compactionTrigger = metadataString(rawMetadata, ["context_compaction_trigger"]);
+  const compactionBudgetNote = metadataString(rawMetadata, ["context_compaction_budget_note"]);
   const status = mediaAttachments.length > 0
     ? "completed"
     : normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
@@ -5417,6 +5506,11 @@ function conversationSpecialBlock(
     taskSessionId: attributes.task_session_id,
     rawMetadata,
     mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,
+    compactionSectionId: compactionSectionId ?? undefined,
+    compactionRole: compactionRole ?? undefined,
+    compactionState: compactionState ?? undefined,
+    compactionTrigger: compactionTrigger ?? undefined,
+    compactionBudgetNote: compactionBudgetNote ?? undefined,
   };
 }
 
@@ -9259,6 +9353,14 @@ function ConversationBlocksView(props: {
       />
     );
   }
+  if (props.blocks.some(isContextCompactionBlock)) {
+    return (
+      <ContextCompactionBlock
+        blocks={props.blocks}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
+  }
 
   const [block] = props.blocks;
   if (!block) {
@@ -9412,6 +9514,68 @@ function SpecialConversationBlock(props: {
       {props.block.status ? <StatusPill status={props.block.status} label={props.block.status} /> : null}
       {canOpen ? <Maximize2 size={15} /> : null}
     </button>
+  );
+}
+
+// ContextCompactionBlock renders the original compacted context status section as one collapsible row.
+// ContextCompactionBlock 将原本的上下文压缩状态分段渲染为单个可折叠行。
+function ContextCompactionBlock(props: {
+  // Section blocks contain start, optional body, and optional end rows.
+  // 分段块包含开始、可选正文和可选结束行。
+  blocks: ConversationBlock[];
+  // onOpenMedia opens generated media referenced from markdown content.
+  // onOpenMedia 打开 Markdown 内容引用的生成媒体。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  const startBlock = props.blocks.find((block) => block.compactionRole === "start") ?? props.blocks[0];
+  const bodyBlock = props.blocks.find((block) => block.compactionRole === "body");
+  const endBlock = props.blocks.find((block) => block.compactionRole === "end");
+  const state = endBlock?.compactionState ?? bodyBlock?.compactionState ?? startBlock?.compactionState ?? "running";
+  const running = state === "running";
+  const displayStatus = running ? "running" : state === "failed" ? "failed" : "completed";
+  const [expanded, setExpanded] = React.useState(running);
+  const sectionIdRef = React.useRef(startBlock?.compactionSectionId ?? startBlock?.id ?? "");
+
+  React.useEffect(() => {
+    const sectionId = startBlock?.compactionSectionId ?? startBlock?.id ?? "";
+    if (sectionIdRef.current !== sectionId) {
+      sectionIdRef.current = sectionId;
+      setExpanded(running);
+      return;
+    }
+    if (!running) {
+      setExpanded(false);
+    }
+  }, [running, startBlock?.compactionSectionId, startBlock?.id]);
+
+  const title = running ? (startBlock?.title ?? "上下文正在压缩") : (endBlock?.title ?? "上下文已压缩");
+  const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? endBlock?.body?.trim() ?? "" : "");
+
+  return (
+    <section className={cn("context-compaction-block", displayStatus)}>
+      <button
+        aria-expanded={expanded}
+        className="context-compaction-toggle"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span className="context-compaction-title">
+          <ScrollText size={15} />
+          <strong>{title}</strong>
+          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="context-compaction-body">
+          {detailBody ? (
+            <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} />
+          ) : (
+            <span>正在生成上下文压缩总结。</span>
+          )}
+          <div className="context-compaction-end-line" aria-hidden="true" />
+        </div>
+      ) : null}
+    </section>
   );
 }
 

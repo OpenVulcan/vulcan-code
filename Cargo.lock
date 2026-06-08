@@ -8598,6 +8598,7 @@ dependencies = [
  "vldb-controller-client",
  "vulcan-agent-runtime",
  "vulcan-context",
+ "vulcan-context-compaction",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-mcp-runtime",

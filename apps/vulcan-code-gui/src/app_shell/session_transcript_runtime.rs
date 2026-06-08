@@ -754,9 +754,6 @@ impl VulcanWorkbench {
         };
         let status_label = match status {
             ContextCompactionStatusPanelState::Completed => "上下文已自动压缩",
-            ContextCompactionStatusPanelState::CompletedWithFallback => {
-                "上下文压缩已完成（使用宿主侧回退摘要）"
-            }
             ContextCompactionStatusPanelState::Stopped => "上下文压缩已停止",
         };
         let mut lines = vec![
@@ -772,11 +769,6 @@ impl VulcanWorkbench {
         }
         match status {
             ContextCompactionStatusPanelState::Completed => {
-                lines.push(String::from(
-                    "说明：已建立新的上下文锚点，后续请求会从压缩后的窗口继续。",
-                ));
-            }
-            ContextCompactionStatusPanelState::CompletedWithFallback => {
                 lines.push(String::from(
                     "说明：已建立新的上下文锚点，后续请求会从压缩后的窗口继续。",
                 ));
@@ -999,11 +991,7 @@ impl VulcanWorkbench {
         );
         let body = Self::build_context_compaction_status_body(
             trigger,
-            if state == "fallback" {
-                ContextCompactionStatusPanelState::CompletedWithFallback
-            } else {
-                ContextCompactionStatusPanelState::Completed
-            },
+            ContextCompactionStatusPanelState::Completed,
             budget_note,
             Some(provider_request_count),
         );
@@ -1031,8 +1019,8 @@ impl VulcanWorkbench {
         end_message_id
     }
 
-    /// Starts one prompt-based session compaction task or immediately falls back to the legacy host-side summary when internal execution prerequisites are unavailable.
-    /// 启动一次提示词式会话压缩任务；若内部执行前提缺失，则立即回退到旧版宿主侧摘要。
+    /// Starts one prompt-based session compaction task and fails when internal execution prerequisites are unavailable.
+    /// 启动一次提示词式会话压缩任务；若内部执行前提缺失则直接失败。
     pub(super) fn start_session_prompt_compaction(
         &mut self,
         session_id: SessionId,
@@ -1062,20 +1050,18 @@ impl VulcanWorkbench {
         let ai_tool_configuration =
             self.effective_ai_tool_configuration_for_runtime_options(&runtime_options);
         let Some(mcp_runtime_access) = self.mcp_runtime.clone() else {
-            let status_message_id =
-                self.push_context_compaction_status_message(session_id, trigger, &budget_note);
-            return self.finish_session_prompt_compaction(
-                session_id,
-                trigger,
-                budget_note,
-                previous_phase,
-                PromptCompactionExecution {
-                    compaction_result: CompactionSkillResult::from_legacy_plan(&plan),
-                    fallback_used: true,
-                    provider_request_count: 0,
-                },
-                Some(status_message_id),
+            self.status_message = String::from(
+                "上下文压缩运行时未就绪，无法发起 API 压缩请求，请稍后重新触发 /compact。",
             );
+            self.push_activity(
+                ActivityLevel::Warning,
+                "上下文压缩失败",
+                format!(
+                    "会话 #{session_id} 的提示词式压缩未执行：MCP 运行时不可用，未改写上下文锚点。"
+                ),
+            );
+            self.set_session_run_phase(session_id, previous_phase);
+            return Task::none();
         };
 
         let request = PromptCompactionJobRequest {
@@ -1115,14 +1101,12 @@ impl VulcanWorkbench {
             self.push_context_compaction_status_message(session_id, trigger, &budget_note);
         let stream_trigger = trigger;
         let stream_budget_note = budget_note.clone();
-        let stream_plan = plan.clone();
         let (run_task, run_handle) = Task::run(stream_prompt_compaction_job(request), {
             move |event| Message::SessionPromptCompactionStreamEvent {
                 run_id,
                 session_id,
                 trigger: stream_trigger,
                 budget_note: stream_budget_note.clone(),
-                plan: stream_plan.clone(),
                 event,
             }
         })
@@ -1165,25 +1149,19 @@ impl VulcanWorkbench {
         } else {
             String::new()
         };
-        let activity_detail = match (trigger, execution.fallback_used) {
-            (SessionPromptCompactionTrigger::ManualSlash, false) => {
+        let activity_detail = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => {
                 format!(
                     "会话 #{session_id} 已通过 slash 指令执行提示词式手动压缩：{budget_note}。{provider_request_note}"
                 )
             }
-            (SessionPromptCompactionTrigger::ManualSlash, true) => format!(
-                "会话 #{session_id} 的提示词式手动压缩已回退到宿主侧摘要：{budget_note}。{provider_request_note}"
-            ),
-            (SessionPromptCompactionTrigger::BudgetAuto, false) => {
+            SessionPromptCompactionTrigger::BudgetAuto => {
                 format!(
                     "会话 #{session_id} 已根据预算快照执行提示词式压缩：{budget_note}。{provider_request_note}"
                 )
             }
-            (SessionPromptCompactionTrigger::BudgetAuto, true) => format!(
-                "会话 #{session_id} 的提示词式预算压缩已回退到宿主侧摘要：{budget_note}。{provider_request_note}"
-            ),
         };
-        let fallback_summary_body = execution.compaction_result.summary_record.body.clone();
+        let summary_body = execution.compaction_result.summary_record.body.clone();
         self.apply_session_history_compaction_result(
             session_id,
             execution.compaction_result,
@@ -1191,88 +1169,12 @@ impl VulcanWorkbench {
             activity_detail,
         );
         if let Some(status_message_id) = status_message_id {
-            let state = if execution.fallback_used {
-                "fallback"
-            } else {
-                "completed"
-            };
-            let title = if execution.fallback_used {
-                "上下文已自动压缩（回退摘要）"
-            } else {
-                "上下文已自动压缩"
-            };
-            if execution.fallback_used {
-                let has_compaction_body = self
-                    .session_messages
-                    .get(&session_id)
-                    .into_iter()
-                    .flatten()
-                    .any(|message| {
-                        message
-                            .metadata
-                            .as_ref()
-                            .and_then(|metadata| metadata.get("context_compaction_section_id"))
-                            .and_then(|value| value.as_str())
-                            == Some(status_message_id.as_str())
-                            && message
-                                .metadata
-                                .as_ref()
-                                .and_then(|metadata| metadata.get("context_compaction_role"))
-                                .and_then(|value| value.as_str())
-                                == Some("body")
-                            && !message.body.trim().is_empty()
-                    });
-                if !has_compaction_body {
-                    let output_message_id = self.push_visible_session_record_message_with_metadata(
-                        session_id,
-                        SessionMessageKind::Assistant,
-                        SessionMessageRecordKind::CompactionStatus,
-                        "上下文总结",
-                        fallback_summary_body.clone(),
-                        Some(json!({
-                            "context_compaction_status": true,
-                            "context_compaction_section_id": status_message_id,
-                            "context_compaction_role": "body",
-                            "context_compaction_state": state,
-                        })),
-                        false,
-                    );
-                    let _ = output_message_id;
-                }
-            }
             self.finish_context_compaction_section(
                 session_id,
                 &status_message_id,
                 trigger,
-                state,
-                title,
-                &budget_note,
-                execution.provider_request_count,
-                true,
-            );
-        } else if execution.fallback_used {
-            let status_message_id =
-                self.push_context_compaction_status_message(session_id, trigger, &budget_note);
-            self.push_visible_session_record_message_with_metadata(
-                session_id,
-                SessionMessageKind::Assistant,
-                SessionMessageRecordKind::CompactionStatus,
-                "上下文总结",
-                fallback_summary_body.clone(),
-                Some(json!({
-                    "context_compaction_status": true,
-                    "context_compaction_section_id": status_message_id,
-                    "context_compaction_role": "body",
-                    "context_compaction_state": "fallback",
-                })),
-                false,
-            );
-            self.finish_context_compaction_section(
-                session_id,
-                &status_message_id,
-                trigger,
-                "fallback",
-                "上下文已自动压缩（回退摘要）",
+                "completed",
+                "上下文已自动压缩",
                 &budget_note,
                 execution.provider_request_count,
                 true,
@@ -1290,23 +1192,17 @@ impl VulcanWorkbench {
             session_id,
             project_id,
             trigger_label,
-            execution.fallback_used,
+            false,
             execution.provider_request_count,
-            &fallback_summary_body,
+            &summary_body,
         );
-        self.status_message = match (trigger, execution.fallback_used) {
-            (SessionPromptCompactionTrigger::ManualSlash, false) => {
+        self.status_message = match trigger {
+            SessionPromptCompactionTrigger::ManualSlash => {
                 format!("当前会话已执行手动上下文压缩：{budget_note}。")
             }
-            (SessionPromptCompactionTrigger::ManualSlash, true) => format!(
-                "当前会话已执行手动上下文压缩，但模型总结失败，已回退到宿主侧摘要：{budget_note}。"
-            ),
-            (SessionPromptCompactionTrigger::BudgetAuto, false) => {
+            SessionPromptCompactionTrigger::BudgetAuto => {
                 format!("当前会话已根据预算完成上下文压缩：{budget_note}。")
             }
-            (SessionPromptCompactionTrigger::BudgetAuto, true) => format!(
-                "当前会话已根据预算完成上下文压缩，但模型总结失败，已回退到宿主侧摘要：{budget_note}。"
-            ),
         };
 
         Task::batch([

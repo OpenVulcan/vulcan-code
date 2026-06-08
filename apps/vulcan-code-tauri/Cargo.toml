@@ -26,6 +26,7 @@ luaskills.workspace = true
 vulcan-agent-runtime.workspace = true
 vulcan-session-boundary.workspace = true
 vulcan-context.workspace = true
+vulcan-context-compaction.workspace = true
 vulcan-context-injection.workspace = true
 vulcan-core.workspace = true
 vulcan-mcp-runtime.workspace = true
