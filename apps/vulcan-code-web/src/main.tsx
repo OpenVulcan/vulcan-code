@@ -3962,7 +3962,7 @@ function StatusbarRuntimeActivities(props: {
         return (
           <span className={cn("statusbar-runtime-activity", activity.kind)} key={activity.kind}>
             <Icon size={13} />
-            <span>{activity.text}</span>
+            <ShinyText text={activity.text} speed={1.65} />
           </span>
         );
       })}
@@ -4795,6 +4795,10 @@ const markdownPlugins = [remarkGfm];
 // markdownSanitizers 保存用于不可信转录内容的 HTML 清理管线。
 const markdownSanitizers = [rehypeSanitize];
 
+// MarkdownImageWorkspacePathContext carries the current project root for relative image links.
+// MarkdownImageWorkspacePathContext 为相对图片链接携带当前项目根目录。
+const MarkdownImageWorkspacePathContext = React.createContext<string | null>(null);
+
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
 // webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
 function webuiClickTrace(action: string, detail: Record<string, unknown> = {}): void {
@@ -4999,6 +5003,9 @@ function projectConversationTimelineItems(
     const projectedDurationMs = startedAtMs && terminalMessageMs
       ? Math.max(0, terminalMessageMs - startedAtMs)
       : null;
+    const runningDurationMs = running
+      ? (startedAtMs ? Math.max(0, nowMs - startedAtMs) : null)
+      : null;
     if (processItems.length > 0 || running || stopped || currentTurn.guidanceItems.length > 0) {
       timeline.push({
         kind: "process",
@@ -5011,7 +5018,7 @@ function projectConversationTimelineItems(
           running,
           stopped,
           startedAtMs,
-          durationMs: turnStatsDurationMs(stats) ?? (running ? Math.max(0, nowMs - (startedAtMs ?? nowMs)) : projectedDurationMs),
+          durationMs: turnStatsDurationMs(stats) ?? runningDurationMs ?? projectedDurationMs,
         },
       });
     }
@@ -6105,7 +6112,7 @@ function mediaSourceUrl(path: string): string {
 
 // normalizeMarkdownImageSource converts generated local image paths into renderable media URLs.
 // normalizeMarkdownImageSource 将 Markdown 中的生成本地图片路径转换为可渲染媒体 URL。
-function normalizeMarkdownImageSource(src: string | undefined): string | undefined {
+function normalizeMarkdownImageSource(src: string | undefined, workspacePath?: string | null): string | undefined {
   const value = src?.trim();
   if (!value) {
     return src;
@@ -6116,6 +6123,10 @@ function normalizeMarkdownImageSource(src: string | undefined): string | undefin
   }
   if (looksLikeLocalFilesystemPath(unwrapped)) {
     return mediaSourceUrl(unwrapped);
+  }
+  const relativeSource = resolveWorkspaceRelativeMarkdownImageSource(unwrapped, workspacePath);
+  if (relativeSource) {
+    return relativeSource;
   }
   return src;
 }
@@ -6178,9 +6189,9 @@ function decodeURIComponentSafe(value: string): string {
 
 // normalizeMarkdownLocalImageLinks rewrites local image links before Markdown sanitization removes them.
 // normalizeMarkdownLocalImageLinks 在 Markdown 清理移除本地路径前重写本地图片链接。
-function normalizeMarkdownLocalImageLinks(content: string): string {
+function normalizeMarkdownLocalImageLinks(content: string, workspacePath?: string | null): string {
   return content.replace(/!\[([^\]\n]*)\]\(([^)\n]+)\)/g, (full, alt: string, destination: string, offset: number) => {
-    const normalized = normalizeMarkdownImageDestination(destination);
+    const normalized = normalizeMarkdownImageDestination(destination, workspacePath);
     const width = markdownImageWidthFromAlt(alt);
     const cleanAlt = width ? alt.replace(/\|\s*\d+\s*$/u, "").trim() : alt;
     const nextDestination = normalized ?? destination.trim();
@@ -6206,14 +6217,14 @@ function markdownImageLeadingBlockPrefix(content: string, offset: number): strin
 
 // normalizeMarkdownImageDestination extracts and rewrites one Markdown image destination.
 // normalizeMarkdownImageDestination 提取并重写单个 Markdown 图片目标。
-function normalizeMarkdownImageDestination(destination: string): string | null {
+function normalizeMarkdownImageDestination(destination: string, workspacePath?: string | null): string | null {
   const trimmed = destination.trim();
   if (!trimmed) {
     return null;
   }
   const sizedDestination = markdownImageSizedDestination(trimmed);
   if (sizedDestination) {
-    const normalized = normalizeMarkdownImageDestination(sizedDestination.path);
+    const normalized = normalizeMarkdownImageDestination(sizedDestination.path, workspacePath);
     const nextPath = normalized ?? sizedDestination.path.trim();
     return `${nextPath} "width=${sizedDestination.width}"`;
   }
@@ -6221,7 +6232,7 @@ function normalizeMarkdownImageDestination(destination: string): string | null {
   const rawPath = (titleMatch ? titleMatch[1] : trimmed).trim();
   const title = titleMatch?.[2] ?? "";
   const unwrapped = rawPath.startsWith("<") && rawPath.endsWith(">") ? rawPath.slice(1, -1).trim() : rawPath;
-  const normalized = normalizeMarkdownImageSource(unwrapped);
+  const normalized = normalizeMarkdownImageSource(unwrapped, workspacePath);
   if (!normalized || normalized === unwrapped) {
     return null;
   }
@@ -6272,6 +6283,66 @@ function looksLikeLocalFilesystemPath(value: string): boolean {
     || normalized.startsWith(".vulcan/code/attachments/")
     || normalized.startsWith("./.vulcan/code/attachments/")
   );
+}
+
+// resolveWorkspaceRelativeMarkdownImageSource converts a relative Markdown image path into a project-root media URL.
+// resolveWorkspaceRelativeMarkdownImageSource 将 Markdown 相对图片路径转换为项目根目录下的媒体 URL。
+function resolveWorkspaceRelativeMarkdownImageSource(value: string, workspacePath?: string | null): string | null {
+  const workspaceRoot = workspacePath?.trim();
+  if (!workspaceRoot || !looksLikeRelativeMarkdownImagePath(value)) {
+    return null;
+  }
+  const { path, suffix } = splitMarkdownImagePathSuffix(value);
+  const relativePath = normalizeRelativeMarkdownImagePath(path);
+  if (!relativePath) {
+    return null;
+  }
+  return `${mediaSourceUrl(joinWorkspaceRelativePath(workspaceRoot, relativePath))}${suffix}`;
+}
+
+// looksLikeRelativeMarkdownImagePath detects image-only relative links that can be resolved from the workspace root.
+// looksLikeRelativeMarkdownImagePath 检测可从工作区根目录解析的图片型相对链接。
+function looksLikeRelativeMarkdownImagePath(value: string): boolean {
+  const { path } = splitMarkdownImagePathSuffix(value.trim());
+  if (!path || looksLikeLocalFilesystemPath(path) || path.startsWith("//")) {
+    return false;
+  }
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(path)) {
+    return false;
+  }
+  const normalized = path.replace(/\\/g, "/");
+  if (normalized.split("/").some((segment) => segment === "..")) {
+    return false;
+  }
+  return /\.(?:png|jpe?g|webp|gif|bmp|svg)$/iu.test(normalized);
+}
+
+// splitMarkdownImagePathSuffix separates a path from query and hash suffixes.
+// splitMarkdownImagePathSuffix 将路径与查询、哈希后缀拆分。
+function splitMarkdownImagePathSuffix(value: string): { path: string; suffix: string } {
+  const match = value.match(/^([^?#]*)([?#].*)?$/u);
+  return {
+    path: match?.[1]?.trim() ?? value.trim(),
+    suffix: match?.[2] ?? "",
+  };
+}
+
+// normalizeRelativeMarkdownImagePath removes harmless relative prefixes without allowing root escapes.
+// normalizeRelativeMarkdownImagePath 移除无害的相对路径前缀，同时避免跳出项目根目录。
+function normalizeRelativeMarkdownImagePath(value: string): string | null {
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/u, "").replace(/^\/+/u, "").trim();
+  if (!normalized || normalized.split("/").some((segment) => segment === "..")) {
+    return null;
+  }
+  return normalized;
+}
+
+// joinWorkspaceRelativePath joins one project root and one already-safe relative media path.
+// joinWorkspaceRelativePath 拼接项目根目录与已确认安全的相对媒体路径。
+function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string): string {
+  const separator = workspaceRoot.includes("\\") ? "\\" : "/";
+  const cleanRoot = workspaceRoot.replace(/[\\/]+$/u, "");
+  return `${cleanRoot}${separator}${relativePath.replace(/[\\/]+/gu, separator)}`;
 }
 
 // base64UrlEncodeUtf8 encodes a local media path into a URL-safe route segment.
@@ -9261,6 +9332,7 @@ function ChatArea(props: {
             messages={messages}
             error={props.conversationLoadError}
             parentConversationId={activeSurfaceConversationId ?? null}
+            workspacePath={selectedProject?.path ?? null}
             onScrollStateChange={updateConversationBottomState}
             onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
             scrollRef={workspaceRef}
@@ -9421,6 +9493,9 @@ function ConversationWorkspace(props: {
   messages: ConversationMessage[];
   error: string | null;
   parentConversationId: string | null;
+  // Project workspace path used to resolve relative Markdown media references.
+  // 用于解析 Markdown 相对媒体引用的项目工作区路径。
+  workspacePath?: string | null;
   onScrollStateChange: () => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   scrollRef: React.RefObject<HTMLElement | null>;
@@ -9452,57 +9527,60 @@ function ConversationWorkspace(props: {
   }, [sessionRunning]);
 
   return (
-    <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
-      <div className="timeline">
-        {props.error ? (
-          <article className="message-card system error-message">
-            <span>system</span>
-            <p>会话正文加载失败：{props.error}</p>
-          </article>
-        ) : null}
-        {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
-          <article className="message-card system">
-            <span>system</span>
-            <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
-          </article>
-        ) : null}
-        {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
-          <ConversationRenderItemView
-            item={timelineItem.item}
-            key={timelineItem.item.id}
-            autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
-            parentConversationId={props.parentConversationId}
-            sessionRunning={sessionRunning}
-            onOpenDetail={setDetail}
+    <MarkdownImageWorkspacePathContext.Provider value={props.workspacePath?.trim() || null}>
+      <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
+        <div className="timeline">
+          {props.error ? (
+            <article className="message-card system error-message">
+              <span>system</span>
+              <p>会话正文加载失败：{props.error}</p>
+            </article>
+          ) : null}
+          {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
+            <article className="message-card system">
+              <span>system</span>
+              <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
+            </article>
+          ) : null}
+          {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
+            <ConversationRenderItemView
+              item={timelineItem.item}
+              key={timelineItem.item.id}
+              autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+              parentConversationId={props.parentConversationId}
+              sessionRunning={sessionRunning}
+              onOpenDetail={setDetail}
+              onOpenMedia={setMediaPlayer}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+            />
+          ) : (
+            <ConversationProcessGroup
+              autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+              key={timelineItem.process.id}
+              nowMs={nowMs}
+              parentConversationId={props.parentConversationId}
+              process={timelineItem.process}
+              sessionRunning={sessionRunning}
+              onOpenDetail={setDetail}
+              onOpenMedia={setMediaPlayer}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+            />
+          ))}
+        </div>
+        {detail ? (
+          <ConversationDetailModal
+            detail={detail}
+            onClose={() => setDetail(null)}
             onOpenMedia={setMediaPlayer}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
           />
-        ) : (
-          <ConversationProcessGroup
-            autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
-            key={timelineItem.process.id}
-            parentConversationId={props.parentConversationId}
-            process={timelineItem.process}
-            sessionRunning={sessionRunning}
-            onOpenDetail={setDetail}
-            onOpenMedia={setMediaPlayer}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
-          />
-        ))}
-      </div>
-      {detail ? (
-        <ConversationDetailModal
-          detail={detail}
-          onClose={() => setDetail(null)}
-          onOpenMedia={setMediaPlayer}
-        />
-      ) : null}
-      {mediaPlayer ? (
-        <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
-      ) : null}
-    </section>
+        ) : null}
+        {mediaPlayer ? (
+          <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
+        ) : null}
+      </section>
+    </MarkdownImageWorkspacePathContext.Provider>
   );
 }
 
@@ -9515,6 +9593,9 @@ function ConversationProcessGroup(props: {
   // hiddenThinkingBlockId hides the block currently shown in the floating thinking overlay.
   // hiddenThinkingBlockId 隐藏当前在浮动思考面板中展示的块。
   hiddenThinkingBlockId: string | null;
+  // Current clock tick used for live duration projection.
+  // 用于实时耗时投影的当前时钟刻度。
+  nowMs: number;
   // Parent conversation id used by subagent navigation.
   // 子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -9535,10 +9616,16 @@ function ConversationProcessGroup(props: {
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
   const [collapsed, setCollapsed] = React.useState(props.process.defaultCollapsed);
+  const fallbackStartedAtMsRef = React.useRef(Date.now());
   React.useEffect(() => {
     setCollapsed(props.process.defaultCollapsed);
+    fallbackStartedAtMsRef.current = Date.now();
   }, [props.process.defaultCollapsed, props.process.id]);
-  const durationLabel = formatWorkProcessDuration(props.process.durationMs);
+  const liveDurationMs = props.process.running
+    ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
+    : null;
+  const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
+  const durationLabel = formatWorkProcessDuration(displayedDurationMs);
   const headerText = durationLabel ? `处理过程 ${durationLabel}` : "处理过程";
   const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
   const bodyVisible = !props.process.collapsible || !collapsed;
@@ -9729,7 +9816,11 @@ function MarkdownMessage(props: {
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const content = React.useMemo(() => normalizeMarkdownLocalImageLinks(props.content), [props.content]);
+  const workspacePath = React.useContext(MarkdownImageWorkspacePathContext);
+  const content = React.useMemo(
+    () => normalizeMarkdownLocalImageLinks(props.content, workspacePath),
+    [props.content, workspacePath],
+  );
   return (
     <div className="markdown-message">
       <ReactMarkdown
@@ -9743,7 +9834,7 @@ function MarkdownMessage(props: {
           },
           img: ({ alt, src, title }) => {
             const width = markdownImageWidthFromTitle(title);
-            const imageSource = normalizeMarkdownImageSource(src) ?? src;
+            const imageSource = normalizeMarkdownImageSource(src, workspacePath) ?? src;
             const imageAttachment = markdownImageAttachment(imageSource, alt);
             const imageStyle = width ? { width, maxWidth: 800 } : undefined;
             if (imageAttachment && props.onOpenMedia) {
@@ -11079,18 +11170,27 @@ function buildStatusbarRuntimeActivities(
     return [];
   }
   const normalized = normalizedSessionRunPhase(conversation.runPhase);
-  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
+  const conversationRunning = conversationIsRunning(conversation);
+  const projectedItems = projectConversationRenderItems(messages);
+  const activeToolItems = projectedItems.filter((item) => item.blocks.some(isMergeableToolBlock)
+    && toolExecutionDisplayState(item.blocks, conversationRunning) === "running");
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
-  if (conversation.status.toLowerCase() !== "running" && !hasRunningSubagents) {
+  if (!conversationRunning && !hasRunningSubagents && activeToolItems.length === 0) {
     return [];
   }
-  const hasSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
-  const hasToolRunning = normalized === "toolrunning" && !hasSubagentTool && !hasRunningSubagents;
+  const lastMeaningfulBlock = [...projectedItems]
+    .reverse()
+    .flatMap((item) => [...item.blocks].reverse())
+    .find((block) => block.kind !== "turn-stats") ?? null;
+  const hasActiveSubagentTool = activeToolItems.some((item) => item.blocks.some(blockLooksLikeSubagentTool));
+  const hasActiveNormalTool = activeToolItems.some((item) => !item.blocks.some(blockLooksLikeSubagentTool));
+  const phaseLooksLikeToolRunning = normalized === "toolrunning";
+  const phaseLooksLikeSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
   const activities: StatusbarRuntimeActivity[] = [];
-  if (hasToolRunning) {
+  if (hasActiveNormalTool || (phaseLooksLikeToolRunning && !hasRunningSubagents && !hasActiveSubagentTool && !phaseLooksLikeSubagentTool)) {
     activities.push({ kind: "tool", text: t("runtime.toolActivity") });
   }
-  if (hasRunningSubagents || (normalized === "toolrunning" && hasSubagentTool)) {
+  if (hasRunningSubagents || hasActiveSubagentTool || (phaseLooksLikeToolRunning && phaseLooksLikeSubagentTool)) {
     activities.push({ kind: "subagent", text: t("runtime.subagentRunning") });
   }
   return activities;

@@ -5495,6 +5495,11 @@ button {
   font-weight: 600;
 }
 
+.statusbar-runtime-activity .shiny-text {
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .statusbar-runtime-activity svg {
   width: 13px;
   height: 13px;

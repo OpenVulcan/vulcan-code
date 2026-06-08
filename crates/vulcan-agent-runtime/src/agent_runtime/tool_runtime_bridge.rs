@@ -1,10 +1,16 @@
 //! Shared host-managed tool runtime bridge for the GUI executor and `vulcan-core` controller.
 //! 供图形界面执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
 
+use crate::agent_runtime::events::RuntimeEvent;
 use crate::model::SessionId;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+use tokio::sync::oneshot;
+use uuid::Uuid;
 use vulcan_core::tool::VulcanToolExecutor;
 use vulcan_core::types::{
     CoreError as VulcanCoreError, ToolInvocationRequest as CoreToolInvocationRequest,
@@ -27,6 +33,34 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// GUI session identifier attached to every host-managed tool invocation.
     /// 附着到每一次宿主管理工具调用上的图形界面会话标识。
     session_id: SessionId,
+}
+
+/// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
+/// 用于把单条运行时事件投影与工具执行屏障关联起来的元数据键。
+pub const RUNTIME_EVENT_PROJECTION_BARRIER_ID: &str = "webui_projection_barrier_id";
+
+/// Enables projection barriers only when a GUI consumer can acknowledge them.
+/// 仅在存在可确认投影的图形界面消费端时启用投影屏障。
+static RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED: AtomicBool = AtomicBool::new(false);
+
+/// Stores pending projection barrier acknowledgements by stable barrier id.
+/// 按稳定屏障标识保存等待中的投影确认发送端。
+static RUNTIME_EVENT_PROJECTION_BARRIERS: OnceLock<Mutex<HashMap<String, oneshot::Sender<()>>>> =
+    OnceLock::new();
+
+/// Maximum time a tool may wait for the UI projection acknowledgement before continuing.
+/// 工具等待界面投影确认后继续执行的最长时间。
+const RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT: Duration = Duration::from_secs(8);
+
+/// One pending projection barrier created for a runtime start event.
+/// 为一条运行时开始事件创建的待确认投影屏障。
+pub(crate) struct RuntimeEventProjectionBarrier {
+    /// Stable barrier id copied into runtime-event metadata.
+    /// 复制到运行时事件元数据中的稳定屏障标识。
+    id: String,
+    /// Receiver resolved by the GUI bridge after it emits the projected workbench snapshot.
+    /// 图形界面桥接层完成投影快照发送后解析的接收端。
+    receiver: oneshot::Receiver<()>,
 }
 
 impl VulcanManagedToolRuntimeBridge {
@@ -66,6 +100,110 @@ impl VulcanManagedToolRuntimeBridge {
     /// 返回附着到每次托管工具调用上的图形界面会话标识。
     pub(crate) fn session_id(&self) -> SessionId {
         self.session_id
+    }
+}
+
+/// Enables or disables runtime-event projection barriers for GUI-owned streams.
+/// 为图形界面拥有的流启用或停用运行时事件投影屏障。
+pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) {
+    RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.store(enabled, Ordering::SeqCst);
+    if !enabled
+        && let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
+        && let Ok(mut guard) = registry.lock()
+    {
+        guard.clear();
+    }
+}
+
+/// Attaches a projection barrier id to one runtime event when GUI barriers are enabled.
+/// 当图形界面屏障启用时，为单条运行时事件附加投影屏障标识。
+pub(crate) fn attach_runtime_event_projection_barrier(
+    mut event: RuntimeEvent,
+) -> (RuntimeEvent, Option<RuntimeEventProjectionBarrier>) {
+    if !RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.load(Ordering::SeqCst) {
+        return (event, None);
+    }
+
+    let barrier_id = Uuid::new_v4().to_string();
+    let (sender, receiver) = oneshot::channel();
+    let registry = RUNTIME_EVENT_PROJECTION_BARRIERS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut guard) = registry.lock() {
+        guard.insert(barrier_id.clone(), sender);
+    } else {
+        return (event, None);
+    }
+
+    let mut metadata = match event.metadata.take() {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            let mut map = Map::new();
+            map.insert(String::from("payload"), other);
+            map
+        }
+        None => Map::new(),
+    };
+    metadata.insert(
+        String::from(RUNTIME_EVENT_PROJECTION_BARRIER_ID),
+        Value::String(barrier_id.clone()),
+    );
+    event.metadata = Some(Value::Object(metadata));
+
+    (
+        event,
+        Some(RuntimeEventProjectionBarrier {
+            id: barrier_id,
+            receiver,
+        }),
+    )
+}
+
+/// Waits until the GUI bridge confirms the start event has been projected.
+/// 等待图形界面桥接层确认开始事件已经完成投影。
+pub(crate) async fn wait_runtime_event_projection_barrier(
+    barrier: Option<RuntimeEventProjectionBarrier>,
+) {
+    let Some(barrier) = barrier else {
+        return;
+    };
+    let barrier_id = barrier.id.clone();
+    if tokio::time::timeout(RUNTIME_EVENT_PROJECTION_BARRIER_TIMEOUT, barrier.receiver)
+        .await
+        .is_err()
+    {
+        if let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get()
+            && let Ok(mut guard) = registry.lock()
+        {
+            guard.remove(&barrier_id);
+        }
+        eprintln!(
+            "[vulcan-agent-runtime][tool-trace] stage=projection_barrier_timeout barrier_id={barrier_id}"
+        );
+    }
+}
+
+/// Acknowledges one projection barrier from runtime-event metadata after WebUI has emitted it.
+/// WebUI 发出运行时事件投影后，根据事件元数据确认对应投影屏障。
+pub fn acknowledge_runtime_event_projection_barrier_from_event(event: &RuntimeEvent) -> bool {
+    let Some(barrier_id) = event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(RUNTIME_EVENT_PROJECTION_BARRIER_ID))
+        .and_then(Value::as_str)
+    else {
+        return false;
+    };
+    let Some(registry) = RUNTIME_EVENT_PROJECTION_BARRIERS.get() else {
+        return false;
+    };
+    let sender = registry
+        .lock()
+        .ok()
+        .and_then(|mut guard| guard.remove(barrier_id));
+    if let Some(sender) = sender {
+        let _ = sender.send(());
+        true
+    } else {
+        false
     }
 }
 
@@ -151,7 +289,9 @@ mod tests {
     use async_trait::async_trait;
     use serde_json::json;
     use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
+    use tokio::sync::Notify;
     use uuid::Uuid;
     use vulcan_core::controller::VulcanCoreController;
     use vulcan_core::provider::VulcanProviderAdapter;
@@ -257,6 +397,48 @@ mod tests {
             invoke: Arc::new(|_args, _session_id| {
                 Box::pin(async move {
                     panic!("模拟搜索节点 panic");
+                })
+            }),
+        }]);
+        let resolved = manager.resolve_for_execution_mode("Build");
+        (manager, resolved.definitions)
+    }
+
+    /// Returns a tools manager whose tool body waits until the test explicitly lets it continue.
+    /// 返回一份工具主体会等待测试显式放行的工具管理器。
+    fn build_gated_demo_manager(
+        entered_tool_body: Arc<AtomicBool>,
+        release_tool_body: Arc<Notify>,
+    ) -> (
+        VulcanToolsManager,
+        Vec<vulcan_tools_manager::ResolvedToolDefinition>,
+    ) {
+        let manager = VulcanToolsManager::new(vec![VulcanToolCandidate {
+            descriptor: VulcanToolDescriptor {
+                id: String::from("gated_tool"),
+                name: String::from("gated_tool"),
+                description: String::from("Gated demo tool"),
+                help_text: None,
+                source: VulcanToolSourceKind::Native,
+            },
+            parameters_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": { "type": "string" }
+                },
+                "required": ["query"]
+            }),
+            ai_visible: true,
+            plan_policy: VulcanPlanToolPolicy::Visible,
+            invoke: Arc::new(move |_args, _session_id| {
+                let entered_tool_body = Arc::clone(&entered_tool_body);
+                let release_tool_body = Arc::clone(&release_tool_body);
+                Box::pin(async move {
+                    entered_tool_body.store(true, Ordering::SeqCst);
+                    release_tool_body.notified().await;
+                    Ok(VulcanToolInvocationResult::from_model_output(json!(
+                        "gated done"
+                    )))
                 })
             }),
         }]);
@@ -718,5 +900,68 @@ mod tests {
                         .and_then(serde_json::Value::as_str)
                         == Some("completed")
         )));
+    }
+
+    /// Verifies the streaming executor yields the tool-start event before the actual tool body begins.
+    /// 验证流式执行器会在真实工具主体开始前先产出工具开始事件。
+    #[test]
+    fn streaming_tool_executor_yields_tool_started_before_tool_body_runs() {
+        let entered_tool_body = Arc::new(AtomicBool::new(false));
+        let release_tool_body = Arc::new(Notify::new());
+        let (manager, definitions) = build_gated_demo_manager(
+            Arc::clone(&entered_tool_body),
+            Arc::clone(&release_tool_body),
+        );
+        let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+        ));
+        let (sender, mut receiver): (
+            ProviderLiveDeltaSender,
+            tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+        ) = tokio::sync::mpsc::unbounded_channel();
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("gated-call-1"),
+            tool_name: String::from("gated_tool"),
+            arguments: json!({ "query": "先显示工具调用" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        runtime.block_on(async {
+            let task = tokio::spawn(async move { executor.execute_tool(&request).await });
+            let first_event = receiver
+                .recv()
+                .await
+                .expect("tool-start event should be sent")
+                .expect("tool-start event should be ok");
+
+            assert!(matches!(
+                first_event,
+                ProviderStreamDelta::RuntimeEvent(runtime_event)
+                    if runtime_event.kind == RuntimeEventKind::ToolStarted
+                        && runtime_event
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("tool_call_id"))
+                            .and_then(serde_json::Value::as_str)
+                            == Some("gated-call-1")
+            ));
+            assert!(
+                !entered_tool_body.load(Ordering::SeqCst),
+                "tool body should not run before the UI-visible start event is observable"
+            );
+
+            release_tool_body.notify_one();
+            let result = task
+                .await
+                .expect("tool task should join")
+                .expect("tool call should complete");
+            assert_eq!(result.model_output, "gated done");
+        });
     }
 }

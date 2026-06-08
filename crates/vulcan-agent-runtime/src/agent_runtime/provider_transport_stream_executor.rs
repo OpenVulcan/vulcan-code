@@ -9,7 +9,8 @@ use crate::agent_runtime::provider_protocol_bridge::{
 };
 use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::tool_runtime_bridge::{
-    VulcanManagedToolRuntimeBridge, build_tool_failure_invocation_result,
+    VulcanManagedToolRuntimeBridge, attach_runtime_event_projection_barrier,
+    build_tool_failure_invocation_result, wait_runtime_event_projection_barrier,
 };
 use async_trait::async_trait;
 use futures_util::FutureExt;
@@ -69,7 +70,7 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 session_id, request.tool_call_id, request.tool_name
             ),
         );
-        let _ = self.live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+        let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
                 format!(
@@ -83,7 +84,17 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                 "tool_name": request.tool_name,
                 "arguments": request.arguments,
             }))),
-        )));
+        );
+        let _ = self
+            .live_sender
+            .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
+        // Wait for the GUI bridge to project the start card before the real tool body can begin.
+        // 在真实工具主体开始前等待图形界面桥接层完成开始卡片投影。
+        let has_projection_barrier = projection_barrier.is_some();
+        wait_runtime_event_projection_barrier(projection_barrier).await;
+        if !has_projection_barrier {
+            tokio::task::yield_now().await;
+        }
         let (result, display_state) =
             match AssertUnwindSafe(self.runtime_bridge.execute_tool(request))
                 .catch_unwind()

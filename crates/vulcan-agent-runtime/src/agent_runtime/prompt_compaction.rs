@@ -332,7 +332,10 @@ fn finalize_prompt_compaction_report(
         });
     }
 
-    Err(build_prompt_compaction_failure_message(model_label, &report))
+    Err(build_prompt_compaction_failure_message(
+        model_label,
+        &report,
+    ))
 }
 
 /// Builds one human-readable failure message for prompt-based compaction without usable plain-text summary output.

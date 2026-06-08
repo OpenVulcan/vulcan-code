@@ -852,7 +852,13 @@ fn core_message_to_openai_compatible_message(
             if !text.is_empty() && !object.contains_key("content") {
                 object.insert(String::from("content"), Value::String(text.clone()));
             }
-            if !tool_calls.is_empty() && !object.contains_key("tool_calls") {
+            if tool_calls.is_empty() {
+                // Canonical tool calls are the source of truth; stale provider state must not replay tool protocol.
+                // 规范工具调用是真实来源；过期 Provider 状态不得回放工具协议。
+                object.remove("tool_calls");
+            } else {
+                // Rebuild tool_calls from canonical calls so assistant ids match following tool messages.
+                // 从规范调用重建 tool_calls，确保助手调用标识与后续工具消息一致。
                 object.insert(
                     String::from("tool_calls"),
                     Value::Array(
@@ -900,14 +906,27 @@ fn core_message_to_openai_compatible_message(
 /// Converts one canonical core tool call into one OpenAI-compatible tool-call object with stringified JSON arguments.
 /// 将一条规范 core 工具调用转换为一条 OpenAI 兼容工具调用对象，并把 JSON 参数字符串化。
 fn core_tool_call_to_openai_compatible_tool_call(tool_call: &CoreConversationToolCall) -> Value {
+    let tool_call_id = openai_compatible_replay_tool_call_id(tool_call);
     json!({
-        "id": tool_call.id,
+        "id": tool_call_id,
         "type": "function",
         "function": {
             "name": tool_call.tool_name,
             "arguments": stringify_openai_compatible_tool_arguments(&tool_call.arguments)
         }
     })
+}
+
+/// Resolves the OpenAI-compatible replay id that must match subsequent `tool_call_id` fields.
+/// 解析 OpenAI 兼容回放标识，该标识必须与后续 `tool_call_id` 字段一致。
+fn openai_compatible_replay_tool_call_id(tool_call: &CoreConversationToolCall) -> String {
+    tool_call
+        .tool_call_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| tool_call.id.trim())
+        .to_string()
 }
 
 /// Converts one host-owned provider tool definition into one OpenAI-compatible tool schema object.
@@ -1501,7 +1520,7 @@ mod tests {
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "assistant");
         assert_eq!(messages[1]["reasoning_content"], "这段思考不应回放。");
-        assert_eq!(messages[1]["tool_calls"][0]["id"], "tool-1");
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call-1");
         assert_eq!(
             messages[1]["tool_calls"][0]["function"]["name"],
             "read_file"
@@ -1922,6 +1941,10 @@ mod tests {
         assert_eq!(messages.len(), 6);
         assert_eq!(messages[0]["role"], "system");
         assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call-1");
+        assert_eq!(messages[1]["tool_calls"][1]["id"], "call-2");
+        assert_eq!(messages[1]["tool_calls"][2]["id"], "call-3");
+        assert_eq!(messages[1]["tool_calls"][3]["id"], "call-4");
         assert_eq!(messages[2]["role"], "tool");
         assert_eq!(messages[3]["role"], "tool");
         assert_eq!(messages[4]["role"], "tool");
@@ -2222,7 +2245,7 @@ mod tests {
             messages[1]["reasoning_details"][0]["text"],
             "已读取主要文件结构。"
         );
-        assert_eq!(messages[1]["tool_calls"][0]["id"], "tool-1");
+        assert_eq!(messages[1]["tool_calls"][0]["id"], "call-1");
     }
 
     /// Verifies OpenAI-compatible request replay restores provider-native interleaved fields for boolean-style capabilities and ignores them when the active model does not declare interleaved support.

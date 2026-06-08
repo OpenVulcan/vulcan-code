@@ -94,9 +94,7 @@ use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
     append_record_body_delta,
 };
-use vulcan_context_compaction::{
-    CompactionPlan, CompactionPlanInput, plan_context_compaction,
-};
+use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
 use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
@@ -2632,8 +2630,10 @@ async fn service_compact_selected_conversation_context(
         ));
     }
 
-    let mut workspace_snapshot = current_workspace_snapshot_from_state(&state)?
-        .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+    let mut workspace_snapshot =
+        current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
     ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None);
     let runtime_state_snapshot = workspace_snapshot
         .session_runtime_state
@@ -8095,6 +8095,7 @@ fn spawn_agent_stream_task(
                     {
                         eprintln!("[tauri-service] append runtime event failed: {error}");
                     }
+                    acknowledge_runtime_event_projection_barrier(&event);
                     let pending_after_runtime_event_started_at = current_unix_millis_value();
                     match maybe_prepare_next_webui_pending_prompt(
                         &app,
@@ -8536,6 +8537,7 @@ async fn handle_webui_detached_subagent_task_event(
             if !consumed {
                 append_runtime_event_projection(app, state, parent_session_id, &event)?;
             }
+            acknowledge_runtime_event_projection_barrier(&event);
             if is_finished {
                 {
                     let mut guard = state
@@ -9036,7 +9038,9 @@ async fn handle_webui_detached_child_execution_event(
                 record_ids.thinking_record_id = None;
                 record_ids.output_record_id = None;
             }
-            append_runtime_event_projection(app, state, session_id, &event)
+            append_runtime_event_projection(app, state, session_id, &event)?;
+            acknowledge_runtime_event_projection_barrier(&event);
+            Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint {
             session_id,
@@ -10342,9 +10346,11 @@ fn spawn_webui_context_compaction_task(
     let handle = tauri::async_runtime::spawn(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut output_message_id: Option<String> = None;
-        let mut terminal_result = request
-            .is_none()
-            .then(|| Err(String::from("上下文压缩运行时未就绪，无法发起模型总结请求。")));
+        let mut terminal_result = request.is_none().then(|| {
+            Err(String::from(
+                "上下文压缩运行时未就绪，无法发起模型总结请求。",
+            ))
+        });
 
         if let Some(request) = request {
             let mut stream = Box::pin(stream_prompt_compaction_job(request));
@@ -10382,11 +10388,8 @@ fn spawn_webui_context_compaction_task(
             }
         }
 
-        let terminal_result = terminal_result.unwrap_or_else(|| {
-            Err(String::from(
-                "模型总结流提前结束，已取消本次提示词压缩。",
-            ))
-        });
+        let terminal_result = terminal_result
+            .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")));
         let terminal_status = if terminal_result.is_ok() {
             TurnTerminalStatus::Completed
         } else {
@@ -10427,8 +10430,12 @@ fn spawn_webui_context_compaction_task(
             ),
             Err(error) => {
                 eprintln!("[tauri-service] context compaction finish failed: {error}");
-                let _ =
-                    apply_session_phase(&task_app, &task_state, session_id, SessionRunPhase::Failed);
+                let _ = apply_session_phase(
+                    &task_app,
+                    &task_state,
+                    session_id,
+                    SessionRunPhase::Failed,
+                );
             }
         }
     });
@@ -10485,7 +10492,9 @@ fn apply_webui_context_compaction_stream_event(
             )
         }
         ExecutionStreamEvent::RuntimeEvent { event, .. } => {
-            append_runtime_event_projection(app, state, session_id, &event)
+            append_runtime_event_projection(app, state, session_id, &event)?;
+            acknowledge_runtime_event_projection_barrier(&event);
+            Ok(())
         }
         ExecutionStreamEvent::ConversationCheckpoint { .. } => Ok(()),
         ExecutionStreamEvent::Finished(_) => Ok(()),
@@ -10494,7 +10503,10 @@ fn apply_webui_context_compaction_stream_event(
 
 /// Returns the retained selected-session title used by compaction diagnostics.
 /// 返回压缩诊断使用的保留会话标题。
-fn current_session_title_from_state(state: &SharedServiceBridgeState, session_id: SessionId) -> String {
+fn current_session_title_from_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> String {
     current_workspace_snapshot_from_shared_state(state)
         .ok()
         .flatten()
@@ -10654,105 +10666,112 @@ fn finish_webui_context_compaction_execution(
     }
     let summary_body = execution.compaction_result.summary_record.body.clone();
     let provider_request_count = execution.provider_request_count;
-    let workspace = with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
-        let now = current_unix_millis_text();
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        ensure_webui_context_compaction_summary_body_for_state(
-            runtime_state,
-            session_id,
-            section_id,
-            "completed",
-            budget_note,
-            &summary_body,
-        );
-        let summary_entry = SessionMessageEntry {
-            id: String::new(),
-            kind: execution.compaction_result.summary_record.kind,
-            record_kind: execution.compaction_result.summary_record.record_kind,
-            visible: false,
-            title: execution.compaction_result.summary_record.title.clone(),
-            body: summary_body.clone(),
-            metadata: None,
-            created_at: String::new(),
-        };
-        let summary_message_id =
-            append_webui_session_message_entry_to_state(runtime_state, session_id, summary_entry);
-        let mut checkpoint = execution
-            .compaction_result
-            .materialize_checkpoint(summary_message_id.clone());
-        checkpoint.context_budget_fingerprint = runtime_state.live_context_budget_fingerprint.clone();
-        checkpoint.context_assembly_fingerprint =
-            runtime_state.live_context_assembly_fingerprint.clone();
-        runtime_state.last_compaction_id = Some(checkpoint.id.clone());
-        runtime_state.context_start_message_id = checkpoint.context_start_message_id.clone();
-        runtime_state.anchor_context_budget_fingerprint =
-            checkpoint.context_budget_fingerprint.clone();
-        runtime_state.anchor_context_assembly_fingerprint =
-            checkpoint.context_assembly_fingerprint.clone();
-        runtime_state.context_injection_state.apply_compaction();
-        compact_conversation_with_summary(
-            &mut runtime_state.conversation_state,
-            summary_message_id.clone(),
-            execution.compaction_result.summary_record.kind,
-            summary_body.clone(),
-            checkpoint.created_at.clone(),
-            execution.compaction_result.policy,
-        );
-        compact_conversation_records_after_summary(
-            &mut runtime_state.conversation_state,
-            &summary_message_id,
-            execution.compaction_result.policy,
-        );
-        workspace
-            .session_compactions
-            .entry(session_id)
-            .or_default()
-            .push(checkpoint);
-        set_webui_context_compaction_section_metadata_in_state(
-            runtime_state,
-            section_id,
-            section_id,
-            "start",
-            "completed",
-            Some(budget_note),
-        );
-        update_webui_context_compaction_body_state(runtime_state, section_id, "completed");
-        append_webui_context_compaction_end_message_to_state(
-            runtime_state,
-            session_id,
-            section_id,
-            budget_note,
-            provider_request_count,
-        );
-        runtime_state.updated_at = now;
-        workspace.session_messages.insert(
-            session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
-        );
-        workspace.session_run_phases.insert(session_id, previous_phase);
-        if let Some(session) = workspace
-            .sessions
-            .iter_mut()
-            .find(|session| session.id == session_id)
-        {
-            session.status = SessionState::Completed;
-            session.last_updated_label = String::from("刚刚");
-            session.updated_at = current_unix_millis_text();
-        }
-        workspace.hydrated_session_ids.insert(session_id);
-        agent_runtime
-            .vmm_hook_runtime
-            .replace_snapshot(build_vmm_hook_config_snapshot(
-                &agent_runtime.provider_configuration,
-                workspace,
-            ));
-    })?;
+    let workspace =
+        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+            let now = current_unix_millis_text();
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: now.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            ensure_webui_context_compaction_summary_body_for_state(
+                runtime_state,
+                session_id,
+                section_id,
+                "completed",
+                budget_note,
+                &summary_body,
+            );
+            let summary_entry = SessionMessageEntry {
+                id: String::new(),
+                kind: execution.compaction_result.summary_record.kind,
+                record_kind: execution.compaction_result.summary_record.record_kind,
+                visible: false,
+                title: execution.compaction_result.summary_record.title.clone(),
+                body: summary_body.clone(),
+                metadata: None,
+                created_at: String::new(),
+            };
+            let summary_message_id = append_webui_session_message_entry_to_state(
+                runtime_state,
+                session_id,
+                summary_entry,
+            );
+            let mut checkpoint = execution
+                .compaction_result
+                .materialize_checkpoint(summary_message_id.clone());
+            checkpoint.context_budget_fingerprint =
+                runtime_state.live_context_budget_fingerprint.clone();
+            checkpoint.context_assembly_fingerprint =
+                runtime_state.live_context_assembly_fingerprint.clone();
+            runtime_state.last_compaction_id = Some(checkpoint.id.clone());
+            runtime_state.context_start_message_id = checkpoint.context_start_message_id.clone();
+            runtime_state.anchor_context_budget_fingerprint =
+                checkpoint.context_budget_fingerprint.clone();
+            runtime_state.anchor_context_assembly_fingerprint =
+                checkpoint.context_assembly_fingerprint.clone();
+            runtime_state.context_injection_state.apply_compaction();
+            compact_conversation_with_summary(
+                &mut runtime_state.conversation_state,
+                summary_message_id.clone(),
+                execution.compaction_result.summary_record.kind,
+                summary_body.clone(),
+                checkpoint.created_at.clone(),
+                execution.compaction_result.policy,
+            );
+            compact_conversation_records_after_summary(
+                &mut runtime_state.conversation_state,
+                &summary_message_id,
+                execution.compaction_result.policy,
+            );
+            workspace
+                .session_compactions
+                .entry(session_id)
+                .or_default()
+                .push(checkpoint);
+            set_webui_context_compaction_section_metadata_in_state(
+                runtime_state,
+                section_id,
+                section_id,
+                "start",
+                "completed",
+                Some(budget_note),
+            );
+            update_webui_context_compaction_body_state(runtime_state, section_id, "completed");
+            append_webui_context_compaction_end_message_to_state(
+                runtime_state,
+                session_id,
+                section_id,
+                budget_note,
+                provider_request_count,
+            );
+            runtime_state.updated_at = now;
+            workspace.session_messages.insert(
+                session_id,
+                conversation_state_to_session_messages(&runtime_state.conversation_state),
+            );
+            workspace
+                .session_run_phases
+                .insert(session_id, previous_phase);
+            if let Some(session) = workspace
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                session.status = SessionState::Completed;
+                session.last_updated_label = String::from("刚刚");
+                session.updated_at = current_unix_millis_text();
+            }
+            workspace.hydrated_session_ids.insert(session_id);
+            agent_runtime
+                .vmm_hook_runtime
+                .replace_snapshot(build_vmm_hook_config_snapshot(
+                    &agent_runtime.provider_configuration,
+                    workspace,
+                ));
+        })?;
     if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
         hook_runtime.record_compacted(
             session_id,
@@ -10807,7 +10826,9 @@ fn fail_webui_context_compaction_execution(
             session_id,
             conversation_state_to_session_messages(&runtime_state.conversation_state),
         );
-        workspace.session_run_phases.insert(session_id, previous_phase);
+        workspace
+            .session_run_phases
+            .insert(session_id, previous_phase);
         if let Some(session) = workspace
             .sessions
             .iter_mut()
@@ -10831,21 +10852,25 @@ fn ensure_webui_context_compaction_summary_body_for_state(
     budget_note: &str,
     summary_body: &str,
 ) {
-    let has_body = runtime_state.conversation_state.records.iter().any(|record| {
-        record
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.get("context_compaction_section_id"))
-            .and_then(Value::as_str)
-            == Some(section_id)
-            && record
+    let has_body = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .any(|record| {
+            record
                 .metadata
                 .as_ref()
-                .and_then(|metadata| metadata.get("context_compaction_role"))
+                .and_then(|metadata| metadata.get("context_compaction_section_id"))
                 .and_then(Value::as_str)
-                == Some("body")
-            && !record.body.trim().is_empty()
-    });
+                == Some(section_id)
+                && record
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.get("context_compaction_role"))
+                    .and_then(Value::as_str)
+                    == Some("body")
+                && !record.body.trim().is_empty()
+        });
     if has_body {
         return;
     }
@@ -10956,10 +10981,7 @@ fn set_webui_context_compaction_section_metadata_in_state(
             json!(section_id),
         );
         object.insert(String::from("context_compaction_role"), json!(role));
-        object.insert(
-            String::from("context_compaction_state"),
-            json!(state_label),
-        );
+        object.insert(String::from("context_compaction_state"), json!(state_label));
         object.insert(
             String::from("context_compaction_trigger"),
             json!("manual_slash"),
@@ -10999,10 +11021,7 @@ fn update_webui_context_compaction_body_state(
             continue;
         }
         if let Some(metadata) = record.metadata.as_mut().and_then(Value::as_object_mut) {
-            metadata.insert(
-                String::from("context_compaction_state"),
-                json!(state_label),
-            );
+            metadata.insert(String::from("context_compaction_state"), json!(state_label));
         }
     }
 }
@@ -11061,6 +11080,19 @@ fn append_runtime_event_projection(
         }
     })
     .map(|_| ())
+}
+
+/// Acknowledges that one runtime event has been projected into the emitted WebUI snapshot.
+/// 确认单条运行时事件已经投影进已发送的 WebUI 快照。
+fn acknowledge_runtime_event_projection_barrier(event: &RuntimeEvent) {
+    let acknowledged =
+        vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::acknowledge_runtime_event_projection_barrier_from_event(event);
+    if acknowledged {
+        webui_trace(
+            "runtime_event_projection_barrier_ack",
+            runtime_event_trace_detail(event),
+        );
+    }
 }
 
 /// Consumes one delegate runtime event into the WebUI subagent cache and child transcript state.
@@ -14295,6 +14327,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
         vmm_hook_runtime,
     };
+    vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true);
     let service_state = app
         .try_state::<SharedServiceBridgeState>()
         .map(|state| state.inner().clone())

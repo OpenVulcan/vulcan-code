@@ -18,6 +18,9 @@ use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver_loop::drive_runtime_stream_provider_loop;
 use crate::agent_runtime::runtime_stream_launch_payload::build_runtime_stream_launch_payload;
+use crate::agent_runtime::tool_runtime_bridge::{
+    attach_runtime_event_projection_barrier, wait_runtime_event_projection_barrier,
+};
 use crate::conversation_protocol::SessionConversationState;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::model::SessionId;
@@ -4752,14 +4755,23 @@ async fn run_task_with_shared_runtime_context(
         "",
         current_unix_millis_text(),
     );
-    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
-        build_task_delegate_runtime_event(
+    let (delegate_started_event, projection_barrier) =
+        attach_runtime_event_projection_barrier(build_task_delegate_runtime_event(
             RuntimeEventKind::DelegateStarted,
             &request,
             "Running and waiting for the subagent to return a result.",
             started_payload,
-        ),
+        ));
+    let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
+        delegate_started_event,
     )));
+    // Wait until the parent WebUI projection sees the subagent-start event before the child run advances.
+    // 等待父级 WebUI 投影看到子代理启动事件后，再推进子任务执行。
+    let has_projection_barrier = projection_barrier.is_some();
+    wait_runtime_event_projection_barrier(projection_barrier).await;
+    if !has_projection_barrier {
+        tokio::task::yield_now().await;
+    }
     task_runtime_trace(
         "shared_task_delegate_started",
         format!(
