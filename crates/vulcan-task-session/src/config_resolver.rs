@@ -7,8 +7,8 @@ use vulcan_session_core::{
     SessionEffectiveConfig, SessionRequestedConfig, ToolExposureSnapshot,
 };
 
-/// Task invocation configuration supplied by the task tool call.
-/// task 工具调用提供的任务调用配置。
+/// Task invocation configuration supplied by the spawn-agent subagent call.
+/// spawn_agent 子代理调用提供的任务调用配置。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TaskInvocationConfig {
     /// Prompt that the task session should execute.
@@ -256,9 +256,6 @@ fn overlay_runtime_policy(
     if let Some(memory_writeback_enabled) = overlay.memory_writeback_enabled {
         target.memory_writeback_enabled = memory_writeback_enabled;
     }
-    if let Some(search_projection_enabled) = overlay.search_projection_enabled {
-        target.search_projection_enabled = search_projection_enabled;
-    }
     if let Some(database_projection_enabled) = overlay.database_projection_enabled {
         target.database_projection_enabled = database_projection_enabled;
     }
@@ -267,7 +264,6 @@ fn overlay_runtime_policy(
 /// Enforces the TaskSession projection-isolation boundary after all overrides.
 /// 在所有覆盖之后强制执行 TaskSession 投影隔离边界。
 fn enforce_task_session_projection_boundary(target: &mut ExecutionRuntimePolicy) {
-    target.search_projection_enabled = false;
     target.database_projection_enabled = false;
 }
 

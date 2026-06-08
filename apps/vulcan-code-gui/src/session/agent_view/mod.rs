@@ -1355,7 +1355,7 @@ mod tests {
             body: String::from("## 工具返回\n\n子代理已完成。"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "tool_display_state": "completed",
                 "kind": "task_session",
                 "payload": {

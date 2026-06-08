@@ -9,12 +9,11 @@ use super::markdown_source::{
 };
 use super::render_cache::{CachedRenderedMarkdownParse, CachedRenderedTranscriptBlock};
 use super::scene::{
-    PlainParagraphStyle, RenderContext, RenderedParagraphBackground, RenderedTranscriptDocument,
-    RenderedTranscriptNode,
+    PlainParagraphStyle, RenderContext, RenderedTranscriptDocument, RenderedTranscriptNode,
 };
 use crate::iced_theme as theme;
 use crate::{AgentViewBlock, AgentViewDirectiveKind, AgentViewDocument};
-use iced::{Background, Border, Color, Theme};
+use iced::{Color, Theme};
 use std::collections::{BTreeMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use vulcan_markdown as markdown;
@@ -139,7 +138,6 @@ fn render_agent_view_block(
 ) -> CachedRenderedTranscriptBlock {
     let markdown_settings = theme::markdown_settings(app_theme);
     let mut builder = RenderedTranscriptBuilder::new(selection_color, fallback_text_color);
-    let child_start_index = builder.node_count();
     builder.begin_block();
     let mut markdown_parse = None;
 
@@ -174,15 +172,6 @@ fn render_agent_view_block(
         AgentViewBlock::Directive(directive_block) => {
             render_directive_block(&mut builder, directive_block, markdown_settings, app_theme);
         }
-    }
-
-    if block_has_workspace_history_search_hit_marker(block) {
-        let child_node_count = builder.node_count().saturating_sub(child_start_index);
-        builder.insert_panel(
-            child_start_index,
-            child_node_count,
-            workspace_history_search_hit_background(app_theme),
-        );
     }
 
     CachedRenderedTranscriptBlock {
@@ -312,30 +301,6 @@ fn shift_paragraph_char_range(
         ..(paragraph_node.global_char_range.end + char_offset);
 }
 
-/// Returns whether one rendered block should receive the transient workspace-history search-hit panel treatment.
-/// 返回某个渲染区块是否应获得工作台历史搜索命中的临时面板高亮处理。
-fn block_has_workspace_history_search_hit_marker(block: &AgentViewBlock) -> bool {
-    block
-        .attributes()
-        .get("ui-search-hit")
-        .is_some_and(|value| value == "true")
-}
-
-/// Builds the subtle background panel used to emphasize one freshly navigated workspace-history search hit.
-/// 构建用于强调一条刚刚定位到的工作台历史搜索命中的轻量背景面板。
-fn workspace_history_search_hit_background(app_theme: &Theme) -> RenderedParagraphBackground {
-    let palette = app_theme.palette();
-
-    RenderedParagraphBackground {
-        background: Background::Color(palette.primary.weak.color.scale_alpha(0.12)),
-        border: Border {
-            radius: 10.0.into(),
-            width: 1.0,
-            color: palette.primary.strong.color.scale_alpha(0.30),
-        },
-    }
-}
-
 /// Hashes every block attribute into the layout signature so runtime-only render decorations invalidate cached geometry correctly.
 /// 将全部区块属性写入布局签名，确保仅运行时可见的渲染装饰能够正确使缓存几何失效。
 fn hash_block_attributes(block: &AgentViewBlock, hasher: &mut DefaultHasher) {
@@ -352,36 +317,4 @@ fn hash_render_color(color: Color, hasher: &mut DefaultHasher) {
     color.g.to_bits().hash(hasher);
     color.b.to_bits().hash(hasher);
     color.a.to_bits().hash(hasher);
-}
-
-#[cfg(test)]
-mod tests {
-    //! Focused rendered-transcript document-model tests.
-    //! 聚焦渲染转录文档模型的定向测试。
-
-    use super::RenderedTranscriptDocument;
-    use crate::{AgentViewDocument, AgentViewMarkdownBlock};
-    use iced::Theme;
-
-    /// Verifies that one Markdown block marked as a workspace-history search hit receives one surrounding highlight panel.
-    /// 验证当某个 Markdown 区块被标记为工作台历史搜索命中时，会获得一个包裹其内容的高亮面板。
-    #[test]
-    fn workspace_history_search_hit_block_gets_highlight_panel() {
-        let mut document = AgentViewDocument::new();
-        let mut markdown_block = AgentViewMarkdownBlock::new("命中正文");
-        markdown_block
-            .attributes
-            .insert(String::from("ui-search-hit"), String::from("true"));
-        document
-            .blocks
-            .push(crate::AgentViewBlock::Markdown(markdown_block));
-
-        let rendered_document =
-            RenderedTranscriptDocument::from_agent_document(&document, &Theme::TokyoNight);
-
-        assert!(matches!(
-            rendered_document.nodes.first(),
-            Some(super::super::scene::RenderedTranscriptNode::Panel(_))
-        ));
-    }
 }

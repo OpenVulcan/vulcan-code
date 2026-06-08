@@ -60,8 +60,8 @@ pub struct SelectedSubagentTaskPanel {
     pub task_id: SessionId,
 }
 
-/// Cached subagent task panel state reconstructed from runtime delegate events and persisted task tool results.
-/// 由运行时委派事件与持久化 task 工具结果重建出的子代理任务面板缓存状态。
+/// Cached subagent task panel state reconstructed from runtime delegate events and persisted spawn-agent results.
+/// 由运行时委派事件与持久化 spawn_agent 结果重建出的子代理任务面板缓存状态。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentTaskPanelState {
@@ -91,8 +91,8 @@ pub struct SubagentTaskPanelState {
     pub conversation_state: Option<SessionConversationState>,
 }
 
-/// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the tool result belongs to the host-managed `task` surface.
-/// 当工具结果属于宿主管理的 `task` 表面时，返回直接元数据或 host-result 元数据中附带的结构化 task-session 载荷。
+/// Returns the structured task-session payload attached to one direct or host-result tool metadata object when the result belongs to the host-managed subagent surface.
+/// 当结果属于宿主管理的子代理工具面时，返回直接元数据或 host-result 元数据中附带的结构化 task-session 载荷。
 pub fn task_session_payload_from_tool_metadata(metadata: &Value) -> Option<&Value> {
     if metadata.get("kind").and_then(Value::as_str) == Some("task_session")
         && let Some(payload) = metadata
@@ -143,10 +143,10 @@ pub fn task_session_internal_id_from_payload(payload: &Value) -> Option<SessionI
         .and_then(|value| SessionId::parse_str(value).ok())
 }
 
-/// Returns the original `task` tool arguments attached to one tool-display metadata object when the card is still in flight.
-/// 当卡片仍处于进行中状态时，返回其工具显示元数据对象中附带的原始 `task` 工具参数。
+/// Returns the original `spawn_agent` tool arguments attached to one tool-display metadata object when the card is still in flight.
+/// 当卡片仍处于进行中状态时，返回其工具显示元数据对象中附带的原始 `spawn_agent` 工具参数。
 pub fn task_session_arguments_from_tool_metadata(metadata: &Value) -> Option<&Value> {
-    (metadata.get("tool_name").and_then(Value::as_str) == Some("task")).then_some(())?;
+    (metadata.get("tool_name").and_then(Value::as_str) == Some("spawn_agent")).then_some(())?;
     metadata.get("arguments")
 }
 
@@ -157,7 +157,12 @@ pub fn task_session_declared_task_id_from_tool_metadata(metadata: &Value) -> Opt
         .and_then(task_session_public_id_from_payload)
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("task_id"))
+                .and_then(|arguments| {
+                    arguments
+                        .get("task_name")
+                        .or_else(|| arguments.get("task_id"))
+                        .or_else(|| arguments.get("name"))
+                })
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -188,7 +193,7 @@ pub fn task_session_prompt_text_from_tool_metadata(metadata: &Value) -> Option<&
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("prompt"))
+                .and_then(|arguments| arguments.get("message").or_else(|| arguments.get("prompt")))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
@@ -218,7 +223,12 @@ pub fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("subagent"))
+                .and_then(|arguments| {
+                    arguments
+                        .get("agent_type")
+                        .or_else(|| arguments.get("agent_profile"))
+                        .or_else(|| arguments.get("subagent"))
+                })
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
@@ -540,10 +550,10 @@ fn collect_best_task_session_record_match<'a>(
     false
 }
 
-/// Returns whether one metadata object represents a task tool card that can be matched with task-session payloads.
-/// 返回单个元数据对象是否表示可与 task-session 载荷匹配的 task 工具卡片。
+/// Returns whether one metadata object represents a spawn-agent card that can be matched with task-session payloads.
+/// 返回单个元数据对象是否表示可与 task-session 载荷匹配的 spawn_agent 工具卡片。
 fn task_session_metadata_can_match_tool_card(metadata: &Value) -> bool {
-    metadata.get("tool_name").and_then(Value::as_str) == Some("task")
+    metadata.get("tool_name").and_then(Value::as_str) == Some("spawn_agent")
         || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
 }
 
@@ -616,7 +626,7 @@ pub fn build_stopped_task_session_metadata(
         .or_else(|| state_snapshot.map(|state| state.public_task_id.clone()))
         .unwrap_or_else(|| task_id.to_string());
     let metadata = json!({
-        "tool_name": "task",
+        "tool_name": "spawn_agent",
         "kind": "task_session",
         "payload": {
             "task_id": public_task_id,
@@ -631,7 +641,7 @@ pub fn build_stopped_task_session_metadata(
     });
     attach_tool_display_state_to_metadata(Some(metadata), "stopped").unwrap_or_else(|| {
         json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "kind": "task_session",
             "tool_display_state": "stopped",
             "payload": {
@@ -1265,7 +1275,7 @@ mod tests {
             },
         });
         let argument_metadata = json!({
-            "tool_name": "task",
+        "tool_name": "spawn_agent",
             "arguments": {
                 "task_id": "public-b",
                 "prompt": "执行测试",
@@ -1295,7 +1305,7 @@ mod tests {
         let parent_session_id = SessionId::new_v4();
         let task_id = SessionId::new_v4();
         let metadata = json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "host_result": {
                 "kind": "task_session",
                 "payload": {
@@ -1343,7 +1353,7 @@ mod tests {
             title: String::from("task"),
             body: String::new(),
             metadata: Some(json!({
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "arguments": {
                     "prompt": "执行审核"
                 }
@@ -1358,7 +1368,7 @@ mod tests {
             title: String::from("task"),
             body: String::new(),
             metadata: Some(json!({
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "kind": "task_session",
                 "payload": {
                     "task_id": "public-task",
@@ -1399,7 +1409,7 @@ mod tests {
     #[test]
     fn merge_tool_display_metadata_preserves_advanced_task_session_payload() {
         let running_metadata = json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "kind": "task_session",
             "payload": {
                 "task_id": "reviewer",
@@ -1408,7 +1418,7 @@ mod tests {
             }
         });
         let completed_metadata = json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "kind": "task_session",
             "payload": {
                 "task_id": "reviewer",
@@ -1447,7 +1457,7 @@ mod tests {
     #[test]
     fn merge_tool_display_metadata_ranks_host_result_task_session_payload() {
         let running_metadata = json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "tool_display_state": "completed",
             "host_result": {
                 "kind": "task_session",
@@ -1459,7 +1469,7 @@ mod tests {
             }
         });
         let completed_metadata = json!({
-            "tool_name": "task",
+            "tool_name": "spawn_agent",
             "kind": "task_session",
             "payload": {
                 "task_id": "reviewer",
@@ -1480,8 +1490,8 @@ mod tests {
         );
     }
 
-    /// Verifies task-card payloads cannot recover embedded child transcripts as full TaskSession panels.
-    /// 验证 task 工具卡片 payload 不能把内嵌子会话转录恢复为完整 TaskSession 面板。
+    /// Verifies spawn-agent card payloads cannot recover embedded child transcripts as full TaskSession panels.
+    /// 验证 spawn_agent 工具卡片 payload 不能把内嵌子会话转录恢复为完整 TaskSession 面板。
     #[test]
     fn task_card_payload_ignores_embedded_conversation_state() {
         let parent_session_id = SessionId::new_v4();
@@ -1507,8 +1517,8 @@ mod tests {
         );
     }
 
-    /// Verifies task-card payload parsing requires a canonical task_session_id.
-    /// 验证 task 工具卡片 payload 解析必须具备规范 task_session_id。
+    /// Verifies spawn-agent card payload parsing requires a canonical task_session_id.
+    /// 验证 spawn_agent 工具卡片 payload 解析必须具备规范 task_session_id。
     #[test]
     fn task_card_payload_requires_task_session_id() {
         let parent_session_id = SessionId::new_v4();

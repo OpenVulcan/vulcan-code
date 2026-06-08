@@ -61,6 +61,12 @@ impl VulcanManagedToolRuntimeBridge {
             .invoke_tool(definition, args, Some(self.session_id.to_string()))
             .await
     }
+
+    /// Returns the GUI session identifier attached to every managed tool call.
+    /// 返回附着到每次托管工具调用上的图形界面会话标识。
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
+    }
 }
 
 /// Builds one controller-visible error result so host-managed tool failures can be returned to the model instead of aborting the whole turn.

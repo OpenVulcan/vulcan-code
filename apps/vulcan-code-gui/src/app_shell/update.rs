@@ -49,7 +49,6 @@ impl VulcanWorkbench {
                 self.session_history_earliest_ordinals.clear();
                 self.session_history_has_more.clear();
                 self.loading_older_session_history_ids.clear();
-                self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
                 self.pending_archived_delete_confirmation = None;
                 self.session_runtime_events.clear();
                 self.collapsed_runtime_event_ids.clear();
@@ -313,8 +312,6 @@ impl VulcanWorkbench {
                             .selected_session()
                             .is_some_and(|session| session.id == session_id)
                         {
-                            let continue_search_navigation =
-                                self.maybe_continue_workspace_history_search_navigation(session_id);
                             self.status_message = self.t(I18nKey::StatusSessionHydrated);
                             return Task::batch([
                                 self.schedule_session_agent_view_projection_refresh_if_needed(
@@ -324,7 +321,6 @@ impl VulcanWorkbench {
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
                                     session_id,
                                 ),
-                                continue_search_navigation,
                             ]);
                         }
 
@@ -381,7 +377,6 @@ impl VulcanWorkbench {
                                 self.maybe_follow_selected_session_thinking_overlay_tail(
                                     session_id,
                                 ),
-                                self.maybe_continue_workspace_history_search_navigation(session_id),
                             ]);
                         }
                     }
@@ -399,9 +394,7 @@ impl VulcanWorkbench {
                     Ok(page) => {
                         self.apply_older_session_history_page(page);
                         self.status_message = self.t(I18nKey::StatusOlderHistoryLoaded);
-                        return Task::batch([
-                            self.maybe_continue_workspace_history_search_navigation(session_id)
-                        ]);
+                        return Task::none();
                     }
                     Err(error) => {
                         self.status_message = format!("加载更早会话历史失败：{error}");
@@ -3086,19 +3079,6 @@ impl VulcanWorkbench {
                 let previous_scope = self.composer_attachment_ref_scope();
                 self.save_selected_session_composer_draft();
                 self.prune_unmaterialized_sessions(Some(session_id));
-                if self
-                    .workspace_history_search
-                    .pending_navigation
-                    .as_ref()
-                    .is_some_and(|pending| pending.session_id != session_id)
-                {
-                    self.workspace_history_search.pending_navigation = None;
-                }
-                let has_pending_search_navigation = self
-                    .workspace_history_search
-                    .pending_navigation
-                    .as_ref()
-                    .is_some_and(|pending| pending.session_id == session_id);
                 self.selected_session = session_id;
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
@@ -3110,8 +3090,7 @@ impl VulcanWorkbench {
                 self.active_subagent_panel = None;
                 self.rebuild_subagent_task_cache_for_session(session_id);
                 self.sync_context_usage_from_session_budget(session_id);
-                self.session_agent_view_follow_tail
-                    .insert(session_id, !has_pending_search_navigation);
+                self.session_agent_view_follow_tail.insert(session_id, true);
                 self.session_streaming_thinking_follow_tail
                     .insert(session_id, true);
                 // Capture the selected session title to keep footer feedback specific.
@@ -3135,13 +3114,8 @@ impl VulcanWorkbench {
                         .unwrap_or_else(Task::none),
                     self.schedule_session_hydration(session_id),
                     projection_task,
-                    if has_pending_search_navigation {
-                        Task::none()
-                    } else {
-                        self.maybe_follow_selected_session_transcript_tail(session_id)
-                    },
+                    self.maybe_follow_selected_session_transcript_tail(session_id),
                     self.maybe_follow_selected_session_thinking_overlay_tail(session_id),
-                    self.maybe_continue_workspace_history_search_navigation(session_id),
                 ])
             }
             Message::ShowSelectedSessionDocumentRawSource => {
@@ -3225,8 +3199,9 @@ impl VulcanWorkbench {
                     return Task::none();
                 };
                 if !self.open_subagent_task_panel(session_id, task_id) {
-                    self.status_message =
-                        String::from("当前子代理详情已不可恢复，请从 task 工具卡片查看返回信息。");
+                    self.status_message = String::from(
+                        "当前子代理详情已不可恢复，请从 spawn_agent 工具卡片查看返回信息。",
+                    );
                 }
                 Task::none()
             }
@@ -3442,262 +3417,6 @@ impl VulcanWorkbench {
 
                 self.status_message = self.t(I18nKey::StatusOlderHistoryLoading);
                 self.schedule_older_session_history_load(session_id)
-            }
-            Message::OpenWorkspaceHistorySearchPanel => self.open_workspace_history_search_panel(),
-            Message::CloseWorkspaceHistorySearchPanel => {
-                self.workspace_history_search.panel_open = false;
-                self.workspace_history_search.project_picker_open = false;
-                self.workspace_history_search.project_filter.clear();
-                Task::none()
-            }
-            Message::WorkspaceHistorySearchQueryChanged(query) => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.query =
-                    sanitize_workspace_history_search_query_input(&query);
-                self.workspace_history_search.error = None;
-                if self.workspace_history_search.query.trim().is_empty() {
-                    self.workspace_history_search.results = None;
-                    self.workspace_history_search.pending_navigation = None;
-                }
-                Task::none()
-            }
-            Message::SubmitWorkspaceHistorySearch => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    self.status_message =
-                        String::from("历史搜索已下线，后续将按新全文搜索方案重新接入。");
-                    return Task::none();
-                }
-                if self.workspace_history_search.loading {
-                    self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
-                    return Task::none();
-                }
-                let query = self.workspace_history_search.query.trim();
-                if query.is_empty() {
-                    self.workspace_history_search.results = None;
-                    self.workspace_history_search.error = None;
-                    self.status_message = self.t(I18nKey::StatusHistorySearchEmptyQuery);
-                    return self.open_workspace_history_search_panel();
-                }
-
-                self.workspace_history_search.panel_open = true;
-                self.workspace_history_search.project_picker_open = false;
-                self.workspace_history_search.project_filter.clear();
-                self.workspace_history_search.error = None;
-                self.status_message = self.t(I18nKey::StatusHistorySearchStarted);
-                self.schedule_workspace_history_search(false)
-            }
-            Message::LoadMoreWorkspaceHistorySearchResults => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                if self.workspace_history_search.loading {
-                    self.status_message = self.t(I18nKey::StatusHistorySearchInProgress);
-                    return Task::none();
-                }
-                let Some(current_page) = self.workspace_history_search.results.as_ref() else {
-                    self.status_message = self.t(I18nKey::StatusHistorySearchNoMoreResults);
-                    return Task::none();
-                };
-                if !current_page.has_more {
-                    self.status_message = self.t(I18nKey::StatusHistorySearchAllLoaded);
-                    return Task::none();
-                }
-                if self.workspace_history_search.query.trim() != current_page.query {
-                    self.status_message = self.t(I18nKey::StatusHistorySearchQueryChanged);
-                    return Task::none();
-                }
-
-                self.workspace_history_search.error = None;
-                self.status_message = self.t(I18nKey::StatusHistorySearchLoadMoreStarted);
-                self.schedule_workspace_history_search(true)
-            }
-            Message::WorkspaceHistorySearchLoaded { append, result } => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.loading = false;
-                self.workspace_history_search.loading_more = false;
-                match result {
-                    Ok(page) => {
-                        let WorkspaceHistorySearchPage {
-                            query,
-                            hits,
-                            limit_reached,
-                            total_hits,
-                            next_offset,
-                            has_more,
-                        } = page;
-                        let hit_count = hits.len();
-                        self.workspace_history_search.error = None;
-                        if append {
-                            if let Some(existing_page) =
-                                self.workspace_history_search.results.as_mut()
-                            {
-                                if existing_page.query == query {
-                                    existing_page.hits.extend(hits);
-                                    existing_page.limit_reached = limit_reached;
-                                    existing_page.total_hits = total_hits;
-                                    existing_page.next_offset = next_offset;
-                                    existing_page.has_more = has_more;
-                                } else {
-                                    self.workspace_history_search.results =
-                                        Some(WorkspaceHistorySearchPage {
-                                            query,
-                                            hits,
-                                            limit_reached,
-                                            total_hits,
-                                            next_offset,
-                                            has_more,
-                                        });
-                                }
-                            } else {
-                                self.workspace_history_search.results =
-                                    Some(WorkspaceHistorySearchPage {
-                                        query,
-                                        hits,
-                                        limit_reached,
-                                        total_hits,
-                                        next_offset,
-                                        has_more,
-                                    });
-                            }
-                            let loaded_count = self
-                                .workspace_history_search
-                                .results
-                                .as_ref()
-                                .map(|merged_page| merged_page.hits.len())
-                                .unwrap_or(0);
-                            let total_hits = self
-                                .workspace_history_search
-                                .results
-                                .as_ref()
-                                .map(|merged_page| merged_page.total_hits)
-                                .unwrap_or(loaded_count);
-                            self.status_message = self.tf(
-                                I18nKey::StatusHistorySearchLoadMoreCompleted,
-                                &[
-                                    I18nArg::named("hit_count", hit_count.to_string()),
-                                    I18nArg::named("loaded_count", loaded_count.to_string()),
-                                    I18nArg::named("total_hits", total_hits.to_string()),
-                                ],
-                            );
-                        } else {
-                            self.workspace_history_search.results =
-                                Some(WorkspaceHistorySearchPage {
-                                    query,
-                                    hits,
-                                    limit_reached,
-                                    total_hits,
-                                    next_offset,
-                                    has_more,
-                                });
-                            self.status_message = self.tf(
-                                I18nKey::StatusHistorySearchCompleted,
-                                &[I18nArg::named("total_hits", total_hits.to_string())],
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        self.workspace_history_search.error = Some(error.clone());
-                        self.status_message = self.tf(
-                            I18nKey::StatusHistorySearchFailed,
-                            &[I18nArg::named("error", error.as_str())],
-                        );
-                        self.push_activity(ActivityLevel::Warning, "工作台历史搜索失败", error);
-                    }
-                }
-
-                Task::none()
-            }
-            Message::ToggleWorkspaceHistorySearchProjectPicker => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.panel_open = true;
-                let next_open = !self.workspace_history_search.project_picker_open;
-                self.workspace_history_search.project_picker_open = next_open;
-                if next_open {
-                    self.workspace_history_search.project_filter.clear();
-                    operation::focus(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID)
-                } else {
-                    self.workspace_history_search.project_filter.clear();
-                    operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
-                }
-            }
-            Message::WorkspaceHistorySearchProjectFilterChanged(value) => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.project_filter = value;
-                Task::none()
-            }
-            Message::WorkspaceHistorySearchScopeSelected(scope) => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.scope = scope;
-                self.workspace_history_search.project_picker_open = false;
-                self.workspace_history_search.project_filter.clear();
-                self.workspace_history_search.error = None;
-                operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
-            }
-            Message::ConfirmWorkspaceHistorySearchScopeSelection => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                let Some(option) = self
-                    .filtered_workspace_history_search_scope_options()
-                    .into_iter()
-                    .next()
-                else {
-                    self.status_message = String::from("没有匹配的项目范围可供选择。");
-                    return operation::focus(WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID);
-                };
-
-                self.workspace_history_search.scope = option.scope;
-                self.workspace_history_search.project_picker_open = false;
-                self.workspace_history_search.project_filter.clear();
-                self.workspace_history_search.error = None;
-                operation::focus(WORKSPACE_HISTORY_SEARCH_INPUT_ID)
-            }
-            Message::OpenWorkspaceHistorySearchHit {
-                session_id,
-                message_id,
-                ordinal,
-                turn_index,
-            } => {
-                if !WORKSPACE_HISTORY_SEARCH_ENABLED {
-                    self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
-                    return Task::none();
-                }
-                self.workspace_history_search.active_highlight = None;
-                self.workspace_history_search.pending_navigation =
-                    Some(PendingWorkspaceHistorySearchNavigation {
-                        session_id,
-                        message_id,
-                        ordinal,
-                        turn_index,
-                    });
-                self.workspace_history_search.project_picker_open = false;
-                self.workspace_history_search.project_filter.clear();
-                self.workspace_history_search.panel_open = false;
-                self.status_message = String::from("正在打开搜索命中并定位对应历史位置。");
-
-                if self.selected_session().map(|session| session.id) == Some(session_id) {
-                    self.maybe_continue_workspace_history_search_navigation(session_id)
-                } else {
-                    Task::done(Message::SessionSelected(session_id))
-                }
             }
             Message::SelectedSessionTranscriptScrolled {
                 session_id,
@@ -4395,6 +4114,8 @@ impl VulcanWorkbench {
                         self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
                         Task::none()
                     }
+                    ExecutionStreamEvent::RequestReady { .. }
+                    | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
                     ExecutionStreamEvent::RequestStarted { session_id } => {
                         self.mark_session_pending_provider_response(session_id);
                         Task::none()
@@ -4483,6 +4204,8 @@ impl VulcanWorkbench {
                             self.push_activity(ActivityLevel::Info, "上下文压缩请求已准备", detail);
                             Task::none()
                         }
+                        ExecutionStreamEvent::RequestReady { .. }
+                        | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
                         ExecutionStreamEvent::RequestStarted { session_id } => {
                             self.mark_session_pending_provider_response(session_id);
                             Task::none()
@@ -4570,6 +4293,8 @@ impl VulcanWorkbench {
             Message::DetachedSubagentTaskEvent { task_id, event } => match event {
                 DetachedTaskRuntimeEvent::ChildExecution(event) => match event {
                     ExecutionStreamEvent::Prepared(_) => Task::none(),
+                    ExecutionStreamEvent::RequestReady { .. }
+                    | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
                     ExecutionStreamEvent::RequestStarted { session_id } => {
                         self.mark_session_pending_provider_response(session_id);
                         Task::none()

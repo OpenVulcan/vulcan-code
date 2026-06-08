@@ -417,43 +417,6 @@ async fn update_project_archive_flag(
     Ok(())
 }
 
-/// Updates the archived flag for a batch of session rows without changing their transcript data.
-/// 批量更新会话行的归档标记，不改变其转录数据。
-async fn update_session_archive_flags(
-    controller: ControllerRuntimeHandle,
-    session_ids: &[SessionId],
-    archived: bool,
-) -> Result<(), String> {
-    if session_ids.is_empty() {
-        return Ok(());
-    }
-
-    let updated_at = current_unix_millis_text();
-    let rows = session_ids
-        .iter()
-        .map(|session_id| {
-            vec![
-                ControllerSqliteValue::Int64(i64::from(archived)),
-                ControllerSqliteValue::String(updated_at.clone()),
-                ControllerSqliteValue::String(session_id.to_string()),
-            ]
-        })
-        .collect::<Vec<_>>();
-
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            "UPDATE sessions SET archived = ?1, updated_at = ?2 WHERE id = ?3;",
-            rows,
-        )
-        .await
-        .map_err(|error| format!("更新会话归档状态失败：{error}"))?;
-
-    Ok(())
-}
-
 /// Toggles one active project's pinned flag without rewriting unrelated workspace rows.
 /// 切换单个活动项目的置顶标记，不重写无关工作区行。
 pub async fn toggle_project_pinned(
@@ -660,85 +623,6 @@ ON CONFLICT(key) DO UPDATE SET value = excluded.value;
     Ok(())
 }
 
-/// Queries one persisted session summary row so single-session maintenance can reuse the event-store writer without a full workspace snapshot.
-/// 查询单条持久化会话摘要行，使单会话维护无需完整工作台快照也能复用事件存储写入器。
-async fn query_persisted_session_summary(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Option<SessionSummary>, String> {
-    #[derive(Debug, Deserialize)]
-    struct PersistedSessionSummaryRow {
-        /// Stable owning project identifier.
-        /// 稳定所属项目标识。
-        project_id: String,
-        /// Visible session title.
-        /// 可见会话标题。
-        title: String,
-        /// Persisted title source key.
-        /// 持久化标题来源键。
-        title_source: String,
-        /// Updated-at timestamp stored as Unix milliseconds text.
-        /// 以 Unix 毫秒文本存储的更新时间。
-        updated_at: String,
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT project_id, title, title_source, updated_at FROM sessions WHERE id = ?1 LIMIT 1;",
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询会话事件存储摘要失败：{error}"))?;
-    let row = decode_query_rows::<PersistedSessionSummaryRow>(&result.json_data)?
-        .into_iter()
-        .next();
-
-    Ok(row.map(|row| {
-        SessionSummary::new(
-            session_id,
-            Some(row.project_id),
-            row.title,
-            String::new(),
-            SessionState::Draft,
-            0,
-            0,
-            relative_time_label_from_unix_millis_text(&row.updated_at),
-        )
-        .with_title_source(SessionTitleSource::from_persisted_key(&row.title_source))
-    }))
-}
-
-/// Queries all compaction checkpoints currently mirrored for one session so single-session updates can persist the matching segmented checkpoint set.
-/// 查询单个会话当前镜像保存的全部压缩检查点，以便单会话更新时同步持久化对应的分段检查点集合。
-async fn query_session_compaction_entries(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Vec<SessionCompactionEntry>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT c.id, c.source_until_message_id, c.source_until_turn_index, c.context_start_message_id, c.retained_tail_start_turn_index, c.summary_message_id, c.created_at
-FROM session_compactions AS c
-WHERE c.session_id = ?1
-ORDER BY c.created_at ASC;
-"#,
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询会话压缩检查点失败：{error}"))?;
-
-    Ok(decode_query_rows::<StoredCompactionRow>(&result.json_data)?
-        .into_iter()
-        .map(stored_compaction_row_to_entry)
-        .collect())
-}
-
 /// Stores runtime checkpoints only in segmented state files.
 /// 仅在分段 state 文件中存储运行态检查点。
 /// Mirrors a runtime-state checkpoint into the segmented session state file without touching append-only JSONL segments.
@@ -831,27 +715,6 @@ fn ensure_segmented_session_directory_for_locator(
     }
 }
 
-/// Stores the minimal persisted session routing data needed to place a segmented session directory.
-/// 保存定位分段会话目录所需的最小持久化会话路由数据。
-#[derive(Debug, Deserialize)]
-struct SegmentedSessionLocatorRow {
-    /// Stable owning project identifier used as the project tag.
-    /// 作为项目标签使用的稳定所属项目标识。
-    project_id: String,
-    /// Visible session title mirrored into metadata when the segmented directory is first created.
-    /// 首次创建分段目录时镜像到 metadata 的可见会话标题。
-    title: String,
-    /// Persisted title-source key mirrored into metadata.
-    /// 镜像到 metadata 的持久化标题来源键。
-    title_source: String,
-    /// SQLite archived flag encoded as an integer.
-    /// 以整数编码的 SQLite 归档标记。
-    archived: i64,
-    /// Creation timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本存储的创建时间。
-    created_at: String,
-}
-
 /// Stores normalized locator data after SQLite scalar decoding.
 /// 保存 SQLite 标量解码后的规范化定位数据。
 struct SegmentedSessionLocator {
@@ -870,37 +733,6 @@ struct SegmentedSessionLocator {
     /// Creation timestamp stored as Unix milliseconds text.
     /// 以 Unix 毫秒文本存储的创建时间。
     created_at: String,
-}
-
-/// Queries the persisted session row used to route segmented state writes.
-/// 查询用于路由分段状态写入的持久化会话行。
-async fn query_segmented_session_locator(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Option<SegmentedSessionLocator>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT project_id, title, title_source, archived, created_at FROM sessions WHERE id = ?1 LIMIT 1;",
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询分段会话定位信息失败：{error}"))?;
-
-    Ok(
-        decode_query_rows::<SegmentedSessionLocatorRow>(&result.json_data)?
-            .into_iter()
-            .next()
-            .map(|row| SegmentedSessionLocator {
-                project_id: row.project_id,
-                title: row.title,
-                title_source: row.title_source,
-                archived: row.archived != 0,
-                created_at: row.created_at,
-            }),
-    )
 }
 
 /// Upserts all visible project rows while clearing the archive flag.
@@ -1008,34 +840,6 @@ async fn archive_missing_projects(
     Ok(())
 }
 
-/// Upserts all visible session rows using the current project-to-session bindings.
-/// 使用当前项目到会话的绑定关系上写全部可见会话行。
-async fn upsert_sessions(
-    controller: &ControllerRuntimeHandle,
-    task_projects: &[TaskProjectSummary],
-    sessions: &[(SessionSummary, bool)],
-) -> Result<(), String> {
-    if sessions.is_empty() {
-        return Ok(());
-    }
-
-    let session_owner_map = session_owner_map_from_projects(task_projects);
-    let mut batch_params = Vec::new();
-
-    for (session, archived) in sessions {
-        if let Some((project_id, sort_order)) = session_owner_map.get(&session.id) {
-            batch_params.push(build_session_upsert_row(
-                session,
-                project_id,
-                *sort_order,
-                *archived,
-            ));
-        }
-    }
-
-    upsert_session_rows(controller, batch_params).await
-}
-
 /// Builds a map from session id to owning project id and project-local sort order.
 /// 构建从会话标识到所属项目标识及项目内排序位置的映射。
 fn session_owner_map_from_projects(
@@ -1051,115 +855,6 @@ fn session_owner_map_from_projects(
                 .map(move |(index, session_id)| (*session_id, (project.id.clone(), index)))
         })
         .collect()
-}
-
-/// Builds one SQLite parameter row for upserting a single session summary.
-/// 构建一条用于上写单个会话摘要的 SQLite 参数行。
-fn build_session_upsert_row(
-    session: &SessionSummary,
-    project_id: &str,
-    sort_order: usize,
-    archived: bool,
-) -> Vec<ControllerSqliteValue> {
-    let now = current_unix_millis();
-    let updated_at = approximate_unix_millis_from_relative_label(&session.last_updated_label)
-        .unwrap_or(now)
-        .to_string();
-    vec![
-        ControllerSqliteValue::String(session.id.to_string()),
-        ControllerSqliteValue::String(project_id.to_string()),
-        ControllerSqliteValue::String(session.title.clone()),
-        ControllerSqliteValue::String(session.title_source.as_persisted_key().to_string()),
-        ControllerSqliteValue::Int64(i64::from(archived)),
-        ControllerSqliteValue::Int64(sort_order as i64),
-        ControllerSqliteValue::String(now.to_string()),
-        ControllerSqliteValue::String(updated_at),
-    ]
-}
-
-/// Executes the shared session-summary upsert statement for prebuilt rows.
-/// 对预构建参数行执行共享会话摘要上写语句。
-async fn upsert_session_rows(
-    controller: &ControllerRuntimeHandle,
-    batch_params: Vec<Vec<ControllerSqliteValue>>,
-) -> Result<(), String> {
-    if batch_params.is_empty() {
-        return Ok(());
-    }
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-INSERT INTO sessions (
-    id,
-    project_id,
-    title,
-    title_source,
-    archived,
-    sort_order,
-    created_at,
-    updated_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-ON CONFLICT(id) DO UPDATE SET
-    project_id = excluded.project_id,
-    title = excluded.title,
-    title_source = excluded.title_source,
-    archived = excluded.archived,
-    sort_order = excluded.sort_order,
-    updated_at = excluded.updated_at;
-"#,
-            batch_params,
-        )
-        .await
-        .map_err(|error| format!("写入会话列表失败：{error}"))?;
-
-    Ok(())
-}
-
-/// Soft-archives active sessions missing from the current visible snapshot.
-/// 将当前可见快照中缺失的激活会话软归档。
-async fn archive_missing_sessions(
-    controller: &ControllerRuntimeHandle,
-    existing_active_ids: &BTreeSet<String>,
-    visible_ids: &BTreeSet<String>,
-    _warnings: &mut Vec<String>,
-) -> Result<(), String> {
-    let missing_ids = existing_active_ids
-        .iter()
-        .filter(|session_id| !visible_ids.contains(*session_id))
-        .cloned()
-        .collect::<Vec<_>>();
-
-    if missing_ids.is_empty() {
-        return Ok(());
-    }
-
-    let now = current_unix_millis_text();
-    let params = missing_ids
-        .iter()
-        .cloned()
-        .map(|session_id| {
-            vec![
-                ControllerSqliteValue::String(now.clone()),
-                ControllerSqliteValue::String(session_id),
-            ]
-        })
-        .collect::<Vec<_>>();
-
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "UPDATE sessions SET archived = 1, updated_at = ?1 WHERE id = ?2;",
-            params,
-        )
-        .await
-        .map_err(|error| format!("软归档会话失败：{error}"))?;
-
-    Ok(())
 }
 
 /// Builds one non-fatal warning describing that segmented session persistence lagged behind a successful snapshot save.
@@ -1210,37 +905,18 @@ pub async fn permanently_delete_archived_session(
     session_id: SessionId,
 ) -> Result<(), String> {
     let session_id_text = session_id.to_string();
-    let session_ids = vec![session_id_text.clone()];
-    let project_id = query_persisted_session_summary(&controller, session_id)
-        .await?
-        .and_then(|session| session.project_id);
+    let project_id = list_segmented_session_catalog(&controller.data_root)?
+        .into_iter()
+        .find(|entry| entry.archived && entry.metadata.session_id == session_id_text)
+        .map(|entry| entry.metadata.project_tag);
 
-    if let Some(project_id) = project_id.as_deref() {
+    if let Some(project_id) = project_id {
         delete_segmented_session_directories_for_project_if_present(
             &controller,
-            project_id,
+            &project_id,
             session_id,
         )?;
     }
-
-    delete_session_scoped_rows(
-        &controller,
-        "session_compactions",
-        &session_ids,
-        "删除归档会话压缩检查点失败",
-    )
-    .await?;
-
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(&controller),
-            "DELETE FROM sessions WHERE id = ?1 AND archived != 0;",
-            vec![vec![ControllerSqliteValue::String(session_id_text)]],
-        )
-        .await
-        .map_err(|error| format!("删除归档会话记录失败：{error}"))?;
     Ok(())
 }
 
@@ -1251,43 +927,12 @@ pub async fn permanently_delete_archived_project(
     project_id: String,
     session_ids: Vec<SessionId>,
 ) -> Result<(), String> {
-    let session_id_texts = session_ids
-        .iter()
-        .copied()
-        .map(|session_id| session_id.to_string())
-        .collect::<Vec<_>>();
-
     for session_id in &session_ids {
         delete_segmented_session_directories_for_project_if_present(
             &controller,
             &project_id,
             *session_id,
         )?;
-    }
-
-    delete_session_scoped_rows(
-        &controller,
-        "session_compactions",
-        &session_id_texts,
-        "删除归档项目下的压缩检查点失败",
-    )
-    .await?;
-
-    if !session_id_texts.is_empty() {
-        let session_delete_params = session_id_texts
-            .into_iter()
-            .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
-            .collect::<Vec<_>>();
-        controller
-            .client
-            .execute_sqlite_batch_typed(
-                APP_SPACE_ID,
-                app_sqlite_binding_id(&controller),
-                "DELETE FROM sessions WHERE id = ?1 AND archived != 0;",
-                session_delete_params,
-            )
-            .await
-            .map_err(|error| format!("删除归档项目下的会话记录失败：{error}"))?;
     }
 
     controller
@@ -1301,240 +946,6 @@ pub async fn permanently_delete_archived_project(
         .await
         .map_err(|error| format!("删除归档项目记录失败：{error}"))?;
     Ok(())
-}
-
-/// Replaces all compaction checkpoint rows for the currently visible sessions while leaving archived sessions intact.
-/// 在保留已归档会话数据的前提下替换当前可见会话的全部压缩检查点行。
-async fn replace_session_compactions(
-    controller: &ControllerRuntimeHandle,
-    sessions: &[SessionSummary],
-    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-    archived_sessions: &[SessionSummary],
-    archived_session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-) -> Result<(), String> {
-    let active_session_ids = sessions
-        .iter()
-        .chain(archived_sessions.iter())
-        .filter(|session| {
-            session_compactions.contains_key(&session.id)
-                || archived_session_compactions.contains_key(&session.id)
-        })
-        .map(|session| session.id.to_string())
-        .collect::<Vec<_>>();
-
-    delete_session_scoped_rows(
-        controller,
-        "session_compactions",
-        &active_session_ids,
-        "删除当前可见会话的旧压缩节点失败",
-    )
-    .await?;
-
-    let mut batch_params = Vec::new();
-    push_session_compaction_batch_rows(&mut batch_params, sessions, session_compactions);
-    push_session_compaction_batch_rows(
-        &mut batch_params,
-        archived_sessions,
-        archived_session_compactions,
-    );
-
-    if batch_params.is_empty() {
-        return Ok(());
-    }
-
-    execute_sqlite_batch_safely(
-        controller,
-        "session_compactions",
-        r#"
-INSERT INTO session_compactions (
-    id,
-    session_id,
-    source_until_message_id,
-    source_until_turn_index,
-    context_start_message_id,
-    retained_tail_start_turn_index,
-    summary_message_id,
-    created_at
-) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8);
-"#,
-        batch_params,
-        "写入会话压缩节点失败",
-    )
-    .await?;
-
-    Ok(())
-}
-
-/// Pushes compaction-checkpoint batch rows for one session slice into the shared SQLite batch payload.
-/// 将某个会话切片的压缩检查点批量行推入共享 SQLite 批处理载荷。
-fn push_session_compaction_batch_rows(
-    batch_params: &mut Vec<Vec<ControllerSqliteValue>>,
-    sessions: &[SessionSummary],
-    session_compactions: &BTreeMap<SessionId, Vec<SessionCompactionEntry>>,
-) {
-    for session in sessions {
-        if let Some(compactions) = session_compactions.get(&session.id) {
-            for entry in compactions {
-                batch_params.push(vec![
-                    ControllerSqliteValue::String(entry.id.clone()),
-                    ControllerSqliteValue::String(session.id.to_string()),
-                    optional_sqlite_string(&entry.source_until_message_id),
-                    optional_sqlite_i64(entry.source_until_turn_index),
-                    optional_sqlite_string(&entry.context_start_message_id),
-                    optional_sqlite_i64(entry.retained_tail_start_turn_index),
-                    optional_sqlite_string(&entry.summary_message_id),
-                    ControllerSqliteValue::String(non_empty_timestamp_text(&entry.created_at)),
-                ]);
-            }
-        }
-    }
-}
-
-/// Deletes all rows from one session-scoped table for the provided active session identifiers.
-/// 删除某个会话作用域表中指定激活会话标识对应的全部行。
-async fn delete_session_scoped_rows(
-    controller: &ControllerRuntimeHandle,
-    table_name: &str,
-    session_ids: &[String],
-    error_prefix: &str,
-) -> Result<(), String> {
-    if session_ids.is_empty() {
-        return Ok(());
-    }
-
-    let statement = format!("DELETE FROM {table_name} WHERE session_id = ?1;");
-    let params = session_ids
-        .iter()
-        .cloned()
-        .map(|session_id| vec![ControllerSqliteValue::String(session_id)])
-        .collect::<Vec<_>>();
-
-    execute_sqlite_batch_safely(controller, table_name, &statement, params, error_prefix).await?;
-
-    Ok(())
-}
-
-/// Executes a typed SQLite batch in safe chunks estimated against the full gRPC protobuf frame.
-/// 按完整 gRPC protobuf 帧估算将类型化 SQLite 批处理拆成安全小批执行。
-async fn execute_sqlite_batch_safely(
-    controller: &ControllerRuntimeHandle,
-    table_name: &str,
-    statement: &str,
-    params: Vec<Vec<ControllerSqliteValue>>,
-    error_prefix: &str,
-) -> Result<(), String> {
-    if params.is_empty() {
-        return Ok(());
-    }
-
-    let statement_bytes = estimate_text_frame_bytes(statement);
-    let mut batch_index = 0usize;
-    let mut current_rows: Vec<Vec<ControllerSqliteValue>> = Vec::new();
-    let mut current_estimated_bytes =
-        SQLITE_BATCH_FRAME_OVERHEAD_BYTES.saturating_add(statement_bytes);
-
-    for row in params {
-        let row_estimated_bytes = estimate_sqlite_row_frame_bytes(&row);
-        let row_would_overflow = !current_rows.is_empty()
-            && (current_rows.len() >= SQLITE_BATCH_SAFE_ROW_LIMIT
-                || current_estimated_bytes.saturating_add(row_estimated_bytes)
-                    > SQLITE_BATCH_SAFE_FRAME_TARGET_BYTES);
-
-        if row_would_overflow {
-            batch_index = batch_index.saturating_add(1);
-            execute_sqlite_batch_chunk(
-                controller,
-                table_name,
-                statement,
-                std::mem::take(&mut current_rows),
-                batch_index,
-                current_estimated_bytes,
-                error_prefix,
-            )
-            .await?;
-            current_estimated_bytes =
-                SQLITE_BATCH_FRAME_OVERHEAD_BYTES.saturating_add(statement_bytes);
-        }
-
-        current_estimated_bytes = current_estimated_bytes.saturating_add(row_estimated_bytes);
-        current_rows.push(row);
-    }
-
-    if !current_rows.is_empty() {
-        batch_index = batch_index.saturating_add(1);
-        execute_sqlite_batch_chunk(
-            controller,
-            table_name,
-            statement,
-            current_rows,
-            batch_index,
-            current_estimated_bytes,
-            error_prefix,
-        )
-        .await?;
-    }
-
-    Ok(())
-}
-
-/// Executes one already-sized SQLite batch chunk and reports frame-budget context on failure.
-/// 执行一段已经切好大小的 SQLite 批处理，并在失败时报告帧预算上下文。
-async fn execute_sqlite_batch_chunk(
-    controller: &ControllerRuntimeHandle,
-    table_name: &str,
-    statement: &str,
-    params: Vec<Vec<ControllerSqliteValue>>,
-    batch_index: usize,
-    estimated_bytes: usize,
-    error_prefix: &str,
-) -> Result<(), String> {
-    let row_count = params.len();
-    controller
-        .client
-        .execute_sqlite_batch_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            statement,
-            params,
-        )
-        .await
-        .map_err(|error| {
-            format!(
-                "{error_prefix}：表 {table_name} 第 {batch_index} 批失败，行数 {row_count}，估算完整帧 {estimated_bytes} bytes：{error}"
-            )
-        })?;
-
-    Ok(())
-}
-
-/// Estimates one SQLite row's contribution to the encoded request frame.
-/// 估算一行 SQLite 参数对编码后请求帧的贡献。
-fn estimate_sqlite_row_frame_bytes(row: &[ControllerSqliteValue]) -> usize {
-    SQLITE_ROW_FRAME_OVERHEAD_BYTES
-        + row
-            .iter()
-            .map(estimate_sqlite_value_frame_bytes)
-            .sum::<usize>()
-}
-
-/// Estimates one SQLite scalar value's encoded request-frame contribution.
-/// 估算一个 SQLite 标量值对编码后请求帧的贡献。
-fn estimate_sqlite_value_frame_bytes(value: &ControllerSqliteValue) -> usize {
-    SQLITE_VALUE_FRAME_OVERHEAD_BYTES
-        + match value {
-            ControllerSqliteValue::Int64(_) => 16,
-            ControllerSqliteValue::Float64(_) => 16,
-            ControllerSqliteValue::String(value) => estimate_text_frame_bytes(value),
-            ControllerSqliteValue::Bytes(value) => value.len(),
-            ControllerSqliteValue::Bool(_) => 8,
-            ControllerSqliteValue::Null => 4,
-        }
-}
-
-/// Estimates a text field after JSON/protobuf structural overhead and escaping slack are considered.
-/// 在考虑 JSON/protobuf 结构开销与转义余量后估算文本字段大小。
-fn estimate_text_frame_bytes(value: &str) -> usize {
-    value.len().saturating_mul(2).saturating_add(32)
 }
 
 #[cfg(test)]

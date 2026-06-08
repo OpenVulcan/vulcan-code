@@ -12,9 +12,6 @@ use crate::provider_config::{
 };
 use serde_json::Value;
 use std::path::PathBuf;
-use vulcan_codex_session_port::{
-    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
-};
 use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent,
@@ -23,6 +20,9 @@ use vulcan_core::types::{
 use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_luaskills_prompt::LuaSkillPromptEntry;
 use vulcan_prompt_skills::ResolvedPromptSkill;
+use vulcan_session_boundary::{
+    SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
+};
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
@@ -98,9 +98,9 @@ pub struct ExecutionPreparationRequest {
     /// Session-level VMM configuration captured for the current conversation.
     /// 为当前会话捕获的会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
-    /// Codex-compatible boundary events accepted before this provider execution starts.
-    /// 本次 Provider 执行开始前已经接受的 Codex 兼容边界事件。
-    pub codex_boundary_events: Vec<CodexSessionEvent>,
+    /// session-boundary boundary events accepted before this provider execution starts.
+    /// 本次 Provider 执行开始前已经接受的 会话边界边界事件。
+    pub boundary_events: Vec<SessionBoundaryEvent>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -273,9 +273,9 @@ pub struct ExecutionPreparation {
     /// Effective session-level VMM configuration captured for this run.
     /// 为本次运行捕获的有效会话级 VMM 配置。
     pub session_vmm: VmmConfigLayer,
-    /// Codex-compatible boundary events accepted before this prepared execution starts.
-    /// 本次已准备执行开始前已经接受的 Codex 兼容边界事件。
-    pub codex_boundary_events: Vec<CodexSessionEvent>,
+    /// session-boundary boundary events accepted before this prepared execution starts.
+    /// 本次已准备执行开始前已经接受的 会话边界边界事件。
+    pub boundary_events: Vec<SessionBoundaryEvent>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.
@@ -590,24 +590,27 @@ impl ExecutionRunReport {
         self.error.is_none()
     }
 
-    /// Builds the Codex-compatible final assistant event for this report when output exists.
-    /// 当输出存在时，为当前报告构建 Codex 兼容的最终助手事件。
-    pub fn codex_final_assistant_event(&self, timestamp_ms: u64) -> Option<CodexSessionEvent> {
+    /// Builds the session-boundary final assistant event for this report when output exists.
+    /// 当输出存在时，为当前报告构建 会话边界的最终助手事件。
+    pub fn final_assistant_boundary_event(
+        &self,
+        timestamp_ms: u64,
+    ) -> Option<SessionBoundaryEvent> {
         let preparation = self.preparation.as_ref()?;
-        let boundary_event = preparation.codex_boundary_events.first()?;
+        let boundary_event = preparation.boundary_events.first()?;
         let turn_id = boundary_event.turn_id.clone()?;
         let assistant_output = self.assistant_output.as_ref()?;
         if assistant_output.is_empty() {
             return None;
         }
         Some(
-            CodexSessionEvent::new(
+            SessionBoundaryEvent::new(
                 format!("{}:{turn_id}:assistant-final", self.session_id),
                 boundary_event.thread_id,
                 0,
-                CodexSessionEventKind::AgentMessage,
-                CodexEventScope::Turn,
-                CodexEventVisibility::Visible,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Visible,
                 timestamp_ms,
             )
             .with_turn_id(turn_id)
@@ -619,27 +622,27 @@ impl ExecutionRunReport {
         )
     }
 
-    /// Builds the Codex-compatible terminal turn event for this report when boundary data exists.
-    /// 当边界数据存在时，为当前报告构建 Codex 兼容的终态轮次事件。
-    pub fn codex_turn_completed_event(&self, timestamp_ms: u64) -> Option<CodexSessionEvent> {
+    /// Builds the session-boundary terminal turn event for this report when boundary data exists.
+    /// 当边界数据存在时，为当前报告构建 会话边界的终态轮次事件。
+    pub fn turn_completed_boundary_event(&self, timestamp_ms: u64) -> Option<SessionBoundaryEvent> {
         let preparation = self.preparation.as_ref()?;
-        let boundary_event = preparation.codex_boundary_events.first()?;
+        let boundary_event = preparation.boundary_events.first()?;
         let turn_id = boundary_event.turn_id.clone()?;
         let sequence = preparation
-            .codex_boundary_events
+            .boundary_events
             .iter()
             .map(|event| event.sequence)
             .max()
             .unwrap_or_default()
             .saturating_add(1);
         Some(
-            CodexSessionEvent::new(
+            SessionBoundaryEvent::new(
                 format!("{}:{turn_id}:turn-completed", self.session_id),
                 boundary_event.thread_id,
                 sequence,
-                CodexSessionEventKind::TurnCompleted,
-                CodexEventScope::Turn,
-                CodexEventVisibility::Hidden,
+                SessionBoundaryEventKind::TurnCompleted,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Hidden,
                 timestamp_ms,
             )
             .with_turn_id(turn_id)

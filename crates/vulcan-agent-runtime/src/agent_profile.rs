@@ -700,7 +700,6 @@ Review code carefully.
         assert_eq!(profile.tool_policy.as_deref(), Some("analysis-safe"));
         assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
         assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
-        assert_eq!(profile.runtime_policy.search_projection_enabled, None);
         assert_eq!(
             profile.runtime_policy.database_projection_enabled,
             Some(true)

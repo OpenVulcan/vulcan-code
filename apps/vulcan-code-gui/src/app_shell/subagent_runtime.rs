@@ -74,6 +74,20 @@ impl VulcanWorkbench {
         .flatten()?;
         Some(SegmentedTaskSessionStore::new(session_dir))
     }
+    /// Loads one subagent task panel state from segmented storage by task id without scanning sibling task sessions.
+    /// 通过任务标识从分段存储加载单个子代理面板状态，避免扫描同级子任务会话。
+    fn segmented_subagent_task_panel_state_for_task(
+        &self,
+        parent_session_id: SessionId,
+        task_id: SessionId,
+    ) -> Option<SubagentTaskPanelState> {
+        let store = self.task_session_store_for_parent_session(parent_session_id)?;
+        subagent_task_panel_state_detail_from_segmented_task_session_store(
+            &store,
+            vulcan_session_core::SessionNodeId::from(task_id),
+        )
+        .filter(|state| state.parent_session_id == parent_session_id)
+    }
     /// Inserts or updates one cached subagent task panel state under its owning parent session.
     /// 将一条缓存子代理任务面板状态写入或更新到所属父会话之下。
     pub(super) fn upsert_subagent_task_panel_state(&mut self, state: SubagentTaskPanelState) {
@@ -90,6 +104,9 @@ impl VulcanWorkbench {
         &mut self,
         root_parent_session_id: SessionId,
     ) {
+        if !self.should_refresh_subagent_task_tree_cache(root_parent_session_id) {
+            return;
+        }
         let mut seen_parent_ids = BTreeSet::new();
         let mut pending_parent_ids = vec![root_parent_session_id];
         while let Some(parent_session_id) = pending_parent_ids.pop() {
@@ -110,6 +127,32 @@ impl VulcanWorkbench {
                 .unwrap_or_default();
             pending_parent_ids.extend(child_task_ids);
         }
+    }
+
+    /// Returns whether the subagent tree needs a segmented-store refresh for a hot-path decision.
+    /// 返回热路径决策是否需要刷新分段存储中的子代理树。
+    fn should_refresh_subagent_task_tree_cache(&self, root_parent_session_id: SessionId) -> bool {
+        if self
+            .session_subagent_navigation_rounds
+            .contains(&root_parent_session_id)
+        {
+            return true;
+        }
+        if self.active_subagent_panel.is_some_and(|selection| {
+            selection.parent_session_id == root_parent_session_id
+                || selection.task_id == root_parent_session_id
+        }) {
+            return true;
+        }
+        self.session_has_cached_running_subagent_tasks(root_parent_session_id)
+    }
+
+    /// Returns whether cached live state still reports running subagents without reading segmented storage.
+    /// 不读取分段存储，返回缓存实时状态是否仍报告存在运行中的子代理。
+    fn session_has_cached_running_subagent_tasks(&self, root_parent_session_id: SessionId) -> bool {
+        !self
+            .running_subagent_task_states_for_tree(root_parent_session_id)
+            .is_empty()
     }
 
     /// Returns running subagent tasks after first refreshing the shared segmented TaskSession tree.
@@ -213,8 +256,8 @@ impl VulcanWorkbench {
             || self.session_runtime_events.contains_key(&task_id)
             || self.session_agent_view_documents.contains_key(&task_id)
     }
-    /// Finds the most suitable parent task-tool call message for one delegate payload so the visible transcript card can inherit task-session metadata.
-    /// 为某份委派 payload 找到最合适的父 task 工具调用消息，使可见转录卡片能够继承 task-session 元数据。
+    /// Finds the most suitable parent spawn-agent call message for one delegate payload so the visible transcript card can inherit task-session metadata.
+    /// 为某份委派 payload 找到最合适的父 spawn_agent 调用消息，使可见转录卡片能够继承 task-session 元数据。
     pub(super) fn find_task_session_tool_message_id_for_payload(
         &self,
         session_id: SessionId,
@@ -270,8 +313,8 @@ impl VulcanWorkbench {
         self.refresh_session_agent_view_buffers(session_id);
         true
     }
-    /// Links one delegate task-session payload back onto the visible parent task card so running cards gain the live child-session identifier needed for panel navigation.
-    /// 把一份委派 task-session payload 反向挂回可见父 task 卡片，让运行中卡片获得进入子面板所需的实时子会话标识。
+    /// Links one delegate task-session payload back onto the visible parent spawn-agent card so running cards gain the live child-session identifier needed for panel navigation.
+    /// 把一份委派 task-session payload 反向挂回可见父 spawn_agent 卡片，让运行中卡片获得进入子面板所需的实时子会话标识。
     pub(super) fn attach_task_session_metadata_to_parent_tool_message(
         &mut self,
         session_id: SessionId,
@@ -470,7 +513,14 @@ impl VulcanWorkbench {
         parent_session_id: SessionId,
         task_id: SessionId,
     ) -> bool {
-        self.rebuild_subagent_task_cache_for_session(parent_session_id);
+        if self
+            .subagent_task_panel_state(parent_session_id, task_id)
+            .is_none()
+            && let Some(state) =
+                self.segmented_subagent_task_panel_state_for_task(parent_session_id, task_id)
+        {
+            self.upsert_subagent_task_panel_state(state);
+        }
         let Some(state) = self.subagent_task_panel_state(parent_session_id, task_id) else {
             return false;
         };

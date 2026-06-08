@@ -1227,7 +1227,7 @@ fn pending_prompt_source_event_kind(source: PendingSessionPromptSource) -> &'sta
     match source {
         PendingSessionPromptSource::UserFollowup => "user_followup",
         PendingSessionPromptSource::UserInterrupt => "user_interrupt",
-        PendingSessionPromptSource::SubagentCallback => "subagent_callback",
+        PendingSessionPromptSource::SessionMailbox => "session_mailbox",
     }
 }
 

@@ -11,7 +11,7 @@ use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use vulcan_codex_session_port::codex_events_to_vulcan_conversation_state;
+use vulcan_session_boundary::boundary_events_to_vulcan_conversation_state;
 
 /// Lightweight persisted session locator row used to resolve segmented session directories.
 /// 用于解析分段会话目录的轻量持久化会话定位行。
@@ -43,9 +43,9 @@ struct SegmentedWindowMessages {
     /// Full projected message window used by runtime-state hydration.
     /// 供运行态水合使用的完整投影消息窗口。
     full_messages: Vec<SessionMessageEntry>,
-    /// Canonical Codex-derived conversation state when the window came from Codex boundary events.
-    /// 当窗口来自 Codex 边界事件时对应的规范 Codex 投影会话状态。
-    codex_conversation_state: Option<SessionConversationState>,
+    /// Canonical session-boundary-derived conversation state when the window came from session boundary events.
+    /// 当窗口来自 会话边界事件时对应的规范 会话边界投影会话状态。
+    boundary_conversation_state: Option<SessionConversationState>,
 }
 
 /// Lazily loads the recent transcript window and lightweight runtime state for one session.
@@ -80,7 +80,7 @@ pub async fn load_session_hydration_snapshot(
         mut tool_detail_messages,
         earliest_ordinal,
         full_messages,
-        codex_conversation_state,
+        boundary_conversation_state,
     ) = segmented_window
         .map(|window| {
             (
@@ -89,7 +89,7 @@ pub async fn load_session_hydration_snapshot(
                 window.tool_detail_messages,
                 window.earliest_ordinal,
                 window.full_messages,
-                window.codex_conversation_state,
+                window.boundary_conversation_state,
             )
         })
         .unwrap_or_else(|| (false, Vec::new(), Vec::new(), None, Vec::new(), None));
@@ -101,10 +101,10 @@ pub async fn load_session_hydration_snapshot(
             }
         }
         .map(|mut runtime_state| {
-            if let Some(codex_conversation_state) = codex_conversation_state {
-                apply_codex_conversation_projection_to_runtime_state(
+            if let Some(boundary_conversation_state) = boundary_conversation_state {
+                apply_boundary_conversation_projection_to_runtime_state(
                     &mut runtime_state,
-                    codex_conversation_state,
+                    boundary_conversation_state,
                 );
             }
             runtime_state
@@ -128,7 +128,7 @@ pub async fn load_session_hydration_snapshot(
 
 /// Repairs duplicate canonical record ids inside one loaded conversation state so older broken sessions can recover during hydration.
 /// 修复单份已加载会话状态中的重复规范记录标识，确保旧的损坏会话能在水合阶段自动恢复。
-fn repair_duplicate_conversation_record_ids(
+pub(super) fn repair_duplicate_conversation_record_ids(
     session_id: SessionId,
     conversation_state: &mut SessionConversationState,
 ) -> bool {
@@ -277,7 +277,7 @@ fn load_segmented_window_messages(
     };
     let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
     if let Some(window) =
-        load_segmented_codex_window_messages(&session_dir, before_seq, requested_limit)?
+        load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
     {
         return Ok(Some(window));
     }
@@ -311,13 +311,13 @@ fn load_segmented_window_messages(
         earliest_ordinal,
         has_more_history: turn_window.has_more_history,
         full_messages: messages,
-        codex_conversation_state: None,
+        boundary_conversation_state: None,
     }))
 }
 
-/// Loads a recent display window from Codex boundary events when the session has been migrated.
-/// 当会话已经迁移时，从 Codex 边界事件加载最近展示窗口。
-fn load_segmented_codex_window_messages(
+/// Loads a recent display window from session boundary events when the session has been migrated.
+/// 当会话已经迁移时，从 会话边界事件加载最近展示窗口。
+fn load_segmented_boundary_window_messages(
     session_dir: &std::path::Path,
     before_seq: Option<u64>,
     requested_limit: usize,
@@ -332,14 +332,14 @@ fn load_segmented_codex_window_messages(
             .is_some_and(|line| line.seq > 0 || before_seq.is_some());
     let boundary_lines = raw_lines
         .into_iter()
-        .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+        .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
         .collect::<Vec<_>>();
-    codex_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
+    session_boundary_lines_to_window_messages(&boundary_lines, has_more_history)
 }
 
-/// Projects Codex boundary JSONL lines into the existing segmented transcript window shape.
-/// 将 Codex 边界 JSONL 行投影为现有分段转录窗口结构。
-fn codex_boundary_lines_to_window_messages(
+/// Projects session boundary JSONL lines into the existing segmented transcript window shape.
+/// 将 会话边界 JSONL 行投影为现有分段转录窗口结构。
+fn session_boundary_lines_to_window_messages(
     lines: &[self::segmented_session_store::SegmentedSessionEventLine],
     has_more_history: bool,
 ) -> Result<Option<SegmentedWindowMessages>, String> {
@@ -348,12 +348,12 @@ fn codex_boundary_lines_to_window_messages(
     }
     let events = lines
         .iter()
-        .map(super::codex_boundary_event_from_segment_line)
+        .map(super::session_boundary_event_from_segment_line)
         .collect::<Result<Vec<_>, _>>()?;
     if events.is_empty() {
         return Ok(None);
     }
-    let projection = codex_events_to_vulcan_conversation_state(&events);
+    let projection = boundary_events_to_vulcan_conversation_state(&events);
     let messages = conversation_state_to_session_messages(&projection.conversation_state);
     if messages.is_empty() {
         return Ok(None);
@@ -375,18 +375,18 @@ fn codex_boundary_lines_to_window_messages(
         earliest_ordinal: lines.first().and_then(|line| i64::try_from(line.seq).ok()),
         has_more_history,
         full_messages: messages,
-        codex_conversation_state: Some(projection.conversation_state),
+        boundary_conversation_state: Some(projection.conversation_state),
     }))
 }
 
-/// Applies Codex-projected transcript records while preserving non-transcript runtime continuation state.
-/// 应用 Codex 投影出的转录记录，同时保留非转录运行时 continuation 状态。
-fn apply_codex_conversation_projection_to_runtime_state(
+/// Applies session-boundary transcript records while preserving non-transcript runtime continuation state.
+/// 应用 会话边界投影出的转录记录，同时保留非转录运行时 continuation 状态。
+fn apply_boundary_conversation_projection_to_runtime_state(
     runtime_state: &mut SessionRuntimeStateEntry,
-    codex_conversation_state: SessionConversationState,
+    boundary_conversation_state: SessionConversationState,
 ) {
-    runtime_state.conversation_state.messages = codex_conversation_state.messages;
-    runtime_state.conversation_state.records = codex_conversation_state.records;
+    runtime_state.conversation_state.messages = boundary_conversation_state.messages;
+    runtime_state.conversation_state.records = boundary_conversation_state.records;
 }
 
 /// Loads one segmented tool-detail page when the new session directory exists.
@@ -490,6 +490,7 @@ fn load_segmented_runtime_state(
     }
     let _ =
         repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
+    let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
     Ok(Some(runtime_state))
 }
 
@@ -649,34 +650,6 @@ async fn query_session_runtime_state_row(
     Ok(None)
 }
 
-/// Queries compaction checkpoints from the SQLite mirror used by the new segmented loader.
-/// 从新分段加载器使用的 SQLite 镜像查询压缩检查点。
-async fn query_session_compaction_entries_for_load(
-    controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-) -> Result<Vec<SessionCompactionEntry>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT c.id, c.source_until_message_id, c.source_until_turn_index, c.context_start_message_id, c.retained_tail_start_turn_index, c.summary_message_id, c.created_at
-FROM session_compactions AS c
-WHERE c.session_id = ?1
-ORDER BY c.created_at ASC;
-"#,
-            vec![ControllerSqliteValue::String(session_id.to_string())],
-        )
-        .await
-        .map_err(|error| format!("查询分段会话压缩检查点失败：{error}"))?;
-
-    Ok(decode_query_rows::<StoredCompactionRow>(&result.json_data)?
-        .into_iter()
-        .map(stored_compaction_row_to_entry)
-        .collect())
-}
-
 /// Restores the hydrated runtime state for one session from the segmented checkpoint plus the canonical event stream.
 /// 通过分段检查点和规范事件流为单个会话恢复水合后的运行时状态。
 async fn hydrate_session_runtime_state(
@@ -800,8 +773,9 @@ mod tests {
     use super::*;
     use crate::conversation_protocol::SessionConversationRecord;
     use serde_json::json;
-    use vulcan_codex_session_port::{
-        CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
+    use vulcan_context::SessionMessageKind;
+    use vulcan_session_boundary::{
+        SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
     };
     use vulcan_session_core::SessionNodeId;
 
@@ -825,26 +799,26 @@ mod tests {
         }
     }
 
-    /// Builds one persisted Codex boundary line for session-load regression tests.
-    /// 为会话加载回归测试构建一条已持久化 Codex 边界行。
-    fn codex_boundary_line(
+    /// Builds one persisted session boundary line for session-load regression tests.
+    /// 为会话加载回归测试构建一条已持久化 会话边界行。
+    fn session_boundary_line(
         seq: u64,
         thread_id: SessionNodeId,
-        kind: CodexSessionEventKind,
-        visibility: CodexEventVisibility,
+        kind: SessionBoundaryEventKind,
+        visibility: SessionEventVisibility,
         text: &str,
     ) -> super::super::segmented_session_store::SegmentedSessionEventLine {
         super::super::segmented_session_store::SegmentedSessionEventLine {
             seq,
             timestamp: (1000 + seq).to_string(),
-            kind: SegmentedSessionEventKind::CodexBoundary,
+            kind: SegmentedSessionEventKind::SessionBoundary,
             payload: json!({
                 "event_id": format!("event-{seq}"),
                 "thread_id": thread_id,
                 "turn_id": "turn-1",
                 "item_id": serde_json::Value::Null,
                 "kind": kind,
-                "scope": CodexEventScope::Turn,
+                "scope": SessionEventScope::Turn,
                 "visibility": visibility,
                 "sequence": seq,
                 "payload": { "text": text },
@@ -852,46 +826,46 @@ mod tests {
         }
     }
 
-    /// Verifies Codex boundary events become the primary hydrated transcript source.
-    /// 验证 Codex 边界事件会成为水合转录正文的首要来源。
+    /// Verifies session boundary events become the primary hydrated transcript source.
+    /// 验证 会话边界事件会成为水合转录正文的首要来源。
     #[test]
-    fn codex_boundary_window_projects_visible_transcript() {
+    fn session_boundary_window_projects_visible_transcript() {
         let thread_id = SessionNodeId::new_v4();
-        let window = codex_boundary_lines_to_window_messages(
+        let window = session_boundary_lines_to_window_messages(
             &[
-                codex_boundary_line(
+                session_boundary_line(
                     1,
                     thread_id,
-                    CodexSessionEventKind::UserInput,
-                    CodexEventVisibility::Visible,
+                    SessionBoundaryEventKind::UserInput,
+                    SessionEventVisibility::Visible,
                     "用户输入",
                 ),
-                codex_boundary_line(
+                session_boundary_line(
                     2,
                     thread_id,
-                    CodexSessionEventKind::AgentMessage,
-                    CodexEventVisibility::Visible,
+                    SessionBoundaryEventKind::AgentMessage,
+                    SessionEventVisibility::Visible,
                     "助手输出",
                 ),
             ],
             false,
         )
-        .expect("project codex boundary")
+        .expect("project session boundary")
         .expect("visible transcript");
 
         assert_eq!(window.messages.len(), 2);
         assert_eq!(window.messages[0].body, "用户输入");
         assert_eq!(window.messages[1].body, "助手输出");
         assert_eq!(window.earliest_ordinal, Some(1));
-        assert!(window.codex_conversation_state.is_some());
+        assert!(window.boundary_conversation_state.is_some());
     }
 
-    /// Verifies archived and restored session directories still hydrate display text from Codex boundary events.
-    /// 验证归档与恢复后的会话目录仍然从 Codex 边界事件水合显示正文。
+    /// Verifies archived and restored session directories still hydrate display text from session boundary events.
+    /// 验证归档与恢复后的会话目录仍然从 会话边界事件水合显示正文。
     #[test]
-    fn codex_boundary_archive_restore_keeps_display_projection() {
+    fn session_boundary_archive_restore_keeps_display_projection() {
         let root = std::env::temp_dir().join(format!(
-            "vulcan-codex-boundary-archive-restore-test-{}",
+            "vulcan-session-boundary-archive-restore-test-{}",
             uuid::Uuid::new_v4()
         ));
         let session_id = SessionId::from_u128(7005);
@@ -911,34 +885,34 @@ mod tests {
             super::super::segmented_session_store::create_segmented_session(&root, request.clone())
                 .expect("create segmented session");
         let boundary_events = vec![
-            CodexSessionEvent::new(
+            SessionBoundaryEvent::new(
                 "turn-1-user",
                 thread_id,
                 0,
-                CodexSessionEventKind::UserInput,
-                CodexEventScope::Turn,
-                CodexEventVisibility::Visible,
+                SessionBoundaryEventKind::UserInput,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Visible,
                 101,
             )
             .with_turn_id("turn-1")
             .with_payload(json!({ "text": "用户归档前输入" })),
-            CodexSessionEvent::new(
+            SessionBoundaryEvent::new(
                 "turn-1-agent",
                 thread_id,
                 0,
-                CodexSessionEventKind::AgentMessage,
-                CodexEventScope::Turn,
-                CodexEventVisibility::Visible,
+                SessionBoundaryEventKind::AgentMessage,
+                SessionEventScope::Turn,
+                SessionEventVisibility::Visible,
                 102,
             )
             .with_turn_id("turn-1")
             .with_payload(json!({ "text": "助手归档后输出" })),
         ];
-        super::super::segmented_session_store::append_segmented_codex_boundary_events(
+        super::super::segmented_session_store::append_segmented_boundary_events(
             &session_dir,
             &boundary_events,
         )
-        .expect("append codex boundary events");
+        .expect("append session boundary events");
 
         let archived_dir = super::super::segmented_session_store::archive_segmented_session_by_id(
             &root,
@@ -952,10 +926,10 @@ mod tests {
             read_segmented_session_event_window(&archived_dir, None, 8).expect("read archived");
         let archived_boundary_lines = archived_lines
             .into_iter()
-            .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+            .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
             .collect::<Vec<_>>();
         let archived_window =
-            codex_boundary_lines_to_window_messages(&archived_boundary_lines, false)
+            session_boundary_lines_to_window_messages(&archived_boundary_lines, false)
                 .expect("project archived boundary")
                 .expect("archived projection");
         assert_eq!(archived_window.messages[0].body, "用户归档前输入");
@@ -973,10 +947,10 @@ mod tests {
             read_segmented_session_event_window(&restored_dir, None, 8).expect("read restored");
         let restored_boundary_lines = restored_lines
             .into_iter()
-            .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+            .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
             .collect::<Vec<_>>();
         let restored_window =
-            codex_boundary_lines_to_window_messages(&restored_boundary_lines, false)
+            session_boundary_lines_to_window_messages(&restored_boundary_lines, false)
                 .expect("project restored boundary")
                 .expect("restored projection");
         assert_eq!(restored_window.messages[0].body, "用户归档前输入");
@@ -985,10 +959,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Verifies Codex projection overwrites transcript records while preserving runtime metadata.
-    /// 验证 Codex 投影会覆盖转录正文，同时保留运行时元数据。
+    /// Verifies session boundary projection overwrites transcript records while preserving runtime metadata.
+    /// 验证 会话边界投影会覆盖转录正文，同时保留运行时元数据。
     #[test]
-    fn codex_projection_replaces_runtime_transcript_only() {
+    fn boundary_projection_replaces_runtime_transcript_only() {
         let mut runtime_state = SessionRuntimeStateEntry {
             active_provider_id: Some(String::from("provider-a")),
             ..SessionRuntimeStateEntry::default()
@@ -1000,14 +974,14 @@ mod tests {
                 SessionMessageRecordKind::Transcript,
                 "旧正文",
             )]);
-        let codex_state = conversation_state_from_session_messages(&[test_message(
-            "codex-assistant",
+        let boundary_state = conversation_state_from_session_messages(&[test_message(
+            "session-assistant",
             SessionMessageKind::Assistant,
             SessionMessageRecordKind::AssistantOutput,
-            "Codex 正文",
+            "会话边界正文",
         )]);
 
-        apply_codex_conversation_projection_to_runtime_state(&mut runtime_state, codex_state);
+        apply_boundary_conversation_projection_to_runtime_state(&mut runtime_state, boundary_state);
 
         assert_eq!(
             runtime_state.active_provider_id.as_deref(),
@@ -1016,7 +990,7 @@ mod tests {
         assert_eq!(runtime_state.conversation_state.records.len(), 1);
         assert_eq!(
             runtime_state.conversation_state.records[0].body,
-            "Codex 正文"
+            "会话边界正文"
         );
     }
 

@@ -8,14 +8,14 @@ use std::{
 
 use serde_json::Value;
 use time::OffsetDateTime;
-use vulcan_codex_session_port::{
-    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
-};
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_hooks::HookRegistrationSnapshot;
 use vulcan_provider_config::config::{
     AiToolKind, PersistedAiToolConfiguration, ProjectVulcanCodeConfigurationFile,
     ReasoningEffortLevel,
+};
+use vulcan_session_boundary::{
+    SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
 };
 use vulcan_session_core::SessionNodeId;
 use vulcan_vmm::{VmmConfigDiagnostic, VmmEffectiveConfig};
@@ -103,9 +103,9 @@ pub struct SharedPromptTurnStart {
     /// AI capability target order overrides requested by this prompt turn.
     /// 本次提示词回合请求的 AI 能力目标顺序覆盖。
     pub ai_capability_target_order_overrides: BTreeMap<AiToolKind, Vec<String>>,
-    /// Codex-compatible boundary events produced when this prompt turn is accepted.
-    /// 当前提示词回合被接受时生成的 Codex 兼容边界事件。
-    pub codex_boundary_events: Vec<CodexSessionEvent>,
+    /// session-boundary boundary events produced when this prompt turn is accepted.
+    /// 当前提示词回合被接受时生成的 会话边界边界事件。
+    pub boundary_events: Vec<SessionBoundaryEvent>,
 }
 
 impl fmt::Debug for SharedPromptTurnStart {
@@ -132,7 +132,7 @@ impl fmt::Debug for SharedPromptTurnStart {
                 "ai_capability_target_order_overrides",
                 &self.ai_capability_target_order_overrides,
             )
-            .field("codex_boundary_events", &self.codex_boundary_events.len())
+            .field("boundary_events", &self.boundary_events.len())
             .finish_non_exhaustive()
     }
 }
@@ -393,7 +393,9 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
                 crate::conversation_protocol::conversation_state_from_session_messages(messages);
         }
     }
-    if input.append_canonical_user_message && input.append_visible_user_prompt_record {
+    let append_visible_user_prompt_record =
+        input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
+    if input.append_canonical_user_message && append_visible_user_prompt_record {
         append_shared_user_prompt_record_with_attachments(
             runtime_state,
             input.session_id,
@@ -437,7 +439,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             .apply_inserts_for_turn(injection_ops, &now, Some(&precheck_turn_id));
         runtime_state.updated_at = now.clone();
     }
-    let codex_boundary_events = codex_prompt_turn_boundary_events(
+    let boundary_events = prompt_turn_boundary_events(
         &input,
         &precheck_turn_id,
         &sanitized_prompt,
@@ -457,33 +459,35 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         disabled_ai_capability_kinds: input.disabled_ai_capability_kinds,
         disabled_ai_capability_target_selectors: input.disabled_ai_capability_target_selectors,
         ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
-        codex_boundary_events,
+        boundary_events,
     })
 }
 
-/// Builds Codex-compatible prompt-turn boundary events from the shared reducer input.
-/// 从共享归约器输入构建 Codex 兼容的提示词轮次边界事件。
-fn codex_prompt_turn_boundary_events(
+/// Builds session-boundary prompt-turn boundary events from the shared reducer input.
+/// 从共享归约器输入构建 会话边界的提示词轮次边界事件。
+fn prompt_turn_boundary_events(
     input: &SharedPromptTurnRuntimeBeginInput<'_>,
     turn_id: &str,
     prompt: &str,
     attachments: &[ConversationAttachment],
     now: &str,
-) -> Vec<CodexSessionEvent> {
+) -> Vec<SessionBoundaryEvent> {
     let thread_id = SessionNodeId::from(input.session_id);
     let timestamp_ms = unix_millis_text_to_u64(now);
-    let user_input_visibility = if input.append_visible_user_prompt_record {
-        CodexEventVisibility::Visible
+    let append_visible_user_prompt_record =
+        input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
+    let user_input_visibility = if append_visible_user_prompt_record {
+        SessionEventVisibility::Visible
     } else {
-        CodexEventVisibility::Hidden
+        SessionEventVisibility::Hidden
     };
-    let turn_started = CodexSessionEvent::new(
+    let turn_started = SessionBoundaryEvent::new(
         format!("{}:{turn_id}:turn-started", input.session_id),
         thread_id,
         0,
-        CodexSessionEventKind::TurnStarted,
-        CodexEventScope::Turn,
-        CodexEventVisibility::Hidden,
+        SessionBoundaryEventKind::TurnStarted,
+        SessionEventScope::Turn,
+        SessionEventVisibility::Hidden,
         timestamp_ms,
     )
     .with_turn_id(turn_id.to_string())
@@ -494,12 +498,12 @@ fn codex_prompt_turn_boundary_events(
         "workspace_path": input.workspace_path,
         "session_title": input.session_title,
     }));
-    let user_input = CodexSessionEvent::new(
+    let user_input = SessionBoundaryEvent::new(
         format!("{}:{turn_id}:user-input", input.session_id),
         thread_id,
         1,
-        CodexSessionEventKind::UserInput,
-        CodexEventScope::Turn,
+        SessionBoundaryEventKind::UserInput,
+        SessionEventScope::Turn,
         user_input_visibility,
         timestamp_ms,
     )
@@ -513,8 +517,8 @@ fn codex_prompt_turn_boundary_events(
     vec![turn_started, user_input]
 }
 
-/// Parses Unix-milliseconds text into the Codex event timestamp domain.
-/// 将 Unix 毫秒文本解析到 Codex 事件时间戳域。
+/// Parses Unix-milliseconds text into the session boundary event timestamp domain.
+/// 将 Unix 毫秒文本解析到 会话边界事件时间戳域。
 fn unix_millis_text_to_u64(value: &str) -> u64 {
     value.trim().parse::<u64>().unwrap_or_default()
 }
@@ -683,7 +687,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         system_prompt_hook_blocks,
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
-        codex_boundary_events: input.start.codex_boundary_events.clone(),
+        boundary_events: input.start.boundary_events.clone(),
     };
     Ok(SharedPromptTurnContinuation {
         request,
@@ -929,8 +933,8 @@ mod tests {
 
     use super::*;
 
-    /// Begins one user-authored prompt turn used by Codex boundary tests.
-    /// 启动一条供 Codex 边界测试使用的用户提示词回合。
+    /// Begins one user-authored prompt turn used by session boundary tests.
+    /// 启动一条供 会话边界测试使用的用户提示词回合。
     fn begin_user_prompt(runtime_state: &mut SessionRuntimeStateEntry) -> SharedPromptTurnStart {
         let mut hook_runtime = ConversationHookRuntime::new();
         begin_shared_prompt_turn_with_runtime_state(
@@ -958,33 +962,74 @@ mod tests {
         .expect("user prompt should start")
     }
 
-    /// Verifies user prompt begins expose visible Codex user-input boundary events.
-    /// 验证用户提示词开始时会暴露可见的 Codex 用户输入边界事件。
+    /// Verifies user prompt begins expose visible session user-input boundary events.
+    /// 验证用户提示词开始时会暴露可见的 会话用户输入边界事件。
     #[test]
-    fn user_prompt_begin_exports_visible_codex_boundary_events() {
+    fn user_prompt_begin_exports_visible_boundary_events() {
         let mut runtime_state = SessionRuntimeStateEntry::default();
         let start = begin_user_prompt(&mut runtime_state);
 
-        assert_eq!(start.codex_boundary_events.len(), 2);
+        assert_eq!(start.boundary_events.len(), 2);
         assert_eq!(
-            start.codex_boundary_events[0].kind,
-            CodexSessionEventKind::TurnStarted
+            start.boundary_events[0].kind,
+            SessionBoundaryEventKind::TurnStarted
         );
         assert_eq!(
-            start.codex_boundary_events[0].visibility,
-            CodexEventVisibility::Hidden
+            start.boundary_events[0].visibility,
+            SessionEventVisibility::Hidden
         );
         assert_eq!(
-            start.codex_boundary_events[1].kind,
-            CodexSessionEventKind::UserInput
+            start.boundary_events[1].kind,
+            SessionBoundaryEventKind::UserInput
         );
         assert_eq!(
-            start.codex_boundary_events[1].visibility,
-            CodexEventVisibility::Visible
+            start.boundary_events[1].visibility,
+            SessionEventVisibility::Visible
         );
         assert_eq!(
-            start.codex_boundary_events[1].payload["source"],
+            start.boundary_events[1].payload["source"],
             serde_json::json!("user_followup")
+        );
+    }
+
+    /// Verifies session-mailbox turns cannot accidentally expose visible user boundary or transcript records.
+    /// 验证会话 mailbox 回合不会意外暴露可见用户边界事件或转录记录。
+    #[test]
+    fn session_mailbox_begin_keeps_user_input_hidden_even_if_visibility_flag_is_true() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let mut hook_runtime = ConversationHookRuntime::new();
+        let start = begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id: SessionId::from_u128(903),
+                session_title: "主会话",
+                workspace_path: "D:/workspace",
+                prompt_entry_id: String::from("mailbox-entry"),
+                prompt: "<subagent_mailbox_event>\n{}\n</subagent_mailbox_event>",
+                attachments: Vec::new(),
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::SessionMailbox,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: Some(String::from("project-a")),
+                prior_session_messages: None,
+            },
+        )
+        .expect("mailbox prompt should start");
+
+        assert!(runtime_state.conversation_state.records.is_empty());
+        assert_eq!(
+            start.boundary_events[1].visibility,
+            SessionEventVisibility::Hidden
+        );
+        assert_eq!(
+            start.boundary_events[1].payload["source"],
+            serde_json::json!("session_mailbox")
         );
     }
 }

@@ -1451,59 +1451,6 @@ pub(super) enum Message {
     /// Requests loading one older transcript page for the visible root session.
     /// 请求为当前可见根会话加载一页更早转录历史。
     LoadOlderSessionHistoryRequested(SessionId),
-    /// Opens the dedicated workspace-history search modal from the left task drawer trigger.
-    /// 通过左侧任务抽屉触发器打开专用工作台历史搜索弹窗。
-    OpenWorkspaceHistorySearchPanel,
-    /// Closes the dedicated workspace-history search modal without clearing the current query state.
-    /// 在不清空当前查询状态的前提下关闭专用工作台历史搜索弹窗。
-    CloseWorkspaceHistorySearchPanel,
-    /// Updates the current left-panel workspace-history query text.
-    /// 更新左侧工作台历史查询文本。
-    WorkspaceHistorySearchQueryChanged(String),
-    /// Requests running one workspace-scoped BM25 history search.
-    /// 请求执行一次工作区级 BM25 历史搜索。
-    SubmitWorkspaceHistorySearch,
-    /// Requests loading the next page of the current workspace-history search result set.
-    /// 请求继续加载当前工作台历史搜索结果的下一页。
-    LoadMoreWorkspaceHistorySearchResults,
-    /// Applies the completed workspace-scoped BM25 history search result page.
-    /// 应用已完成的工作区级 BM25 历史搜索结果页。
-    WorkspaceHistorySearchLoaded {
-        /// Whether the loaded page should be appended to the current result set.
-        /// 本次加载完成的结果页是否应追加到当前结果集中。
-        append: bool,
-        /// Final page payload or the failure returned by the controller-backed search task.
-        /// 控制器承载搜索任务返回的最终结果页或失败信息。
-        result: Result<WorkspaceHistorySearchPage, String>,
-    },
-    /// Toggles the project-scope dropdown used by the left search panel.
-    /// 切换左侧搜索面板使用的项目范围下拉区。
-    ToggleWorkspaceHistorySearchProjectPicker,
-    /// Updates the project keyword filter shown inside the left search panel scope dropdown.
-    /// 更新左侧搜索面板范围下拉区中的项目关键字过滤文本。
-    WorkspaceHistorySearchProjectFilterChanged(String),
-    /// Applies one concrete workspace-history search scope chosen from the left dropdown.
-    /// 应用从左侧下拉区选择的一条具体工作台历史搜索范围。
-    WorkspaceHistorySearchScopeSelected(WorkspaceHistorySearchScope),
-    /// Confirms the currently highlighted project-scope filter selection.
-    /// 确认当前项目范围过滤列表中的高亮选择。
-    ConfirmWorkspaceHistorySearchScopeSelection,
-    /// Opens one workspace-history search hit and navigates the transcript to the matched message.
-    /// 打开一条工作台历史搜索命中并将转录定位到匹配消息。
-    OpenWorkspaceHistorySearchHit {
-        /// Stable session identifier owning the matched message row.
-        /// 拥有该命中消息行的稳定会话标识。
-        session_id: SessionId,
-        /// Stable message identifier that should become visible in the transcript.
-        /// 应在转录中变为可见的稳定消息标识。
-        message_id: String,
-        /// Stable ordinal used to decide whether older history still needs loading.
-        /// 用于判断是否仍需补载更早历史的稳定序号。
-        ordinal: i64,
-        /// Stable turn index used for user-facing status copy.
-        /// 用于面向用户状态文案的稳定轮次索引。
-        turn_index: i64,
-    },
     /// Updates the active drag auto-scroll request emitted by the main rendered transcript surface.
     /// 更新主渲染转录表面发出的当前拖拽自动滚动请求。
     SelectedSessionTranscriptDragAutoScrollChanged {

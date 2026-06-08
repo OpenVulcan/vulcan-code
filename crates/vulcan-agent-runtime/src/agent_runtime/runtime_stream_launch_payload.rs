@@ -19,8 +19,8 @@ use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 /// Launch payload that captures everything the outer runtime stream needs after preparation and bootstrap have both succeeded.
 /// 捕获准备阶段与启动阶段都成功后外层运行时流所需全部内容的启动载荷。
 pub struct RuntimeStreamLaunch {
-    /// Shared runtime context registered for task-tool child launches while this provider loop is alive.
-    /// 当前 Provider 循环存活期间为 task 工具子启动注册的共享运行时上下文。
+    /// Shared runtime context registered for spawn-agent child launches while this provider loop is alive.
+    /// 当前 Provider 循环存活期间为 spawn_agent 子代理启动注册的共享运行时上下文。
     pub(crate) task_execution_context: Option<TaskExecutionRuntimeContext>,
     /// Session identifier owned by the current runtime run.
     /// 当前运行时执行所属的会话标识。
@@ -242,7 +242,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
-            codex_boundary_events: Vec::new(),
+            boundary_events: Vec::new(),
         }
     }
 
@@ -274,7 +274,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
-            codex_boundary_events: Vec::new(),
+            boundary_events: Vec::new(),
         }
     }
 

@@ -647,8 +647,8 @@ pub(super) fn task_session_tool_display_label(
     )
 }
 
-/// Resolves the localized task-session status copy shown inside the dedicated `task` transcript card title.
-/// 解析展示在专属 `task` 转录卡片标题中的本地化 task-session 状态文案。
+/// Resolves the localized task-session status copy shown inside the dedicated subagent transcript card title.
+/// 解析展示在专属子代理转录卡片标题中的本地化 task-session 状态文案。
 pub(super) fn task_session_tool_display_status(
     record_kind: SessionMessageRecordKind,
     metadata: &Value,
@@ -675,8 +675,8 @@ pub(super) fn task_session_tool_display_status(
     }
 }
 
-/// Builds the dedicated task-session title when one tool-display metadata object belongs to the `task` surface.
-/// 当某个工具显示元数据对象属于 `task` 表面时，构建其专属 task-session 标题。
+/// Builds the dedicated task-session title when one tool-display metadata object belongs to the subagent surface.
+/// 当某个工具显示元数据对象属于子代理工具面时，构建其专属 task-session 标题。
 pub(super) fn task_session_tool_display_title(
     record_kind: SessionMessageRecordKind,
     metadata: &Value,
@@ -742,8 +742,8 @@ pub(super) fn build_user_prompt_transcript_metadata(
     build_shared_user_prompt_transcript_metadata(prompt, attachments)
 }
 
-/// Returns whether one visible tool transcript message belongs to the dedicated host-managed `task` surface.
-/// 返回某条可见工具转录消息是否属于宿主管理的专属 `task` 表面。
+/// Returns whether one visible tool transcript message belongs to the dedicated host-managed subagent surface.
+/// 返回某条可见工具转录消息是否属于宿主管理的专属子代理工具面。
 pub(super) fn tool_display_message_is_task_session(message: &SessionMessageEntry) -> bool {
     message.metadata.as_ref().is_some_and(|metadata| {
         task_session_payload_from_tool_metadata(metadata).is_some()

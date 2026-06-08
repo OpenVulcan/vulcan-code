@@ -108,12 +108,11 @@ mod tests {
         assert!(!resolved.runtime_policy.vmm_enabled);
         assert!(!resolved.runtime_policy.memory_recall_enabled);
         assert!(!resolved.runtime_policy.memory_writeback_enabled);
-        assert!(!resolved.runtime_policy.search_projection_enabled);
         assert!(!resolved.runtime_policy.database_projection_enabled);
     }
 
-    /// Verifies explicit TaskSession runtime overrides cannot enable search or database projection.
-    /// 验证显式 TaskSession 运行时覆盖无法启用搜索或数据库投影。
+    /// Verifies explicit TaskSession runtime overrides cannot enable database projection.
+    /// 验证明示 TaskSession 运行时覆盖无法启用数据库投影。
     #[test]
     fn task_session_runtime_overrides_keep_projection_forbidden() {
         let mut profile = SubagentProfile::new("memory-agent", "Memory agent");
@@ -122,7 +121,6 @@ mod tests {
             vmm_enabled: Some(true),
             memory_recall_enabled: Some(true),
             memory_writeback_enabled: Some(true),
-            search_projection_enabled: Some(true),
             database_projection_enabled: Some(true),
         };
         let mut invocation = TaskInvocationConfig::with_profile("memory-agent", "recall context");
@@ -131,7 +129,6 @@ mod tests {
             vmm_enabled: Some(true),
             memory_recall_enabled: Some(false),
             memory_writeback_enabled: Some(true),
-            search_projection_enabled: Some(true),
             database_projection_enabled: Some(true),
         };
 
@@ -146,7 +143,6 @@ mod tests {
         assert!(resolved.runtime_policy.vmm_enabled);
         assert!(!resolved.runtime_policy.memory_recall_enabled);
         assert!(resolved.runtime_policy.memory_writeback_enabled);
-        assert!(!resolved.runtime_policy.search_projection_enabled);
         assert!(!resolved.runtime_policy.database_projection_enabled);
     }
 
@@ -242,7 +238,6 @@ mod tests {
 
         assert_eq!(metadata.status, TaskSessionStatus::Created);
         assert!(!metadata.runtime_policy.database_projection_enabled);
-        assert!(!metadata.runtime_policy.search_projection_enabled);
     }
 
     /// Verifies that the segmented store writes and reads TaskSession artifacts from the session directory.

@@ -912,52 +912,14 @@ impl VulcanWorkbench {
         Some(document)
     }
 
-    /// Returns whether the provided block belongs to the currently active workspace-history search highlight target.
-    /// 返回给定区块是否属于当前活动中的工作台历史搜索高亮目标。
-    pub(super) fn agent_view_block_matches_workspace_history_search_highlight(
-        &self,
-        session_id: SessionId,
-        block: &vulcan_agent_view::AgentViewBlock,
-    ) -> bool {
-        let Some(active_highlight) = self
-            .workspace_history_search
-            .active_highlight
-            .as_ref()
-            .filter(|active_highlight| active_highlight.session_id == session_id)
-        else {
-            return false;
-        };
-
-        block
-            .attributes()
-            .get("message-id")
-            .is_some_and(|message_id| message_id == &active_highlight.message_id)
-    }
-
-    /// Attaches the transient workspace-history search-hit render marker to one block when it owns the currently highlighted message.
-    /// 当某个区块归属于当前高亮消息时，为其附着临时工作台历史搜索命中渲染标记。
-    pub(super) fn decorate_agent_view_block_workspace_history_search_hit(
-        &self,
-        session_id: SessionId,
-        block: &mut vulcan_agent_view::AgentViewBlock,
-    ) {
-        if self.agent_view_block_matches_workspace_history_search_highlight(session_id, block) {
-            block
-                .attributes_mut()
-                .insert(String::from("ui-search-hit"), String::from("true"));
-        }
-    }
-
     /// Decorates one child-panel block with the minimal runtime-only attributes needed by the shared transcript renderer.
     /// 使用共享转录渲染器所需的最小运行时属性装饰单个子面板区块。
     pub(super) fn decorate_subagent_task_block_for_render(
         &self,
-        session_id: SessionId,
+        _session_id: SessionId,
         block_id: &str,
         block: &mut vulcan_agent_view::AgentViewBlock,
     ) {
-        self.decorate_agent_view_block_workspace_history_search_hit(session_id, block);
-
         let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
             return;
         };
@@ -1060,8 +1022,6 @@ impl VulcanWorkbench {
         block_id: &str,
         block: &mut vulcan_agent_view::AgentViewBlock,
     ) {
-        self.decorate_agent_view_block_workspace_history_search_hit(session_id, block);
-
         let vulcan_agent_view::AgentViewBlock::Directive(directive) = block else {
             return;
         };

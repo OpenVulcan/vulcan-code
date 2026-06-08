@@ -55,6 +55,9 @@ pub struct LuaSkillsRuntimeHandle {
     /// Number of runtime entries currently visible to the host.
     /// 当前对宿主可见的运行时入口数量。
     pub entry_count: usize,
+    /// Cached runtime entries currently visible to provider-facing tool preparation.
+    /// 当前对 Provider 工具准备链可见的运行时入口缓存。
+    pub tool_entries: Arc<Mutex<Vec<RuntimeEntryDescriptor>>>,
     /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for GUI polling.
     /// 保存细粒度 LuaSkills 操作进度事件并供图形界面轮询的共享 FIFO 队列。
     pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
@@ -70,6 +73,14 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
             .field("system_lua_lib_dir", &self.system_lua_lib_dir)
             .field("skill_roots", &self.skill_roots)
             .field("entry_count", &self.entry_count)
+            .field(
+                "cached_tool_entry_count",
+                &self
+                    .tool_entries
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .len(),
+            )
             .field(
                 "operation_progress_event_count",
                 &self
@@ -359,7 +370,8 @@ fn bootstrap_luaskills_runtime_blocking(
         .load_from_roots(&skill_roots)
         .map_err(|error| format!("加载 LuaSkills 技能根失败：{error}"))?;
 
-    let entry_count = engine.list_entries().len();
+    let tool_entries = list_host_visible_luaskills_entries(&engine);
+    let entry_count = tool_entries.len();
     let operation_progress_events = Arc::new(Mutex::new(VecDeque::new()));
     install_luaskills_operation_progress_callback(operation_progress_events.clone());
 
@@ -370,6 +382,7 @@ fn bootstrap_luaskills_runtime_blocking(
             system_lua_lib_dir,
             skill_roots,
             entry_count,
+            tool_entries: Arc::new(Mutex::new(tool_entries)),
             operation_progress_events,
         },
     })
@@ -739,8 +752,11 @@ fn perform_luaskills_management_action_blocking(
 pub fn list_luaskills_tool_entries(
     handle: &LuaSkillsRuntimeHandle,
 ) -> Result<Vec<RuntimeEntryDescriptor>, String> {
-    let engine = lock_runtime_engine(handle)?;
-    Ok(list_host_visible_luaskills_entries(&engine))
+    handle
+        .tool_entries
+        .lock()
+        .map(|entries| entries.clone())
+        .map_err(|_| String::from("LuaSkills 工具入口缓存锁已损坏，无法读取工具表。"))
 }
 
 /// One compact LuaSkills help summary matched to a runtime entry.
@@ -1140,6 +1156,7 @@ fn build_luaskills_catalog(
     engine: &LuaEngine,
 ) -> Result<LuaSkillsCatalog, String> {
     let visible_entries = list_host_visible_luaskills_entries(engine);
+    refresh_luaskills_tool_entry_cache(handle, &visible_entries)?;
     let mut tools_by_skill = visible_entries.into_iter().fold(
         BTreeMap::<String, Vec<LuaSkillsCatalogTool>>::new(),
         |mut grouped_tools, entry| {
@@ -1218,6 +1235,20 @@ fn build_luaskills_catalog(
         entry_count: skills.iter().map(|skill| skill.entry_count).sum(),
         skills,
     })
+}
+
+/// Refreshes the provider-facing LuaSkills entry cache from one freshly enumerated entry list.
+/// 根据刚枚举出的入口列表刷新面向 Provider 的 LuaSkills 入口缓存。
+fn refresh_luaskills_tool_entry_cache(
+    handle: &LuaSkillsRuntimeHandle,
+    entries: &[RuntimeEntryDescriptor],
+) -> Result<(), String> {
+    let mut cached_entries = handle
+        .tool_entries
+        .lock()
+        .map_err(|_| String::from("LuaSkills 工具入口缓存锁已损坏，无法刷新工具表。"))?;
+    *cached_entries = entries.to_vec();
+    Ok(())
 }
 
 /// Lists the LuaSkills runtime entries currently visible to the host-controlled System authority.

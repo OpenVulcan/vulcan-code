@@ -536,7 +536,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
-            codex_boundary_events: Vec::new(),
+            boundary_events: Vec::new(),
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),

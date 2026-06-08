@@ -23,8 +23,8 @@ pub enum AgentViewToolPresentationKind {
     /// Dedicated command-session card used by host-managed shell-session results.
     /// 供宿主管理 shell-session 结果使用的专属命令会话卡片。
     CommandSession,
-    /// Dedicated task-session card used by host-managed delegate/task tool flows.
-    /// 供宿主管理的委派或任务工具流使用的专属 task-session 卡片。
+    /// Dedicated task-session card used by host-managed subagent flows.
+    /// 供宿主管理的子代理流程使用的专属 task-session 卡片。
     TaskSession,
     /// Dedicated generated-image tool card.
     /// 专属图片生成工具卡片。

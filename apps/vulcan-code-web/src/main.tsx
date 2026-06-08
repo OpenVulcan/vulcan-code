@@ -1827,9 +1827,35 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // draftConversationIdRef keeps the latest draft id without retriggering workbench snapshot hydration.
   // draftConversationIdRef 保存最新草稿标识，避免重新触发工作台快照水合。
   const draftConversationIdRef = React.useRef<string | null>(null);
+  // subagentSurfaceMessageCacheRef retains every loaded child transcript surface for instant route switching.
+  // subagentSurfaceMessageCacheRef 保留每个已载入的子代理转录界面，用于即时路由切换。
+  const subagentSurfaceMessageCacheRef = React.useRef<SubagentSurfaceMessageCache>(new Map());
   // workbenchState stores local message hydration updates.
   // workbenchState 保存本地会话正文水合更新。
-  const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(props.workbench);
+  const [workbenchState, setWorkbenchState] = React.useState<WorkbenchSnapshot>(
+    () => workbenchWithSubagentSurfaceMessageCache(props.workbench, subagentSurfaceMessageCacheRef.current),
+  );
+  // workbenchStateRef exposes the latest workbench state to route-click callbacks without stale closures.
+  // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
+  const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
+  workbenchStateRef.current = workbenchState;
+  // mergeWorkbenchWithLocalCaches centralizes service snapshot merges that must preserve loaded child surfaces.
+  // mergeWorkbenchWithLocalCaches 集中处理必须保留已载入子代理界面的服务快照合并。
+  const mergeWorkbenchWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
+    mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(current, incoming, subagentSurfaceMessageCacheRef.current)
+  ), []);
+  // mergeConversationMessagesWithLocalCaches centralizes lazy message hydration cache updates.
+  // mergeConversationMessagesWithLocalCaches 集中处理懒加载正文时的缓存更新。
+  const mergeConversationMessagesWithLocalCaches = React.useCallback((
+    current: WorkbenchSnapshot,
+    conversationId: string,
+    messages: ConversationMessage[],
+  ) => mergeConversationMessagesWithSubagentSurfaceMessageCache(
+    current,
+    conversationId,
+    messages,
+    subagentSurfaceMessageCacheRef.current,
+  ), []);
   // loadingConversationId stores the conversation currently loading from the service.
   // loadingConversationId 保存当前正在从服务加载正文的会话标识。
   const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
@@ -1968,7 +1994,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     if (!snapshot) {
       return;
     }
-    setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+    setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     setDraftConversation(null);
     setSelectedConversationId((current) => {
       if (current && snapshot.conversations.some((conversation) => conversation.id === current)) {
@@ -2112,7 +2138,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await setExpandedTaskProjects(projectIds);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       console.warn("persist expanded projects failed", nextError);
@@ -2149,7 +2175,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         toast.info("浏览器预览模式下无法发送真实会话。");
         return false;
       }
-      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       setDraftConversation(null);
       const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
       if (nextConversationId) {
@@ -2174,7 +2200,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         return null;
       }
       const snapshot = await loadWorkbenchSnapshot();
-      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       return pendingPrompt;
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2189,7 +2215,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await insertPendingPrompt(entryId);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2203,7 +2229,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await stopConversationRun();
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
       return Boolean(snapshot);
     } catch (nextError) {
@@ -2217,17 +2243,40 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const handleOpenSubagentPanel = React.useCallback(async (parentConversationId: string, taskId: string): Promise<boolean> => {
     const routeKey = `${parentConversationId}:${taskId}`;
     const existingRequest = inflightSubagentOpenRequestRef.current;
+    if (canOpenCachedSubagentSurface(
+      workbenchStateRef.current,
+      subagentSurfaceMessageCacheRef.current,
+      parentConversationId,
+      taskId,
+    )) {
+      subagentRoutePreferenceRef.current = { parentConversationId, taskId };
+      webuiClickTrace("subagent.open.local_cache", { parentConversationId, taskId, routeKey });
+      setWorkbenchState((current) => openSubagentSurfaceForConversation(
+        injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
+        parentConversationId,
+        taskId,
+      ));
+      return true;
+    }
     if (existingRequest?.key === routeKey) {
       subagentRoutePreferenceRef.current = { parentConversationId, taskId };
       webuiClickTrace("subagent.open.coalesced", { parentConversationId, taskId, routeKey });
-      setWorkbenchState((current) => openSubagentSurfaceForConversation(current, parentConversationId, taskId));
+      setWorkbenchState((current) => openSubagentSurfaceForConversation(
+        injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
+        parentConversationId,
+        taskId,
+      ));
       return true;
     }
     const requestSeq = subagentNavigationRequestSeqRef.current + 1;
     subagentNavigationRequestSeqRef.current = requestSeq;
     subagentRoutePreferenceRef.current = { parentConversationId, taskId };
     webuiClickTrace("subagent.open.invoke", { parentConversationId, taskId, requestSeq, routeKey });
-    setWorkbenchState((current) => openSubagentSurfaceForConversation(current, parentConversationId, taskId));
+    setWorkbenchState((current) => openSubagentSurfaceForConversation(
+      injectCachedSubagentSurfaceMessages(current, subagentSurfaceMessageCacheRef.current),
+      parentConversationId,
+      taskId,
+    ));
     const requestPromise = openSubagentPanel(parentConversationId, taskId);
     inflightSubagentOpenRequestRef.current = { key: routeKey, promise: requestPromise };
     try {
@@ -2246,7 +2295,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           return true;
         }
         setWorkbenchState((current) => applySubagentRoutePreference(
-          mergeWorkbenchSnapshot(current, snapshot),
+          mergeWorkbenchWithLocalCaches(current, snapshot),
           subagentRoutePreferenceRef.current,
         ));
         setHydratedConversationIds((current) => new Set(current).add(snapshot.subagentNavigation?.activeConversationId ?? taskId));
@@ -2298,7 +2347,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
           return;
         }
         setWorkbenchState((current) => applySubagentRoutePreference(
-          mergeWorkbenchSnapshot(current, snapshot),
+          mergeWorkbenchWithLocalCaches(current, snapshot),
           subagentRoutePreferenceRef.current,
         ));
       }
@@ -2314,7 +2363,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await stopSubagentTask(parentConversationId, taskId);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2327,7 +2376,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await removePendingPrompt(entryId);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
@@ -2345,12 +2394,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await reorderPendingPrompts(selectedConversationIdRef.current, draggedEntryId, targetEntryId);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
       const snapshot = await loadWorkbenchSnapshot();
-      setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
     }
   }, []);
 
@@ -2360,7 +2409,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await selectWorkbenchModel(choice);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         toast.success(`当前模型已切换为 ${choice.modelName}（${choice.providerName}）。`);
       }
       return true;
@@ -2376,7 +2425,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     try {
       const snapshot = await selectWorkbenchReasoningEffort(effort);
       if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
       return true;
     } catch (nextError) {
@@ -2460,13 +2509,13 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     void selectConversation(conversationId)
       .then((snapshot) => {
         if (snapshot) {
-          setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
         return markConversationRead(conversationId);
       })
       .then((snapshot) => {
         if (snapshot) {
-          setWorkbenchState((current) => mergeWorkbenchSnapshot(current, snapshot));
+          setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
         }
       })
       .catch((error) => {
@@ -2540,7 +2589,11 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
 
   React.useEffect(() => {
     setWorkbenchState((current) => applySubagentRoutePreference(
-      mergeWorkbenchSnapshot(current, props.workbench),
+      mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
+        current,
+        props.workbench,
+        subagentSurfaceMessageCacheRef.current,
+      ),
       subagentRoutePreferenceRef.current,
     ));
     const nextSelected = props.workbench.selectedConversationId ?? props.workbench.conversations[0]?.id ?? null;
@@ -2579,7 +2632,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         if (cancelled) {
           return;
         }
-        setWorkbenchState((current) => mergeConversationMessages(current, conversationId, messages));
+        setWorkbenchState((current) => mergeConversationMessagesWithLocalCaches(current, conversationId, messages));
         setHydratedConversationIds((current) => new Set(current).add(conversationId));
       } catch (nextError) {
         if (!cancelled) {
@@ -2894,6 +2947,21 @@ interface InflightSubagentOpenRequest {
   promise: Promise<WorkbenchSnapshot | null>;
 }
 
+// SubagentSurfaceMessageCache stores loaded child transcript messages by child task conversation id.
+// SubagentSurfaceMessageCache 按子任务会话标识保存已载入的子代理转录消息。
+type SubagentSurfaceMessageCache = Map<string, ConversationMessage[]>;
+
+// ConversationScrollSnapshot stores one transcript surface scroll restoration point.
+// ConversationScrollSnapshot 保存单个转录界面的滚动恢复点。
+interface ConversationScrollSnapshot {
+  // Scroll offset captured from the shared timeline element.
+  // 从共享时间线元素捕获的滚动偏移。
+  scrollTop: number;
+  // Whether this surface should continue following newly appended content.
+  // 该界面是否应继续跟随新追加的内容。
+  wasAtBottom: boolean;
+}
+
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
 // mergeWorkbenchSnapshot 合并后端工作台更新且不丢弃已懒加载的会话正文。
 function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchSnapshot): WorkbenchSnapshot {
@@ -2909,6 +2977,103 @@ function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchS
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...incoming.messages],
   };
+}
+
+// workbenchWithSubagentSurfaceMessageCache absorbs and injects cached child transcript windows for one snapshot.
+// workbenchWithSubagentSurfaceMessageCache 为单个快照吸收并注入已缓存的子代理转录窗口。
+function workbenchWithSubagentSurfaceMessageCache(
+  workbench: WorkbenchSnapshot,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  rememberSubagentSurfaceMessages(cache, workbench);
+  return injectCachedSubagentSurfaceMessages(workbench, cache);
+}
+
+// mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache merges one backend snapshot while preserving all loaded child surfaces.
+// mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache 合并后端快照，同时保留所有已载入的子代理界面。
+function mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
+  current: WorkbenchSnapshot,
+  incoming: WorkbenchSnapshot,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  rememberSubagentSurfaceMessages(cache, incoming);
+  return injectCachedSubagentSurfaceMessages(mergeWorkbenchSnapshot(current, incoming), cache);
+}
+
+// mergeConversationMessagesWithSubagentSurfaceMessageCache replaces one message window and updates child-surface cache when applicable.
+// mergeConversationMessagesWithSubagentSurfaceMessageCache 替换单个消息窗口，并在适用时更新子代理界面缓存。
+function mergeConversationMessagesWithSubagentSurfaceMessageCache(
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+  messages: ConversationMessage[],
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  if (workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId)) {
+    cache.set(conversationId, messages);
+  }
+  return injectCachedSubagentSurfaceMessages(mergeConversationMessages(workbench, conversationId, messages), cache);
+}
+
+// rememberSubagentSurfaceMessages records message windows belonging to the current subagent task list.
+// rememberSubagentSurfaceMessages 记录属于当前子代理任务列表的消息窗口。
+function rememberSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, workbench: WorkbenchSnapshot): void {
+  const taskIds = new Set(workbench.subagentNavigation?.tasks?.map((task) => task.taskId) ?? []);
+  if (taskIds.size === 0) {
+    return;
+  }
+  const messagesByTaskId = new Map<string, ConversationMessage[]>();
+  for (const message of workbench.messages) {
+    if (!taskIds.has(message.conversationId)) {
+      continue;
+    }
+    const taskMessages = messagesByTaskId.get(message.conversationId) ?? [];
+    taskMessages.push(message);
+    messagesByTaskId.set(message.conversationId, taskMessages);
+  }
+  for (const [taskId, messages] of messagesByTaskId) {
+    cache.set(taskId, messages);
+  }
+}
+
+// injectCachedSubagentSurfaceMessages reattaches every cached child message window for the visible parent task list.
+// injectCachedSubagentSurfaceMessages 为当前可见父任务列表重新挂回所有已缓存的子代理消息窗口。
+function injectCachedSubagentSurfaceMessages(
+  workbench: WorkbenchSnapshot,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  const taskIdsWithCache = new Set(
+    (workbench.subagentNavigation?.tasks ?? [])
+      .map((task) => task.taskId)
+      .filter((taskId) => cache.has(taskId)),
+  );
+  if (taskIdsWithCache.size === 0) {
+    return workbench;
+  }
+  const retainedMessages = workbench.messages.filter((message) => !taskIdsWithCache.has(message.conversationId));
+  const cachedMessages = [...taskIdsWithCache].flatMap((taskId) => cache.get(taskId) ?? []);
+  return {
+    ...workbench,
+    messages: [...retainedMessages, ...cachedMessages],
+  };
+}
+
+// hasCachedSubagentSurfaceMessages returns whether one child transcript is already loaded in this frontend session.
+// hasCachedSubagentSurfaceMessages 返回当前前端会话中是否已经载入指定子转录。
+function hasCachedSubagentSurfaceMessages(cache: SubagentSurfaceMessageCache, taskId: string): boolean {
+  return (cache.get(taskId)?.length ?? 0) > 0;
+}
+
+// canOpenCachedSubagentSurface verifies that cached messages and the current navigation can both satisfy a local route switch.
+// canOpenCachedSubagentSurface 校验缓存消息与当前导航是否都足以完成本地路由切换。
+function canOpenCachedSubagentSurface(
+  workbench: WorkbenchSnapshot,
+  cache: SubagentSurfaceMessageCache,
+  parentConversationId: string,
+  taskId: string,
+): boolean {
+  return hasCachedSubagentSurfaceMessages(cache, taskId)
+    && workbench.subagentNavigation?.parentConversationId === parentConversationId
+    && Boolean(workbench.subagentNavigation.tasks?.some((task) => task.taskId === taskId));
 }
 
 // applySubagentRoutePreference keeps late backend snapshots from overriding the user's latest WebUI route choice.
@@ -6654,6 +6819,12 @@ function ChatArea(props: {
     ? props.workbench.subagentNavigation
     : null;
   const activeSurfaceConversationId = subagentNavigation?.activeConversationId ?? props.selectedConversationId;
+  // renderedSurfaceConversationIdRef tracks the surface currently represented by the shared scroll element.
+  // renderedSurfaceConversationIdRef 跟踪当前共享滚动元素代表的界面。
+  const renderedSurfaceConversationIdRef = React.useRef<string | null>(activeSurfaceConversationId ?? null);
+  // conversationScrollSnapshotsRef keeps scroll restoration data per parent or child surface.
+  // conversationScrollSnapshotsRef 按主会话或子代理界面保存滚动恢复数据。
+  const conversationScrollSnapshotsRef = React.useRef<Map<string, ConversationScrollSnapshot>>(new Map());
   const activeSubagentTask = subagentNavigation?.tasks?.find((task) => task.isActive) ?? null;
   const surfaceConversation = activeSubagentTask
     ? {
@@ -6699,7 +6870,14 @@ function ChatArea(props: {
   // hasRunningSubagents reflects the backend-routed subagent lane rather than local UI inference.
   // hasRunningSubagents 反映后端路由的子代理通道，而不是本地界面推断。
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
-  const runtimeCue = visibleStreamingThinkingOverlayBlock ? null : conversationRuntimeCue(surfaceConversation, messages, t);
+  // suppressSubagentOnlyMainCue keeps delegated work in the footer instead of the main request cue.
+  // suppressSubagentOnlyMainCue 将纯子代理工作保留在底部栏，不显示为主窗口请求提示。
+  const suppressSubagentOnlyMainCue = hasRunningSubagents
+    && (Boolean(activeSubagentTask?.isRunning)
+      || normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning");
+  const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
+    ? null
+    : conversationRuntimeCue(surfaceConversation, messages, t);
   const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
@@ -6707,6 +6885,22 @@ function ChatArea(props: {
     () => buildConversationStreamSignature(messages),
     [messages],
   );
+
+  // rememberConversationScrollSnapshot captures the current shared scroll element before route changes.
+  // rememberConversationScrollSnapshot 在路由切换前捕获当前共享滚动元素状态。
+  const rememberConversationScrollSnapshot = React.useCallback(() => {
+    const element = workspaceRef.current;
+    const surfaceId = renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    if (!element || !surfaceId) {
+      return;
+    }
+    const wasAtBottom = conversationViewportAllowsTailFollow(element);
+    conversationScrollSnapshotsRef.current.set(surfaceId, {
+      scrollTop: element.scrollTop,
+      wasAtBottom,
+    });
+    shouldFollowConversationTailRef.current = wasAtBottom;
+  }, [activeSurfaceConversationId]);
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
@@ -6719,8 +6913,25 @@ function ChatArea(props: {
     }
     const shouldFollow = conversationViewportAllowsTailFollow(element);
     shouldFollowConversationTailRef.current = shouldFollow;
+    const surfaceId = renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    if (surfaceId) {
+      conversationScrollSnapshotsRef.current.set(surfaceId, {
+        scrollTop: element.scrollTop,
+        wasAtBottom: shouldFollow,
+      });
+    }
     setIsAtConversationBottom(shouldFollow);
-  }, []);
+  }, [activeSurfaceConversationId]);
+
+  // handleOpenSubagentPanelFromTimeline preserves the current scroll before opening a child transcript.
+  // handleOpenSubagentPanelFromTimeline 在打开子代理转录前保留当前滚动位置。
+  const handleOpenSubagentPanelFromTimeline = React.useCallback((
+    parentConversationId: string,
+    taskId: string,
+  ) => {
+    rememberConversationScrollSnapshot();
+    return props.onOpenSubagentPanel(parentConversationId, taskId);
+  }, [props.onOpenSubagentPanel, rememberConversationScrollSnapshot]);
 
   // scrollConversationToBottom moves the timeline to the latest content.
   // scrollConversationToBottom 将时间线滚动到最新内容。
@@ -6750,8 +6961,42 @@ function ChatArea(props: {
     }
 
     const element = workspaceRef.current;
-    const selectedChanged = selectedConversationTailRef.current !== activeSurfaceConversationId;
+    const previousSurfaceId = selectedConversationTailRef.current;
+    const selectedChanged = previousSurfaceId !== activeSurfaceConversationId;
+    if (
+      selectedChanged
+      && previousSurfaceId
+      && element
+      && !conversationScrollSnapshotsRef.current.has(previousSurfaceId)
+    ) {
+      conversationScrollSnapshotsRef.current.set(previousSurfaceId, {
+        scrollTop: element.scrollTop,
+        wasAtBottom: shouldFollowConversationTailRef.current,
+      });
+    }
     selectedConversationTailRef.current = activeSurfaceConversationId;
+    renderedSurfaceConversationIdRef.current = activeSurfaceConversationId ?? null;
+    const savedScrollSnapshot = selectedChanged && activeSurfaceConversationId
+      ? conversationScrollSnapshotsRef.current.get(activeSurfaceConversationId)
+      : null;
+    if (selectedChanged && savedScrollSnapshot && element) {
+      const restoreSavedScrollPosition = () => {
+        if (savedScrollSnapshot.wasAtBottom) {
+          element.scrollTop = element.scrollHeight;
+          return;
+        }
+        const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+        element.scrollTop = Math.min(savedScrollSnapshot.scrollTop, maxScrollTop);
+      };
+      shouldFollowConversationTailRef.current = savedScrollSnapshot.wasAtBottom;
+      restoreSavedScrollPosition();
+      const firstFrame = window.requestAnimationFrame(() => {
+        restoreSavedScrollPosition();
+        updateConversationBottomState();
+      });
+      return () => window.cancelAnimationFrame(firstFrame);
+    }
+
     const shouldFollowTail = selectedChanged
       || !element
       || shouldFollowConversationTailRef.current
@@ -6868,7 +7113,7 @@ function ChatArea(props: {
             error={props.conversationLoadError}
             parentConversationId={activeSurfaceConversationId ?? null}
             onScrollStateChange={updateConversationBottomState}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
             scrollRef={workspaceRef}
             suppressEmptyPlaceholder={isEmptyConversation}
           />
@@ -8453,10 +8698,14 @@ function conversationRuntimeCue(
   if (conversation.status.toLowerCase() !== "running") {
     return null;
   }
+  const normalizedPhase = normalizedSessionRunPhase(conversation.runPhase);
   const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
   const phaseCue = sessionRunPhaseCue(conversation.runPhase, t);
   if (phaseCue) {
     return phaseCue;
+  }
+  if (normalizedPhase && !sessionRunPhaseCanUseFallbackCue(normalizedPhase)) {
+    return null;
   }
   if (!lastMeaningfulBlock) {
     return { kind: "default", text: t("runtime.memoryRecall") };
@@ -8502,6 +8751,12 @@ function sessionRunPhaseCue(
   return { kind: "default", text: t("runtime.requesting") };
 }
 
+// sessionRunPhaseCanUseFallbackCue decides whether legacy running sessions may infer a main-window cue.
+// sessionRunPhaseCanUseFallbackCue 判断旧式 running 会话是否允许推断主窗口运行提示。
+function sessionRunPhaseCanUseFallbackCue(normalizedPhase: string): boolean {
+  return normalizedPhase === "running";
+}
+
 // buildStatusbarRuntimeActivities derives footer-only tool and subagent activities for the selected session.
 // buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的工具与子代理活动。
 function buildStatusbarRuntimeActivities(
@@ -8510,14 +8765,17 @@ function buildStatusbarRuntimeActivities(
   subagentNavigation: WorkbenchSnapshot["subagentNavigation"] | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
 ): StatusbarRuntimeActivity[] {
-  if (!conversation || conversation.status.toLowerCase() !== "running") {
+  if (!conversation) {
     return [];
   }
   const normalized = normalizedSessionRunPhase(conversation.runPhase);
   const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
+  if (conversation.status.toLowerCase() !== "running" && !hasRunningSubagents) {
+    return [];
+  }
   const hasSubagentTool = Boolean(lastMeaningfulBlock && blockLooksLikeSubagentTool(lastMeaningfulBlock));
-  const hasToolRunning = normalized === "toolrunning" && !hasSubagentTool;
+  const hasToolRunning = normalized === "toolrunning" && !hasSubagentTool && !hasRunningSubagents;
   const activities: StatusbarRuntimeActivity[] = [];
   if (hasToolRunning) {
     activities.push({ kind: "tool", text: t("runtime.toolActivity") });
@@ -8573,11 +8831,13 @@ function blockLooksLikeMemoryRecall(block: ConversationBlock): boolean {
     || source.includes("recall");
 }
 
-// blockLooksLikeSubagentTool detects Codex-style child-agent coordination tools.
-// blockLooksLikeSubagentTool 检测 Codex 风格的子代理协调工具。
+// blockLooksLikeSubagentTool detects session child-agent coordination tools.
+// blockLooksLikeSubagentTool 检测会话子代理协调工具。
 function blockLooksLikeSubagentTool(block: ConversationBlock): boolean {
   const toolName = block.toolName?.trim().toLowerCase();
   return toolName === "spawn_agent"
+    || toolName === "send_message"
+    || toolName === "followup_task"
     || toolName === "wait_agent"
     || toolName === "list_agents"
     || toolName === "close_agent";

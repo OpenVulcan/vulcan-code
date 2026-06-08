@@ -504,6 +504,7 @@ fn merge_checkpoint_user_records(
             || record.kind != SessionMessageKind::User
             || record.record_kind != SessionMessageRecordKind::Transcript
             || preserved_ids.contains(&record.id)
+            || is_internal_session_mailbox_checkpoint_record(record)
         {
             continue;
         }
@@ -512,6 +513,13 @@ fn merge_checkpoint_user_records(
             checkpoint_user_record_insert_index(preserved_records, checkpoint_records, index);
         preserved_records.insert(insert_index, record.clone());
     }
+}
+
+/// Returns whether one checkpoint record is an internal session-mailbox prompt.
+/// 判断一条检查点记录是否是内部会话 mailbox 提示词。
+fn is_internal_session_mailbox_checkpoint_record(record: &SessionConversationRecord) -> bool {
+    let body = record.body.trim_start();
+    body.starts_with("<subagent_mailbox_event>") || body.starts_with("<subagent_mailbox_events>")
 }
 
 /// Returns where a checkpoint-created user record belongs in the preserved transcript.
@@ -1008,6 +1016,39 @@ mod tests {
         );
     }
 
+    /// Verifies internal mailbox checkpoint prompts never become visible user transcript rows.
+    /// 验证内部 mailbox 检查点提示词不会进入可见用户转录行。
+    #[test]
+    fn checkpoint_skips_session_mailbox_user_record() {
+        let session_id = test_session_id();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_prompt_record(&mut runtime_state, session_id, "1200", "启动两个子代理");
+        let mut checkpoint_state = runtime_state.conversation_state.clone();
+        checkpoint_state.records.push(SessionConversationRecord {
+            id: String::from("core-mailbox-user-record"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户输入"),
+            body: String::from(
+                "<subagent_mailbox_event>\n{\"kind\":\"completed\"}\n</subagent_mailbox_event>",
+            ),
+            metadata: None,
+            created_at: String::from("1201"),
+        });
+
+        apply_checkpoint_conversation_state(&mut runtime_state, checkpoint_state, "1202");
+
+        let visible_bodies = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .filter(|record| record.visible)
+            .map(|record| record.body.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(visible_bodies, vec!["启动两个子代理"]);
+    }
+
     /// Verifies terminal reports keep streamed records when they also carry a canonical checkpoint.
     /// 验证终态报告携带规范检查点时仍会保留已流式写入的记录。
     #[test]
@@ -1156,8 +1197,8 @@ mod tests {
         );
     }
 
-    /// Verifies a running TaskSession acknowledgement stays running even though the task tool call returned.
-    /// 验证 TaskSession 运行中确认在 task 工具调用返回后仍保持运行态。
+    /// Verifies a running TaskSession acknowledgement stays running even though the spawn-agent call returned.
+    /// 验证 TaskSession 运行中确认在 spawn_agent 调用返回后仍保持运行态。
     #[test]
     fn running_task_session_result_keeps_running_display_state() {
         let metadata = json!({

@@ -48,9 +48,6 @@ pub struct ExecutionRuntimePolicy {
     /// Whether memory writeback is enabled.
     /// 是否启用记忆写回。
     pub memory_writeback_enabled: bool,
-    /// Whether workspace search projection is enabled.
-    /// 是否启用工作区搜索投影。
-    pub search_projection_enabled: bool,
     /// Whether normal session database projection is enabled.
     /// 是否启用普通会话数据库投影。
     pub database_projection_enabled: bool,
@@ -93,14 +90,6 @@ pub struct ExecutionRuntimePolicyRequest {
         skip_serializing_if = "Option::is_none"
     )]
     pub memory_writeback_enabled: Option<bool>,
-    /// Optional workspace-search projection toggle.
-    /// 可选的工作区搜索投影开关。
-    #[serde(
-        default,
-        alias = "search_projection_enabled",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub search_projection_enabled: Option<bool>,
     /// Optional normal database projection toggle.
     /// 可选的普通数据库投影开关。
     #[serde(
@@ -119,7 +108,6 @@ impl ExecutionRuntimePolicyRequest {
             || self.vmm_enabled.is_some()
             || self.memory_recall_enabled.is_some()
             || self.memory_writeback_enabled.is_some()
-            || self.search_projection_enabled.is_some()
             || self.database_projection_enabled.is_some()
     }
 }
@@ -133,7 +121,6 @@ impl ExecutionRuntimePolicy {
             vmm_enabled: true,
             memory_recall_enabled: true,
             memory_writeback_enabled: true,
-            search_projection_enabled: false,
             database_projection_enabled: true,
         }
     }
@@ -146,7 +133,6 @@ impl ExecutionRuntimePolicy {
             vmm_enabled: false,
             memory_recall_enabled: false,
             memory_writeback_enabled: false,
-            search_projection_enabled: false,
             database_projection_enabled: false,
         }
     }

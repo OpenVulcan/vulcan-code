@@ -85,6 +85,20 @@ pub enum ExecutionStreamEvent {
     /// Execution preparation completed and validated.
     /// 执行准备已完成且通过校验。
     Prepared(ExecutionPreparation),
+    /// Provider-neutral request snapshot has been built before transport-specific serialization.
+    /// Provider 中立请求快照已在传输层专用序列化前构建完成。
+    RequestReady {
+        /// Session identifier owning the provider request.
+        /// 拥有该 Provider 请求的会话标识。
+        session_id: SessionId,
+    },
+    /// Provider-specific wire request payload has been built immediately before the HTTP/API call.
+    /// Provider 专用线缆请求载荷已在 HTTP/API 调用前构建完成。
+    WireRequestReady {
+        /// Session identifier owning the provider wire request.
+        /// 拥有该 Provider 线缆请求的会话标识。
+        session_id: SessionId,
+    },
     /// One real provider request snapshot has just been sent and the GUI should show a lightweight waiting hint until visible output arrives.
     /// 一次真实 Provider 请求快照刚刚发出，图形界面应显示轻量等待提示，直到出现可见输出为止。
     RequestStarted {

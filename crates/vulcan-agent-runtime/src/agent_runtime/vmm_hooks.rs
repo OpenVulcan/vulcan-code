@@ -562,19 +562,6 @@ async fn maybe_sync_vmm_profile(
     }
 }
 
-/// Builds a persistent hidden-user injection from the cached profile baseline.
-/// 使用缓存的画像基点构建持久隐藏用户注入。
-#[cfg(test)]
-fn cached_vmm_profile_baseline_output(state: VmmProfileSyncState) -> Option<VmmProfileSyncOutput> {
-    let block = base_profile_block(&state, SystemPromptHookPhase::SubsequentSession, "baseline");
-    block.as_ref()?;
-    Some(VmmProfileSyncOutput {
-        state,
-        block,
-        injections: Vec::new(),
-    })
-}
-
 /// Resolves where a full profile refresh should be placed for the current request.
 /// 解析当前请求中的全量画像刷新应放置的位置。
 pub fn vmm_profile_placement_phase(
@@ -742,47 +729,6 @@ fn render_profile_target_section(
         lines.pop();
     }
     Some(lines.join("\n"))
-}
-
-/// Renders a compact text-level delta between two full profile snapshots.
-/// 渲染两个全量画像快照之间的紧凑文本级差量。
-#[cfg(test)]
-fn render_profile_text_delta(previous: &str, next: &str) -> String {
-    let previous_lines = normalized_profile_lines(previous);
-    let next_lines = normalized_profile_lines(next);
-    if previous_lines == next_lines {
-        return String::new();
-    }
-    let added = next_lines
-        .iter()
-        .filter(|line| !previous_lines.contains(*line))
-        .cloned()
-        .collect::<Vec<_>>();
-    let removed = previous_lines
-        .iter()
-        .filter(|line| !next_lines.contains(*line))
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut sections = Vec::new();
-    if !added.is_empty() {
-        sections.push(format!("# Added Profile Facts\n{}", added.join("\n")));
-    }
-    if !removed.is_empty() {
-        sections.push(format!("# Removed Profile Facts\n{}", removed.join("\n")));
-    }
-    sections.join("\n\n")
-}
-
-/// Normalizes one full profile snapshot into comparable non-empty lines.
-/// 将一份全量画像快照规范化为可比较的非空行。
-#[cfg(test)]
-fn normalized_profile_lines(content: &str) -> Vec<String> {
-    content
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect()
 }
 
 /// Converts non-empty text into a persisted optional string.

@@ -140,9 +140,8 @@ use self::workbench_model_state::{
 use self::workspace_state::{
     AgentTranscriptSurfaceMode, AiCapabilityRouteDropTarget, ArchivedDeleteConfirmationState,
     ArchivedDeleteOutcome, ArchivedDeleteTarget, ContextInjectionPanelTab, PendingPromptDropTarget,
-    PendingWorkspaceHistorySearchNavigation, PromptResourceWatchKind,
-    SessionInlineAgentViewDocumentCache, StartupLifecycle, TaskProjectDropTarget,
-    WorkspaceHistorySearchPanelState, WorkspaceHistorySearchScope,
+    PromptResourceWatchKind, SessionInlineAgentViewDocumentCache, StartupLifecycle,
+    TaskProjectDropTarget,
 };
 use crate::agent_profile::{self, AgentProfileCatalog, SYSTEM_DEFAULT_AGENT_CHOICE_ID};
 use crate::agent_runtime::config::{
@@ -210,7 +209,9 @@ use crate::model::{
     build_session_record_message_id, collect_running_subagent_task_states_for_tree,
     merge_subagent_task_panel_cache, normalize_subagent_task_panel_state,
     pending_prompt_dispatch_index, select_subagent_navigation_panel_states,
-    subagent_task_panel_is_openable, subagent_task_panel_state_has_recoverable_conversation,
+    subagent_task_panel_is_openable,
+    subagent_task_panel_state_detail_from_segmented_task_session_store,
+    subagent_task_panel_state_has_recoverable_conversation,
     subagent_task_panel_states_from_segmented_task_session_store,
     task_session_arguments_from_tool_metadata, task_session_display_title_from_payload,
     task_session_display_title_from_tool_metadata,
@@ -257,8 +258,7 @@ use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSes
 use crate::wheel_passthrough::{WheelIntercept, WheelPassthrough};
 use crate::workspace_path::normalize_workspace_path_text;
 use crate::workspace_store::{
-    self, SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS, SESSION_HISTORY_SEARCH_RESULT_LIMIT,
-    SessionHistoryPage, SessionHydrationSnapshot, WorkspaceHistorySearchPage, WorkspaceSnapshot,
+    self, SessionHistoryPage, SessionHydrationSnapshot, WorkspaceSnapshot,
     WorkspaceSnapshotPersistOutcome,
 };
 use crate::{AppLocale, I18nArg, I18nKey, LanguageManager};
@@ -474,10 +474,6 @@ const TRANSCRIPT_FOLLOW_TAIL_BOTTOM_GAP_THRESHOLD: f32 = 28.0;
 /// Shared bottom spacer kept at the tail of transcript surfaces so the newest content does not stick to the bottom edge.
 /// 保留在转录表面尾部的共享底部留白，用于避免最新内容紧贴底边。
 const TRANSCRIPT_BOTTOM_SPACER_HEIGHT: f32 = 72.0;
-/// Conservative estimated row height used when scrolling to one searched transcript hit.
-/// 滚动定位某条搜索命中时使用的保守估算行高。
-const WORKSPACE_HISTORY_SEARCH_SCROLL_ESTIMATED_ROW_HEIGHT: f32 = 132.0;
-
 /// Maximum session messages retained in GUI memory for one hydrated transcript window.
 /// 单个已水合转录窗口允许保留在 GUI 内存中的最大会话消息数量。
 const SESSION_IN_MEMORY_MESSAGE_LIMIT: usize = 4000;
@@ -630,10 +626,6 @@ const DIFF_HUNK_VIRTUAL_OVERSCAN_LINES: usize = 48;
 /// 结构化 diff 审查流使用的稳定滚动容器标识。
 const DIFF_PANEL_SCROLLABLE_ID: &str = "vulcan-code.diff-panel-scrollable";
 
-/// Whether the legacy workspace-history search UI may be opened.
-/// 旧工作台历史搜索界面是否允许打开。
-const WORKSPACE_HISTORY_SEARCH_ENABLED: bool = false;
-
 /// Stable widget identifier shared by the main prompt composer editor across compact and expanded surfaces.
 /// 主提示词编辑器在紧凑态与展开态之间共用的稳定部件标识。
 const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
@@ -642,13 +634,6 @@ const COMPOSER_EDITOR_ID: &str = "vulcan-code.composer-editor";
 /// 工作台内嵌模型选择弹窗过滤输入框使用的稳定部件标识。
 const WORKBENCH_MODEL_PICKER_FILTER_INPUT_ID: &str =
     "vulcan-code.workbench-model-picker-filter-input";
-/// Stable widget identifier used by the left-panel workspace-history search input.
-/// 左侧面板工作台历史搜索输入框使用的稳定部件标识。
-const WORKSPACE_HISTORY_SEARCH_INPUT_ID: &str = "vulcan-code.workspace-history-search-input";
-/// Stable widget identifier used by the left-panel search project-filter input.
-/// 左侧搜索项目过滤输入框使用的稳定部件标识。
-const WORKSPACE_HISTORY_SEARCH_PROJECT_FILTER_INPUT_ID: &str =
-    "vulcan-code.workspace-history-search-project-filter-input";
 /// Stable widget identifier used by the visible ask/question custom-answer input inside the blocking modal.
 /// 阻塞式 ask/question 弹窗内部可见自定义回答输入框使用的稳定部件标识。
 const WORKBENCH_QUESTION_MODAL_CUSTOM_INPUT_ID: &str =
@@ -930,21 +915,9 @@ const WORKBENCH_MODEL_PICKER_ROW_GAP: f32 = 6.0;
 /// 工作台模型选择弹窗在可视区域上下方保留的共享预加载行数。
 const WORKBENCH_MODEL_PICKER_VIRTUAL_OVERSCAN_ROWS: usize = 10;
 
-/// Shared fixed width used by the in-app workspace-history search modal card.
-/// 工作台历史搜索弹窗卡片使用的共享固定宽度。
-const WORKSPACE_HISTORY_SEARCH_MODAL_WIDTH: f32 = 760.0;
-
-/// Shared fixed height used by the scrollable result list inside the workspace-history search modal.
-/// 工作台历史搜索弹窗内部滚动结果列表使用的共享固定高度。
-const WORKSPACE_HISTORY_SEARCH_LIST_HEIGHT: f32 = 360.0;
-
 /// Shared fixed width used by the project settings modal card.
 /// 项目设置弹窗卡片使用的共享固定宽度。
 const TASK_PROJECT_SETTINGS_MODAL_WIDTH: f32 = 640.0;
-
-/// Shared fixed height used by the optional project-scope picker list inside the workspace-history search modal.
-/// 工作台历史搜索弹窗内可选项目范围列表使用的共享固定高度。
-const WORKSPACE_HISTORY_SEARCH_SCOPE_LIST_HEIGHT: f32 = 220.0;
 
 /// Returns the inner text width available to the main prompt composer after subtracting the editor padding.
 /// 返回主提示词编辑器在扣除内部边距之后可用于文本排版的实际宽度。
@@ -1092,40 +1065,6 @@ fn merge_tool_display_messages(messages: Vec<SessionMessageEntry>) -> Vec<Sessio
 /// 返回某段剪贴板文本载荷是否应启用提示词粘贴动作。
 fn composer_clipboard_text_is_pastable(text: Option<&str>) -> bool {
     text.is_some_and(|value| !value.is_empty())
-}
-
-/// Sanitizes pasted workspace-history search text into one bounded single-line query.
-/// 将粘贴的工作台历史搜索文本清洗为一条有界单行查询。
-fn sanitize_workspace_history_search_query_input(query: &str) -> String {
-    let mut sanitized =
-        String::with_capacity(query.len().min(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS));
-    let mut retained_chars = 0usize;
-    let mut pending_space = false;
-
-    for ch in query.chars() {
-        if retained_chars >= SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS {
-            break;
-        }
-
-        if ch.is_whitespace() || ch.is_control() {
-            pending_space = !sanitized.is_empty();
-            continue;
-        }
-
-        if pending_space {
-            sanitized.push(' ');
-            retained_chars += 1;
-            pending_space = false;
-            if retained_chars >= SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS {
-                break;
-            }
-        }
-
-        sanitized.push(ch);
-        retained_chars += 1;
-    }
-
-    sanitized
 }
 
 /// Returns whether one session-hydration error is caused by missing segmented session files on disk.
@@ -1514,9 +1453,6 @@ pub struct VulcanWorkbench {
     /// Session identifiers currently loading one older transcript page.
     /// 当前正在加载更早转录分页的会话标识集合。
     loading_older_session_history_ids: BTreeSet<SessionId>,
-    /// Aggregated left-panel workspace-history search UI state shared across projects and sessions.
-    /// 跨项目与会话共享的左侧面板工作台历史搜索聚合界面状态。
-    workspace_history_search: WorkspaceHistorySearchPanelState,
     /// Whether one workspace snapshot persistence task is currently writing to SQLite.
     /// 当前是否已有一条工作台快照持久化任务正在写入 SQLite。
     workspace_snapshot_persist_in_flight: bool,
@@ -2424,7 +2360,6 @@ impl VulcanWorkbench {
             session_history_earliest_ordinals: BTreeMap::new(),
             session_history_has_more: BTreeSet::new(),
             loading_older_session_history_ids: BTreeSet::new(),
-            workspace_history_search: WorkspaceHistorySearchPanelState::default(),
             workspace_snapshot_persist_in_flight: false,
             workspace_snapshot_persist_pending: false,
             pending_archived_delete_confirmation: None,
@@ -2868,7 +2803,6 @@ impl VulcanWorkbench {
             || self.workbench_model_picker_open
             || self.workbench_openrouter_endpoint_picker.open
             || self.workbench_reasoning_picker_open
-            || (WORKSPACE_HISTORY_SEARCH_ENABLED && self.workspace_history_search.panel_open)
             || self.about_license_active_document_id.is_some()
             || self.workbench_context_menu.is_some()
     }
@@ -3196,16 +3130,6 @@ impl VulcanWorkbench {
         self.loading_older_session_history_ids.remove(&session_id);
         self.session_history_earliest_ordinals.remove(&session_id);
         self.session_history_has_more.remove(&session_id);
-        if self
-            .workspace_history_search
-            .results
-            .as_ref()
-            .is_some_and(|page| page.hits.iter().any(|hit| hit.session_id == session_id))
-        {
-            self.workspace_history_search.results = None;
-            self.workspace_history_search.loading = false;
-            self.workspace_history_search.loading_more = false;
-        }
         self.dirty_session_payload_ids.insert(session_id);
         self.dirty_session_message_ids.insert(session_id);
         self.hydrated_session_ids.insert(session_id);
@@ -3571,7 +3495,6 @@ impl VulcanWorkbench {
         self.session_history_earliest_ordinals.clear();
         self.session_history_has_more.clear();
         self.loading_older_session_history_ids.clear();
-        self.workspace_history_search = WorkspaceHistorySearchPanelState::default();
         self.pending_archived_delete_confirmation = None;
         self.session_run_phases = snapshot.session_run_phases;
         self.active_runs.clear();

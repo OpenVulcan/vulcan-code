@@ -265,30 +265,6 @@ async fn ensure_application_schema_migrations(
     client: &ControllerClient,
     sqlite_binding_id: &str,
 ) -> Result<(), String> {
-    ensure_optional_session_compaction_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_compactions ADD COLUMN source_until_turn_index INTEGER;",
-    )
-    .await?;
-    ensure_optional_session_compaction_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE session_compactions ADD COLUMN retained_tail_start_turn_index INTEGER;",
-    )
-    .await?;
-    ensure_optional_session_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE sessions ADD COLUMN latest_turn_index INTEGER NOT NULL DEFAULT -1;",
-    )
-    .await?;
-    ensure_optional_session_column(
-        client,
-        sqlite_binding_id,
-        "ALTER TABLE sessions ADD COLUMN latest_event_seq INTEGER NOT NULL DEFAULT -1;",
-    )
-    .await?;
     ensure_optional_project_column(
         client,
         sqlite_binding_id,
@@ -304,29 +280,9 @@ async fn ensure_application_schema_migrations(
     Ok(())
 }
 
-/// Applies one idempotent session column migration and ignores duplicate-column failures.
-/// 执行一条幂等会话列迁移，并忽略重复列失败。
-async fn ensure_optional_session_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
-}
-
 /// Applies one idempotent project column migration and ignores duplicate-column failures.
 /// 执行一条幂等项目列迁移，并忽略重复列失败。
 async fn ensure_optional_project_column(
-    client: &ControllerClient,
-    sqlite_binding_id: &str,
-    statement: &str,
-) -> Result<(), String> {
-    ensure_optional_schema_column(client, sqlite_binding_id, statement).await
-}
-
-/// Executes one idempotent session-compaction column migration and ignores duplicate-column failures.
-/// 执行一条幂等会话压缩列迁移，并忽略重复列失败。
-async fn ensure_optional_session_compaction_column(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -432,38 +388,8 @@ CREATE TABLE IF NOT EXISTS projects (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    title_source TEXT NOT NULL DEFAULT 'generated',
-    archived INTEGER NOT NULL DEFAULT 0,
-    sort_order INTEGER NOT NULL DEFAULT 0,
-    latest_turn_index INTEGER NOT NULL DEFAULT -1,
-    latest_event_seq INTEGER NOT NULL DEFAULT -1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_compactions (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    source_until_message_id TEXT,
-    source_until_turn_index INTEGER,
-    context_start_message_id TEXT,
-    retained_tail_start_turn_index INTEGER,
-    summary_message_id TEXT,
-    created_at TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_project_sort
-ON sessions(project_id, archived ASC, sort_order ASC, updated_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_session_compactions_session
-ON session_compactions(session_id, created_at DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
     )
@@ -493,6 +419,18 @@ mod tests {
 
         assert!(!schema.contains("CREATE TABLE IF NOT EXISTS workspace_history_search_docs"));
         assert!(!schema.contains("idx_workspace_history_search_docs_session"));
+    }
+
+    /// Verifies that session routing and compaction indexes are not duplicated in SQLite.
+    /// 验证会话路由与压缩索引不再重复写入 SQLite。
+    #[test]
+    fn base_schema_excludes_session_index_tables() {
+        let schema = build_application_schema_script();
+
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS sessions"));
+        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_compactions"));
+        assert!(!schema.contains("idx_sessions_project_sort"));
+        assert!(!schema.contains("idx_session_compactions_session"));
     }
 
     /// Verifies that runtime checkpoints are no longer duplicated into the application SQLite schema.

@@ -25,12 +25,21 @@ pub mod policy;
 /// Shared session node routing contracts.
 /// 共享会话节点路由契约。
 pub mod router;
+/// Shared single-source active-turn runtime kernel.
+/// 共享单一事实活动回合运行时内核。
+pub mod runtime_kernel;
 /// Shared selector matching helpers for session-scoped routing.
 /// 共享会话级路由使用的选择器匹配辅助逻辑。
 pub mod selector;
 /// Shared session node storage contracts.
 /// 共享会话节点存储契约。
 pub mod store;
+/// Shared child-agent registry models.
+/// 共享子代理注册表模型。
+pub mod subagent_registry;
+/// Shared active-turn input queue and mailbox models.
+/// 共享活动回合输入队列与 mailbox 模型。
+pub mod turn_input_queue;
 
 pub use compactor::{
     SessionContextCompactionError, SessionContextCompactionOutcome,
@@ -53,8 +62,16 @@ pub use executor::{
 pub use model::{ParentSessionRef, RootSessionId, SessionNodeId, SessionNodeKind, SessionTreePath};
 pub use policy::{ExecutionRuntimePolicy, ExecutionRuntimePolicyRequest, ExecutionScope};
 pub use router::{SessionNodeRouter, SessionNodeViewSnapshot, SessionRouteError};
+pub use runtime_kernel::{
+    ActiveTurn, ActiveTurnKind, SessionRuntimeKernel, SessionRuntimeKernelError,
+    SessionRuntimeKernelSnapshot, TurnTerminalStatus, WaitScope,
+};
 pub use selector::{normalize_tool_selector, normalized_tool_selector_set, tool_selector_matches};
 pub use store::{SessionNodeStore, SessionStoreError};
+pub use subagent_registry::{
+    SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus,
+};
+pub use turn_input_queue::{MailboxDeliveryPhase, TurnInput, TurnInputKind, TurnInputQueue};
 
 #[cfg(test)]
 mod tests {
@@ -74,7 +91,6 @@ mod tests {
         assert!(!policy.vmm_enabled);
         assert!(!policy.memory_recall_enabled);
         assert!(!policy.memory_writeback_enabled);
-        assert!(!policy.search_projection_enabled);
         assert!(!policy.database_projection_enabled);
     }
 

@@ -11,11 +11,12 @@ use crate::model::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use vulcan_codex_session_port::CodexSessionEvent;
+use std::sync::{Mutex, OnceLock};
+use vulcan_session_boundary::SessionBoundaryEvent;
 
 /// Directory name used for active sessions below the Vulcan code data root.
 /// Vulcan Code 数据根目录下用于活动会话的目录名称。
@@ -41,6 +42,9 @@ pub(super) const DEFAULT_SEGMENT_MAX_LINES: u64 = 3000;
 /// Default maximum byte count allowed in one segment before rollover.
 /// 单个分段在滚动前默认允许的最大字节数。
 pub(super) const DEFAULT_SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+/// Process-local mutex protecting overwrite-only state read/modify/write operations.
+/// 保护覆盖式状态读改写操作的进程内互斥锁。
+static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Append-only event kind persisted in segmented session JSONL files.
 /// 持久化到分段会话 JSONL 文件中的追加式事件类型。
@@ -68,9 +72,9 @@ pub(super) enum SegmentedSessionEventKind {
     /// Turn context baseline used by runtime restoration.
     /// 运行时恢复使用的轮次上下文基线。
     TurnContext,
-    /// Codex-compatible runtime boundary event.
-    /// Codex 兼容运行时边界事件。
-    CodexBoundary,
+    /// session-boundary runtime boundary event.
+    /// 会话边界运行时边界事件。
+    SessionBoundary,
     /// Append-only patch event for a previously visible record.
     /// 针对既有可见记录的追加式补丁事件。
     RecordPatched,
@@ -335,6 +339,18 @@ pub(super) struct SegmentedSessionMetadata {
     /// Next global sequence number for the main session.
     /// 主会话下一条全局事件序号。
     pub next_global_seq: u64,
+    /// Number of canonical transcript messages already appended after the latest rollback boundary.
+    /// 最新回滚边界之后已经追加的规范转录消息数量。
+    #[serde(default)]
+    pub message_count: u64,
+    /// Identifier of the last canonical transcript message appended after the latest rollback boundary.
+    /// 最新回滚边界之后最后一条已追加规范转录消息的标识。
+    #[serde(default)]
+    pub last_message_id: Option<String>,
+    /// Serialized fingerprint of the last canonical transcript message for tail-boundary validation.
+    /// 用于尾部边界校验的最后一条规范转录消息序列化指纹。
+    #[serde(default)]
+    pub last_message_fingerprint: Option<String>,
     /// Latest rollback marker sequence for fast display-window and append checks.
     /// 最新回滚标记序号，用于快速显示窗口与追加检查。
     pub latest_rollback_seq: Option<u64>,
@@ -416,10 +432,10 @@ pub(super) struct SegmentedSessionStateDocument {
     /// Serialized current context payload.
     /// 序列化后的当前上下文载荷。
     pub current_context: Value,
-    /// Codex-compatible thread state managed by the session runner.
-    /// 由会话 runner 管理的 Codex 兼容线程状态。
+    /// session-boundary thread state managed by the session runner.
+    /// 由会话 runner 管理的 会话边界线程状态。
     #[serde(default)]
-    pub codex_thread_state: Value,
+    pub session_boundary_state: Value,
 }
 
 /// One append-only JSONL event line.
@@ -773,13 +789,16 @@ pub(super) fn create_segmented_session_in_location(
         active_segment: first_segment.file.clone(),
         task_dir: SEGMENTED_TASK_DIR.to_string(),
         next_global_seq: 0,
+        message_count: 0,
+        last_message_id: None,
+        last_message_fingerprint: None,
         latest_rollback_seq: None,
         segment_policy: request.segment_policy,
         segments: vec![first_segment],
         tasks: Vec::new(),
     };
-    // The first JSONL line mirrors Codex's canonical SessionMeta audit record.
-    // 首条 JSONL 行镜像 Codex 的规范 SessionMeta 审计记录。
+    // The first JSONL line stores the canonical SessionMeta audit record.
+    // 首条 JSONL 行存储规范 SessionMeta 审计记录。
     let session_meta_event = SegmentedSessionEventInput {
         timestamp: request.created_at.clone(),
         kind: SegmentedSessionEventKind::SessionMeta,
@@ -800,7 +819,7 @@ pub(super) fn create_segmented_session_in_location(
             updated_at: metadata.updated_at.clone(),
             runtime_state: Value::Null,
             current_context: Value::Null,
-            codex_thread_state: Value::Null,
+            session_boundary_state: Value::Null,
         },
     )?;
     Ok(session_dir)
@@ -898,11 +917,11 @@ pub(super) fn append_segmented_session_events(
     Ok(lines)
 }
 
-/// Appends Codex boundary events while making persisted payload sequence match JSONL sequence.
-/// 追加 Codex 边界事件，并确保持久化 payload 序号与 JSONL 行序号一致。
-pub(super) fn append_segmented_codex_boundary_events(
+/// Appends session boundary events while making persisted payload sequence match JSONL sequence.
+/// 追加 会话边界事件，并确保持久化 payload 序号与 JSONL 行序号一致。
+pub(super) fn append_segmented_boundary_events(
     session_dir: &Path,
-    events: &[CodexSessionEvent],
+    events: &[SessionBoundaryEvent],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
     if events.is_empty() {
         return Ok(Vec::new());
@@ -915,8 +934,8 @@ pub(super) fn append_segmented_codex_boundary_events(
         let assigned_sequence = metadata.next_global_seq;
         let event_input = SegmentedSessionEventInput {
             timestamp: event.timestamp_ms.to_string(),
-            kind: SegmentedSessionEventKind::CodexBoundary,
-            payload: codex_boundary_payload(event, assigned_sequence),
+            kind: SegmentedSessionEventKind::SessionBoundary,
+            payload: session_boundary_payload(event, assigned_sequence),
             turn_index: None,
         };
         lines.extend(append_events_with_metadata(
@@ -935,52 +954,44 @@ pub(super) fn append_segmented_session_message_tail(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    let metadata = read_session_metadata(session_dir)?;
-    let existing_messages = collect_segmented_messages(session_dir, &metadata)?;
-    let existing_message_ids = existing_messages.keys().cloned().collect::<BTreeSet<_>>();
-    let turn_indexes = assign_segmented_message_turn_indexes(messages);
-    let mut first_new_index = None;
-    for (index, message) in messages.iter().enumerate() {
-        let message_id = stable_segmented_message_id(index, message);
-        if let Some(existing_message) = existing_messages.get(&message_id) {
-            let message_value = serde_json::to_value(message).map_err(to_store_error)?;
-            if existing_message != &message_value {
-                return Err(format!(
-                    "Segmented session append rejected non-tail transcript change: message `{message_id}` changed at index {index}."
-                ));
-            }
-        } else {
-            first_new_index = Some(index);
-            break;
-        }
+    let mut metadata = read_session_metadata(session_dir)?;
+    let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
+    if messages.len() < first_new_index {
+        return Err(format!(
+            "Segmented session append rejected non-tail transcript change: persisted message count {} exceeds incoming message count {}.",
+            first_new_index,
+            messages.len()
+        ));
     }
-    let Some(first_new_index) = first_new_index else {
-        if messages.len() < existing_message_ids.len() {
-            return Err(format!(
-                "Segmented session append rejected non-tail transcript change: persisted message count {} exceeds incoming message count {}.",
-                existing_message_ids.len(),
-                messages.len()
-            ));
-        }
+    if messages.len() == first_new_index {
+        validate_segmented_message_tail_boundary(&metadata, messages)?;
         return Ok(Vec::new());
-    };
+    }
+    validate_segmented_message_tail_boundary(&metadata, messages)?;
+    let mut new_message_ids = BTreeSet::new();
     for (index, message) in messages.iter().enumerate().skip(first_new_index) {
         let message_id = stable_segmented_message_id(index, message);
-        if existing_message_ids.contains(&message_id) {
+        if !new_message_ids.insert(message_id.clone()) {
             return Err(format!(
-                "Segmented session append rejected non-tail transcript change: message `{message_id}` already exists after new message index {first_new_index}."
+                "Segmented session append rejected duplicate tail message `{message_id}` after new message index {first_new_index}."
             ));
         }
     }
+    let turn_indexes =
+        assign_segmented_tail_message_turn_indexes(&metadata, &messages[first_new_index..]);
     let events = messages
         .iter()
         .enumerate()
         .skip(first_new_index)
-        .map(|(index, message)| {
-            segmented_event_input_from_message(index, message, turn_indexes[index])
+        .zip(turn_indexes)
+        .map(|((index, message), turn_index)| {
+            segmented_event_input_from_message(index, message, turn_index)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    append_segmented_session_events(session_dir, &events)
+    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
+    update_segmented_message_checkpoint(&mut metadata, messages)?;
+    write_metadata(session_dir, &metadata)?;
+    Ok(appended_lines)
 }
 
 /// Appends a transcript update, converting non-tail changes into an append-only rollback boundary.
@@ -1037,8 +1048,70 @@ fn append_segmented_session_replacement(
             .collect::<Result<Vec<_>, _>>()?,
     );
     let lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
+    update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
     Ok(lines)
+}
+
+/// Validates the persisted transcript tail boundary without scanning historical segment files.
+/// 不扫描历史分段文件，仅校验已持久化转录尾部边界。
+fn validate_segmented_message_tail_boundary(
+    metadata: &SegmentedSessionMetadata,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    let message_count = usize::try_from(metadata.message_count).map_err(to_store_error)?;
+    if message_count == 0 {
+        return Ok(());
+    }
+    let Some(previous_message) = messages.get(message_count.saturating_sub(1)) else {
+        return Ok(());
+    };
+    let previous_message_id =
+        stable_segmented_message_id(message_count.saturating_sub(1), previous_message);
+    if metadata
+        .last_message_id
+        .as_deref()
+        .is_some_and(|stored_id| stored_id != previous_message_id)
+    {
+        return Err(format!(
+            "Segmented session append rejected non-tail transcript change: persisted tail message id changed from `{}` to `{previous_message_id}`.",
+            metadata.last_message_id.as_deref().unwrap_or_default()
+        ));
+    }
+    let previous_message_fingerprint = segmented_message_fingerprint(previous_message)?;
+    if metadata
+        .last_message_fingerprint
+        .as_deref()
+        .is_some_and(|stored_fingerprint| stored_fingerprint != previous_message_fingerprint)
+    {
+        return Err(format!(
+            "Segmented session append rejected non-tail transcript change: persisted tail message `{previous_message_id}` changed."
+        ));
+    }
+    Ok(())
+}
+
+/// Stores the current persisted transcript tail checkpoint in metadata.
+/// 将当前已持久化转录尾部检查点写入元数据。
+fn update_segmented_message_checkpoint(
+    metadata: &mut SegmentedSessionMetadata,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    metadata.message_count = messages.len() as u64;
+    if let Some((index, message)) = messages.iter().enumerate().next_back() {
+        metadata.last_message_id = Some(stable_segmented_message_id(index, message));
+        metadata.last_message_fingerprint = Some(segmented_message_fingerprint(message)?);
+    } else {
+        metadata.last_message_id = None;
+        metadata.last_message_fingerprint = None;
+    }
+    Ok(())
+}
+
+/// Builds the lightweight persisted fingerprint for one transcript message.
+/// 为单条转录消息构建轻量持久化指纹。
+fn segmented_message_fingerprint(message: &SessionMessageEntry) -> Result<String, String> {
+    serde_json::to_string(message).map_err(to_store_error)
 }
 
 /// Reads the latest events from the active segment without scanning older segment files.
@@ -1296,12 +1369,34 @@ pub(super) fn write_state(
     session_dir: &Path,
     state: &SegmentedSessionStateDocument,
 ) -> Result<(), String> {
-    write_json_file_atomic(&state_path(session_dir), state)
+    let _guard = segmented_state_file_io_lock()
+        .lock()
+        .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
+    let mut next_state = state.clone();
+    if next_state.session_boundary_state.is_null() {
+        if let Some(existing_state) = read_state_unlocked(session_dir)? {
+            if !existing_state.session_boundary_state.is_null() {
+                next_state.session_boundary_state = existing_state.session_boundary_state;
+            }
+        }
+    }
+    write_state_unlocked(session_dir, &next_state)
 }
 
 /// Reads the overwrite-only state document for one segmented session directory.
 /// 读取某个分段会话目录的覆盖式状态文档。
 pub(super) fn read_state(
+    session_dir: &Path,
+) -> Result<Option<SegmentedSessionStateDocument>, String> {
+    let _guard = segmented_state_file_io_lock()
+        .lock()
+        .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
+    read_state_unlocked(session_dir)
+}
+
+/// Reads state.json while the caller already owns the state IO lock.
+/// 在调用方已持有状态 IO 锁时读取 state.json。
+fn read_state_unlocked(
     session_dir: &Path,
 ) -> Result<Option<SegmentedSessionStateDocument>, String> {
     let path = state_path(session_dir);
@@ -1311,28 +1406,43 @@ pub(super) fn read_state(
     read_required_json(&path).map(Some)
 }
 
-/// Replaces only the Codex-compatible thread state inside state.json.
-/// 仅覆盖 state.json 内的 Codex 兼容线程状态。
-pub(super) fn replace_codex_thread_state(session_dir: &Path, state: Value) -> Result<(), String> {
+/// Writes state.json while the caller already owns the state IO lock.
+/// 在调用方已持有状态 IO 锁时写入 state.json。
+fn write_state_unlocked(
+    session_dir: &Path,
+    state: &SegmentedSessionStateDocument,
+) -> Result<(), String> {
+    write_json_file_atomic(&state_path(session_dir), state)
+}
+
+/// Replaces only the session-boundary thread state inside state.json.
+/// 仅覆盖 state.json 内的 会话边界线程状态。
+pub(super) fn replace_session_boundary_state(
+    session_dir: &Path,
+    state: Value,
+) -> Result<(), String> {
+    let _guard = segmented_state_file_io_lock()
+        .lock()
+        .map_err(|error| format!("锁定分段 state.json 失败：{error}"))?;
     let mut state_document =
-        read_state(session_dir)?.unwrap_or_else(|| SegmentedSessionStateDocument {
+        read_state_unlocked(session_dir)?.unwrap_or_else(|| SegmentedSessionStateDocument {
             schema_version: 1,
             session_id: String::new(),
             updated_at: super::current_unix_millis_text(),
             runtime_state: Value::Null,
             current_context: Value::Null,
-            codex_thread_state: Value::Null,
+            session_boundary_state: Value::Null,
         });
-    state_document.codex_thread_state = state;
+    state_document.session_boundary_state = state;
     state_document.updated_at = super::current_unix_millis_text();
-    write_state(session_dir, &state_document)
+    write_state_unlocked(session_dir, &state_document)
 }
 
-/// Loads the Codex-compatible thread state from state.json when present.
-/// 从 state.json 读取存在的 Codex 兼容线程状态。
-pub(super) fn load_codex_thread_state(session_dir: &Path) -> Result<Option<Value>, String> {
+/// Loads the session-boundary thread state from state.json when present.
+/// 从 state.json 读取存在的 会话边界线程状态。
+pub(super) fn load_session_boundary_state(session_dir: &Path) -> Result<Option<Value>, String> {
     Ok(read_state(session_dir)?.and_then(|state| {
-        (!state.codex_thread_state.is_null()).then_some(state.codex_thread_state)
+        (!state.session_boundary_state.is_null()).then_some(state.session_boundary_state)
     }))
 }
 
@@ -1342,16 +1452,15 @@ pub(super) fn state_document_from_runtime_state(
     session_id: &str,
     runtime_state: &SessionRuntimeStateEntry,
 ) -> Result<SegmentedSessionStateDocument, String> {
-    // Serialize the complete runtime state so the new state file can fully replace SQLite-only checkpoints.
-    // 序列化完整运行态，使新的状态文件能够完整替代仅写 SQLite 的检查点。
-    let runtime_state_value = serde_json::to_value(runtime_state).map_err(to_store_error)?;
-    // Keep the current-context view explicit for future lightweight context hydration.
-    // 显式保留当前上下文视图，供后续轻量上下文水合使用。
+    // Serialize only lightweight runtime metadata; canonical conversation history lives in append-only segments.
+    // 仅序列化轻量运行时元数据；规范会话历史保存在追加式分段中。
+    let mut runtime_state_value = serde_json::to_value(runtime_state).map_err(to_store_error)?;
+    if let Some(runtime_state_object) = runtime_state_value.as_object_mut() {
+        runtime_state_object.remove("conversation_state");
+    }
+    // Keep the current-context view explicit without duplicating the canonical conversation window.
+    // 显式保留当前上下文视图，但不重复保存规范会话窗口。
     let current_context = json!({
-        "conversation_state": runtime_state_value
-            .get("conversation_state")
-            .cloned()
-            .unwrap_or(Value::Null),
         "context_start_message_id": runtime_state.context_start_message_id.clone(),
         "last_compaction_id": runtime_state.last_compaction_id.clone(),
         "anchor_context_budget_fingerprint": runtime_state
@@ -1367,7 +1476,7 @@ pub(super) fn state_document_from_runtime_state(
         updated_at: runtime_state.updated_at.clone(),
         runtime_state: runtime_state_value,
         current_context,
-        codex_thread_state: Value::Null,
+        session_boundary_state: Value::Null,
     })
 }
 
@@ -1624,7 +1733,7 @@ pub(super) fn create_segmented_task_session(
             updated_at: request.created_at.clone(),
             runtime_state: Value::Null,
             current_context: Value::Null,
-            codex_thread_state: Value::Null,
+            session_boundary_state: Value::Null,
         },
     )?;
 
@@ -1634,8 +1743,8 @@ pub(super) fn create_segmented_task_session(
         "{SEGMENTED_TASK_DIR}/{}",
         sanitize_file_component(&request.task_session_id)
     );
-    // Parent JSONL receives a link event so transcript and search results can navigate to task details.
-    // 父 JSONL 接收关联事件，让转录与搜索结果能够跳转到子任务详情。
+    // Parent JSONL receives a link event so transcript views can navigate to task details.
+    // 父 JSONL 接收关联事件，让转录视图能够跳转到子任务详情。
     let parent_link_payload = json!({
         "task_session_id": request.task_session_id,
         "task_dir": task_relative_dir,
@@ -1780,34 +1889,6 @@ pub(super) fn record_segmented_task_link_update(
     parent_metadata.updated_at = task_metadata.updated_at.clone();
     write_metadata(parent_session_dir, &parent_metadata)?;
     Ok(appended_line)
-}
-
-/// Collects the latest message payloads already materialized in the segmented JSONL stream.
-/// 收集分段 JSONL 流中已经物化的最新消息载荷。
-fn collect_segmented_messages(
-    session_dir: &Path,
-    metadata: &SegmentedSessionMetadata,
-) -> Result<BTreeMap<String, Value>, String> {
-    let mut messages = BTreeMap::new();
-    let rollback_boundary = metadata.latest_rollback_seq;
-    for segment in &metadata.segments {
-        for line in read_segment_event_lines(&session_dir.join(&segment.file))? {
-            if rollback_boundary.is_some_and(|boundary| line.seq <= boundary) {
-                continue;
-            }
-            if let Some(message_id) = line
-                .payload
-                .get("message_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                && let Some(message) = line.payload.get("message").cloned()
-            {
-                messages.insert(message_id.to_string(), message);
-            }
-        }
-    }
-    Ok(messages)
 }
 
 /// Builds one deterministic message identifier when the in-memory entry has not been assigned one yet.
@@ -2034,6 +2115,35 @@ fn assign_segmented_message_turn_indexes(messages: &[SessionMessageEntry]) -> Ve
     turn_indexes
 }
 
+/// Assigns turn indexes only to newly appended transcript tail messages.
+/// 仅为新追加的转录尾部消息分配轮次索引。
+fn assign_segmented_tail_message_turn_indexes(
+    metadata: &SegmentedSessionMetadata,
+    tail_messages: &[SessionMessageEntry],
+) -> Vec<i64> {
+    let mut turn_indexes = Vec::with_capacity(tail_messages.len());
+    let mut current_turn_index = metadata
+        .segments
+        .iter()
+        .rev()
+        .find_map(|segment| segment.last_turn_index)
+        .unwrap_or(0);
+    let mut has_seen_user_turn = metadata.message_count > 0;
+
+    for message in tail_messages {
+        if segmented_message_starts_new_turn(message) {
+            if has_seen_user_turn {
+                current_turn_index = current_turn_index.saturating_add(1);
+            } else {
+                has_seen_user_turn = true;
+            }
+        }
+        turn_indexes.push(current_turn_index);
+    }
+
+    turn_indexes
+}
+
 /// Returns whether one segmented transcript message opens a user-driven turn.
 /// 返回一条分段转录消息是否开启用户驱动轮次。
 fn segmented_message_starts_new_turn(message: &SessionMessageEntry) -> bool {
@@ -2058,7 +2168,71 @@ fn non_empty_timestamp_text(value: &str) -> String {
 pub(super) fn read_segment_event_lines(
     segment_path: &Path,
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
-    read_json_lines(segment_path)
+    read_segment_event_lines_tolerant(segment_path)
+}
+
+/// Reads segmented event lines while isolating unknown historical event types from the active workspace.
+/// 读取分段事件行时隔离未知历史事件类型，避免单条旧事件拖垮当前工作区。
+fn read_segment_event_lines_tolerant(
+    segment_path: &Path,
+) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    if !segment_path.exists() {
+        return Ok(Vec::new());
+    }
+    let file = File::open(segment_path).map_err(to_store_error)?;
+    let reader = BufReader::new(file);
+    let mut lines = Vec::new();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line_number = line_index.saturating_add(1);
+        let line = line.map_err(|error| {
+            format!(
+                "读取 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                segment_path.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value = serde_json::from_str::<Value>(&line).map_err(|error| {
+            format!(
+                "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                segment_path.display()
+            )
+        })?;
+        if !segmented_event_value_has_known_kind(&value) {
+            let event_type = value
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or("<missing>");
+            eprintln!(
+                "[workspace-store] skipped unknown segmented session event type `{event_type}` at {}:{line_number}",
+                segment_path.display()
+            );
+            continue;
+        }
+        lines.push(
+            serde_json::from_value::<SegmentedSessionEventLine>(value).map_err(|error| {
+                format!(
+                    "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                    segment_path.display()
+                )
+            })?,
+        );
+    }
+    Ok(lines)
+}
+
+/// Returns whether one raw segment JSON value declares an event type accepted by the current schema.
+/// 返回原始分段 JSON 值是否声明了当前 schema 接受的事件类型。
+fn segmented_event_value_has_known_kind(value: &Value) -> bool {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(|kind| {
+            serde_json::from_value::<SegmentedSessionEventKind>(Value::String(kind.to_string()))
+                .ok()
+        })
+        .is_some()
 }
 
 /// Reverse-scans ordered segment metadata for the latest compaction replacement-history anchor.
@@ -2185,9 +2359,9 @@ fn append_events_with_metadata(
     Ok(appended_lines)
 }
 
-/// Builds the durable payload for one Codex boundary event with store-assigned sequence.
-/// 使用存储层分配的序号构建单个 Codex 边界事件的持久化 payload。
-fn codex_boundary_payload(event: &CodexSessionEvent, assigned_sequence: u64) -> Value {
+/// Builds the durable payload for one session boundary event with store-assigned sequence.
+/// 使用存储层分配的序号构建单个 会话边界事件的持久化 payload。
+fn session_boundary_payload(event: &SessionBoundaryEvent, assigned_sequence: u64) -> Value {
     json!({
         "event_id": event.event_id,
         "thread_id": event.thread_id,
@@ -2393,6 +2567,12 @@ fn state_path(session_dir: &Path) -> PathBuf {
     session_dir.join(SEGMENTED_STATE_FILE)
 }
 
+/// Returns the shared process-local mutex used for state document read/modify/write operations.
+/// 返回状态文档读改写操作共用的进程内互斥锁。
+fn segmented_state_file_io_lock() -> &'static Mutex<()> {
+    SEGMENTED_STATE_FILE_IO_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// Builds a stable segment file name from its one-based index.
 /// 根据从一开始的索引构建稳定分段文件名。
 fn segment_file_name(index: usize) -> String {
@@ -2430,8 +2610,10 @@ fn read_required_json<T>(path: &Path) -> Result<T, String>
 where
     T: for<'de> Deserialize<'de>,
 {
-    let file = File::open(path).map_err(to_store_error)?;
-    serde_json::from_reader(file).map_err(to_store_error)
+    let file = File::open(path)
+        .map_err(|error| format!("打开 JSON 文件失败 `{}`：{error}", path.display()))?;
+    serde_json::from_reader(file)
+        .map_err(|error| format!("解析 JSON 文件失败 `{}`：{error}", path.display()))
 }
 
 /// Writes one JSON document through a temporary file and rename.
@@ -2445,12 +2627,26 @@ where
     }
     // The temporary file lives next to the target so rename stays on the same filesystem.
     // 临时文件放在目标旁边，确保重命名位于同一文件系统。
-    let temp_path = path.with_extension("tmp");
+    let temp_path = unique_json_temp_path(path);
     let mut file = File::create(&temp_path).map_err(to_store_error)?;
     serde_json::to_writer_pretty(&mut file, value).map_err(to_store_error)?;
     file.write_all(b"\n").map_err(to_store_error)?;
     file.flush().map_err(to_store_error)?;
-    fs::rename(&temp_path, path).map_err(to_store_error)
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        to_store_error(error)
+    })
+}
+
+/// Builds a collision-free temporary JSON path next to the target file.
+/// 在目标文件旁构建不会互相冲突的 JSON 临时路径。
+fn unique_json_temp_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("document.json");
+    let temp_name = format!(".{file_name}.{}.tmp", uuid::Uuid::new_v4());
+    path.with_file_name(temp_name)
 }
 
 /// Moves one segmented session directory without overwriting an existing destination.
@@ -2480,12 +2676,23 @@ where
     let file = File::open(path).map_err(to_store_error)?;
     let reader = BufReader::new(file);
     let mut values = Vec::new();
-    for line in reader.lines() {
-        let line = line.map_err(to_store_error)?;
+    for (line_index, line) in reader.lines().enumerate() {
+        let line_number = line_index.saturating_add(1);
+        let line = line.map_err(|error| {
+            format!(
+                "读取 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                path.display()
+            )
+        })?;
         if line.trim().is_empty() {
             continue;
         }
-        values.push(serde_json::from_str(&line).map_err(to_store_error)?);
+        values.push(serde_json::from_str(&line).map_err(|error| {
+            format!(
+                "解析 JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                path.display()
+            )
+        })?);
     }
     Ok(values)
 }
@@ -2645,6 +2852,37 @@ mod tests {
         assert_eq!(metadata.segments[0].line_count, 3);
     }
 
+    /// Unknown historical segment event types are skipped instead of failing the whole session load.
+    /// 未知历史分段事件类型会被跳过，而不是导致整个会话加载失败。
+    #[test]
+    fn read_segment_event_lines_skips_unknown_historical_event_types() {
+        let root = test_root("read_segment_event_lines_skips_unknown_historical_event_types");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let segment_path = session_dir.join("s001.jsonl");
+        let mut file = OpenOptions::new()
+            .append(true)
+            .open(&segment_path)
+            .expect("open segment");
+        writeln!(
+            file,
+            "{}",
+            json!({
+                "seq": 99,
+                "timestamp": "2026",
+                "type": "codex_boundary",
+                "payload": {"kind": "turn_started"}
+            })
+        )
+        .expect("append unknown line");
+
+        let lines = read_segment_event_lines(&segment_path).expect("read tolerant lines");
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].kind, SegmentedSessionEventKind::SessionMeta);
+    }
+
     /// Verifies line-count based rollover creates ordered segments.
     /// 验证基于行数的滚动会创建有序分段。
     #[test]
@@ -2681,11 +2919,11 @@ mod tests {
         assert_eq!(metadata.segments[1].start_seq, 2);
     }
 
-    /// Verifies transcript tail appends are idempotent and preserve search-facing event kinds.
-    /// 验证转录尾部追加具备幂等性，并保留面向搜索的事件类型。
+    /// Verifies transcript tail appends are idempotent and preserve transcript-facing event kinds.
+    /// 验证转录尾部追加具备幂等性，并保留面向转录的事件类型。
     #[test]
-    fn append_message_tail_is_idempotent_and_maps_search_kinds() {
-        let root = test_root("append_message_tail_is_idempotent_and_maps_search_kinds");
+    fn append_message_tail_is_idempotent_and_maps_transcript_kinds() {
+        let root = test_root("append_message_tail_is_idempotent_and_maps_transcript_kinds");
         let session_dir = create_segmented_session(
             &root,
             test_session_request(SegmentPolicy {
@@ -2737,6 +2975,7 @@ mod tests {
         let metadata: SegmentedSessionMetadata =
             read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
         assert_eq!(metadata.next_global_seq, 4);
+        assert_eq!(metadata.message_count, 3);
     }
 
     /// Verifies non-tail transcript changes are rejected instead of being silently appended out of order.
@@ -2780,12 +3019,12 @@ mod tests {
         assert!(error.contains("non-tail transcript change"));
     }
 
-    /// Verifies non-tail transcript updates become rollback-bounded replacement history.
-    /// 验证非尾部转录更新会变成带回滚边界的替换历史。
+    /// Verifies shortened transcript updates become rollback-bounded replacement history.
+    /// 验证缩短的转录更新会变成带回滚边界的替换历史。
     #[test]
-    fn append_message_update_records_rollback_replacement_for_non_tail_change() {
+    fn append_message_update_records_rollback_replacement_for_shortened_history() {
         let root =
-            test_root("append_message_update_records_rollback_replacement_for_non_tail_change");
+            test_root("append_message_update_records_rollback_replacement_for_shortened_history");
         let session_dir =
             create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
                 .expect("create session");
@@ -2805,20 +3044,12 @@ mod tests {
         ];
         append_segmented_session_message_tail(&session_dir, &original_messages)
             .expect("append original messages");
-        let replacement_messages = vec![
-            test_message(
-                "m-user-1",
-                SessionMessageKind::User,
-                SessionMessageRecordKind::Transcript,
-                "edited prompt",
-            ),
-            test_message(
-                "m-assistant-1",
-                SessionMessageKind::Assistant,
-                SessionMessageRecordKind::AssistantOutput,
-                "edited answer",
-            ),
-        ];
+        let replacement_messages = vec![test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "edited prompt",
+        )];
 
         let replacement_lines =
             append_segmented_session_message_update(&session_dir, &replacement_messages)
@@ -2835,6 +3066,7 @@ mod tests {
             replacement_metadata.latest_rollback_seq,
             replacement_lines.first().map(|line| line.seq)
         );
+        assert_eq!(replacement_metadata.message_count, 1);
         assert_eq!(replacement_lines.len(), replacement_messages.len() + 1);
         let latest_window =
             read_segmented_session_turn_window(&session_dir, None, 10).expect("read latest window");
@@ -2844,7 +3076,7 @@ mod tests {
                 .iter()
                 .map(|line| line.payload["message_id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec!["m-user-1", "m-assistant-1"]
+            vec!["m-user-1"]
         );
         let latest_messages =
             segmented_lines_to_session_messages(&latest_window.lines).expect("project messages");
@@ -2861,7 +3093,7 @@ mod tests {
             &replay.expect("replay result").conversation_state,
         );
         assert_eq!(replay_messages[0].body, "edited prompt");
-        assert_eq!(replay_messages[1].body, "edited answer");
+        assert_eq!(replay_messages.len(), 1);
     }
 
     /// Verifies messages removed by rollback can be reintroduced with the same id later.
@@ -3104,7 +3336,7 @@ mod tests {
                 updated_at: "2026-06-06T11:00:00Z".to_string(),
                 runtime_state: json!({ "phase": "checkpoint" }),
                 current_context: json!({ "cursor": 7 }),
-                codex_thread_state: Value::Null,
+                session_boundary_state: Value::Null,
             },
         )
         .expect("write state");
@@ -3115,6 +3347,44 @@ mod tests {
         let state: SegmentedSessionStateDocument =
             read_required_json(&session_dir.join(SEGMENTED_STATE_FILE)).expect("read state");
         assert_eq!(state.runtime_state["phase"], "checkpoint");
+    }
+
+    /// Verifies runtime-state writes preserve the independently managed session-boundary partition.
+    /// 验证运行态写入会保留独立管理的会话边界状态分区。
+    #[test]
+    fn write_state_preserves_existing_session_boundary_partition() {
+        let root = test_root("write_state_preserves_existing_session_boundary_partition");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+
+        replace_session_boundary_state(
+            &session_dir,
+            json!({
+                "status": "idle",
+                "last_turn_id": "turn-alpha"
+            }),
+        )
+        .expect("write boundary state");
+        write_state(
+            &session_dir,
+            &SegmentedSessionStateDocument {
+                schema_version: 1,
+                session_id: "session-alpha".to_string(),
+                updated_at: "2026-06-08T10:00:00Z".to_string(),
+                runtime_state: json!({ "phase": "runtime-checkpoint" }),
+                current_context: json!({ "cursor": 9 }),
+                session_boundary_state: Value::Null,
+            },
+        )
+        .expect("write runtime state");
+
+        let state = read_state(&session_dir)
+            .expect("read state")
+            .expect("state exists");
+        assert_eq!(state.runtime_state["phase"], "runtime-checkpoint");
+        assert_eq!(state.session_boundary_state["status"], "idle");
+        assert_eq!(state.session_boundary_state["last_turn_id"], "turn-alpha");
     }
 
     /// Verifies runtime state entries are mapped into overwrite-only state documents.
@@ -3145,7 +3415,8 @@ mod tests {
             state.current_context["anchor_context_budget_fingerprint"],
             "budget-a"
         );
-        assert!(state.current_context["conversation_state"].is_object());
+        assert!(state.runtime_state.get("conversation_state").is_none());
+        assert!(state.current_context.get("conversation_state").is_none());
     }
 
     /// Verifies child task sessions use the same segment model and begin with SubagentTaskMeta.

@@ -12,8 +12,8 @@ use super::{
     composer_visible_line_count, generated_attachments_from_tool_metadata,
     merge_projected_session_messages_into_existing_window, merge_tool_display_messages,
     pending_prompt_dispatch_index, prune_session_messages_to_limit,
-    sanitize_workspace_history_search_query_input, segmented_session_files_missing_error,
-    task_session_payload_from_tool_metadata, tool_modal_presentation_from_agent_view_attributes,
+    segmented_session_files_missing_error, task_session_payload_from_tool_metadata,
+    tool_modal_presentation_from_agent_view_attributes,
 };
 use crate::app_shell::markdown;
 use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
@@ -28,7 +28,6 @@ use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSes
 use crate::workbench_prompt_turn::{
     SharedPromptTurnRuntimeBeginInput, begin_shared_prompt_turn_with_runtime_state,
 };
-use crate::workspace_store::SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS;
 use iced::Task;
 use iced::widget::text_editor;
 use serde_json::{Value, json};
@@ -471,37 +470,6 @@ fn composer_visible_line_count_preserves_trailing_blank_line() {
     let buffer = text_editor::Content::with_text("第一行\n");
 
     assert_eq!(composer_visible_line_count(&buffer, 420.0), 2);
-}
-
-/// Verifies that pasted workspace-history search text is flattened and bounded before rendering.
-/// 验证粘贴的工作台历史搜索文本在渲染前会被压平并限制长度。
-#[test]
-fn sanitize_workspace_history_search_query_input_limits_pasted_text() {
-    let pasted = format!(
-        "第一行\n\t第二行 {}",
-        "x".repeat(SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS + 64)
-    );
-    let sanitized = sanitize_workspace_history_search_query_input(&pasted);
-
-    assert!(sanitized.starts_with("第一行 第二行 "));
-    assert!(!sanitized.contains('\n'));
-    assert_eq!(
-        sanitized.chars().count(),
-        SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS
-    );
-}
-
-/// Verifies the legacy workspace-history search panel stays disabled while search is downlined.
-/// 验证搜索下线期间旧工作台历史搜索面板保持禁用。
-#[test]
-fn disabled_workspace_history_search_panel_does_not_open() {
-    let (mut workbench, _task) = VulcanWorkbench::new();
-
-    let _ = workbench.update(Message::OpenWorkspaceHistorySearchPanel);
-
-    assert!(!workbench.workspace_history_search.panel_open);
-    assert!(workbench.workspace_history_search.query.is_empty());
-    assert!(workbench.status_message.contains("历史搜索已下线"));
 }
 
 /// Verifies that one long logical line expands into multiple visible lines when the composer width becomes narrow enough.
@@ -1621,16 +1589,16 @@ fn pending_prompt_dispatch_index_uses_fifo_ordering() {
     assert_eq!(pending_prompt_dispatch_index(&queue, false), 0);
 }
 
-/// Verifies any provider runtime blocks pending-prompt dispatch while detached subagents from the previous tool round are still running.
-/// 验证当上一轮工具回合的分离子代理仍在运行时，任意 Provider 运行时都会阻止待发送提示词分发。
+/// Verifies running subagents no longer block pending-prompt dispatch on the independent subagent lane.
+/// 验证运行中子代理在独立子代理通道语义下不再阻塞待发送提示词分发。
 #[test]
-fn pending_prompt_dispatch_blocks_for_running_subagents() {
+fn pending_prompt_dispatch_allows_running_subagents() {
     assert!(
         pending_prompt_dispatch_block_reason(
             test_pending_prompt_dispatch_context(true, true),
             true,
         )
-        .is_some()
+        .is_none()
     );
     assert!(
         pending_prompt_dispatch_block_reason(
@@ -1644,7 +1612,7 @@ fn pending_prompt_dispatch_blocks_for_running_subagents() {
             test_pending_prompt_dispatch_context(false, true),
             true,
         )
-        .is_some()
+        .is_none()
     );
     assert!(
         pending_prompt_dispatch_block_reason(
@@ -3131,11 +3099,11 @@ fn merge_tool_display_messages_formats_task_session_cards() {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolCallOutput,
             visible: true,
-            title: String::from("调用 task 工具"),
+            title: String::from("调用 spawn_agent 工具"),
             body: String::from("## 调用参数\n\n```json\n{\"description\":\"审查仓库\"}\n```"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "arguments": {
                     "description": "审查仓库",
                     "subagent": "explorer",
@@ -3148,11 +3116,11 @@ fn merge_tool_display_messages_formats_task_session_cards() {
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
-            title: String::from("调用 task 工具"),
+            title: String::from("调用 spawn_agent 工具"),
             body: String::from("## 工具返回\n\n子代理已完成。"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "kind": "task_session",
                 "payload": {
                     "task_id": "00000000-0000-0000-0000-000000000001",
@@ -3217,11 +3185,11 @@ fn merge_tool_display_messages_prefers_terminal_task_payload_over_stale_running_
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolCallOutput,
             visible: true,
-            title: String::from("调用 task 工具"),
+            title: String::from("调用 spawn_agent 工具"),
             body: String::from("## 调用参数"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "kind": "task_session",
                 "payload": {
                     "task_id": "count_10",
@@ -3239,11 +3207,11 @@ fn merge_tool_display_messages_prefers_terminal_task_payload_over_stale_running_
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolResultOutput,
             visible: true,
-            title: String::from("调用 task 工具"),
+            title: String::from("调用 spawn_agent 工具"),
             body: String::from("## 工具返回\n\n运行中。"),
             metadata: Some(json!({
                 "tool_call_id": "call-task-1",
-                "tool_name": "task",
+                "tool_name": "spawn_agent",
                 "kind": "task_session",
                 "payload": {
                     "task_id": "count_10",

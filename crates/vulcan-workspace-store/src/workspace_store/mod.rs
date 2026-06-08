@@ -9,10 +9,9 @@ use crate::conversation_protocol::{
 };
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
-    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
-    VmmProfileSyncState, VmmWritebackOutboxEntry,
+    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageRecordKind,
+    SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource,
+    SessionTranscriptUiState, TaskProjectSummary, VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
 use crate::provider_usage::parse_provider_usage_from_json;
 use serde::Deserialize;
@@ -21,15 +20,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 use vldb_controller_client::ControllerSqliteValue;
-use vulcan_codex_session_port::{
-    CodexEventScope, CodexEventVisibility, CodexSessionEvent, CodexSessionEventKind,
-    CodexSessionStateStore, CodexSessionStore, CodexStorageWrite,
-};
 use vulcan_context_injection::ContextInjectionState;
+use vulcan_session_boundary::{
+    SessionBoundaryEvent, SessionBoundaryEventKind, SessionBoundaryStateStore,
+    SessionBoundaryStorageWrite, SessionBoundaryStore, SessionEventScope, SessionEventVisibility,
+};
 use vulcan_session_core::SessionNodeId;
 use vulcan_vmm::VmmConfigLayer;
 
-mod history_search;
 mod persistence;
 mod segmented_session_store;
 mod session_load;
@@ -37,13 +35,14 @@ mod session_load;
 pub use self::segmented_session_store::find_segmented_session_directory_for_task_store;
 use self::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventInput,
-    SegmentedSessionEventKind, append_segmented_codex_boundary_events,
+    SegmentedSessionEventKind, SegmentedSessionMetadataPatch, append_segmented_boundary_events,
     append_segmented_session_events, clear_all_segmented_session_roots,
     create_segmented_session_in_location, find_segmented_session_directory,
-    list_segmented_session_catalog, load_codex_thread_state, read_segmented_session_event_window,
-    read_state, replace_codex_thread_state, state_document_from_runtime_state, write_state,
+    find_segmented_session_directory_by_id, list_segmented_session_catalog,
+    load_session_boundary_state, patch_segmented_session_metadata,
+    read_segmented_session_event_window, read_state, replace_session_boundary_state,
+    replay_segmented_session_context, state_document_from_runtime_state, write_state,
 };
-pub use history_search::search_workspace_history;
 pub use persistence::{
     archive_project_with_sessions, archive_single_session, permanently_delete_archived_project,
     permanently_delete_archived_session, persist_collapsed_task_project_ids, persist_new_project,
@@ -58,8 +57,8 @@ pub use session_load::{load_session_history_page, load_session_hydration_snapsho
 /// 描述一次已完成的工作台快照持久化过程，并携带所有非致命的辅助告警。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkspaceSnapshotPersistOutcome {
-    /// Non-fatal warnings collected while synchronizing auxiliary projections such as workspace-history search.
-    /// 在同步工作台历史搜索等辅助投影期间收集到的非致命告警。
+    /// Non-fatal warnings collected while synchronizing auxiliary workspace projections.
+    /// 在同步工作台辅助投影期间收集到的非致命告警。
     pub warnings: Vec<String>,
 }
 
@@ -95,12 +94,6 @@ pub const SESSION_TRANSCRIPT_COMPACTION_OVERLAP_TURN_COUNT: usize = 5;
 /// Tool-detail page size used when a specific turn asks for its tool rows.
 /// 指定轮次请求工具明细行时使用的分页大小。
 pub const SESSION_TOOL_DETAIL_PAGE_LIMIT: usize = 100;
-/// Search-result page size used by the lightweight per-session history search.
-/// 单会话轻量历史搜索使用的搜索结果页大小。
-pub const SESSION_HISTORY_SEARCH_RESULT_LIMIT: usize = 20;
-/// Maximum characters retained from one user-provided history-search query.
-/// 单条用户提供的历史搜索词允许保留的最大字符数。
-pub const SESSION_HISTORY_SEARCH_QUERY_MAX_CHARS: usize = 512;
 /// Maximum message rows fetched for each requested turn before an inner-turn page becomes necessary.
 /// 在需要轮内分页前，每个请求轮次允许拉取的最大消息行数。
 const SESSION_TRANSCRIPT_ROWS_PER_TURN_LIMIT: usize = 32;
@@ -207,69 +200,6 @@ pub struct SessionHistoryPage {
     pub has_more_history: bool,
 }
 
-/// Workspace-scoped history-search results returned for one left-panel query.
-/// 左侧面板历史查询返回的工作区级历史搜索结果。
-#[derive(Debug, Clone)]
-pub struct WorkspaceHistorySearchPage {
-    /// Normalized user query used to produce the result page.
-    /// 生成该结果页时使用的规范化用户查询。
-    pub query: String,
-    /// Search hits returned by the active history-search implementation.
-    /// 当前历史搜索实现返回的命中集合。
-    pub hits: Vec<WorkspaceHistorySearchHit>,
-    /// Whether the result count reached the requested limit.
-    /// 结果数量是否已经达到请求上限。
-    pub limit_reached: bool,
-    /// Total match count reported for the current query and scope.
-    /// 当前查询与范围返回的总命中数量。
-    pub total_hits: usize,
-    /// Next result offset that should be requested when the user asks to load more.
-    /// 用户请求继续加载时应使用的下一页偏移量。
-    pub next_offset: usize,
-    /// Whether more results still remain after the currently returned page.
-    /// 当前结果页之后是否仍然存在更多命中。
-    pub has_more: bool,
-}
-
-/// One workspace-scoped history-search hit.
-/// 单条工作区级历史搜索命中。
-#[derive(Debug, Clone)]
-pub struct WorkspaceHistorySearchHit {
-    /// Human-readable project name rendered in the left search panel.
-    /// 渲染在左侧搜索面板中的项目名称。
-    pub project_name: String,
-    /// Stable session identifier owning the matched message row.
-    /// 拥有该命中消息行的稳定会话标识。
-    pub session_id: SessionId,
-    /// Human-readable session title restored from the persisted session row.
-    /// 从持久化会话行恢复出的会话标题。
-    pub session_title: String,
-    /// Stable identifier of the matched message row.
-    /// 命中消息行的稳定标识。
-    pub message_id: String,
-    /// Stable ordinal inside the session transcript.
-    /// 会话转录内部的稳定序号。
-    pub ordinal: i64,
-    /// Stable turn index inside the session transcript.
-    /// 会话转录内部的稳定轮次索引。
-    pub turn_index: i64,
-    /// High-level message kind reconstructed from the persisted role.
-    /// 根据持久化角色恢复出的高层消息类型。
-    pub message_kind: SessionMessageKind,
-    /// Compact preview fragment for the matched content.
-    /// 命中内容的紧凑预览片段。
-    pub preview: String,
-    /// Raw preview markup that the UI may render with highlights.
-    /// UI 可用于渲染高亮的原始预览标记。
-    pub preview_markup: String,
-    /// Created-at timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的创建时间。
-    pub created_at: String,
-    /// Implementation-specific score used for tie-break visibility.
-    /// 用于并列诊断的实现相关分值。
-    pub score: f64,
-}
-
 /// One tool-detail page loaded on demand for a single conversation turn.
 /// 为单个对话轮次按需加载的一页工具明细。
 #[derive(Debug, Clone)]
@@ -324,33 +254,6 @@ struct StoredAppMetadataRow {
     value: String,
 }
 
-/// Raw session row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始会话行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredSessionRow {
-    /// Stable text session identifier stored in SQLite.
-    /// 存储在 SQLite 中的稳定文本会话标识。
-    id: String,
-    /// Owning project identifier stored in SQLite.
-    /// 存储在 SQLite 中的所属项目标识。
-    project_id: String,
-    /// Visible session title stored in SQLite.
-    /// 存储在 SQLite 中的可见会话标题。
-    title: String,
-    /// Persisted title source key.
-    /// 持久化标题来源键。
-    title_source: String,
-    /// Stable order value inside the owning project.
-    /// 所属项目内部的稳定顺序值。
-    sort_order: i64,
-    /// SQLite numeric archived flag.
-    /// SQLite 数值型归档标记。
-    archived: i64,
-    /// Last-updated timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的最近更新时间戳。
-    updated_at: String,
-}
-
 /// Lightweight session turn-index row used by tool-detail hydration lookups.
 /// 工具明细水合查询使用的轻量会话轮次索引行。
 #[derive(Debug, Clone, Deserialize)]
@@ -358,35 +261,6 @@ struct StoredSessionTurnIndexRow {
     /// Stable conversation-turn index already stored in SQLite.
     /// 已持久化到 SQLite 中的稳定对话轮次索引。
     turn_index: i64,
-}
-
-/// Raw compaction checkpoint row decoded from the controller SQLite query payload.
-/// 从控制器 SQLite 查询载荷中解码出的原始压缩检查点行。
-#[derive(Debug, Clone, Deserialize)]
-struct StoredCompactionRow {
-    /// Stable compaction identifier.
-    /// 稳定压缩标识。
-    id: String,
-    /// Optional source tail message identifier.
-    /// 可选的源历史尾消息标识。
-    source_until_message_id: Option<String>,
-    /// Optional absolute source tail turn index.
-    /// 可选的绝对源历史尾轮次索引。
-    #[serde(default)]
-    source_until_turn_index: Option<i64>,
-    /// Optional rebuilt context start message identifier.
-    /// 可选的新上下文起始消息标识。
-    context_start_message_id: Option<String>,
-    /// Optional absolute retained-tail start turn index.
-    /// 可选的绝对保留尾部起始轮次索引。
-    #[serde(default)]
-    retained_tail_start_turn_index: Option<i64>,
-    /// Optional hidden summary message identifier.
-    /// 可选的隐藏摘要消息标识。
-    summary_message_id: Option<String>,
-    /// Created-at timestamp stored as Unix milliseconds text.
-    /// 以 Unix 毫秒文本形式存储的创建时间。
-    created_at: String,
 }
 
 /// Disabled legacy runtime-state shape retained for migration-free loader boundaries.
@@ -541,6 +415,12 @@ pub async fn load_workspace_snapshot(
                 {
                     runtime_state.updated_at = state_document.updated_at;
                 }
+                hydrate_runtime_state_from_segmented_replay_if_missing(
+                    session_id,
+                    &entry.session_dir,
+                    &mut runtime_state,
+                )?;
+                let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
                 if entry.archived {
                     archived_runtime_state_map.insert(session_id, runtime_state);
                 } else {
@@ -647,6 +527,65 @@ pub async fn load_workspace_snapshot(
     })
 }
 
+/// Clears process-scoped runtime latches that must never survive an application restart.
+/// 清理绝不能跨应用重启保留的进程级运行态闩锁。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the freshly loaded persisted session runtime state.
+/// `runtime_state` 是刚从持久化内容加载出的会话运行态。
+///
+/// # Returns
+/// 返回值
+/// Whether any volatile field was cleared.
+/// 是否清理了任何临时字段。
+fn sanitize_loaded_runtime_state_for_fresh_process(
+    runtime_state: &mut SessionRuntimeStateEntry,
+) -> bool {
+    runtime_state.active_precheck_turn_id.take().is_some()
+}
+
+/// Rehydrates the canonical conversation state from segmented JSONL when state.json is intentionally lightweight.
+/// 当 state.json 按设计只保存轻量运行态时，从分段 JSONL 回填规范会话状态。
+fn hydrate_runtime_state_from_segmented_replay_if_missing(
+    session_id: SessionId,
+    session_dir: &std::path::Path,
+    runtime_state: &mut SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    if runtime_state_has_concrete_conversation_context(runtime_state) {
+        return Ok(());
+    }
+    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+        return Ok(());
+    };
+    runtime_state.conversation_state = replay.conversation_state;
+    if runtime_state.last_compaction_id.is_none() {
+        runtime_state.last_compaction_id = replay.last_compaction_id;
+    }
+    if runtime_state.context_start_message_id.is_none() {
+        runtime_state.context_start_message_id = replay.context_start_message_id;
+    }
+    if runtime_state.updated_at.trim().is_empty() {
+        if let Some(updated_at) = replay.updated_at {
+            runtime_state.updated_at = updated_at;
+        }
+    }
+    let _ = session_load::repair_duplicate_conversation_record_ids(
+        session_id,
+        &mut runtime_state.conversation_state,
+    );
+    Ok(())
+}
+
+/// Returns whether a runtime state already carries concrete transcript context.
+/// 返回运行态是否已经携带具体转录上下文。
+fn runtime_state_has_concrete_conversation_context(
+    runtime_state: &SessionRuntimeStateEntry,
+) -> bool {
+    !runtime_state.conversation_state.messages.is_empty()
+        || !runtime_state.conversation_state.records.is_empty()
+}
+
 /// Builds the default empty workspace snapshot used before any real project has been added.
 /// 构建在尚未添加任何真实项目之前使用的默认空工作台快照。
 fn build_empty_workspace_snapshot() -> WorkspaceSnapshot {
@@ -703,8 +642,6 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             APP_SPACE_ID,
             app_sqlite_binding_id(controller),
             r#"
-DELETE FROM session_compactions;
-DELETE FROM sessions;
 DELETE FROM projects;
 DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
 "#,
@@ -768,10 +705,10 @@ pub fn snapshot_segmented_session_context_before_user_prompt(
     Ok(())
 }
 
-/// Codex store adapter backed by one workspace segmented session directory.
-/// 由单个工作区分段会话目录支撑的 Codex 存储适配器。
+/// session boundary store adapter backed by one workspace segmented session directory.
+/// 由单个工作区分段会话目录支撑的 会话边界存储适配器。
 #[derive(Debug, Clone)]
-pub struct WorkspaceSegmentedCodexSessionStore {
+pub struct WorkspaceSegmentedSessionBoundaryStore {
     /// Vulcan code data root.
     /// Vulcan Code 数据根目录。
     data_root: std::path::PathBuf,
@@ -786,9 +723,9 @@ pub struct WorkspaceSegmentedCodexSessionStore {
     session_title: String,
 }
 
-impl WorkspaceSegmentedCodexSessionStore {
-    /// Creates one Codex store adapter for a workspace segmented session.
-    /// 为工作区分段会话创建一个 Codex 存储适配器。
+impl WorkspaceSegmentedSessionBoundaryStore {
+    /// Creates one session boundary store adapter for a workspace segmented session.
+    /// 为工作区分段会话创建一个 会话边界存储适配器。
     pub fn new(
         data_root: impl Into<std::path::PathBuf>,
         project_id: impl Into<String>,
@@ -806,7 +743,7 @@ impl WorkspaceSegmentedCodexSessionStore {
     /// Resolves or creates the backing segmented session directory.
     /// 解析或创建背后的分段会话目录。
     fn ensure_session_dir(&self) -> Result<std::path::PathBuf, String> {
-        ensure_codex_boundary_session_dir(
+        ensure_session_boundary_dir(
             &self.data_root,
             &self.project_id,
             self.session_id,
@@ -815,28 +752,28 @@ impl WorkspaceSegmentedCodexSessionStore {
     }
 }
 
-impl CodexSessionStore for WorkspaceSegmentedCodexSessionStore {
-    /// Appends one Codex event into the segmented session stream.
-    /// 向分段会话流追加一条 Codex 事件。
-    fn append_event(&self, write: CodexStorageWrite) -> Result<(), String> {
+impl SessionBoundaryStore for WorkspaceSegmentedSessionBoundaryStore {
+    /// Appends one session boundary event into the segmented session stream.
+    /// 向分段会话流追加一条 会话边界事件。
+    fn append_event(&self, write: SessionBoundaryStorageWrite) -> Result<(), String> {
         if write.thread_id != SessionNodeId::from(self.session_id) {
             return Err(format!(
-                "Codex write thread `{}` does not match workspace session `{}`.",
+                "Session boundary write thread `{}` does not match workspace session `{}`.",
                 write.thread_id, self.session_id
             ));
         }
         let session_dir = self.ensure_session_dir()?;
-        append_segmented_codex_boundary_events(&session_dir, std::slice::from_ref(&write.event))?;
+        append_segmented_boundary_events(&session_dir, std::slice::from_ref(&write.event))?;
         Ok(())
     }
 
-    /// Reads Codex events from the segmented session stream.
-    /// 从分段会话流读取 Codex 事件。
-    fn read_events(&self, thread_id: SessionNodeId) -> Result<Vec<CodexSessionEvent>, String> {
+    /// Reads session boundary events from the segmented session stream.
+    /// 从分段会话流读取 会话边界事件。
+    fn read_events(&self, thread_id: SessionNodeId) -> Result<Vec<SessionBoundaryEvent>, String> {
         if thread_id != SessionNodeId::from(self.session_id) {
             return Ok(Vec::new());
         }
-        load_segmented_session_codex_boundary_events(
+        load_segmented_session_boundary_events(
             &self.data_root,
             &self.project_id,
             self.session_id,
@@ -846,22 +783,22 @@ impl CodexSessionStore for WorkspaceSegmentedCodexSessionStore {
     }
 }
 
-impl CodexSessionStateStore for WorkspaceSegmentedCodexSessionStore {
-    /// Replaces only the Codex runner state inside state.json.
-    /// 仅覆盖 state.json 内的 Codex runner 状态。
+impl SessionBoundaryStateStore for WorkspaceSegmentedSessionBoundaryStore {
+    /// Replaces only the session lifecycle runner state inside state.json.
+    /// 仅覆盖 state.json 内的 session lifecycle runner 状态。
     fn replace_state(&self, thread_id: SessionNodeId, state: Value) -> Result<(), String> {
         if thread_id != SessionNodeId::from(self.session_id) {
             return Err(format!(
-                "Codex state thread `{}` does not match workspace session `{}`.",
+                "Session boundary state thread `{}` does not match workspace session `{}`.",
                 thread_id, self.session_id
             ));
         }
         let session_dir = self.ensure_session_dir()?;
-        replace_codex_thread_state(&session_dir, state)
+        replace_session_boundary_state(&session_dir, state)
     }
 
-    /// Loads the Codex runner state from state.json.
-    /// 从 state.json 读取 Codex runner 状态。
+    /// Loads the session lifecycle runner state from state.json.
+    /// 从 state.json 读取 session lifecycle runner 状态。
     fn load_state(&self, thread_id: SessionNodeId) -> Result<Option<Value>, String> {
         if thread_id != SessionNodeId::from(self.session_id) {
             return Ok(None);
@@ -876,31 +813,31 @@ impl CodexSessionStateStore for WorkspaceSegmentedCodexSessionStore {
         else {
             return Ok(None);
         };
-        load_codex_thread_state(&session_dir)
+        load_session_boundary_state(&session_dir)
     }
 }
 
-/// Appends accepted Codex boundary events into the segmented session stream.
-/// 将已接受的 Codex 边界事件追加到分段会话流。
-pub fn append_segmented_session_codex_boundary_events(
+/// Appends accepted session boundary events into the segmented session stream.
+/// 将已接受的 会话边界事件追加到分段会话流。
+pub fn append_segmented_session_boundary_events(
     data_root: &std::path::Path,
     project_id: &str,
     session_id: SessionId,
     session_title: &str,
-    events: &[CodexSessionEvent],
+    events: &[SessionBoundaryEvent],
 ) -> Result<(), String> {
     if events.is_empty() {
         return Ok(());
     }
     let session_dir =
-        ensure_codex_boundary_session_dir(data_root, project_id, session_id, session_title)?;
-    append_segmented_codex_boundary_events(&session_dir, events)?;
+        ensure_session_boundary_dir(data_root, project_id, session_id, session_title)?;
+    append_segmented_boundary_events(&session_dir, events)?;
     Ok(())
 }
 
-/// Resolves or creates the segmented session directory used by Codex boundary storage.
-/// 解析或创建 Codex 边界存储使用的分段会话目录。
-fn ensure_codex_boundary_session_dir(
+/// Resolves or creates the segmented session directory used by session boundary storage.
+/// 解析或创建 会话边界存储使用的分段会话目录。
+fn ensure_session_boundary_dir(
     data_root: &std::path::Path,
     project_id: &str,
     session_id: SessionId,
@@ -920,22 +857,22 @@ fn ensure_codex_boundary_session_dir(
                 created_at: now,
                 project_id: Some(project_id.to_string()),
                 title: Some(session_title.to_string()),
-                title_source: Some(String::from("codex_boundary")),
+                title_source: Some(String::from("session_boundary")),
                 segment_policy: SegmentPolicy::default(),
             },
         ),
     }
 }
 
-/// Loads Codex boundary events from one segmented session window.
-/// 从一个分段会话窗口读取 Codex 边界事件。
-pub fn load_segmented_session_codex_boundary_events(
+/// Loads session boundary events from one segmented session window.
+/// 从一个分段会话窗口读取 会话边界事件。
+pub fn load_segmented_session_boundary_events(
     data_root: &std::path::Path,
     project_id: &str,
     session_id: SessionId,
     before_seq: Option<u64>,
     limit: usize,
-) -> Result<Vec<CodexSessionEvent>, String> {
+) -> Result<Vec<SessionBoundaryEvent>, String> {
     let session_id_text = session_id.to_string();
     let Some(session_dir) =
         find_segmented_session_directory(data_root, false, project_id, &session_id_text)?
@@ -944,29 +881,54 @@ pub fn load_segmented_session_codex_boundary_events(
     };
     read_segmented_session_event_window(&session_dir, before_seq, limit)?
         .iter()
-        .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
-        .map(codex_boundary_event_from_segment_line)
+        .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
+        .map(session_boundary_event_from_segment_line)
         .collect()
 }
 
-/// Rebuilds one Codex boundary event from a segmented JSONL line.
-/// 从分段 JSONL 行重建一条 Codex 边界事件。
-fn codex_boundary_event_from_segment_line(
+/// Updates display metadata for one segmented session without rewriting transcript segments.
+/// 仅更新单个分段会话的展示元数据，不重写转录分段。
+pub fn rename_segmented_session_metadata(
+    data_root: &std::path::Path,
+    session_id: SessionId,
+    title: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    let session_id_text = session_id.to_string();
+    let Some(session_dir) = find_segmented_session_directory_by_id(data_root, &session_id_text)?
+    else {
+        return Err(format!("未找到分段会话目录：{session_id_text}"));
+    };
+    patch_segmented_session_metadata(
+        &session_dir,
+        SegmentedSessionMetadataPatch {
+            updated_at: Some(updated_at.to_string()),
+            title: Some(Some(title.to_string())),
+            title_source: Some(Some("manual".to_string())),
+            archived_at: None,
+        },
+    )?;
+    Ok(())
+}
+
+/// Rebuilds one session boundary event from a segmented JSONL line.
+/// 从分段 JSONL 行重建一条 会话边界事件。
+fn session_boundary_event_from_segment_line(
     line: &self::segmented_session_store::SegmentedSessionEventLine,
-) -> Result<CodexSessionEvent, String> {
+) -> Result<SessionBoundaryEvent, String> {
     let payload = &line.payload;
     let event_id = required_string(payload, "event_id")?;
     let thread_id = serde_json::from_value::<SessionNodeId>(required_value(payload, "thread_id")?)
-        .map_err(|error| format!("invalid codex boundary thread_id: {error}"))?;
-    let kind = serde_json::from_value::<CodexSessionEventKind>(required_value(payload, "kind")?)
-        .map_err(|error| format!("invalid codex boundary kind: {error}"))?;
-    let scope = serde_json::from_value::<CodexEventScope>(required_value(payload, "scope")?)
-        .map_err(|error| format!("invalid codex boundary scope: {error}"))?;
+        .map_err(|error| format!("invalid session boundary thread_id: {error}"))?;
+    let kind = serde_json::from_value::<SessionBoundaryEventKind>(required_value(payload, "kind")?)
+        .map_err(|error| format!("invalid session boundary kind: {error}"))?;
+    let scope = serde_json::from_value::<SessionEventScope>(required_value(payload, "scope")?)
+        .map_err(|error| format!("invalid session boundary scope: {error}"))?;
     let visibility =
-        serde_json::from_value::<CodexEventVisibility>(required_value(payload, "visibility")?)
-            .map_err(|error| format!("invalid codex boundary visibility: {error}"))?;
+        serde_json::from_value::<SessionEventVisibility>(required_value(payload, "visibility")?)
+            .map_err(|error| format!("invalid session boundary visibility: {error}"))?;
     let timestamp_ms = line.timestamp.parse::<u64>().unwrap_or_default();
-    Ok(CodexSessionEvent {
+    Ok(SessionBoundaryEvent {
         event_id,
         thread_id,
         turn_id: optional_string(payload, "turn_id"),
@@ -1143,56 +1105,6 @@ async fn query_active_project_ids(
 
 /// Queries visible session rows ordered by project and stable order.
 /// 查询按项目与稳定顺序排序后的可见会话行。
-async fn query_session_rows(
-    controller: &ControllerRuntimeHandle,
-) -> Result<Vec<StoredSessionRow>, String> {
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            r#"
-SELECT id, project_id, title, title_source, sort_order, archived, updated_at
-FROM sessions
-ORDER BY project_id ASC, sort_order ASC, updated_at DESC;
-"#,
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("查询工作台会话列表失败：{error}"))?;
-
-    decode_query_rows::<StoredSessionRow>(&result.json_data)
-}
-
-/// Queries active session identifiers used for soft-archive reconciliation.
-/// 查询用于软归档对账的激活会话标识集合。
-async fn query_active_session_ids(
-    controller: &ControllerRuntimeHandle,
-) -> Result<BTreeSet<String>, String> {
-    #[derive(Deserialize)]
-    struct IdRow {
-        /// Persisted identifier.
-        /// 持久化标识。
-        id: String,
-    }
-
-    let result = controller
-        .client
-        .query_sqlite_json_typed(
-            APP_SPACE_ID,
-            app_sqlite_binding_id(controller),
-            "SELECT id FROM sessions WHERE archived = 0;",
-            Vec::new(),
-        )
-        .await
-        .map_err(|error| format!("查询激活会话标识失败：{error}"))?;
-
-    Ok(decode_query_rows::<IdRow>(&result.json_data)?
-        .into_iter()
-        .map(|row| row.id)
-        .collect())
-}
-
 /// Returns the maximum message rows fetched for one turn-level transcript window.
 /// 返回单个轮次级转录窗口允许拉取的最大消息行数。
 fn session_transcript_row_limit_for_turns(turn_limit: usize) -> usize {
@@ -1240,22 +1152,6 @@ where
 {
     serde_json::from_str::<Vec<T>>(json_data)
         .map_err(|error| format!("解析控制器 SQLite 查询结果失败：{error}"))
-}
-
-/// Converts one persisted compaction row into the in-memory checkpoint shape.
-/// 将一条持久化压缩行转换为内存中的检查点结构。
-fn stored_compaction_row_to_entry(row: StoredCompactionRow) -> SessionCompactionEntry {
-    SessionCompactionEntry {
-        id: row.id,
-        source_until_message_id: row.source_until_message_id,
-        source_until_turn_index: row.source_until_turn_index,
-        context_start_message_id: row.context_start_message_id,
-        context_budget_fingerprint: None,
-        context_assembly_fingerprint: None,
-        retained_tail_start_turn_index: row.retained_tail_start_turn_index,
-        summary_message_id: row.summary_message_id,
-        created_at: row.created_at,
-    }
 }
 
 /// Converts one legacy runtime document into the in-memory runtime-state shape.
@@ -1545,27 +1441,27 @@ fn non_empty_timestamp_text(value: &str) -> String {
     }
 }
 
-/// Returns a required cloned JSON value from a Codex boundary wrapper.
-/// 从 Codex 边界包装对象中返回一个必需的 JSON 值副本。
+/// Returns a required cloned JSON value from a session boundary wrapper.
+/// 从 会话边界包装对象中返回一个必需的 JSON 值副本。
 fn required_value(payload: &Value, key: &str) -> Result<Value, String> {
     payload
         .get(key)
         .cloned()
-        .ok_or_else(|| format!("codex boundary payload missing `{key}`"))
+        .ok_or_else(|| format!("session boundary payload missing `{key}`"))
 }
 
-/// Returns a required string from a Codex boundary wrapper.
-/// 从 Codex 边界包装对象中返回一个必需字符串。
+/// Returns a required string from a session boundary wrapper.
+/// 从 会话边界包装对象中返回一个必需字符串。
 fn required_string(payload: &Value, key: &str) -> Result<String, String> {
     payload
         .get(key)
         .and_then(Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| format!("codex boundary payload missing string `{key}`"))
+        .ok_or_else(|| format!("session boundary payload missing string `{key}`"))
 }
 
-/// Returns an optional string from a Codex boundary wrapper.
-/// 从 Codex 边界包装对象中返回一个可选字符串。
+/// Returns an optional string from a session boundary wrapper.
+/// 从 会话边界包装对象中返回一个可选字符串。
 fn optional_string(payload: &Value, key: &str) -> Option<String> {
     payload.get(key)?.as_str().map(str::to_string)
 }
@@ -1576,14 +1472,6 @@ fn optional_sqlite_string(value: &Option<String>) -> ControllerSqliteValue {
     value
         .as_ref()
         .map(|value| ControllerSqliteValue::String(value.clone()))
-        .unwrap_or(ControllerSqliteValue::Null)
-}
-
-/// Converts one optional 64-bit integer into the nullable SQLite value expected by the controller SDK.
-/// 将一个可选 64 位整数转换为控制器 SDK 期望的可空 SQLite 值。
-fn optional_sqlite_i64(value: Option<i64>) -> ControllerSqliteValue {
-    value
-        .map(ControllerSqliteValue::Int64)
         .unwrap_or(ControllerSqliteValue::Null)
 }
 
@@ -1627,41 +1515,6 @@ fn relative_time_label_from_unix_millis(timestamp_millis: i64) -> String {
     }
 
     format!("{}月前", (delta_days / 30).max(1))
-}
-
-/// Approximates one Unix-milliseconds timestamp from the compact relative label stored by the UI.
-/// 根据界面存储的紧凑相对标签近似还原一条 Unix 毫秒时间戳。
-fn approximate_unix_millis_from_relative_label(label: &str) -> Option<i64> {
-    if label.trim().is_empty() {
-        return None;
-    }
-
-    let now = current_unix_millis();
-    if label == "刚刚" {
-        return Some(now);
-    }
-
-    let number_text = label
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    let amount = number_text.parse::<i64>().ok()?;
-
-    let millis = if label.contains("分钟前") {
-        amount * 60 * 1_000
-    } else if label.contains("小时前") {
-        amount * 60 * 60 * 1_000
-    } else if label.contains("天前") {
-        amount * 24 * 60 * 60 * 1_000
-    } else if label.contains("周前") {
-        amount * 7 * 24 * 60 * 60 * 1_000
-    } else if label.contains("月前") {
-        amount * 30 * 24 * 60 * 60 * 1_000
-    } else {
-        0
-    };
-
-    Some(now.saturating_sub(millis))
 }
 
 /// Truncates one multi-line preview into a single compact snippet used by persistence-derived summaries.

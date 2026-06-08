@@ -8472,7 +8472,6 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-change-set",
- "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-compaction",
  "vulcan-context-injection",
@@ -8485,6 +8484,7 @@ dependencies = [
  "vulcan-prompt-skills",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-session-boundary",
  "vulcan-session-core",
  "vulcan-task-session",
  "vulcan-token-counter",
@@ -8597,7 +8597,6 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-agent-runtime",
- "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",
@@ -8605,22 +8604,13 @@ dependencies = [
  "vulcan-provider-config",
  "vulcan-runtime-assets",
  "vulcan-service-api",
+ "vulcan-session-boundary",
  "vulcan-session-core",
  "vulcan-task-session",
  "vulcan-token-counter",
  "vulcan-vmm",
  "vulcan-workbench-model",
  "vulcan-workspace-store",
-]
-
-[[package]]
-name = "vulcan-codex-session-port"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "vulcan-context",
- "vulcan-session-core",
 ]
 
 [[package]]
@@ -8784,6 +8774,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vulcan-session-boundary"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "vulcan-context",
+ "vulcan-session-core",
+]
+
+[[package]]
 name = "vulcan-session-core"
 version = "0.1.0"
 dependencies = [
@@ -8872,12 +8872,12 @@ dependencies = [
  "uuid",
  "vldb-controller-client",
  "vulcan-change-set",
- "vulcan-codex-session-port",
  "vulcan-context",
  "vulcan-context-injection",
  "vulcan-core",
  "vulcan-provider-config",
  "vulcan-runtime-assets",
+ "vulcan-session-boundary",
  "vulcan-session-core",
  "vulcan-vmm",
  "vulcan-workbench-model",

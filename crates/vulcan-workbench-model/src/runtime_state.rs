@@ -12,6 +12,17 @@ use vulcan_provider_config::config::{
 };
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 
+/// Returns whether the canonical conversation state has no durable payload.
+/// 返回规范会话状态是否没有任何需要持久化的有效载荷。
+fn session_conversation_state_is_empty(state: &SessionConversationState) -> bool {
+    state.messages.is_empty()
+        && state.records.is_empty()
+        && state.continuation.provider_id.is_none()
+        && state.continuation.model_id.is_none()
+        && state.continuation.last_provider_message_id.is_none()
+        && state.continuation.updated_at.is_none()
+}
+
 /// Maximum number of pending prompts retained in either visible or internal queues.
 /// 可见队列或内部队列中允许保留的最大待发送提示词数量。
 pub const PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
@@ -27,9 +38,9 @@ pub enum PendingSessionPromptSource {
     /// User-authored follow-up that should interrupt the current run before being dispatched.
     /// 应先打断当前运行再发送的用户跟进消息。
     UserInterrupt,
-    /// Host-created callback that returns one completed subagent task result to the parent model.
-    /// 宿主创建的回调，用于将单个已完成子代理任务结果回流给父级模型。
-    SubagentCallback,
+    /// Host-created session mailbox input that returns completed runtime work to the parent model.
+    /// 宿主创建的会话 mailbox 输入，用于将已完成运行时工作回流给父级模型。
+    SessionMailbox,
 }
 
 impl PendingSessionPromptSource {
@@ -161,12 +172,8 @@ pub fn pending_prompt_dispatch_block_reason(
 pub fn pending_prompt_dispatch_block_reason_for_source(
     context: PendingPromptDispatchContext,
     allow_from_stopped_phase: bool,
-    next_source: Option<PendingSessionPromptSource>,
+    _next_source: Option<PendingSessionPromptSource>,
 ) -> Option<PendingPromptDispatchBlockReason> {
-    let _ = next_source;
-    if context.has_running_subagents {
-        return Some(PendingPromptDispatchBlockReason::RunningSubagents);
-    }
     if context.has_active_run || provider_session_run_phase_is_active(context.run_phase) {
         return Some(PendingPromptDispatchBlockReason::ActiveRun);
     }
@@ -252,7 +259,6 @@ pub fn pending_prompt_lane_is_busy(
         || context.dispatch.has_active_compaction
         || !ui_state.pending_prompt_queue.is_empty()
         || !ui_state.pending_prompt_panel_queue.is_empty()
-        || context.dispatch.has_running_subagents
 }
 
 /// Error returned when one internal pending prompt cannot be added to the queue.
@@ -559,15 +565,13 @@ pub fn take_guided_pending_prompt_entries(
 ///
 /// # Returns
 /// 返回值
-/// Guided prompt entries in intervention order, or an empty list when running subagents require waiting.
-/// 返回按干预顺序排列的引导提示词；若运行中子代理要求等待则返回空列表。
+/// Guided prompt entries in intervention order.
+/// 返回按干预顺序排列的引导提示词。
 pub fn take_runtime_intervention_guided_pending_prompt_entries(
     ui_state: &mut SessionTranscriptUiState,
     context: PendingPromptDispatchContext,
 ) -> Vec<PendingSessionPromptEntry> {
-    if context.has_running_subagents {
-        return Vec::new();
-    }
+    let _ = context;
     take_guided_pending_prompt_entries(ui_state, false)
 }
 
@@ -916,6 +920,31 @@ pub fn take_next_internal_pending_prompt_entry(
     Some(ui_state.pending_prompt_queue.remove(0))
 }
 
+/// Removes internal pending prompts that match one source.
+/// 移除匹配指定来源的内部待发送提示词。
+///
+/// # Parameters
+/// 参数
+/// `ui_state` is the session-scoped UI state containing the internal queue.
+/// `ui_state` 是包含内部队列的会话级 UI 状态。
+/// `source` selects entries that must be removed.
+/// `source` 用于选择必须移除的条目。
+///
+/// # Returns
+/// 返回值
+/// Number of removed internal queue entries.
+/// 被移除的内部队列条目数量。
+pub fn remove_internal_pending_prompt_entries_by_source(
+    ui_state: &mut SessionTranscriptUiState,
+    source: PendingSessionPromptSource,
+) -> usize {
+    let before = ui_state.pending_prompt_queue.len();
+    ui_state
+        .pending_prompt_queue
+        .retain(|entry| entry.source != source);
+    before.saturating_sub(ui_state.pending_prompt_queue.len())
+}
+
 /// Removes one visible panel entry and any linked internal queue entries.
 /// 移除单条可见面板条目及其关联的内部队列项。
 ///
@@ -1129,6 +1158,26 @@ mod tests {
             .collect()
     }
 
+    /// Verifies lightweight persisted runtime state can omit canonical conversation history.
+    /// 验证轻量持久化运行态可以省略规范会话历史。
+    #[test]
+    fn runtime_state_deserializes_without_conversation_state() {
+        let mut value = serde_json::to_value(SessionRuntimeStateEntry::default())
+            .expect("default runtime state should serialize");
+        value
+            .as_object_mut()
+            .expect("runtime state should serialize as object")
+            .remove("conversation_state");
+
+        let restored: SessionRuntimeStateEntry =
+            serde_json::from_value::<SessionRuntimeStateEntry>(value)
+                .expect("runtime state should restore without conversation_state");
+
+        assert!(session_conversation_state_is_empty(
+            &restored.conversation_state
+        ));
+    }
+
     #[test]
     fn pending_prompt_panel_drop_target_matches_iced_before_semantics() {
         let mut ui_state = SessionTranscriptUiState {
@@ -1252,10 +1301,10 @@ mod tests {
         ));
     }
 
-    /// Verifies queued prompt dispatch waits for running subagents across provider runtimes.
-    /// 验证待发送提示词分发会在所有 Provider 运行时下等待运行中的子代理。
+    /// Verifies queued prompt dispatch treats running subagents as independent work across provider runtimes.
+    /// 验证待发送提示词分发在所有 Provider 运行时下都将运行中子代理视为独立工作。
     #[test]
-    fn pending_prompt_dispatch_blocks_running_subagents_for_all_runtimes() {
+    fn pending_prompt_dispatch_allows_running_subagents_for_all_runtimes() {
         for uses_anthropic_runtime in [true, false] {
             assert_eq!(
                 pending_prompt_dispatch_block_reason(
@@ -1268,7 +1317,7 @@ mod tests {
                     },
                     true,
                 ),
-                Some(PendingPromptDispatchBlockReason::RunningSubagents)
+                None
             );
             assert_eq!(
                 pending_prompt_dispatch_block_reason(
@@ -1284,6 +1333,40 @@ mod tests {
                 None
             );
         }
+    }
+
+    /// Verifies pending-prompt mailbox inputs are blocked only by an active parent run.
+    /// 验证待发送 mailbox 输入只会被活跃父会话运行阻塞。
+    #[test]
+    fn pending_prompt_dispatch_allows_session_mailbox_during_running_siblings() {
+        assert_eq!(
+            pending_prompt_dispatch_block_reason_for_source(
+                PendingPromptDispatchContext {
+                    uses_anthropic_runtime: false,
+                    has_running_subagents: true,
+                    has_active_run: false,
+                    run_phase: None,
+                    has_active_compaction: false,
+                },
+                false,
+                Some(PendingSessionPromptSource::SessionMailbox),
+            ),
+            None
+        );
+        assert_eq!(
+            pending_prompt_dispatch_block_reason_for_source(
+                PendingPromptDispatchContext {
+                    uses_anthropic_runtime: false,
+                    has_running_subagents: true,
+                    has_active_run: true,
+                    run_phase: None,
+                    has_active_compaction: false,
+                },
+                false,
+                Some(PendingSessionPromptSource::SessionMailbox),
+            ),
+            Some(PendingPromptDispatchBlockReason::ActiveRun)
+        );
     }
 
     /// Verifies a full internal queue rejects ordinary user follow-ups.
@@ -1382,10 +1465,10 @@ mod tests {
         assert!(ui_state.pending_prompt_panel_queue.is_empty());
     }
 
-    /// Verifies runtime intervention does not inject user guidance while delegated siblings still run.
-    /// 验证存在仍在运行的委派兄弟任务时，运行时干预不会注入用户引导。
+    /// Verifies runtime intervention injects user guidance without waiting for independent subagents.
+    /// 验证运行时干预会注入用户引导，而不等待独立子代理。
     #[test]
-    fn runtime_intervention_guidance_waits_for_running_subagents() {
+    fn runtime_intervention_guidance_ignores_running_subagents() {
         let mut ui_state = SessionTranscriptUiState {
             pending_prompt_panel_queue: vec![test_panel_entry("a")],
             ..SessionTranscriptUiState::default()
@@ -1408,12 +1491,15 @@ mod tests {
         let guided_entries =
             take_runtime_intervention_guided_pending_prompt_entries(&mut ui_state, context);
 
-        assert!(guided_entries.is_empty());
-        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
         assert_eq!(
-            ui_state.pending_prompt_panel_queue[0].state,
-            PendingPromptPanelEntryState::Inserted
+            guided_entries
+                .iter()
+                .filter_map(|entry| entry.panel_entry_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["a"]
         );
+        assert!(ui_state.pending_prompt_queue.is_empty());
+        assert!(ui_state.pending_prompt_panel_queue.is_empty());
     }
 
     /// Verifies runtime intervention still injects user guidance after delegated siblings have settled.
@@ -1494,6 +1580,35 @@ mod tests {
             .expect("take second guided prompt");
         assert_eq!(first.panel_entry_id.as_deref(), Some("b"));
         assert_eq!(second.panel_entry_id.as_deref(), Some("a"));
+    }
+
+    /// Verifies stale session mailbox prompts can be removed without touching user prompts.
+    /// 验证可清理过时会话 mailbox 提示词且不影响用户提示词。
+    #[test]
+    fn remove_internal_pending_prompt_entries_by_source_keeps_user_prompts() {
+        let mut ui_state = SessionTranscriptUiState {
+            pending_prompt_queue: vec![
+                PendingSessionPromptEntry {
+                    source: PendingSessionPromptSource::SessionMailbox,
+                    ..test_internal_prompt_entry("session-mailbox", None)
+                },
+                test_internal_prompt_entry("user-followup", None),
+            ],
+            ..SessionTranscriptUiState::default()
+        };
+
+        let removed = remove_internal_pending_prompt_entries_by_source(
+            &mut ui_state,
+            PendingSessionPromptSource::SessionMailbox,
+        );
+
+        assert_eq!(removed, 1);
+        assert_eq!(ui_state.pending_prompt_queue.len(), 1);
+        assert_eq!(ui_state.pending_prompt_queue[0].id, "user-followup");
+        assert_eq!(
+            ui_state.pending_prompt_queue[0].source,
+            PendingSessionPromptSource::UserFollowup
+        );
     }
 }
 
@@ -1660,6 +1775,7 @@ pub struct SessionRuntimeStateEntry {
     pub ui_state: SessionTranscriptUiState,
     /// Canonical conversation state used by the runtime instead of rebuilding history from transcript projections.
     /// 运行时使用的规范会话状态，用于替代从转录投影重建历史。
+    #[serde(default, skip_serializing_if = "session_conversation_state_is_empty")]
     pub conversation_state: SessionConversationState,
     /// Latest provider usage snapshot retained for budget calibration across turns.
     /// 为跨轮预算校准保留的最近一次 Provider 用量快照。

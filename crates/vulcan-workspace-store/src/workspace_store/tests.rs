@@ -3,27 +3,138 @@
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventKind,
-    create_segmented_session, read_segmented_session_event_window, read_state,
+    append_segmented_session_message_update, create_segmented_session,
+    read_segmented_session_event_window, read_state,
 };
 use super::*;
 use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
-use vulcan_codex_session_port::{
-    CodexEventScope, CodexEventVisibility, CodexExternalStreamTurnRunner,
-    CodexExternalTurnBeginRequest, CodexExternalTurnFinishRequest, CodexHookAdapter,
-    CodexSessionEvent, CodexSessionEventKind, CodexTurnTerminalStatus,
+use vulcan_context::SessionMessageKind;
+use vulcan_session_boundary::{
+    SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
+    SessionLifecycleBeginRequest, SessionLifecycleFinishRequest, SessionLifecycleHook,
+    SessionLifecycleRunner, SessionTurnTerminalStatus,
 };
 use vulcan_session_core::SessionNodeId;
 
-/// No-op Codex hook adapter used by workspace-store Codex runner tests.
-/// workspace-store Codex runner 测试使用的空 hook 适配器。
-struct NoopCodexHook;
+/// No-op session lifecycle hook adapter used by workspace-store session lifecycle runner tests.
+/// workspace-store session lifecycle runner 测试使用的空 hook 适配器。
+struct NoopSessionLifecycleHook;
 
-impl CodexHookAdapter for NoopCodexHook {
-    /// Ignores appended Codex events.
-    /// 忽略已追加的 Codex 事件。
-    fn after_event_appended(&self, _event: &CodexSessionEvent) -> Result<(), String> {
+impl SessionLifecycleHook for NoopSessionLifecycleHook {
+    /// Ignores appended session boundary events.
+    /// 忽略已追加的 会话边界事件。
+    fn after_event_appended(&self, _event: &SessionBoundaryEvent) -> Result<(), String> {
         Ok(())
     }
+}
+
+/// Verifies freshly loaded runtime state drops stale process-scoped precheck latches.
+/// 验证刚加载的运行态会丢弃陈旧的进程级预检查闩锁。
+#[test]
+fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
+    let mut runtime_state = SessionRuntimeStateEntry {
+        active_model_id: Some(String::from("model-alpha")),
+        context_start_message_id: Some(String::from("message-1")),
+        active_precheck_turn_id: Some(String::from("turn-stale")),
+        updated_at: String::from("100"),
+        ..SessionRuntimeStateEntry::default()
+    };
+
+    let changed = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
+
+    assert!(changed);
+    assert_eq!(
+        runtime_state.active_model_id.as_deref(),
+        Some("model-alpha")
+    );
+    assert_eq!(
+        runtime_state.context_start_message_id.as_deref(),
+        Some("message-1")
+    );
+    assert!(runtime_state.active_precheck_turn_id.is_none());
+}
+
+/// Verifies lightweight state.json startup loading restores transcript context from segmented JSONL.
+/// 验证轻量 state.json 启动加载会从分段 JSONL 恢复转录上下文。
+#[test]
+fn lightweight_state_startup_load_rehydrates_conversation_from_segmented_jsonl() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-workspace-session-store-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7010);
+    let session_dir = create_segmented_session(
+        &root,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-context"),
+            created_date: String::from("2026-06-08"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-context")),
+            title: Some(String::from("startup hydrate")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create session");
+    let user_message = SessionMessageEntry {
+        id: String::from("message-user"),
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::Transcript,
+        visible: true,
+        title: String::from("User"),
+        body: String::from("调用两个子代理"),
+        metadata: None,
+        created_at: String::from("101"),
+    };
+    let assistant_message = SessionMessageEntry {
+        id: String::from("message-assistant"),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::AssistantOutput,
+        visible: true,
+        title: String::from("AI"),
+        body: String::from("两个子代理均已完成"),
+        metadata: None,
+        created_at: String::from("102"),
+    };
+    append_segmented_session_message_update(
+        &session_dir,
+        &[user_message.clone(), assistant_message.clone()],
+    )
+    .expect("append transcript");
+    let lightweight_runtime_state = SessionRuntimeStateEntry {
+        active_model_id: Some(String::from("model-alpha")),
+        updated_at: String::from("103"),
+        ..SessionRuntimeStateEntry::default()
+    };
+    let state_document =
+        state_document_from_runtime_state(&session_id.to_string(), &lightweight_runtime_state)
+            .expect("build lightweight state");
+    write_state(&session_dir, &state_document).expect("write lightweight state");
+
+    let mut restored_runtime_state = lightweight_runtime_state;
+    hydrate_runtime_state_from_segmented_replay_if_missing(
+        session_id,
+        &session_dir,
+        &mut restored_runtime_state,
+    )
+    .expect("rehydrate runtime state");
+
+    assert_eq!(
+        restored_runtime_state.active_model_id.as_deref(),
+        Some("model-alpha")
+    );
+    assert_eq!(restored_runtime_state.conversation_state.records.len(), 2);
+    assert_eq!(
+        restored_runtime_state.conversation_state.records[0].body,
+        user_message.body
+    );
+    assert_eq!(
+        restored_runtime_state.conversation_state.records[1].body,
+        assistant_message.body
+    );
+
+    let _ = std::fs::remove_dir_all(root);
 }
 
 /// Verifies segmented context APIs write state and turn-context anchors into the new session directory.
@@ -96,35 +207,76 @@ fn segmented_context_public_apis_write_state_and_turn_context() {
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies Codex boundary events create and append to the segmented session stream.
-/// 验证 Codex 边界事件会创建并追加到分段会话流。
+/// Verifies session rename updates only metadata without appending segmented JSONL rows.
+/// 验证会话重命名只更新元数据，不追加分段 JSONL 行。
 #[test]
-fn segmented_codex_boundary_public_api_appends_events() {
+fn segmented_session_rename_updates_metadata_without_touching_segments() {
     let root = std::env::temp_dir().join(format!(
-        "vulcan-segmented-codex-boundary-test-{}",
+        "vulcan-segmented-rename-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7008);
+    let session_dir = create_segmented_session(
+        &root,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-rename"),
+            created_date: String::from("2026-06-08"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-rename")),
+            title: Some(String::from("旧标题")),
+            title_source: Some(String::from("generated")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create segmented session");
+    let before_lines =
+        read_segmented_session_event_window(&session_dir, None, 8).expect("read before lines");
+
+    rename_segmented_session_metadata(&root, session_id, "新标题", "200").expect("rename metadata");
+
+    let metadata_text =
+        std::fs::read_to_string(session_dir.join("metadata.json")).expect("read metadata");
+    let metadata: serde_json::Value = serde_json::from_str(&metadata_text).expect("parse metadata");
+    assert_eq!(metadata["title"], "新标题");
+    assert_eq!(metadata["title_source"], "manual");
+    assert_eq!(metadata["updated_at"], "200");
+    let after_lines =
+        read_segmented_session_event_window(&session_dir, None, 8).expect("read after lines");
+    assert_eq!(after_lines.len(), before_lines.len());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies session boundary events create and append to the segmented session stream.
+/// 验证 会话边界事件会创建并追加到分段会话流。
+#[test]
+fn segmented_session_boundary_public_api_appends_events() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-segmented-session-boundary-test-{}",
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7002);
-    let event = CodexSessionEvent::new(
+    let event = SessionBoundaryEvent::new(
         "boundary-1",
         SessionNodeId::from(session_id),
         0,
-        CodexSessionEventKind::TurnStarted,
-        CodexEventScope::Turn,
-        CodexEventVisibility::Hidden,
+        SessionBoundaryEventKind::TurnStarted,
+        SessionEventScope::Turn,
+        SessionEventVisibility::Hidden,
         100,
     )
     .with_turn_id("turn-1")
     .with_payload(serde_json::json!({ "source": "user_followup" }));
 
-    append_segmented_session_codex_boundary_events(
+    append_segmented_session_boundary_events(
         &root,
         "project-context",
         session_id,
-        "Codex 边界",
+        "会话边界",
         &[event],
     )
-    .expect("append codex boundary events");
+    .expect("append session boundary events");
 
     let session_dir =
         find_existing_segmented_context_session_dir(&root, "project-context", session_id)
@@ -132,87 +284,85 @@ fn segmented_codex_boundary_public_api_appends_events() {
             .expect("session dir should exist");
     let lines =
         read_segmented_session_event_window(&session_dir, None, 8).expect("read segmented events");
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.kind == SegmentedSessionEventKind::CodexBoundary
-                && line.payload["event_id"] == "boundary-1")
-    );
+    assert!(lines.iter().any(
+        |line| line.kind == SegmentedSessionEventKind::SessionBoundary
+            && line.payload["event_id"] == "boundary-1"
+    ));
 
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies Codex boundary payload sequence is assigned by the segmented store.
-/// 验证 Codex 边界 payload 序号由分段存储层统一分配。
+/// Verifies session boundary payload sequence is assigned by the segmented store.
+/// 验证 会话边界 payload 序号由分段存储层统一分配。
 #[test]
-fn segmented_codex_boundary_payload_sequence_matches_jsonl_sequence() {
+fn segmented_session_boundary_payload_sequence_matches_jsonl_sequence() {
     let root = std::env::temp_dir().join(format!(
-        "vulcan-segmented-codex-boundary-seq-test-{}",
+        "vulcan-segmented-session-boundary-seq-test-{}",
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7003);
     let thread_id = SessionNodeId::from(session_id);
     let first_turn_events = vec![
-        CodexSessionEvent::new(
+        SessionBoundaryEvent::new(
             "turn-1-started",
             thread_id,
             0,
-            CodexSessionEventKind::TurnStarted,
-            CodexEventScope::Turn,
-            CodexEventVisibility::Hidden,
+            SessionBoundaryEventKind::TurnStarted,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Hidden,
             100,
         )
         .with_turn_id("turn-1"),
-        CodexSessionEvent::new(
+        SessionBoundaryEvent::new(
             "turn-1-input",
             thread_id,
             1,
-            CodexSessionEventKind::UserInput,
-            CodexEventScope::Turn,
-            CodexEventVisibility::Visible,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
             101,
         )
         .with_turn_id("turn-1"),
     ];
     let second_turn_events = vec![
-        CodexSessionEvent::new(
+        SessionBoundaryEvent::new(
             "turn-2-started",
             thread_id,
             0,
-            CodexSessionEventKind::TurnStarted,
-            CodexEventScope::Turn,
-            CodexEventVisibility::Hidden,
+            SessionBoundaryEventKind::TurnStarted,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Hidden,
             200,
         )
         .with_turn_id("turn-2"),
-        CodexSessionEvent::new(
+        SessionBoundaryEvent::new(
             "turn-2-input",
             thread_id,
             1,
-            CodexSessionEventKind::UserInput,
-            CodexEventScope::Turn,
-            CodexEventVisibility::Visible,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
             201,
         )
         .with_turn_id("turn-2"),
     ];
 
-    append_segmented_session_codex_boundary_events(
+    append_segmented_session_boundary_events(
         &root,
         "project-context",
         session_id,
-        "Codex 边界序号",
+        "会话边界序号",
         &first_turn_events,
     )
-    .expect("append first codex boundary turn");
-    append_segmented_session_codex_boundary_events(
+    .expect("append first session boundary turn");
+    append_segmented_session_boundary_events(
         &root,
         "project-context",
         session_id,
-        "Codex 边界序号",
+        "会话边界序号",
         &second_turn_events,
     )
-    .expect("append second codex boundary turn");
+    .expect("append second session boundary turn");
 
     let session_dir =
         find_existing_segmented_context_session_dir(&root, "project-context", session_id)
@@ -220,32 +370,32 @@ fn segmented_codex_boundary_payload_sequence_matches_jsonl_sequence() {
             .expect("session dir should exist");
     let lines =
         read_segmented_session_event_window(&session_dir, None, 8).expect("read segmented events");
-    let codex_lines = lines
+    let boundary_lines = lines
         .iter()
-        .filter(|line| line.kind == SegmentedSessionEventKind::CodexBoundary)
+        .filter(|line| line.kind == SegmentedSessionEventKind::SessionBoundary)
         .collect::<Vec<_>>();
-    assert_eq!(codex_lines.len(), 4);
-    for line in &codex_lines {
+    assert_eq!(boundary_lines.len(), 4);
+    for line in &boundary_lines {
         assert_eq!(line.payload["sequence"], serde_json::json!(line.seq));
         assert_eq!(line.payload["thread_id"], serde_json::json!(thread_id));
     }
     let restored_events =
-        load_segmented_session_codex_boundary_events(&root, "project-context", session_id, None, 8)
-            .expect("restore codex boundary events");
+        load_segmented_session_boundary_events(&root, "project-context", session_id, None, 8)
+            .expect("restore session boundary events");
     assert_eq!(restored_events.len(), 4);
     assert_eq!(restored_events[0].thread_id, thread_id);
-    assert_eq!(restored_events[0].sequence, codex_lines[0].seq);
+    assert_eq!(restored_events[0].sequence, boundary_lines[0].seq);
     assert_eq!(restored_events[3].turn_id.as_deref(), Some("turn-2"));
 
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies the workspace Codex store adapter preserves non-Codex state fields.
-/// 验证工作区 Codex 存储适配器会保留非 Codex 状态字段。
+/// Verifies the workspace session boundary store adapter preserves host state fields.
+/// 验证工作区会话边界存储适配器会保留宿主状态字段。
 #[test]
-fn workspace_segmented_codex_store_runs_external_lifecycle_without_overwriting_runtime_state() {
+fn workspace_segmented_boundary_store_runs_external_lifecycle_without_overwriting_runtime_state() {
     let root = std::env::temp_dir().join(format!(
-        "vulcan-workspace-codex-store-test-{}",
+        "vulcan-workspace-session-store-test-{}",
         uuid::Uuid::new_v4()
     ));
     let session_id = SessionId::from_u128(7004);
@@ -258,7 +408,7 @@ fn workspace_segmented_codex_store_runs_external_lifecycle_without_overwriting_r
             created_date: String::from("2026-06-07"),
             created_at: String::from("100"),
             project_id: Some(String::from("project-context")),
-            title: Some(String::from("Codex runner")),
+            title: Some(String::from("session lifecycle runner")),
             title_source: Some(String::from("test")),
             segment_policy: SegmentPolicy::default(),
         },
@@ -272,30 +422,30 @@ fn workspace_segmented_codex_store_runs_external_lifecycle_without_overwriting_r
             updated_at: String::from("101"),
             runtime_state: serde_json::json!({ "phase": "existing-runtime" }),
             current_context: serde_json::json!({ "cursor": 42 }),
-            codex_thread_state: serde_json::Value::Null,
+            session_boundary_state: serde_json::Value::Null,
         },
     )
     .expect("write existing state");
-    let store = WorkspaceSegmentedCodexSessionStore::new(
+    let store = WorkspaceSegmentedSessionBoundaryStore::new(
         &root,
         "project-context",
         session_id,
-        "Codex runner",
+        "session lifecycle runner",
     );
-    let runner = CodexExternalStreamTurnRunner::new(store, NoopCodexHook);
+    let runner = SessionLifecycleRunner::new(store, NoopSessionLifecycleHook);
 
     runner
-        .begin_turn(CodexExternalTurnBeginRequest {
+        .begin_turn(SessionLifecycleBeginRequest {
             thread_id,
             turn_id: String::from("turn-1"),
             accepted_events: vec![
-                CodexSessionEvent::new(
+                SessionBoundaryEvent::new(
                     "turn-started",
                     thread_id,
                     0,
-                    CodexSessionEventKind::TurnStarted,
-                    CodexEventScope::Turn,
-                    CodexEventVisibility::Hidden,
+                    SessionBoundaryEventKind::TurnStarted,
+                    SessionEventScope::Turn,
+                    SessionEventVisibility::Hidden,
                     200,
                 )
                 .with_turn_id("turn-1"),
@@ -303,19 +453,19 @@ fn workspace_segmented_codex_store_runs_external_lifecycle_without_overwriting_r
         })
         .expect("begin external lifecycle");
     runner
-        .finish_turn(CodexExternalTurnFinishRequest {
+        .finish_turn(SessionLifecycleFinishRequest {
             thread_id,
             turn_id: String::from("turn-1"),
-            terminal_status: CodexTurnTerminalStatus::Completed,
+            terminal_status: SessionTurnTerminalStatus::Completed,
             final_events: Vec::new(),
             terminal_event: Some(
-                CodexSessionEvent::new(
+                SessionBoundaryEvent::new(
                     "turn-completed",
                     thread_id,
                     0,
-                    CodexSessionEventKind::TurnCompleted,
-                    CodexEventScope::Turn,
-                    CodexEventVisibility::Hidden,
+                    SessionBoundaryEventKind::TurnCompleted,
+                    SessionEventScope::Turn,
+                    SessionEventVisibility::Hidden,
                     201,
                 )
                 .with_turn_id("turn-1"),
@@ -328,10 +478,10 @@ fn workspace_segmented_codex_store_runs_external_lifecycle_without_overwriting_r
         .expect("state should exist");
     assert_eq!(state.runtime_state["phase"], "existing-runtime");
     assert_eq!(state.current_context["cursor"], 42);
-    assert_eq!(state.codex_thread_state["status"], "idle");
+    assert_eq!(state.session_boundary_state["status"], "idle");
     let restored_events =
-        load_segmented_session_codex_boundary_events(&root, "project-context", session_id, None, 8)
-            .expect("codex events should restore");
+        load_segmented_session_boundary_events(&root, "project-context", session_id, None, 8)
+            .expect("session events should restore");
     assert_eq!(restored_events.len(), 2);
     assert_eq!(restored_events[0].sequence, 1);
     assert_eq!(restored_events[1].sequence, 2);

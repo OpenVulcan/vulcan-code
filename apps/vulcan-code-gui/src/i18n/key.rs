@@ -18,17 +18,6 @@ pub enum I18nKey {
     CommonThemeLabel,
     CommonUnknownDuration,
     GuideQuickMarkdown,
-    HistorySearchActiveProjectsOnly,
-    HistorySearchFailedWithError,
-    HistorySearchFilterPlaceholder,
-    HistorySearchHint,
-    HistorySearchLoading,
-    HistorySearchNoProjectMatches,
-    HistorySearchProjectFilterPlaceholder,
-    HistorySearchScopePrefix,
-    HistorySearchSearchAction,
-    HistorySearchSearching,
-    HistorySearchTitle,
     SettingsRuntimeParametersTitle,
     SettingsRuntimeParametersDescription,
     SettingsRootTitle,
@@ -60,16 +49,6 @@ pub enum I18nKey {
     StartupLoadingTitle,
     StatusToolDetailLoading,
     StatusToolDetailLoadingWithFailures,
-    StatusHistorySearchAllLoaded,
-    StatusHistorySearchCompleted,
-    StatusHistorySearchEmptyQuery,
-    StatusHistorySearchFailed,
-    StatusHistorySearchInProgress,
-    StatusHistorySearchLoadMoreCompleted,
-    StatusHistorySearchLoadMoreStarted,
-    StatusHistorySearchNoMoreResults,
-    StatusHistorySearchQueryChanged,
-    StatusHistorySearchStarted,
     StatusInitializingDataPlane,
     StatusInitializingLuaSkills,
     StatusLocaleChanged,
@@ -221,19 +200,6 @@ impl I18nKey {
             Self::CommonThemeLabel => "common.theme_label",
             Self::CommonUnknownDuration => "common.unknown_duration",
             Self::GuideQuickMarkdown => "guide.quick_markdown",
-            Self::HistorySearchActiveProjectsOnly => "history_search.active_projects_only",
-            Self::HistorySearchFailedWithError => "history_search.failed_with_error",
-            Self::HistorySearchFilterPlaceholder => "history_search.filter_placeholder",
-            Self::HistorySearchHint => "history_search.hint",
-            Self::HistorySearchLoading => "history_search.loading",
-            Self::HistorySearchNoProjectMatches => "history_search.no_project_matches",
-            Self::HistorySearchProjectFilterPlaceholder => {
-                "history_search.project_filter_placeholder"
-            }
-            Self::HistorySearchScopePrefix => "history_search.scope_prefix",
-            Self::HistorySearchSearchAction => "history_search.search_action",
-            Self::HistorySearchSearching => "history_search.searching",
-            Self::HistorySearchTitle => "history_search.title",
             Self::SettingsRuntimeParametersTitle => "settings.runtime_parameters_title",
             Self::SettingsRuntimeParametersDescription => "settings.runtime_parameters_description",
             Self::SettingsRootTitle => "settings.root_title",
@@ -271,18 +237,6 @@ impl I18nKey {
             Self::StartupLoadingTitle => "startup.loading_title",
             Self::StatusToolDetailLoading => "status.tool_detail_loading",
             Self::StatusToolDetailLoadingWithFailures => "status.tool_detail_loading_with_failures",
-            Self::StatusHistorySearchAllLoaded => "status.history_search_all_loaded",
-            Self::StatusHistorySearchCompleted => "status.history_search_completed",
-            Self::StatusHistorySearchEmptyQuery => "status.history_search_empty_query",
-            Self::StatusHistorySearchFailed => "status.history_search_failed",
-            Self::StatusHistorySearchInProgress => "status.history_search_in_progress",
-            Self::StatusHistorySearchLoadMoreCompleted => {
-                "status.history_search_load_more_completed"
-            }
-            Self::StatusHistorySearchLoadMoreStarted => "status.history_search_load_more_started",
-            Self::StatusHistorySearchNoMoreResults => "status.history_search_no_more_results",
-            Self::StatusHistorySearchQueryChanged => "status.history_search_query_changed",
-            Self::StatusHistorySearchStarted => "status.history_search_started",
             Self::StatusInitializingDataPlane => "status.initializing_data_plane",
             Self::StatusInitializingLuaSkills => "status.initializing_luaskills",
             Self::StatusLocaleChanged => "status.locale_changed",
@@ -481,17 +435,10 @@ impl I18nKey {
     /// 返回本地化模板期望的有序占位符列表（如果存在）。
     pub const fn placeholders(self) -> &'static [&'static str] {
         match self {
-            Self::HistorySearchFailedWithError => &["error"],
-            Self::HistorySearchScopePrefix => &["scope_label"],
             Self::SettingsTemperatureValueEnabled => &["temperature"],
             Self::StatusToolDetailLoading => &["completed_count", "total_count"],
             Self::StatusToolDetailLoadingWithFailures => {
                 &["completed_count", "total_count", "failed_count"]
-            }
-            Self::StatusHistorySearchCompleted => &["total_hits"],
-            Self::StatusHistorySearchFailed => &["error"],
-            Self::StatusHistorySearchLoadMoreCompleted => {
-                &["hit_count", "loaded_count", "total_hits"]
             }
             Self::StatusSessionSwitched => &["selected_title"],
             Self::TranscriptToolResultWithName => &["tool_name"],

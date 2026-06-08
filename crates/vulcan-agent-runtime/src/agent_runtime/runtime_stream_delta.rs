@@ -239,11 +239,14 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
             state.latest_request_snapshot = Some(snapshot);
             state.provider_request_count = state.provider_request_count.saturating_add(1);
-            vec![ExecutionStreamEvent::RequestStarted { session_id }]
+            vec![
+                ExecutionStreamEvent::RequestReady { session_id },
+                ExecutionStreamEvent::RequestStarted { session_id },
+            ]
         }
         Ok(ProviderStreamDelta::WireRequest(request_json)) => {
             state.latest_wire_request_json = Some(request_json);
-            Vec::new()
+            vec![ExecutionStreamEvent::WireRequestReady { session_id }]
         }
         Ok(ProviderStreamDelta::Thinking(delta)) => state
             .process_thinking_delta(session_id, delta)

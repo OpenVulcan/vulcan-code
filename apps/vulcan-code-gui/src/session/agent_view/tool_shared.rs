@@ -105,7 +105,7 @@ pub(crate) fn build_tool_directive_block(
 /// 返回单条可见转录消息是否属于宿主管理的 task-session 家族。
 pub(crate) fn is_task_session_message(message: &SessionMessageEntry) -> bool {
     message.metadata.as_ref().is_some_and(|metadata| {
-        metadata.get("tool_name").and_then(Value::as_str) == Some("task")
+        metadata.get("tool_name").and_then(Value::as_str) == Some("spawn_agent")
             || metadata.get("kind").and_then(Value::as_str) == Some("task_session")
     })
 }

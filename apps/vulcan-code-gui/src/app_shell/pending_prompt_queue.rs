@@ -1448,9 +1448,7 @@ impl VulcanWorkbench {
                     String::from("正在处理排队消息。")
                 }
             }
-            PendingSessionPromptSource::SubagentCallback => {
-                String::from("正在处理子代理回流结果。")
-            }
+            PendingSessionPromptSource::SessionMailbox => String::from("正在处理会话回流结果。"),
         };
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }

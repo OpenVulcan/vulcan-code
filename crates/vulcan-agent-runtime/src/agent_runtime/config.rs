@@ -840,7 +840,6 @@ mod tests {
                     vmm_enabled: None,
                     memory_recall_enabled: Some(true),
                     memory_writeback_enabled: None,
-                    search_projection_enabled: None,
                     database_projection_enabled: Some(true),
                 },
             },
@@ -860,7 +859,6 @@ mod tests {
         assert_eq!(agent.tool_policy.as_deref(), Some("analysis-safe"));
         assert_eq!(agent.runtime_policy.hooks_enabled, Some(true));
         assert_eq!(agent.runtime_policy.memory_recall_enabled, Some(true));
-        assert_eq!(agent.runtime_policy.search_projection_enabled, None);
         assert_eq!(agent.runtime_policy.database_projection_enabled, Some(true));
     }
 

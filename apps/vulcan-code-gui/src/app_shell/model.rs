@@ -14,6 +14,7 @@ pub use vulcan_workbench_model::{
     collect_running_subagent_task_states_for_tree, merge_subagent_task_panel_cache,
     normalize_subagent_task_panel_state, pending_prompt_dispatch_index,
     select_subagent_navigation_panel_states, subagent_task_panel_is_openable,
+    subagent_task_panel_state_detail_from_segmented_task_session_store,
     subagent_task_panel_state_has_recoverable_conversation,
     subagent_task_panel_states_from_segmented_task_session_store,
     task_session_arguments_from_tool_metadata, task_session_display_title_from_payload,

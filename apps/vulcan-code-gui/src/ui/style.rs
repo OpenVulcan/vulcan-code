@@ -357,32 +357,6 @@ pub fn subtle_panel_button_style(theme: &Theme, status: button::Status) -> butto
     }
 }
 
-/// Returns the compact rounded panel style used by the left-drawer workspace history search surface.
-/// 返回左侧抽屉工作台历史搜索表面使用的紧凑圆角面板样式。
-pub fn main_task_search_panel_style(theme: &Theme) -> container::Style {
-    let palette = theme.extended_palette();
-
-    container::Style {
-        background: Some(Background::Color(
-            palette.background.weak.color.scale_alpha(0.98),
-        )),
-        border: Border {
-            radius: 14.0.into(),
-            width: 1.0,
-            color: palette.background.strong.color.scale_alpha(0.24),
-        },
-        shadow: Shadow {
-            color: Color {
-                a: 0.12,
-                ..Color::BLACK
-            },
-            offset: Vector::new(0.0, 6.0),
-            blur_radius: 14.0,
-        },
-        ..Default::default()
-    }
-}
-
 /// Returns the compact filled badge style used by the left-drawer search shortcut hint.
 /// 返回左侧抽屉搜索快捷键提示使用的紧凑填充徽标样式。
 pub fn main_task_search_shortcut_badge_style(theme: &Theme) -> container::Style {

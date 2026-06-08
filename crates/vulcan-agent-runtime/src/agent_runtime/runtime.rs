@@ -595,9 +595,6 @@ fn runtime_agent_definition_to_subagent_profile(
         disabled: Vec::new(),
     };
     profile.runtime_policy = definition.runtime_policy;
-    // Search projection is disabled globally until the session kernel is stable.
-    // 在会话内核稳定前，全局禁用搜索投影。
-    profile.runtime_policy.search_projection_enabled = None;
     profile.extra = runtime_agent_extra_payload(definition);
     profile
 }
@@ -904,7 +901,6 @@ mod tests {
                 vmm_enabled: None,
                 memory_recall_enabled: Some(true),
                 memory_writeback_enabled: None,
-                search_projection_enabled: Some(true),
                 database_projection_enabled: Some(true),
             },
         };
@@ -971,7 +967,6 @@ mod tests {
         assert_eq!(profile.extra["max_turns"], json!(8));
         assert_eq!(profile.runtime_policy.hooks_enabled, Some(true));
         assert_eq!(profile.runtime_policy.memory_recall_enabled, Some(true));
-        assert_eq!(profile.runtime_policy.search_projection_enabled, None);
         assert_eq!(
             profile.runtime_policy.database_projection_enabled,
             Some(true)

@@ -11,7 +11,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use vulcan_session_core::{
     ParentSessionRef, SessionCompactionCheckpoint, SessionContextDocument, SessionEventRecord,
-    SessionNodeId, SessionNodeStore, SessionRuntimeCheckpoint, SessionStoreError,
+    SessionNodeId, SessionNodeStore, SessionRuntimeCheckpoint, SessionSegmentSummary,
+    SessionStoreError,
 };
 
 const SEGMENTED_TASK_DIR: &str = "task";
@@ -100,6 +101,22 @@ impl SegmentedTaskSessionStore {
             }
         }
         Ok(None)
+    }
+
+    /// Loads task segment summaries from metadata.json without reading JSONL bodies.
+    /// 仅从 metadata.json 加载子任务分段摘要，不读取 JSONL 正文。
+    pub fn load_task_segment_summaries(
+        &self,
+        task_session_id: TaskSessionId,
+    ) -> Result<Vec<SessionSegmentSummary>, SessionStoreError> {
+        let task_dir = self.indexed_task_dir(task_session_id)?;
+        let metadata =
+            read_required_task_metadata_document(&task_dir.join(SEGMENTED_METADATA_FILE))?;
+        Ok(metadata
+            .segments
+            .into_iter()
+            .map(|segment| SessionSegmentSummary::new(segment.file, segment.line_count))
+            .collect())
     }
 
     /// Returns the direct child task directory root.

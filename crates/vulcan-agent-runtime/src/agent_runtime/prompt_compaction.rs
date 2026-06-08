@@ -324,7 +324,7 @@ fn build_prompt_compaction_launch_request(
         system_prompt_hook_blocks: Vec::new(),
         project_vmm: Default::default(),
         session_vmm: Default::default(),
-        codex_boundary_events: Vec::new(),
+        boundary_events: Vec::new(),
     }
 }
 

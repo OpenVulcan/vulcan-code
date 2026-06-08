@@ -271,7 +271,7 @@ pub(crate) fn prepare_execution(
         system_prompt_hook_blocks,
         project_vmm,
         session_vmm,
-        codex_boundary_events: request.codex_boundary_events.clone(),
+        boundary_events: request.boundary_events.clone(),
     })
 }
 
@@ -1186,7 +1186,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: VmmConfigLayer::default(),
             session_vmm: VmmConfigLayer::default(),
-            codex_boundary_events: Vec::new(),
+            boundary_events: Vec::new(),
         }
     }
 }

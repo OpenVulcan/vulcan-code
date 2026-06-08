@@ -23,7 +23,7 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::model::SessionId;
 use crate::provider_config::{PersistedPromptSkillState, ProviderConfigurationFile};
 use async_stream::stream;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{BTreeSet, HashMap};
@@ -36,10 +36,6 @@ use time::OffsetDateTime;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
-use vulcan_codex_session_port::{
-    CodexAgentKind, CodexSubagentMailbox, CodexSubagentMailboxEvent, CodexSubagentMailboxEventKind,
-    CodexSubagentStatus, CodexThreadId, InMemoryCodexSubagentMailbox,
-};
 use vulcan_context::{ContextCompactionPolicy, conversation_state_to_session_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
 use vulcan_core::types::{
@@ -50,11 +46,16 @@ use vulcan_prompt_composer::{
     ModelDescriptor, PersonalitySelection, PromptAssemblyInput, PromptAssemblyMode,
     PromptAssemblyOutput, ProviderPromptSnapshot, SubagentSnapshot, ToolCatalogSnapshot,
 };
+use vulcan_session_boundary::{
+    InMemorySubagentMailbox, SessionThreadId, SubagentMailbox, SubagentMailboxAgentKind,
+    SubagentMailboxEvent, SubagentMailboxEventKind, SubagentMailboxStatus,
+};
 use vulcan_session_core::{
     ContextCompactionPolicyRequest, ContextCompactionPolicySnapshot, ExecutionRuntimePolicyRequest,
     ExecutionScope, ParentSessionRef, PromptSkillSnapshot, ProviderModelSnapshot,
     SessionContextDocument, SessionEffectiveConfig, SessionEventKind, SessionEventRecord,
     SessionNodeId, SessionNodeStore, SessionRequestedConfig, SessionRuntimeCheckpoint,
+    SessionSegmentSummary, SubagentKind, SubagentRegistry, SubagentRegistryEntry, SubagentStatus,
     ToolExposureSnapshot,
 };
 use vulcan_task_session::{
@@ -72,13 +73,13 @@ use vulcan_tools_manager::{
 /// 用于防止无限递归任务派生的默认嵌套任务深度上限。
 const DEFAULT_TASK_NESTING_LIMIT: usize = 8;
 
-/// Fallback stop summary returned to the parent task tool when the child run is manually interrupted before producing a complete answer.
-/// 当子运行在产出完整答案前被人工中断时，返回给父级 task 工具的兜底停止摘要。
+/// Fallback stop summary returned to the parent child-agent tool when the child run is manually interrupted before producing a complete answer.
+/// 当子运行在产出完整答案前被人工中断时，返回给父级子代理工具的兜底停止摘要。
 const STOPPED_TASK_RESULT_SUMMARY: &str = "The subagent was stopped at the user's request before producing a complete final result. Decide whether to retry, rewrite the task, or continue the main flow with the current context.";
 
 /// Running inspection summary returned only when the model checks a task that is already active.
 /// 仅当模型检查一条已经运行中的任务时返回的运行中查看摘要。
-const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgement, not the subagent's final result. The subagent owns the delegated work now. Do not recreate the same task, do not replace the unfinished subagent work with direct main-thread or non-task tool calls, and do not produce a final answer from assumptions. If coordination requires a status check, call task with the same task_id only to inspect that existing subagent.";
+const RUNNING_TASK_RESULT_SUMMARY: &str = "This is a running-status acknowledgement, not the subagent's final result. The subagent owns the delegated work now. Do not recreate the same child agent, do not replace the unfinished subagent work with direct main-thread or non-agent tool calls, and do not produce a final answer from assumptions. If coordination requires a status check, use list_agents or wait_agent for the existing child agent.";
 
 /// Windows filesystem path guidance injected into child task prompts to stabilize tool calls.
 /// 注入到子任务提示词中的 Windows 文件系统路径指引，用于稳定工具调用。
@@ -94,8 +95,8 @@ pub type TaskExecutionFuture =
 pub type TaskExecutionHandler =
     Arc<dyn Fn(TaskExecutionRequest) -> TaskExecutionFuture + Send + Sync>;
 
-/// Structured task tool arguments accepted from the model-visible `task` tool surface.
-/// 模型可见 `task` 工具表面接受的结构化任务参数。
+/// Structured TaskSession arguments used internally by the child-agent tool surface.
+/// 子代理工具面内部使用的结构化 TaskSession 参数。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
 struct TaskToolInvocationArgs {
@@ -300,8 +301,8 @@ pub struct TaskExecutionOutcome {
     /// Final text surfaced to the model-visible task result.
     /// 暴露给模型可见任务结果的最终文本。
     pub final_output_text: String,
-    /// Final execution status surfaced to both host persistence and the parent task-tool result.
-    /// 同时暴露给宿主持久化与父级 task 工具结果的最终执行状态。
+    /// Final execution status surfaced to both host persistence and the parent spawn-agent result.
+    /// 同时暴露给宿主持久化与父级 spawn_agent 结果的最终执行状态。
     pub execution_status: TaskExecutionStatus,
 }
 
@@ -332,8 +333,8 @@ pub enum TaskExecutionStatus {
     Stopped,
 }
 
-/// Fully resolved task-session identifiers derived from one task tool invocation.
-/// 从一次 task 工具调用中完整解析出的任务会话标识集合。
+/// Fully resolved task-session identifiers derived from one child-agent invocation.
+/// 从一次子代理调用中完整解析出的任务会话标识集合。
 #[derive(Debug, Clone)]
 struct ResolvedTaskSessionIdentifier {
     /// Internal UUID-shaped child session identifier used by the runtime registry.
@@ -523,9 +524,15 @@ pub struct TaskRuntime {
     /// Detached child-task event streams keyed by stable task identifier for non-blocking GUI mirroring.
     /// 为无阻塞图形界面镜像保留的按稳定任务标识索引的分离子任务事件流。
     detached_task_event_streams: RwLock<HashMap<SessionId, DetachedTaskEventStreamState>>,
-    /// Codex-compatible mailbox used for child-agent lifecycle association events.
-    /// 用于子代理生命周期关联事件的 Codex 兼容 mailbox。
-    codex_subagent_mailbox: InMemoryCodexSubagentMailbox,
+    /// session-boundary mailbox used for child-agent lifecycle association events.
+    /// 用于子代理生命周期关联事件的 会话边界 mailbox。
+    subagent_mailbox: InMemorySubagentMailbox,
+    /// Vulcan-native child-agent registry used as the future single source for subagent state.
+    /// Vulcan 原生子代理注册表，用作未来子代理状态的单一事实源。
+    subagent_registry: RwLock<SubagentRegistry>,
+    /// Queued parent-authored messages keyed by child task session id.
+    /// 按子任务会话标识暂存父级发送给子代理的消息。
+    queued_child_messages: RwLock<HashMap<SessionId, Vec<String>>>,
     /// Segmented task-session roots keyed by root main-session identifier.
     /// 按根主会话标识索引的分段子代理会话根目录。
     task_session_store_roots: RwLock<HashMap<SessionId, PathBuf>>,
@@ -555,7 +562,9 @@ impl TaskRuntime {
             execution_contexts: RwLock::new(HashMap::new()),
             active_task_runs: RwLock::new(HashMap::new()),
             detached_task_event_streams: RwLock::new(HashMap::new()),
-            codex_subagent_mailbox: InMemoryCodexSubagentMailbox::default(),
+            subagent_mailbox: InMemorySubagentMailbox::default(),
+            subagent_registry: RwLock::new(SubagentRegistry::new()),
+            queued_child_messages: RwLock::new(HashMap::new()),
             task_session_store_roots: RwLock::new(HashMap::new()),
             subagent_profiles: RwLock::new(HashMap::new()),
             max_depth: DEFAULT_TASK_NESTING_LIMIT,
@@ -586,14 +595,28 @@ impl TaskRuntime {
         self.max_depth
     }
 
-    /// Takes queued Codex-compatible subagent mailbox events for one parent thread.
-    /// 取出指定父线程下排队的 Codex 兼容子代理 mailbox 事件。
-    pub fn take_codex_subagent_events_for_parent(
+    /// Takes queued session-boundary subagent mailbox events for one parent thread.
+    /// 取出指定父线程下排队的 会话边界子代理 mailbox 事件。
+    pub fn take_subagent_events_for_parent(
         &self,
-        parent_thread_id: CodexThreadId,
-    ) -> Result<Vec<CodexSubagentMailboxEvent>, String> {
-        self.codex_subagent_mailbox
+        parent_thread_id: SessionThreadId,
+    ) -> Result<Vec<SubagentMailboxEvent>, String> {
+        self.subagent_mailbox
             .take_events_for_parent(parent_thread_id)
+    }
+
+    /// Returns a clone of the Vulcan-native subagent registry.
+    /// 返回 Vulcan 原生子代理注册表的克隆快照。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A registry snapshot that callers can inspect without holding runtime locks.
+    /// 调用方可在不持有运行时锁的情况下检查的注册表快照。
+    pub fn subagent_registry_snapshot(&self) -> Result<SubagentRegistry, String> {
+        self.subagent_registry
+            .read()
+            .map_err(|_| String::from("The subagent registry is locked and cannot be read."))
+            .map(|registry| registry.clone())
     }
 
     /// Registers the file-domain root used by TaskSession artifacts under one root main session.
@@ -668,8 +691,8 @@ impl TaskRuntime {
             .remove(&session_id);
     }
 
-    /// Executes one task tool invocation through the backend registered for the current controller session.
-    /// 通过为当前控制器会话注册的后端执行一次任务工具调用。
+    /// Executes one spawn-agent-backed TaskSession invocation through the backend registered for the current controller session.
+    /// 通过为当前控制器会话注册的后端执行一次由 spawn_agent 承载的 TaskSession 调用。
     pub async fn invoke_task(
         self: &Arc<Self>,
         current_session_id: SessionId,
@@ -721,6 +744,46 @@ impl TaskRuntime {
         Ok(build_task_invocation_result(&invocation, &outcome))
     }
 
+    /// Starts a new child-agent task session for one spawn_agent invocation.
+    /// 为一次 spawn_agent 调用启动新的子代理任务会话。
+    pub async fn invoke_spawn_agent(
+        self: &Arc<Self>,
+        current_session_id: SessionId,
+        args: Value,
+    ) -> Result<VulcanToolInvocationResult, String> {
+        let backend = self
+            .backend_for_session(current_session_id)
+            .ok_or_else(|| {
+                format!(
+                    "The current session `{}` does not have a task backend installed, so the subagent cannot run.",
+                    current_session_id
+                )
+            })?;
+
+        let parsed_args = parse_task_tool_arguments(args)?;
+        let resolved_identifier =
+            resolve_new_spawn_task_session_id(self, current_session_id, &parsed_args)?;
+        let invocation = prepare_task_execution_request(
+            self,
+            current_session_id,
+            resolved_identifier,
+            parsed_args,
+        )?;
+        let outcome = match backend(invocation.clone()).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.mark_task_failure(current_session_id, &invocation, &error)?;
+                return Err(error);
+            }
+        };
+
+        if outcome.execution_status != TaskExecutionStatus::Running {
+            self.store_task_outcome(current_session_id, &invocation, &outcome)?;
+        }
+
+        Ok(build_task_invocation_result(&invocation, &outcome))
+    }
+
     /// Waits for one or more already spawned child agents without creating new task sessions.
     /// 等待一个或多个已启动的子代理，且不会创建新的任务会话。
     pub async fn invoke_wait_agent(
@@ -728,26 +791,80 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        // Tool-level tracing separates model wait latency from child-agent execution latency.
+        // 工具级跟踪用于区分模型等待耗时和子代理自身执行耗时。
+        let trace_started_at = current_unix_millis_u64();
         let timeout_ms = subagent_tool_timeout_ms(&args).unwrap_or(300_000);
         let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let mut waiting_logged = false;
+        task_runtime_trace(
+            "subagent_wait_agent_start",
+            format!("parent={current_session_id} timeout_ms={timeout_ms}"),
+        );
         loop {
             let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
             let active_task_ids = self.active_task_ids_from_records(&records)?;
             if active_task_ids.is_empty() || tokio::time::Instant::now() >= deadline {
-                return Ok(build_subagent_status_tool_result(
+                let registry_entries =
+                    self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
+                if !registry_entries.is_empty() {
+                    let result = build_subagent_registry_status_tool_result(
+                        "wait_agent",
+                        current_session_id,
+                        registry_entries,
+                        timeout_ms,
+                        active_task_ids.is_empty(),
+                    );
+                    task_runtime_trace(
+                        "subagent_wait_agent_return",
+                        format!(
+                            "parent={current_session_id} source=registry active_count={} elapsed_ms={}",
+                            active_task_ids.len(),
+                            current_unix_millis_u64().saturating_sub(trace_started_at)
+                        ),
+                    );
+                    return Ok(result);
+                }
+                let result = build_subagent_status_tool_result(
                     "wait_agent",
                     current_session_id,
                     records,
                     timeout_ms,
                     active_task_ids.is_empty(),
-                ));
+                );
+                task_runtime_trace(
+                    "subagent_wait_agent_return",
+                    format!(
+                        "parent={current_session_id} source=records active_count={} elapsed_ms={}",
+                        active_task_ids.len(),
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
+                );
+                return Ok(result);
+            }
+            if !waiting_logged {
+                waiting_logged = true;
+                task_runtime_trace(
+                    "subagent_wait_agent_waiting",
+                    format!(
+                        "parent={current_session_id} active_count={} elapsed_ms={}",
+                        active_task_ids.len(),
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
+                );
             }
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let sleep_duration = remaining.min(Duration::from_millis(20));
-            let mut stream = Box::pin(self.subscribe_detached_task_events(active_task_ids[0]));
+            let mut streams = active_task_ids
+                .iter()
+                .map(|task_id| Box::pin(self.subscribe_detached_task_events(*task_id)))
+                .collect::<Vec<_>>();
+            let mut event_futures = FuturesUnordered::new();
+            for stream in streams.iter_mut() {
+                event_futures.push(stream.next());
+            }
             tokio::select! {
-                _ = stream.next() => {}
-                _ = tokio::time::sleep(sleep_duration) => {}
+                _ = event_futures.next() => {}
+                _ = tokio::time::sleep(remaining) => {}
             }
         }
     }
@@ -759,14 +876,248 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        let trace_started_at = current_unix_millis_u64();
+        task_runtime_trace(
+            "subagent_list_agents_start",
+            format!("parent={current_session_id}"),
+        );
+        let registry_entries =
+            self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
+        if !registry_entries.is_empty() {
+            let result = build_subagent_registry_status_tool_result(
+                "list_agents",
+                current_session_id,
+                registry_entries,
+                0,
+                true,
+            );
+            task_runtime_trace(
+                "subagent_list_agents_return",
+                format!(
+                    "parent={current_session_id} source=registry elapsed_ms={}",
+                    current_unix_millis_u64().saturating_sub(trace_started_at)
+                ),
+            );
+            return Ok(result);
+        }
         let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
-        Ok(build_subagent_status_tool_result(
-            "list_agents",
+        let result =
+            build_subagent_status_tool_result("list_agents", current_session_id, records, 0, true);
+        task_runtime_trace(
+            "subagent_list_agents_return",
+            format!(
+                "parent={current_session_id} source=records elapsed_ms={}",
+                current_unix_millis_u64().saturating_sub(trace_started_at)
+            ),
+        );
+        Ok(result)
+    }
+
+    /// Queues a message for one existing child agent without starting new child work.
+    /// 为一个已存在的子代理暂存消息，且不启动新的子代理工作。
+    pub async fn invoke_send_message(
+        &self,
+        current_session_id: SessionId,
+        args: Value,
+    ) -> Result<VulcanToolInvocationResult, String> {
+        let trace_started_at = current_unix_millis_u64();
+        let message_args = parse_subagent_message_tool_arguments(args, "send_message")?;
+        task_runtime_trace(
+            "subagent_send_message_start",
+            format!(
+                "parent={current_session_id} target={} message_chars={}",
+                message_args.target,
+                message_args.message.chars().count()
+            ),
+        );
+        let target_task_ids = self
+            .child_task_ids_for_message_target(current_session_id, message_args.target.as_str())?;
+        self.queue_child_messages(&target_task_ids, message_args.message.as_str())?;
+        let result = build_subagent_message_tool_result(
+            "send_message",
             current_session_id,
-            records,
-            0,
+            message_args.target.as_str(),
+            target_task_ids,
+            false,
             true,
-        ))
+            None,
+        );
+        task_runtime_trace(
+            "subagent_send_message_return",
+            format!(
+                "parent={current_session_id} target={} elapsed_ms={}",
+                message_args.target,
+                current_unix_millis_u64().saturating_sub(trace_started_at)
+            ),
+        );
+        Ok(result)
+    }
+
+    /// Sends a follow-up task to one existing child agent and triggers a child continuation when possible.
+    /// 向一个已存在子代理发送后续任务，并在可行时触发子代理继续执行。
+    pub async fn invoke_followup_task(
+        self: &Arc<Self>,
+        current_session_id: SessionId,
+        args: Value,
+    ) -> Result<VulcanToolInvocationResult, String> {
+        let trace_started_at = current_unix_millis_u64();
+        let message_args = parse_subagent_message_tool_arguments(args, "followup_task")?;
+        task_runtime_trace(
+            "subagent_followup_task_start",
+            format!(
+                "parent={current_session_id} target={} message_chars={}",
+                message_args.target,
+                message_args.message.chars().count()
+            ),
+        );
+        let selector_args = json!({ "task_name": message_args.target.clone() });
+        let target_records =
+            self.child_agent_records_for_tool_request(current_session_id, &selector_args)?;
+        let active_task_ids = self.active_task_ids_from_records(&target_records)?;
+        if !active_task_ids.is_empty() {
+            self.queue_child_messages(&active_task_ids, message_args.message.as_str())?;
+            let result = build_subagent_message_tool_result(
+                "followup_task",
+                current_session_id,
+                message_args.target.as_str(),
+                active_task_ids,
+                true,
+                true,
+                Some(String::from(
+                    "The selected child agent is still running; the follow-up was queued for the next child-agent continuation.",
+                )),
+            );
+            task_runtime_trace(
+                "subagent_followup_task_return",
+                format!(
+                    "parent={current_session_id} target={} queued_for_active=true elapsed_ms={}",
+                    message_args.target,
+                    current_unix_millis_u64().saturating_sub(trace_started_at)
+                ),
+            );
+            return Ok(result);
+        }
+        let target_task_ids =
+            self.child_task_ids_for_message_target(current_session_id, &message_args.target)?;
+        let queued_messages = self.drain_queued_child_messages(&target_task_ids)?;
+        let prompt = followup_prompt_from_messages(queued_messages, message_args.message);
+        let task_args = json!({
+            "prompt": prompt,
+            "task_id": message_args.target,
+            "description": format!("Follow up {}", message_args.target),
+        });
+        let result = self.invoke_task(current_session_id, task_args).await;
+        task_runtime_trace(
+            "subagent_followup_task_return",
+            format!(
+                "parent={current_session_id} target={} ok={} elapsed_ms={}",
+                message_args.target,
+                result.is_ok(),
+                current_unix_millis_u64().saturating_sub(trace_started_at)
+            ),
+        );
+        result
+    }
+
+    /// Resolves child task-session ids for one message target.
+    /// 为单个消息目标解析子任务会话标识列表。
+    fn child_task_ids_for_message_target(
+        &self,
+        current_session_id: SessionId,
+        target: &str,
+    ) -> Result<Vec<SessionId>, String> {
+        let selector_args = json!({ "task_name": target });
+        let records =
+            self.child_agent_records_for_tool_request(current_session_id, &selector_args)?;
+        let mut task_ids = records
+            .into_iter()
+            .map(|record| record.task_id)
+            .collect::<Vec<_>>();
+        if task_ids.is_empty() {
+            task_ids.extend(
+                self.subagent_registry_entries_for_tool_request(
+                    current_session_id,
+                    &selector_args,
+                )?
+                .into_iter()
+                .map(|entry| entry.session_id.as_uuid()),
+            );
+        }
+        if task_ids.is_empty() {
+            return Err(format!(
+                "The target child agent `{target}` does not exist under the current parent session."
+            ));
+        }
+        task_ids.sort();
+        task_ids.dedup();
+        Ok(task_ids)
+    }
+
+    /// Queues one message for every selected child task session.
+    /// 为每个选中的子任务会话暂存一条消息。
+    fn queue_child_messages(&self, task_ids: &[SessionId], message: &str) -> Result<(), String> {
+        let mut queued_messages = self.queued_child_messages.write().map_err(|_| {
+            String::from("The child-agent message queue is locked and cannot update.")
+        })?;
+        for task_id in task_ids {
+            queued_messages
+                .entry(*task_id)
+                .or_default()
+                .push(message.to_string());
+        }
+        Ok(())
+    }
+
+    /// Drains queued parent-authored messages for the selected child task sessions.
+    /// 取出选中子任务会话中暂存的父级消息。
+    fn drain_queued_child_messages(&self, task_ids: &[SessionId]) -> Result<Vec<String>, String> {
+        let mut queued_messages = self.queued_child_messages.write().map_err(|_| {
+            String::from("The child-agent message queue is locked and cannot read.")
+        })?;
+        let mut drained = Vec::new();
+        for task_id in task_ids {
+            if let Some(messages) = queued_messages.remove(task_id) {
+                drained.extend(messages);
+            }
+        }
+        Ok(drained)
+    }
+
+    /// Reads registry entries for one subagent tool request.
+    /// 读取一次子代理工具请求对应的注册表条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `current_session_id` is the direct parent session id.
+    /// `current_session_id` 是直接父会话标识。
+    /// `args` carries the optional child-agent selector.
+    /// `args` 携带可选子代理选择器。
+    ///
+    /// # Returns
+    /// 返回值
+    /// Matching registry entries cloned from the native registry snapshot.
+    /// 从原生注册表快照克隆出的匹配条目。
+    fn subagent_registry_entries_for_tool_request(
+        &self,
+        current_session_id: SessionId,
+        args: &Value,
+    ) -> Result<Vec<SubagentRegistryEntry>, String> {
+        let registry = self.subagent_registry_snapshot()?;
+        let parent_session_id = SessionNodeId::from(current_session_id);
+        if let Some(target) = subagent_tool_target(args) {
+            let target = normalize_public_task_identifier(&target)?;
+            return Ok(registry
+                .get(&target)
+                .filter(|entry| entry.parent_session_id == parent_session_id)
+                .cloned()
+                .into_iter()
+                .collect());
+        }
+        Ok(registry
+            .list_for_parent(parent_session_id)
+            .into_iter()
+            .cloned()
+            .collect())
     }
 
     /// Stops one running child agent selected by task name, public id, or task-session id.
@@ -776,12 +1127,48 @@ impl TaskRuntime {
         current_session_id: SessionId,
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
+        let trace_started_at = current_unix_millis_u64();
+        task_runtime_trace(
+            "subagent_close_agent_start",
+            format!("parent={current_session_id}"),
+        );
+        let registry_entries =
+            self.subagent_registry_entries_for_tool_request(current_session_id, &args)?;
+        if !registry_entries.is_empty() {
+            let mut stopped_task_ids = Vec::new();
+            for entry in &registry_entries {
+                stopped_task_ids.extend(self.stop_task_tree(SessionId::from(entry.session_id))?);
+            }
+            let result = VulcanToolInvocationResult::from_model_output(json!({
+                "tool": "close_agent",
+                "parent_session_id": current_session_id.to_string(),
+                "matched_agents": registry_entries.iter().map(subagent_registry_entry_status_payload).collect::<Vec<_>>(),
+                "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                "stopped_count": stopped_task_ids.len(),
+            })).with_host_result(VulcanToolHostResult {
+                kind: String::from("subagent_control"),
+                payload: json!({
+                    "tool": "close_agent",
+                    "parent_session_id": current_session_id.to_string(),
+                    "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+                }),
+            });
+            task_runtime_trace(
+                "subagent_close_agent_return",
+                format!(
+                    "parent={current_session_id} source=registry stopped_count={} elapsed_ms={}",
+                    stopped_task_ids.len(),
+                    current_unix_millis_u64().saturating_sub(trace_started_at)
+                ),
+            );
+            return Ok(result);
+        }
         let records = self.child_agent_records_for_tool_request(current_session_id, &args)?;
         let mut stopped_task_ids = Vec::new();
         for record in &records {
             stopped_task_ids.extend(self.stop_task_tree(record.task_id)?);
         }
-        Ok(VulcanToolInvocationResult::from_model_output(json!({
+        let result = VulcanToolInvocationResult::from_model_output(json!({
             "tool": "close_agent",
             "parent_session_id": current_session_id.to_string(),
             "matched_agents": records.iter().map(subagent_record_status_payload).collect::<Vec<_>>(),
@@ -794,11 +1181,20 @@ impl TaskRuntime {
                 "parent_session_id": current_session_id.to_string(),
                 "stopped_task_session_ids": stopped_task_ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
             }),
-        }))
+        });
+        task_runtime_trace(
+            "subagent_close_agent_return",
+            format!(
+                "parent={current_session_id} source=records stopped_count={} elapsed_ms={}",
+                stopped_task_ids.len(),
+                current_unix_millis_u64().saturating_sub(trace_started_at)
+            ),
+        );
+        Ok(result)
     }
 
-    /// Collects child-agent records selected by one Codex-style subagent tool request.
-    /// 根据一次 Codex 风格子代理工具请求收集匹配的子代理记录。
+    /// Collects child-agent records selected by one session-agent-style subagent tool request.
+    /// 根据一次 会话代理风格子代理工具请求收集匹配的子代理记录。
     fn child_agent_records_for_tool_request(
         &self,
         current_session_id: SessionId,
@@ -1157,7 +1553,7 @@ impl TaskRuntime {
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
         let record = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
-        self.publish_codex_subagent_mailbox_event(
+        self.publish_subagent_mailbox_event(
             invocation,
             task_session_status_from_execution_status(outcome.execution_status),
             Some(outcome.final_output_text.as_str()),
@@ -1168,8 +1564,8 @@ impl TaskRuntime {
         Ok(())
     }
 
-    /// Stores one running task outcome in memory without blocking the parent tool call on file persistence.
-    /// 仅在内存中保存运行中的任务结果，避免父级工具调用被文件持久化阻塞。
+    /// Stores one running task outcome and persists the task creation/start state once.
+    /// 保存运行中的任务结果，并且只持久化一次子任务创建/启动状态。
     fn store_running_task_outcome_in_memory(
         &self,
         current_session_id: SessionId,
@@ -1177,14 +1573,29 @@ impl TaskRuntime {
         outcome: &TaskExecutionOutcome,
     ) -> Result<(), String> {
         debug_assert_eq!(outcome.execution_status, TaskExecutionStatus::Running);
-        let _ = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
-        self.publish_codex_subagent_mailbox_event(
+        let record = self.upsert_task_outcome_record(current_session_id, invocation, outcome)?;
+        self.publish_subagent_mailbox_event(
             invocation,
             TaskSessionStatus::Running,
             None,
             None,
             Some(outcome),
         );
+        if let Err(error) = self.persist_task_record_state(
+            &record,
+            invocation,
+            TaskSessionStatus::Running,
+            None,
+            None,
+            Some(&outcome.snapshot),
+            Some(&outcome.controller_config),
+            Some(outcome),
+        ) {
+            eprintln!(
+                "[task-session-store] persist running state failed for task {}: {error}",
+                record.task_id
+            );
+        }
         Ok(())
     }
 
@@ -1237,7 +1648,74 @@ impl TaskRuntime {
         if record.subagent.is_none() {
             record.subagent = invocation.subagent.clone();
         }
+        let task_status = task_session_status_from_execution_status(outcome.execution_status);
+        let result_summary = (!task_status.is_active()
+            && !record.last_result_text.trim().is_empty())
+        .then_some(record.last_result_text.as_str());
+        self.upsert_subagent_registry_entry(record, task_status, result_summary)?;
         Ok(record.clone())
+    }
+
+    /// Upserts one Vulcan-native subagent registry entry from a task-session record.
+    /// 根据任务会话记录更新或插入一条 Vulcan 原生子代理注册表条目。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `record` is the in-memory task-session record to mirror.
+    /// `record` 是需要镜像的内存任务会话记录。
+    /// `status` is the current task-session status.
+    /// `status` 是当前任务会话状态。
+    /// `result_summary` is an optional compact terminal or running result summary.
+    /// `result_summary` 是可选的紧凑终态或运行结果摘要。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `Ok(())` when the registry entry is updated.
+    /// 注册表条目更新成功时返回 `Ok(())`。
+    fn upsert_subagent_registry_entry(
+        &self,
+        record: &TaskSessionRecord,
+        status: TaskSessionStatus,
+        result_summary: Option<&str>,
+    ) -> Result<(), String> {
+        let parent_session_id = record.parent_task_id.unwrap_or(record.origin_session_id);
+        let created_at_ms = record.created_at.parse::<u64>().unwrap_or_default();
+        let updated_at_ms = record.updated_at.parse::<u64>().unwrap_or(created_at_ms);
+        let mut entry = SubagentRegistryEntry::new(
+            record.public_task_id.clone(),
+            SessionNodeId::from(record.task_id),
+            SessionNodeId::from(parent_session_id),
+            subagent_kind_for_task_record(record),
+            created_at_ms,
+        );
+        entry.status = subagent_status_from_task_session_status(status);
+        entry.updated_at_ms = updated_at_ms;
+        if let Some(prompt_source) = subagent_prompt_source_for_task_record(record) {
+            entry.prompt_source = Some(prompt_source);
+        }
+        if let Some(result_summary) = result_summary
+            && !result_summary.trim().is_empty()
+        {
+            entry.result_summary = Some(result_summary.to_string());
+        }
+        let persisted_segments = self
+            .load_task_segment_summaries_for_record(record)
+            .unwrap_or_default();
+        entry.segments = persisted_segments;
+        let mut registry = self
+            .subagent_registry
+            .write()
+            .map_err(|_| String::from("The subagent registry is locked and cannot be updated."))?;
+        if let Some(existing) = registry.get(&entry.agent_id).cloned() {
+            if entry.segments.is_empty() {
+                entry.segments = existing.segments;
+            }
+            if entry.result_summary.is_none() {
+                entry.result_summary = existing.result_summary;
+            }
+        }
+        registry.upsert(entry);
+        Ok(())
     }
 
     /// Stores one failed task outcome while preserving the latest snapshot for later resumption.
@@ -1283,7 +1761,8 @@ impl TaskRuntime {
             }
             record.clone()
         };
-        self.publish_codex_subagent_mailbox_event(
+        self.upsert_subagent_registry_entry(&record, TaskSessionStatus::Failed, Some(error))?;
+        self.publish_subagent_mailbox_event(
             invocation,
             TaskSessionStatus::Failed,
             Some(error),
@@ -1294,9 +1773,9 @@ impl TaskRuntime {
         Ok(())
     }
 
-    /// Publishes one Codex-compatible child-agent lifecycle event into the parent mailbox.
-    /// 将一条 Codex 兼容子代理生命周期事件发布到父级 mailbox。
-    fn publish_codex_subagent_mailbox_event(
+    /// Publishes one session-boundary child-agent lifecycle event into the parent mailbox.
+    /// 将一条 会话边界子代理生命周期事件发布到父级 mailbox。
+    fn publish_subagent_mailbox_event(
         &self,
         invocation: &TaskExecutionRequest,
         status: TaskSessionStatus,
@@ -1304,7 +1783,7 @@ impl TaskRuntime {
         error_text: Option<&str>,
         outcome: Option<&TaskExecutionOutcome>,
     ) {
-        let event = build_codex_subagent_mailbox_event(
+        let event = build_subagent_mailbox_event(
             invocation,
             status,
             current_unix_millis_u64(),
@@ -1312,9 +1791,9 @@ impl TaskRuntime {
             error_text,
             outcome,
         );
-        if let Err(error) = self.codex_subagent_mailbox.push_event(event) {
+        if let Err(error) = self.subagent_mailbox.push_event(event) {
             eprintln!(
-                "[task-runtime] failed to publish Codex subagent mailbox event for task {}: {error}",
+                "[task-runtime] failed to publish subagent mailbox event for task {}: {error}",
                 invocation.task_id
             );
         }
@@ -1438,15 +1917,35 @@ impl TaskRuntime {
             .save_task_session(metadata)
             .map_err(|error| error.message)?;
 
-        let parent_sequence = store
-            .list_task_invocation_events(parent.clone())
-            .map(|events| events.len() as u64)
-            .unwrap_or(0);
+        let event_sequence = now_ms;
+        store
+            .append_event(SessionEventRecord::new(
+                format!(
+                    "task-node-state-{}-{status:?}-{event_sequence}",
+                    record.task_id
+                ),
+                task_session_id,
+                event_sequence,
+                task_session_event_kind_for_status(status),
+                now_ms,
+                task_state_event_payload(
+                    record,
+                    invocation,
+                    result_text,
+                    error_text,
+                    status,
+                    now_ms,
+                    outcome,
+                ),
+            ))
+            .map_err(|error| error.message)?;
+
+        let parent_sequence = now_ms;
         store
             .append_task_invocation_event(
                 parent,
                 TaskInvocationEvent {
-                    event_id: format!("task-state-{}-{parent_sequence}", record.task_id),
+                    event_id: format!("task-state-{}-{status:?}-{parent_sequence}", record.task_id),
                     root_session_id,
                     parent: parent_ref_for_task_record(record),
                     task_session_id,
@@ -1466,29 +1965,6 @@ impl TaskRuntime {
                     ),
                 },
             )
-            .map_err(|error| error.message)?;
-
-        let event_sequence = store
-            .load_events(task_session_id)
-            .map(|events| events.len() as u64)
-            .unwrap_or(0);
-        store
-            .append_event(SessionEventRecord::new(
-                format!("task-node-state-{}-{event_sequence}", record.task_id),
-                task_session_id,
-                event_sequence,
-                task_session_event_kind_for_status(status),
-                now_ms,
-                task_state_event_payload(
-                    record,
-                    invocation,
-                    result_text,
-                    error_text,
-                    status,
-                    now_ms,
-                    outcome,
-                ),
-            ))
             .map_err(|error| error.message)?;
 
         if let (Some(snapshot), Some(controller_config)) = (snapshot, controller_config) {
@@ -1532,6 +2008,10 @@ impl TaskRuntime {
             })
             .map_err(|error| error.message)?;
 
+        let registry_result_summary =
+            (!status.is_active()).then(|| result_text.filter(|text| !text.trim().is_empty()));
+        self.upsert_subagent_registry_entry(record, status, registry_result_summary.flatten())?;
+
         Ok(())
     }
 
@@ -1550,6 +2030,20 @@ impl TaskRuntime {
             .get(&root_session_id)
             .cloned();
         Ok(root.map(SegmentedTaskSessionStore::new))
+    }
+
+    /// Loads child task segment summaries from the segmented task metadata.
+    /// 从分段子任务元数据加载子任务分段摘要。
+    fn load_task_segment_summaries_for_record(
+        &self,
+        record: &TaskSessionRecord,
+    ) -> Result<Vec<SessionSegmentSummary>, String> {
+        let Some(store) = self.task_session_store_for_root(record.origin_session_id)? else {
+            return Ok(Vec::new());
+        };
+        store
+            .load_task_segment_summaries(SessionNodeId::from(record.task_id))
+            .map_err(|error| error.message)
     }
 
     /// Finds one persisted TaskSession metadata record by direct parent and public task id.
@@ -1650,44 +2144,13 @@ impl TaskRuntime {
     }
 }
 
-/// Builds one task tool candidate backed by the shared task runtime registry.
-/// 根据共享任务运行时注册表构建一条任务工具候选项。
-pub fn build_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCandidate {
-    VulcanToolCandidate {
-        descriptor: VulcanToolDescriptor {
-            id: String::from("task"),
-            name: String::from("task"),
-            description: String::from(
-                "Create, resume, or inspect a recoverable subtask session. A running task owns its delegated work until it reports back automatically. Always provide `description` and `subagent` so the subtask keeps a stable title and identity. When a task is already running, reuse the same `task_id` to inspect that exact task; do not start a duplicate task, do not rewrite the task prompt as new work, and do not replace unfinished subagent work with main-thread or non-task tools.",
-            ),
-            help_text: None,
-            source: VulcanToolSourceKind::Native,
-        },
-        parameters_schema: task_tool_args_schema(),
-        ai_visible: false,
-        plan_policy: VulcanPlanToolPolicy::Hidden,
-        invoke: Arc::new(move |args, session_id| {
-            let task_runtime = Arc::clone(&task_runtime);
-            Box::pin(async move {
-                let Some(session_id) = session_id.as_deref() else {
-                    return Err(String::from(
-                        "The `task` tool requires a session identifier and cannot run without it.",
-                    ));
-                };
-                let session_id = Uuid::parse_str(session_id).map_err(|error| {
-                    format!("Failed to parse the session identifier for the `task` tool: {error}")
-                })?;
-                task_runtime.invoke_task(session_id, args).await
-            })
-        }),
-    }
-}
-
-/// Builds the Codex-style child-agent tool surface backed by the shared TaskSession runtime.
-/// 构建由共享 TaskSession 运行时承载的 Codex 风格子代理工具面。
+/// Builds the session-agent-style child-agent tool surface backed by the shared TaskSession runtime.
+/// 构建由共享 TaskSession 运行时承载的 会话代理风格子代理工具面。
 pub fn build_subagent_tool_candidates(task_runtime: Arc<TaskRuntime>) -> Vec<VulcanToolCandidate> {
     vec![
         build_spawn_agent_tool_candidate(Arc::clone(&task_runtime)),
+        build_send_message_tool_candidate(Arc::clone(&task_runtime)),
+        build_followup_task_tool_candidate(Arc::clone(&task_runtime)),
         build_wait_agent_tool_candidate(Arc::clone(&task_runtime)),
         build_list_agents_tool_candidate(Arc::clone(&task_runtime)),
         build_close_agent_tool_candidate(task_runtime),
@@ -1713,10 +2176,83 @@ fn build_spawn_agent_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToo
         invoke: Arc::new(move |args, session_id| {
             let task_runtime = Arc::clone(&task_runtime);
             Box::pin(async move {
+                let trace_started_at = current_unix_millis_u64();
                 let session_id =
                     parse_subagent_tool_session_id(session_id.as_deref(), "spawn_agent")?;
+                task_runtime_trace(
+                    "subagent_spawn_agent_start",
+                    format!(
+                        "parent={} args_chars={}",
+                        session_id,
+                        args.to_string().chars().count()
+                    ),
+                );
                 let task_args = task_tool_args_from_spawn_agent_args(args)?;
-                task_runtime.invoke_task(session_id, task_args).await
+                let result = task_runtime.invoke_spawn_agent(session_id, task_args).await;
+                task_runtime_trace(
+                    "subagent_spawn_agent_return",
+                    format!(
+                        "parent={} ok={} elapsed_ms={}",
+                        session_id,
+                        result.is_ok(),
+                        current_unix_millis_u64().saturating_sub(trace_started_at)
+                    ),
+                );
+                result
+            })
+        }),
+    }
+}
+
+/// Builds the model-visible child-agent queue-only message tool.
+/// 构建模型可见的子代理仅排队消息工具。
+fn build_send_message_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCandidate {
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from("send_message"),
+            name: String::from("send_message"),
+            description: String::from(
+                "Send a message to an existing child agent without starting new child work. The host queues the message for that child agent's next followup_task continuation.",
+            ),
+            help_text: None,
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: subagent_message_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Hidden,
+        invoke: Arc::new(move |args, session_id| {
+            let task_runtime = Arc::clone(&task_runtime);
+            Box::pin(async move {
+                let session_id =
+                    parse_subagent_tool_session_id(session_id.as_deref(), "send_message")?;
+                task_runtime.invoke_send_message(session_id, args).await
+            })
+        }),
+    }
+}
+
+/// Builds the model-visible child-agent follow-up task tool.
+/// 构建模型可见的子代理后续任务工具。
+fn build_followup_task_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToolCandidate {
+    VulcanToolCandidate {
+        descriptor: VulcanToolDescriptor {
+            id: String::from("followup_task"),
+            name: String::from("followup_task"),
+            description: String::from(
+                "Send a follow-up task to an existing child agent and trigger a child-agent continuation when the child is idle.",
+            ),
+            help_text: None,
+            source: VulcanToolSourceKind::Native,
+        },
+        parameters_schema: subagent_message_args_schema(),
+        ai_visible: true,
+        plan_policy: VulcanPlanToolPolicy::Hidden,
+        invoke: Arc::new(move |args, session_id| {
+            let task_runtime = Arc::clone(&task_runtime);
+            Box::pin(async move {
+                let session_id =
+                    parse_subagent_tool_session_id(session_id.as_deref(), "followup_task")?;
+                task_runtime.invoke_followup_task(session_id, args).await
             })
         }),
     }
@@ -1803,134 +2339,6 @@ fn build_close_agent_tool_candidate(task_runtime: Arc<TaskRuntime>) -> VulcanToo
     }
 }
 
-/// Builds the JSON Schema advertised to the model for the `task` tool.
-/// 为模型端 `task` 工具构建对外声明的 JSON Schema。
-fn task_tool_args_schema() -> Value {
-    json!({
-        "type": "object",
-        "properties": {
-            "prompt": {
-                "type": "string",
-                "description": "Detailed prompt used to start or resume the subtask. State the goal, boundaries, expected return format, and whether code changes are allowed."
-            },
-            "description": {
-                "type": "string",
-                "description": "Short task title, ideally 3 to 8 words, used for stable naming, card titles, and resume display."
-            },
-            "task_id": {
-                "type": "string",
-                "description": "Optional stable task identifier. Provide it to continue, inspect, or resume the same subtask. For a running task, reuse this exact id only for status inspection; never omit it to recreate a duplicate or replace that work in the parent thread."
-            },
-            "subagent": {
-                "type": "string",
-                "description": "Subagent name or role label. This should usually be provided so the UI can display a stable worker identity and responsibility."
-            },
-            "subagent_profile_id": {
-                "type": "string",
-                "description": "Optional named subagent profile id. Use this when a configured specialized subagent should be selected."
-            },
-            "profile": {
-                "type": "string",
-                "description": "Short alias for subagent_profile_id."
-            },
-            "inherit_parent_config": {
-                "type": "boolean",
-                "description": "Optional override. True inherits the parent model, prompt, tools, and skills; false uses only default/profile/invocation configuration."
-            },
-            "system_prompt": {
-                "type": "string",
-                "description": "Optional replacement system prompt for this subagent session."
-            },
-            "system_prompt_append": {
-                "type": "string",
-                "description": "Optional extra system prompt instructions appended to this subagent session."
-            },
-            "provider": {
-                "type": "string",
-                "description": "Optional provider id override. Provider switching is only honored when the host runtime can route that provider."
-            },
-            "model": {
-                "type": "string",
-                "description": "Optional model id override for this subagent."
-            },
-            "reasoning_effort": {
-                "type": "string",
-                "description": "Optional reasoning effort override for this subagent."
-            },
-            "execution_mode": {
-                "type": "string",
-                "description": "Optional execution mode override such as Build or Plan."
-            },
-            "provider_model": {
-                "description": "Optional provider/model override. Use an object with provider_id, model_id, reasoning_effort, and execution_mode, or a provider/model string.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "tools": {
-                "description": "Optional tool exposure override. Use an array of allowed tool ids, or an object with allowed/enabled and disabled lists.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "ai_capabilities": {
-                "description": "Optional AI capability override. Use an array of allowed capability ids, or an object with allowed/enabled and disabled lists.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "skills": {
-                "description": "Optional prompt skill override. Use an array of enabled skill ids, or an object with enabled and disabled lists.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "prompt_skills": {
-                "description": "Alias of skills for prompt-skill override.",
-                "anyOf": [
-                    { "type": "string" },
-                    { "type": "array", "items": { "type": "string" } },
-                    { "type": "object", "additionalProperties": true }
-                ]
-            },
-            "luaskills": {
-                "description": "Optional LuaSkills override payload persisted in the TaskSession config snapshot.",
-                "type": "object",
-                "additionalProperties": true
-            },
-            "mcp": {
-                "description": "Optional MCP override payload persisted in the TaskSession config snapshot.",
-                "type": "object",
-                "additionalProperties": true
-            },
-            "context_compaction": {
-                "description": "Optional context compaction override with context_budget, max_provider_requests, or auto_compaction_enabled.",
-                "type": "object",
-                "additionalProperties": true
-            },
-            "runtime_policy": {
-                "description": "Optional task-session runtime override. Prefer camelCase keys such as hooksEnabled, vmmEnabled, memoryRecallEnabled, and memoryWritebackEnabled; snake_case aliases are also accepted. searchProjectionEnabled and databaseProjectionEnabled are recorded for audit but remain disabled for TaskSession persistence isolation.",
-                "type": "object",
-                "additionalProperties": true
-            },
-            "extra": {
-                "description": "Optional caller-owned JSON payload persisted with this task invocation.",
-                "type": "object",
-                "additionalProperties": true
-            }
-        },
-        "required": ["prompt"],
-        "additionalProperties": false
-    })
-}
-
 /// Builds the JSON Schema advertised to the model for `spawn_agent`.
 /// 为模型端 `spawn_agent` 工具构建对外声明的 JSON Schema。
 fn spawn_agent_args_schema() -> Value {
@@ -1981,6 +2389,26 @@ fn spawn_agent_args_schema() -> Value {
         },
         "required": ["message"],
         "additionalProperties": true
+    })
+}
+
+/// Builds the JSON Schema advertised to the model for child-agent message tools.
+/// 为子代理消息工具构建对模型声明的 JSON Schema。
+fn subagent_message_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": {
+                "type": "string",
+                "description": "Required child-agent name returned from spawn_agent."
+            },
+            "message": {
+                "type": "string",
+                "description": "Required message or follow-up task instruction to send to the child agent."
+            }
+        },
+        "required": ["target", "message"],
+        "additionalProperties": false
     })
 }
 
@@ -2046,8 +2474,8 @@ fn close_agent_args_schema() -> Value {
     })
 }
 
-/// Parses the session identifier required by every Codex-style subagent tool.
-/// 解析每个 Codex 风格子代理工具都需要的会话标识。
+/// Parses the session identifier required by every session-agent-style subagent tool.
+/// 解析每个 会话代理风格子代理工具都需要的会话标识。
 fn parse_subagent_tool_session_id(
     session_id: Option<&str>,
     tool_name: &str,
@@ -2062,8 +2490,8 @@ fn parse_subagent_tool_session_id(
     })
 }
 
-/// Converts Codex-style `spawn_agent` arguments into the existing TaskSession invocation shape.
-/// 将 Codex 风格 `spawn_agent` 参数转换为既有 TaskSession 调用形态。
+/// Converts session-agent-style `spawn_agent` arguments into the existing TaskSession invocation shape.
+/// 将 会话代理风格 `spawn_agent` 参数转换为既有 TaskSession 调用形态。
 fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value, String> {
     let Value::Object(map) = args else {
         return Err(String::from(
@@ -2125,8 +2553,59 @@ fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value, String> {
     Ok(Value::Object(task_args))
 }
 
-/// Reads the optional child-agent selector from a Codex-style subagent tool request.
-/// 从 Codex 风格子代理工具请求中读取可选子代理选择器。
+/// Parsed arguments shared by child-agent message tools.
+/// 子代理消息工具共享的已解析参数。
+struct SubagentMessageToolArgs {
+    /// Target child-agent identifier.
+    /// 目标子代理标识。
+    target: String,
+    /// Message sent from the parent agent.
+    /// 父代理发送的消息。
+    message: String,
+}
+
+/// Parses the shared argument payload for child-agent message tools.
+/// 解析子代理消息工具共享的参数载荷。
+fn parse_subagent_message_tool_arguments(
+    args: Value,
+    tool_name: &str,
+) -> Result<SubagentMessageToolArgs, String> {
+    let Value::Object(map) = args else {
+        return Err(format!("`{tool_name}` arguments must be a JSON object."));
+    };
+    let target = string_field(
+        &map,
+        &["target", "task_name", "task_id", "agent_id", "name"],
+    )
+    .ok_or_else(|| format!("`{tool_name}` requires `target`."))?;
+    let message = string_field(&map, &["message", "prompt", "instructions"])
+        .ok_or_else(|| format!("`{tool_name}` requires `message`."))?;
+    let target = normalize_public_task_identifier(&target)?;
+    if message.trim().is_empty() {
+        return Err(format!("`{tool_name}` message cannot be empty."));
+    }
+    Ok(SubagentMessageToolArgs { target, message })
+}
+
+/// Builds the prompt used by followup_task from queued send_message items and the latest message.
+/// 根据已排队的 send_message 条目和最新消息构建 followup_task 提示词。
+fn followup_prompt_from_messages(
+    mut queued_messages: Vec<String>,
+    latest_message: String,
+) -> String {
+    queued_messages.push(latest_message);
+    if queued_messages.len() == 1 {
+        return queued_messages.remove(0);
+    }
+    let mut prompt = String::from("Parent agent follow-up messages, oldest first:\n");
+    for (index, message) in queued_messages.iter().enumerate() {
+        prompt.push_str(&format!("\n[{}]\n{}", index + 1, message.trim()));
+    }
+    prompt
+}
+
+/// Reads the optional child-agent selector from a session-agent-style subagent tool request.
+/// 从 会话代理风格子代理工具请求中读取可选子代理选择器。
 fn subagent_tool_target(args: &Value) -> Option<String> {
     let Value::Object(map) = args else {
         return None;
@@ -2138,13 +2617,14 @@ fn subagent_tool_target(args: &Value) -> Option<String> {
             "task_id",
             "agent_id",
             "child_thread_id",
+            "target",
             "name",
         ],
     )
 }
 
-/// Reads the optional wait timeout from a Codex-style subagent tool request.
-/// 从 Codex 风格子代理工具请求中读取可选等待超时。
+/// Reads the optional wait timeout from a session-agent-style subagent tool request.
+/// 从 会话代理风格子代理工具请求中读取可选等待超时。
 fn subagent_tool_timeout_ms(args: &Value) -> Option<u64> {
     let Value::Object(map) = args else {
         return None;
@@ -2168,8 +2648,37 @@ fn subagent_record_status_payload(record: &TaskSessionRecord) -> Value {
     })
 }
 
-/// Builds a model-visible status result for Codex-style subagent control tools.
-/// 为 Codex 风格子代理控制工具构建模型可见状态结果。
+/// Builds one compact JSON status payload for a native subagent registry entry.
+/// 为一条原生子代理注册表条目构建紧凑 JSON 状态载荷。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the subagent registry entry to expose.
+/// `entry` 是需要暴露的子代理注册表条目。
+///
+/// # Returns
+/// 返回值
+/// A model-visible JSON status payload.
+/// 模型可见的 JSON 状态载荷。
+fn subagent_registry_entry_status_payload(entry: &SubagentRegistryEntry) -> Value {
+    json!({
+        "task_name": &entry.agent_id,
+        "task_session_id": entry.session_id.to_string(),
+        "display_title": &entry.agent_id,
+        "description": Value::Null,
+        "agent_type": entry.prompt_source.clone(),
+        "agent_kind": entry.agent_kind,
+        "prompt_source": entry.prompt_source.clone(),
+        "status": entry.status,
+        "depth": Value::Null,
+        "result": entry.result_summary.clone(),
+        "updated_at": entry.updated_at_ms.to_string(),
+        "segments": entry.segments.clone(),
+    })
+}
+
+/// Builds a model-visible status result for session-agent-style subagent control tools.
+/// 为 会话代理风格子代理控制工具构建模型可见状态结果。
 fn build_subagent_status_tool_result(
     tool_name: &str,
     current_session_id: SessionId,
@@ -2196,11 +2705,88 @@ fn build_subagent_status_tool_result(
     )
 }
 
-/// Parses one raw JSON payload into the strongly typed task invocation arguments.
-/// 将一份原始 JSON 载荷解析为强类型任务调用参数。
+/// Builds a model-visible status result from native subagent registry entries.
+/// 根据原生子代理注册表条目构建模型可见状态结果。
+///
+/// # Parameters
+/// 参数
+/// `tool_name` is the subagent control tool name.
+/// `tool_name` 是子代理控制工具名称。
+/// `current_session_id` is the parent session id.
+/// `current_session_id` 是父会话标识。
+/// `entries` are the registry entries to expose.
+/// `entries` 是需要暴露的注册表条目。
+/// `timeout_ms` is the wait timeout represented in the tool result.
+/// `timeout_ms` 是工具结果中表示的等待超时时间。
+/// `completed` indicates whether the requested wait/list operation is complete.
+/// `completed` 表示请求的等待或列出操作是否完成。
+///
+/// # Returns
+/// 返回值
+/// A model-visible tool invocation result.
+/// 模型可见的工具调用结果。
+fn build_subagent_registry_status_tool_result(
+    tool_name: &str,
+    current_session_id: SessionId,
+    entries: Vec<SubagentRegistryEntry>,
+    timeout_ms: u64,
+    completed: bool,
+) -> VulcanToolInvocationResult {
+    let agents = entries
+        .iter()
+        .map(subagent_registry_entry_status_payload)
+        .collect::<Vec<_>>();
+    let payload = json!({
+        "tool": tool_name,
+        "parent_session_id": current_session_id.to_string(),
+        "completed": completed,
+        "timeout_ms": timeout_ms,
+        "agents": agents,
+    });
+    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+        VulcanToolHostResult {
+            kind: String::from("subagent_status"),
+            payload,
+        },
+    )
+}
+
+/// Builds a model-visible result for child-agent message delivery tools.
+/// 为子代理消息投递工具构建模型可见结果。
+fn build_subagent_message_tool_result(
+    tool_name: &str,
+    current_session_id: SessionId,
+    target: &str,
+    target_task_ids: Vec<SessionId>,
+    trigger_turn: bool,
+    queued: bool,
+    note: Option<String>,
+) -> VulcanToolInvocationResult {
+    let payload = json!({
+        "tool": tool_name,
+        "parent_session_id": current_session_id.to_string(),
+        "target": target,
+        "target_task_session_ids": target_task_ids
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        "trigger_turn": trigger_turn,
+        "queued": queued,
+        "note": note,
+    });
+    VulcanToolInvocationResult::from_model_output(payload.clone()).with_host_result(
+        VulcanToolHostResult {
+            kind: String::from("subagent_message"),
+            payload,
+        },
+    )
+}
+
+/// Parses one raw JSON payload into strongly typed child-agent TaskSession arguments.
+/// 将一份原始 JSON 载荷解析为强类型子代理 TaskSession 参数。
 fn parse_task_tool_arguments(args: Value) -> Result<TaskToolInvocationArgs, String> {
     serde_json::from_value(args)
-        .map_err(|error| format!("Failed to parse task tool arguments: {error}"))
+        .map_err(|error| format!("Failed to parse child-agent TaskSession arguments: {error}"))
 }
 
 /// Resolves the stable task identifier and resume flag for the current invocation.
@@ -2292,6 +2878,62 @@ fn resolve_task_session_id(
     })
 }
 
+/// Resolves a fresh task-session identifier for spawn_agent without resuming completed work.
+/// 为 spawn_agent 解析全新的任务会话标识，避免复用已完成任务。
+fn resolve_new_spawn_task_session_id(
+    task_runtime: &Arc<TaskRuntime>,
+    current_session_id: SessionId,
+    args: &TaskToolInvocationArgs,
+) -> Result<ResolvedTaskSessionIdentifier, String> {
+    let (root_session_id, direct_parent, current_depth) = {
+        let sessions = task_runtime.sessions.read().map_err(|_| {
+            String::from("The task session registry is locked and cannot inspect existing tasks.")
+        })?;
+        let current_record = sessions.get(&current_session_id);
+        let root_session_id = current_record
+            .map(|record| record.origin_session_id)
+            .unwrap_or(current_session_id);
+        let direct_parent = current_record
+            .map(|_| ParentSessionRef::TaskSession {
+                root_session_id: SessionNodeId::from(root_session_id),
+                parent_task_session_id: SessionNodeId::from(current_session_id),
+            })
+            .unwrap_or(ParentSessionRef::MainSession {
+                root_session_id: SessionNodeId::from(root_session_id),
+            });
+        let current_depth = current_record.map(|record| record.depth).unwrap_or(0);
+        (root_session_id, direct_parent, current_depth)
+    };
+
+    if current_depth + 1 > task_runtime.max_depth() {
+        return Err(format!(
+            "The current task chain has reached the maximum depth `{}` and cannot create another subtask.",
+            task_runtime.max_depth()
+        ));
+    }
+
+    let task_id = Uuid::new_v4();
+    let public_task_id = if let Some(task_id_text) = args.task_id.as_ref() {
+        let requested_public_task_id = normalize_public_task_identifier(task_id_text)?;
+        unique_spawn_public_task_identifier(
+            task_runtime,
+            root_session_id,
+            direct_parent,
+            current_session_id,
+            &requested_public_task_id,
+        )?
+    } else {
+        task_id.to_string()
+    };
+
+    Ok(ResolvedTaskSessionIdentifier {
+        task_id,
+        public_task_id,
+        is_resumed: false,
+        persisted_metadata: None,
+    })
+}
+
 /// Returns whether a task record belongs to the currently invoking direct parent.
 /// 返回一条任务记录是否属于当前发起调用的直接父级。
 fn task_record_belongs_to_direct_parent(
@@ -2302,6 +2944,70 @@ fn task_record_belongs_to_direct_parent(
         .parent_task_id
         .map(|parent_task_id| parent_task_id == current_session_id)
         .unwrap_or(record.origin_session_id == current_session_id)
+}
+
+/// Builds a collision-free public child-agent id for repeated spawn_agent labels.
+/// 为重复的 spawn_agent 标签生成不冲突的公开子代理标识。
+fn unique_spawn_public_task_identifier(
+    task_runtime: &Arc<TaskRuntime>,
+    root_session_id: SessionId,
+    direct_parent: ParentSessionRef,
+    current_session_id: SessionId,
+    requested_public_task_id: &str,
+) -> Result<String, String> {
+    if !public_task_identifier_exists_for_parent(
+        task_runtime,
+        root_session_id,
+        direct_parent.clone(),
+        current_session_id,
+        requested_public_task_id,
+    )? {
+        return Ok(requested_public_task_id.to_string());
+    }
+
+    for suffix in 2..=999 {
+        let candidate = format!("{requested_public_task_id}-{suffix}");
+        if !public_task_identifier_exists_for_parent(
+            task_runtime,
+            root_session_id,
+            direct_parent.clone(),
+            current_session_id,
+            &candidate,
+        )? {
+            return Ok(candidate);
+        }
+    }
+
+    Ok(format!("{requested_public_task_id}-{}", Uuid::new_v4()))
+}
+
+/// Checks whether a public child-agent id already belongs to the direct parent.
+/// 检查公开子代理标识是否已经属于当前直接父会话。
+fn public_task_identifier_exists_for_parent(
+    task_runtime: &Arc<TaskRuntime>,
+    root_session_id: SessionId,
+    direct_parent: ParentSessionRef,
+    current_session_id: SessionId,
+    public_task_id: &str,
+) -> Result<bool, String> {
+    let exists_in_memory = task_runtime
+        .sessions
+        .read()
+        .map_err(|_| {
+            String::from("The task session registry is locked and cannot inspect existing tasks.")
+        })?
+        .values()
+        .any(|record| {
+            record.public_task_id == public_task_id
+                && task_record_belongs_to_direct_parent(record, current_session_id)
+        });
+    if exists_in_memory {
+        return Ok(true);
+    }
+
+    task_runtime
+        .persisted_task_metadata_for_public_id(root_session_id, direct_parent, public_task_id)
+        .map(|metadata| metadata.is_some())
 }
 
 /// Normalizes one caller-facing task identifier while preserving the original textual identity used for future resume lookups.
@@ -2347,8 +3053,8 @@ fn task_invocation_config_from_args(args: &TaskToolInvocationArgs) -> TaskInvoca
     config
 }
 
-/// Builds the provider/model override snapshot from task tool arguments.
-/// 从 task 工具参数构建供应商与模型覆盖快照。
+/// Builds the provider/model override snapshot from child-agent TaskSession arguments.
+/// 从子代理 TaskSession 参数构建供应商与模型覆盖快照。
 fn provider_model_snapshot_from_args(args: &TaskToolInvocationArgs) -> ProviderModelSnapshot {
     let mut snapshot = ProviderModelSnapshot::default();
     if let Some(provider_model) = args.provider_model.as_ref() {
@@ -2401,8 +3107,8 @@ fn apply_provider_model_value(snapshot: &mut ProviderModelSnapshot, value: &Valu
     }
 }
 
-/// Builds the tool exposure override snapshot from task tool arguments.
-/// 从 task 工具参数构建工具可见性覆盖快照。
+/// Builds the tool exposure override snapshot from child-agent TaskSession arguments.
+/// 从子代理 TaskSession 参数构建工具可见性覆盖快照。
 fn tool_exposure_snapshot_from_args(args: &TaskToolInvocationArgs) -> ToolExposureSnapshot {
     let mut snapshot = ToolExposureSnapshot::default();
     if let Some(tools) = args.tools.as_ref() {
@@ -2432,8 +3138,8 @@ fn tool_exposure_snapshot_from_args(args: &TaskToolInvocationArgs) -> ToolExposu
     snapshot
 }
 
-/// Builds the prompt-skill override snapshot from task tool arguments.
-/// 从 task 工具参数构建提示词技能覆盖快照。
+/// Builds the prompt-skill override snapshot from child-agent TaskSession arguments.
+/// 从子代理 TaskSession 参数构建提示词技能覆盖快照。
 fn prompt_skill_snapshot_from_args(args: &TaskToolInvocationArgs) -> PromptSkillSnapshot {
     let mut snapshot = PromptSkillSnapshot::default();
     if let Some(skills) = args.skills.as_ref() {
@@ -2489,14 +3195,6 @@ fn runtime_policy_request_from_value(value: Option<&Value>) -> ExecutionRuntimeP
             "memory_writeback_enabled",
             "memory_writeback",
             "writeback",
-        ],
-    );
-    request.search_projection_enabled = bool_field(
-        map,
-        &[
-            "searchProjectionEnabled",
-            "search_projection_enabled",
-            "search_projection",
         ],
     );
     request.database_projection_enabled = bool_field(
@@ -3421,6 +4119,44 @@ fn task_session_status_from_execution_status(status: TaskExecutionStatus) -> Tas
     }
 }
 
+/// Converts a host payload status label into the persisted TaskSession status.
+/// 将宿主载荷中的状态标签转换为持久化 TaskSession 状态。
+fn task_session_status_from_execution_status_text(status: &str) -> TaskSessionStatus {
+    match status {
+        "running" => TaskSessionStatus::Running,
+        "completed" => TaskSessionStatus::Completed,
+        "stopped" => TaskSessionStatus::Stopped,
+        "failed" => TaskSessionStatus::Failed,
+        _ => TaskSessionStatus::Running,
+    }
+}
+
+/// Maps TaskSession status into the Vulcan-native subagent registry status.
+/// 将 TaskSession 状态映射为 Vulcan 原生子代理注册表状态。
+///
+/// # Parameters
+/// 参数
+/// `status` is the TaskSession status.
+/// `status` 是 TaskSession 状态。
+///
+/// # Returns
+/// 返回值
+/// The matching subagent registry status.
+/// 匹配的子代理注册表状态。
+fn subagent_status_from_task_session_status(status: TaskSessionStatus) -> SubagentStatus {
+    match status {
+        TaskSessionStatus::Created => SubagentStatus::Created,
+        TaskSessionStatus::Running => SubagentStatus::Running,
+        TaskSessionStatus::WaitingChildren => SubagentStatus::WaitingChildren,
+        TaskSessionStatus::WaitingFollowup => SubagentStatus::WaitingFollowup,
+        TaskSessionStatus::Completed => SubagentStatus::Completed,
+        TaskSessionStatus::Failed => SubagentStatus::Failed,
+        TaskSessionStatus::Stopped => SubagentStatus::Stopped,
+        TaskSessionStatus::Compacting => SubagentStatus::Compacting,
+        TaskSessionStatus::Archived => SubagentStatus::Archived,
+    }
+}
+
 /// Returns the stable lowercase name for one TaskSession status.
 /// 返回某个 TaskSession 状态的稳定小写名称。
 fn status_name_for_task_session_status(status: TaskSessionStatus) -> &'static str {
@@ -3508,7 +4244,7 @@ fn task_state_event_payload(
     timestamp_ms: u64,
     outcome: Option<&TaskExecutionOutcome>,
 ) -> Value {
-    let codex_mailbox_event = build_codex_subagent_mailbox_event(
+    let subagent_mailbox_event = build_subagent_mailbox_event(
         invocation,
         status,
         timestamp_ms,
@@ -3531,27 +4267,27 @@ fn task_state_event_payload(
         "provider_turns_executed": outcome.map(|value| value.provider_turns_executed).unwrap_or(0),
         "tool_calls_processed": outcome.map(|value| value.tool_calls_processed).unwrap_or(0),
         "final_assistant_message_id": outcome.and_then(|value| value.final_assistant_message_id.clone()),
-        "codex_mailbox_event": codex_mailbox_event,
+        "subagent_mailbox_event": subagent_mailbox_event,
     })
 }
 
-/// Builds a Codex-compatible mailbox event for one task-session lifecycle transition.
-/// 为一次子代理会话生命周期变化构建 Codex 兼容 mailbox 事件。
-fn build_codex_subagent_mailbox_event(
+/// Builds a session-boundary mailbox event for one task-session lifecycle transition.
+/// 为一次子代理会话生命周期变化构建 会话边界 mailbox 事件。
+fn build_subagent_mailbox_event(
     invocation: &TaskExecutionRequest,
     status: TaskSessionStatus,
     timestamp_ms: u64,
     result_text: Option<&str>,
     error_text: Option<&str>,
     outcome: Option<&TaskExecutionOutcome>,
-) -> CodexSubagentMailboxEvent {
-    CodexSubagentMailboxEvent {
+) -> SubagentMailboxEvent {
+    SubagentMailboxEvent {
         parent_thread_id: SessionNodeId::from(invocation.current_session_id),
         parent_turn_id: None,
         child_thread_id: SessionNodeId::from(invocation.task_id),
-        kind: codex_mailbox_kind_from_task_status(status),
+        kind: subagent_mailbox_kind_from_task_status(status),
         timestamp_ms,
-        payload: build_codex_subagent_mailbox_payload(
+        payload: build_subagent_mailbox_payload(
             invocation,
             status,
             result_text,
@@ -3561,17 +4297,17 @@ fn build_codex_subagent_mailbox_event(
     }
 }
 
-/// Builds the structured payload stored in Codex-compatible subagent mailbox events.
-/// 构建 Codex 兼容子代理 mailbox 事件中保存的结构化载荷。
-fn build_codex_subagent_mailbox_payload(
+/// Builds the structured payload stored in session-boundary subagent mailbox events.
+/// 构建 会话边界子代理 mailbox 事件中保存的结构化载荷。
+fn build_subagent_mailbox_payload(
     invocation: &TaskExecutionRequest,
     status: TaskSessionStatus,
     result_text: Option<&str>,
     error_text: Option<&str>,
     outcome: Option<&TaskExecutionOutcome>,
 ) -> Value {
-    let agent_kind = codex_agent_kind_for_invocation(&invocation.invocation_config);
-    let agent_profile = codex_agent_profile_for_invocation(invocation);
+    let agent_kind = subagent_kind_for_invocation(&invocation.invocation_config);
+    let agent_profile = subagent_profile_for_invocation(invocation);
     json!({
         "child_thread_id": invocation.task_id.to_string(),
         "public_id": invocation.public_task_id,
@@ -3581,7 +4317,7 @@ fn build_codex_subagent_mailbox_payload(
         "parent_turn_id": Value::Null,
         "agent_kind": agent_kind,
         "agent_profile": agent_profile,
-        "status": codex_subagent_status_from_task_status(status),
+        "status": subagent_status_from_task_status(status),
         "task_status": status,
         "description": invocation.description,
         "display_title": invocation.display_title,
@@ -3595,19 +4331,59 @@ fn build_codex_subagent_mailbox_payload(
     })
 }
 
-/// Maps a TaskSession invocation into the Codex child-agent kind contract.
-/// 将 TaskSession 调用映射到 Codex 子代理类型契约。
-fn codex_agent_kind_for_invocation(invocation: &TaskInvocationConfig) -> CodexAgentKind {
+/// Maps a TaskSession invocation into the subagent mailbox kind contract.
+/// 将 TaskSession 调用映射到 会话子代理类型契约。
+fn subagent_kind_for_invocation(invocation: &TaskInvocationConfig) -> SubagentMailboxAgentKind {
     if invocation.subagent_profile_id.is_some() {
-        CodexAgentKind::AgentProfile
+        SubagentMailboxAgentKind::AgentProfile
     } else {
-        CodexAgentKind::ParentClone
+        SubagentMailboxAgentKind::ParentClone
     }
 }
 
-/// Resolves the optional Codex agent profile label for one TaskSession invocation.
-/// 解析单次 TaskSession 调用对应的可选 Codex 代理画像标签。
-fn codex_agent_profile_for_invocation(invocation: &TaskExecutionRequest) -> Option<String> {
+/// Maps one task-session record into the Vulcan-native subagent kind.
+/// 将一条任务会话记录映射为 Vulcan 原生子代理类型。
+///
+/// # Parameters
+/// 参数
+/// `record` is the task-session record being mirrored.
+/// `record` 是正在镜像的任务会话记录。
+///
+/// # Returns
+/// 返回值
+/// The subagent kind stored in the native registry.
+/// 写入原生注册表的子代理类型。
+fn subagent_kind_for_task_record(record: &TaskSessionRecord) -> SubagentKind {
+    if record.invocation_config.subagent_profile_id.is_some() {
+        SubagentKind::AgentMd
+    } else {
+        SubagentKind::Clone
+    }
+}
+
+/// Resolves a prompt-source label for one task-session record.
+/// 解析一条任务会话记录的提示词来源标签。
+///
+/// # Parameters
+/// 参数
+/// `record` is the task-session record being mirrored.
+/// `record` 是正在镜像的任务会话记录。
+///
+/// # Returns
+/// 返回值
+/// A profile id for agent.md children or `main_clone` for cloned children.
+/// 对 agent.md 子代理返回画像标识，对克隆子代理返回 `main_clone`。
+fn subagent_prompt_source_for_task_record(record: &TaskSessionRecord) -> Option<String> {
+    record
+        .invocation_config
+        .subagent_profile_id
+        .clone()
+        .or_else(|| Some(String::from("main_clone")))
+}
+
+/// Resolves the optional subagent profile label for one TaskSession invocation.
+/// 解析单次 TaskSession 调用对应的可选 子代理画像标签。
+fn subagent_profile_for_invocation(invocation: &TaskExecutionRequest) -> Option<String> {
     invocation
         .invocation_config
         .subagent_profile_id
@@ -3615,36 +4391,36 @@ fn codex_agent_profile_for_invocation(invocation: &TaskExecutionRequest) -> Opti
         .or_else(|| invocation.subagent.clone())
 }
 
-/// Maps a persisted TaskSession status into the Codex child-agent status contract.
-/// 将持久化 TaskSession 状态映射到 Codex 子代理状态契约。
-fn codex_subagent_status_from_task_status(status: TaskSessionStatus) -> CodexSubagentStatus {
+/// Maps a persisted TaskSession status into the subagent mailbox status contract.
+/// 将持久化 TaskSession 状态映射到 会话子代理状态契约。
+fn subagent_status_from_task_status(status: TaskSessionStatus) -> SubagentMailboxStatus {
     match status {
-        TaskSessionStatus::Completed => CodexSubagentStatus::Completed,
-        TaskSessionStatus::Failed => CodexSubagentStatus::Failed,
-        TaskSessionStatus::Stopped => CodexSubagentStatus::Stopped,
+        TaskSessionStatus::Completed => SubagentMailboxStatus::Completed,
+        TaskSessionStatus::Failed => SubagentMailboxStatus::Failed,
+        TaskSessionStatus::Stopped => SubagentMailboxStatus::Stopped,
         TaskSessionStatus::Created
         | TaskSessionStatus::Running
         | TaskSessionStatus::WaitingChildren
         | TaskSessionStatus::WaitingFollowup
         | TaskSessionStatus::Compacting
-        | TaskSessionStatus::Archived => CodexSubagentStatus::Running,
+        | TaskSessionStatus::Archived => SubagentMailboxStatus::Running,
     }
 }
 
-/// Maps a TaskSession status into the Codex parent mailbox event kind.
-/// 将 TaskSession 状态映射到 Codex 父级 mailbox 事件类型。
-fn codex_mailbox_kind_from_task_status(status: TaskSessionStatus) -> CodexSubagentMailboxEventKind {
+/// Maps a TaskSession status into the parent mailbox event kind.
+/// 将 TaskSession 状态映射到 父级 mailbox 事件类型。
+fn subagent_mailbox_kind_from_task_status(status: TaskSessionStatus) -> SubagentMailboxEventKind {
     match status {
-        TaskSessionStatus::Completed => CodexSubagentMailboxEventKind::Completed,
-        TaskSessionStatus::Failed => CodexSubagentMailboxEventKind::Failed,
-        TaskSessionStatus::Stopped => CodexSubagentMailboxEventKind::Stopped,
+        TaskSessionStatus::Completed => SubagentMailboxEventKind::Completed,
+        TaskSessionStatus::Failed => SubagentMailboxEventKind::Failed,
+        TaskSessionStatus::Stopped => SubagentMailboxEventKind::Stopped,
         TaskSessionStatus::Created | TaskSessionStatus::Running => {
-            CodexSubagentMailboxEventKind::Started
+            SubagentMailboxEventKind::Started
         }
         TaskSessionStatus::WaitingChildren
         | TaskSessionStatus::WaitingFollowup
         | TaskSessionStatus::Compacting
-        | TaskSessionStatus::Archived => CodexSubagentMailboxEventKind::Message,
+        | TaskSessionStatus::Archived => SubagentMailboxEventKind::Message,
     }
 }
 
@@ -4084,18 +4860,18 @@ async fn run_task_with_shared_runtime_context(
         let mut active_task_run_guard = Some(active_task_run_guard);
         let _child_run_abort_guard = child_run_abort_guard;
         let child_run_result = child_run_task.await;
-        drop(active_task_run_guard.take());
         match child_run_result {
             Ok(Ok(completion)) => {
                 let outcome = completion.outcome;
+                let _ =
+                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                drop(active_task_run_guard.take());
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
                     &outcome,
                     "The subagent task has completed.",
                 );
-                let _ =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
                 if completion.should_compact_context {
                     spawn_task_session_context_compaction(
                         Arc::clone(&task_runtime),
@@ -4118,19 +4894,21 @@ async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
+                let _ =
+                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                drop(active_task_run_guard.take());
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
                     &outcome,
                     outcome.final_output_text.as_str(),
                 );
-                let _ =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
             }
             Ok(Err(error)) => {
-                publish_task_failure_to_parent(&task_runtime, &request, &error);
                 let _ =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
+                drop(active_task_run_guard.take());
+                publish_task_failure_to_parent(&task_runtime, &request, &error);
             }
             Err(join_error) if join_error.is_cancelled() => {
                 let stopped_snapshot = current_task_snapshot_from_store(
@@ -4145,14 +4923,15 @@ async fn run_task_with_shared_runtime_context(
                     resolved_config,
                     stopped_snapshot,
                 );
+                let _ =
+                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
+                drop(active_task_run_guard.take());
                 publish_task_finished_to_parent(
                     &task_runtime,
                     &request,
                     &outcome,
                     outcome.final_output_text.as_str(),
                 );
-                let _ =
-                    task_runtime.store_task_outcome(request.current_session_id, &request, &outcome);
             }
             Err(join_error) => {
                 let error = format!(
@@ -4160,11 +4939,13 @@ async fn run_task_with_shared_runtime_context(
                     task_id,
                     format_task_join_error(&join_error)
                 );
-                publish_task_failure_to_parent(&task_runtime, &request, &error);
                 let _ =
                     task_runtime.mark_task_failure(request.current_session_id, &request, &error);
+                drop(active_task_run_guard.take());
+                publish_task_failure_to_parent(&task_runtime, &request, &error);
             }
         }
+        drop(active_task_run_guard.take());
         if !task_runtime.task_has_active_descendant_runs(task_id) {
             task_runtime.close_detached_task_event_stream(task_id);
         }
@@ -4539,6 +5320,38 @@ fn build_task_host_payload(
     result_text: &str,
     updated_at: String,
 ) -> Value {
+    let task_status = task_session_status_from_execution_status_text(execution_status);
+    let timestamp_ms = updated_at
+        .parse::<u64>()
+        .unwrap_or_else(|_| current_unix_millis_u64());
+    let result_for_mailbox = matches!(
+        task_status,
+        TaskSessionStatus::Completed | TaskSessionStatus::Stopped
+    )
+    .then_some(result_text);
+    let error_for_mailbox = (task_status == TaskSessionStatus::Failed).then_some(result_text);
+    let mut subagent_mailbox_event = build_subagent_mailbox_event(
+        invocation,
+        task_status,
+        timestamp_ms,
+        result_for_mailbox,
+        error_for_mailbox,
+        None,
+    );
+    if let Some(payload) = subagent_mailbox_event.payload.as_object_mut() {
+        payload.insert(
+            String::from("provider_turns_executed"),
+            serde_json::json!(provider_turns_executed),
+        );
+        payload.insert(
+            String::from("tool_calls_processed"),
+            serde_json::json!(tool_calls_processed),
+        );
+        payload.insert(
+            String::from("final_assistant_message_id"),
+            serde_json::json!(final_assistant_message_id),
+        );
+    }
     json!({
         "task_id": invocation.public_task_id.clone(),
         "task_session_id": invocation.task_id.to_string(),
@@ -4556,6 +5369,7 @@ fn build_task_host_payload(
         "final_assistant_message_id": final_assistant_message_id,
         "result": result_text,
         "updated_at": updated_at,
+        "subagent_mailbox_event": subagent_mailbox_event,
     })
 }
 
@@ -4966,8 +5780,8 @@ mod tests {
         .expect("write root segment");
     }
 
-    /// Builds one minimal task-tool argument object for task-runtime tests.
-    /// 为 task-runtime 测试构建一份最小 task 工具参数对象。
+    /// Builds one minimal child-agent argument object for task-runtime tests.
+    /// 为 task-runtime 测试构建一份最小子代理参数对象。
     fn test_task_args(prompt: &str, task_id: Option<&str>) -> TaskToolInvocationArgs {
         TaskToolInvocationArgs {
             prompt: prompt.to_string(),
@@ -4996,14 +5810,11 @@ mod tests {
         }
     }
 
-    /// Verifies the model-facing subagent surface follows the Codex-style tool split and hides the legacy task tool.
-    /// 验证模型可见子代理工具面遵循 Codex 风格拆分，并隐藏旧 task 工具。
+    /// Verifies the model-facing subagent surface follows the session-agent-style tool split.
+    /// 验证模型可见子代理工具面遵循 会话代理风格拆分。
     #[test]
-    fn subagent_tool_surface_exposes_codex_style_tools_without_visible_task() {
+    fn subagent_tool_surface_exposes_session_agent_style_tools_without_visible_task() {
         let task_runtime = Arc::new(TaskRuntime::new());
-        let legacy_task = build_task_tool_candidate(Arc::clone(&task_runtime));
-        assert!(!legacy_task.ai_visible);
-
         let candidates = build_subagent_tool_candidates(task_runtime);
         let visible_ids = candidates
             .iter()
@@ -5012,12 +5823,41 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             visible_ids,
-            vec!["spawn_agent", "wait_agent", "list_agents", "close_agent"]
+            vec![
+                "spawn_agent",
+                "send_message",
+                "followup_task",
+                "wait_agent",
+                "list_agents",
+                "close_agent"
+            ]
+        );
+        assert!(
+            candidates
+                .iter()
+                .all(|candidate| candidate.descriptor.id != "task")
         );
     }
 
-    /// Verifies Codex-style spawn arguments map into the existing TaskSession invocation payload.
-    /// 验证 Codex 风格启动参数会映射到既有 TaskSession 调用载荷。
+    /// Verifies queued child-agent messages are preserved in follow-up prompt order.
+    /// 验证排队子代理消息会按顺序保留到后续任务提示词中。
+    #[test]
+    fn followup_prompt_combines_queued_messages_in_order() {
+        let prompt = followup_prompt_from_messages(
+            vec![
+                String::from("First note for the child."),
+                String::from("Second note for the child."),
+            ],
+            String::from("Continue now."),
+        );
+
+        assert!(prompt.contains("[1]\nFirst note for the child."));
+        assert!(prompt.contains("[2]\nSecond note for the child."));
+        assert!(prompt.contains("[3]\nContinue now."));
+    }
+
+    /// Verifies session-agent-style spawn arguments map into the existing TaskSession invocation payload.
+    /// 验证 会话代理风格启动参数会映射到既有 TaskSession 调用载荷。
     #[test]
     fn spawn_agent_arguments_map_to_task_session_arguments() {
         let mapped = task_tool_args_from_spawn_agent_args(json!({
@@ -5084,7 +5924,7 @@ mod tests {
             system_prompt_hook_blocks: Vec::new(),
             project_vmm: Default::default(),
             session_vmm: Default::default(),
-            codex_boundary_events: Vec::new(),
+            boundary_events: Vec::new(),
         }
     }
 
@@ -5132,7 +5972,6 @@ mod tests {
             vmm_enabled: true,
             memory_recall_enabled: false,
             memory_writeback_enabled: false,
-            search_projection_enabled: false,
             database_projection_enabled: false,
         };
 
@@ -5429,37 +6268,6 @@ mod tests {
             enabled_policy.tail_turns,
             ContextCompactionPolicy::default().tail_turns
         );
-    }
-
-    /// Verifies the task tool schema supports profile-based invocation without requiring a separate subagent label.
-    /// 验证 task 工具 schema 支持基于 profile 的调用，而不再强制要求单独的子代理标签。
-    #[test]
-    fn task_tool_schema_allows_profile_without_subagent_label() {
-        let schema = task_tool_args_schema();
-        let required = schema["required"]
-            .as_array()
-            .expect("required fields should be an array")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        let mut args = test_task_args("review code", None);
-        args.profile = Some(String::from("agent-review"));
-
-        let config = task_invocation_config_from_args(&args);
-
-        assert_eq!(required, vec!["prompt"]);
-        assert!(
-            schema["properties"]["task_id"]["description"]
-                .as_str()
-                .is_some_and(|description| description.contains("inspect")
-                    && description.contains("resume the same subtask")
-                    && description.contains("status inspection")
-                    && description.contains("parent thread"))
-        );
-        assert!(RUNNING_TASK_RESULT_SUMMARY.contains("not the subagent's final result"));
-        assert!(RUNNING_TASK_RESULT_SUMMARY.contains("non-task tool calls"));
-        assert!(RUNNING_TASK_RESULT_SUMMARY.contains("same task_id"));
-        assert_eq!(config.subagent_profile_id.as_deref(), Some("agent-review"));
     }
 
     /// Verifies runtime-registered profiles enter the shared TaskSession config resolver.
@@ -5908,6 +6716,98 @@ mod tests {
         assert_eq!(host_result.payload["task_session_id"], task_id.to_string());
     }
 
+    /// Verifies spawn_agent creates a fresh run instead of returning a cached completed task with the same public label.
+    /// 验证 spawn_agent 会创建全新运行，而不是返回同名已完成任务的缓存结果。
+    #[tokio::test]
+    async fn invoke_spawn_agent_allocates_fresh_task_when_public_id_exists() {
+        let task_runtime = Arc::new(TaskRuntime::new());
+        let parent_session_id = Uuid::new_v4();
+        let completed_task_id = Uuid::new_v4();
+        let backend_calls = Arc::new(AtomicUsize::new(0));
+        let captured_task_id = Arc::new(std::sync::Mutex::new(None));
+        let captured_public_task_id = Arc::new(std::sync::Mutex::new(None));
+        let backend_calls_for_handler = Arc::clone(&backend_calls);
+        let captured_task_id_for_handler = Arc::clone(&captured_task_id);
+        let captured_public_task_id_for_handler = Arc::clone(&captured_public_task_id);
+        let _guard = task_runtime.install_backend(
+            parent_session_id,
+            Arc::new(move |request: TaskExecutionRequest| {
+                backend_calls_for_handler.fetch_add(1, Ordering::SeqCst);
+                *captured_task_id_for_handler
+                    .lock()
+                    .expect("captured task id lock") = Some(request.task_id);
+                *captured_public_task_id_for_handler
+                    .lock()
+                    .expect("captured public task id lock") = Some(request.public_task_id.clone());
+                Box::pin(async move {
+                    let controller_config = build_test_controller_config("Fresh spawn prompt");
+                    Ok(TaskExecutionOutcome {
+                        task_id: request.task_id,
+                        controller_config: controller_config.clone(),
+                        resolved_config: test_resolved_config(
+                            &controller_config,
+                            &request.invocation_config,
+                        ),
+                        snapshot: CoreConversationSnapshot::default(),
+                        provider_turns_executed: 1,
+                        tool_calls_processed: 0,
+                        final_assistant_message_id: Some(String::from("assistant-fresh")),
+                        final_output_text: String::from("fresh image result"),
+                        execution_status: TaskExecutionStatus::Completed,
+                    })
+                })
+            }),
+        );
+        let mut completed_record = build_task_session_record(
+            completed_task_id,
+            String::from("image-generator-2"),
+            parent_session_id,
+            None,
+            1,
+            Some(String::from("Image generation")),
+            Some(String::from("image-agent")),
+            TaskInvocationConfig::main("generate image"),
+            String::from("Image generation (image-agent)"),
+            None,
+            CoreConversationSnapshot::default(),
+            String::from("generate image"),
+            String::from("completed"),
+        );
+        completed_record.last_result_text = String::from("cached image result");
+        task_runtime
+            .sessions
+            .write()
+            .expect("task session registry should be writable")
+            .insert(completed_task_id, completed_record);
+
+        let result = task_runtime
+            .invoke_spawn_agent(
+                parent_session_id,
+                json!({
+                    "prompt": "generate another image",
+                    "task_id": "image-generator-2"
+                }),
+            )
+            .await
+            .expect("spawn_agent should start a fresh task");
+
+        assert_eq!(backend_calls.load(Ordering::SeqCst), 1);
+        let new_task_id = captured_task_id
+            .lock()
+            .expect("captured task id lock")
+            .expect("backend should capture the fresh task id");
+        assert_ne!(new_task_id, completed_task_id);
+        let new_public_task_id = captured_public_task_id
+            .lock()
+            .expect("captured public task id lock")
+            .clone()
+            .expect("backend should capture the fresh public task id");
+        assert_eq!(new_public_task_id, "image-generator-2-2");
+        assert_eq!(result.model_output["cached"], Value::Null);
+        assert_eq!(result.model_output["task_id"], "image-generator-2-2");
+        assert_eq!(result.model_output["result"], "fresh image result");
+    }
+
     /// Verifies task invocation relays a terminal result when a custom backend chooses to return one.
     /// 验证自定义后端选择返回终态结果时，task 调用会原样转发该结果。
     #[tokio::test]
@@ -6249,10 +7149,10 @@ mod tests {
         );
         assert!(
             task_runtime
-                .take_codex_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+                .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
                 .expect("mailbox should drain")
                 .is_empty(),
-            "cached persisted lookup must not publish duplicate Codex mailbox events"
+            "cached persisted lookup must not publish duplicate subagent mailbox events"
         );
         assert!(
             task_runtime
@@ -6451,20 +7351,109 @@ mod tests {
         assert!(
             completed_parent_event
                 .payload
-                .get("codex_mailbox_event")
+                .get("subagent_mailbox_event")
                 .is_some(),
-            "parent event payload should expose the Codex mailbox event"
+            "parent event payload should expose the subagent mailbox event"
         );
         assert_eq!(
-            completed_parent_event.payload["codex_mailbox_event"]["kind"],
+            completed_parent_event.payload["subagent_mailbox_event"]["kind"],
             "completed"
         );
+        let root_metadata = serde_json::from_reader::<_, Value>(
+            std::fs::File::open(temp_dir.path().join("metadata.json"))
+                .expect("root metadata should open"),
+        )
+        .expect("root metadata should parse");
+        assert_eq!(root_metadata["tasks"][0]["line_count"], 3);
+        let registry = task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should read");
+        let entry = registry
+            .get("agent-review")
+            .expect("completed registry entry should exist");
+        assert_eq!(entry.segments.len(), 1);
+        assert_eq!(entry.segments[0].line_count, 3);
     }
 
-    /// Verifies TaskRuntime publishes Codex mailbox lifecycle events on real status transitions.
-    /// 验证 TaskRuntime 会在真实状态变化时发布 Codex mailbox 生命周期事件。
+    /// Verifies running subagent start state is persisted once and mirrored into the native registry.
+    /// 验证运行中子代理的启动状态会持久化一次，并镜像到原生注册表。
     #[test]
-    fn task_runtime_publishes_codex_subagent_mailbox_events() {
+    fn store_running_task_persists_start_metadata_and_registry_segments() {
+        let temp_dir = tempfile::tempdir().expect("temp task-session root");
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        write_test_segmented_root_metadata(temp_dir.path(), root_session_id);
+        task_runtime
+            .configure_task_session_store_root(root_session_id, temp_dir.path().to_path_buf())
+            .expect("store root should configure");
+
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            public_task_id: String::from("image-worker-a"),
+            prompt: String::from("generate one image"),
+            description: Some(String::from("Generate image")),
+            subagent: Some(String::from("image-agent")),
+            invocation_config: TaskInvocationConfig::main("generate one image"),
+            display_title: String::from("Generate image (image-agent)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let running_outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: test_resolved_config(
+                &controller_config,
+                &invocation.invocation_config,
+            ),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 0,
+            tool_calls_processed: 0,
+            final_assistant_message_id: None,
+            final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+            execution_status: TaskExecutionStatus::Running,
+        };
+
+        task_runtime
+            .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+            .expect("running task should store");
+
+        let store = SegmentedTaskSessionStore::new(temp_dir.path());
+        let metadata = store
+            .load_task_session(SessionNodeId::from(task_id))
+            .expect("metadata should load")
+            .expect("metadata should exist");
+        assert_eq!(metadata.status, TaskSessionStatus::Running);
+        let root_metadata = serde_json::from_reader::<_, Value>(
+            std::fs::File::open(temp_dir.path().join("metadata.json"))
+                .expect("root metadata should open"),
+        )
+        .expect("root metadata should parse");
+        assert_eq!(root_metadata["tasks"][0]["status"], "running");
+        assert_eq!(root_metadata["tasks"][0]["line_count"], 2);
+
+        let registry = task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should read");
+        let entry = registry
+            .get("image-worker-a")
+            .expect("running registry entry should exist");
+        assert_eq!(entry.status, SubagentStatus::Running);
+        assert_eq!(entry.segments.len(), 1);
+        assert_eq!(entry.segments[0].line_count, 2);
+        assert!(entry.result_summary.is_none());
+    }
+
+    /// Verifies TaskRuntime publishes subagent mailbox lifecycle events on real status transitions.
+    /// 验证 TaskRuntime 会在真实状态变化时发布 subagent mailbox 生命周期事件。
+    #[test]
+    fn task_runtime_publishes_subagent_mailbox_events() {
         let task_runtime = TaskRuntime::new();
         let root_session_id = Uuid::new_v4();
         let task_id = Uuid::new_v4();
@@ -6516,19 +7505,286 @@ mod tests {
             .expect("completed task should store");
 
         let events = task_runtime
-            .take_codex_subagent_events_for_parent(SessionNodeId::from(root_session_id))
+            .take_subagent_events_for_parent(SessionNodeId::from(root_session_id))
             .expect("mailbox should drain");
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].kind, CodexSubagentMailboxEventKind::Started);
-        assert_eq!(events[1].kind, CodexSubagentMailboxEventKind::Completed);
+        assert_eq!(events[0].kind, SubagentMailboxEventKind::Started);
+        assert_eq!(events[1].kind, SubagentMailboxEventKind::Completed);
         assert_eq!(events[1].child_thread_id, SessionNodeId::from(task_id));
         assert_eq!(events[1].payload["agent_kind"], "agent_profile");
         assert_eq!(events[1].payload["agent_profile"], "agent-review");
         assert_eq!(events[1].payload["result_text"], "review complete");
     }
 
-    /// Verifies parent task metadata points at the TaskSession instead of embedding the child transcript.
-    /// 验证父级 task 元数据只指向 TaskSession，而不会内嵌子代理完整转录。
+    /// Verifies TaskRuntime mirrors task-session lifecycle changes into the native subagent registry.
+    /// 验证 TaskRuntime 会把任务会话生命周期变化镜像到原生子代理注册表。
+    #[test]
+    fn task_runtime_mirrors_lifecycle_into_subagent_registry() {
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut invocation_config = TaskInvocationConfig::main("review this change");
+        invocation_config.subagent_profile_id = Some(String::from("agent-review"));
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            public_task_id: String::from("agent-review"),
+            prompt: String::from("review this change"),
+            description: Some(String::from("Review code")),
+            subagent: Some(String::from("reviewer")),
+            invocation_config,
+            display_title: String::from("Review code (reviewer)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let resolved_config =
+            test_resolved_config(&controller_config, &invocation.invocation_config);
+        let running_outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: resolved_config.clone(),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 0,
+            tool_calls_processed: 0,
+            final_assistant_message_id: None,
+            final_output_text: String::from(RUNNING_TASK_RESULT_SUMMARY),
+            execution_status: TaskExecutionStatus::Running,
+        };
+        let completed_outcome = TaskExecutionOutcome {
+            final_output_text: String::from("review complete"),
+            execution_status: TaskExecutionStatus::Completed,
+            provider_turns_executed: 1,
+            final_assistant_message_id: Some(String::from("assistant-1")),
+            ..running_outcome.clone()
+        };
+
+        task_runtime
+            .store_running_task_outcome_in_memory(root_session_id, &invocation, &running_outcome)
+            .expect("running task should store");
+        let running_registry = task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should read");
+        let running_entry = running_registry
+            .get("agent-review")
+            .expect("running registry entry should exist");
+        assert_eq!(running_entry.status, SubagentStatus::Running);
+        assert_eq!(running_entry.agent_kind, SubagentKind::AgentMd);
+        assert_eq!(running_entry.prompt_source.as_deref(), Some("agent-review"));
+
+        task_runtime
+            .store_task_outcome(root_session_id, &invocation, &completed_outcome)
+            .expect("completed task should store");
+        let completed_registry = task_runtime
+            .subagent_registry_snapshot()
+            .expect("registry should read");
+        let completed_entry = completed_registry
+            .get("agent-review")
+            .expect("completed registry entry should exist");
+        assert_eq!(completed_entry.status, SubagentStatus::Completed);
+        assert_eq!(
+            completed_entry.result_summary.as_deref(),
+            Some("review complete")
+        );
+        assert_eq!(
+            completed_registry.running_count_for_parent(SessionNodeId::from(root_session_id)),
+            0
+        );
+    }
+
+    /// Verifies list_agents prefers the native registry payload when registry entries exist.
+    /// 验证存在注册表条目时 list_agents 会优先使用原生注册表载荷。
+    #[tokio::test]
+    async fn list_agents_prefers_native_subagent_registry_payload() {
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut invocation_config = TaskInvocationConfig::main("review this change");
+        invocation_config.subagent_profile_id = Some(String::from("agent-review"));
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            public_task_id: String::from("agent-review"),
+            prompt: String::from("review this change"),
+            description: Some(String::from("Review code")),
+            subagent: Some(String::from("reviewer")),
+            invocation_config,
+            display_title: String::from("Review code (reviewer)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: test_resolved_config(
+                &controller_config,
+                &invocation.invocation_config,
+            ),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 1,
+            tool_calls_processed: 0,
+            final_assistant_message_id: Some(String::from("assistant-1")),
+            final_output_text: String::from("review complete"),
+            execution_status: TaskExecutionStatus::Completed,
+        };
+        task_runtime
+            .store_task_outcome(root_session_id, &invocation, &outcome)
+            .expect("task outcome should store");
+
+        let result = task_runtime
+            .invoke_list_agents(root_session_id, json!({}))
+            .await
+            .expect("list_agents should succeed");
+
+        assert_eq!(
+            result.model_output["agents"][0]["task_name"],
+            "agent-review"
+        );
+        assert_eq!(result.model_output["agents"][0]["agent_kind"], "agent_md");
+        assert_eq!(
+            result.model_output["agents"][0]["prompt_source"],
+            "agent-review"
+        );
+        assert_eq!(result.model_output["agents"][0]["status"], "completed");
+        assert_eq!(
+            result.model_output["agents"][0]["result"],
+            "review complete"
+        );
+    }
+
+    /// Verifies wait_agent returns the native registry payload once selected agents are completed.
+    /// 验证所选子代理完成后 wait_agent 会返回原生注册表载荷。
+    #[tokio::test]
+    async fn wait_agent_prefers_native_subagent_registry_payload_for_completed_agents() {
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut invocation_config = TaskInvocationConfig::main("review this change");
+        invocation_config.subagent_profile_id = Some(String::from("agent-review"));
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            public_task_id: String::from("agent-review"),
+            prompt: String::from("review this change"),
+            description: Some(String::from("Review code")),
+            subagent: Some(String::from("reviewer")),
+            invocation_config,
+            display_title: String::from("Review code (reviewer)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: test_resolved_config(
+                &controller_config,
+                &invocation.invocation_config,
+            ),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 1,
+            tool_calls_processed: 0,
+            final_assistant_message_id: Some(String::from("assistant-1")),
+            final_output_text: String::from("review complete"),
+            execution_status: TaskExecutionStatus::Completed,
+        };
+        task_runtime
+            .store_task_outcome(root_session_id, &invocation, &outcome)
+            .expect("task outcome should store");
+
+        let result = task_runtime
+            .invoke_wait_agent(root_session_id, json!({ "task_name": "agent-review" }))
+            .await
+            .expect("wait_agent should succeed");
+
+        assert_eq!(result.model_output["completed"], true);
+        assert_eq!(
+            result.model_output["agents"][0]["task_name"],
+            "agent-review"
+        );
+        assert_eq!(result.model_output["agents"][0]["agent_kind"], "agent_md");
+        assert_eq!(result.model_output["agents"][0]["status"], "completed");
+        assert_eq!(
+            result.model_output["agents"][0]["result"],
+            "review complete"
+        );
+    }
+
+    /// Verifies close_agent resolves matched agents from the native registry when available.
+    /// 验证存在原生注册表条目时 close_agent 会从注册表解析匹配代理。
+    #[tokio::test]
+    async fn close_agent_prefers_native_subagent_registry_payload() {
+        let task_runtime = TaskRuntime::new();
+        let root_session_id = Uuid::new_v4();
+        let task_id = Uuid::new_v4();
+        let mut invocation_config = TaskInvocationConfig::main("review this change");
+        invocation_config.subagent_profile_id = Some(String::from("agent-review"));
+        let invocation = TaskExecutionRequest {
+            current_session_id: root_session_id,
+            root_session_id,
+            task_id,
+            public_task_id: String::from("agent-review"),
+            prompt: String::from("review this change"),
+            description: Some(String::from("Review code")),
+            subagent: Some(String::from("reviewer")),
+            invocation_config,
+            display_title: String::from("Review code (reviewer)"),
+            parent_task_id: None,
+            depth: 1,
+            snapshot: CoreConversationSnapshot::default(),
+            controller_config: None,
+            is_resumed: false,
+        };
+        let controller_config = build_test_controller_config("Base prompt");
+        let outcome = TaskExecutionOutcome {
+            task_id,
+            controller_config: controller_config.clone(),
+            resolved_config: test_resolved_config(
+                &controller_config,
+                &invocation.invocation_config,
+            ),
+            snapshot: CoreConversationSnapshot::default(),
+            provider_turns_executed: 1,
+            tool_calls_processed: 0,
+            final_assistant_message_id: Some(String::from("assistant-1")),
+            final_output_text: String::from("review complete"),
+            execution_status: TaskExecutionStatus::Completed,
+        };
+        task_runtime
+            .store_task_outcome(root_session_id, &invocation, &outcome)
+            .expect("task outcome should store");
+
+        let result = task_runtime
+            .invoke_close_agent(root_session_id, json!({ "task_name": "agent-review" }))
+            .await
+            .expect("close_agent should succeed");
+
+        assert_eq!(
+            result.model_output["matched_agents"][0]["task_name"],
+            "agent-review"
+        );
+        assert_eq!(
+            result.model_output["matched_agents"][0]["agent_kind"],
+            "agent_md"
+        );
+        assert_eq!(result.model_output["stopped_count"], 0);
+    }
+
+    /// Verifies parent spawn-agent metadata points at the TaskSession instead of embedding the child transcript.
+    /// 验证父级 spawn_agent 元数据只指向 TaskSession，而不会内嵌子代理完整转录。
     #[test]
     fn task_invocation_result_omits_embedded_conversation_state() {
         let root_session_id = Uuid::new_v4();

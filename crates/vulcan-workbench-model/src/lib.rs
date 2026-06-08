@@ -25,9 +25,10 @@ pub use runtime_state::{
     pending_prompt_dispatch_block_reason, pending_prompt_dispatch_block_reason_for_source,
     pending_prompt_dispatch_index, pending_prompt_lane_is_busy,
     pending_session_prompt_entry_from_panel_entry, plan_pending_prompt_internal_queue_enqueue,
-    remove_pending_prompt_panel_entry, route_pending_prompt_panel_entry_into_internal_queue,
-    take_guided_pending_prompt_entries, take_next_internal_pending_prompt_entry,
-    take_next_pending_prompt_entry, take_runtime_intervention_guided_pending_prompt_entries,
+    remove_internal_pending_prompt_entries_by_source, remove_pending_prompt_panel_entry,
+    route_pending_prompt_panel_entry_into_internal_queue, take_guided_pending_prompt_entries,
+    take_next_internal_pending_prompt_entry, take_next_pending_prompt_entry,
+    take_runtime_intervention_guided_pending_prompt_entries,
 };
 pub use session::{
     SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource,

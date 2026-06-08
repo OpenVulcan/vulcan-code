@@ -31,8 +31,8 @@ mod tests {
     };
     use vulcan_session_core::SessionNodeId;
 
-    /// Verifies that main-session runtime policy keeps durable side effects enabled without search projection.
-    /// 验证主会话运行时策略会保持持久副作用开启，但不会开启搜索投影。
+    /// Verifies that main-session runtime policy keeps durable side effects enabled.
+    /// 验证主会话运行时策略会保持持久副作用开启。
     #[test]
     fn main_session_runtime_policy_keeps_durable_side_effects_without_search() {
         let policy = MainSessionRuntimePolicy::default().runtime_policy;
@@ -41,20 +41,16 @@ mod tests {
         assert!(policy.vmm_enabled);
         assert!(policy.memory_recall_enabled);
         assert!(policy.memory_writeback_enabled);
-        assert!(!policy.search_projection_enabled);
         assert!(policy.database_projection_enabled);
     }
 
-    /// Verifies that main-session projection defaults to durable state without search indexing.
-    /// 验证主会话投影默认保留持久状态，但不会开启搜索索引。
+    /// Verifies that main-session projection defaults to durable state.
+    /// 验证主会话投影默认保留持久状态。
     #[test]
     fn main_session_projection_policy_defaults_to_search_disabled_behavior() {
         let policy = MainSessionProjectionPolicy::default();
 
         assert!(policy.database_projection_enabled);
-        assert!(!policy.search_projection_enabled);
-        assert!(!policy.bm25_enabled);
-        assert!(!policy.fts_enabled);
     }
 
     /// Verifies that task entries only index child task sessions instead of embedding transcripts.
