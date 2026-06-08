@@ -181,13 +181,9 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
                 if result_end == index + 1 {
                     projected.push(CoreConversationMessage {
                         id: message.id.clone(),
-                        payload: CoreConversationPayload::Assistant {
-                            text: text.clone(),
-                            reasoning: String::new(),
-                            provider_message_id: provider_message_id.clone(),
-                            provider_message_state: provider_message_state.clone(),
-                            usage: usage.clone(),
-                            tool_calls: tool_calls.clone(),
+                        payload: CoreConversationPayload::UserText {
+                            text: partial_tool_batch_text(text, reasoning, tool_calls, &[]),
+                            attachments: Vec::new(),
                         },
                     });
                 } else if tool_calls_are_fully_completed(tool_calls, &completed_tool_call_ids) {
@@ -742,5 +738,48 @@ mod tests {
         assert!(text.contains("first_tool"));
         assert!(text.contains("second_tool"));
         assert!(text.contains("first done"));
+    }
+
+    /// Verifies interrupted tool batches with no results are never replayed as live provider tool calls.
+    /// 验证没有任何结果的中断工具批次绝不会作为实时 Provider 工具调用回放。
+    #[test]
+    fn provider_visible_history_downgrades_unanswered_tool_batch() {
+        let messages = vec![CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("I need to ask the user."),
+                reasoning: String::from("call ask"),
+                provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: None,
+                usage: None,
+                tool_calls: vec![CoreConversationToolCall {
+                    id: String::from("local-call-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    tool_name: String::from("ask"),
+                    arguments: serde_json::json!({
+                        "questions": [{
+                            "header": "Choice",
+                            "question": "Pick one?",
+                            "options": []
+                        }]
+                    }),
+                }],
+            },
+        }];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 1);
+        let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
+            panic!("unanswered tool batch should downgrade to text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("interrupted before every requested tool returned"));
+        assert!(text.contains("ask"));
+        assert!(text.contains("provider-call-1"));
     }
 }

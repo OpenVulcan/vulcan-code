@@ -42,7 +42,7 @@ use vulcan_agent_runtime::{
             ConversationTurnCompletionStatus, VmmWritebackHookEffect,
         },
         events::{RuntimeEvent, RuntimeEventKind},
-        question_runtime::QuestionRuntime,
+        question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
         token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
@@ -91,11 +91,11 @@ use vulcan_service_api::{
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
     ConversationMessage, ConversationSummary, FeatureAreaSummary, LogEntrySummary, MemorySummary,
-    MessageRole, PendingPromptSummary, PluginSummary, ProjectSummary, ProviderModelSummary,
-    ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
-    RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary, StartupSnapshot,
-    StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
-    ToolCallSummary, WorkbenchSnapshot,
+    MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
+    PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
+    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
+    ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, WorkbenchSnapshot,
 };
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionLifecycleBeginRequest, SessionLifecycleFinishRequest,
@@ -922,6 +922,8 @@ pub fn run() {
             service_stage_composer_attachment_bytes,
             service_submit_conversation_prompt,
             service_stop_conversation_run,
+            service_reply_pending_question,
+            service_reject_pending_question,
             service_open_subagent_panel,
             service_close_subagent_panel,
             service_stop_subagent_task,
@@ -1211,8 +1213,117 @@ fn service_workbench_snapshot(
 ) -> Result<WorkbenchSnapshot, String> {
     state
         .lock()
-        .map(|guard| guard.workbench.clone())
+        .map(|guard| workbench_with_live_pending_question(&guard))
         .map_err(|error| format!("failed to lock service workbench state: {error}"))
+}
+
+/// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
+/// 提交当前可见 ask 工具请求的答案，并恢复被阻塞的工具调用。
+#[tauri::command]
+fn service_reply_pending_question(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request_id: String,
+    answers: Vec<Vec<String>>,
+) -> Result<WorkbenchSnapshot, String> {
+    let agent_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.agent_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; question runtime is not ready")
+        })?
+    };
+    let answered = agent_runtime
+        .question_runtime
+        .reply(&request_id, answers)
+        .map_err(|error| format!("failed to submit ask answers: {error}"))?;
+    if !answered {
+        return Err(format!(
+            "pending ask request `{request_id}` is no longer active"
+        ));
+    }
+    store_and_emit_pending_question_workbench_snapshot(&app, state.inner())
+}
+
+/// Rejects the visible ask-tool request after explicit user confirmation.
+/// 在用户明确确认后拒绝当前可见 ask 工具请求。
+#[tauri::command]
+fn service_reject_pending_question(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let agent_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.agent_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; question runtime is not ready")
+        })?
+    };
+    let rejected = agent_runtime
+        .question_runtime
+        .reject(&request_id)
+        .map_err(|error| format!("failed to reject ask request: {error}"))?;
+    if !rejected {
+        return Err(format!(
+            "pending ask request `{request_id}` is no longer active"
+        ));
+    }
+    store_and_emit_pending_question_workbench_snapshot(&app, state.inner())
+}
+
+/// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.
+/// 仅重建保留工作台快照上的 ask 弹窗投影并发送事件。
+fn store_and_emit_pending_question_workbench_snapshot(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let pending_question =
+            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.pending_question = pending_question;
+        guard.workbench.clone()
+    };
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+    Ok(workbench)
+}
+
+/// Installs the WebUI projection callback used by the ask-question runtime.
+/// 安装 ask 提问运行时使用的 WebUI 投影回调。
+fn install_webui_question_runtime_event_bridge(
+    app: &tauri::AppHandle,
+    state: &SharedServiceBridgeState,
+    question_runtime: &Arc<QuestionRuntime>,
+) -> Result<(), String> {
+    let app = app.clone();
+    let state = Arc::clone(state);
+    let callback: PendingQuestionChangeCallback = Arc::new(move || {
+        if let Err(error) = store_and_emit_pending_question_workbench_snapshot(&app, &state) {
+            webui_trace(
+                "pending_question_projection_failed",
+                format!("error={error}"),
+            );
+        }
+    });
+    question_runtime.set_change_callback(Some(callback))
+}
+
+/// Returns the retained workbench with the latest live ask-runtime pending request attached.
+/// 返回附加最新实时 ask 运行时待处理请求的保留工作台。
+fn workbench_with_live_pending_question(guard: &ServiceBridgeState) -> WorkbenchSnapshot {
+    let mut workbench = guard.workbench.clone();
+    workbench.pending_question =
+        pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+    workbench
 }
 
 /// Loads the recent transcript window for one conversation.
@@ -3354,6 +3465,7 @@ async fn service_select_conversation(
         provider_configuration,
         ai_tool_configuration,
         live_context_budgets,
+        pending_question,
         mut workspace_snapshot,
     ) = {
         let guard = state
@@ -3382,6 +3494,8 @@ async fn service_select_conversation(
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
         let live_context_budgets = guard.live_context_budgets.clone();
+        let pending_question =
+            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
         (
             controller_runtime,
             luaskills_catalog,
@@ -3391,6 +3505,7 @@ async fn service_select_conversation(
             provider_configuration,
             ai_tool_configuration,
             live_context_budgets,
+            pending_question,
             workspace_snapshot,
         )
     };
@@ -3422,6 +3537,7 @@ async fn service_select_conversation(
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
+        pending_question,
         &logs,
         &live_context_budgets,
     );
@@ -5481,7 +5597,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
 ) -> Result<WorkbenchSnapshot, String> {
     let trace_started_at = current_unix_millis_value();
     let trace_lock_wait_started_at = current_unix_millis_value();
-    let (live_context_budgets, surface_messages, subagent_navigation) = {
+    let (live_context_budgets, surface_messages, subagent_navigation, pending_question) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -5525,7 +5641,14 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
                 current_unix_millis_value().saturating_sub(trace_surface_started_at)
             ),
         );
-        (live_context_budgets, surface_messages, subagent_navigation)
+        let pending_question =
+            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        (
+            live_context_budgets,
+            surface_messages,
+            subagent_navigation,
+            pending_question,
+        )
     };
     let trace_workbench_started_at = current_unix_millis_value();
     let workbench = workbench_from_runtime(
@@ -5538,6 +5661,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
+        pending_question,
         logs,
         &live_context_budgets,
     );
@@ -8317,6 +8441,7 @@ fn store_current_workbench_snapshot(
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
+        pending_question_snapshot_from_agent_runtime(Some(agent_runtime)),
         &logs,
         &live_context_budgets,
     );
@@ -10170,6 +10295,7 @@ where
         ai_tool_configuration,
         surface_messages,
         subagent_navigation,
+        pending_question,
         logs,
         live_context_budgets,
     ) = {
@@ -10205,6 +10331,8 @@ where
             .as_ref()
             .map(|runtime| runtime.ai_tool_configuration.clone())
             .unwrap_or_default();
+        let pending_question =
+            pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
         let live_context_budgets = guard.live_context_budgets.clone();
         webui_trace_if_slow(
             "workspace_mutation_prepare",
@@ -10266,6 +10394,7 @@ where
             ai_tool_configuration,
             surface_messages,
             subagent_navigation,
+            pending_question,
             logs,
             live_context_budgets,
         )
@@ -10281,6 +10410,7 @@ where
         &workspace_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
+        pending_question,
         &logs,
         &live_context_budgets,
     );
@@ -11043,6 +11173,7 @@ async fn refresh_workbench_snapshot(
         &refreshed_snapshot,
         surface_messages.as_slice(),
         subagent_navigation,
+        pending_question_snapshot_from_agent_runtime(agent_runtime_for_status.as_ref()),
         &logs,
         &live_context_budgets,
     );
@@ -11912,6 +12043,28 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         conversation_hook_runtime: Arc::new(Mutex::new(conversation_hook_runtime)),
         vmm_hook_runtime,
     };
+    let service_state = app
+        .try_state::<SharedServiceBridgeState>()
+        .map(|state| state.inner().clone())
+        .ok_or_else(|| {
+            ServiceBootstrapError::new(
+                "service-process",
+                "Core Service",
+                "Tauri 服务状态未注册，无法安装 ask 弹窗事件桥。",
+            )
+        })?;
+    install_webui_question_runtime_event_bridge(
+        app,
+        &service_state,
+        &agent_runtime.question_runtime,
+    )
+    .map_err(|error| {
+        ServiceBootstrapError::new(
+            "service-process",
+            "Core Service",
+            format!("安装 ask 弹窗事件桥失败：{error}"),
+        )
+    })?;
     logs.push(String::from(
         "[tauri-service] agent runtime bridge ready: provider/LuaSkills/MCP/token-budget handles are mounted",
     ));
@@ -12031,6 +12184,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
             .map(|snapshot| snapshot.messages.as_slice())
             .unwrap_or(&[]),
         None,
+        pending_question_snapshot_from_agent_runtime(Some(&agent_runtime)),
         &logs,
         &BTreeMap::new(),
     );
@@ -12289,6 +12443,7 @@ fn workbench_from_runtime(
     workspace: &vulcan_workspace_store::workspace_store::WorkspaceSnapshot,
     surface_messages: &[SessionMessageEntry],
     subagent_navigation: Option<SubagentNavigationSnapshot>,
+    pending_question: Option<PendingQuestionSnapshot>,
     logs: &[String],
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
 ) -> WorkbenchSnapshot {
@@ -12388,6 +12543,7 @@ fn workbench_from_runtime(
                     .collect()
             })
             .unwrap_or_default(),
+        pending_question,
         memories: memories(workspace),
         command_sessions: command_sessions(controller),
         logs: logs
@@ -12435,6 +12591,41 @@ fn pending_prompt_summary_from_panel_entry(
         },
         created_at: entry.created_at.clone(),
     }
+}
+
+/// Projects the oldest pending ask-tool request from the shared runtime for WebUI display.
+/// 从共享运行时投影最早的待处理 ask 工具请求供 WebUI 展示。
+fn pending_question_snapshot_from_agent_runtime(
+    agent_runtime: Option<&AgentRuntimeBridge>,
+) -> Option<PendingQuestionSnapshot> {
+    let question_runtime = agent_runtime.map(|runtime| runtime.question_runtime.as_ref())?;
+    let mut pending = question_runtime.list_pending().ok()?;
+    let request = pending.drain(..).next()?;
+    Some(PendingQuestionSnapshot {
+        id: request.id,
+        session_id: request.session_id.to_string(),
+        sequence: request.sequence,
+        questions: request
+            .questions
+            .into_iter()
+            .map(|question| {
+                let multiple = question.allows_multiple();
+                PendingQuestionPromptSummary {
+                    question: question.question,
+                    header: question.header,
+                    options: question
+                        .options
+                        .into_iter()
+                        .map(|option| PendingQuestionOptionSummary {
+                            label: option.label,
+                            description: option.description,
+                        })
+                        .collect(),
+                    multiple,
+                }
+            })
+            .collect(),
+    })
 }
 
 /// Builds the selected-session context injection side-panel snapshot.
@@ -12848,6 +13039,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
+        pending_question: None,
         memories: Vec::new(),
         command_sessions: Vec::new(),
         logs: logs

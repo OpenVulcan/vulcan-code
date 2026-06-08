@@ -14,6 +14,10 @@ use vulcan_tools_manager::{
     VulcanToolInvocationResult, VulcanToolSourceKind,
 };
 
+/// Callback invoked whenever pending-question visibility changes.
+/// 待回答问题可见性变化时触发的回调。
+pub type PendingQuestionChangeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
+
 /// Stable host-result kind emitted by the ask tool so transcript and future GUI enrichments can identify structured question replies.
 /// ask 工具输出的稳定宿主结果类型，供转录与后续图形界面增强识别结构化问答回复。
 const QUESTION_TOOL_HOST_RESULT_KIND: &str = "ask";
@@ -144,6 +148,9 @@ pub struct QuestionRuntime {
     /// Pending structured question requests keyed by their stable request identifiers.
     /// 按稳定请求标识索引的待回答结构化问题请求集合。
     pending: RwLock<HashMap<String, PendingQuestionEntry>>,
+    /// Optional host callback used to notify GUI projections when pending requests change.
+    /// 待回答请求变化时用于通知图形界面投影的可选宿主回调。
+    change_callback: RwLock<Option<PendingQuestionChangeCallback>>,
     /// Monotonic sequence allocator used to preserve display order for concurrently pending questions.
     /// 用于在并发待回答问题之间保持展示顺序的单调序号分配器。
     next_sequence: AtomicU64,
@@ -163,8 +170,21 @@ impl QuestionRuntime {
     pub fn new() -> Self {
         Self {
             pending: RwLock::new(HashMap::new()),
+            change_callback: RwLock::new(None),
             next_sequence: AtomicU64::new(1),
         }
+    }
+
+    /// Installs or clears the host callback invoked when pending-question requests are added or removed.
+    /// 安装或清除待回答问题请求增删时触发的宿主回调。
+    pub fn set_change_callback(
+        &self,
+        callback: Option<PendingQuestionChangeCallback>,
+    ) -> Result<(), String> {
+        *self.change_callback.write().map_err(|_| {
+            String::from("The question runtime registry is locked and cannot update its callback.")
+        })? = callback;
+        Ok(())
     }
 
     /// Suspends the current tool invocation, registers the pending structured questions, and waits until the GUI replies or rejects them.
@@ -188,6 +208,7 @@ impl QuestionRuntime {
             .write()
             .map_err(|_| String::from("The question runtime registry is locked and cannot register pending questions."))?
             .insert(request_id.clone(), PendingQuestionEntry { request, sender });
+        self.notify_pending_question_changed();
         let _pending_guard = PendingQuestionGuard {
             runtime: Arc::clone(self),
             request_id,
@@ -234,6 +255,7 @@ impl QuestionRuntime {
         let Some(entry) = entry else {
             return Ok(false);
         };
+        self.notify_pending_question_changed();
         let _ = entry
             .sender
             .send(PendingQuestionCompletion::Reply(QuestionReply { answers }));
@@ -251,6 +273,7 @@ impl QuestionRuntime {
         let Some(entry) = entry else {
             return Ok(false);
         };
+        self.notify_pending_question_changed();
         let _ = entry.sender.send(PendingQuestionCompletion::Reject);
         Ok(true)
     }
@@ -277,8 +300,24 @@ impl QuestionRuntime {
     /// Removes one pending request from the registry when it still exists.
     /// 当一条待回答请求仍存在时，将其从注册表中移除。
     fn remove_pending_request(&self, request_id: &str) {
-        if let Ok(mut pending) = self.pending.write() {
-            pending.remove(request_id);
+        if let Ok(mut pending) = self.pending.write()
+            && pending.remove(request_id).is_some()
+        {
+            drop(pending);
+            self.notify_pending_question_changed();
+        }
+    }
+
+    /// Notifies the optional host callback after pending-question state changed.
+    /// 待回答问题状态变化后通知可选宿主回调。
+    fn notify_pending_question_changed(&self) {
+        let callback = self
+            .change_callback
+            .read()
+            .ok()
+            .and_then(|guard| guard.clone());
+        if let Some(callback) = callback {
+            callback();
         }
     }
 }

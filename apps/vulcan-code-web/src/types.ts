@@ -572,6 +572,51 @@ export interface SubagentTaskSummary {
   isActive: boolean;
 }
 
+// PendingQuestionSnapshot describes one ask-tool request waiting for user input.
+// PendingQuestionSnapshot 描述一个正在等待用户输入的 ask 工具请求。
+export interface PendingQuestionSnapshot {
+  // Stable request id used by reply and reject commands.
+  // 回复和拒绝命令使用的稳定请求标识。
+  id: string;
+  // Controller session that owns the blocked ask tool call.
+  // 拥有阻塞 ask 工具调用的控制器会话。
+  sessionId: string;
+  // Runtime sequence used to order concurrent ask requests.
+  // 用于排序并发 ask 请求的运行时序号。
+  sequence: number;
+  // Ordered prompts shown in the ask modal.
+  // ask 弹窗中按顺序展示的问题提示。
+  questions: PendingQuestionPromptSummary[];
+}
+
+// PendingQuestionPromptSummary describes one prompt inside a pending ask request.
+// PendingQuestionPromptSummary 描述待处理 ask 请求中的单条问题提示。
+export interface PendingQuestionPromptSummary {
+  // Full question text shown to the user.
+  // 展示给用户的完整问题文本。
+  question: string;
+  // Short field header shown above the question.
+  // 展示在问题上方的简短字段标题。
+  header: string;
+  // Selectable choices offered by this prompt.
+  // 该问题提供的可选答案。
+  options: PendingQuestionOptionSummary[];
+  // Whether multiple structured choices may be selected together.
+  // 是否允许同时选择多个结构化选项。
+  multiple: boolean;
+}
+
+// PendingQuestionOptionSummary describes one selectable ask choice.
+// PendingQuestionOptionSummary 描述 ask 问题中的单个可选答案。
+export interface PendingQuestionOptionSummary {
+  // Choice label returned to the model when selected.
+  // 被选中时回传给模型的选项标签。
+  label: string;
+  // Helper text explaining the choice.
+  // 解释该选项的辅助说明。
+  description: string;
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -629,6 +674,9 @@ export interface WorkbenchSnapshot {
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts?: PendingPromptSummary[];
+  // Oldest pending ask-tool request waiting for a user reply.
+  // 当前等待用户回复的最早 ask 工具请求。
+  pendingQuestion?: PendingQuestionSnapshot | null;
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

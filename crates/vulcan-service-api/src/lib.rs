@@ -152,6 +152,10 @@ pub struct WorkbenchSnapshot {
     /// 当前选中会话保留的可见待发送提示词。
     #[serde(default)]
     pub pending_prompts: Vec<PendingPromptSummary>,
+    /// Oldest pending ask-tool question waiting for user input.
+    /// 当前等待用户输入的最早 ask 工具问题。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<PendingQuestionSnapshot>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -169,6 +173,58 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes one pending ask-tool request mirrored into the WebUI.
+/// 描述镜像到 WebUI 的单个待处理 ask 工具请求。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionSnapshot {
+    /// Stable request identifier used by reply and reject commands.
+    /// 回复与拒绝命令使用的稳定请求标识。
+    pub id: String,
+    /// Controller session that owns the blocked ask tool call.
+    /// 拥有阻塞 ask 工具调用的控制器会话。
+    pub session_id: String,
+    /// Monotonic runtime sequence used to order concurrent asks.
+    /// 用于排序并发 ask 请求的运行时单调序号。
+    pub sequence: u64,
+    /// Ordered prompts shown in the modal.
+    /// 在弹窗中按顺序展示的问题提示。
+    pub questions: Vec<PendingQuestionPromptSummary>,
+}
+
+/// Describes one prompt inside a pending ask-tool request.
+/// 描述待处理 ask 工具请求中的单条问题提示。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionPromptSummary {
+    /// Full question text shown to the user.
+    /// 展示给用户的完整问题文本。
+    pub question: String,
+    /// Short field header shown above the question.
+    /// 展示在问题上方的简短字段标题。
+    pub header: String,
+    /// Selectable choices offered by the prompt.
+    /// 该问题提供的可选答案。
+    #[serde(default)]
+    pub options: Vec<PendingQuestionOptionSummary>,
+    /// Whether multiple structured choices may be selected together.
+    /// 是否允许同时选择多个结构化选项。
+    pub multiple: bool,
+}
+
+/// Describes one selectable choice inside an ask-tool prompt.
+/// 描述 ask 工具问题中的单个可选答案。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingQuestionOptionSummary {
+    /// Choice label returned to the model when selected.
+    /// 被选中时回传给模型的选项标签。
+    pub label: String,
+    /// Helper text explaining the choice.
+    /// 解释该选项的辅助说明。
+    pub description: String,
 }
 
 /// Describes the subagent navigation surface for one selected parent conversation.
