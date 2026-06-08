@@ -17,6 +17,7 @@ use base64::engine::general_purpose::{
 };
 use futures_util::StreamExt;
 use http_range::HttpRange;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::http::{
     Method, Response, StatusCode,
@@ -46,6 +47,10 @@ use vulcan_agent_runtime::{
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
         token_budget_runtime::TokenBudgetRuntime,
         vmm_hooks::{VmmHookConfigSnapshot, VmmHookRuntimeHandle, register_builtin_vmm_hooks},
+    },
+    attachment_asset_index::{
+        AttachmentCleanupPreview, AttachmentCleanupReport, AttachmentCleanupSelection,
+        execute_attachment_cleanup, preview_attachment_cleanup,
     },
     attachment_assets::{
         attachment_descriptor_from_mime_type, attachment_descriptor_from_path,
@@ -377,6 +382,97 @@ struct ServiceBridgeState {
 /// Thread-safe service state handle.
 /// 线程安全的服务状态句柄。
 type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+
+/// WebUI request body for project-scoped attachment cleanup operations.
+/// WebUI 项目级附件清理操作的请求体。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiProjectAttachmentCleanupRequest {
+    /// Stable project identifier selected in the WebUI project settings dialog.
+    /// WebUI 项目设置弹窗选中的稳定项目标识。
+    project_id: String,
+    /// Local cutoff date in `YYYY-MM-DD` format.
+    /// `YYYY-MM-DD` 格式的本地截止日期。
+    cutoff_date: String,
+    /// Attachment-kind filters selected by the user.
+    /// 用户选择的附件类型筛选。
+    selection: WebuiAttachmentCleanupSelection,
+}
+
+/// WebUI attachment-kind filter state.
+/// WebUI 附件类型筛选状态。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiAttachmentCleanupSelection {
+    /// Whether image assets should participate in cleanup.
+    /// 图片资产是否参与清理。
+    image: bool,
+    /// Whether audio assets should participate in cleanup.
+    /// 音频资产是否参与清理。
+    audio: bool,
+    /// Whether video assets should participate in cleanup.
+    /// 视频资产是否参与清理。
+    video: bool,
+    /// Whether PDF assets should participate in cleanup.
+    /// PDF 资产是否参与清理。
+    pdf: bool,
+}
+
+/// WebUI summary returned by attachment cleanup preview.
+/// 附件清理预览返回给 WebUI 的摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiAttachmentCleanupPreviewSummary {
+    /// Cutoff date applied by the preview.
+    /// 预览使用的截止日期。
+    cutoff_date: String,
+    /// Total matched attachment asset count.
+    /// 匹配的附件资产总数。
+    matched_asset_count: usize,
+    /// Human-readable matched byte count.
+    /// 匹配字节数的人类可读文本。
+    matched_byte_len_label: String,
+    /// Unique session count impacted by matched assets.
+    /// 受匹配资产影响的唯一会话数量。
+    impacted_session_count: usize,
+    /// Per-kind matched asset counts.
+    /// 按类型统计的匹配资产数。
+    per_kind_counts: BTreeMap<String, usize>,
+    /// One-line user-facing summary.
+    /// 面向用户的一行摘要。
+    summary: String,
+}
+
+/// WebUI summary returned after attachment cleanup execution.
+/// 附件清理执行后返回给 WebUI 的摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiAttachmentCleanupReportSummary {
+    /// Cutoff date applied by the execution.
+    /// 执行使用的截止日期。
+    cutoff_date: String,
+    /// Total purged attachment asset count.
+    /// 被清理的附件资产总数。
+    purged_asset_count: usize,
+    /// Total deleted managed file count.
+    /// 已删除的托管文件总数。
+    deleted_file_count: usize,
+    /// Total managed files already missing before cleanup.
+    /// 清理前已经缺失的托管文件总数。
+    already_missing_file_count: usize,
+    /// Total managed files that could not be deleted.
+    /// 未能删除的托管文件总数。
+    failed_delete_count: usize,
+    /// Human-readable purged byte count.
+    /// 清理字节数的人类可读文本。
+    purged_byte_len_label: String,
+    /// Unique session count impacted by purged assets.
+    /// 受清理资产影响的唯一会话数量。
+    impacted_session_count: usize,
+    /// One-line user-facing summary.
+    /// 面向用户的一行摘要。
+    summary: String,
+}
 
 /// Shared process-wide gate for WebUI workspace persistence.
 /// WebUI 工作区持久化使用的进程级共享闸门。
@@ -934,8 +1030,13 @@ pub fn run() {
             service_install_system_agent_skills,
             service_set_agent_skills_enabled,
             service_set_agent_skill_enabled,
+            service_load_project_agent_skill_overrides,
+            service_set_agent_skill_project_state,
             service_run_vmm_memory_action,
+            service_load_project_vmm_config,
             service_save_vmm_memory_config,
+            service_preview_project_attachment_cleanup,
+            service_execute_project_attachment_cleanup,
             service_session_messages,
             service_pick_composer_attachments,
             service_stage_composer_attachment_paths,
@@ -1391,28 +1492,28 @@ async fn service_install_system_agent_skills(
     refresh_workbench_snapshot(state).await
 }
 
-/// Persists the Agent Skills global switch and refreshes the WebUI snapshot.
-/// 持久化 Agent Skills 全局开关并刷新 WebUI 快照。
+/// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
+/// 持久化 Agent Skills 全局开关并仅刷新 Agent Skills 目录。
 #[tauri::command]
 async fn service_set_agent_skills_enabled(
     state: tauri::State<'_, SharedServiceBridgeState>,
     enabled: bool,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<AgentSkillsCatalogSummary, String> {
     mutate_provider_configuration(&state, |configuration| {
         configuration.prompt_skills.enabled = enabled;
         Ok(())
     })?;
-    refresh_workbench_snapshot(state).await
+    refresh_agent_skills_local_state(&state)
 }
 
-/// Persists one global Agent Skill state and refreshes the WebUI snapshot.
-/// 持久化单个全局 Agent Skill 状态并刷新 WebUI 快照。
+/// Persists one global Agent Skill state and refreshes only the Agent Skills catalog.
+/// 持久化单个全局 Agent Skill 状态并仅刷新 Agent Skills 目录。
 #[tauri::command]
 async fn service_set_agent_skill_enabled(
     state: tauri::State<'_, SharedServiceBridgeState>,
     name: String,
     enabled: bool,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<AgentSkillsCatalogSummary, String> {
     let state_override = if enabled {
         PersistedPromptSkillState::Enabled
     } else {
@@ -1424,7 +1525,67 @@ async fn service_set_agent_skill_enabled(
             .set_skill_state(&name, Some(state_override));
         Ok(())
     })?;
-    refresh_workbench_snapshot(state).await
+    refresh_agent_skills_local_state(&state)
+}
+
+/// Loads project-level Agent Skill overrides for the WebUI project settings modal.
+/// 为 WebUI 项目设置弹窗加载项目级 Agent Skill 覆盖。
+#[tauri::command]
+fn service_load_project_agent_skill_overrides(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<BTreeMap<String, String>, String> {
+    let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
+    let project_configuration = load_project_configuration(&project_path);
+    Ok(project_configuration
+        .prompt_skills
+        .skill_overrides
+        .into_iter()
+        .map(|(name, state)| {
+            let value = if state.is_enabled() {
+                "enabled"
+            } else {
+                "disabled"
+            };
+            (name, value.to_string())
+        })
+        .collect())
+}
+
+/// Persists one project-level Agent Skill tri-state override without rebuilding the full snapshot.
+/// 持久化单个项目级 Agent Skill 三态覆盖，但不重建完整快照。
+#[tauri::command]
+fn service_set_agent_skill_project_state(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+    name: String,
+    state_key: String,
+) -> Result<(), String> {
+    let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
+    let mut project_configuration = load_project_configuration(&project_path);
+    let stable_name = name.trim();
+    if stable_name.is_empty() {
+        return Err(String::from("项目级 Agent Skill 名称不能为空。"));
+    }
+    match parse_agent_skill_project_state(&state_key)? {
+        Some(state_override) => {
+            project_configuration
+                .prompt_skills
+                .skill_overrides
+                .insert(stable_name.to_string(), state_override);
+        }
+        None => {
+            project_configuration
+                .prompt_skills
+                .skill_overrides
+                .remove(stable_name);
+        }
+    }
+    vulcan_provider_config::config::save_project_configuration_file(
+        &PathBuf::from(&project_path),
+        &project_configuration,
+    )?;
+    Ok(())
 }
 
 /// Runs one VMM memory management action and returns its structured result.
@@ -1457,6 +1618,52 @@ async fn service_save_vmm_memory_config(
 ) -> Result<WorkbenchSnapshot, String> {
     save_vmm_memory_config(&state, request)?;
     refresh_workbench_snapshot(state).await
+}
+
+/// Loads one project-scoped VMM configuration draft for the WebUI project settings modal.
+/// 为 WebUI 项目设置弹窗加载单个项目级 VMM 配置草稿。
+#[tauri::command]
+fn service_load_project_vmm_config(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    project_id: String,
+) -> Result<VmmConfigDraftSummary, String> {
+    load_project_vmm_config(&state, &project_id)
+}
+
+/// Builds a project-scoped managed attachment cleanup preview for the WebUI settings dialog.
+/// 为 WebUI 设置弹窗构建项目级托管附件清理预览。
+#[tauri::command]
+async fn service_preview_project_attachment_cleanup(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: WebuiProjectAttachmentCleanupRequest,
+) -> Result<WebuiAttachmentCleanupPreviewSummary, String> {
+    let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
+    let cutoff_date = request.cutoff_date.trim().to_string();
+    let selection = webui_attachment_cleanup_selection(request.selection);
+    tauri::async_runtime::spawn_blocking(move || {
+        let preview = preview_attachment_cleanup(&project_path, &cutoff_date, selection)?;
+        Ok(webui_attachment_cleanup_preview_summary(preview))
+    })
+    .await
+    .map_err(|error| format!("附件清理预览任务失败：{error}"))?
+}
+
+/// Executes a project-scoped managed attachment cleanup for the WebUI settings dialog.
+/// 为 WebUI 设置弹窗执行项目级托管附件清理。
+#[tauri::command]
+async fn service_execute_project_attachment_cleanup(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: WebuiProjectAttachmentCleanupRequest,
+) -> Result<WebuiAttachmentCleanupReportSummary, String> {
+    let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
+    let cutoff_date = request.cutoff_date.trim().to_string();
+    let selection = webui_attachment_cleanup_selection(request.selection);
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = execute_attachment_cleanup(&project_path, &cutoff_date, selection)?;
+        Ok(webui_attachment_cleanup_report_summary(report))
+    })
+    .await
+    .map_err(|error| format!("附件清理执行任务失败：{error}"))?
 }
 
 /// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
@@ -3401,13 +3608,13 @@ async fn service_add_project_from_folder(
     refresh_workbench_snapshot(state).await.map(Some)
 }
 
-/// Toggles one project pinned state and returns the refreshed workbench snapshot.
-/// 切换单个项目置顶状态并返回刷新后的工作台快照。
+/// Toggles one project pinned state without rebuilding the full workbench snapshot.
+/// 切换单个项目置顶状态，但不重建完整工作台快照。
 #[tauri::command]
 async fn service_toggle_project_pinned(
     state: tauri::State<'_, SharedServiceBridgeState>,
     project_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<(), String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
     controller_runtime
         .client
@@ -3417,12 +3624,13 @@ async fn service_toggle_project_pinned(
             "UPDATE projects SET pinned = CASE WHEN pinned = 0 THEN 1 ELSE 0 END, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
             vec![vec![
                 ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id),
+                ControllerSqliteValue::String(project_id.clone()),
             ]],
         )
         .await
         .map_err(|error| format!("切换项目置顶状态失败：{error}"))?;
-    refresh_workbench_snapshot(state).await
+    update_project_pinned_local_state(&state, &project_id)?;
+    Ok(())
 }
 
 /// Reorders visible projects inside one pinned or regular section.
@@ -3497,15 +3705,15 @@ async fn service_rename_project(
     refresh_workbench_snapshot(state).await
 }
 
-/// Applies a project icon override and returns the refreshed workbench snapshot.
-/// 应用项目图标覆盖并返回刷新后的工作台快照。
+/// Applies a project icon override without rebuilding the full workbench snapshot.
+/// 应用项目图标覆盖，但不重建完整工作台快照。
 #[tauri::command]
 async fn service_set_project_icon(
     state: tauri::State<'_, SharedServiceBridgeState>,
     project_id: String,
     icon_pack: String,
     icon_key: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<(), String> {
     let normalized_icon_pack = normalize_non_empty_name(&icon_pack)?;
     let normalized_icon_key = normalize_non_empty_name(&icon_key)?;
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -3516,24 +3724,30 @@ async fn service_set_project_icon(
             controller_runtime.sqlite_binding_id.as_str(),
             "UPDATE projects SET icon_pack = ?1, icon_key = ?2, updated_at = ?3 WHERE id = ?4 AND archived = 0;",
             vec![vec![
-                ControllerSqliteValue::String(normalized_icon_pack),
-                ControllerSqliteValue::String(normalized_icon_key),
+                ControllerSqliteValue::String(normalized_icon_pack.clone()),
+                ControllerSqliteValue::String(normalized_icon_key.clone()),
                 ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id),
+                ControllerSqliteValue::String(project_id.clone()),
             ]],
         )
         .await
         .map_err(|error| format!("设置项目图标失败：{error}"))?;
-    refresh_workbench_snapshot(state).await
+    update_project_icon_local_state(
+        &state,
+        &project_id,
+        Some(normalized_icon_pack),
+        Some(normalized_icon_key),
+    )?;
+    Ok(())
 }
 
-/// Clears a project icon override and returns the refreshed workbench snapshot.
-/// 清除项目图标覆盖并返回刷新后的工作台快照。
+/// Clears a project icon override without rebuilding the full workbench snapshot.
+/// 清除项目图标覆盖，但不重建完整工作台快照。
 #[tauri::command]
 async fn service_reset_project_icon(
     state: tauri::State<'_, SharedServiceBridgeState>,
     project_id: String,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<(), String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
     controller_runtime
         .client
@@ -3543,12 +3757,13 @@ async fn service_reset_project_icon(
             "UPDATE projects SET icon_pack = NULL, icon_key = NULL, updated_at = ?1 WHERE id = ?2 AND archived = 0;",
             vec![vec![
                 ControllerSqliteValue::String(current_unix_millis_text()),
-                ControllerSqliteValue::String(project_id),
+                ControllerSqliteValue::String(project_id.clone()),
             ]],
         )
         .await
         .map_err(|error| format!("还原项目图标失败：{error}"))?;
-    refresh_workbench_snapshot(state).await
+    update_project_icon_local_state(&state, &project_id, None, None)?;
+    Ok(())
 }
 
 /// Persists the expanded project identifiers and returns the refreshed workbench snapshot.
@@ -3941,6 +4156,74 @@ fn current_workbench_snapshot_from_state(
         .map(|guard| guard.workbench.clone())
 }
 
+/// Applies one pinned-state mutation to retained project snapshots.
+/// 将单个置顶状态变更应用到保留的项目快照。
+fn update_project_pinned_local_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: &str,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let mut found = false;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        for project in &mut workspace_snapshot.task_projects {
+            if project.id == project_id {
+                project.pinned = !project.pinned;
+                found = true;
+            }
+        }
+    }
+    for project in &mut guard.workbench.projects {
+        if project.id == project_id {
+            project.pinned = !project.pinned;
+            found = true;
+        }
+    }
+    if found {
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        Ok(())
+    } else {
+        Err(format!("没有找到要切换置顶状态的项目：{project_id}"))
+    }
+}
+
+/// Applies one icon mutation to retained project snapshots.
+/// 将单个图标变更应用到保留的项目快照。
+fn update_project_icon_local_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: &str,
+    icon_pack: Option<String>,
+    icon_key: Option<String>,
+) -> Result<(), String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let mut found = false;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        for project in &mut workspace_snapshot.task_projects {
+            if project.id == project_id {
+                project.icon_pack = icon_pack.clone();
+                project.icon_key = icon_key.clone();
+                found = true;
+            }
+        }
+    }
+    for project in &mut guard.workbench.projects {
+        if project.id == project_id {
+            project.icon_pack = icon_pack.clone();
+            project.icon_key = icon_key.clone();
+            found = true;
+        }
+    }
+    if found {
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        Ok(())
+    } else {
+        Err(format!("没有找到要设置图标的项目：{project_id}"))
+    }
+}
+
 /// Returns the retained LuaSkills handle for WebUI management commands.
 /// 返回 WebUI 管理命令使用的保留 LuaSkills 句柄。
 fn service_luaskills_handle(
@@ -4053,6 +4336,34 @@ where
         runtime.provider_configuration = configuration;
     }
     Ok(())
+}
+
+/// Reprojects Agent Skills after a focused prompt-skill configuration change.
+/// 在聚焦的提示词技能配置变更后重新投影 Agent Skills。
+fn refresh_agent_skills_local_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<AgentSkillsCatalogSummary, String> {
+    let provider_configuration = provider_configuration_from_state(state)?;
+    let summary = agent_skills_catalog_summary(&provider_configuration);
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.agent_skills = summary.clone();
+    Ok(summary)
+}
+
+/// Parses the project-level Agent Skill tri-state key from the WebUI.
+/// 从 WebUI 解析项目级 Agent Skill 三态键。
+fn parse_agent_skill_project_state(
+    value: &str,
+) -> Result<Option<PersistedPromptSkillState>, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inherit" => Ok(None),
+        "enabled" => Ok(Some(PersistedPromptSkillState::Enabled)),
+        "disabled" => Ok(Some(PersistedPromptSkillState::Disabled)),
+        other => Err(format!("不支持的项目级 Agent Skill 状态：{other}")),
+    }
 }
 
 /// Parses a persisted LuaSkills tool registration state key from the WebUI.
@@ -4351,7 +4662,11 @@ fn save_vmm_memory_config(
                 &project_path,
             ))
             .unwrap_or_default();
-        project_configuration.vmm = vmm_config_layer_from_draft(&request.draft, false)?;
+        project_configuration.vmm = if request.draft.has_override {
+            vmm_config_layer_from_draft(&request.draft, false)?
+        } else {
+            vulcan_vmm::VmmConfigLayer::default()
+        };
         vulcan_provider_config::config::save_project_configuration_file(
             &PathBuf::from(&project_path),
             &project_configuration,
@@ -4370,6 +4685,131 @@ fn save_vmm_memory_config(
     }
     refresh_guard_vmm_hook_snapshot(&mut guard, &configuration);
     Ok(())
+}
+
+/// Loads one persisted project VMM layer and resolves its effective editable fallback.
+/// 加载单个已持久化的项目 VMM 层，并解析其可编辑回退值。
+fn load_project_vmm_config(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: &str,
+) -> Result<VmmConfigDraftSummary, String> {
+    let project_path = vmm_project_scope_path(state, Some(project_id))?;
+    let provider_configuration = provider_configuration_from_state(state)?;
+    let project_layer = load_project_configuration(&project_path).vmm;
+    let project_effective = vulcan_vmm::VmmEffectiveConfig::resolve(
+        &provider_configuration.vmm,
+        Some(&project_layer),
+        None,
+    );
+    Ok(vmm_config_draft_summary(
+        &project_layer,
+        &project_effective,
+        !project_layer.is_empty(),
+    ))
+}
+
+/// Converts the WebUI cleanup-kind selection into the runtime attachment cleanup selection.
+/// 将 WebUI 清理类型选择转换为运行时附件清理选择。
+fn webui_attachment_cleanup_selection(
+    selection: WebuiAttachmentCleanupSelection,
+) -> AttachmentCleanupSelection {
+    AttachmentCleanupSelection {
+        image: selection.image,
+        audio: selection.audio,
+        video: selection.video,
+        pdf: selection.pdf,
+    }
+}
+
+/// Converts a runtime cleanup preview into the WebUI response shape.
+/// 将运行时清理预览转换为 WebUI 响应结构。
+fn webui_attachment_cleanup_preview_summary(
+    preview: AttachmentCleanupPreview,
+) -> WebuiAttachmentCleanupPreviewSummary {
+    let matched_byte_len_label = webui_attachment_cleanup_byte_len_label(preview.matched_byte_len);
+    let summary = format!(
+        "截止 {cutoff} 将匹配 {count} 个附件、约 {byte_len}、影响 {sessions} 个会话（{kind_summary}）",
+        cutoff = preview.cutoff_date_text,
+        count = preview.matched_asset_count,
+        byte_len = matched_byte_len_label,
+        sessions = preview.impacted_session_count,
+        kind_summary = webui_attachment_cleanup_kind_summary(&preview.per_kind_counts),
+    );
+    WebuiAttachmentCleanupPreviewSummary {
+        cutoff_date: preview.cutoff_date_text,
+        matched_asset_count: preview.matched_asset_count,
+        matched_byte_len_label,
+        impacted_session_count: preview.impacted_session_count,
+        per_kind_counts: preview.per_kind_counts,
+        summary,
+    }
+}
+
+/// Converts a runtime cleanup report into the WebUI response shape.
+/// 将运行时清理报告转换为 WebUI 响应结构。
+fn webui_attachment_cleanup_report_summary(
+    report: AttachmentCleanupReport,
+) -> WebuiAttachmentCleanupReportSummary {
+    let purged_byte_len_label = webui_attachment_cleanup_byte_len_label(report.purged_byte_len);
+    let failed_delete_suffix = if report.failed_delete_count == 0 {
+        String::new()
+    } else {
+        format!(
+            "，{} 个文件删除失败但已撤销回放",
+            report.failed_delete_count
+        )
+    };
+    let summary = format!(
+        "已按 {cutoff} 清理 {purged} 个附件，删除 {deleted} 个托管文件，{missing} 个文件已缺失，共释放约 {byte_len}，影响 {sessions} 个会话{failed_delete_suffix}",
+        cutoff = report.cutoff_date_text,
+        purged = report.purged_asset_count,
+        deleted = report.deleted_file_count,
+        missing = report.already_missing_file_count,
+        byte_len = purged_byte_len_label,
+        sessions = report.impacted_session_count,
+    );
+    WebuiAttachmentCleanupReportSummary {
+        cutoff_date: report.cutoff_date_text,
+        purged_asset_count: report.purged_asset_count,
+        deleted_file_count: report.deleted_file_count,
+        already_missing_file_count: report.already_missing_file_count,
+        failed_delete_count: report.failed_delete_count,
+        purged_byte_len_label,
+        impacted_session_count: report.impacted_session_count,
+        summary,
+    }
+}
+
+/// Formats attachment cleanup byte counts for the WebUI.
+/// 为 WebUI 格式化附件清理字节数。
+fn webui_attachment_cleanup_byte_len_label(byte_len: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = KIB * 1024.0;
+    const GIB: f64 = MIB * 1024.0;
+    let byte_len_f64 = byte_len as f64;
+    if byte_len_f64 >= GIB {
+        format!("{:.2} GiB", byte_len_f64 / GIB)
+    } else if byte_len_f64 >= MIB {
+        format!("{:.2} MiB", byte_len_f64 / MIB)
+    } else if byte_len_f64 >= KIB {
+        format!("{:.2} KiB", byte_len_f64 / KIB)
+    } else {
+        format!("{byte_len} B")
+    }
+}
+
+/// Formats per-kind cleanup counts for the WebUI summary line.
+/// 为 WebUI 摘要行格式化按类型统计数量。
+fn webui_attachment_cleanup_kind_summary(per_kind_counts: &BTreeMap<String, usize>) -> String {
+    if per_kind_counts.is_empty() {
+        String::from("未匹配任何类型")
+    } else {
+        per_kind_counts
+            .iter()
+            .map(|(kind, count)| format!("{kind}:{count}"))
+            .collect::<Vec<_>>()
+            .join(" / ")
+    }
 }
 
 /// Refreshes the retained VMM hook snapshot from shared service state.

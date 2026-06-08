@@ -1222,6 +1222,31 @@ button {
   gap: 14px;
 }
 
+.feature-header-title-stack {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: grid;
+  gap: 2px;
+  transform: translateY(-2px);
+}
+
+.feature-header-title-stack small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.feature-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .console-header-actions {
   flex: 0 0 auto;
   display: flex;
@@ -1853,6 +1878,7 @@ button {
 }
 
 .feature-content > .panel,
+.feature-content > .skill-management-surface,
 .feature-content > .area-grid {
   min-height: 0;
   height: 100%;
@@ -1925,22 +1951,12 @@ button {
   overflow: auto;
 }
 
-.skill-management-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
+.skill-management-surface {
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
-.skill-page-header {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.skill-tabs,
 .skill-actions-row,
 .skill-toolbar {
   min-width: 0;
@@ -1950,7 +1966,6 @@ button {
   flex-wrap: wrap;
 }
 
-.skill-tabs button,
 .skill-action-button {
   height: 32px;
   display: inline-flex;
@@ -1966,7 +1981,6 @@ button {
   font-weight: 650;
 }
 
-.skill-tabs button.active,
 .skill-action-button:not(.secondary) {
   background: var(--primary);
   color: var(--primary-foreground);
@@ -1978,7 +1992,6 @@ button {
   color: var(--secondary-foreground);
 }
 
-.skill-tabs button:disabled,
 .skill-action-button:disabled {
   cursor: default;
   opacity: 0.55;
@@ -1991,6 +2004,10 @@ button {
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
   overflow: hidden;
+}
+
+.lua-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .skill-summary-grid {
@@ -2056,6 +2073,39 @@ button {
 
 .skill-toolbar input {
   flex: 1 1 210px;
+}
+
+.lua-skill-install-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-width: min(520px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-install-form,
+.lua-skill-install-field {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.lua-skill-install-form {
+  gap: 14px;
+}
+
+.lua-skill-install-field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-install-field input,
+.lua-skill-install-field select {
+  min-width: 0;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 12px;
 }
 
 .skill-card-list {
@@ -2167,10 +2217,14 @@ button {
 
 .vmm-memory-shell {
   display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) minmax(260px, 340px);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 340px);
   gap: 14px;
   min-height: 0;
   height: 100%;
+}
+
+.vmm-memory-shell.status-only {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .vmm-memory-rail,
@@ -2202,6 +2256,16 @@ button {
   gap: 12px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.vmm-status-page {
+  padding-right: 0;
+}
+
+.vmm-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .vmm-memory-status,
@@ -2433,7 +2497,7 @@ button {
 
 @media (max-width: 1180px) {
   .vmm-memory-shell {
-    grid-template-columns: minmax(200px, 260px) minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .vmm-memory-result {
@@ -2443,6 +2507,7 @@ button {
   }
 
   .vmm-overview-grid,
+  .vmm-status-grid,
   .vmm-form-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -2452,6 +2517,7 @@ button {
   .vmm-memory-shell,
   .vmm-memory-result,
   .vmm-overview-grid,
+  .vmm-status-grid,
   .vmm-form-grid,
   .vmm-row-list {
     grid-template-columns: 1fr;
@@ -3573,6 +3639,329 @@ button {
 .rename-dialog,
 .archive-dialog {
   width: min(460px, calc(100vw - 32px));
+}
+
+.project-settings-dialog {
+  width: min(1050px, calc(100vw - 40px));
+  height: min(600px, calc(100vh - 32px));
+  max-width: min(1050px, calc(100vw - 40px)) !important;
+  max-height: min(600px, calc(100vh - 32px));
+  grid-template-rows: auto minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.project-settings-dialog [data-slot="dialog-description"] {
+  line-height: 1.55;
+}
+
+.project-settings-layout {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.project-settings-nav {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 42%, transparent);
+}
+
+.project-settings-nav-button {
+  width: 100%;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-settings-nav-button:hover,
+.project-settings-nav-button.active {
+  border-color: var(--border);
+  background: var(--background);
+}
+
+.project-settings-nav-button svg {
+  color: var(--muted-foreground);
+}
+
+.project-settings-nav-button span,
+.project-settings-nav-button strong,
+.project-settings-nav-button small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-nav-button strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-nav-button small {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-content {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.project-settings-section {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+
+.project-settings-heading,
+.project-settings-summary {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.project-settings-heading strong,
+.project-settings-summary strong {
+  display: block;
+  font-size: 15px;
+}
+
+.project-settings-heading span,
+.project-settings-summary span {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-settings-panel {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+}
+
+.project-settings-panel.compact {
+  align-items: start;
+}
+
+.project-settings-panel strong {
+  font-size: 13px;
+}
+
+.project-settings-panel p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.project-settings-toggle-row,
+.project-settings-check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-settings-toggle-row {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+}
+
+.project-settings-toggle-row span,
+.project-settings-toggle-row strong,
+.project-settings-toggle-row small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-toggle-row strong {
+  font-size: 13px;
+}
+
+.project-settings-toggle-row small {
+  margin-top: 2px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.project-settings-form-grid,
+.project-settings-cleanup-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.project-settings-form-grid.disabled {
+  opacity: 0.68;
+}
+
+.project-settings-field {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.project-settings-field.wide {
+  grid-column: 1 / -1;
+}
+
+.project-settings-field span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.project-settings-field textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+
+.project-settings-kind-grid {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+
+.project-settings-skill-list {
+  display: grid;
+  gap: 8px;
+}
+
+.project-settings-skill-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(300px, 360px);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+}
+
+.project-settings-skill-row span,
+.project-settings-skill-row strong,
+.project-settings-skill-row small {
+  min-width: 0;
+  display: block;
+}
+
+.project-settings-skill-row strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-skill-row small {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-settings-segmented {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(118px, 1.4fr) minmax(64px, 0.8fr) minmax(64px, 0.8fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+.project-settings-segmented-button {
+  min-height: 32px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 9px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.project-settings-segmented-button:last-child {
+  border-right: 0;
+}
+
+.project-settings-segmented-button:hover,
+.project-settings-segmented-button.active {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.project-settings-segmented-button:disabled {
+  opacity: 0.58;
+  cursor: wait;
+}
+
+.project-settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.project-settings-actions button {
+  gap: 7px;
+}
+
+.project-settings-muted {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .archive-dialog [data-slot="dialog-title"] {
@@ -4804,6 +5193,42 @@ button {
   .console-shell {
     min-height: 70vh;
     flex-direction: column;
+  }
+
+  .project-settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-settings-nav {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .project-settings-content {
+    max-height: min(520px, calc(100vh - 280px));
+  }
+
+  .project-settings-grid,
+  .project-settings-form-grid,
+  .project-settings-cleanup-grid,
+  .project-settings-kind-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .project-settings-kind-grid {
+    grid-column: auto;
+  }
+
+  .project-settings-skill-row {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+  }
+
+  .project-settings-skill-row .status-pill {
+    width: fit-content;
+  }
+
+  .project-settings-segmented {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.8fr) minmax(0, 0.8fr);
   }
 
   .vcn-sidebar,

@@ -107,6 +107,7 @@ import { I18nProvider, useI18n, type LocaleCode } from "@/i18n";
 import type {
   AiCapabilitySummary,
   AiCapabilityTargetSummary,
+  AgentSkillsCatalogSummary,
   ComposerAttachmentCapabilitySummary,
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
@@ -127,6 +128,7 @@ import type {
   SettingsSubAreaId,
   StartupStepSnapshot,
   StartupSnapshot,
+  VmmConfigDraftSummary,
   VmmConfigSaveRequest,
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
@@ -147,6 +149,7 @@ import {
   ChevronRight,
   CheckCircle2,
   CircleAlert,
+  Calendar,
   Clock3,
   Code2,
   Copy,
@@ -157,6 +160,7 @@ import {
   ExternalLink,
   FileText,
   Folder,
+  FolderCog,
   FolderPlus,
   FolderOpen,
   GitBranch,
@@ -177,6 +181,7 @@ import {
   MicVocal,
   Music2,
   Scan,
+  Save,
   PanelRightClose,
   PanelRightOpen,
   PanelTopOpen,
@@ -1406,30 +1411,52 @@ async function installSystemAgentSkills(): Promise<WorkbenchSnapshot> {
 
 // setAgentSkillsEnabled persists the global Agent Skills switch.
 // setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
-async function setAgentSkillsEnabled(enabled: boolean): Promise<WorkbenchSnapshot> {
+async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogSummary> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.agentSkills.globalEnabled = enabled;
       snapshot.agentSkills.skills = snapshot.agentSkills.skills.map((skill) => ({ ...skill, enabled }));
     });
+    return snapshot.agentSkills;
   }
-  return invoke<WorkbenchSnapshot>("service_set_agent_skills_enabled", { enabled });
+  return invoke<AgentSkillsCatalogSummary>("service_set_agent_skills_enabled", { enabled });
 }
 
 // setAgentSkillEnabled persists one global Agent Skill state.
 // setAgentSkillEnabled 持久化单个全局 Agent Skill 状态。
-async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<WorkbenchSnapshot> {
+async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkillsCatalogSummary> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return updateBrowserFallbackWorkbench((snapshot) => {
+    const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.agentSkills.skills.find((item) => item.name === name);
       if (skill) {
         skill.enabled = enabled && snapshot.agentSkills.globalEnabled;
       }
     });
+    return snapshot.agentSkills;
   }
-  return invoke<WorkbenchSnapshot>("service_set_agent_skill_enabled", { name, enabled });
+  return invoke<AgentSkillsCatalogSummary>("service_set_agent_skill_enabled", { name, enabled });
+}
+
+// loadProjectAgentSkillOverrides loads project-local Agent Skill overrides.
+// loadProjectAgentSkillOverrides 加载项目本地 Agent Skill 覆盖。
+async function loadProjectAgentSkillOverrides(projectId: string): Promise<Record<string, string>> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return {};
+  }
+  return invoke<Record<string, string>>("service_load_project_agent_skill_overrides", { projectId });
+}
+
+// setAgentSkillProjectState persists one project-level Agent Skill tri-state override.
+// setAgentSkillProjectState 持久化单个项目级 Agent Skill 三态覆盖。
+async function setAgentSkillProjectState(projectId: string, name: string, stateKey: ProjectAgentSkillState): Promise<void> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return;
+  }
+  return invoke<void>("service_set_agent_skill_project_state", { projectId, name, stateKey });
 }
 
 // runVmmMemoryAction executes one VMM memory workbench action.
@@ -1448,6 +1475,45 @@ async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promise<VmmM
   return invoke<VmmMemoryActionResult>("service_run_vmm_memory_action", { request });
 }
 
+// loadProjectVmmConfig loads the editable project-scoped VMM draft.
+// loadProjectVmmConfig 加载可编辑的项目级 VMM 草稿。
+async function loadProjectVmmConfig(projectId: string): Promise<VmmConfigDraftSummary> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return browserFallbackSnapshot().vmmMemory.projectDraft;
+  }
+  return invoke<VmmConfigDraftSummary>("service_load_project_vmm_config", { projectId });
+}
+
+// previewProjectAttachmentCleanup builds a project-scoped managed attachment cleanup preview.
+// previewProjectAttachmentCleanup 构建项目级托管附件清理预览。
+async function previewProjectAttachmentCleanup(request: ProjectAttachmentCleanupRequest): Promise<ProjectAttachmentCleanupPreviewSummary> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return projectAttachmentPreviewFallback(request);
+  }
+  return invoke<ProjectAttachmentCleanupPreviewSummary>("service_preview_project_attachment_cleanup", { request });
+}
+
+// executeProjectAttachmentCleanup runs one project-scoped managed attachment cleanup.
+// executeProjectAttachmentCleanup 执行单次项目级托管附件清理。
+async function executeProjectAttachmentCleanup(request: ProjectAttachmentCleanupRequest): Promise<ProjectAttachmentCleanupReportSummary> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return {
+      cutoffDate: request.cutoffDate,
+      purgedAssetCount: 0,
+      deletedFileCount: 0,
+      alreadyMissingFileCount: 0,
+      failedDeleteCount: 0,
+      purgedByteLenLabel: "0 B",
+      impactedSessionCount: 0,
+      summary: "预览模式不会删除托管附件。",
+    };
+  }
+  return invoke<ProjectAttachmentCleanupReportSummary>("service_execute_project_attachment_cleanup", { request });
+}
+
 // saveVmmMemoryConfig persists one VMM memory configuration draft.
 // saveVmmMemoryConfig 持久化单个 VMM 记忆配置草稿。
 async function saveVmmMemoryConfig(request: VmmConfigSaveRequest): Promise<WorkbenchSnapshot> {
@@ -1455,7 +1521,7 @@ async function saveVmmMemoryConfig(request: VmmConfigSaveRequest): Promise<Workb
   if (!invoke) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       if (request.scope === "project") {
-        snapshot.vmmMemory.projectDraft = { ...request.draft, hasOverride: true };
+        snapshot.vmmMemory.projectDraft = { ...request.draft, hasOverride: request.draft.hasOverride };
       } else {
         snapshot.vmmMemory.globalDraft = { ...request.draft, hasOverride: true };
       }
@@ -1893,12 +1959,12 @@ async function addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
 
 // toggleProjectPinned asks the desktop shell to toggle one project pinned state.
 // toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
-async function toggleProjectPinned(projectId: string): Promise<WorkbenchSnapshot | null> {
+async function toggleProjectPinned(projectId: string): Promise<void> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return null;
+    return;
   }
-  return invoke<WorkbenchSnapshot>("service_toggle_project_pinned", { projectId });
+  await invoke<void>("service_toggle_project_pinned", { projectId });
 }
 
 // reorderProjects asks the desktop shell to persist one same-section project order.
@@ -1923,12 +1989,12 @@ async function renameProject(projectId: string, name: string): Promise<Workbench
 
 // setProjectIcon asks the desktop shell to persist one project icon override.
 // setProjectIcon 请求桌面壳持久化单个项目图标覆盖。
-async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Promise<WorkbenchSnapshot | null> {
+async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Promise<void> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return null;
+    return;
   }
-  return invoke<WorkbenchSnapshot>("service_set_project_icon", {
+  await invoke<void>("service_set_project_icon", {
     projectId,
     iconPack: icon.pack,
     iconKey: icon.key,
@@ -1937,12 +2003,12 @@ async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Pr
 
 // resetProjectIcon asks the desktop shell to clear one project icon override.
 // resetProjectIcon 请求桌面壳清除单个项目图标覆盖。
-async function resetProjectIcon(projectId: string): Promise<WorkbenchSnapshot | null> {
+async function resetProjectIcon(projectId: string): Promise<void> {
   const invoke = await resolveInvoke();
   if (!invoke) {
-    return null;
+    return;
   }
-  return invoke<WorkbenchSnapshot>("service_reset_project_icon", { projectId });
+  await invoke<void>("service_reset_project_icon", { projectId });
 }
 
 // setExpandedTaskProjects asks the desktop shell to persist expanded project rows.
@@ -2272,6 +2338,14 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
     const snapshot = await action();
     setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
   }, [mergeWorkbenchWithLocalCaches]);
+  // applyAgentSkillsCatalog merges one lightweight Agent Skills catalog update.
+  // applyAgentSkillsCatalog 合并单个轻量 Agent Skills 目录更新。
+  const applyAgentSkillsCatalog = React.useCallback((agentSkills: AgentSkillsCatalogSummary) => {
+    setWorkbenchState((current) => ({
+      ...current,
+      agentSkills,
+    }));
+  }, []);
   // loadingConversationId stores the conversation currently loading from the service.
   // loadingConversationId 保存当前正在从服务加载正文的会话标识。
   const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
@@ -2284,6 +2358,9 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // projectIconTarget stores the project currently editing its sidebar icon.
   // projectIconTarget 保存当前正在编辑侧栏图标的项目。
   const [projectIconTarget, setProjectIconTarget] = React.useState<ProjectIconDialogTarget | null>(null);
+  // projectSettingsTarget stores the project currently shown in the settings dialog.
+  // projectSettingsTarget 保存当前显示设置弹窗的项目。
+  const [projectSettingsTarget, setProjectSettingsTarget] = React.useState<ProjectSettingsDialogTarget | null>(null);
   // archiveProjectTarget stores the project waiting for archive confirmation.
   // archiveProjectTarget 保存正在等待归档确认的项目。
   const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
@@ -2445,19 +2522,69 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         return;
       }
 
-      const snapshot = await toggleProjectPinned(project.id);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
-        toast.success(project.pinned ? `已取消置顶项目：${project.name}` : `已置顶项目：${project.name}`);
-      } else {
-        const fallback = applyPreviewProjectAction(workbenchState, project.id, action);
-        applyProjectActionSnapshot(fallback.snapshot);
-        toast.success(fallback.message);
+      if (action === "settings") {
+        setProjectSettingsTarget({ project });
+        return;
       }
+
+      const preview = applyPreviewProjectAction(workbenchState, project.id, action);
+      applyProjectActionSnapshot(preview.snapshot);
+      await toggleProjectPinned(project.id);
+      toast.success(project.pinned ? `已取消置顶项目：${project.name}` : `已置顶项目：${project.name}`);
     } catch (nextError) {
+      applyProjectActionSnapshot(workbenchState);
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
     }
   }, [applyProjectActionSnapshot, workbenchState]);
+
+  // handleProjectSettingsVmmSave persists the project-scoped VMM settings draft.
+  // handleProjectSettingsVmmSave 持久化项目级 VMM 设置草稿。
+  const handleProjectSettingsVmmSave = React.useCallback(async (projectId: string, draft: VmmConfigDraftSummary) => {
+    await applySkillWorkbenchAction(() => saveVmmMemoryConfig({ scope: "project", projectId, draft }));
+    toast.success("已保存项目 VMM 设置。");
+  }, [applySkillWorkbenchAction]);
+
+  // handleProjectSettingsAgentSkillSave persists one project Agent Skill override.
+  // handleProjectSettingsAgentSkillSave 持久化单个项目 Agent Skill 覆盖。
+  const handleProjectSettingsAgentSkillSave = React.useCallback(async (projectId: string, name: string, stateKey: ProjectAgentSkillState) => {
+    await setAgentSkillProjectState(projectId, name, stateKey);
+    toast.success(projectAgentSkillSaveMessage(name, stateKey));
+  }, []);
+
+  // handleSetAgentSkillsEnabled persists the global Agent Skills switch with a lightweight catalog refresh.
+  // handleSetAgentSkillsEnabled 使用轻量目录刷新持久化 Agent Skills 全局开关。
+  const handleSetAgentSkillsEnabled = React.useCallback(async (enabled: boolean) => {
+    const previousAgentSkills = workbenchState.agentSkills;
+    applyAgentSkillsCatalog({
+      ...previousAgentSkills,
+      globalEnabled: enabled,
+      skills: previousAgentSkills.skills.map((skill) => ({ ...skill, enabled: enabled && skill.enabled })),
+    });
+    try {
+      applyAgentSkillsCatalog(await setAgentSkillsEnabled(enabled));
+    } catch (error) {
+      applyAgentSkillsCatalog(previousAgentSkills);
+      throw error;
+    }
+  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
+
+  // handleSetAgentSkillEnabled persists one Agent Skill state with a lightweight catalog refresh.
+  // handleSetAgentSkillEnabled 使用轻量目录刷新持久化单个 Agent Skill 状态。
+  const handleSetAgentSkillEnabled = React.useCallback(async (name: string, enabled: boolean) => {
+    const previousAgentSkills = workbenchState.agentSkills;
+    applyAgentSkillsCatalog({
+      ...previousAgentSkills,
+      skills: previousAgentSkills.skills.map((skill) => (
+        skill.name === name ? { ...skill, enabled: enabled && previousAgentSkills.globalEnabled } : skill
+      )),
+    });
+    try {
+      applyAgentSkillsCatalog(await setAgentSkillEnabled(name, enabled));
+    } catch (error) {
+      applyAgentSkillsCatalog(previousAgentSkills);
+      throw error;
+    }
+  }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
 
   // handleProjectIconConfirm persists the selected project icon override.
   // handleProjectIconConfirm 持久化选择的项目图标覆盖。
@@ -2466,15 +2593,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       ? { pack: icon.pack, key: encodeProjectBadgeKey(decodeProjectBadgeKey(icon.key) ?? DEFAULT_PROJECT_BADGE_CONFIG) }
       : icon;
     try {
-      const snapshot = await setProjectIcon(project.id, normalizedIcon);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
-      } else {
-        applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
-      }
+      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, normalizedIcon).snapshot);
+      await setProjectIcon(project.id, normalizedIcon);
       setProjectIconTarget(null);
       toast.success(`已更新项目图标：${project.name}`);
     } catch (error) {
+      applyProjectActionSnapshot(workbenchState);
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }, [applyProjectActionSnapshot, workbenchState]);
@@ -2483,15 +2607,12 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // handleProjectIconReset 清除选择的项目图标覆盖。
   const handleProjectIconReset = React.useCallback(async (project: ProjectSummary) => {
     try {
-      const snapshot = await resetProjectIcon(project.id);
-      if (snapshot) {
-        applyProjectActionSnapshot(snapshot);
-      } else {
-        applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
-      }
+      applyProjectActionSnapshot(applyPreviewProjectIcon(workbenchState, project.id, null).snapshot);
+      await resetProjectIcon(project.id);
       setProjectIconTarget(null);
       toast.success(`已还原项目图标：${project.name}`);
     } catch (error) {
+      applyProjectActionSnapshot(workbenchState);
       toast.error(error instanceof Error ? error.message : String(error));
     }
   }, [applyProjectActionSnapshot, workbenchState]);
@@ -3192,8 +3313,8 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
               onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState)),
               onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
               onInstallSystemAgentSkills: () => applySkillWorkbenchAction(installSystemAgentSkills),
-              onSetAgentSkillsEnabled: (enabled) => applySkillWorkbenchAction(() => setAgentSkillsEnabled(enabled)),
-              onSetAgentSkillEnabled: (name, enabled) => applySkillWorkbenchAction(() => setAgentSkillEnabled(name, enabled)),
+              onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
+              onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
             }}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,
@@ -3220,6 +3341,15 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
         onCancel={() => setProjectIconTarget(null)}
         onConfirm={handleProjectIconConfirm}
         onReset={handleProjectIconReset}
+      />
+      <ProjectSettingsDialog
+        target={projectSettingsTarget}
+        workbench={workbenchState}
+        onCancel={() => setProjectSettingsTarget(null)}
+        onLoadAgentSkillOverrides={loadProjectAgentSkillOverrides}
+        onLoadVmmDraft={loadProjectVmmConfig}
+        onSaveVmmDraft={handleProjectSettingsVmmSave}
+        onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
       />
       <ArchiveProjectDialog
         conversationCount={archiveProjectTarget ? projectConversationCount(workbenchState, archiveProjectTarget.id) : 0}
@@ -4185,7 +4315,7 @@ function markConversationLocallyRead(workbench: WorkbenchSnapshot, conversationI
 
 // ProjectMenuAction names project-tree context menu commands.
 // ProjectMenuAction 命名项目树右键菜单命令。
-type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "set-icon" | "archive-conversations";
+type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "set-icon" | "archive-conversations" | "settings";
 
 // ProjectIconDialogTarget stores the project currently editing its icon.
 // ProjectIconDialogTarget 保存当前正在编辑图标的项目。
@@ -4593,6 +4723,14 @@ function webuiClickTrace(action: string, detail: Record<string, unknown> = {}): 
     // Ignore console failures from restricted WebView contexts.
     // 忽略受限 WebView 环境中的控制台失败。
   }
+}
+
+// ProjectSettingsDialogTarget stores the project currently shown in the settings dialog.
+// ProjectSettingsDialogTarget 保存当前显示设置弹窗的项目。
+interface ProjectSettingsDialogTarget {
+  // Project being configured by the settings dialog.
+  // 设置弹窗正在配置的项目。
+  project: ProjectSummary;
 }
 
 // directiveKinds maps Vulcan directive names to WebUI conversation block kinds.
@@ -7262,6 +7400,11 @@ function ProjectContextMenu(props: {
           <Minus size={15} />
           <span>移除</span>
         </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => props.onAction("settings", props.project)}>
+          <FolderCog size={15} />
+          <span>项目设置</span>
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );
@@ -7619,6 +7762,729 @@ function badgeShapeLabel(shape: ProjectIconBadgeShape): string {
     case "square":
       return "方形";
   }
+}
+
+// ProjectSettingsSectionId names the left-side categories in the project settings dialog.
+// ProjectSettingsSectionId 命名项目设置弹窗左侧分类。
+type ProjectSettingsSectionId = "overview" | "vmm" | "agent-skills" | "attachments";
+
+// ProjectSettingsSectionSummary describes one navigable settings category.
+// ProjectSettingsSectionSummary 描述单个可导航的设置分类。
+interface ProjectSettingsSectionSummary {
+  // Stable section identifier.
+  // 稳定分类标识。
+  id: ProjectSettingsSectionId;
+  // Icon rendered in the left navigation.
+  // 左侧导航中渲染的图标。
+  icon: React.ReactNode;
+  // Human-facing section label.
+  // 面向用户的分类名称。
+  label: string;
+  // Compact section description.
+  // 紧凑分类说明。
+  detail: string;
+}
+
+// ProjectAttachmentCleanupKinds stores the project cleanup type filters.
+// ProjectAttachmentCleanupKinds 保存项目清理类型筛选。
+interface ProjectAttachmentCleanupKinds {
+  // Whether managed image attachments are included.
+  // 是否包含托管图片附件。
+  image: boolean;
+  // Whether managed audio attachments are included.
+  // 是否包含托管音频附件。
+  audio: boolean;
+  // Whether managed video attachments are included.
+  // 是否包含托管视频附件。
+  video: boolean;
+  // Whether managed PDF attachments are included.
+  // 是否包含托管 PDF 附件。
+  pdf: boolean;
+}
+
+// ProjectAgentSkillState names one project-level Agent Skill tri-state.
+// ProjectAgentSkillState 命名单个项目级 Agent Skill 三态。
+type ProjectAgentSkillState = "inherit" | "enabled" | "disabled";
+
+// ProjectAttachmentCleanupRequest describes one project attachment cleanup command.
+// ProjectAttachmentCleanupRequest 描述单个项目附件清理命令。
+interface ProjectAttachmentCleanupRequest {
+  // Stable project identifier owning the cleanup command.
+  // 拥有清理命令的稳定项目标识。
+  projectId: string;
+  // Local cutoff date in YYYY-MM-DD format.
+  // YYYY-MM-DD 格式的本地截止日期。
+  cutoffDate: string;
+  // Attachment-kind filters selected by the user.
+  // 用户选择的附件类型筛选。
+  selection: ProjectAttachmentCleanupKinds;
+}
+
+// ProjectAttachmentCleanupPreviewSummary describes a cleanup preview returned by the service.
+// ProjectAttachmentCleanupPreviewSummary 描述服务返回的清理预览。
+interface ProjectAttachmentCleanupPreviewSummary {
+  // Cutoff date applied by the preview.
+  // 预览使用的截止日期。
+  cutoffDate: string;
+  // Total matched attachment asset count.
+  // 匹配的附件资产总数。
+  matchedAssetCount: number;
+  // Human-readable matched byte count.
+  // 匹配字节数的人类可读文本。
+  matchedByteLenLabel: string;
+  // Unique session count impacted by matched assets.
+  // 受匹配资产影响的唯一会话数量。
+  impactedSessionCount: number;
+  // Per-kind matched asset counts.
+  // 按类型统计的匹配资产数。
+  perKindCounts: Record<string, number>;
+  // One-line user-facing summary.
+  // 面向用户的一行摘要。
+  summary: string;
+}
+
+// ProjectAttachmentCleanupReportSummary describes a cleanup execution report returned by the service.
+// ProjectAttachmentCleanupReportSummary 描述服务返回的清理执行报告。
+interface ProjectAttachmentCleanupReportSummary {
+  // Cutoff date applied by the execution.
+  // 执行使用的截止日期。
+  cutoffDate: string;
+  // Total purged attachment asset count.
+  // 被清理的附件资产总数。
+  purgedAssetCount: number;
+  // Total deleted managed file count.
+  // 已删除的托管文件总数。
+  deletedFileCount: number;
+  // Total managed files already missing before cleanup.
+  // 清理前已经缺失的托管文件总数。
+  alreadyMissingFileCount: number;
+  // Total managed files that could not be deleted.
+  // 未能删除的托管文件总数。
+  failedDeleteCount: number;
+  // Human-readable purged byte count.
+  // 清理字节数的人类可读文本。
+  purgedByteLenLabel: string;
+  // Unique session count impacted by purged assets.
+  // 受清理资产影响的唯一会话数量。
+  impactedSessionCount: number;
+  // One-line user-facing summary.
+  // 面向用户的一行摘要。
+  summary: string;
+}
+
+// ProjectSettingsDialog renders project-level settings migrated from the iced workbench.
+// ProjectSettingsDialog 渲染从 iced 工作台迁移来的项目级设置。
+function ProjectSettingsDialog(props: {
+  // Project currently edited by this dialog.
+  // 当前弹窗正在编辑的项目。
+  target: ProjectSettingsDialogTarget | null;
+  // Workbench snapshot supplying catalogs and counters.
+  // 提供目录与计数的工作台快照。
+  workbench: WorkbenchSnapshot;
+  // Closes the dialog without forcing a save.
+  // 关闭弹窗且不强制保存。
+  onCancel: () => void;
+  // Loads project Agent Skill overrides.
+  // 加载项目 Agent Skill 覆盖。
+  onLoadAgentSkillOverrides: (projectId: string) => Promise<Record<string, string>>;
+  // Loads the project VMM draft.
+  // 加载项目 VMM 草稿。
+  onLoadVmmDraft: (projectId: string) => Promise<VmmConfigDraftSummary>;
+  // Saves the project VMM draft.
+  // 保存项目 VMM 草稿。
+  onSaveVmmDraft: (projectId: string, draft: VmmConfigDraftSummary) => Promise<void>;
+  // Saves one project Agent Skill tri-state override.
+  // 保存单个项目 Agent Skill 三态覆盖。
+  onSetAgentSkillState: (projectId: string, name: string, stateKey: ProjectAgentSkillState) => Promise<void>;
+}) {
+  const project = props.target?.project ?? null;
+  // activeSection stores the selected settings category.
+  // activeSection 保存当前选中的设置分类。
+  const [activeSection, setActiveSection] = React.useState<ProjectSettingsSectionId>("overview");
+  // vmmDraft stores the editable project-level VMM configuration.
+  // vmmDraft 保存可编辑的项目级 VMM 配置。
+  const [vmmDraft, setVmmDraft] = React.useState<VmmConfigDraftSummary | null>(null);
+  // vmmBusy stores the current VMM load or save phase.
+  // vmmBusy 保存当前 VMM 加载或保存阶段。
+  const [vmmBusy, setVmmBusy] = React.useState<"idle" | "loading" | "saving">("idle");
+  // agentOverrides stores project-local Agent Skill override states.
+  // agentOverrides 保存项目本地 Agent Skill 覆盖状态。
+  const [agentOverrides, setAgentOverrides] = React.useState<Record<string, string>>({});
+  // agentLoading records whether the Agent Skill override map is loading.
+  // agentLoading 记录 Agent Skill 覆盖映射是否正在加载。
+  const [agentLoading, setAgentLoading] = React.useState(false);
+  // agentBusySkill stores the Agent Skill currently being saved.
+  // agentBusySkill 保存当前正在保存的 Agent Skill。
+  const [agentBusySkill, setAgentBusySkill] = React.useState<string | null>(null);
+  // cleanupKinds stores selected attachment families for cleanup preview.
+  // cleanupKinds 保存附件清理预览选择的附件类型。
+  const [cleanupKinds, setCleanupKinds] = React.useState<ProjectAttachmentCleanupKinds>({
+    image: true,
+    audio: true,
+    video: true,
+    pdf: true,
+  });
+  // cleanupCutoffDate stores the project cleanup cutoff date text.
+  // cleanupCutoffDate 保存项目清理截止日期文本。
+  const [cleanupCutoffDate, setCleanupCutoffDate] = React.useState("");
+  // cleanupNotice stores the modal-local attachment cleanup status.
+  // cleanupNotice 保存弹窗内的附件清理状态。
+  const [cleanupNotice, setCleanupNotice] = React.useState("选择截止日期和附件类型后可预览当前项目的托管附件清理范围。");
+  // cleanupBusy stores the current attachment cleanup phase.
+  // cleanupBusy 保存当前附件清理阶段。
+  const [cleanupBusy, setCleanupBusy] = React.useState<"idle" | "preview" | "execute">("idle");
+  // cleanupPreview stores the latest successful cleanup preview.
+  // cleanupPreview 保存最近一次成功的清理预览。
+  const [cleanupPreview, setCleanupPreview] = React.useState<ProjectAttachmentCleanupPreviewSummary | null>(null);
+  // cleanupReport stores the latest successful cleanup execution report.
+  // cleanupReport 保存最近一次成功的清理执行报告。
+  const [cleanupReport, setCleanupReport] = React.useState<ProjectAttachmentCleanupReportSummary | null>(null);
+
+  React.useEffect(() => {
+    if (!project) {
+      return;
+    }
+    let cancelled = false;
+    setActiveSection("overview");
+    setVmmDraft(null);
+    setVmmBusy("loading");
+    setAgentOverrides({});
+    setAgentLoading(true);
+    setAgentBusySkill(null);
+    setCleanupKinds({ image: true, audio: true, video: true, pdf: true });
+    setCleanupCutoffDate(new Date().toISOString().slice(0, 10));
+    setCleanupNotice("选择截止日期和附件类型后可预览当前项目的托管附件清理范围。");
+    setCleanupBusy("idle");
+    setCleanupPreview(null);
+    setCleanupReport(null);
+
+    void props.onLoadVmmDraft(project.id)
+      .then((draft) => {
+        if (!cancelled) {
+          setVmmDraft(draft);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setVmmBusy("idle");
+        }
+      });
+
+    void props.onLoadAgentSkillOverrides(project.id)
+      .then((overrides) => {
+        if (!cancelled) {
+          setAgentOverrides(overrides);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAgentLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [project, props.onLoadAgentSkillOverrides, props.onLoadVmmDraft]);
+
+  if (!project) {
+    return null;
+  }
+
+  const sections = projectSettingsSections(project, props.workbench);
+  const attachmentRoot = projectAttachmentRoot(project);
+  const conversationCount = projectConversationCount(props.workbench, project.id);
+
+  // updateVmmDraft applies a partial edit to the current VMM draft.
+  // updateVmmDraft 将局部编辑应用到当前 VMM 草稿。
+  const updateVmmDraft = (patch: Partial<VmmConfigDraftSummary>) => {
+    setVmmDraft((current) => current ? { ...current, ...patch } : current);
+  };
+
+  // saveVmmDraft persists the current VMM draft through the host.
+  // saveVmmDraft 通过宿主持久化当前 VMM 草稿。
+  const saveVmmDraft = async () => {
+    if (!vmmDraft) {
+      return;
+    }
+    try {
+      setVmmBusy("saving");
+      await props.onSaveVmmDraft(project.id, vmmDraft);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setVmmBusy("idle");
+    }
+  };
+
+  // setProjectAgentSkill persists one Agent Skill project tri-state override optimistically.
+  // setProjectAgentSkill 乐观持久化单个 Agent Skill 项目三态覆盖。
+  const setProjectAgentSkill = async (name: string, stateKey: ProjectAgentSkillState) => {
+    const previousOverrides = agentOverrides;
+    setAgentOverrides((current) => {
+      const next = { ...current };
+      if (stateKey === "inherit") {
+        delete next[name];
+      } else {
+        next[name] = stateKey;
+      }
+      return next;
+    });
+    setAgentBusySkill(name);
+    try {
+      await props.onSetAgentSkillState(project.id, name, stateKey);
+    } catch (error) {
+      setAgentOverrides(previousOverrides);
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setAgentBusySkill(null);
+    }
+  };
+
+  // cleanupRequest builds the current attachment cleanup command payload.
+  // cleanupRequest 构建当前附件清理命令载荷。
+  const cleanupRequest = (): ProjectAttachmentCleanupRequest => ({
+    projectId: project.id,
+    cutoffDate: cleanupCutoffDate,
+    selection: cleanupKinds,
+  });
+
+  // previewCleanup loads the current project attachment cleanup preview.
+  // previewCleanup 加载当前项目附件清理预览。
+  const previewCleanup = async () => {
+    try {
+      setCleanupBusy("preview");
+      const preview = await previewProjectAttachmentCleanup(cleanupRequest());
+      setCleanupPreview(preview);
+      setCleanupReport(null);
+      setCleanupNotice(preview.summary);
+    } catch (error) {
+      setCleanupPreview(null);
+      setCleanupNotice(error instanceof Error ? error.message : String(error));
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCleanupBusy("idle");
+    }
+  };
+
+  // executeCleanup executes the cleanup represented by the latest matching preview.
+  // executeCleanup 执行最近一次匹配预览代表的清理。
+  const executeCleanup = async () => {
+    try {
+      setCleanupBusy("execute");
+      const report = await executeProjectAttachmentCleanup(cleanupRequest());
+      setCleanupReport(report);
+      setCleanupPreview(null);
+      setCleanupNotice(report.summary);
+      toast.success("项目附件缓存清理已完成。");
+    } catch (error) {
+      setCleanupNotice(error instanceof Error ? error.message : String(error));
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCleanupBusy("idle");
+    }
+  };
+
+  // cleanupPreviewMatchesCurrent gates destructive execution behind a fresh positive preview.
+  // cleanupPreviewMatchesCurrent 用最近一次有效正向预览控制破坏性执行入口。
+  const cleanupPreviewMatchesCurrent = cleanupPreview
+    && cleanupPreview.cutoffDate === cleanupCutoffDate
+    && cleanupPreview.matchedAssetCount > 0;
+
+  return (
+    <Dialog open={Boolean(project)} onOpenChange={(open) => !open && props.onCancel()}>
+      <DialogContent className="project-settings-dialog">
+        <DialogHeader>
+          <DialogTitle>项目设置：{project.name}</DialogTitle>
+          <DialogDescription>项目级配置与缓存清理只作用于当前项目空间。</DialogDescription>
+        </DialogHeader>
+        <div className="project-settings-layout">
+          <nav className="project-settings-nav" aria-label="项目设置分类">
+            {sections.map((section) => (
+              <button
+                className={cn("project-settings-nav-button", activeSection === section.id && "active")}
+                key={section.id}
+                onClick={() => setActiveSection(section.id)}
+                type="button"
+              >
+                {section.icon}
+                <span>
+                  <strong>{section.label}</strong>
+                  <small>{section.detail}</small>
+                </span>
+              </button>
+            ))}
+          </nav>
+          <section className="project-settings-content">
+            {activeSection === "overview" ? (
+              <div className="project-settings-section">
+                <div className="project-settings-summary">
+                  <FolderCog size={22} />
+                  <div>
+                    <strong>{project.name}</strong>
+                    <span>{project.path}</span>
+                  </div>
+                </div>
+                <div className="project-settings-grid">
+                  <div className="project-settings-panel">
+                    <strong>项目空间</strong>
+                    <p>项目标识：{project.id}</p>
+                    <p>对话数量：{conversationCount}</p>
+                    <p>置顶状态：{project.pinned ? "已置顶" : "未置顶"}</p>
+                  </div>
+                  <div className="project-settings-panel">
+                    <strong>附件缓存</strong>
+                    <p>{attachmentRoot}</p>
+                  </div>
+                  <div className="project-settings-panel">
+                    <strong>VMM 记忆</strong>
+                    <p>{vmmDraft?.hasOverride ? "当前项目已启用独立覆盖。" : "当前项目继承全局 VMM 设置。"}</p>
+                  </div>
+                  <div className="project-settings-panel">
+                    <strong>Agent Skills</strong>
+                    <p>{Object.keys(agentOverrides).length > 0 ? `当前项目有 ${Object.keys(agentOverrides).length} 条覆盖。` : "未设置项目级覆盖，继承全局规则。"}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {activeSection === "vmm" ? (
+              <div className="project-settings-section">
+                <header className="project-settings-heading">
+                  <BrainCircuit size={18} />
+                  <div>
+                    <strong>项目级 VMM 记忆</strong>
+                    <span>覆盖当前项目的记忆开关、用户/项目映射与召回注入参数。</span>
+                  </div>
+                </header>
+                {vmmBusy === "loading" || !vmmDraft ? (
+                  <p className="project-settings-muted">正在加载项目 VMM 设置...</p>
+                ) : (
+                  <>
+                    <label className="project-settings-toggle-row">
+                      <input
+                        checked={vmmDraft.hasOverride}
+                        onChange={(event) => updateVmmDraft({ hasOverride: event.target.checked })}
+                        type="checkbox"
+                      />
+                      <span>
+                        <strong>启用项目覆盖</strong>
+                        <small>{vmmDraft.hasOverride ? "保存后当前项目使用下方设置。" : "保存后清空项目覆盖并继承全局设置。"}</small>
+                      </span>
+                    </label>
+                    <div className={cn("project-settings-form-grid", !vmmDraft.hasOverride && "disabled")}>
+                      <label className="project-settings-check-row">
+                        <input checked={vmmDraft.enabled} disabled={!vmmDraft.hasOverride} onChange={(event) => updateVmmDraft({ enabled: event.target.checked })} type="checkbox" />
+                        启用记忆连接
+                      </label>
+                      <label className="project-settings-check-row">
+                        <input checked={vmmDraft.aiToolsEnabled} disabled={!vmmDraft.hasOverride} onChange={(event) => updateVmmDraft({ aiToolsEnabled: event.target.checked })} type="checkbox" />
+                        暴露 AI 工具
+                      </label>
+                      <label className="project-settings-check-row">
+                        <input checked={vmmDraft.precheckEnabled} disabled={!vmmDraft.hasOverride} onChange={(event) => updateVmmDraft({ precheckEnabled: event.target.checked })} type="checkbox" />
+                        自动前置召回
+                      </label>
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="用户 ID" value={vmmDraft.userId} onChange={(userId) => updateVmmDraft({ userId })} />
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="项目 ID" value={vmmDraft.projectId} onChange={(projectId) => updateVmmDraft({ projectId })} />
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="临时记忆 TTL" value={vmmDraft.implicitMemoryTurns} onChange={(implicitMemoryTurns) => updateVmmDraft({ implicitMemoryTurns })} />
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="画像刷新间隔" value={vmmDraft.profileRefreshTurns} onChange={(profileRefreshTurns) => updateVmmDraft({ profileRefreshTurns })} />
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="画像节点上限" value={vmmDraft.profileNodeLimit} onChange={(profileNodeLimit) => updateVmmDraft({ profileNodeLimit })} />
+                      <ProjectSettingsField disabled={!vmmDraft.hasOverride} label="注入标签" value={vmmDraft.injectionTag} onChange={(injectionTag) => updateVmmDraft({ injectionTag })} />
+                      <label className="project-settings-field wide">
+                        <span>注入说明</span>
+                        <Textarea disabled={!vmmDraft.hasOverride} value={vmmDraft.injectionDescription} onChange={(event) => updateVmmDraft({ injectionDescription: event.target.value })} />
+                      </label>
+                    </div>
+                    <p className="project-settings-muted">项目级设置继承全局 gRPC 连接与 API Key；连接参数请在 VMM 记忆的全局配置中调整。</p>
+                    <div className="project-settings-actions">
+                      <Button disabled={vmmBusy === "saving"} onClick={() => void saveVmmDraft()} type="button">
+                        <Save size={15} />
+                        {vmmBusy === "saving" ? "保存中" : "保存 VMM 设置"}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : null}
+
+            {activeSection === "agent-skills" ? (
+              <div className="project-settings-section">
+                <header className="project-settings-heading">
+                  <Bot size={18} />
+                  <div>
+                    <strong>项目级 Agent Skills</strong>
+                    <span>对系统与用户提示词技能建立当前项目专属启停覆盖。</span>
+                  </div>
+                </header>
+                <div className="project-settings-panel compact">
+                  <StatusPill status={props.workbench.agentSkills.globalEnabled ? "ready" : "pending"} label={props.workbench.agentSkills.globalEnabled ? "全局已启用" : "全局已关闭"} />
+                  <p>{props.workbench.agentSkills.notice}</p>
+                </div>
+                {agentLoading ? (
+                  <p className="project-settings-muted">正在加载项目技能覆盖...</p>
+                ) : props.workbench.agentSkills.skills.length === 0 ? (
+                  <p className="project-settings-muted">系统与用户目录暂未发现提示词技能。</p>
+                ) : (
+                  <div className="project-settings-skill-list">
+                    {props.workbench.agentSkills.skills.map((skill) => {
+                      const projectState = projectAgentSkillCurrentState(agentOverrides[skill.name]);
+                      return (
+                        <article className="project-settings-skill-row" key={skill.name}>
+                          <span>
+                            <strong>{skill.displayName || skill.name}</strong>
+                            <small>{skill.description || skill.skillFile}</small>
+                          </span>
+                          <StatusPill status={projectState === "inherit" ? "pending" : "ready"} label={projectAgentSkillStateLabel(skill.enabled, projectState)} />
+                          <div className="project-settings-segmented" role="group" aria-label={`${skill.displayName || skill.name} 项目状态`}>
+                            {(["inherit", "enabled", "disabled"] as ProjectAgentSkillState[]).map((stateKey) => (
+                              <button
+                                className={cn("project-settings-segmented-button", projectState === stateKey && "active")}
+                                disabled={agentBusySkill === skill.name}
+                                key={stateKey}
+                                onClick={() => void setProjectAgentSkill(skill.name, stateKey)}
+                                type="button"
+                              >
+                                {projectAgentSkillOptionLabel(stateKey, skill.enabled)}
+                              </button>
+                            ))}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {activeSection === "attachments" ? (
+              <div className="project-settings-section">
+                <header className="project-settings-heading">
+                  <Database size={18} />
+                  <div>
+                    <strong>项目附件缓存清理</strong>
+                    <span>按日期和附件类型筛选当前项目的托管历史附件。</span>
+                  </div>
+                </header>
+                <div className="project-settings-panel">
+                  <strong>托管目录</strong>
+                  <p>{attachmentRoot}</p>
+                </div>
+                <div className="project-settings-cleanup-grid">
+                  <label className="project-settings-field">
+                    <span>截止日期</span>
+                    <Input
+                      value={cleanupCutoffDate}
+                      onChange={(event) => {
+                        setCleanupCutoffDate(event.target.value);
+                        setCleanupPreview(null);
+                      }}
+                      type="date"
+                    />
+                  </label>
+                  <div className="project-settings-kind-grid">
+                    {(["image", "audio", "video", "pdf"] as const).map((kind) => (
+                      <label className="project-settings-check-row" key={kind}>
+                        <input
+                          checked={cleanupKinds[kind]}
+                          onChange={(event) => {
+                            setCleanupKinds((current) => ({ ...current, [kind]: event.target.checked }));
+                            setCleanupPreview(null);
+                          }}
+                          type="checkbox"
+                        />
+                        {projectAttachmentKindLabel(kind)}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="project-settings-actions">
+                  <Button
+                    disabled={cleanupBusy !== "idle"}
+                    onClick={() => void previewCleanup()}
+                    type="button"
+                    variant="secondary"
+                  >
+                    <Calendar size={15} />
+                    {cleanupBusy === "preview" ? "预览中" : "预览清理范围"}
+                  </Button>
+                  <Button disabled={!cleanupPreviewMatchesCurrent || cleanupBusy !== "idle"} onClick={() => void executeCleanup()} type="button">
+                    <Trash2 size={15} />
+                    {cleanupBusy === "execute" ? "清理中" : "执行清理"}
+                  </Button>
+                </div>
+                <div className="project-settings-panel compact">
+                  <strong>最近一次预览</strong>
+                  <p>{cleanupPreview ? cleanupPreview.summary : cleanupNotice}</p>
+                </div>
+                <div className="project-settings-panel compact">
+                  <strong>最近一次执行</strong>
+                  <p>{cleanupReport ? cleanupReport.summary : "尚未执行历史附件缓存清理。"}</p>
+                </div>
+              </div>
+            ) : null}
+          </section>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ProjectSettingsField renders one labeled text input inside project settings.
+// ProjectSettingsField 渲染项目设置中的单个带标签文本输入。
+function ProjectSettingsField(props: {
+  // Whether the input is disabled.
+  // 输入框是否禁用。
+  disabled?: boolean;
+  // Field label.
+  // 字段标签。
+  label: string;
+  // Field value.
+  // 字段值。
+  value: string;
+  // Updates the field value.
+  // 更新字段值。
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="project-settings-field">
+      <span>{props.label}</span>
+      <Input disabled={props.disabled} value={props.value} onChange={(event) => props.onChange(event.target.value)} />
+    </label>
+  );
+}
+
+// projectSettingsSections builds the left-side project settings navigation.
+// projectSettingsSections 构建项目设置左侧导航。
+function projectSettingsSections(project: ProjectSummary, workbench: WorkbenchSnapshot): ProjectSettingsSectionSummary[] {
+  return [
+    {
+      id: "overview",
+      icon: <FolderCog size={16} />,
+      label: "概览",
+      detail: project.pinned ? "已置顶项目" : "项目空间摘要",
+    },
+    {
+      id: "vmm",
+      icon: <BrainCircuit size={16} />,
+      label: "VMM 记忆",
+      detail: workbench.vmmMemory.projectDraft.hasOverride ? "项目覆盖" : "继承全局",
+    },
+    {
+      id: "agent-skills",
+      icon: <Bot size={16} />,
+      label: "Agent Skills",
+      detail: `${workbench.agentSkills.skills.length} 个提示词技能`,
+    },
+    {
+      id: "attachments",
+      icon: <Database size={16} />,
+      label: "附件缓存",
+      detail: "历史附件清理",
+    },
+  ];
+}
+
+// projectAttachmentRoot returns the managed attachment directory shown for a project.
+// projectAttachmentRoot 返回项目展示的托管附件目录。
+function projectAttachmentRoot(project: ProjectSummary): string {
+  const separator = project.path.includes("\\") ? "\\" : "/";
+  return `${project.path.replace(/[\\/]+$/, "")}${separator}.vulcan${separator}code${separator}attachments`;
+}
+
+// projectAgentSkillCurrentState normalizes one stored project Agent Skill override.
+// projectAgentSkillCurrentState 归一化单个已存储的项目 Agent Skill 覆盖。
+function projectAgentSkillCurrentState(overrideState?: string): ProjectAgentSkillState {
+  if (overrideState === "enabled" || overrideState === "disabled") {
+    return overrideState;
+  }
+  return "inherit";
+}
+
+// projectAgentSkillStateLabel returns the status label for one Agent Skill row.
+// projectAgentSkillStateLabel 返回单个 Agent Skill 行的状态标签。
+function projectAgentSkillStateLabel(inheritedEnabled: boolean, stateKey: ProjectAgentSkillState): string {
+  if (stateKey === "enabled") {
+    return "项目启用";
+  }
+  if (stateKey === "disabled") {
+    return "项目关闭";
+  }
+  return inheritedEnabled ? "继承启用" : "继承关闭";
+}
+
+// projectAgentSkillOptionLabel returns the segmented-control label for one project state.
+// projectAgentSkillOptionLabel 返回单个项目状态的分段控件标签。
+function projectAgentSkillOptionLabel(stateKey: ProjectAgentSkillState, inheritedEnabled: boolean): string {
+  if (stateKey === "inherit") {
+    return inheritedEnabled ? "继承全局（启用）" : "继承全局（关闭）";
+  }
+  if (stateKey === "enabled") {
+    return "启用";
+  }
+  return "关闭";
+}
+
+// projectAgentSkillSaveMessage returns the toast message for one project state save.
+// projectAgentSkillSaveMessage 返回单个项目状态保存后的提示消息。
+function projectAgentSkillSaveMessage(name: string, stateKey: ProjectAgentSkillState): string {
+  if (stateKey === "inherit") {
+    return `已将 ${name} 改为继承全局设置`;
+  }
+  return stateKey === "enabled" ? `已在项目中启用 ${name}` : `已在项目中关闭 ${name}`;
+}
+
+// projectAttachmentKindLabel returns the localized label for an attachment kind.
+// projectAttachmentKindLabel 返回附件类型的本地化标签。
+function projectAttachmentKindLabel(kind: keyof ProjectAttachmentCleanupKinds): string {
+  switch (kind) {
+    case "image":
+      return "图片";
+    case "audio":
+      return "音频";
+    case "video":
+      return "视频";
+    case "pdf":
+      return "PDF";
+  }
+}
+
+// projectAttachmentPreviewFallback builds a no-op cleanup preview for browser-only mode.
+// projectAttachmentPreviewFallback 为纯浏览器模式构建无副作用清理预览。
+function projectAttachmentPreviewFallback(request: ProjectAttachmentCleanupRequest): ProjectAttachmentCleanupPreviewSummary {
+  const selectedKinds = projectAttachmentSelectedKindLabels(request.selection);
+  let summary = `预览模式将检查 ${request.cutoffDate} 之前的 ${selectedKinds.join("、")} 托管附件。`;
+  if (!request.cutoffDate) {
+    summary = "请选择有效的截止日期。";
+  } else if (selectedKinds.length === 0) {
+    summary = "至少选择一种附件类型后才能预览。";
+  }
+  return {
+    cutoffDate: request.cutoffDate,
+    matchedAssetCount: 0,
+    matchedByteLenLabel: "0 B",
+    impactedSessionCount: 0,
+    perKindCounts: {},
+    summary,
+  };
+}
+
+// projectAttachmentSelectedKindLabels returns selected cleanup-kind labels.
+// projectAttachmentSelectedKindLabels 返回选中的清理类型标签。
+function projectAttachmentSelectedKindLabels(kinds: ProjectAttachmentCleanupKinds): string[] {
+  return (Object.keys(kinds) as Array<keyof ProjectAttachmentCleanupKinds>)
+    .filter((kind) => kinds[kind])
+    .map(projectAttachmentKindLabel);
 }
 
 // ArchiveProjectDialog confirms bulk conversation archiving for one project.

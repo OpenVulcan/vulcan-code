@@ -29,6 +29,14 @@ import {
 
 import { PanelTitle, StatusIcon, StatusPill } from "@/components/shared/status"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
@@ -117,6 +125,21 @@ interface MemoryActionProps {
 // SkillSubAreaId 标识当前选中的技能管理分类。
 type SkillSubAreaId = "lua" | "agent"
 
+// MemorySubAreaId identifies the selected VMM memory management page.
+// MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
+type MemorySubAreaId = string
+
+// SkillHeaderSummary describes the active skill page header copy.
+// SkillHeaderSummary 描述当前技能页标题文案。
+interface SkillHeaderSummary {
+  // Header title shown on the first line.
+  // 第一行展示的标题。
+  title: string
+  // Compact metrics shown on the second line.
+  // 第二行展示的紧凑统计。
+  detail: string
+}
+
 // FeatureShell renders non-console pages with the same sidebar and inset structure as the console.
 // FeatureShell 使用与控制台一致的侧栏和内容框结构渲染非控制台页面。
 function FeatureShell(props: {
@@ -148,31 +171,75 @@ function FeatureShell(props: {
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
   const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("lua")
+  // activeMemorySubArea keeps VMM left navigation and content synchronized.
+  // activeMemorySubArea 保持 VMM 左侧导航与内容区域同步。
+  const [activeMemorySubArea, setActiveMemorySubArea] = React.useState<MemorySubAreaId>("status")
+  // luaInstallDialogOpen controls the standalone LuaSkills install dialog.
+  // luaInstallDialogOpen 控制独立 LuaSkills 安装弹窗。
+  const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false)
+  // showLuaInstallAction decides whether the header should expose the LuaSkills install entry.
+  // showLuaInstallAction 决定标题栏是否展示 LuaSkills 安装入口。
+  const showLuaInstallAction = props.activeArea === "skills" && activeSkillSubArea === "lua"
+  // skillHeaderSummary stores the active skill page title and compact metrics.
+  // skillHeaderSummary 保存当前技能页标题与紧凑统计。
+  const skillHeaderSummary = props.activeArea === "skills"
+    ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench)
+    : null
+  // headerFeature overrides the generic feature title while a skill sub page is active.
+  // headerFeature 在技能子页面激活时覆盖通用功能标题。
+  const headerFeature = skillHeaderSummary
+    ? {
+      ...(props.activeFeature ?? { id: "skills" as MainAreaId, label: "技能", description: "", status: "" }),
+      label: skillHeaderSummary.title,
+      description: skillHeaderSummary.detail,
+    }
+    : props.activeFeature
 
   return (
     <SidebarProvider className="console-shell feature-shell">
       <FeatureSidebar
         activeArea={props.activeArea}
+        activeMemorySubArea={activeMemorySubArea}
         activeSkillSubArea={activeSkillSubArea}
         activeSettingsSubArea={props.activeSettingsSubArea}
+        onSelectMemorySubArea={setActiveMemorySubArea}
         onSelectSkillSubArea={setActiveSkillSubArea}
         onSelectSettingsSubArea={props.onSelectSettingsSubArea}
         workbench={props.workbench}
       />
       <SidebarInset>
         <div className="feature-main-shell">
-          <FeatureHeader feature={props.activeFeature} />
+          <FeatureHeader
+            action={showLuaInstallAction ? (
+              <div className="feature-header-actions">
+                <button className="skill-action-button secondary" onClick={() => void props.skillActions.onRefreshLuaSkills()} type="button">
+                  <RefreshCw size={15} />
+                  <span>刷新</span>
+                </button>
+                <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
+                  <PackagePlus size={15} />
+                  <span>安装 LuaSkills</span>
+                </button>
+              </div>
+            ) : null}
+            feature={headerFeature}
+          />
           <FeatureContent
           activeArea={props.activeArea}
+          activeMemorySubArea={activeMemorySubArea}
           activeSkillSubArea={activeSkillSubArea}
           activeSettingsSubArea={props.activeSettingsSubArea}
-          onSelectSkillSubArea={setActiveSkillSubArea}
           memoryActions={props.memoryActions}
           skillActions={props.skillActions}
           startup={props.startup}
           workbench={props.workbench}
           />
         </div>
+        <LuaSkillInstallDialog
+          actions={props.skillActions}
+          open={luaInstallDialogOpen}
+          onOpenChange={setLuaInstallDialogOpen}
+        />
       </SidebarInset>
     </SidebarProvider>
   )
@@ -181,6 +248,9 @@ function FeatureShell(props: {
 // FeatureHeader renders the inset title bar for a non-console page.
 // FeatureHeader 渲染非控制台页面的内容区标题栏。
 function FeatureHeader(props: {
+  // Optional right-side action rendered in the feature header.
+  // 渲染在功能标题栏右侧的可选操作。
+  action?: React.ReactNode
   // Feature metadata displayed in the header.
   // 标题栏中展示的功能元数据。
   feature?: FeatureAreaSummary
@@ -190,9 +260,12 @@ function FeatureHeader(props: {
       <div className="console-header-main">
         <SidebarTrigger />
         <span className="console-header-separator" aria-hidden="true" />
-        <h1>{props.feature?.label ?? "工作台"}</h1>
+        <div className="feature-header-title-stack">
+          <h1>{props.feature?.label ?? "工作台"}</h1>
+          {props.feature?.description ? <small>{props.feature.description}</small> : null}
+        </div>
       </div>
-      <span className="feature-header-description">{props.feature?.description}</span>
+      {props.action}
     </header>
   )
 }
@@ -203,6 +276,9 @@ function FeatureSidebar(props: {
   // Active top-level area.
   // 当前顶层区域。
   activeArea: MainAreaId
+  // Selected VMM memory sub page.
+  // 当前选中的 VMM 记忆子页面。
+  activeMemorySubArea: MemorySubAreaId
   // Selected skill sub page.
   // 当前选中的技能子页面。
   activeSkillSubArea: SkillSubAreaId
@@ -212,6 +288,9 @@ function FeatureSidebar(props: {
   // Updates the selected skill sub page.
   // 更新选中的技能子页面。
   onSelectSkillSubArea: (area: SkillSubAreaId) => void
+  // Updates the selected VMM memory sub page.
+  // 更新选中的 VMM 记忆子页面。
+  onSelectMemorySubArea: (area: MemorySubAreaId) => void
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
@@ -243,7 +322,9 @@ function FeatureSidebar(props: {
         ) : (
           <FeatureOverviewMenu
             activeArea={props.activeArea}
+            activeMemorySubArea={props.activeMemorySubArea}
             activeSkillSubArea={props.activeSkillSubArea}
+            onSelectMemorySubArea={props.onSelectMemorySubArea}
             onSelectSkillSubArea={props.onSelectSkillSubArea}
             workbench={props.workbench}
           />
@@ -259,12 +340,18 @@ function FeatureOverviewMenu(props: {
   // Active feature area used to choose overview rows.
   // 用于选择概览行的当前功能区域。
   activeArea: MainAreaId
+  // Selected VMM memory sub page.
+  // 当前选中的 VMM 记忆子页面。
+  activeMemorySubArea: MemorySubAreaId
   // Selected skill sub page.
   // 当前选中的技能子页面。
   activeSkillSubArea: SkillSubAreaId
   // Updates the selected skill sub page.
   // 更新选中的技能子页面。
   onSelectSkillSubArea: (area: SkillSubAreaId) => void
+  // Updates the selected VMM memory sub page.
+  // 更新选中的 VMM 记忆子页面。
+  onSelectMemorySubArea: (area: MemorySubAreaId) => void
   // Workbench snapshot used for row counters.
   // 行计数使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -288,6 +375,19 @@ function FeatureOverviewMenu(props: {
                     props.onSelectSkillSubArea(subArea)
                   }
                 }}
+                tooltip={row.detail}
+              >
+                {row.icon}
+                <span className="vcn-sidebar-label">
+                  <strong>{row.label}</strong>
+                  <small>{row.detail}</small>
+                </span>
+              </SidebarMenuButton>
+            ) : props.activeArea === "memory" ? (
+              <SidebarMenuButton
+                active={row.id === props.activeMemorySubArea}
+                className="feature-sidebar-row"
+                onClick={() => props.onSelectMemorySubArea(row.id)}
                 tooltip={row.detail}
               >
                 {row.icon}
@@ -354,15 +454,15 @@ function FeatureContent(props: {
   // Active top-level feature area.
   // 当前顶层功能区域。
   activeArea: MainAreaId
+  // Selected VMM memory sub page.
+  // 当前选中的 VMM 记忆子页面。
+  activeMemorySubArea: MemorySubAreaId
   // Selected skill sub page.
   // 当前选中的技能子页面。
   activeSkillSubArea: SkillSubAreaId
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
-  // Updates the selected skill sub page.
-  // 更新选中的技能子页面。
-  onSelectSkillSubArea: (area: SkillSubAreaId) => void
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps
@@ -381,7 +481,6 @@ function FeatureContent(props: {
       <div className="feature-content">
         <SkillsArea
           activeTab={props.activeSkillSubArea}
-          onActiveTabChange={props.onSelectSkillSubArea}
           skillActions={props.skillActions}
           workbench={props.workbench}
         />
@@ -406,6 +505,7 @@ function FeatureContent(props: {
     return (
       <div className="feature-content">
         <MemoryArea
+          activeSection={props.activeMemorySubArea}
           actions={props.memoryActions}
           memories={props.workbench.memories}
           snapshot={props.workbench.vmmMemory}
@@ -458,13 +558,30 @@ function SettingsFeatureContent(props: {
 
 // SkillsArea renders LuaSkills and tool capability status.
 // SkillsArea 渲染 LuaSkills 与工具能力状态。
+// activeSkillHeaderSummary returns the title and metrics for the current skill sub page.
+// activeSkillHeaderSummary 返回当前技能子页面的标题与统计。
+function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: WorkbenchSnapshot): SkillHeaderSummary {
+  if (activeTab === "agent") {
+    const enabledCount = workbench.agentSkills.skills.filter((skill) => skill.enabled).length
+    return {
+      title: "Agent Skills",
+      detail: `总技能数 ${workbench.agentSkills.skills.length} · 已启用 ${enabledCount} · 加载警告 ${workbench.agentSkills.errors.length}`,
+    }
+  }
+  const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
+  const implicitToolCount = workbench.luaSkills.skills.reduce((count, skill) => (
+    count + skill.tools.filter((tool) => tool.registrationState === "implicit").length
+  ), 0)
+  return {
+    title: "Lua Skills",
+    detail: `总技能数 ${workbench.luaSkills.skills.length} · 显示工具数 ${visibleToolCount} · 隐式工具数 ${implicitToolCount}`,
+  }
+}
+
 function SkillsArea(props: {
   // Selected skill tab.
   // 当前选中的技能页签。
   activeTab: SkillSubAreaId
-  // Updates the selected skill tab.
-  // 更新当前选中的技能页签。
-  onActiveTabChange: (area: SkillSubAreaId) => void
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps
@@ -473,28 +590,11 @@ function SkillsArea(props: {
   workbench: WorkbenchSnapshot
 }) {
   return (
-    <section className="panel full-height skill-management-panel">
-      <div className="skill-page-header">
-        <PanelTitle icon={<Hammer size={17} />} title="技能" />
-        <div className="skill-tabs" role="tablist" aria-label="技能分类">
-          <button className={props.activeTab === "lua" ? "active" : ""} onClick={() => props.onActiveTabChange("lua")} type="button">
-            <Hammer size={15} />
-            <span>Lua Skills</span>
-          </button>
-          <button className={props.activeTab === "agent" ? "active" : ""} onClick={() => props.onActiveTabChange("agent")} type="button">
-            <Bot size={15} />
-            <span>Agent Skills</span>
-          </button>
-        </div>
-      </div>
+    <section className="skill-management-surface">
       {props.activeTab === "lua" ? (
         <LuaSkillsPanel
           actions={props.skillActions}
           skills={props.workbench.luaSkills.skills}
-          entryCount={props.workbench.luaSkills.entryCount}
-          notice={props.workbench.luaSkills.notice}
-          runtimeRoot={props.workbench.luaSkills.runtimeRoot}
-          systemLuaLib={props.workbench.luaSkills.systemLuaLib}
         />
       ) : (
         <AgentSkillsPanel
@@ -520,25 +620,8 @@ function LuaSkillsPanel(props: {
   // Lua Skill rows.
   // Lua Skill 行。
   skills: LuaSkillSummary[]
-  // Total runtime entry count.
-  // 运行时入口总数。
-  entryCount: number
-  // Catalog notice text.
-  // 目录提示文本。
-  notice: string
-  // Runtime root path.
-  // 运行时根路径。
-  runtimeRoot: string
-  // System Lua library path.
-  // 系统 Lua 库路径。
-  systemLuaLib: string
 }) {
-  const [sourceType, setSourceType] = React.useState<"github" | "url">("github")
-  const [installSkillId, setInstallSkillId] = React.useState("")
-  const [installSource, setInstallSource] = React.useState("")
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
-  const enabledCount = props.skills.filter((skill) => skill.enabled).length
-  const managedCount = props.skills.filter((skill) => skill.managed).length
 
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
     setBusyAction(label)
@@ -550,35 +633,7 @@ function LuaSkillsPanel(props: {
   }, [])
 
   return (
-    <div className="skill-page-body">
-      <div className="skill-summary-grid">
-        <article className="skill-summary-card">
-          <strong>LuaSkills 目录</strong>
-          <span>{props.notice}</span>
-          <small>可见技能 {props.skills.length} · 已启用 {enabledCount} · 受管 {managedCount} · 入口 {props.entryCount}</small>
-        </article>
-        <article className="skill-summary-card">
-          <strong>运行时路径</strong>
-          <span>{props.runtimeRoot || "等待运行时目录"}</span>
-          <small>{props.systemLuaLib || "等待 system_lua_lib"}</small>
-        </article>
-      </div>
-      <div className="skill-toolbar">
-        <button className="skill-action-button secondary" disabled={busyAction !== null} onClick={() => runAction("refresh", props.actions.onRefreshLuaSkills)} type="button">
-          <RefreshCw size={15} />
-          <span>刷新</span>
-        </button>
-        <select value={sourceType} onChange={(event) => setSourceType(event.target.value as "github" | "url")}>
-          <option value="github">GitHub</option>
-          <option value="url">URL</option>
-        </select>
-        <input placeholder="可选技能标识，例如 vulcan-codekit" value={installSkillId} onChange={(event) => setInstallSkillId(event.target.value)} />
-        <input placeholder={sourceType === "github" ? "LuaSkills/vulcan-codekit" : "https://example.com/skill-source.yaml"} value={installSource} onChange={(event) => setInstallSource(event.target.value)} />
-        <button className="skill-action-button" disabled={busyAction !== null || installSource.trim().length === 0} onClick={() => runAction("install", () => props.actions.onInstallLuaSkill(installSkillId, installSource, sourceType))} type="button">
-          <PackagePlus size={15} />
-          <span>安装</span>
-        </button>
-      </div>
+    <div className="skill-page-body lua-skill-page-body">
       <div className="skill-card-list">
         {props.skills.length === 0 ? (
           <article className="skill-empty-card">
@@ -597,6 +652,99 @@ function LuaSkillsPanel(props: {
         ))}
       </div>
     </div>
+  )
+}
+
+// LuaSkillInstallDialog renders the standalone LuaSkills install form.
+// LuaSkillInstallDialog 渲染独立的 LuaSkills 安装表单。
+function LuaSkillInstallDialog(props: {
+  // Service-backed skill page actions.
+  // 服务端支持的技能页面动作。
+  actions: SkillActionProps
+  // Whether the install dialog is open.
+  // 安装弹窗当前是否打开。
+  open: boolean
+  // Updates the install dialog open state.
+  // 更新安装弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+}) {
+  // sourceType stores the selected install source kind.
+  // sourceType 保存当前选择的安装来源类型。
+  const [sourceType, setSourceType] = React.useState<"github" | "url">("github")
+  // skillId stores the optional explicit skill identifier.
+  // skillId 保存可选的显式技能标识。
+  const [skillId, setSkillId] = React.useState("")
+  // source stores the install source locator.
+  // source 保存安装来源定位值。
+  const [source, setSource] = React.useState("")
+  // installing tracks the active install request.
+  // installing 跟踪当前安装请求。
+  const [installing, setInstalling] = React.useState(false)
+
+  React.useEffect(() => {
+    if (props.open) {
+      setSourceType("github")
+      setSkillId("")
+      setSource("")
+      setInstalling(false)
+    }
+  }, [props.open])
+
+  // submitInstall validates and runs one LuaSkills install request.
+  // submitInstall 校验并执行单次 LuaSkills 安装请求。
+  const submitInstall = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (source.trim().length === 0) {
+      return
+    }
+    setInstalling(true)
+    try {
+      await props.actions.onInstallLuaSkill(skillId, source, sourceType)
+      props.onOpenChange(false)
+    } finally {
+      setInstalling(false)
+    }
+  }, [props.actions, props.onOpenChange, skillId, source, sourceType])
+
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => !installing && props.onOpenChange(open)}>
+      <DialogContent className="lua-skill-install-dialog">
+        <DialogHeader>
+          <DialogTitle>安装 LuaSkills</DialogTitle>
+          <DialogDescription>从 GitHub 仓库或 URL 安装一个 Lua Skill 包。</DialogDescription>
+        </DialogHeader>
+        <form className="lua-skill-install-form" onSubmit={submitInstall}>
+          <label className="lua-skill-install-field">
+            <span>来源类型</span>
+            <select disabled={installing} value={sourceType} onChange={(event) => setSourceType(event.target.value as "github" | "url")}>
+              <option value="github">GitHub</option>
+              <option value="url">URL</option>
+            </select>
+          </label>
+          <label className="lua-skill-install-field">
+            <span>技能标识</span>
+            <input disabled={installing} placeholder="可选，例如 vulcan-codekit" value={skillId} onChange={(event) => setSkillId(event.target.value)} />
+          </label>
+          <label className="lua-skill-install-field">
+            <span>安装来源</span>
+            <input
+              autoFocus
+              disabled={installing}
+              placeholder={sourceType === "github" ? "LuaSkills/vulcan-codekit" : "https://example.com/skill-source.yaml"}
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+            />
+          </label>
+          <DialogFooter>
+            <button className="skill-action-button secondary" disabled={installing} onClick={() => props.onOpenChange(false)} type="button">取消</button>
+            <button className="skill-action-button" disabled={installing || source.trim().length === 0} type="submit">
+              <PackagePlus size={15} />
+              <span>{installing ? "安装中" : "安装"}</span>
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1026,6 +1174,9 @@ type VmmScope = "global" | "project"
 // MemoryArea renders the VMM memory management workbench.
 // MemoryArea 渲染 VMM 记忆管理工作台。
 function MemoryArea(props: {
+  // Active VMM section selected from the shared feature sidebar.
+  // 从共享功能侧栏选中的当前 VMM 分区。
+  activeSection: MemorySubAreaId
   // Service-backed VMM actions.
   // 服务端支持的 VMM 动作。
   actions: MemoryActionProps
@@ -1036,8 +1187,6 @@ function MemoryArea(props: {
   // 详细 VMM 快照。
   snapshot: VmmMemorySnapshot
 }) {
-  const firstSection = props.snapshot.sections[0]?.id ?? "user_manager";
-  const [activeSection, setActiveSection] = React.useState(firstSection);
   const [scope, setScope] = React.useState<VmmScope>("global");
   const [projectId, setProjectId] = React.useState(props.snapshot.selectedProjectId ?? props.snapshot.projectScopes[0]?.projectId ?? "");
   const [globalDraft, setGlobalDraft] = React.useState(props.snapshot.globalDraft);
@@ -1121,7 +1270,7 @@ function MemoryArea(props: {
 
   const activeSectionDetail = renderVmmSectionDetail({
     activeDraft,
-    activeSection,
+    activeSection: props.activeSection,
     busyAction,
     globalDraft,
     migrateConfirmed,
@@ -1174,33 +1323,28 @@ function MemoryArea(props: {
     onSaveDraft: saveDraft,
   });
 
+  if (props.activeSection === "status") {
+    return (
+      <section className="panel full-height vmm-memory-page">
+        <PanelTitle icon={<BrainCircuit size={17} />} title="VMM 记忆" />
+        <div className="vmm-memory-shell status-only">
+          <main className="vmm-memory-main vmm-status-page">
+            <VmmEffectiveOverview memories={props.memories} snapshot={props.snapshot} />
+            <div className="vmm-status-grid">
+              <VmmRuntimePanel snapshot={props.snapshot} />
+              <VmmResultPanel result={result} />
+            </div>
+          </main>
+        </div>
+      </section>
+    )
+  }
+
   return (
     <section className="panel full-height vmm-memory-page">
       <PanelTitle icon={<BrainCircuit size={17} />} title="VMM 记忆" />
       <div className="vmm-memory-shell">
-        <aside className="vmm-memory-rail">
-          <div className="vmm-memory-status">
-            <StatusPill status={props.snapshot.effective.diagnostic === "ready" ? "ready" : "warning"} label={vmmDiagnosticLabel(props.snapshot.effective.diagnostic)} />
-            <strong>{props.snapshot.effective.enabled ? "记忆已启用" : "记忆已关闭"}</strong>
-            <span>{props.snapshot.notice}</span>
-          </div>
-          <div className="vmm-section-list">
-            {props.snapshot.sections.map((section) => (
-              <button
-                className={`vmm-section-button${activeSection === section.id ? " active" : ""}`}
-                key={section.id}
-                onClick={() => setActiveSection(section.id)}
-                type="button"
-              >
-                <small>{section.key}</small>
-                <strong>{section.label}</strong>
-                <span>{section.description}</span>
-              </button>
-            ))}
-          </div>
-        </aside>
         <main className="vmm-memory-main">
-          <VmmEffectiveOverview memories={props.memories} snapshot={props.snapshot} />
           <div className="vmm-scope-bar">
             <label>
               <span>作用域</span>
@@ -1940,11 +2084,43 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
   }
   if (activeArea === "memory") {
     return [
-      { id: "memory-vmm", label: "VMM 记忆", detail: `${workbench.memories.length} 个入口`, icon: <BrainCircuit size={16} /> },
-      { id: "memory-audit", label: "冲突审计", detail: "等待真实节点", icon: <History size={16} /> },
+      { id: "status", label: "状态", detail: workbench.vmmMemory.notice, icon: <BrainCircuit size={16} /> },
+      ...workbench.vmmMemory.sections.map((section) => ({
+        id: section.id,
+        label: section.label,
+        detail: section.description,
+        icon: vmmSectionIcon(section.id),
+      })),
     ]
   }
   return []
+}
+
+// vmmSectionIcon maps VMM section ids to sidebar icons.
+// vmmSectionIcon 将 VMM 分区标识映射到侧栏图标。
+function vmmSectionIcon(sectionId: string): React.ReactNode {
+  if (sectionId === "user_manager") {
+    return <User size={16} />
+  }
+  if (sectionId === "project_manager") {
+    return <FolderTree size={16} />
+  }
+  if (sectionId === "profile_center") {
+    return <BrainCircuit size={16} />
+  }
+  if (sectionId === "profile_bundle") {
+    return <ScrollText size={16} />
+  }
+  if (sectionId === "tools_debug") {
+    return <TerminalSquare size={16} />
+  }
+  if (sectionId === "memory_settings") {
+    return <SlidersHorizontal size={16} />
+  }
+  if (sectionId === "grpc_transport") {
+    return <PlugZap size={16} />
+  }
+  return <BrainCircuit size={16} />
 }
 
 // skillSidebarRowToSubArea maps a skills sidebar row id to its content page id.
