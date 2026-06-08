@@ -3,6 +3,7 @@ import {
   Bot,
   Boxes,
   BrainCircuit,
+  ChevronDown,
   Database,
   FileText,
   FolderTree,
@@ -28,6 +29,7 @@ import {
 } from "lucide-react"
 
 import { PanelTitle, StatusIcon, StatusPill } from "@/components/shared/status"
+import { Badge } from "@/components/ui/badge"
 import {
   Dialog,
   DialogContent,
@@ -36,6 +38,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Sidebar,
   SidebarContent,
@@ -622,6 +630,12 @@ function LuaSkillsPanel(props: {
   skills: LuaSkillSummary[]
 }) {
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // detailSkill stores the Lua Skill selected for the details dialog.
+  // detailSkill 保存当前打开详情弹窗的 Lua Skill。
+  const [detailSkill, setDetailSkill] = React.useState<LuaSkillSummary | null>(null)
+  // toolsSkill stores the Lua Skill selected for the tools dialog.
+  // toolsSkill 保存当前打开工具弹窗的 Lua Skill。
+  const [toolsSkill, setToolsSkill] = React.useState<LuaSkillSummary | null>(null)
 
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
     setBusyAction(label)
@@ -646,11 +660,33 @@ function LuaSkillsPanel(props: {
             actions={props.actions}
             busy={busyAction !== null}
             key={skill.skillId}
+            onOpenDetail={setDetailSkill}
+            onOpenTools={setToolsSkill}
             onRunAction={runAction}
             skill={skill}
           />
         ))}
       </div>
+      <LuaSkillDetailDialog
+        open={detailSkill !== null}
+        skill={detailSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailSkill(null)
+          }
+        }}
+      />
+      <LuaSkillToolsDialog
+        actions={props.actions}
+        busy={busyAction !== null}
+        open={toolsSkill !== null}
+        skill={toolsSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setToolsSkill(null)
+          }
+        }}
+      />
     </div>
   )
 }
@@ -671,9 +707,6 @@ function LuaSkillInstallDialog(props: {
   // sourceType stores the selected install source kind.
   // sourceType 保存当前选择的安装来源类型。
   const [sourceType, setSourceType] = React.useState<"github" | "url">("github")
-  // skillId stores the optional explicit skill identifier.
-  // skillId 保存可选的显式技能标识。
-  const [skillId, setSkillId] = React.useState("")
   // source stores the install source locator.
   // source 保存安装来源定位值。
   const [source, setSource] = React.useState("")
@@ -684,7 +717,6 @@ function LuaSkillInstallDialog(props: {
   React.useEffect(() => {
     if (props.open) {
       setSourceType("github")
-      setSkillId("")
       setSource("")
       setInstalling(false)
     }
@@ -699,12 +731,12 @@ function LuaSkillInstallDialog(props: {
     }
     setInstalling(true)
     try {
-      await props.actions.onInstallLuaSkill(skillId, source, sourceType)
+      await props.actions.onInstallLuaSkill("", source, sourceType)
       props.onOpenChange(false)
     } finally {
       setInstalling(false)
     }
-  }, [props.actions, props.onOpenChange, skillId, source, sourceType])
+  }, [props.actions, props.onOpenChange, source, sourceType])
 
   return (
     <Dialog open={props.open} onOpenChange={(open) => !installing && props.onOpenChange(open)}>
@@ -720,10 +752,6 @@ function LuaSkillInstallDialog(props: {
               <option value="github">GitHub</option>
               <option value="url">URL</option>
             </select>
-          </label>
-          <label className="lua-skill-install-field">
-            <span>技能标识</span>
-            <input disabled={installing} placeholder="可选，例如 vulcan-codekit" value={skillId} onChange={(event) => setSkillId(event.target.value)} />
           </label>
           <label className="lua-skill-install-field">
             <span>安装来源</span>
@@ -757,6 +785,12 @@ function LuaSkillCard(props: {
   // Whether another skill action is running.
   // 是否已有其他技能动作正在运行。
   busy: boolean
+  // Opens the details dialog for this Lua Skill.
+  // 打开当前 Lua Skill 的详情弹窗。
+  onOpenDetail: (skill: LuaSkillSummary) => void
+  // Opens the tools dialog for this Lua Skill.
+  // 打开当前 Lua Skill 的工具弹窗。
+  onOpenTools: (skill: LuaSkillSummary) => void
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>
@@ -764,60 +798,178 @@ function LuaSkillCard(props: {
   // 当前卡片渲染的 Lua Skill 行。
   skill: LuaSkillSummary
 }) {
-  const [toolsOpen, setToolsOpen] = React.useState(false)
-  const source = props.skill.sourceLocator ? `${props.skill.sourceType ?? "source"} · ${props.skill.sourceLocator}` : "未记录来源"
+  const source = props.skill.sourceLocator ?? "未记录来源"
+  const sourceTypeLabel = (props.skill.sourceType ?? "source").toUpperCase()
+  const explicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "explicit").length
+  const implicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "implicit").length
+  const disabledToolCount = props.skill.tools.filter((tool) => tool.registrationState === "disabled").length
 
   return (
-    <article className="skill-card">
+    <article className="skill-card lua-skill-card">
       <header className="skill-card-header">
-        <div>
-          <strong>{props.skill.displayName} <span>v{props.skill.version}</span></strong>
-          <small>ID: {props.skill.skillId}</small>
+        <div className="skill-card-title">
+          <div className="skill-card-title-line">
+            <strong>{props.skill.displayName}</strong>
+            <div className="skill-card-title-meta">
+              <Badge variant="secondary">v{props.skill.version}</Badge>
+            </div>
+          </div>
+          <div className="skill-card-badges">
+            {props.skill.enabled ? (
+              <Badge className="skill-card-enabled-badge">已启用</Badge>
+            ) : (
+              <Badge variant="destructive">已停用</Badge>
+            )}
+            <Badge variant="outline">{sourceTypeLabel}</Badge>
+          </div>
         </div>
-        <StatusPill status={props.skill.enabled ? "ready" : "warning"} label={props.skill.enabled ? "已启用" : "已停用"} />
       </header>
-      <div className="skill-meta-grid">
-        <span>{props.skill.rootName} · {props.skill.managed ? "受管" : "非受管"} · 入口 {props.skill.entryCount}</span>
+      <div className="skill-card-summary">
         <span>{source}</span>
-        <span>{props.skill.skillDir}</span>
-        {props.skill.disabledReason ? <span>停用原因：{props.skill.disabledReason}</span> : null}
+      </div>
+      <div className="skill-card-metrics">
+        <span>{props.skill.rootName === "ROOT" ? "系统" : props.skill.rootName}</span>
+        {props.skill.enabled ? (
+          <>
+            <span>显式 {explicitToolCount}</span>
+            <span>隐式 {implicitToolCount}</span>
+            {disabledToolCount > 0 ? <span>关闭 {disabledToolCount}</span> : null}
+          </>
+        ) : null}
       </div>
       <div className="skill-actions-row">
-        <button className="skill-action-button" disabled={props.busy} onClick={() => props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))} type="button">
-          <Power size={15} />
-          <span>{props.skill.enabled ? "停用" : "启用"}</span>
-        </button>
-        {props.skill.managed ? (
-          <button className="skill-action-button secondary" disabled={props.busy} onClick={() => props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))} type="button">
-            <RotateCw size={15} />
-            <span>更新</span>
-          </button>
-        ) : null}
-        <button className="skill-action-button secondary" disabled={props.busy || props.skill.systemOwned} onClick={() => props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))} type="button">
-          <Trash2 size={15} />
-          <span>{props.skill.systemOwned ? "ROOT 技能" : "卸载"}</span>
-        </button>
-        <button className="skill-action-button secondary" onClick={() => setToolsOpen((open) => !open)} type="button">
+        <button className="skill-action-button secondary" onClick={() => props.onOpenDetail(props.skill)} type="button">
           <FileText size={15} />
-          <span>{toolsOpen ? "收起工具" : `工具 ${props.skill.tools.length}`}</span>
+          <span>详情</span>
         </button>
+        <button className="skill-action-button secondary" onClick={() => props.onOpenTools(props.skill)} type="button">
+          <Wrench size={15} />
+          <span>工具 {props.skill.tools.length}</span>
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="skill-action-button secondary" disabled={props.busy} type="button">
+              <span>操作</span>
+              <ChevronDown size={14} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="lua-skill-action-menu">
+            <DropdownMenuItem onSelect={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}>
+              <Power size={15} />
+              <span>{props.skill.enabled ? "停用" : "启用"}</span>
+            </DropdownMenuItem>
+            {props.skill.managed ? (
+              <DropdownMenuItem onSelect={() => void props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))}>
+                <RotateCw size={15} />
+                <span>更新</span>
+              </DropdownMenuItem>
+            ) : null}
+            {!props.skill.systemOwned ? (
+              <DropdownMenuItem variant="destructive" onSelect={() => void props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))}>
+                <Trash2 size={15} />
+                <span>删除</span>
+              </DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
-      {toolsOpen ? (
-        <div className="skill-tool-list">
-          {props.skill.tools.length === 0 ? (
+    </article>
+  )
+}
+
+// LuaSkillDetailDialog renders package metadata for one Lua Skill.
+// LuaSkillDetailDialog 渲染单个 Lua Skill 的包元数据。
+function LuaSkillDetailDialog(props: {
+  // Whether the details dialog is open.
+  // 详情弹窗当前是否打开。
+  open: boolean
+  // Lua Skill selected for details.
+  // 当前查看详情的 Lua Skill。
+  skill: LuaSkillSummary | null
+  // Updates the details dialog open state.
+  // 更新详情弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+}) {
+  const skill = props.skill
+  const source = skill?.sourceLocator ? `${skill.sourceType ?? "source"} · ${skill.sourceLocator}` : "未记录来源"
+  return (
+    <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
+      <DialogContent className="lua-skill-detail-dialog">
+        <DialogHeader>
+          <DialogTitle>{skill?.displayName ?? "Lua Skill 详情"}</DialogTitle>
+          <DialogDescription>{skill ? `${skill.skillId} · v${skill.version}` : "查看 Lua Skill 包详情。"}</DialogDescription>
+        </DialogHeader>
+        {skill ? (
+          <div className="lua-skill-detail-grid">
+            <div>
+              <span>当前状态</span>
+              <strong>{skill.enabled ? "已启用" : "已停用"}</strong>
+            </div>
+            <div>
+              <span>安装层级</span>
+              <strong>{skill.rootName === "ROOT" ? "系统" : skill.rootName}</strong>
+            </div>
+            <div>
+              <span>安装管理</span>
+              <strong>{skill.managed ? "受管安装" : "非受管安装"}</strong>
+            </div>
+            <div>
+              <span>运行时入口</span>
+              <strong>{skill.entryCount}</strong>
+            </div>
+            <div className="wide">
+              <span>来源</span>
+              <strong>{source}</strong>
+            </div>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// LuaSkillToolsDialog renders runtime tool registration controls in a dialog.
+// LuaSkillToolsDialog 在弹窗中渲染运行时工具注册控件。
+function LuaSkillToolsDialog(props: {
+  // Service-backed skill page actions.
+  // 服务端支持的技能页面动作。
+  actions: SkillActionProps
+  // Whether another skill action is running.
+  // 是否已有其他技能动作正在运行。
+  busy: boolean
+  // Whether the tools dialog is open.
+  // 工具弹窗当前是否打开。
+  open: boolean
+  // Lua Skill selected for tool management.
+  // 当前管理工具的 Lua Skill。
+  skill: LuaSkillSummary | null
+  // Updates the tools dialog open state.
+  // 更新工具弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+}) {
+  const skill = props.skill
+  return (
+    <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
+      <DialogContent className="lua-skill-tools-dialog">
+        <DialogHeader>
+          <DialogTitle>{skill ? `${skill.displayName} 工具` : "LuaSkills 工具"}</DialogTitle>
+          <DialogDescription>{skill ? `${skill.skillId} · ${skill.tools.length} 个运行时工具` : "管理 Lua Skill 工具可见性。"}</DialogDescription>
+        </DialogHeader>
+        <div className="skill-tool-list dialog-tool-list">
+          {skill && skill.tools.length === 0 ? (
             <p>当前技能尚未解析到可管理的运行时工具。</p>
-          ) : props.skill.tools.map((tool) => (
+          ) : skill?.tools.map((tool) => (
             <LuaSkillToolRow
               actions={props.actions}
               busy={props.busy}
-              key={`${props.skill.skillId}-${tool.localName}`}
-              skillId={props.skill.skillId}
+              key={`${skill.skillId}-${tool.localName}`}
+              skillId={skill.skillId}
               tool={tool}
             />
           ))}
         </div>
-      ) : null}
-    </article>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -850,9 +1002,11 @@ function LuaSkillToolRow(props: {
 
   // handleRegistrationChange applies an optimistic local switch and reverts on persistence failure.
   // handleRegistrationChange 先执行乐观本地切换，并在持久化失败时回滚。
-  const handleRegistrationChange = React.useCallback(async (event: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleRegistrationChange = React.useCallback(async (nextState: LuaSkillToolSummary["registrationState"]) => {
     const previousState = selectedState
-    const nextState = event.target.value as LuaSkillToolSummary["registrationState"]
+    if (nextState === previousState || syncing || props.busy) {
+      return
+    }
     setSelectedState(nextState)
     setSyncing(true)
     try {
@@ -863,26 +1017,47 @@ function LuaSkillToolRow(props: {
     } finally {
       setSyncing(false)
     }
-  }, [props.actions, props.skillId, props.tool.localName, selectedState])
+  }, [props.actions, props.busy, props.skillId, props.tool.localName, selectedState, syncing])
 
   return (
     <article className="skill-tool-row">
-      <div>
-        <strong>{props.tool.localName}</strong>
-        <span>{props.tool.canonicalName}</span>
-        <p>{props.tool.description || props.tool.registrationHelp}</p>
+      <div className="skill-tool-row-header">
+        <div>
+          <strong>{props.tool.localName}</strong>
+          <span>{props.tool.canonicalName}</span>
+        </div>
+        <div className="skill-tool-control">
+          <div className="skill-tool-segmented" role="group" aria-label={`${props.tool.localName} 工具启用模式`}>
+            <button
+              className={selectedState === "explicit" ? "active" : ""}
+              disabled={props.busy || syncing}
+              onClick={() => handleRegistrationChange("explicit")}
+              type="button"
+            >
+              显式启用
+            </button>
+            <button
+              className={selectedState === "implicit" ? "active" : ""}
+              disabled={props.busy || syncing}
+              onClick={() => handleRegistrationChange("implicit")}
+              type="button"
+            >
+              隐式启用
+            </button>
+            <button
+              className={selectedState === "disabled" ? "active" : ""}
+              disabled={props.busy || syncing}
+              onClick={() => handleRegistrationChange("disabled")}
+              type="button"
+            >
+              关闭工具
+            </button>
+          </div>
+          {syncing ? <small className="skill-sync-status">同步中</small> : null}
+        </div>
       </div>
-      <div className="skill-tool-control">
-        <select
-          disabled={props.busy}
-          value={selectedState}
-          onChange={handleRegistrationChange}
-        >
-          <option value="explicit">显式启用</option>
-          <option value="implicit">隐式启用</option>
-          <option value="disabled">禁用</option>
-        </select>
-        {syncing ? <small className="skill-sync-status">同步中</small> : null}
+      <div className="skill-tool-description">
+        <p>{props.tool.description || props.tool.registrationHelp}</p>
       </div>
     </article>
   )

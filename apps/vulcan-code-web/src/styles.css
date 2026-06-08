@@ -2059,8 +2059,7 @@ button {
 }
 
 .skill-toolbar input,
-.skill-toolbar select,
-.skill-tool-row select {
+.skill-toolbar select {
   min-width: 0;
   height: 32px;
   border: 1px solid var(--border);
@@ -2116,28 +2115,125 @@ button {
   align-content: start;
   overflow: auto;
   padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
+.lua-skill-page-body .skill-card-list {
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  align-items: start;
 }
 
 .skill-card {
   gap: 10px;
 }
 
+.lua-skill-card {
+  min-height: 196px;
+  align-content: start;
+}
+
 .skill-card-header {
   min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.skill-card-title-line {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-card-title-meta {
+  min-width: 0;
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
 .skill-card-header strong {
+  min-width: 0;
+  overflow: hidden;
   font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skill-card-header strong span {
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 550;
+}
+
+.skill-card-badges {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.skill-card-badges [data-slot="badge"] {
+  min-width: 0;
+  max-width: 100%;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.skill-card-enabled-badge {
+  background: color-mix(in oklch, hsl(142 62% 34%) 12%, transparent);
+  color: hsl(142 62% 34%);
+}
+
+.skill-card-summary {
+  min-width: 0;
+  min-height: 38px;
+  display: grid;
+  gap: 5px;
+}
+
+.skill-card-summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-card-metrics {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-card-metrics span {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--muted);
+  color: var(--muted-foreground);
+  padding: 3px 7px;
+  font-size: 11px;
+  line-height: 1.15;
+}
+
+.lua-skill-action-menu {
+  min-width: 150px;
+}
+
+.lua-skill-action-menu [data-slot="dropdown-menu-item"] {
+  gap: 8px;
 }
 
 .skill-card p,
@@ -2154,22 +2250,123 @@ button {
   gap: 8px;
 }
 
+.lua-skill-detail-dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-width: min(620px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-tools-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: min(760px, calc(100vw - 32px)) !important;
+}
+
+.lua-skill-detail-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.lua-skill-detail-grid > div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--card);
+  padding: 10px;
+}
+
+.lua-skill-detail-grid > div.wide {
+  grid-column: 1 / -1;
+}
+
+.lua-skill-detail-grid span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.lua-skill-detail-grid strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.dialog-tool-list {
+  max-height: min(540px, calc(100vh - 220px));
+  min-height: 120px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+
 .skill-tool-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(130px, 160px);
-  align-items: start;
-  gap: 10px;
+  gap: 9px;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--muted);
   padding: 9px;
 }
 
+.skill-tool-row-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  align-items: start;
+  gap: 12px;
+}
+
+.skill-tool-row-header > div:first-child,
+.skill-tool-description {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
 .skill-tool-control {
   min-width: 0;
   display: grid;
   gap: 5px;
+}
+
+.skill-tool-segmented {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--muted);
+}
+
+.skill-tool-segmented button {
+  min-width: 0;
+  min-height: 32px;
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 9px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.skill-tool-segmented button:last-child {
+  border-right: 0;
+}
+
+.skill-tool-segmented button:hover,
+.skill-tool-segmented button.active {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.skill-tool-segmented button:disabled {
+  opacity: 0.58;
+  cursor: wait;
 }
 
 .skill-sync-status {
