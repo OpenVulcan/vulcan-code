@@ -130,12 +130,14 @@ use vulcan_workbench_model::{
     subagent_task_panel_state_detail_from_segmented_task_session_store,
     subagent_task_panel_state_has_recoverable_conversation, take_next_pending_prompt_entry,
     take_runtime_intervention_guided_pending_prompt_entries,
-    task_session_execution_status_from_tool_metadata, task_session_payload_from_tool_metadata,
+    task_session_execution_status_from_tool_metadata, task_session_message_match_score,
+    task_session_payload_from_tool_metadata,
 };
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
     workspace_store::{
-        SessionHydrationSnapshot, WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
+        SessionHydrationSnapshot, SessionTaskMirrorSnapshot,
+        WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
     },
 };
 
@@ -1223,25 +1225,48 @@ async fn service_session_messages(
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
-    let controller_runtime = {
+    let (controller_runtime, agent_runtime, live_listener_task_ids, in_memory_messages) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
-        if let Some(messages) =
-            in_memory_session_messages_for_service(&guard.workspace_snapshot, parsed_session_id)
-        {
-            return Ok(conversation_messages_from_session(
-                &session_id,
-                messages.as_slice(),
-            ));
-        }
-        guard.controller_runtime.clone().ok_or_else(|| {
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
-        })?
-    };
-    let hydration_snapshot =
-        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+        })?;
+        let in_memory_messages =
+            in_memory_session_messages_for_service(&guard.workspace_snapshot, parsed_session_id);
+        (
             controller_runtime,
+            guard.agent_runtime.clone(),
+            guard.detached_subagent_task_listeners.clone(),
+            in_memory_messages,
+        )
+    };
+    if let Some(mut messages) = in_memory_messages {
+        let task_mirrors =
+            vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+                &controller_runtime.data_root,
+                parsed_session_id,
+            )?;
+        apply_task_mirror_statuses_to_parent_messages(
+            messages.as_mut_slice(),
+            None,
+            task_mirrors.as_slice(),
+            |task_id| {
+                webui_subagent_task_has_live_run(
+                    agent_runtime.as_ref().map(|runtime| &runtime.task_runtime),
+                    live_listener_task_ids.contains(&task_id),
+                    task_id,
+                )
+            },
+        );
+        return Ok(conversation_messages_from_session(
+            &session_id,
+            messages.as_slice(),
+        ));
+    }
+    let mut hydration_snapshot =
+        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+            controller_runtime.clone(),
             parsed_session_id,
             SELECTED_SESSION_TURN_LOAD_LIMIT,
         )
@@ -1253,6 +1278,23 @@ async fn service_session_messages(
             }
             Err(error) => return Err(error),
         };
+    let task_mirrors =
+        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+            &controller_runtime.data_root,
+            parsed_session_id,
+        )?;
+    apply_task_mirror_statuses_to_parent_messages(
+        hydration_snapshot.messages.as_mut_slice(),
+        hydration_snapshot.runtime_state.as_mut(),
+        task_mirrors.as_slice(),
+        |task_id| {
+            webui_subagent_task_has_live_run(
+                agent_runtime.as_ref().map(|runtime| &runtime.task_runtime),
+                live_listener_task_ids.contains(&task_id),
+                task_id,
+            )
+        },
+    );
 
     Ok(conversation_messages_from_session(
         &session_id,
@@ -3604,7 +3646,7 @@ async fn load_workspace_for_submission(
         // 衡量无法复用保留上下文时的选中会话水合耗时。
         let hydration_started_at = current_unix_millis_value();
         match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
-            controller_runtime,
+            controller_runtime.clone(),
             session_id,
             SELECTED_SESSION_TURN_LOAD_LIMIT,
         )
@@ -3620,6 +3662,12 @@ async fn load_workspace_for_submission(
                         .insert(session_id, runtime_state);
                 }
                 workspace_snapshot.hydrated_session_ids.insert(session_id);
+                apply_persisted_task_mirror_statuses_to_workspace(
+                    &controller_runtime,
+                    &mut workspace_snapshot,
+                    session_id,
+                    |_| false,
+                )?;
             }
             Err(error) if is_missing_segmented_session_file_error(&error) => {}
             Err(error) => return Err(error),
@@ -8364,10 +8412,15 @@ fn build_subagent_display_route_workbench_snapshot_locked(
         subagent_navigation_snapshot_from_cached_state(guard, workspace_snapshot);
     let active_session_id =
         preserved_active_surface_session_id(workspace_snapshot, subagent_navigation.as_ref());
-    let surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
+    let mut surface_messages = surface_messages_for_session_without_subagent_navigation_refresh(
         guard,
         workspace_snapshot,
         active_session_id,
+    );
+    repair_task_mirror_statuses_for_surface_messages_locked(
+        guard,
+        active_session_id,
+        surface_messages.as_mut_slice(),
     );
     let mut workbench = guard.workbench.clone();
     let active_conversation_id = subagent_navigation
@@ -8792,24 +8845,28 @@ fn attach_webui_task_session_metadata_to_parent_tool_message(
     let Some(payload) = task_session_payload_from_tool_metadata(metadata) else {
         return;
     };
-    let Some(message_id) = find_webui_task_session_tool_message_id_for_payload(
+    let message_ids = find_webui_task_session_tool_message_ids_for_payload(
         workspace_snapshot,
         parent_session_id,
         payload,
-    ) else {
+    );
+    if message_ids.is_empty() {
         return;
-    };
+    }
     let execution_status =
         task_session_execution_status_from_tool_metadata(metadata).unwrap_or("running");
     let metadata_update =
         attach_tool_display_state_to_metadata(Some(metadata.clone()), execution_status)
             .unwrap_or_else(|| metadata.clone());
-    let _ = merge_webui_task_session_tool_message_metadata(
-        workspace_snapshot,
-        parent_session_id,
-        &message_id,
-        metadata_update,
-    );
+    for message_id in message_ids {
+        let _ = merge_webui_task_session_tool_message_metadata(
+            workspace_snapshot,
+            parent_session_id,
+            &message_id,
+            metadata_update.clone(),
+            execution_status,
+        );
+    }
 }
 
 /// Shallow-merges task-session metadata into one WebUI parent tool-card record and projection.
@@ -8819,12 +8876,15 @@ fn merge_webui_task_session_tool_message_metadata(
     parent_session_id: SessionId,
     message_id: &str,
     metadata_update: Value,
+    execution_status: &str,
 ) -> bool {
     let current_metadata =
         webui_task_session_tool_message_metadata(workspace_snapshot, parent_session_id, message_id);
-    let Some(updated_metadata) =
-        merge_tool_display_metadata(current_metadata, Some(metadata_update))
-    else {
+    let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
+        current_metadata,
+        task_session_display_metadata_update(metadata_update, execution_status),
+        execution_status == "running",
+    ) else {
         return false;
     };
     let mut updated = false;
@@ -8836,6 +8896,11 @@ fn merge_webui_task_session_tool_message_metadata(
         for record in &mut runtime_state.conversation_state.records {
             if record.id == message_id {
                 record.metadata = Some(updated_metadata.clone());
+                repair_task_session_display_title(
+                    &mut record.title,
+                    record.record_kind,
+                    execution_status,
+                );
                 runtime_state.updated_at = updated_at.clone();
                 updated = true;
                 break;
@@ -8849,12 +8914,405 @@ fn merge_webui_task_session_tool_message_metadata(
         for message in messages {
             if message.id == message_id {
                 message.metadata = Some(updated_metadata.clone());
+                repair_task_session_display_title(
+                    &mut message.title,
+                    message.record_kind,
+                    execution_status,
+                );
                 updated = true;
                 break;
             }
         }
     }
     updated
+}
+
+/// Applies lightweight persisted child-task mirror states to parent spawn-agent tool cards.
+/// 将持久化轻量子任务镜像状态应用到父级 spawn_agent 工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` provides the data root used to read parent session metadata.
+/// `controller_runtime` 提供读取父会话元数据所需的数据根目录。
+/// `workspace_snapshot` owns the already hydrated parent transcript window.
+/// `workspace_snapshot` 持有已经水合的父会话转录窗口。
+/// `parent_session_id` identifies the parent session whose tool cards should be repaired.
+/// `parent_session_id` 标识需要修正工具卡片的父会话。
+/// `is_task_live_running` reports whether the task still has a real in-process runtime.
+/// `is_task_live_running` 表示该任务是否仍有真实进程内运行态。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after best-effort state repair; missing mirrors are treated as no-op.
+/// 尽力修复状态后返回 `Ok(())`；缺少镜像时视为无操作。
+fn apply_persisted_task_mirror_statuses_to_workspace<F>(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    parent_session_id: SessionId,
+    mut is_task_live_running: F,
+) -> Result<(), String>
+where
+    F: FnMut(SessionId) -> bool,
+{
+    let task_mirrors =
+        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+            &controller_runtime.data_root,
+            parent_session_id,
+        )?;
+    if task_mirrors.is_empty() {
+        return Ok(());
+    }
+    let Some(messages) = workspace_snapshot
+        .session_messages
+        .get_mut(&parent_session_id)
+    else {
+        return Ok(());
+    };
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&parent_session_id);
+    apply_task_mirror_statuses_to_parent_messages(
+        messages.as_mut_slice(),
+        runtime_state,
+        task_mirrors.as_slice(),
+        |task_id| is_task_live_running(task_id),
+    );
+    Ok(())
+}
+
+/// Applies task mirror status rows to already loaded parent transcript messages.
+/// 将任务镜像状态行应用到已加载的父级转录消息。
+///
+/// # Parameters
+/// 参数
+/// `messages` is the mutable projected parent transcript window.
+/// `messages` 是可变的父级投影转录窗口。
+/// `runtime_state` optionally carries canonical parent conversation records to repair in parallel.
+/// `runtime_state` 可选携带需要同步修复的父级规范会话记录。
+/// `task_mirrors` are lightweight parent metadata rows and never include child transcript bodies.
+/// `task_mirrors` 是父元数据中的轻量行，不包含子任务转录正文。
+/// `is_task_live_running` reports whether a task is truly running in the current process.
+/// `is_task_live_running` 表示任务在当前进程中是否真实运行。
+fn apply_task_mirror_statuses_to_parent_messages<F>(
+    messages: &mut [SessionMessageEntry],
+    mut runtime_state: Option<&mut SessionRuntimeStateEntry>,
+    task_mirrors: &[SessionTaskMirrorSnapshot],
+    mut is_task_live_running: F,
+) where
+    F: FnMut(SessionId) -> bool,
+{
+    for task_mirror in task_mirrors {
+        let execution_status = normalized_task_mirror_execution_status(
+            task_mirror.status.as_str(),
+            is_task_live_running(task_mirror.task_session_id),
+        );
+        let payload = json!({
+            "task_id": task_mirror.task_session_id.to_string(),
+            "task_session_id": task_mirror.task_session_id.to_string(),
+            "execution_status": execution_status,
+            "line_count": task_mirror.line_count,
+            "updated_at": task_mirror.updated_at,
+        });
+        let message_ids = find_task_session_tool_message_ids_for_payload(
+            messages.iter(),
+            runtime_state
+                .as_deref()
+                .map(|state| state.conversation_state.records.iter())
+                .into_iter()
+                .flatten(),
+            &payload,
+        );
+        if message_ids.is_empty() {
+            continue;
+        }
+        let metadata_update = task_session_display_metadata_update(
+            json!({
+                "tool_name": "spawn_agent",
+                "kind": "task_session",
+                "payload": payload,
+            }),
+            execution_status.as_str(),
+        );
+        for message_id in message_ids {
+            for message in messages.iter_mut() {
+                if message.id == message_id {
+                    let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
+                        message.metadata.clone(),
+                        metadata_update.clone(),
+                        execution_status == "running",
+                    ) else {
+                        continue;
+                    };
+                    message.metadata = Some(updated_metadata);
+                    repair_task_session_display_title(
+                        &mut message.title,
+                        message.record_kind,
+                        execution_status.as_str(),
+                    );
+                }
+            }
+            if let Some(runtime_state) = runtime_state.as_deref_mut() {
+                for record in &mut runtime_state.conversation_state.records {
+                    if record.id == message_id {
+                        let Some(updated_metadata) = merge_task_mirror_tool_display_metadata(
+                            record.metadata.clone(),
+                            metadata_update.clone(),
+                            execution_status == "running",
+                        ) else {
+                            continue;
+                        };
+                        record.metadata = Some(updated_metadata);
+                        repair_task_session_display_title(
+                            &mut record.title,
+                            record.record_kind,
+                            execution_status.as_str(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Repairs one display-only surface window with lightweight parent task mirrors.
+/// 使用轻量父级任务镜像修复一个仅显示用途的消息窗口。
+///
+/// # Parameters
+/// 参数
+/// `guard` provides controller and live task-runtime state.
+/// `guard` 提供控制器与实时任务运行态。
+/// `session_id` identifies the surface session whose messages are being displayed.
+/// `session_id` 标识当前正在显示的界面会话。
+/// `messages` is the projected message window to repair in place.
+/// `messages` 是需要原地修复的投影消息窗口。
+fn repair_task_mirror_statuses_for_surface_messages_locked(
+    guard: &ServiceBridgeState,
+    session_id: SessionId,
+    messages: &mut [SessionMessageEntry],
+) {
+    if messages.is_empty() {
+        return;
+    }
+    let Some(controller_runtime) = guard.controller_runtime.as_ref() else {
+        return;
+    };
+    let Ok(task_mirrors) =
+        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+            &controller_runtime.data_root,
+            session_id,
+        )
+    else {
+        return;
+    };
+    if task_mirrors.is_empty() {
+        return;
+    }
+    apply_task_mirror_statuses_to_parent_messages(
+        messages,
+        None,
+        task_mirrors.as_slice(),
+        |task_id| {
+            webui_subagent_task_has_live_run(
+                guard
+                    .agent_runtime
+                    .as_ref()
+                    .map(|runtime| &runtime.task_runtime),
+                guard.detached_subagent_task_listeners.contains(&task_id),
+                task_id,
+            )
+        },
+    );
+}
+
+/// Finds every parent task-card message id that belongs to one task-session payload.
+/// 查找属于同一 task-session 载荷的所有父级任务卡片消息标识。
+///
+/// # Parameters
+/// 参数
+/// `messages` yields projected parent transcript messages.
+/// `messages` 产出父级转录投影消息。
+/// `records` yields canonical parent conversation records.
+/// `records` 产出父级规范会话记录。
+/// `payload` is the task-session payload used for matching.
+/// `payload` 是用于匹配的 task-session 载荷。
+///
+/// # Returns
+/// 返回值
+/// Stable set of every matching task-card message id.
+/// 返回所有匹配任务卡片消息标识的稳定集合。
+fn find_task_session_tool_message_ids_for_payload<'a>(
+    messages: impl Iterator<Item = &'a SessionMessageEntry>,
+    records: impl Iterator<Item = &'a SessionConversationRecord>,
+    payload: &Value,
+) -> BTreeSet<String> {
+    let mut message_ids = BTreeSet::new();
+    for message in messages {
+        if !task_session_record_kind_can_display_status(message.record_kind) {
+            continue;
+        }
+        if message
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_message_match_score(metadata, payload) > 0)
+        {
+            message_ids.insert(message.id.clone());
+        }
+    }
+    for record in records {
+        if !task_session_record_kind_can_display_status(record.record_kind) {
+            continue;
+        }
+        if record
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_message_match_score(metadata, payload) > 0)
+        {
+            message_ids.insert(record.id.clone());
+        }
+    }
+    message_ids
+}
+
+/// Returns whether one record kind can be a visible task-session tool row.
+/// 返回某记录类型是否可能是可见的 task-session 工具行。
+fn task_session_record_kind_can_display_status(record_kind: SessionMessageRecordKind) -> bool {
+    matches!(
+        record_kind,
+        SessionMessageRecordKind::ToolCallOutput | SessionMessageRecordKind::ToolResultOutput
+    )
+}
+
+/// Builds display metadata with every status alias kept in sync.
+/// 构建显示元数据，并保持所有状态别名同步。
+///
+/// # Parameters
+/// 参数
+/// `metadata_update` is the base task-session metadata update.
+/// `metadata_update` 是基础 task-session 元数据更新。
+/// `execution_status` is the canonical runtime-derived display state.
+/// `execution_status` 是运行时推导出的规范显示状态。
+///
+/// # Returns
+/// 返回值
+/// Metadata update with top-level and payload-level display states aligned.
+/// 返回顶层与 payload 层显示状态已对齐的元数据更新。
+fn task_session_display_metadata_update(
+    mut metadata_update: Value,
+    execution_status: &str,
+) -> Value {
+    let Some(object) = metadata_update.as_object_mut() else {
+        return json!({
+            "tool_name": "spawn_agent",
+            "kind": "task_session",
+            "display_state": execution_status,
+            "tool_display_state": execution_status,
+        });
+    };
+    object.insert(
+        String::from("display_state"),
+        Value::String(execution_status.to_string()),
+    );
+    object.insert(
+        String::from("tool_display_state"),
+        Value::String(execution_status.to_string()),
+    );
+    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+        payload.insert(
+            String::from("execution_status"),
+            Value::String(execution_status.to_string()),
+        );
+    }
+    if let Some(host_payload) = object
+        .get_mut("host_result")
+        .and_then(Value::as_object_mut)
+        .and_then(|host_result| host_result.get_mut("payload"))
+        .and_then(Value::as_object_mut)
+    {
+        host_payload.insert(
+            String::from("execution_status"),
+            Value::String(execution_status.to_string()),
+        );
+    }
+    metadata_update
+}
+
+/// Repairs stale localized task-session titles without changing unrelated titles.
+/// 修复陈旧的本地化 task-session 标题，同时不改动无关标题。
+fn repair_task_session_display_title(
+    title: &mut String,
+    record_kind: SessionMessageRecordKind,
+    execution_status: &str,
+) {
+    if !task_session_record_kind_can_display_status(record_kind) || !title.contains("spawn_agent") {
+        return;
+    }
+    let status_label = match execution_status {
+        "failed" => "失败",
+        "stopped" => "已停止",
+        "completed" => "已完成",
+        _ => "进行中",
+    };
+    *title = format!("调用 spawn_agent 工具 {status_label}");
+}
+
+/// Merges task-mirror display metadata while allowing live running state to override stale terminal payloads.
+/// 合并任务镜像展示元数据，并允许实时运行态覆盖陈旧终态载荷。
+///
+/// # Parameters
+/// 参数
+/// `current_metadata` is the metadata already attached to the parent tool card.
+/// `current_metadata` 是父级工具卡片已有的元数据。
+/// `metadata_update` is the task-mirror-derived display metadata.
+/// `metadata_update` 是从任务镜像推导出的展示元数据。
+/// `live_running_override` indicates that the host runtime still owns active task work.
+/// `live_running_override` 表示宿主运行时仍持有活动任务。
+///
+/// # Returns
+/// 返回值
+/// Merged metadata for the parent tool card.
+/// 返回父级工具卡片的合并后元数据。
+fn merge_task_mirror_tool_display_metadata(
+    current_metadata: Option<Value>,
+    metadata_update: Value,
+    live_running_override: bool,
+) -> Option<Value> {
+    if !live_running_override {
+        return merge_tool_display_metadata(current_metadata, Some(metadata_update));
+    }
+    match (current_metadata, metadata_update) {
+        (Some(Value::Object(mut current_object)), Value::Object(update_object)) => {
+            current_object.extend(update_object);
+            Some(Value::Object(current_object))
+        }
+        (_, update) => Some(update),
+    }
+}
+
+/// Resolves display status for one task mirror, letting live runtime state win over stale metadata.
+/// 为单条任务镜像解析展示状态，并让实时运行态覆盖陈旧元数据。
+///
+/// # Parameters
+/// 参数
+/// `status` is the status text mirrored in parent metadata.
+/// `status` 是父级元数据镜像中的状态文本。
+/// `is_live_running` tells whether the current process still owns active task work.
+/// `is_live_running` 表示当前进程是否仍持有活动任务。
+///
+/// # Returns
+/// 返回值
+/// A canonical display execution status.
+/// 规范化后的展示执行状态。
+fn normalized_task_mirror_execution_status(status: &str, is_live_running: bool) -> String {
+    if is_live_running {
+        return String::from("running");
+    }
+    match status.trim().to_ascii_lowercase().as_str() {
+        "failed" | "error" | "errored" => String::from("failed"),
+        "stopped" | "cancelled" | "canceled" | "aborted" => String::from("stopped"),
+        "completed" | "complete" | "success" | "succeeded" => String::from("completed"),
+        "running" | "created" | "pending" | "in_progress" => String::from("completed"),
+        _ => String::from("completed"),
+    }
 }
 
 /// Returns a cloned metadata object for one WebUI task-session parent message.
@@ -8933,6 +9391,7 @@ fn mark_webui_subagent_task_stopped_in_workspace(
         parent_session_id,
         &message_id,
         updated_metadata,
+        "stopped",
     );
 }
 
@@ -8968,6 +9427,40 @@ fn find_webui_task_session_tool_message_id_for_payload(
         .into_iter()
         .flat_map(|runtime_state| runtime_state.conversation_state.records.iter().rev());
     find_task_session_tool_message_id_for_payload(messages, records, payload)
+}
+
+/// Finds every WebUI parent task-card message id for one task-session payload.
+/// 为单个 task-session 载荷查找所有 WebUI 父级任务卡片消息标识。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` provides projected messages and canonical runtime records.
+/// `workspace_snapshot` 提供投影消息与规范运行时记录。
+/// `parent_session_id` selects the parent session to scan.
+/// `parent_session_id` 选择需要扫描的父会话。
+/// `payload` is the task-session payload to match.
+/// `payload` 是需要匹配的 task-session 载荷。
+///
+/// # Returns
+/// 返回值
+/// Stable set of every matching WebUI parent task-card message id.
+/// 返回所有匹配 WebUI 父级任务卡片消息标识的稳定集合。
+fn find_webui_task_session_tool_message_ids_for_payload(
+    workspace_snapshot: &WorkspaceSnapshot,
+    parent_session_id: SessionId,
+    payload: &Value,
+) -> BTreeSet<String> {
+    let messages = workspace_snapshot
+        .session_messages
+        .get(&parent_session_id)
+        .into_iter()
+        .flat_map(|messages| messages.iter().rev());
+    let records = workspace_snapshot
+        .session_runtime_state
+        .get(&parent_session_id)
+        .into_iter()
+        .flat_map(|runtime_state| runtime_state.conversation_state.records.iter().rev());
+    find_task_session_tool_message_ids_for_payload(messages, records, payload)
 }
 
 /// Replaces one child task transcript with the canonical conversation returned by the subagent.
@@ -10428,6 +10921,8 @@ async fn refresh_workbench_snapshot(
         provider_configuration,
         ai_tool_configuration,
         live_context_budgets,
+        agent_runtime_for_status,
+        live_listener_task_ids,
     ) = {
         let guard = state
             .lock()
@@ -10468,6 +10963,8 @@ async fn refresh_workbench_snapshot(
             provider_configuration,
             ai_tool_configuration,
             live_context_budgets,
+            guard.agent_runtime.clone(),
+            guard.detached_subagent_task_listeners.clone(),
         )
     };
 
@@ -10497,10 +10994,25 @@ async fn refresh_workbench_snapshot(
                 .map(|snapshot| snapshot.messages)
                 .unwrap_or_default()
         };
-    if refreshed_snapshot.selected_session != SessionId::nil() && !selected_messages.is_empty() {
+    let selected_session_id = refreshed_snapshot.selected_session;
+    if selected_session_id != SessionId::nil() && !selected_messages.is_empty() {
         refreshed_snapshot
             .session_messages
-            .insert(refreshed_snapshot.selected_session, selected_messages);
+            .insert(selected_session_id, selected_messages);
+        apply_persisted_task_mirror_statuses_to_workspace(
+            &controller_runtime,
+            &mut refreshed_snapshot,
+            selected_session_id,
+            |task_id| {
+                webui_subagent_task_has_live_run(
+                    agent_runtime_for_status
+                        .as_ref()
+                        .map(|runtime| &runtime.task_runtime),
+                    live_listener_task_ids.contains(&task_id),
+                    task_id,
+                )
+            },
+        )?;
     }
     let (surface_messages, subagent_navigation) = {
         let mut guard = state
@@ -15075,5 +15587,119 @@ mod tests {
                 && message.title == "执行已停止"
                 && message.body.contains("当前 AI 调用")
         }));
+    }
+
+    /// Verifies persisted completed task mirrors repair stale running spawn-agent display cards.
+    /// 验证持久化的已完成任务镜像会修复陈旧的运行中 spawn_agent 展示卡片。
+    #[test]
+    fn task_mirror_completed_status_repairs_stale_running_tool_card() {
+        let task_id = SessionId::new_v4();
+        let mut messages = vec![
+            test_spawn_agent_tool_message(
+                task_id,
+                "running",
+                SessionMessageRecordKind::ToolCallOutput,
+            ),
+            test_spawn_agent_tool_message(
+                task_id,
+                "running",
+                SessionMessageRecordKind::ToolResultOutput,
+            ),
+        ];
+        let mirrors = vec![SessionTaskMirrorSnapshot {
+            task_session_id: task_id,
+            status: String::from("completed"),
+            line_count: 3,
+            updated_at: String::from("1780000000000"),
+        }];
+
+        apply_task_mirror_statuses_to_parent_messages(
+            messages.as_mut_slice(),
+            None,
+            mirrors.as_slice(),
+            |_| false,
+        );
+
+        for message in messages {
+            let metadata = message.metadata.as_ref().expect("metadata");
+            assert_eq!(
+                task_session_execution_status_from_tool_metadata(metadata),
+                Some("completed")
+            );
+            assert_eq!(
+                metadata
+                    .get("tool_display_state")
+                    .and_then(serde_json::Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(message.title, "调用 spawn_agent 工具 已完成");
+        }
+    }
+
+    /// Verifies live runtime state overrides stale terminal task mirrors.
+    /// 验证实时运行态会覆盖陈旧的终态任务镜像。
+    #[test]
+    fn task_mirror_display_keeps_running_when_task_is_live() {
+        let task_id = SessionId::new_v4();
+        let mut messages = vec![test_spawn_agent_tool_message(
+            task_id,
+            "completed",
+            SessionMessageRecordKind::ToolCallOutput,
+        )];
+        let mirrors = vec![SessionTaskMirrorSnapshot {
+            task_session_id: task_id,
+            status: String::from("completed"),
+            line_count: 3,
+            updated_at: String::from("1780000000000"),
+        }];
+
+        apply_task_mirror_statuses_to_parent_messages(
+            messages.as_mut_slice(),
+            None,
+            mirrors.as_slice(),
+            |_| true,
+        );
+
+        let metadata = messages[0].metadata.as_ref().expect("metadata");
+        assert_eq!(
+            task_session_execution_status_from_tool_metadata(metadata),
+            Some("running")
+        );
+        assert_eq!(
+            metadata
+                .get("tool_display_state")
+                .and_then(serde_json::Value::as_str),
+            Some("running")
+        );
+    }
+
+    /// Builds one parent spawn-agent tool output message with task-session metadata.
+    /// 构建一条带 task-session 元数据的父级 spawn_agent 工具输出消息。
+    fn test_spawn_agent_tool_message(
+        task_id: SessionId,
+        execution_status: &str,
+        record_kind: SessionMessageRecordKind,
+    ) -> SessionMessageEntry {
+        let mut message = SessionMessageEntry::new(
+            SessionMessageKind::Assistant,
+            "调用 spawn_agent 工具 进行中",
+            "spawn_agent returned",
+        )
+        .with_runtime_metadata(format!("tool-{task_id}"), String::from("1780000000000"));
+        message.record_kind = record_kind;
+        message.metadata = Some(json!({
+            "tool_name": "spawn_agent",
+            "display_state": execution_status,
+            "tool_display_state": execution_status,
+            "host_result": {
+                "kind": "task_session",
+                "payload": {
+                    "task_id": "image-worker",
+                    "task_session_id": task_id.to_string(),
+                    "execution_status": execution_status
+                }
+            }
+        }));
+        message
     }
 }

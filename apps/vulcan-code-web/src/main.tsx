@@ -3873,6 +3873,10 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
   ]);
   const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
   const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
+      "tool_display_state",
+      "toolDisplayState",
+      "display_state",
+      "displayState",
       "payload.execution_status",
       "payload.executionStatus",
       "host_result.payload.execution_status",

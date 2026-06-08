@@ -2487,7 +2487,9 @@ fn update_segment_metadata(
 
 /// Reads one main segmented session metadata document.
 /// 读取一份主分段会话元数据文档。
-fn read_session_metadata(session_dir: &Path) -> Result<SegmentedSessionMetadata, String> {
+pub(super) fn read_session_metadata(
+    session_dir: &Path,
+) -> Result<SegmentedSessionMetadata, String> {
     read_required_json::<SegmentedSessionMetadata>(&metadata_path(session_dir))
 }
 

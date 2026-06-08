@@ -179,6 +179,24 @@ pub struct SessionHydrationSnapshot {
     pub has_more_history: bool,
 }
 
+/// Lightweight child-task mirror restored from a parent session metadata document.
+/// 从父会话元数据文档恢复出的轻量子任务镜像。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionTaskMirrorSnapshot {
+    /// Child task session identifier.
+    /// 子任务会话标识。
+    pub task_session_id: SessionId,
+    /// Current child task status label such as running, completed, stopped, or failed.
+    /// 当前子任务状态标签，例如 running、completed、stopped 或 failed。
+    pub status: String,
+    /// Mirrored child segment line count.
+    /// 镜像的子任务分段行数。
+    pub line_count: u64,
+    /// Last update timestamp stored in the parent metadata mirror.
+    /// 父元数据镜像中保存的最后更新时间戳。
+    pub updated_at: String,
+}
+
 /// One older transcript page loaded before an already hydrated session window.
 /// 在已水合会话窗口之前加载的一页更早转录历史。
 #[derive(Debug, Clone)]
@@ -669,6 +687,44 @@ pub fn persist_segmented_session_context_current_document(
     };
     let state_document = state_document_from_runtime_state(&session_id.to_string(), runtime_state)?;
     write_state(&session_dir, &state_document)
+}
+
+/// Loads lightweight child-task mirrors from the parent session metadata without reading child transcripts.
+/// 从父会话元数据加载轻量子任务镜像，不读取子任务转录正文。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the Vulcan Code data root containing segmented session directories.
+/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
+/// `session_id` identifies the parent session whose child task mirrors should be read.
+/// `session_id` 标识需要读取子任务镜像的父会话。
+///
+/// # Returns
+/// 返回值
+/// Lightweight task mirror rows from the parent `metadata.json`; missing sessions return an empty list.
+/// 来自父级 `metadata.json` 的轻量任务镜像；会话缺失时返回空列表。
+pub fn load_segmented_session_task_mirrors(
+    data_root: &std::path::Path,
+    session_id: SessionId,
+) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
+    let Some(session_dir) =
+        find_segmented_session_directory_by_id(data_root, &session_id.to_string())?
+    else {
+        return Ok(Vec::new());
+    };
+    let metadata = segmented_session_store::read_session_metadata(&session_dir)?;
+    Ok(metadata
+        .tasks
+        .into_iter()
+        .filter_map(|task| {
+            Some(SessionTaskMirrorSnapshot {
+                task_session_id: SessionId::parse_str(&task.session_id).ok()?,
+                status: task.status,
+                line_count: task.line_count,
+                updated_at: task.updated_at,
+            })
+        })
+        .collect())
 }
 
 /// Appends a pre-prompt turn-context anchor to the segmented session stream when available.
