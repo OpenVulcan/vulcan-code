@@ -133,9 +133,62 @@ interface MemoryActionProps {
 // SkillSubAreaId 标识当前选中的技能管理分类。
 type SkillSubAreaId = "lua" | "agent"
 
+// SkillHeaderBusyActionId identifies one title-bar skill action currently showing feedback.
+// SkillHeaderBusyActionId 标识当前正在标题栏展示反馈的技能动作。
+type SkillHeaderBusyActionId = "lua-refresh" | "agent-refresh" | "agent-sync"
+
 // MemorySubAreaId identifies the selected VMM memory management page.
 // MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
 type MemorySubAreaId = string
+
+// encodeBase64UrlUtf8 converts a string to URL-safe base64.
+// encodeBase64UrlUtf8 将字符串转换为 URL 安全的 base64。
+function encodeBase64UrlUtf8(value: string): string {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")
+}
+
+// isTauriWebRuntime checks whether the current page is running inside Tauri.
+// isTauriWebRuntime 检查当前页面是否运行在 Tauri 内。
+function isTauriWebRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
+}
+
+// localMediaUrl converts local file paths into URLs usable by WebUI previews.
+// localMediaUrl 将本地文件路径转换为 WebUI 预览可使用的 URL。
+function localMediaUrl(path: string): string {
+  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(path)) {
+    return path
+  }
+  if (isTauriWebRuntime()) {
+    return `http://vulcan-media.localhost/asset/${encodeBase64UrlUtf8(path)}`
+  }
+  const normalized = path.replace(/\\/g, "/")
+  return normalized.startsWith("/") ? `file://${normalized}` : `file:///${normalized}`
+}
+
+// formatSkillText replaces simple named placeholders in one localized skill string.
+// formatSkillText 替换技能本地化字符串中的简单命名占位符。
+function formatSkillText(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match))
+}
+
+// localizedAgentSkillScope maps backend scope labels into the active UI language.
+// localizedAgentSkillScope 将后端作用域标签映射到当前界面语言。
+function localizedAgentSkillScope(scope: string, t: ReturnType<typeof useI18n>["t"]): string {
+  const normalized = scope.trim().toLowerCase()
+  if (normalized === "系统" || normalized === "system") {
+    return t("skills.label.system")
+  }
+  if (normalized === "用户" || normalized === "user") {
+    return t("skills.label.user")
+  }
+  return scope
+}
 
 // SkillHeaderSummary describes the active skill page header copy.
 // SkillHeaderSummary 描述当前技能页标题文案。
@@ -176,6 +229,7 @@ function FeatureShell(props: {
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
+  const { t } = useI18n()
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
   const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("lua")
@@ -185,19 +239,76 @@ function FeatureShell(props: {
   // luaInstallDialogOpen controls the standalone LuaSkills install dialog.
   // luaInstallDialogOpen 控制独立 LuaSkills 安装弹窗。
   const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false)
-  // showLuaInstallAction decides whether the header should expose the LuaSkills install entry.
-  // showLuaInstallAction 决定标题栏是否展示 LuaSkills 安装入口。
-  const showLuaInstallAction = props.activeArea === "skills" && activeSkillSubArea === "lua"
+  // skillHeaderBusyAction stores the title-bar action that should show busy feedback.
+  // skillHeaderBusyAction 保存需要在标题栏展示忙碌反馈的动作。
+  const [skillHeaderBusyAction, setSkillHeaderBusyAction] = React.useState<SkillHeaderBusyActionId | null>(null)
+  // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
+  // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
+  const runSkillHeaderAction = React.useCallback(async (actionId: SkillHeaderBusyActionId, action: () => Promise<void>) => {
+    setSkillHeaderBusyAction(actionId)
+    const startedAt = window.performance.now()
+    try {
+      await action()
+    } finally {
+      const remainingMs = 450 - (window.performance.now() - startedAt)
+      if (remainingMs > 0) {
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, remainingMs)
+        })
+      }
+      setSkillHeaderBusyAction(null)
+    }
+  }, [])
+  // skillHeaderAction renders the active skill page actions in the shared title bar.
+  // skillHeaderAction 在共享标题栏中渲染当前技能页面操作。
+  const skillHeaderAction = props.activeArea === "skills" && activeSkillSubArea === "lua" ? (
+    <div className="feature-header-actions">
+      <button
+        className="skill-action-button secondary"
+        disabled={skillHeaderBusyAction !== null}
+        onClick={() => void runSkillHeaderAction("lua-refresh", props.skillActions.onRefreshLuaSkills)}
+        type="button"
+      >
+        <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+        <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+      </button>
+      <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
+        <PackagePlus size={15} />
+        <span>{t("skills.action.installLua")}</span>
+      </button>
+    </div>
+  ) : props.activeArea === "skills" && activeSkillSubArea === "agent" ? (
+    <div className="feature-header-actions">
+      <button
+        className="skill-action-button secondary"
+        disabled={skillHeaderBusyAction !== null}
+        onClick={() => void runSkillHeaderAction("agent-refresh", props.skillActions.onRefreshAgentSkills)}
+        type="button"
+      >
+        <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
+        <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+      </button>
+      <button
+        className="skill-action-button secondary"
+        disabled={skillHeaderBusyAction !== null}
+        onClick={() => void runSkillHeaderAction("agent-sync", props.skillActions.onInstallSystemAgentSkills)}
+        type="button"
+      >
+        <PackagePlus className={skillHeaderBusyAction === "agent-sync" ? "spin" : undefined} size={15} />
+        <span>{skillHeaderBusyAction === "agent-sync" ? t("skills.action.syncing") : t("skills.action.syncSystem")}</span>
+      </button>
+    </div>
+  ) : null
   // skillHeaderSummary stores the active skill page title and compact metrics.
   // skillHeaderSummary 保存当前技能页标题与紧凑统计。
   const skillHeaderSummary = props.activeArea === "skills"
-    ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench)
+    ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench, t)
     : null
   // headerFeature overrides the generic feature title while a skill sub page is active.
   // headerFeature 在技能子页面激活时覆盖通用功能标题。
   const headerFeature = skillHeaderSummary
     ? {
-      ...(props.activeFeature ?? { id: "skills" as MainAreaId, label: "技能", description: "", status: "" }),
+      ...(props.activeFeature ?? { id: "skills" as MainAreaId, label: t("area.skills"), description: "", status: "" }),
       label: skillHeaderSummary.title,
       description: skillHeaderSummary.detail,
     }
@@ -218,18 +329,7 @@ function FeatureShell(props: {
       <SidebarInset>
         <div className="feature-main-shell">
           <FeatureHeader
-            action={showLuaInstallAction ? (
-              <div className="feature-header-actions">
-                <button className="skill-action-button secondary" onClick={() => void props.skillActions.onRefreshLuaSkills()} type="button">
-                  <RefreshCw size={15} />
-                  <span>刷新</span>
-                </button>
-                <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
-                  <PackagePlus size={15} />
-                  <span>安装 LuaSkills</span>
-                </button>
-              </div>
-            ) : null}
+            action={skillHeaderAction}
             feature={headerFeature}
           />
           <FeatureContent
@@ -365,7 +465,7 @@ function FeatureOverviewMenu(props: {
   workbench: WorkbenchSnapshot
 }) {
   const { t } = useI18n()
-  const rows = featureSidebarRows(props.activeArea, props.workbench)
+  const rows = featureSidebarRows(props.activeArea, props.workbench, t)
 
   return (
     <SidebarGroup>
@@ -383,7 +483,7 @@ function FeatureOverviewMenu(props: {
                     props.onSelectSkillSubArea(subArea)
                   }
                 }}
-                tooltip={row.detail}
+                tooltip={row.label}
               >
                 {row.icon}
                 <span className="vcn-sidebar-label">
@@ -396,7 +496,7 @@ function FeatureOverviewMenu(props: {
                 active={row.id === props.activeMemorySubArea}
                 className="feature-sidebar-row"
                 onClick={() => props.onSelectMemorySubArea(row.id)}
-                tooltip={row.detail}
+                tooltip={row.label}
               >
                 {row.icon}
                 <span className="vcn-sidebar-label">
@@ -568,12 +668,16 @@ function SettingsFeatureContent(props: {
 // SkillsArea 渲染 LuaSkills 与工具能力状态。
 // activeSkillHeaderSummary returns the title and metrics for the current skill sub page.
 // activeSkillHeaderSummary 返回当前技能子页面的标题与统计。
-function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: WorkbenchSnapshot): SkillHeaderSummary {
+function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): SkillHeaderSummary {
   if (activeTab === "agent") {
     const enabledCount = workbench.agentSkills.skills.filter((skill) => skill.enabled).length
     return {
       title: "Agent Skills",
-      detail: `总技能数 ${workbench.agentSkills.skills.length} · 已启用 ${enabledCount} · 加载警告 ${workbench.agentSkills.errors.length}`,
+      detail: formatSkillText(t("skills.header.agentDetail"), {
+        total: workbench.agentSkills.skills.length,
+        enabled: enabledCount,
+        warnings: workbench.agentSkills.errors.length,
+      }),
     }
   }
   const visibleToolCount = workbench.luaSkills.skills.reduce((count, skill) => count + skill.entryCount, 0)
@@ -582,7 +686,11 @@ function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: Workbenc
   ), 0)
   return {
     title: "Lua Skills",
-    detail: `总技能数 ${workbench.luaSkills.skills.length} · 显示工具数 ${visibleToolCount} · 隐式工具数 ${implicitToolCount}`,
+    detail: formatSkillText(t("skills.header.luaDetail"), {
+      total: workbench.luaSkills.skills.length,
+      visible: visibleToolCount,
+      implicit: implicitToolCount,
+    }),
   }
 }
 
@@ -608,11 +716,7 @@ function SkillsArea(props: {
         <AgentSkillsPanel
           actions={props.skillActions}
           errors={props.workbench.agentSkills.errors}
-          globalEnabled={props.workbench.agentSkills.globalEnabled}
-          notice={props.workbench.agentSkills.notice}
           skills={props.workbench.agentSkills.skills}
-          systemRoot={props.workbench.agentSkills.systemRoot}
-          userRoot={props.workbench.agentSkills.userRoot}
         />
       )}
     </section>
@@ -629,6 +733,7 @@ function LuaSkillsPanel(props: {
   // Lua Skill 行。
   skills: LuaSkillSummary[]
 }) {
+  const { t } = useI18n()
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
   // detailSkill stores the Lua Skill selected for the details dialog.
   // detailSkill 保存当前打开详情弹窗的 Lua Skill。
@@ -652,8 +757,8 @@ function LuaSkillsPanel(props: {
         {props.skills.length === 0 ? (
           <article className="skill-empty-card">
             <StatusPill status="pending" label="pending" />
-            <strong>等待 LuaSkills 目录</strong>
-            <span>启动完成或刷新后会显示真实技能包。</span>
+            <strong>{t("skills.lua.emptyTitle")}</strong>
+            <span>{t("skills.lua.emptyDetail")}</span>
           </article>
         ) : props.skills.map((skill) => (
           <LuaSkillCard
@@ -704,6 +809,7 @@ function LuaSkillInstallDialog(props: {
   // 更新安装弹窗打开状态。
   onOpenChange: (open: boolean) => void
 }) {
+  const { t } = useI18n()
   // sourceType stores the selected install source kind.
   // sourceType 保存当前选择的安装来源类型。
   const [sourceType, setSourceType] = React.useState<"github" | "url">("github")
@@ -742,32 +848,32 @@ function LuaSkillInstallDialog(props: {
     <Dialog open={props.open} onOpenChange={(open) => !installing && props.onOpenChange(open)}>
       <DialogContent className="lua-skill-install-dialog">
         <DialogHeader>
-          <DialogTitle>安装 LuaSkills</DialogTitle>
-          <DialogDescription>从 GitHub 仓库或 URL 安装一个 Lua Skill 包。</DialogDescription>
+          <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>
+          <DialogDescription>{t("skills.lua.installDescription")}</DialogDescription>
         </DialogHeader>
         <form className="lua-skill-install-form" onSubmit={submitInstall}>
           <label className="lua-skill-install-field">
-            <span>来源类型</span>
+            <span>{t("skills.lua.sourceType")}</span>
             <select disabled={installing} value={sourceType} onChange={(event) => setSourceType(event.target.value as "github" | "url")}>
               <option value="github">GitHub</option>
               <option value="url">URL</option>
             </select>
           </label>
           <label className="lua-skill-install-field">
-            <span>安装来源</span>
+            <span>{t("skills.lua.installSource")}</span>
             <input
               autoFocus
               disabled={installing}
-              placeholder={sourceType === "github" ? "LuaSkills/vulcan-codekit" : "https://example.com/skill-source.yaml"}
+              placeholder={sourceType === "github" ? t("skills.lua.placeholderGithub") : t("skills.lua.placeholderUrl")}
               value={source}
               onChange={(event) => setSource(event.target.value)}
             />
           </label>
           <DialogFooter>
-            <button className="skill-action-button secondary" disabled={installing} onClick={() => props.onOpenChange(false)} type="button">取消</button>
+            <button className="skill-action-button secondary" disabled={installing} onClick={() => props.onOpenChange(false)} type="button">{t("skills.action.cancel")}</button>
             <button className="skill-action-button" disabled={installing || source.trim().length === 0} type="submit">
               <PackagePlus size={15} />
-              <span>{installing ? "安装中" : "安装"}</span>
+              <span>{installing ? t("skills.action.installing") : t("skills.action.install")}</span>
             </button>
           </DialogFooter>
         </form>
@@ -798,7 +904,8 @@ function LuaSkillCard(props: {
   // 当前卡片渲染的 Lua Skill 行。
   skill: LuaSkillSummary
 }) {
-  const source = props.skill.sourceLocator ?? "未记录来源"
+  const { t } = useI18n()
+  const source = props.skill.sourceLocator ?? t("skills.source.unknown")
   const sourceTypeLabel = (props.skill.sourceType ?? "source").toUpperCase()
   const explicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "explicit").length
   const implicitToolCount = props.skill.tools.filter((tool) => tool.registrationState === "implicit").length
@@ -814,11 +921,11 @@ function LuaSkillCard(props: {
               <Badge variant="secondary">v{props.skill.version}</Badge>
             </div>
           </div>
-          <div className="skill-card-badges">
-            {props.skill.enabled ? (
-              <Badge className="skill-card-enabled-badge">已启用</Badge>
+            <div className="skill-card-badges">
+              {props.skill.enabled ? (
+              <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge>
             ) : (
-              <Badge variant="destructive">已停用</Badge>
+              <Badge variant="destructive">{t("skills.status.stopped")}</Badge>
             )}
             <Badge variant="outline">{sourceTypeLabel}</Badge>
           </div>
@@ -828,46 +935,46 @@ function LuaSkillCard(props: {
         <span>{source}</span>
       </div>
       <div className="skill-card-metrics">
-        <span>{props.skill.rootName === "ROOT" ? "系统" : props.skill.rootName}</span>
+        <span>{props.skill.rootName === "ROOT" ? t("skills.label.system") : props.skill.rootName}</span>
         {props.skill.enabled ? (
           <>
-            <span>显式 {explicitToolCount}</span>
-            <span>隐式 {implicitToolCount}</span>
-            {disabledToolCount > 0 ? <span>关闭 {disabledToolCount}</span> : null}
+            <span>{t("skills.label.explicit")} {explicitToolCount}</span>
+            <span>{t("skills.label.implicit")} {implicitToolCount}</span>
+            {disabledToolCount > 0 ? <span>{t("skills.label.closed")} {disabledToolCount}</span> : null}
           </>
         ) : null}
       </div>
       <div className="skill-actions-row">
         <button className="skill-action-button secondary" onClick={() => props.onOpenDetail(props.skill)} type="button">
           <FileText size={15} />
-          <span>详情</span>
+          <span>{t("skills.action.details")}</span>
         </button>
         <button className="skill-action-button secondary" onClick={() => props.onOpenTools(props.skill)} type="button">
           <Wrench size={15} />
-          <span>工具 {props.skill.tools.length}</span>
+          <span>{t("skills.action.tools")} {props.skill.tools.length}</span>
         </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button className="skill-action-button secondary" disabled={props.busy} type="button">
-              <span>操作</span>
+              <span>{t("skills.action.action")}</span>
               <ChevronDown size={14} />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="lua-skill-action-menu">
             <DropdownMenuItem onSelect={() => void props.onRunAction("toggle", () => props.actions.onSetLuaSkillEnabled(props.skill.skillId, !props.skill.enabled))}>
               <Power size={15} />
-              <span>{props.skill.enabled ? "停用" : "启用"}</span>
+              <span>{props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
             </DropdownMenuItem>
             {props.skill.managed ? (
               <DropdownMenuItem onSelect={() => void props.onRunAction("update", () => props.actions.onUpdateLuaSkill(props.skill.skillId))}>
                 <RotateCw size={15} />
-                <span>更新</span>
+                <span>{t("skills.action.update")}</span>
               </DropdownMenuItem>
             ) : null}
             {!props.skill.systemOwned ? (
               <DropdownMenuItem variant="destructive" onSelect={() => void props.onRunAction("uninstall", () => props.actions.onUninstallLuaSkill(props.skill.skillId))}>
                 <Trash2 size={15} />
-                <span>删除</span>
+                <span>{t("skills.action.delete")}</span>
               </DropdownMenuItem>
             ) : null}
           </DropdownMenuContent>
@@ -890,35 +997,36 @@ function LuaSkillDetailDialog(props: {
   // 更新详情弹窗打开状态。
   onOpenChange: (open: boolean) => void
 }) {
+  const { t } = useI18n()
   const skill = props.skill
-  const source = skill?.sourceLocator ? `${skill.sourceType ?? "source"} · ${skill.sourceLocator}` : "未记录来源"
+  const source = skill?.sourceLocator ? `${skill.sourceType ?? "source"} · ${skill.sourceLocator}` : t("skills.source.unknown")
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="lua-skill-detail-dialog">
         <DialogHeader>
-          <DialogTitle>{skill?.displayName ?? "Lua Skill 详情"}</DialogTitle>
-          <DialogDescription>{skill ? `${skill.skillId} · v${skill.version}` : "查看 Lua Skill 包详情。"}</DialogDescription>
+          <DialogTitle>{skill?.displayName ?? t("skills.lua.detailsTitle")}</DialogTitle>
+          <DialogDescription>{skill ? `${skill.skillId} · v${skill.version}` : t("skills.lua.detailsDescription")}</DialogDescription>
         </DialogHeader>
         {skill ? (
           <div className="lua-skill-detail-grid">
             <div>
-              <span>当前状态</span>
-              <strong>{skill.enabled ? "已启用" : "已停用"}</strong>
+              <span>{t("skills.label.currentStatus")}</span>
+              <strong>{skill.enabled ? t("skills.status.enabled") : t("skills.status.stopped")}</strong>
             </div>
             <div>
-              <span>安装层级</span>
-              <strong>{skill.rootName === "ROOT" ? "系统" : skill.rootName}</strong>
+              <span>{t("skills.label.installLayer")}</span>
+              <strong>{skill.rootName === "ROOT" ? t("skills.label.system") : skill.rootName}</strong>
             </div>
             <div>
-              <span>安装管理</span>
-              <strong>{skill.managed ? "受管安装" : "非受管安装"}</strong>
+              <span>{t("skills.label.installManagement")}</span>
+              <strong>{skill.managed ? t("skills.label.managedInstall") : t("skills.label.unmanagedInstall")}</strong>
             </div>
             <div>
-              <span>运行时入口</span>
+              <span>{t("skills.label.runtimeEntries")}</span>
               <strong>{skill.entryCount}</strong>
             </div>
             <div className="wide">
-              <span>来源</span>
+              <span>{t("skills.label.source")}</span>
               <strong>{source}</strong>
             </div>
           </div>
@@ -947,17 +1055,18 @@ function LuaSkillToolsDialog(props: {
   // 更新工具弹窗打开状态。
   onOpenChange: (open: boolean) => void
 }) {
+  const { t } = useI18n()
   const skill = props.skill
   return (
     <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
       <DialogContent className="lua-skill-tools-dialog">
         <DialogHeader>
-          <DialogTitle>{skill ? `${skill.displayName} 工具` : "LuaSkills 工具"}</DialogTitle>
-          <DialogDescription>{skill ? `${skill.skillId} · ${skill.tools.length} 个运行时工具` : "管理 Lua Skill 工具可见性。"}</DialogDescription>
+          <DialogTitle>{skill ? `${skill.displayName} ${t("skills.action.tools")}` : t("skills.lua.toolsTitle")}</DialogTitle>
+          <DialogDescription>{skill ? `${skill.skillId} · ${skill.tools.length} ${t("skills.label.runtimeTools")}` : t("skills.lua.toolsDescription")}</DialogDescription>
         </DialogHeader>
         <div className="skill-tool-list dialog-tool-list">
           {skill && skill.tools.length === 0 ? (
-            <p>当前技能尚未解析到可管理的运行时工具。</p>
+            <p>{t("skills.lua.toolsEmpty")}</p>
           ) : skill?.tools.map((tool) => (
             <LuaSkillToolRow
               actions={props.actions}
@@ -989,6 +1098,7 @@ function LuaSkillToolRow(props: {
   // 运行时工具行。
   tool: LuaSkillToolSummary
 }) {
+  const { t } = useI18n()
   // selectedState mirrors the select value immediately before backend synchronization completes.
   // selectedState 在后端同步完成前立即镜像选择框取值。
   const [selectedState, setSelectedState] = React.useState(props.tool.registrationState)
@@ -1027,14 +1137,14 @@ function LuaSkillToolRow(props: {
           <span>{props.tool.canonicalName}</span>
         </div>
         <div className="skill-tool-control">
-          <div className="skill-tool-segmented" role="group" aria-label={`${props.tool.localName} 工具启用模式`}>
+          <div className="skill-tool-segmented" role="group" aria-label={formatSkillText(t("skills.lua.toolModeAria"), { name: props.tool.localName })}>
             <button
               className={selectedState === "explicit" ? "active" : ""}
               disabled={props.busy || syncing}
               onClick={() => handleRegistrationChange("explicit")}
               type="button"
             >
-              显式启用
+              {t("skills.lua.toolExplicit")}
             </button>
             <button
               className={selectedState === "implicit" ? "active" : ""}
@@ -1042,7 +1152,7 @@ function LuaSkillToolRow(props: {
               onClick={() => handleRegistrationChange("implicit")}
               type="button"
             >
-              隐式启用
+              {t("skills.lua.toolImplicit")}
             </button>
             <button
               className={selectedState === "disabled" ? "active" : ""}
@@ -1050,10 +1160,10 @@ function LuaSkillToolRow(props: {
               onClick={() => handleRegistrationChange("disabled")}
               type="button"
             >
-              关闭工具
+              {t("skills.lua.toolDisabled")}
             </button>
           </div>
-          {syncing ? <small className="skill-sync-status">同步中</small> : null}
+          {syncing ? <small className="skill-sync-status">{t("skills.lua.syncing")}</small> : null}
         </div>
       </div>
       <div className="skill-tool-description">
@@ -1072,23 +1182,15 @@ function AgentSkillsPanel(props: {
   // Non-fatal loading errors.
   // 非致命加载错误。
   errors: Array<{ path: string; message: string }>
-  // Whether Agent Skills are globally enabled.
-  // Agent Skills 是否全局启用。
-  globalEnabled: boolean
-  // Catalog notice text.
-  // 目录提示文本。
-  notice: string
   // Agent Skill rows.
   // Agent Skill 行。
   skills: AgentSkillSummary[]
-  // System skill root path.
-  // 系统技能根路径。
-  systemRoot: string
-  // User skill root path.
-  // 用户技能根路径。
-  userRoot: string
 }) {
+  const { t } = useI18n()
   const [busyAction, setBusyAction] = React.useState<string | null>(null)
+  // detailSkill stores the Agent Skill selected for the details dialog.
+  // detailSkill 保存当前打开详情弹窗的 Agent Skill。
+  const [detailSkill, setDetailSkill] = React.useState<AgentSkillSummary | null>(null)
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
     setBusyAction(label)
     try {
@@ -1099,33 +1201,7 @@ function AgentSkillsPanel(props: {
   }, [])
 
   return (
-    <div className="skill-page-body">
-      <div className="skill-summary-grid">
-        <article className="skill-summary-card">
-          <strong>Agent Skills</strong>
-          <span>{props.notice}</span>
-          <small>全局状态：{props.globalEnabled ? "已启用" : "已关闭"} · 技能 {props.skills.length}</small>
-        </article>
-        <article className="skill-summary-card">
-          <strong>技能根目录</strong>
-          <span>{props.systemRoot}</span>
-          <small>{props.userRoot}</small>
-        </article>
-      </div>
-      <div className="skill-toolbar">
-        <button className="skill-action-button secondary" disabled={busyAction !== null} onClick={() => runAction("refresh", props.actions.onRefreshAgentSkills)} type="button">
-          <RefreshCw size={15} />
-          <span>刷新</span>
-        </button>
-        <button className="skill-action-button secondary" disabled={busyAction !== null} onClick={() => runAction("sync", props.actions.onInstallSystemAgentSkills)} type="button">
-          <PackagePlus size={15} />
-          <span>同步系统技能</span>
-        </button>
-        <button className="skill-action-button" disabled={busyAction !== null} onClick={() => runAction("global", () => props.actions.onSetAgentSkillsEnabled(!props.globalEnabled))} type="button">
-          <Power size={15} />
-          <span>{props.globalEnabled ? "关闭全局技能" : "启用全局技能"}</span>
-        </button>
-      </div>
+    <div className="skill-page-body agent-skill-page-body">
       {props.errors.length > 0 ? (
         <div className="skill-warning-list">
           {props.errors.map((error) => (
@@ -1136,23 +1212,33 @@ function AgentSkillsPanel(props: {
           ))}
         </div>
       ) : null}
-      <div className="skill-card-list">
+      <div className="skill-card-list agent-skill-card-list">
         {props.skills.length === 0 ? (
           <article className="skill-empty-card">
             <StatusPill status="pending" label="pending" />
-            <strong>提示词技能目录尚未载入</strong>
-            <span>点击刷新或同步系统技能后会扫描系统目录与用户目录下的 SKILL.md。</span>
+            <strong>{t("skills.agent.emptyTitle")}</strong>
+            <span>{t("skills.agent.emptyDetail")}</span>
           </article>
         ) : props.skills.map((skill) => (
           <AgentSkillCard
             actions={props.actions}
             busy={busyAction !== null}
             key={skill.name}
+            onOpenDetail={setDetailSkill}
             onRunAction={runAction}
             skill={skill}
           />
         ))}
       </div>
+      <AgentSkillDetailDialog
+        open={detailSkill !== null}
+        skill={detailSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailSkill(null)
+          }
+        }}
+      />
     </div>
   )
 }
@@ -1166,6 +1252,9 @@ function AgentSkillCard(props: {
   // Whether another skill action is running.
   // 是否已有其他技能动作正在运行。
   busy: boolean
+  // Opens the details dialog for this Agent Skill.
+  // 打开当前 Agent Skill 的详情弹窗。
+  onOpenDetail: (skill: AgentSkillSummary) => void
   // Runs a labeled async action with page-level busy state.
   // 使用页面级忙碌状态运行带标签的异步动作。
   onRunAction: (label: string, action: () => Promise<void>) => Promise<void>
@@ -1173,38 +1262,124 @@ function AgentSkillCard(props: {
   // 当前卡片渲染的 Agent Skill 行。
   skill: AgentSkillSummary
 }) {
-  const [detailsOpen, setDetailsOpen] = React.useState(false)
+  const { t } = useI18n()
   const fallbackIcon = props.skill.displayName.trim().charAt(0).toUpperCase() || "*"
+  const scopeLabel = localizedAgentSkillScope(props.skill.scope, t)
 
   return (
-    <article className="skill-card">
+    <article className="skill-card agent-skill-card">
       <header className="skill-card-header">
         <div className="agent-skill-title">
-          <span className="agent-skill-icon">{fallbackIcon}</span>
+          <AgentSkillIcon fallback={fallbackIcon} iconPath={props.skill.iconPath} />
           <div>
             <strong>{props.skill.displayName}</strong>
-            <small>ID: {props.skill.name} · {props.skill.scope}</small>
+            <div className="skill-card-badges">
+              {props.skill.enabled ? (
+                <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge>
+              ) : (
+                <Badge variant="destructive">{t("skills.status.stopped")}</Badge>
+              )}
+              <Badge variant="outline">{scopeLabel}</Badge>
+            </div>
           </div>
         </div>
-        <StatusPill status={props.skill.enabled ? "ready" : "warning"} label={props.skill.enabled ? "已启用" : "已停用"} />
       </header>
       <p>{props.skill.description}</p>
-      <div className="skill-meta-grid">
-        <span>{props.skill.skillFile}</span>
-        <span>{props.skill.baseDir}</span>
-      </div>
       <div className="skill-actions-row">
         <button className="skill-action-button" disabled={props.busy} onClick={() => props.onRunAction("agent-toggle", () => props.actions.onSetAgentSkillEnabled(props.skill.name, !props.skill.enabled))} type="button">
           <Power size={15} />
-          <span>{props.skill.enabled ? "停用" : "启用"}</span>
+          <span>{props.skill.enabled ? t("skills.action.disable") : t("skills.action.enable")}</span>
         </button>
-        <button className="skill-action-button secondary" onClick={() => setDetailsOpen((open) => !open)} type="button">
+        <button className="skill-action-button secondary" onClick={() => props.onOpenDetail(props.skill)} type="button">
           <FileText size={15} />
-          <span>{detailsOpen ? "收起" : "详情"}</span>
+          <span>{t("skills.action.details")}</span>
         </button>
       </div>
-      {detailsOpen ? <pre className="skill-body-preview">{props.skill.body}</pre> : null}
     </article>
+  )
+}
+
+// AgentSkillIcon renders the resolved Agent Skill icon with a text fallback.
+// AgentSkillIcon 渲染解析后的 Agent Skill 图标，并提供文本兜底。
+function AgentSkillIcon(props: {
+  // Fallback text used when the icon cannot be loaded.
+  // 图标无法加载时使用的兜底文本。
+  fallback: string
+  // Optional local icon path resolved by the service.
+  // 服务端解析出的可选本地图标路径。
+  iconPath?: string | null
+}) {
+  // failed tracks image loading failure so the fallback stays visible.
+  // failed 跟踪图片加载失败以持续展示兜底。
+  const [failed, setFailed] = React.useState(false)
+  React.useEffect(() => {
+    setFailed(false)
+  }, [props.iconPath])
+
+  if (!props.iconPath || failed) {
+    return <span className="agent-skill-icon fallback">{props.fallback}</span>
+  }
+  return (
+    <span className="agent-skill-icon">
+      <img alt="" src={localMediaUrl(props.iconPath)} onError={() => setFailed(true)} />
+    </span>
+  )
+}
+
+// AgentSkillDetailDialog renders Agent Skill metadata and Markdown body in a dialog.
+// AgentSkillDetailDialog 在弹窗中渲染 Agent Skill 元数据与 Markdown 正文。
+function AgentSkillDetailDialog(props: {
+  // Whether the details dialog is open.
+  // 详情弹窗当前是否打开。
+  open: boolean
+  // Agent Skill selected for details.
+  // 当前查看详情的 Agent Skill。
+  skill: AgentSkillSummary | null
+  // Updates the details dialog open state.
+  // 更新详情弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+}) {
+  const { t } = useI18n()
+  const skill = props.skill
+  const scopeLabel = skill ? localizedAgentSkillScope(skill.scope, t) : ""
+  return (
+    <Dialog open={props.open && skill !== null} onOpenChange={props.onOpenChange}>
+      <DialogContent className="agent-skill-detail-dialog">
+        <DialogHeader>
+          <DialogTitle>{skill?.displayName ?? t("skills.agent.detailsTitle")}</DialogTitle>
+          <DialogDescription>{skill ? `${scopeLabel} · ${skill.enabled ? t("skills.status.enabled") : t("skills.status.stopped")}` : t("skills.agent.detailsDescription")}</DialogDescription>
+        </DialogHeader>
+        {skill ? (
+          <div className="agent-skill-detail-body">
+            <div className="lua-skill-detail-grid">
+              <div>
+                <span>{t("skills.label.currentStatus")}</span>
+                <strong>{skill.enabled ? t("skills.status.enabled") : t("skills.status.stopped")}</strong>
+              </div>
+              <div>
+                <span>{t("skills.label.scope")}</span>
+                <strong>{scopeLabel}</strong>
+              </div>
+              <div className="wide">
+                <span>{t("skills.label.skillFile")}</span>
+                <strong>{skill.skillFile}</strong>
+              </div>
+              <div className="wide">
+                <span>{t("skills.label.skillDir")}</span>
+                <strong>{skill.baseDir}</strong>
+              </div>
+              {skill.iconPath ? (
+                <div className="wide">
+                  <span>{t("skills.label.iconPath")}</span>
+                  <strong>{skill.iconPath}</strong>
+                </div>
+              ) : null}
+            </div>
+            <pre className="skill-body-preview">{skill.body}</pre>
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -2238,11 +2413,11 @@ function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): Array<{ id: Setti
 
 // featureSidebarRows builds left sidebar rows for the current non-settings feature.
 // featureSidebarRows 为当前非设置功能构建左侧栏条目。
-function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
+function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): Array<{ id: string; label: string; detail: string; icon: React.ReactNode }> {
   if (activeArea === "skills") {
     return [
-      { id: "skills-lua", label: "Lua Skills", detail: `${workbench.luaSkills.skills.length} 个技能包`, icon: <Hammer size={16} /> },
-      { id: "skills-agent", label: "Agent Skills", detail: `${workbench.agentSkills.skills.length} 个提示词技能`, icon: <Bot size={16} /> },
+      { id: "skills-lua", label: "Lua Skills", detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
+      { id: "skills-agent", label: "Agent Skills", detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: workbench.agentSkills.skills.length }), icon: <Bot size={16} /> },
     ]
   }
   if (activeArea === "automation") {

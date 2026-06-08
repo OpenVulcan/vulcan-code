@@ -1024,6 +1024,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
         enabled: true,
         skillFile: "C:/Users/20000/.vulcan/skills/.system/security-review/SKILL.md",
         baseDir: "C:/Users/20000/.vulcan/skills/.system/security-review",
+        iconPath: "C:/Users/20000/.vulcan/skills/.system/skill-creator/assets/skill-creator-small.svg",
         body: "Use this skill when the user explicitly requests a security review.",
       },
     ],

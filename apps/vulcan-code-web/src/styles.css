@@ -525,12 +525,7 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
-  width: 34px;
-  height: 28px;
-  justify-content: center;
-  margin-left: 4px;
-  padding: 0;
-  opacity: 1;
+  display: none;
   pointer-events: none;
 }
 
@@ -1954,7 +1949,8 @@ button {
 .skill-management-surface {
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .skill-actions-row,
@@ -2003,11 +1999,19 @@ button {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 12px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .lua-skill-page-body {
   grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-skill-page-body {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.agent-skill-page-body:has(> .skill-warning-list) {
+  grid-template-rows: minmax(0, 96px) minmax(0, 1fr);
 }
 
 .skill-summary-grid {
@@ -2113,8 +2117,13 @@ button {
   display: grid;
   gap: 10px;
   align-content: start;
-  overflow: auto;
   padding-right: 2px;
+}
+
+.agent-skill-page-body > .skill-warning-list {
+  max-height: 96px;
+  min-height: 0;
+  overflow: auto;
   scrollbar-gutter: stable;
 }
 
@@ -2123,13 +2132,26 @@ button {
   align-items: start;
 }
 
+.agent-skill-card-list {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  align-items: start;
+}
+
 .skill-card {
   gap: 10px;
 }
 
-.lua-skill-card {
-  min-height: 196px;
-  align-content: start;
+.lua-skill-card,
+.agent-skill-card {
+  height: 196px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.agent-skill-card {
+  grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 .skill-card-header {
@@ -2195,7 +2217,7 @@ button {
 
 .skill-card-summary {
   min-width: 0;
-  min-height: 38px;
+  min-height: 0;
   display: grid;
   gap: 5px;
 }
@@ -2215,6 +2237,9 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  align-content: start;
+  max-height: 42px;
+  overflow: hidden;
 }
 
 .skill-card-metrics span {
@@ -2242,6 +2267,20 @@ button {
   margin: 0;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.lua-skill-card .skill-actions-row,
+.agent-skill-card .skill-actions-row {
+  align-self: end;
+}
+
+.agent-skill-card > p {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .skill-tool-list,
@@ -2378,20 +2417,45 @@ button {
 .agent-skill-title {
   min-width: 0;
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  align-items: center;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
   gap: 10px;
 }
 
 .agent-skill-icon {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   display: grid;
   place-items: center;
   border: 1px solid var(--border);
   border-radius: 7px;
   background: var(--muted);
+  overflow: hidden;
+}
+
+.agent-skill-icon.fallback {
   font-weight: 750;
+}
+
+.agent-skill-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.agent-skill-detail-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-width: min(760px, calc(100vw - 32px)) !important;
+}
+
+.agent-skill-detail-body {
+  min-width: 0;
+  max-height: min(620px, calc(100vh - 190px));
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
 }
 
 .skill-body-preview {
@@ -5435,8 +5499,7 @@ button {
     max-height: 32vh;
   }
 
-  .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label,
-  .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
+  .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label {
     display: flex;
     margin-top: 0;
     opacity: 1;

@@ -93,6 +93,67 @@ export type TranslationKey =
   | "settings.providers.description"
   | "settings.tools.description"
   | "settings.diagnostics.description"
+  | "skills.action.refresh"
+  | "skills.action.refreshing"
+  | "skills.action.installLua"
+  | "skills.action.syncSystem"
+  | "skills.action.syncing"
+  | "skills.action.install"
+  | "skills.action.installing"
+  | "skills.action.cancel"
+  | "skills.action.details"
+  | "skills.action.tools"
+  | "skills.action.action"
+  | "skills.action.enable"
+  | "skills.action.disable"
+  | "skills.action.update"
+  | "skills.action.delete"
+  | "skills.status.enabled"
+  | "skills.status.stopped"
+  | "skills.label.system"
+  | "skills.label.user"
+  | "skills.label.source"
+  | "skills.label.explicit"
+  | "skills.label.implicit"
+  | "skills.label.closed"
+  | "skills.label.currentStatus"
+  | "skills.label.installLayer"
+  | "skills.label.installManagement"
+  | "skills.label.runtimeEntries"
+  | "skills.label.runtimeTools"
+  | "skills.label.managedInstall"
+  | "skills.label.unmanagedInstall"
+  | "skills.label.scope"
+  | "skills.label.skillFile"
+  | "skills.label.skillDir"
+  | "skills.label.iconPath"
+  | "skills.source.unknown"
+  | "skills.sidebar.luaDetail"
+  | "skills.sidebar.agentDetail"
+  | "skills.header.luaDetail"
+  | "skills.header.agentDetail"
+  | "skills.lua.emptyTitle"
+  | "skills.lua.emptyDetail"
+  | "skills.lua.installTitle"
+  | "skills.lua.installDescription"
+  | "skills.lua.sourceType"
+  | "skills.lua.installSource"
+  | "skills.lua.placeholderGithub"
+  | "skills.lua.placeholderUrl"
+  | "skills.lua.detailsTitle"
+  | "skills.lua.detailsDescription"
+  | "skills.lua.toolsTitle"
+  | "skills.lua.toolsDescription"
+  | "skills.lua.toolsEmpty"
+  | "skills.lua.toolModeAria"
+  | "skills.lua.toolExplicit"
+  | "skills.lua.toolImplicit"
+  | "skills.lua.toolDisabled"
+  | "skills.lua.syncing"
+  | "skills.agent.emptyTitle"
+  | "skills.agent.emptyDetail"
+  | "skills.agent.detailsTitle"
+  | "skills.agent.detailsDescription"
 
 // translations stores shell-level localized labels.
 // translations 保存外壳层本地化标签。
@@ -184,6 +245,67 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "settings.providers.description": "Provider、模型、推理与工具能力",
     "settings.tools.description": "工具调用、命令会话与输出",
     "settings.diagnostics.description": "启动日志、错误与运行时事件",
+    "skills.action.refresh": "刷新",
+    "skills.action.refreshing": "刷新中",
+    "skills.action.installLua": "安装 LuaSkills",
+    "skills.action.syncSystem": "同步系统技能",
+    "skills.action.syncing": "同步中",
+    "skills.action.install": "安装",
+    "skills.action.installing": "安装中",
+    "skills.action.cancel": "取消",
+    "skills.action.details": "详情",
+    "skills.action.tools": "工具",
+    "skills.action.action": "操作",
+    "skills.action.enable": "启用",
+    "skills.action.disable": "停用",
+    "skills.action.update": "更新",
+    "skills.action.delete": "删除",
+    "skills.status.enabled": "已启用",
+    "skills.status.stopped": "已停用",
+    "skills.label.system": "系统",
+    "skills.label.user": "用户",
+    "skills.label.source": "来源",
+    "skills.label.explicit": "显式",
+    "skills.label.implicit": "隐式",
+    "skills.label.closed": "关闭",
+    "skills.label.currentStatus": "当前状态",
+    "skills.label.installLayer": "安装层级",
+    "skills.label.installManagement": "安装管理",
+    "skills.label.runtimeEntries": "运行时入口",
+    "skills.label.runtimeTools": "运行时工具",
+    "skills.label.managedInstall": "受管安装",
+    "skills.label.unmanagedInstall": "非受管安装",
+    "skills.label.scope": "作用域",
+    "skills.label.skillFile": "技能文件",
+    "skills.label.skillDir": "技能目录",
+    "skills.label.iconPath": "图标路径",
+    "skills.source.unknown": "未记录来源",
+    "skills.sidebar.luaDetail": "{count} 个技能包",
+    "skills.sidebar.agentDetail": "{count} 个提示词技能",
+    "skills.header.luaDetail": "总技能数 {total} · 显示工具数 {visible} · 隐式工具数 {implicit}",
+    "skills.header.agentDetail": "总技能数 {total} · 已启用 {enabled} · 加载警告 {warnings}",
+    "skills.lua.emptyTitle": "等待 LuaSkills 目录",
+    "skills.lua.emptyDetail": "启动完成或刷新后会显示真实技能包。",
+    "skills.lua.installTitle": "安装 LuaSkills",
+    "skills.lua.installDescription": "从 GitHub 仓库或 URL 安装一个 Lua Skill 包。",
+    "skills.lua.sourceType": "来源类型",
+    "skills.lua.installSource": "安装来源",
+    "skills.lua.placeholderGithub": "LuaSkills/vulcan-codekit",
+    "skills.lua.placeholderUrl": "https://example.com/skill-source.yaml",
+    "skills.lua.detailsTitle": "Lua Skill 详情",
+    "skills.lua.detailsDescription": "查看 Lua Skill 包详情。",
+    "skills.lua.toolsTitle": "LuaSkills 工具",
+    "skills.lua.toolsDescription": "管理 Lua Skill 工具可见性。",
+    "skills.lua.toolsEmpty": "当前技能尚未解析到可管理的运行时工具。",
+    "skills.lua.toolModeAria": "{name} 工具启用模式",
+    "skills.lua.toolExplicit": "显式启用",
+    "skills.lua.toolImplicit": "隐式启用",
+    "skills.lua.toolDisabled": "关闭工具",
+    "skills.lua.syncing": "同步中",
+    "skills.agent.emptyTitle": "提示词技能目录尚未载入",
+    "skills.agent.emptyDetail": "点击刷新或同步系统技能后会扫描系统目录与用户目录下的 SKILL.md。",
+    "skills.agent.detailsTitle": "Agent Skill 详情",
+    "skills.agent.detailsDescription": "查看 Agent Skill 详情。",
   },
   "en-US": {
     "app.subtitle": "Ai Coding",
@@ -272,6 +394,67 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "settings.providers.description": "Providers, models, reasoning, and tool capability",
     "settings.tools.description": "Tool calls, command sessions, and output",
     "settings.diagnostics.description": "Startup logs, errors, and runtime events",
+    "skills.action.refresh": "Refresh",
+    "skills.action.refreshing": "Refreshing",
+    "skills.action.installLua": "Install LuaSkills",
+    "skills.action.syncSystem": "Sync System Skills",
+    "skills.action.syncing": "Syncing",
+    "skills.action.install": "Install",
+    "skills.action.installing": "Installing",
+    "skills.action.cancel": "Cancel",
+    "skills.action.details": "Details",
+    "skills.action.tools": "Tools",
+    "skills.action.action": "Actions",
+    "skills.action.enable": "Enable",
+    "skills.action.disable": "Disable",
+    "skills.action.update": "Update",
+    "skills.action.delete": "Delete",
+    "skills.status.enabled": "Enabled",
+    "skills.status.stopped": "Disabled",
+    "skills.label.system": "System",
+    "skills.label.user": "User",
+    "skills.label.source": "Source",
+    "skills.label.explicit": "Explicit",
+    "skills.label.implicit": "Implicit",
+    "skills.label.closed": "Closed",
+    "skills.label.currentStatus": "Current Status",
+    "skills.label.installLayer": "Install Layer",
+    "skills.label.installManagement": "Install Management",
+    "skills.label.runtimeEntries": "Runtime Entries",
+    "skills.label.runtimeTools": "Runtime Tools",
+    "skills.label.managedInstall": "Managed Install",
+    "skills.label.unmanagedInstall": "Unmanaged Install",
+    "skills.label.scope": "Scope",
+    "skills.label.skillFile": "Skill File",
+    "skills.label.skillDir": "Skill Directory",
+    "skills.label.iconPath": "Icon Path",
+    "skills.source.unknown": "No source recorded",
+    "skills.sidebar.luaDetail": "{count} skill packages",
+    "skills.sidebar.agentDetail": "{count} prompt skills",
+    "skills.header.luaDetail": "Total skills {total} · Visible tools {visible} · Implicit tools {implicit}",
+    "skills.header.agentDetail": "Total skills {total} · Enabled {enabled} · Load warnings {warnings}",
+    "skills.lua.emptyTitle": "Waiting for LuaSkills catalog",
+    "skills.lua.emptyDetail": "Real skill packages appear after startup completes or refresh runs.",
+    "skills.lua.installTitle": "Install LuaSkills",
+    "skills.lua.installDescription": "Install a Lua Skill package from a GitHub repository or URL.",
+    "skills.lua.sourceType": "Source Type",
+    "skills.lua.installSource": "Install Source",
+    "skills.lua.placeholderGithub": "LuaSkills/vulcan-codekit",
+    "skills.lua.placeholderUrl": "https://example.com/skill-source.yaml",
+    "skills.lua.detailsTitle": "Lua Skill Details",
+    "skills.lua.detailsDescription": "View Lua Skill package details.",
+    "skills.lua.toolsTitle": "LuaSkills Tools",
+    "skills.lua.toolsDescription": "Manage Lua Skill tool visibility.",
+    "skills.lua.toolsEmpty": "This skill has no manageable runtime tools yet.",
+    "skills.lua.toolModeAria": "{name} tool enablement mode",
+    "skills.lua.toolExplicit": "Explicit",
+    "skills.lua.toolImplicit": "Implicit",
+    "skills.lua.toolDisabled": "Disable",
+    "skills.lua.syncing": "Syncing",
+    "skills.agent.emptyTitle": "Prompt skill catalog is not loaded",
+    "skills.agent.emptyDetail": "Refresh or sync system skills to scan SKILL.md files under system and user directories.",
+    "skills.agent.detailsTitle": "Agent Skill Details",
+    "skills.agent.detailsDescription": "View Agent Skill details.",
   },
 }
 
