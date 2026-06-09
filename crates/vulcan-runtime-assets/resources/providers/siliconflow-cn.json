@@ -1525,6 +1525,24 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "deepseek-ai\/DeepSeek-V4-Pro",
+      "name": "deepseek-ai\/DeepSeek-V4-Pro",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1049000,
+      "outputLimit": 393000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

@@ -28,7 +28,7 @@
   },
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "value": "https:\/\/dashscope-intl.aliyuncs.com\/compatible-mode\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -1035,6 +1035,46 @@
       "attachment": false,
       "inputModalities": [
         "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3.6-flash",
+      "name": "Qwen3.6 Flash",
+      "family": "qwen3.6",
+      "releaseDate": "2026-04-27",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3.7-plus",
+      "name": "Qwen3.7 Plus",
+      "family": "qwen",
+      "releaseDate": "2026-06-02",
+      "contextLimit": 1000000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
       ],
       "outputModalities": [
         "text"

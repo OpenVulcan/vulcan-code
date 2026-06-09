@@ -275,6 +275,26 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "qwen3.6-35b-a3b",
+      "name": "Qwen3.6 35B A3B",
+      "status": "beta",
+      "family": "qwen",
+      "releaseDate": "2026-05-01",
+      "contextLimit": 128000,
+      "outputLimit": 16384,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

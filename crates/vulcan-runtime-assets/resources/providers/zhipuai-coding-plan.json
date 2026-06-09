@@ -121,6 +121,26 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "glm-4.6v",
+      "name": "GLM-4.6V",
+      "family": "glm",
+      "releaseDate": "2025-12-08",
+      "contextLimit": 128000,
+      "outputLimit": 32768,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

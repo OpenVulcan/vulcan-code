@@ -1855,6 +1855,42 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "qwen\/qwen3.7-max",
+      "name": "Qwen3.7-Max",
+      "family": "qwen",
+      "releaseDate": "2026-05-21",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax\/minimax-m2.7-highspeed",
+      "name": "MiniMax-M2.7-highspeed",
+      "family": "minimax",
+      "releaseDate": "2026-03-18",
+      "contextLimit": 204800,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

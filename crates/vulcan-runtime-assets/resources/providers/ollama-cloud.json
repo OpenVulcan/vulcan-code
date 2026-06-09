@@ -703,6 +703,26 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "minimax-m3",
+      "name": "minimax-m3",
+      "family": "minimax-m3",
+      "releaseDate": "2026-05-31",
+      "contextLimit": 512000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

@@ -54,6 +54,107 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "Kimi-K2.6",
+      "name": "Kimi-K2.6",
+      "family": "kimi",
+      "releaseDate": "2026-05-13",
+      "contextLimit": 262144,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "Qwen3.6-35B-A3B",
+      "name": "Qwen3.6-35B-A3B",
+      "family": "qwen",
+      "releaseDate": "2026-05-11",
+      "contextLimit": 256000,
+      "inputLimit": 229376,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen3.7-max",
+      "name": "Qwen3.7-Max",
+      "family": "qwen3.7-max",
+      "releaseDate": "2026-05-21",
+      "contextLimit": 256000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-v4-flash",
+      "name": "DeepSeek V4 Flash",
+      "family": "deepseek-flash",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-v4-pro",
+      "name": "DeepSeek V4 Pro",
+      "family": "deepseek-thinking",
+      "releaseDate": "2026-04-24",
+      "contextLimit": 1000000,
+      "outputLimit": 384000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://api.venice.ai/api/v1",
+    "value": "https:\/\/api.venice.ai\/api\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -1266,6 +1266,123 @@
       "inputModalities": [
         "text",
         "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-8-fast",
+      "name": "Claude Opus 4.8 Fast",
+      "family": "claude-opus",
+      "releaseDate": "2026-05-28",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "minimax-m3",
+      "name": "MiniMax M3",
+      "family": "minimax-m3",
+      "releaseDate": "2026-06-01",
+      "contextLimit": 500000,
+      "outputLimit": 131072,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen-3-7-max",
+      "name": "Qwen 3.7 Max",
+      "family": "qwen",
+      "releaseDate": "2026-05-22",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "claude-opus-4-8",
+      "name": "Claude Opus 4.8",
+      "family": "claude-opus",
+      "releaseDate": "2026-05-28",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "qwen-3-7-plus",
+      "name": "Qwen 3.7 Plus",
+      "family": "qwen",
+      "releaseDate": "2026-06-02",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "video"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "gemini-3-5-flash",
+      "name": "Gemini 3.5 Flash",
+      "family": "gemini-flash",
+      "releaseDate": "2026-05-22",
+      "contextLimit": 1000000,
+      "outputLimit": 65536,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image",
+        "audio",
         "video"
       ],
       "outputModalities": [

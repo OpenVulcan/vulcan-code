@@ -1466,6 +1466,43 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "anthropic-claude-opus-4.8",
+      "name": "Claude Opus 4.8",
+      "family": "claude-opus",
+      "releaseDate": "2026-05-28",
+      "contextLimit": 1000000,
+      "outputLimit": 128000,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": true,
+      "inputModalities": [
+        "text",
+        "image"
+      ],
+      "outputModalities": [
+        "text"
+      ]
+    },
+    {
+      "id": "deepseek-4-flash",
+      "name": "Deepseek V4 Flash",
+      "family": "deepseek",
+      "releaseDate": "2026-05-27",
+      "contextLimit": 262144,
+      "outputLimit": 8192,
+      "reasoning": false,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }

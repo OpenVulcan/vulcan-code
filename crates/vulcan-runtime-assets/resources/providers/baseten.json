@@ -201,6 +201,27 @@
       "outputModalities": [
         "text"
       ]
+    },
+    {
+      "id": "zai-org\/GLM-5.1",
+      "name": "GLM 5.1",
+      "family": "glm",
+      "releaseDate": "2026-03-27",
+      "contextLimit": 202800,
+      "outputLimit": 202800,
+      "reasoning": true,
+      "toolCall": true,
+      "temperature": true,
+      "attachment": false,
+      "interleaved": {
+        "field": "reasoning_content"
+      },
+      "inputModalities": [
+        "text"
+      ],
+      "outputModalities": [
+        "text"
+      ]
     }
   ]
 }
