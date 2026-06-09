@@ -42,44 +42,6 @@
   },
   "models": [
     {
-      "id": "deepseek-r1",
-      "name": "DeepSeek R1",
-      "family": "deepseek-thinking",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ],
-      "defaultEnabled": true
-    },
-    {
-      "id": "deepseek-r1-0528",
-      "name": "DeepSeek R1 0528",
-      "family": "deepseek-thinking",
-      "releaseDate": "2025-05-28",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ],
-      "defaultEnabled": true
-    },
-    {
       "id": "deepseek-r1-distill-llama-70b",
       "name": "DeepSeek R1 Distill Llama 70B",
       "family": "deepseek-thinking",
@@ -123,78 +85,6 @@
       "contextLimit": 32768,
       "outputLimit": 16384,
       "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-r1-distill-qwen-14b",
-      "name": "DeepSeek R1 Distill Qwen 14B",
-      "family": "qwen",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-r1-distill-qwen-32b",
-      "name": "DeepSeek R1 Distill Qwen 32B",
-      "family": "qwen",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-r1-distill-qwen-7b",
-      "name": "DeepSeek R1 Distill Qwen 7B",
-      "family": "qwen",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-v3",
-      "name": "DeepSeek V3",
-      "family": "deepseek",
-      "releaseDate": "2024-12-01",
-      "contextLimit": 65536,
-      "outputLimit": 8192,
-      "reasoning": false,
       "toolCall": true,
       "temperature": true,
       "attachment": false,
@@ -326,27 +216,6 @@
       ]
     },
     {
-      "id": "kimi-k2-thinking",
-      "name": "Moonshot Kimi K2 Thinking",
-      "family": "kimi",
-      "releaseDate": "2025-11-06",
-      "contextLimit": 262144,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "kimi-k2.5",
       "name": "Moonshot Kimi K2.5",
       "family": "kimi",
@@ -444,24 +313,6 @@
       "contextLimit": 204800,
       "outputLimit": 131072,
       "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshot-kimi-k2-instruct",
-      "name": "Moonshot Kimi K2 Instruct",
-      "family": "kimi",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": false,
       "toolCall": true,
       "temperature": true,
       "attachment": false,
@@ -1012,78 +863,6 @@
       ]
     },
     {
-      "id": "qwen3-14b",
-      "name": "Qwen3 14B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-235b-a22b",
-      "name": "Qwen3 235B-A22B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-32b",
-      "name": "Qwen3 32B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-8b",
-      "name": "Qwen3 8B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "qwen3-asr-flash",
       "name": "Qwen3-ASR Flash",
       "family": "qwen",
@@ -1096,42 +875,6 @@
       "attachment": false,
       "inputModalities": [
         "audio"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-coder-30b-a3b-instruct",
-      "name": "Qwen3-Coder 30B-A3B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 262144,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-coder-480b-a35b-instruct",
-      "name": "Qwen3-Coder 480B-A35B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 262144,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -1205,42 +948,6 @@
           },
           "citationSupport": true
         }
-      ]
-    },
-    {
-      "id": "qwen3-next-80b-a3b-instruct",
-      "name": "Qwen3-Next 80B-A3B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-09",
-      "contextLimit": 131072,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-next-80b-a3b-thinking",
-      "name": "Qwen3-Next 80B-A3B (Thinking)",
-      "family": "qwen",
-      "releaseDate": "2025-09",
-      "contextLimit": 131072,
-      "outputLimit": 32768,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
       ]
     },
     {

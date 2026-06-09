@@ -420,78 +420,6 @@
       ]
     },
     {
-      "id": "qwen3-14b",
-      "name": "Qwen3 14B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-235b-a22b",
-      "name": "Qwen3 235B-A22B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-32b",
-      "name": "Qwen3 32B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-8b",
-      "name": "Qwen3 8B",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "qwen3-asr-flash",
       "name": "Qwen3-ASR Flash",
       "family": "qwen",
@@ -504,42 +432,6 @@
       "attachment": false,
       "inputModalities": [
         "audio"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-coder-30b-a3b-instruct",
-      "name": "Qwen3-Coder 30B-A3B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 262144,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-coder-480b-a35b-instruct",
-      "name": "Qwen3-Coder 480B-A35B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-04",
-      "contextLimit": 262144,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -635,42 +527,6 @@
           },
           "citationSupport": true
         }
-      ]
-    },
-    {
-      "id": "qwen3-next-80b-a3b-instruct",
-      "name": "Qwen3-Next 80B-A3B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-09",
-      "contextLimit": 131072,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen3-next-80b-a3b-thinking",
-      "name": "Qwen3-Next 80B-A3B (Thinking)",
-      "family": "qwen",
-      "releaseDate": "2025-09",
-      "contextLimit": 131072,
-      "outputLimit": 32768,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
       ]
     },
     {
