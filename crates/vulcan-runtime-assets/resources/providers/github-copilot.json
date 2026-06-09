@@ -10,53 +10,13 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://api.githubcopilot.com",
+    "value": "https:\/\/api.githubcopilot.com",
     "allowOverride": false
   },
   "modelDiscovery": {
     "kind": "openai-models"
   },
   "models": [
-    {
-      "id": "claude-opus-41",
-      "name": "Claude Opus 4.1",
-      "status": "deprecated",
-      "family": "claude-opus",
-      "releaseDate": "2025-08-05",
-      "contextLimit": 80000,
-      "outputLimit": 16000,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gpt-4o",
-      "name": "GPT-4o",
-      "family": "gpt",
-      "releaseDate": "2024-05-13",
-      "contextLimit": 128000,
-      "inputLimit": 64000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
     {
       "id": "claude-sonnet-4.6",
       "name": "Claude Sonnet 4.6",
@@ -140,46 +100,6 @@
       ]
     },
     {
-      "id": "gpt-5.1-codex-mini",
-      "name": "GPT-5.1-Codex-mini",
-      "status": "deprecated",
-      "family": "gpt-codex",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 400000,
-      "inputLimit": 128000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-code-fast-1",
-      "name": "Grok Code Fast 1",
-      "family": "grok",
-      "releaseDate": "2025-08-27",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "claude-opus-4.6",
       "name": "Claude Opus 4.6",
       "family": "claude-opus",
@@ -210,50 +130,6 @@
       "reasoning": false,
       "toolCall": true,
       "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemini-3-pro-preview",
-      "name": "Gemini 3 Pro Preview",
-      "status": "deprecated",
-      "family": "gemini-pro",
-      "releaseDate": "2025-11-18",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gpt-5.1",
-      "name": "GPT-5.1",
-      "status": "deprecated",
-      "family": "gpt",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 264000,
-      "inputLimit": 128000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": false,
       "attachment": true,
       "inputModalities": [
         "text",
@@ -334,27 +210,6 @@
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gpt-5.1-codex-max",
-      "name": "GPT-5.1-Codex-max",
-      "status": "deprecated",
-      "family": "gpt-codex",
-      "releaseDate": "2025-12-04",
-      "contextLimit": 400000,
-      "inputLimit": 128000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": false,
       "attachment": true,
       "inputModalities": [
         "text",
@@ -448,27 +303,6 @@
       ]
     },
     {
-      "id": "gpt-5.1-codex",
-      "name": "GPT-5.1-Codex",
-      "status": "deprecated",
-      "family": "gpt-codex",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 400000,
-      "inputLimit": 128000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "gpt-5.2-codex",
       "name": "GPT-5.2-Codex",
       "family": "gpt-codex",
@@ -539,26 +373,6 @@
       "reasoning": true,
       "toolCall": true,
       "temperature": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gpt-5",
-      "name": "GPT-5",
-      "status": "deprecated",
-      "family": "gpt",
-      "releaseDate": "2025-08-07",
-      "contextLimit": 128000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
       "attachment": true,
       "inputModalities": [
         "text",

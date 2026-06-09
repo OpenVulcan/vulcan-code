@@ -642,19 +642,32 @@ function Merge-ProviderModels {
         [object]$ExistingDefinition,
         [System.Collections.Specialized.OrderedDictionary]$GeneratedDefinition,
         [AllowNull()]
-        [System.Collections.Generic.List[string]]$AddedModelIds
+        [System.Collections.Generic.List[string]]$AddedModelIds,
+        [AllowNull()]
+        [System.Collections.Generic.List[string]]$RemovedModelIds
     )
 
     # Existing model identifier set used to preserve all local-only model metadata and ordering.
     # 用于保留全部本地模型元数据与顺序的既有模型标识集合。
     $existingModelIds = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::Ordinal)
 
+    # Generated upstream model identifier set used to report models no longer returned upstream.
+    # 用于报告上游不再返回模型的上游生成模型标识集合。
+    $generatedModelIds = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::Ordinal)
+    foreach ($generatedModel in @($GeneratedDefinition["models"])) {
+        [void]$generatedModelIds.Add([string]$generatedModel["id"])
+    }
+
     # Merged model array reused for the final provider definition.
     # 供最终 provider 定义复用的合并后模型数组。
     $mergedModels = @()
     foreach ($existingModel in @($ExistingDefinition.models)) {
         $mergedModels += ,(ConvertTo-PlainData -Value $existingModel)
-        [void]$existingModelIds.Add([string]$existingModel.id)
+        $existingModelId = [string]$existingModel.id
+        [void]$existingModelIds.Add($existingModelId)
+        if ($null -ne $RemovedModelIds -and -not $generatedModelIds.Contains($existingModelId)) {
+            $RemovedModelIds.Add($existingModelId) | Out-Null
+        }
     }
 
     foreach ($generatedModel in @($GeneratedDefinition["models"])) {
@@ -682,14 +695,19 @@ function Merge-ProviderDefinition {
     # 合并单个既有 provider 定义时收集到的新增模型标识列表。
     $addedModelIds = New-Object System.Collections.Generic.List[string]
 
+    # Removed upstream model identifier list collected without deleting local provider models.
+    # 仅收集上游已移除模型标识，不删除本地 provider 模型。
+    $removedModelIds = New-Object System.Collections.Generic.List[string]
+
     # Existing root object converted into ordered plain data so custom local fields stay intact.
     # 将既有根对象转换为有序普通数据结构，以保留本地自定义字段。
     $mergedDefinition = ConvertTo-PlainData -Value $ExistingDefinition
-    $mergedDefinition["models"] = Merge-ProviderModels -ExistingDefinition $ExistingDefinition -GeneratedDefinition $GeneratedDefinition -AddedModelIds $addedModelIds
+    $mergedDefinition["models"] = Merge-ProviderModels -ExistingDefinition $ExistingDefinition -GeneratedDefinition $GeneratedDefinition -AddedModelIds $addedModelIds -RemovedModelIds $removedModelIds
 
     return [pscustomobject]@{
         Definition = $mergedDefinition
         AddedModelIds = @($addedModelIds)
+        RemovedModelIds = @($removedModelIds)
     }
 }
 
@@ -751,6 +769,7 @@ function Write-SyncReport {
         [string]$Path,
         [object[]]$CreatedProviders,
         [object[]]$UpdatedProviders,
+        [object[]]$RemovedModelProviders,
         [object[]]$ManualReviewProviders
     )
 
@@ -786,6 +805,24 @@ function Write-SyncReport {
     }
 
     if ($UpdatedProviders.Count -eq 0) {
+        $lines.Add("- None") | Out-Null
+    }
+
+    $lines.Add("") | Out-Null
+    $lines.Add("## Upstream Removed Models") | Out-Null
+    $lines.Add("") | Out-Null
+    $lines.Add("- Models listed here are still preserved locally; the upstream catalog no longer reports them.") | Out-Null
+    $lines.Add("- 此处模型仍保留在本地；上游目录已不再返回它们。") | Out-Null
+    $lines.Add("") | Out-Null
+
+    foreach ($removedModelProvider in $RemovedModelProviders) {
+        $lines.Add(('- ``{0}`` -`{1}` models' -f $removedModelProvider.Id, $removedModelProvider.RemovedModelCount)) | Out-Null
+        foreach ($removedModelId in $removedModelProvider.RemovedModelIds) {
+            $lines.Add(('  - ``{0}``' -f $removedModelId)) | Out-Null
+        }
+    }
+
+    if ($RemovedModelProviders.Count -eq 0) {
         $lines.Add("- None") | Out-Null
     }
 
@@ -840,6 +877,10 @@ $createdProviders = New-Object System.Collections.Generic.List[object]
 # 当前执行过程中收集到的已更新 provider 摘要条目。
 $updatedProviders = New-Object System.Collections.Generic.List[object]
 
+# Upstream-removed model summary entries collected during the current run.
+# 当前执行过程中收集到的上游已移除模型摘要条目。
+$removedModelProviders = New-Object System.Collections.Generic.List[object]
+
 # Manual-review summary entries collected during the current run.
 # 当前执行过程中收集到的人工复核摘要条目。
 $manualReviewProviders = New-Object System.Collections.Generic.List[object]
@@ -878,6 +919,14 @@ foreach ($providerId in @($remoteProviderIndex.Keys | Sort-Object)) {
                 AddedModelIds = @($mergeResult.AddedModelIds)
             }) | Out-Null
         }
+
+        if ($mergeResult.RemovedModelIds.Count -gt 0) {
+            $removedModelProviders.Add([pscustomobject]@{
+                Id = $providerId
+                RemovedModelCount = $mergeResult.RemovedModelIds.Count
+                RemovedModelIds = @($mergeResult.RemovedModelIds)
+            }) | Out-Null
+        }
     } else {
         # New provider resource file path created for one provider absent from the local catalog.
         # 为本地目录中缺失的 provider 创建的新资源文件路径。
@@ -905,11 +954,18 @@ foreach ($providerId in @($remoteProviderIndex.Keys | Sort-Object)) {
     }
 }
 
-Write-SyncReport -Path $ReportPath -CreatedProviders $createdProviders.ToArray() -UpdatedProviders $updatedProviders.ToArray() -ManualReviewProviders $manualReviewProviders.ToArray()
+Write-SyncReport -Path $ReportPath -CreatedProviders $createdProviders.ToArray() -UpdatedProviders $updatedProviders.ToArray() -RemovedModelProviders $removedModelProviders.ToArray() -ManualReviewProviders $manualReviewProviders.ToArray()
 
 # Final provider count currently present in the local resource directory after synchronization.
 # 同步完成后当前本地资源目录中的最终 provider 数量。
 $finalProviderCount = (Get-ChildItem -Path $ProviderDirectory -Filter "*.json" | Measure-Object).Count
+
+# Total upstream-removed model count accumulated for the terminal summary.
+# 为终端摘要累计得到的上游已移除模型总数。
+$removedModelCount = 0
+foreach ($removedModelProvider in $removedModelProviders) {
+    $removedModelCount += $removedModelProvider.RemovedModelCount
+}
 
 # Human-readable synchronization summary emitted to the terminal.
 # 输出到终端的人类可读同步摘要。
@@ -917,6 +973,8 @@ $summary = [pscustomobject]@{
     provider_directory = $ProviderDirectory
     created_provider_count = $createdProviders.Count
     updated_provider_count = $updatedProviders.Count
+    removed_model_provider_count = $removedModelProviders.Count
+    removed_model_count = $removedModelCount
     manual_review_provider_count = $manualReviewProviders.Count
     final_provider_count = $finalProviderCount
     report_path = $ReportPath

@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://inference.do-ai.run/v1",
+    "value": "https:\/\/inference.do-ai.run\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -367,7 +367,7 @@
       ]
     },
     {
-      "id": "fal-ai/elevenlabs/tts/multilingual-v2",
+      "id": "fal-ai\/elevenlabs\/tts\/multilingual-v2",
       "name": "ElevenLabs Multilingual TTS v2",
       "family": "elevenlabs",
       "releaseDate": "2023-08-22",
@@ -385,7 +385,7 @@
       ]
     },
     {
-      "id": "fal-ai/fast-sdxl",
+      "id": "fal-ai\/fast-sdxl",
       "name": "Fast SDXL",
       "family": "stable-diffusion",
       "releaseDate": "2023-07-26",
@@ -403,7 +403,7 @@
       ]
     },
     {
-      "id": "fal-ai/flux/schnell",
+      "id": "fal-ai\/flux\/schnell",
       "name": "FLUX.1 [schnell]",
       "family": "flux",
       "releaseDate": "2024-08-01",
@@ -421,7 +421,7 @@
       ]
     },
     {
-      "id": "fal-ai/stable-audio-25/text-to-audio",
+      "id": "fal-ai\/stable-audio-25\/text-to-audio",
       "name": "Stable Audio 2.5 (Text-to-Audio)",
       "releaseDate": "2025-10-08",
       "contextLimit": 0,
@@ -546,25 +546,6 @@
       "outputLimit": 16384,
       "reasoning": false,
       "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "llama-guard-4-12b",
-      "name": "Llama Guard 4 12B",
-      "family": "llama",
-      "releaseDate": "2025-04-05",
-      "contextLimit": 128000,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
       "temperature": true,
       "attachment": true,
       "inputModalities": [

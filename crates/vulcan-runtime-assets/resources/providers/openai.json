@@ -815,42 +815,6 @@
       ]
     },
     {
-      "id": "o1-mini",
-      "name": "o1-mini",
-      "family": "o-mini",
-      "releaseDate": "2024-09-12",
-      "contextLimit": 128000,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "o1-preview",
-      "name": "o1-preview",
-      "family": "o",
-      "releaseDate": "2024-09-12",
-      "contextLimit": 128000,
-      "outputLimit": 32768,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "o1-pro",
       "name": "o1-pro",
       "family": "o-pro",

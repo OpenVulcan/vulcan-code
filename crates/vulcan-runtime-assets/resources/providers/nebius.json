@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://api.tokenfactory.nebius.com/v1",
+    "value": "https:\/\/api.tokenfactory.nebius.com\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -18,156 +18,7 @@
   },
   "models": [
     {
-      "id": "BAAI/bge-en-icl",
-      "name": "BGE-ICL",
-      "family": "text-embedding",
-      "releaseDate": "2024-07-30",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "BAAI/bge-multilingual-gemma2",
-      "name": "bge-multilingual-gemma2",
-      "family": "text-embedding",
-      "releaseDate": "2024-07-30",
-      "contextLimit": 8192,
-      "inputLimit": 8192,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "black-forest-labs/flux-dev",
-      "name": "FLUX.1-dev",
-      "releaseDate": "2024-08-01",
-      "contextLimit": 77,
-      "inputLimit": 77,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "image"
-      ]
-    },
-    {
-      "id": "black-forest-labs/flux-schnell",
-      "name": "FLUX.1-schnell",
-      "releaseDate": "2024-08-01",
-      "contextLimit": 77,
-      "inputLimit": 77,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "image"
-      ]
-    },
-    {
-      "id": "deepseek-ai/DeepSeek-R1-0528",
-      "name": "DeepSeek-R1-0528",
-      "releaseDate": "2026-01-15",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 32768,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-ai/DeepSeek-R1-0528-fast",
-      "name": "DeepSeek R1 0528 Fast",
-      "family": "deepseek",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-ai/DeepSeek-V3-0324",
-      "name": "DeepSeek-V3-0324",
-      "releaseDate": "2025-03-24",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-ai/DeepSeek-V3-0324-fast",
-      "name": "DeepSeek-V3-0324 (Fast)",
-      "releaseDate": "2025-03-24",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-ai/DeepSeek-V3.2",
+      "id": "deepseek-ai\/DeepSeek-V3.2",
       "name": "DeepSeek-V3.2",
       "releaseDate": "2026-01-20",
       "contextLimit": 163000,
@@ -188,7 +39,7 @@
       ]
     },
     {
-      "id": "google/gemma-2-2b-it",
+      "id": "google\/gemma-2-2b-it",
       "name": "Gemma-2-2b-it",
       "releaseDate": "2024-07-31",
       "contextLimit": 8192,
@@ -206,25 +57,7 @@
       ]
     },
     {
-      "id": "google/gemma-2-9b-it-fast",
-      "name": "Gemma-2-9b-it (Fast)",
-      "releaseDate": "2024-06-27",
-      "contextLimit": 8192,
-      "inputLimit": 8000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/gemma-3-27b-it",
+      "id": "google\/gemma-3-27b-it",
       "name": "Gemma-3-27b-it",
       "releaseDate": "2026-01-20",
       "contextLimit": 110000,
@@ -243,45 +76,7 @@
       ]
     },
     {
-      "id": "google/gemma-3-27b-it-fast",
-      "name": "Gemma-3-27b-it (Fast)",
-      "releaseDate": "2026-01-20",
-      "contextLimit": 110000,
-      "inputLimit": 100000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "intfloat/e5-mistral-7b-instruct",
-      "name": "e5-mistral-7b-instruct",
-      "family": "text-embedding",
-      "releaseDate": "2024-01-01",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "meta-llama/Llama-3.3-70B-Instruct",
+      "id": "meta-llama\/Llama-3.3-70B-Instruct",
       "name": "Llama-3.3-70B-Instruct",
       "releaseDate": "2025-12-05",
       "contextLimit": 128000,
@@ -299,43 +94,7 @@
       ]
     },
     {
-      "id": "meta-llama/Llama-3.3-70B-Instruct-fast",
-      "name": "Llama-3.3-70B-Instruct (Fast)",
-      "releaseDate": "2025-12-05",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "meta-llama/Llama-Guard-3-8B",
-      "name": "Llama-Guard-3-8B",
-      "releaseDate": "2024-04-18",
-      "contextLimit": 8192,
-      "inputLimit": 8000,
-      "outputLimit": 1024,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "meta-llama/Meta-Llama-3.1-8B-Instruct",
+      "id": "meta-llama\/Meta-Llama-3.1-8B-Instruct",
       "name": "Meta-Llama-3.1-8B-Instruct",
       "releaseDate": "2024-07-23",
       "contextLimit": 128000,
@@ -353,86 +112,7 @@
       ]
     },
     {
-      "id": "meta-llama/Meta-Llama-3.1-8B-Instruct-fast",
-      "name": "Meta-Llama-3.1-8B-Instruct (Fast)",
-      "releaseDate": "2024-07-23",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "MiniMaxAI/MiniMax-M2.1",
-      "name": "MiniMax-M2.1",
-      "releaseDate": "2026-02-01",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai/Kimi-K2-Instruct",
-      "name": "Kimi-K2-Instruct",
-      "releaseDate": "2026-01-05",
-      "contextLimit": 200000,
-      "inputLimit": 190000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai/Kimi-K2-Thinking",
-      "name": "Kimi-K2-Thinking",
-      "releaseDate": "2026-01-05",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai/Kimi-K2.5",
+      "id": "moonshotai\/Kimi-K2.5",
       "name": "Kimi-K2.5",
       "family": "kimi",
       "releaseDate": "2025-12-15",
@@ -455,7 +135,7 @@
       ]
     },
     {
-      "id": "moonshotai/Kimi-K2.5-fast",
+      "id": "moonshotai\/Kimi-K2.5-fast",
       "name": "Kimi-K2.5-fast",
       "family": "kimi",
       "releaseDate": "2025-12-15",
@@ -478,7 +158,7 @@
       ]
     },
     {
-      "id": "NousResearch/Hermes-4-405B",
+      "id": "NousResearch\/Hermes-4-405B",
       "name": "Hermes-4-405B",
       "releaseDate": "2026-01-30",
       "contextLimit": 128000,
@@ -499,7 +179,7 @@
       ]
     },
     {
-      "id": "NousResearch/Hermes-4-70B",
+      "id": "NousResearch\/Hermes-4-70B",
       "name": "Hermes-4-70B",
       "releaseDate": "2026-01-30",
       "contextLimit": 128000,
@@ -520,7 +200,7 @@
       ]
     },
     {
-      "id": "nvidia/Llama-3_1-Nemotron-Ultra-253B-v1",
+      "id": "nvidia\/Llama-3_1-Nemotron-Ultra-253B-v1",
       "name": "Llama-3.1-Nemotron-Ultra-253B-v1",
       "releaseDate": "2025-01-15",
       "contextLimit": 128000,
@@ -538,7 +218,7 @@
       ]
     },
     {
-      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "id": "nvidia\/nemotron-3-super-120b-a12b",
       "name": "Nemotron-3-Super-120B-A12B",
       "releaseDate": "2026-03-11",
       "contextLimit": 256000,
@@ -556,25 +236,7 @@
       ]
     },
     {
-      "id": "nvidia/Nemotron-Nano-V2-12b",
-      "name": "Nemotron-Nano-V2-12b",
-      "releaseDate": "2025-03-15",
-      "contextLimit": 32000,
-      "inputLimit": 30000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
+      "id": "nvidia\/NVIDIA-Nemotron-3-Nano-30B-A3B",
       "name": "Nemotron-3-Nano-30B-A3B",
       "releaseDate": "2025-08-10",
       "contextLimit": 32000,
@@ -592,7 +254,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-120b",
+      "id": "openai\/gpt-oss-120b",
       "name": "gpt-oss-120b",
       "releaseDate": "2026-01-10",
       "contextLimit": 128000,
@@ -613,25 +275,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-20b",
-      "name": "gpt-oss-20b",
-      "releaseDate": "2026-01-10",
-      "contextLimit": 128000,
-      "inputLimit": 124000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "PrimeIntellect/INTELLECT-3",
+      "id": "PrimeIntellect\/INTELLECT-3",
       "name": "INTELLECT-3",
       "releaseDate": "2026-01-25",
       "contextLimit": 128000,
@@ -649,25 +293,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen2.5-Coder-7B-fast",
-      "name": "Qwen2.5-Coder-7B (Fast)",
-      "releaseDate": "2024-09-19",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen2.5-VL-72B-Instruct",
+      "id": "Qwen\/Qwen2.5-VL-72B-Instruct",
       "name": "Qwen2.5-VL-72B-Instruct",
       "releaseDate": "2025-01-20",
       "contextLimit": 128000,
@@ -686,7 +312,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+      "id": "Qwen\/Qwen3-235B-A22B-Instruct-2507",
       "name": "Qwen3 235B A22B Instruct 2507",
       "family": "qwen",
       "releaseDate": "2025-07-25",
@@ -704,25 +330,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-235B-A22B-Thinking-2507",
-      "name": "Qwen3 235B A22B Thinking 2507",
-      "family": "qwen",
-      "releaseDate": "2025-07-25",
-      "contextLimit": 262144,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "id": "Qwen\/Qwen3-30B-A3B-Instruct-2507",
       "name": "Qwen3-30B-A3B-Instruct-2507",
       "releaseDate": "2026-01-28",
       "contextLimit": 128000,
@@ -740,28 +348,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-30B-A3B-Thinking-2507",
-      "name": "Qwen3-30B-A3B-Thinking-2507",
-      "releaseDate": "2026-01-28",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen3-32B",
+      "id": "Qwen\/Qwen3-32B",
       "name": "Qwen3-32B",
       "releaseDate": "2026-01-28",
       "contextLimit": 128000,
@@ -779,61 +366,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-32B-fast",
-      "name": "Qwen3-32B (Fast)",
-      "releaseDate": "2026-01-28",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
-      "name": "Qwen3-Coder-30B-A3B-Instruct",
-      "releaseDate": "2026-01-28",
-      "contextLimit": 128000,
-      "inputLimit": 120000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
-      "name": "Qwen3 Coder 480B A35B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-07-23",
-      "contextLimit": 262144,
-      "outputLimit": 66536,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Qwen/Qwen3-Embedding-8B",
+      "id": "Qwen\/Qwen3-Embedding-8B",
       "name": "Qwen3-Embedding-8B",
       "family": "text-embedding",
       "releaseDate": "2026-01-10",
@@ -852,7 +385,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+      "id": "Qwen\/Qwen3-Next-80B-A3B-Thinking",
       "name": "Qwen3-Next-80B-A3B-Thinking",
       "releaseDate": "2026-01-28",
       "contextLimit": 128000,
@@ -873,61 +406,7 @@
       ]
     },
     {
-      "id": "zai-org/GLM-4.5",
-      "name": "GLM-4.5",
-      "releaseDate": "2025-11-15",
-      "contextLimit": 128000,
-      "inputLimit": 124000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "zai-org/GLM-4.5-Air",
-      "name": "GLM-4.5-Air",
-      "releaseDate": "2025-11-15",
-      "contextLimit": 128000,
-      "inputLimit": 124000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "zai-org/GLM-4.7-FP8",
-      "name": "GLM-4.7 (FP8)",
-      "releaseDate": "2026-01-15",
-      "contextLimit": 128000,
-      "inputLimit": 124000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "zai-org/GLM-5",
+      "id": "zai-org\/GLM-5",
       "name": "GLM-5",
       "releaseDate": "2026-03-01",
       "contextLimit": 200000,
@@ -948,7 +427,7 @@
       ]
     },
     {
-      "id": "deepseek-ai/DeepSeek-V3.2-fast",
+      "id": "deepseek-ai\/DeepSeek-V3.2-fast",
       "name": "DeepSeek-V3.2-fast",
       "releaseDate": "2025-01-27",
       "contextLimit": 8000,
@@ -966,7 +445,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-120b-fast",
+      "id": "openai\/gpt-oss-120b-fast",
       "name": "gpt-oss-120b-fast",
       "releaseDate": "2025-06-10",
       "contextLimit": 8000,
@@ -984,7 +463,7 @@
       ]
     },
     {
-      "id": "nvidia/Nemotron-3-Nano-Omni",
+      "id": "nvidia\/Nemotron-3-Nano-Omni",
       "name": "Nemotron-3-Nano-Omni",
       "releaseDate": "2025-01-20",
       "contextLimit": 65536,
@@ -1002,7 +481,7 @@
       ]
     },
     {
-      "id": "MiniMaxAI/MiniMax-M2.5-fast",
+      "id": "MiniMaxAI\/MiniMax-M2.5-fast",
       "name": "MiniMax-M2.5-fast",
       "releaseDate": "2025-01-20",
       "contextLimit": 8000,
@@ -1020,7 +499,7 @@
       ]
     },
     {
-      "id": "MiniMaxAI/MiniMax-M2.5",
+      "id": "MiniMaxAI\/MiniMax-M2.5",
       "name": "MiniMax-M2.5",
       "releaseDate": "2025-01-20",
       "contextLimit": 196608,
@@ -1038,7 +517,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3.5-397B-A17B-fast",
+      "id": "Qwen\/Qwen3.5-397B-A17B-fast",
       "name": "Qwen3.5-397B-A17B-fast",
       "releaseDate": "2025-07-15",
       "contextLimit": 8000,
@@ -1056,7 +535,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-Next-80B-A3B-Thinking-fast",
+      "id": "Qwen\/Qwen3-Next-80B-A3B-Thinking-fast",
       "name": "Qwen3-Next-80B-A3B-Thinking-fast",
       "releaseDate": "2025-07-25",
       "contextLimit": 8000,
@@ -1074,7 +553,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3.5-397B-A17B",
+      "id": "Qwen\/Qwen3.5-397B-A17B",
       "name": "Qwen3.5-397B-A17B",
       "releaseDate": "2025-07-15",
       "contextLimit": 262144,
@@ -1092,7 +571,7 @@
       ]
     },
     {
-      "id": "Qwen/Qwen3-235B-A22B-Thinking-2507-fast",
+      "id": "Qwen\/Qwen3-235B-A22B-Thinking-2507-fast",
       "name": "Qwen3-235B-A22B-Thinking-2507-fast",
       "releaseDate": "2025-07-25",
       "contextLimit": 8000,
@@ -1110,7 +589,7 @@
       ]
     },
     {
-      "id": "deepseek-ai/DeepSeek-V4-Pro",
+      "id": "deepseek-ai\/DeepSeek-V4-Pro",
       "name": "DeepSeek V4 Pro",
       "family": "deepseek-thinking",
       "releaseDate": "2026-04-24",

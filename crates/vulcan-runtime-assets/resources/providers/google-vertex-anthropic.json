@@ -139,26 +139,6 @@
       ]
     },
     {
-      "id": "claude-3-5-sonnet@20241022",
-      "name": "Claude Sonnet 3.5 v2",
-      "family": "claude-sonnet",
-      "releaseDate": "2024-10-22",
-      "contextLimit": 200000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "claude-opus-4-1@20250805",
       "name": "Claude Opus 4.1",
       "family": "claude-opus",
@@ -183,26 +163,6 @@
       "name": "Claude Haiku 4.5",
       "family": "claude-haiku",
       "releaseDate": "2025-10-15",
-      "contextLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet@20250219",
-      "name": "Claude Sonnet 3.7",
-      "family": "claude-sonnet",
-      "releaseDate": "2025-02-19",
       "contextLimit": 200000,
       "outputLimit": 64000,
       "reasoning": true,

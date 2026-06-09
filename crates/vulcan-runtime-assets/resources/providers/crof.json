@@ -10,34 +10,13 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://crof.ai/v1",
+    "value": "https:\/\/crof.ai\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
     "kind": "openai-models"
   },
   "models": [
-    {
-      "id": "deepseek-v4-pro-precision",
-      "name": "DeepSeek V4 Pro (Precision)",
-      "family": "deepseek-thinking",
-      "releaseDate": "2026-04-24",
-      "contextLimit": 1000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
     {
       "id": "deepseek-v3.2",
       "name": "DeepSeek V3.2",
@@ -81,27 +60,6 @@
       ]
     },
     {
-      "id": "mimo-v2.5-pro-precision",
-      "name": "MiMo-V2.5-Pro (Precision)",
-      "family": "mimo",
-      "releaseDate": "2026-04-22",
-      "contextLimit": 1000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "kimi-k2.5-lightning",
       "name": "Kimi K2.5 (Lightning)",
       "family": "kimi-k2.5",
@@ -112,67 +70,6 @@
       "toolCall": true,
       "temperature": false,
       "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text",
-        "image",
-        "video"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "greg",
-      "name": "Experiment!: Greg",
-      "releaseDate": "2026-01-27",
-      "contextLimit": 229376,
-      "outputLimit": 229376,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "glm-5.1-precision",
-      "name": "GLM 5.1 (Precision)",
-      "family": "glm",
-      "releaseDate": "2026-03-27",
-      "contextLimit": 202752,
-      "outputLimit": 202752,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "kimi-k2.6-precision",
-      "name": "Kimi K2.6 (Precision)",
-      "family": "kimi-k2.6",
-      "releaseDate": "2026-04-21",
-      "contextLimit": 262144,
-      "outputLimit": 262144,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
       "interleaved": {
         "field": "reasoning_content"
       },

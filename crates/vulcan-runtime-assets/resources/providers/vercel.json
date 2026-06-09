@@ -17,42 +17,7 @@
   },
   "models": [
     {
-      "id": "prime-intellect/intellect-3",
-      "name": "INTELLECT 3",
-      "family": "intellect",
-      "releaseDate": "2025-11-26",
-      "contextLimit": 131072,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "inception/mercury-edit-2",
-      "name": "Mercury Edit 2",
-      "releaseDate": "2026-03-30",
-      "contextLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "inception/mercury-coder-small",
+      "id": "inception\/mercury-coder-small",
       "name": "Mercury Coder Small Beta",
       "family": "mercury",
       "releaseDate": "2025-02-26",
@@ -70,7 +35,7 @@
       ]
     },
     {
-      "id": "inception/mercury-2",
+      "id": "inception\/mercury-2",
       "name": "Mercury 2",
       "family": "mercury",
       "releaseDate": "2026-02-24",
@@ -88,7 +53,7 @@
       ]
     },
     {
-      "id": "zai/glm-5.1",
+      "id": "zai\/glm-5.1",
       "name": "GLM 5.1",
       "family": "glm",
       "releaseDate": "2026-04-07",
@@ -108,7 +73,7 @@
       ]
     },
     {
-      "id": "zai/glm-5v-turbo",
+      "id": "zai\/glm-5v-turbo",
       "name": "GLM 5V Turbo",
       "family": "glm",
       "releaseDate": "2026-04-01",
@@ -128,7 +93,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.6v-flash",
+      "id": "zai\/glm-4.6v-flash",
       "name": "GLM-4.6V-Flash",
       "family": "glm",
       "releaseDate": "2025-09-30",
@@ -148,7 +113,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.7-flashx",
+      "id": "zai\/glm-4.7-flashx",
       "name": "GLM 4.7 FlashX",
       "family": "glm-flash",
       "releaseDate": "2025-01",
@@ -167,7 +132,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.5-air",
+      "id": "zai\/glm-4.5-air",
       "name": "GLM 4.5 Air",
       "family": "glm-air",
       "releaseDate": "2025-07-28",
@@ -185,7 +150,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.5v",
+      "id": "zai\/glm-4.5v",
       "name": "GLM 4.5V",
       "family": "glm",
       "releaseDate": "2025-08-11",
@@ -204,7 +169,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.7-flash",
+      "id": "zai\/glm-4.7-flash",
       "name": "GLM 4.7 Flash",
       "family": "glm",
       "releaseDate": "2026-03-13",
@@ -222,7 +187,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.6",
+      "id": "zai\/glm-4.6",
       "name": "GLM 4.6",
       "family": "glm",
       "releaseDate": "2025-09-30",
@@ -241,7 +206,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.5",
+      "id": "zai\/glm-4.5",
       "name": "GLM 4.5",
       "family": "glm",
       "releaseDate": "2025-07-28",
@@ -260,7 +225,7 @@
       ]
     },
     {
-      "id": "zai/glm-5-turbo",
+      "id": "zai\/glm-5-turbo",
       "name": "GLM 5 Turbo",
       "family": "glm",
       "releaseDate": "2026-03-15",
@@ -278,7 +243,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.7",
+      "id": "zai\/glm-4.7",
       "name": "GLM 4.7",
       "family": "glm",
       "releaseDate": "2025-12-22",
@@ -297,7 +262,7 @@
       ]
     },
     {
-      "id": "zai/glm-5",
+      "id": "zai\/glm-5",
       "name": "GLM-5",
       "family": "glm",
       "releaseDate": "2026-02-12",
@@ -315,7 +280,7 @@
       ]
     },
     {
-      "id": "zai/glm-4.6v",
+      "id": "zai\/glm-4.6v",
       "name": "GLM-4.6V",
       "family": "glm",
       "releaseDate": "2025-09-30",
@@ -335,7 +300,7 @@
       ]
     },
     {
-      "id": "cohere/embed-v4.0",
+      "id": "cohere\/embed-v4.0",
       "name": "Embed v4.0",
       "family": "cohere-embed",
       "releaseDate": "2025-04-15",
@@ -353,7 +318,7 @@
       ]
     },
     {
-      "id": "cohere/command-a",
+      "id": "cohere\/command-a",
       "name": "Command A",
       "family": "command",
       "releaseDate": "2025-03-13",
@@ -371,7 +336,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-4-lite",
+      "id": "voyage\/voyage-4-lite",
       "name": "voyage-4-lite",
       "family": "voyage",
       "releaseDate": "2026-03-06",
@@ -389,7 +354,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-4",
+      "id": "voyage\/voyage-4",
       "name": "voyage-4",
       "family": "voyage",
       "releaseDate": "2026-03-06",
@@ -407,7 +372,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-3.5",
+      "id": "voyage\/voyage-3.5",
       "name": "voyage-3.5",
       "family": "voyage",
       "releaseDate": "2025-05-20",
@@ -425,7 +390,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-law-2",
+      "id": "voyage\/voyage-law-2",
       "name": "voyage-law-2",
       "family": "voyage",
       "releaseDate": "2024-03",
@@ -443,7 +408,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-3.5-lite",
+      "id": "voyage\/voyage-3.5-lite",
       "name": "voyage-3.5-lite",
       "family": "voyage",
       "releaseDate": "2025-05-20",
@@ -461,7 +426,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-3-large",
+      "id": "voyage\/voyage-3-large",
       "name": "voyage-3-large",
       "family": "voyage",
       "releaseDate": "2024-09",
@@ -479,7 +444,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-finance-2",
+      "id": "voyage\/voyage-finance-2",
       "name": "voyage-finance-2",
       "family": "voyage",
       "releaseDate": "2024-03",
@@ -497,7 +462,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-code-2",
+      "id": "voyage\/voyage-code-2",
       "name": "voyage-code-2",
       "family": "voyage",
       "releaseDate": "2024-01",
@@ -515,7 +480,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-4-large",
+      "id": "voyage\/voyage-4-large",
       "name": "voyage-4-large",
       "family": "voyage",
       "releaseDate": "2026-03-06",
@@ -533,7 +498,7 @@
       ]
     },
     {
-      "id": "voyage/voyage-code-3",
+      "id": "voyage\/voyage-code-3",
       "name": "voyage-code-3",
       "family": "voyage",
       "releaseDate": "2024-09",
@@ -551,7 +516,7 @@
       ]
     },
     {
-      "id": "bytedance/seed-1.6",
+      "id": "bytedance\/seed-1.6",
       "name": "Seed 1.6",
       "family": "seed",
       "releaseDate": "2025-09",
@@ -569,7 +534,7 @@
       ]
     },
     {
-      "id": "bytedance/seed-1.8",
+      "id": "bytedance\/seed-1.8",
       "name": "Seed 1.8",
       "family": "seed",
       "releaseDate": "2025-10",
@@ -588,7 +553,7 @@
       ]
     },
     {
-      "id": "bfl/flux-pro-1.0-fill",
+      "id": "bfl\/flux-pro-1.0-fill",
       "name": "FLUX.1 Fill [pro]",
       "family": "flux",
       "releaseDate": "2024-10",
@@ -606,7 +571,7 @@
       ]
     },
     {
-      "id": "bfl/flux-kontext-max",
+      "id": "bfl\/flux-kontext-max",
       "name": "FLUX.1 Kontext Max",
       "family": "flux",
       "releaseDate": "2025-06",
@@ -624,7 +589,7 @@
       ]
     },
     {
-      "id": "bfl/flux-pro-1.1",
+      "id": "bfl\/flux-pro-1.1",
       "name": "FLUX1.1 [pro]",
       "family": "flux",
       "releaseDate": "2024-10",
@@ -642,7 +607,7 @@
       ]
     },
     {
-      "id": "bfl/flux-pro-1.1-ultra",
+      "id": "bfl\/flux-pro-1.1-ultra",
       "name": "FLUX1.1 [pro] Ultra",
       "family": "flux",
       "releaseDate": "2024-11",
@@ -660,7 +625,7 @@
       ]
     },
     {
-      "id": "bfl/flux-kontext-pro",
+      "id": "bfl\/flux-kontext-pro",
       "name": "FLUX.1 Kontext Pro",
       "family": "flux",
       "releaseDate": "2025-06",
@@ -678,7 +643,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2.5",
+      "id": "moonshotai\/kimi-k2.5",
       "name": "Kimi K2.5",
       "family": "kimi",
       "releaseDate": "2026-01-26",
@@ -699,25 +664,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2-0905",
-      "name": "Kimi K2 0905",
-      "family": "kimi",
-      "releaseDate": "2025-09-05",
-      "contextLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai/kimi-k2-turbo",
+      "id": "moonshotai\/kimi-k2-turbo",
       "name": "Kimi K2 Turbo",
       "family": "kimi",
       "releaseDate": "2025-09-05",
@@ -735,7 +682,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2-thinking",
+      "id": "moonshotai\/kimi-k2-thinking",
       "name": "Kimi K2 Thinking",
       "family": "kimi-thinking",
       "releaseDate": "2025-11-06",
@@ -754,7 +701,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2-thinking-turbo",
+      "id": "moonshotai\/kimi-k2-thinking-turbo",
       "name": "Kimi K2 Thinking Turbo",
       "family": "kimi-thinking",
       "releaseDate": "2025-11-06",
@@ -773,7 +720,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2.6",
+      "id": "moonshotai\/kimi-k2.6",
       "name": "Kimi K2.6",
       "family": "kimi-k2.6",
       "releaseDate": "2026-04-20",
@@ -793,7 +740,7 @@
       ]
     },
     {
-      "id": "moonshotai/kimi-k2",
+      "id": "moonshotai\/kimi-k2",
       "name": "Kimi K2 Instruct",
       "status": "deprecated",
       "family": "kimi",
@@ -812,7 +759,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-medium",
+      "id": "mistral\/mistral-medium",
       "name": "Mistral Medium 3.1",
       "family": "mistral-medium",
       "releaseDate": "2025-05-07",
@@ -831,7 +778,7 @@
       ]
     },
     {
-      "id": "mistral/devstral-2",
+      "id": "mistral\/devstral-2",
       "name": "Devstral 2",
       "family": "devstral",
       "releaseDate": "2025-12-09",
@@ -849,7 +796,7 @@
       ]
     },
     {
-      "id": "mistral/codestral-embed",
+      "id": "mistral\/codestral-embed",
       "name": "Codestral Embed",
       "family": "codestral-embed",
       "releaseDate": "2025-05-28",
@@ -867,7 +814,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-medium-3.5",
+      "id": "mistral\/mistral-medium-3.5",
       "name": "Mistral Medium Latest",
       "family": "mistral-medium",
       "releaseDate": "2026-05-21",
@@ -885,7 +832,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-nemo",
+      "id": "mistral\/mistral-nemo",
       "name": "Mistral Nemo",
       "family": "mistral-nemo",
       "releaseDate": "2024-07-01",
@@ -903,7 +850,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-large-3",
+      "id": "mistral\/mistral-large-3",
       "name": "Mistral Large 3",
       "family": "mistral-large",
       "releaseDate": "2025-12-02",
@@ -922,7 +869,7 @@
       ]
     },
     {
-      "id": "mistral/devstral-small-2",
+      "id": "mistral\/devstral-small-2",
       "name": "Devstral Small 2",
       "family": "devstral",
       "releaseDate": "2025-05-07",
@@ -940,7 +887,7 @@
       ]
     },
     {
-      "id": "mistral/devstral-small",
+      "id": "mistral\/devstral-small",
       "name": "Devstral Small 1.1",
       "family": "devstral",
       "releaseDate": "2025-05-07",
@@ -958,7 +905,7 @@
       ]
     },
     {
-      "id": "mistral/ministral-14b",
+      "id": "mistral\/ministral-14b",
       "name": "Ministral 14B",
       "family": "ministral",
       "releaseDate": "2025-12-01",
@@ -978,7 +925,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-embed",
+      "id": "mistral\/mistral-embed",
       "name": "Mistral Embed",
       "family": "mistral-embed",
       "releaseDate": "2023-12-11",
@@ -996,7 +943,7 @@
       ]
     },
     {
-      "id": "mistral/magistral-medium",
+      "id": "mistral\/magistral-medium",
       "name": "Magistral Medium (latest)",
       "family": "magistral-medium",
       "releaseDate": "2025-03-17",
@@ -1014,7 +961,7 @@
       ]
     },
     {
-      "id": "mistral/ministral-3b",
+      "id": "mistral\/ministral-3b",
       "name": "Ministral 3B (latest)",
       "family": "ministral",
       "releaseDate": "2024-10-01",
@@ -1032,7 +979,7 @@
       ]
     },
     {
-      "id": "mistral/pixtral-large",
+      "id": "mistral\/pixtral-large",
       "name": "Pixtral Large (latest)",
       "family": "pixtral",
       "releaseDate": "2024-11-01",
@@ -1051,7 +998,7 @@
       ]
     },
     {
-      "id": "mistral/ministral-8b",
+      "id": "mistral\/ministral-8b",
       "name": "Ministral 8B (latest)",
       "family": "ministral",
       "releaseDate": "2024-10-01",
@@ -1069,25 +1016,7 @@
       ]
     },
     {
-      "id": "mistral/mixtral-8x22b-instruct",
-      "name": "Mixtral 8x22B",
-      "family": "mixtral",
-      "releaseDate": "2024-04-17",
-      "contextLimit": 64000,
-      "outputLimit": 64000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "mistral/magistral-small",
+      "id": "mistral\/magistral-small",
       "name": "Magistral Small",
       "family": "magistral-small",
       "releaseDate": "2025-03-17",
@@ -1105,7 +1034,7 @@
       ]
     },
     {
-      "id": "mistral/codestral",
+      "id": "mistral\/codestral",
       "name": "Codestral (latest)",
       "family": "codestral",
       "releaseDate": "2024-05-29",
@@ -1123,7 +1052,7 @@
       ]
     },
     {
-      "id": "mistral/pixtral-12b",
+      "id": "mistral\/pixtral-12b",
       "name": "Pixtral 12B",
       "family": "pixtral",
       "releaseDate": "2024-09-01",
@@ -1142,7 +1071,7 @@
       ]
     },
     {
-      "id": "mistral/mistral-small",
+      "id": "mistral\/mistral-small",
       "name": "Mistral Small (latest)",
       "family": "mistral-small",
       "releaseDate": "2026-03-16",
@@ -1161,7 +1090,7 @@
       ]
     },
     {
-      "id": "morph/morph-v3-fast",
+      "id": "morph\/morph-v3-fast",
       "name": "Morph v3 Fast",
       "family": "morph",
       "releaseDate": "2024-08-15",
@@ -1179,7 +1108,7 @@
       ]
     },
     {
-      "id": "morph/morph-v3-large",
+      "id": "morph\/morph-v3-large",
       "name": "Morph v3 Large",
       "family": "morph",
       "releaseDate": "2024-08-15",
@@ -1197,7 +1126,7 @@
       ]
     },
     {
-      "id": "openai/text-embedding-3-large",
+      "id": "openai\/text-embedding-3-large",
       "name": "text-embedding-3-large",
       "family": "text-embedding",
       "releaseDate": "2024-01-25",
@@ -1216,7 +1145,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4o-mini-search-preview",
+      "id": "openai\/gpt-4o-mini-search-preview",
       "name": "GPT 4o Mini Search Preview",
       "family": "gpt-mini",
       "releaseDate": "2025-01",
@@ -1235,7 +1164,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.2",
+      "id": "openai\/gpt-5.2",
       "name": "GPT-5.2",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1256,7 +1185,7 @@
       ]
     },
     {
-      "id": "openai/gpt-3.5-turbo",
+      "id": "openai\/gpt-3.5-turbo",
       "name": "GPT-3.5 Turbo",
       "family": "gpt",
       "releaseDate": "2023-03-01",
@@ -1275,7 +1204,7 @@
       ]
     },
     {
-      "id": "openai/o3-pro",
+      "id": "openai\/o3-pro",
       "name": "o3 Pro",
       "family": "o-pro",
       "releaseDate": "2025-04-16",
@@ -1296,7 +1225,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.4-nano",
+      "id": "openai\/gpt-5.4-nano",
       "name": "GPT 5.4 Nano",
       "family": "gpt",
       "releaseDate": "2026-03-17",
@@ -1317,7 +1246,7 @@
       ]
     },
     {
-      "id": "openai/text-embedding-ada-002",
+      "id": "openai\/text-embedding-ada-002",
       "name": "text-embedding-ada-002",
       "family": "text-embedding",
       "releaseDate": "2022-12-15",
@@ -1336,7 +1265,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.5-pro",
+      "id": "openai\/gpt-5.5-pro",
       "name": "GPT 5.5 Pro",
       "family": "gpt",
       "releaseDate": "2026-04-24",
@@ -1357,7 +1286,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.1-codex-mini",
+      "id": "openai\/gpt-5.1-codex-mini",
       "name": "GPT-5.1 Codex mini",
       "family": "gpt",
       "releaseDate": "2025-05-16",
@@ -1378,7 +1307,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.2-pro",
+      "id": "openai\/gpt-5.2-pro",
       "name": "GPT 5.2 ",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1399,7 +1328,7 @@
       ]
     },
     {
-      "id": "openai/gpt-3.5-turbo-instruct",
+      "id": "openai\/gpt-3.5-turbo-instruct",
       "name": "GPT-3.5 Turbo Instruct",
       "family": "gpt",
       "releaseDate": "2023-03-01",
@@ -1418,7 +1347,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-20b",
+      "id": "openai\/gpt-oss-20b",
       "name": "GPT OSS 20B",
       "family": "gpt-oss",
       "releaseDate": "2025-08-05",
@@ -1437,7 +1366,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-safeguard-20b",
+      "id": "openai\/gpt-oss-safeguard-20b",
       "name": "gpt-oss-safeguard-20b",
       "family": "gpt-oss",
       "releaseDate": "2024-12-01",
@@ -1456,7 +1385,7 @@
       ]
     },
     {
-      "id": "openai/text-embedding-3-small",
+      "id": "openai\/text-embedding-3-small",
       "name": "text-embedding-3-small",
       "family": "text-embedding",
       "releaseDate": "2024-01-25",
@@ -1475,7 +1404,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5-pro",
+      "id": "openai\/gpt-5-pro",
       "name": "GPT-5 pro",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1497,7 +1426,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.4",
+      "id": "openai\/gpt-5.4",
       "name": "GPT 5.4",
       "family": "gpt",
       "releaseDate": "2026-03-05",
@@ -1518,7 +1447,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.4-mini",
+      "id": "openai\/gpt-5.4-mini",
       "name": "GPT 5.4 Mini",
       "family": "gpt",
       "releaseDate": "2026-03-17",
@@ -1539,7 +1468,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.1-thinking",
+      "id": "openai\/gpt-5.1-thinking",
       "name": "GPT 5.1 Thinking",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1561,7 +1490,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.1-instant",
+      "id": "openai\/gpt-5.1-instant",
       "name": "GPT-5.1 Instant",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1583,28 +1512,7 @@
       ]
     },
     {
-      "id": "openai/codex-mini",
-      "name": "Codex Mini",
-      "family": "gpt-codex-mini",
-      "releaseDate": "2025-05-16",
-      "contextLimit": 200000,
-      "inputLimit": 100000,
-      "outputLimit": 100000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "openai/gpt-5.1-codex-max",
+      "id": "openai\/gpt-5.1-codex-max",
       "name": "GPT 5.1 Codex Max",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1625,7 +1533,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.5",
+      "id": "openai\/gpt-5.5",
       "name": "GPT 5.5",
       "family": "gpt",
       "releaseDate": "2026-04-24",
@@ -1646,7 +1554,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.4-pro",
+      "id": "openai\/gpt-5.4-pro",
       "name": "GPT 5.4 Pro",
       "family": "gpt",
       "releaseDate": "2026-03-05",
@@ -1667,7 +1575,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.1-codex",
+      "id": "openai\/gpt-5.1-codex",
       "name": "GPT-5.1-Codex",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1688,7 +1596,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.2-codex",
+      "id": "openai\/gpt-5.2-codex",
       "name": "GPT-5.2-Codex",
       "family": "gpt-codex",
       "releaseDate": "2025-12",
@@ -1709,7 +1617,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5-chat",
+      "id": "openai\/gpt-5-chat",
       "name": "GPT-5 Chat",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1731,7 +1639,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.3-codex",
+      "id": "openai\/gpt-5.3-codex",
       "name": "GPT 5.3 Codex",
       "family": "gpt",
       "releaseDate": "2026-02-24",
@@ -1752,7 +1660,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.2-chat",
+      "id": "openai\/gpt-5.2-chat",
       "name": "GPT-5.2 Chat",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1773,7 +1681,7 @@
       ]
     },
     {
-      "id": "openai/gpt-oss-120b",
+      "id": "openai\/gpt-oss-120b",
       "name": "GPT OSS 120B",
       "family": "gpt-oss",
       "releaseDate": "2025-08-05",
@@ -1791,7 +1699,7 @@
       ]
     },
     {
-      "id": "openai/o3-deep-research",
+      "id": "openai\/o3-deep-research",
       "name": "o3-deep-research",
       "family": "o",
       "releaseDate": "2024-06-26",
@@ -1812,7 +1720,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5.3-chat",
+      "id": "openai\/gpt-5.3-chat",
       "name": "GPT-5.3 Chat",
       "family": "gpt",
       "releaseDate": "2026-03-03",
@@ -1833,7 +1741,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5",
+      "id": "openai\/gpt-5",
       "name": "GPT-5",
       "family": "gpt",
       "releaseDate": "2025-08-07",
@@ -1853,7 +1761,7 @@
       ]
     },
     {
-      "id": "openai/o3",
+      "id": "openai\/o3",
       "name": "o3",
       "family": "o",
       "releaseDate": "2025-04-16",
@@ -1873,7 +1781,7 @@
       ]
     },
     {
-      "id": "openai/o3-mini",
+      "id": "openai\/o3-mini",
       "name": "o3-mini",
       "family": "o-mini",
       "releaseDate": "2024-12-20",
@@ -1891,7 +1799,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5-mini",
+      "id": "openai\/gpt-5-mini",
       "name": "GPT-5 Mini",
       "family": "gpt-mini",
       "releaseDate": "2025-08-07",
@@ -1911,7 +1819,7 @@
       ]
     },
     {
-      "id": "openai/o4-mini",
+      "id": "openai\/o4-mini",
       "name": "o4-mini",
       "family": "o-mini",
       "releaseDate": "2025-04-16",
@@ -1930,7 +1838,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4.1-nano",
+      "id": "openai\/gpt-4.1-nano",
       "name": "GPT-4.1 nano",
       "family": "gpt-nano",
       "releaseDate": "2025-04-14",
@@ -1949,7 +1857,7 @@
       ]
     },
     {
-      "id": "openai/o1",
+      "id": "openai\/o1",
       "name": "o1",
       "family": "o",
       "releaseDate": "2024-12-05",
@@ -1969,7 +1877,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4-turbo",
+      "id": "openai\/gpt-4-turbo",
       "name": "GPT-4 Turbo",
       "family": "gpt",
       "releaseDate": "2023-11-06",
@@ -1988,7 +1896,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4o-mini",
+      "id": "openai\/gpt-4o-mini",
       "name": "GPT-4o mini",
       "family": "gpt-mini",
       "releaseDate": "2024-07-18",
@@ -2008,7 +1916,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5-nano",
+      "id": "openai\/gpt-5-nano",
       "name": "GPT-5 Nano",
       "family": "gpt-nano",
       "releaseDate": "2025-08-07",
@@ -2028,7 +1936,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4.1-mini",
+      "id": "openai\/gpt-4.1-mini",
       "name": "GPT-4.1 mini",
       "family": "gpt-mini",
       "releaseDate": "2025-04-14",
@@ -2048,7 +1956,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4.1",
+      "id": "openai\/gpt-4.1",
       "name": "GPT-4.1",
       "family": "gpt",
       "releaseDate": "2025-04-14",
@@ -2068,7 +1976,7 @@
       ]
     },
     {
-      "id": "openai/gpt-5-codex",
+      "id": "openai\/gpt-5-codex",
       "name": "GPT-5-Codex",
       "family": "gpt-codex",
       "releaseDate": "2025-09-15",
@@ -2088,7 +1996,7 @@
       ]
     },
     {
-      "id": "openai/gpt-4o",
+      "id": "openai\/gpt-4o",
       "name": "GPT-4o",
       "family": "gpt",
       "releaseDate": "2024-05-13",
@@ -2108,7 +2016,7 @@
       ]
     },
     {
-      "id": "amazon/nova-2-lite",
+      "id": "amazon\/nova-2-lite",
       "name": "Nova 2 Lite",
       "family": "nova",
       "releaseDate": "2024-12-01",
@@ -2127,7 +2035,7 @@
       ]
     },
     {
-      "id": "amazon/titan-embed-text-v2",
+      "id": "amazon\/titan-embed-text-v2",
       "name": "Titan Text Embeddings V2",
       "family": "titan-embed",
       "releaseDate": "2024-04",
@@ -2145,7 +2053,7 @@
       ]
     },
     {
-      "id": "amazon/nova-lite",
+      "id": "amazon\/nova-lite",
       "name": "Nova Lite",
       "family": "nova-lite",
       "releaseDate": "2024-12-03",
@@ -2165,7 +2073,7 @@
       ]
     },
     {
-      "id": "amazon/nova-micro",
+      "id": "amazon\/nova-micro",
       "name": "Nova Micro",
       "family": "nova-micro",
       "releaseDate": "2024-12-03",
@@ -2183,7 +2091,7 @@
       ]
     },
     {
-      "id": "amazon/nova-pro",
+      "id": "amazon\/nova-pro",
       "name": "Nova Pro",
       "family": "nova-pro",
       "releaseDate": "2024-12-03",
@@ -2203,7 +2111,7 @@
       ]
     },
     {
-      "id": "recraft/recraft-v2",
+      "id": "recraft\/recraft-v2",
       "name": "Recraft V2",
       "family": "recraft",
       "releaseDate": "2024-03",
@@ -2221,7 +2129,7 @@
       ]
     },
     {
-      "id": "recraft/recraft-v3",
+      "id": "recraft\/recraft-v3",
       "name": "Recraft V3",
       "family": "recraft",
       "releaseDate": "2024-10",
@@ -2239,7 +2147,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.1",
+      "id": "minimax\/minimax-m2.1",
       "name": "MiniMax M2.1",
       "family": "minimax",
       "releaseDate": "2025-10-27",
@@ -2258,7 +2166,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.7-highspeed",
+      "id": "minimax\/minimax-m2.7-highspeed",
       "name": "MiniMax M2.7 High Speed",
       "family": "minimax",
       "releaseDate": "2026-03-18",
@@ -2277,7 +2185,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2",
+      "id": "minimax\/minimax-m2",
       "name": "MiniMax M2",
       "family": "minimax",
       "releaseDate": "2025-10-27",
@@ -2296,7 +2204,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.1-lightning",
+      "id": "minimax\/minimax-m2.1-lightning",
       "name": "MiniMax M2.1 Lightning",
       "family": "minimax",
       "releaseDate": "2025-10-27",
@@ -2314,7 +2222,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.5",
+      "id": "minimax\/minimax-m2.5",
       "name": "MiniMax M2.5",
       "family": "minimax",
       "releaseDate": "2026-02-12",
@@ -2332,7 +2240,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.7",
+      "id": "minimax\/minimax-m2.7",
       "name": "Minimax M2.7",
       "family": "minimax",
       "releaseDate": "2026-03-18",
@@ -2352,7 +2260,7 @@
       ]
     },
     {
-      "id": "minimax/minimax-m2.5-highspeed",
+      "id": "minimax\/minimax-m2.5-highspeed",
       "name": "MiniMax M2.5 High Speed",
       "family": "minimax",
       "releaseDate": "2026-02-12",
@@ -2370,7 +2278,7 @@
       ]
     },
     {
-      "id": "kwaipilot/kat-coder-pro-v2",
+      "id": "kwaipilot\/kat-coder-pro-v2",
       "name": "Kat Coder Pro V2",
       "family": "kat-coder",
       "releaseDate": "2026-03-27",
@@ -2388,7 +2296,7 @@
       ]
     },
     {
-      "id": "kwaipilot/kat-coder-pro-v1",
+      "id": "kwaipilot\/kat-coder-pro-v1",
       "name": "KAT-Coder-Pro V1",
       "family": "kat-coder",
       "releaseDate": "2025-10-24",
@@ -2406,7 +2314,7 @@
       ]
     },
     {
-      "id": "nvidia/nemotron-nano-12b-v2-vl",
+      "id": "nvidia\/nemotron-nano-12b-v2-vl",
       "name": "Nvidia Nemotron Nano 12B V2 VL",
       "family": "nemotron",
       "releaseDate": "2024-12",
@@ -2425,7 +2333,7 @@
       ]
     },
     {
-      "id": "nvidia/nemotron-3-super-120b-a12b",
+      "id": "nvidia\/nemotron-3-super-120b-a12b",
       "name": "NVIDIA Nemotron 3 Super 120B A12B",
       "family": "nemotron",
       "releaseDate": "2026-03-18",
@@ -2443,7 +2351,7 @@
       ]
     },
     {
-      "id": "nvidia/nemotron-nano-9b-v2",
+      "id": "nvidia\/nemotron-nano-9b-v2",
       "name": "Nvidia Nemotron Nano 9B V2",
       "family": "nemotron",
       "releaseDate": "2025-08-18",
@@ -2461,7 +2369,7 @@
       ]
     },
     {
-      "id": "nvidia/nemotron-3-nano-30b-a3b",
+      "id": "nvidia\/nemotron-3-nano-30b-a3b",
       "name": "Nemotron 3 Nano 30B A3B",
       "family": "nemotron",
       "releaseDate": "2024-12",
@@ -2479,7 +2387,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-sonnet-4.6",
+      "id": "anthropic\/claude-sonnet-4.6",
       "name": "Claude Sonnet 4.6",
       "family": "claude-sonnet",
       "releaseDate": "2026-02-17",
@@ -2500,7 +2408,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-opus-4.6",
+      "id": "anthropic\/claude-opus-4.6",
       "name": "Claude Opus 4.6",
       "family": "claude-opus",
       "releaseDate": "2026-02",
@@ -2521,7 +2429,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-haiku-4.5",
+      "id": "anthropic\/claude-haiku-4.5",
       "name": "Claude Haiku 4.5",
       "family": "claude-haiku",
       "releaseDate": "2025-10-15",
@@ -2542,7 +2450,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-opus-4.5",
+      "id": "anthropic\/claude-opus-4.5",
       "name": "Claude Opus 4.5",
       "family": "claude-opus",
       "releaseDate": "2025-11-24",
@@ -2563,27 +2471,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3.5-sonnet-20240620",
-      "name": "Claude 3.5 Sonnet (2024-06-20)",
-      "family": "claude-sonnet",
-      "releaseDate": "2024-06-20",
-      "contextLimit": 200000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "anthropic/claude-opus-4.7",
+      "id": "anthropic\/claude-opus-4.7",
       "name": "Claude Opus 4.7",
       "family": "claude-opus",
       "releaseDate": "2026-04-16",
@@ -2603,7 +2491,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3.5-haiku",
+      "id": "anthropic\/claude-3.5-haiku",
       "name": "Claude Haiku 3.5",
       "family": "claude-haiku",
       "releaseDate": "2024-10-22",
@@ -2623,7 +2511,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-sonnet-4",
+      "id": "anthropic\/claude-sonnet-4",
       "name": "Claude Sonnet 4",
       "family": "claude-sonnet",
       "releaseDate": "2025-05-22",
@@ -2643,27 +2531,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3-opus",
-      "name": "Claude Opus 3",
-      "family": "claude-opus",
-      "releaseDate": "2024-02-29",
-      "contextLimit": 200000,
-      "outputLimit": 4096,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "anthropic/claude-opus-4",
+      "id": "anthropic\/claude-opus-4",
       "name": "Claude Opus 4",
       "family": "claude-opus",
       "releaseDate": "2025-05-22",
@@ -2683,7 +2551,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-opus-4.1",
+      "id": "anthropic\/claude-opus-4.1",
       "name": "Claude Opus 4",
       "family": "claude-opus",
       "releaseDate": "2025-05-22",
@@ -2703,27 +2571,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3.5-sonnet",
-      "name": "Claude Sonnet 3.5 v2",
-      "family": "claude-sonnet",
-      "releaseDate": "2024-10-22",
-      "contextLimit": 200000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "anthropic/claude-sonnet-4.5",
+      "id": "anthropic\/claude-sonnet-4.5",
       "name": "Claude Sonnet 4.5",
       "family": "claude-sonnet",
       "releaseDate": "2025-09-29",
@@ -2743,7 +2591,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3-haiku",
+      "id": "anthropic\/claude-3-haiku",
       "name": "Claude Haiku 3",
       "family": "claude-haiku",
       "releaseDate": "2024-03-13",
@@ -2763,27 +2611,7 @@
       ]
     },
     {
-      "id": "anthropic/claude-3.7-sonnet",
-      "name": "Claude Sonnet 3.7",
-      "family": "claude-sonnet",
-      "releaseDate": "2025-02-19",
-      "contextLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/gemma-4-26b-a4b-it",
+      "id": "google\/gemma-4-26b-a4b-it",
       "name": "Gemma 4 26B A4B IT",
       "family": "gemma",
       "releaseDate": "2026-04-02",
@@ -2803,7 +2631,7 @@
       ]
     },
     {
-      "id": "google/gemini-3.5-flash",
+      "id": "google\/gemini-3.5-flash",
       "name": "Gemini 3.5 Flash",
       "family": "gemini",
       "releaseDate": "2026-05-19",
@@ -2823,7 +2651,7 @@
       ]
     },
     {
-      "id": "google/gemini-3.1-flash-lite",
+      "id": "google\/gemini-3.1-flash-lite",
       "name": "Gemini 3.1 Flash Lite",
       "family": "gemini",
       "releaseDate": "2026-05-07",
@@ -2843,29 +2671,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.5-flash-preview-09-2025",
-      "name": "Gemini 2.5 Flash Preview 09-25",
-      "family": "gemini-flash",
-      "releaseDate": "2025-09-25",
-      "contextLimit": 1048576,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/imagen-4.0-fast-generate-001",
+      "id": "google\/imagen-4.0-fast-generate-001",
       "name": "Imagen 4 Fast",
       "family": "imagen",
       "releaseDate": "2025-06",
@@ -2883,7 +2689,7 @@
       ]
     },
     {
-      "id": "google/imagen-4.0-generate-001",
+      "id": "google\/imagen-4.0-generate-001",
       "name": "Imagen 4",
       "family": "imagen",
       "releaseDate": "2025-05-22",
@@ -2901,7 +2707,7 @@
       ]
     },
     {
-      "id": "google/gemma-4-31b-it",
+      "id": "google\/gemma-4-31b-it",
       "name": "Gemma 4 31B IT",
       "family": "gemma",
       "releaseDate": "2026-04-02",
@@ -2921,7 +2727,7 @@
       ]
     },
     {
-      "id": "google/gemini-3.1-flash-image-preview",
+      "id": "google\/gemini-3.1-flash-image-preview",
       "name": "Gemini 3.1 Flash Image Preview (Nano Banana 2)",
       "family": "gemini",
       "releaseDate": "2026-02-26",
@@ -2941,29 +2747,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.5-flash-lite-preview-09-2025",
-      "name": "Gemini 2.5 Flash Lite Preview 09-25",
-      "family": "gemini-flash-lite",
-      "releaseDate": "2025-09-25",
-      "contextLimit": 1048576,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/gemini-2.5-flash-lite",
+      "id": "google\/gemini-2.5-flash-lite",
       "name": "Gemini 2.5 Flash Lite",
       "family": "gemini-flash-lite",
       "releaseDate": "2025-06-17",
@@ -2985,7 +2769,7 @@
       ]
     },
     {
-      "id": "google/gemini-3-pro-preview",
+      "id": "google\/gemini-3-pro-preview",
       "name": "Gemini 3 Pro Preview",
       "family": "gemini-pro",
       "releaseDate": "2025-11-18",
@@ -3007,7 +2791,7 @@
       ]
     },
     {
-      "id": "google/gemini-embedding-2",
+      "id": "google\/gemini-embedding-2",
       "name": "Gemini Embedding 2",
       "family": "gemini-embedding",
       "releaseDate": "2026-03-10",
@@ -3025,7 +2809,7 @@
       ]
     },
     {
-      "id": "google/gemini-3-pro-image",
+      "id": "google\/gemini-3-pro-image",
       "name": "Nano Banana Pro (Gemini 3 Pro Image)",
       "family": "gemini-pro",
       "releaseDate": "2025-09",
@@ -3044,7 +2828,7 @@
       ]
     },
     {
-      "id": "google/gemini-3-flash",
+      "id": "google\/gemini-3-flash",
       "name": "Gemini 3 Flash",
       "family": "gemini-flash",
       "releaseDate": "2025-12-17",
@@ -3064,26 +2848,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.5-flash-image-preview",
-      "name": "Nano Banana Preview (Gemini 2.5 Flash Image Preview)",
-      "family": "gemini-flash",
-      "releaseDate": "2025-03-20",
-      "contextLimit": 32768,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text",
-        "image"
-      ]
-    },
-    {
-      "id": "google/gemini-3.1-flash-lite-preview",
+      "id": "google\/gemini-3.1-flash-lite-preview",
       "name": "Gemini 3.1 Flash Lite Preview",
       "family": "gemini",
       "releaseDate": "2026-03-03",
@@ -3103,7 +2868,7 @@
       ]
     },
     {
-      "id": "google/gemini-3.1-pro-preview",
+      "id": "google\/gemini-3.1-pro-preview",
       "name": "Gemini 3.1 Pro Preview",
       "family": "gemini",
       "releaseDate": "2026-02-19",
@@ -3123,7 +2888,7 @@
       ]
     },
     {
-      "id": "google/imagen-4.0-ultra-generate-001",
+      "id": "google\/imagen-4.0-ultra-generate-001",
       "name": "Imagen 4 Ultra",
       "family": "imagen",
       "releaseDate": "2025-05-24",
@@ -3141,7 +2906,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.5-flash-image",
+      "id": "google\/gemini-2.5-flash-image",
       "name": "Nano Banana (Gemini 2.5 Flash Image)",
       "family": "gemini-flash",
       "releaseDate": "2025-03-20",
@@ -3160,7 +2925,7 @@
       ]
     },
     {
-      "id": "google/gemini-embedding-001",
+      "id": "google\/gemini-embedding-001",
       "name": "Gemini Embedding 001",
       "family": "gemini-embedding",
       "releaseDate": "2025-05-20",
@@ -3178,7 +2943,7 @@
       ]
     },
     {
-      "id": "google/text-multilingual-embedding-002",
+      "id": "google\/text-multilingual-embedding-002",
       "name": "Text Multilingual Embedding 002",
       "family": "text-embedding",
       "releaseDate": "2024-03",
@@ -3196,7 +2961,7 @@
       ]
     },
     {
-      "id": "google/text-embedding-005",
+      "id": "google\/text-embedding-005",
       "name": "Text Embedding 005",
       "family": "text-embedding",
       "releaseDate": "2024-08",
@@ -3214,29 +2979,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.0-flash",
-      "name": "Gemini 2.0 Flash",
-      "family": "gemini-flash",
-      "releaseDate": "2024-12-11",
-      "contextLimit": 1048576,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/gemini-2.5-flash",
+      "id": "google\/gemini-2.5-flash",
       "name": "Gemini 2.5 Flash",
       "family": "gemini-flash",
       "releaseDate": "2025-03-20",
@@ -3258,29 +3001,7 @@
       ]
     },
     {
-      "id": "google/gemini-2.0-flash-lite",
-      "name": "Gemini 2.0 Flash-Lite",
-      "family": "gemini-flash-lite",
-      "releaseDate": "2024-12-11",
-      "contextLimit": 1048576,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "google/gemini-2.5-pro",
+      "id": "google\/gemini-2.5-pro",
       "name": "Gemini 2.5 Pro",
       "family": "gemini-pro",
       "releaseDate": "2025-03-20",
@@ -3302,63 +3023,7 @@
       ]
     },
     {
-      "id": "vercel/v0-1.0-md",
-      "name": "v0-1.0-md",
-      "family": "v0",
-      "releaseDate": "2025-05-22",
-      "contextLimit": 128000,
-      "outputLimit": 32000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "vercel/v0-1.5-md",
-      "name": "v0-1.5-md",
-      "family": "v0",
-      "releaseDate": "2025-06-09",
-      "contextLimit": 128000,
-      "outputLimit": 32000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek/deepseek-v3.2-exp",
-      "name": "DeepSeek V3.2 Exp",
-      "family": "deepseek",
-      "releaseDate": "2025-09-29",
-      "contextLimit": 163840,
-      "outputLimit": 163840,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek/deepseek-v4-pro",
+      "id": "deepseek\/deepseek-v4-pro",
       "name": "DeepSeek V4 Pro",
       "family": "deepseek",
       "releaseDate": "2026-04-23",
@@ -3376,7 +3041,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v3.2",
+      "id": "deepseek\/deepseek-v3.2",
       "name": "DeepSeek V3.2",
       "family": "deepseek",
       "releaseDate": "2025-12-01",
@@ -3394,7 +3059,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v3",
+      "id": "deepseek\/deepseek-v3",
       "name": "DeepSeek V3 0324",
       "family": "deepseek",
       "releaseDate": "2024-12-26",
@@ -3412,7 +3077,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v3.2-thinking",
+      "id": "deepseek\/deepseek-v3.2-thinking",
       "name": "DeepSeek V3.2 Thinking",
       "family": "deepseek-thinking",
       "releaseDate": "2025-12-01",
@@ -3431,7 +3096,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v3.1",
+      "id": "deepseek\/deepseek-v3.1",
       "name": "DeepSeek-V3.1",
       "family": "deepseek",
       "releaseDate": "2025-08-21",
@@ -3449,7 +3114,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v4-flash",
+      "id": "deepseek\/deepseek-v4-flash",
       "name": "DeepSeek V4 Flash",
       "family": "deepseek",
       "releaseDate": "2026-04-23",
@@ -3467,7 +3132,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-v3.1-terminus",
+      "id": "deepseek\/deepseek-v3.1-terminus",
       "name": "DeepSeek V3.1 Terminus",
       "family": "deepseek",
       "releaseDate": "2025-09-22",
@@ -3485,7 +3150,7 @@
       ]
     },
     {
-      "id": "deepseek/deepseek-r1",
+      "id": "deepseek\/deepseek-r1",
       "name": "DeepSeek-R1",
       "family": "deepseek-thinking",
       "releaseDate": "2025-01-20",
@@ -3503,25 +3168,7 @@
       ]
     },
     {
-      "id": "perplexity/sonar-reasoning",
-      "name": "Sonar Reasoning",
-      "family": "sonar-reasoning",
-      "releaseDate": "2025-02-19",
-      "contextLimit": 127000,
-      "outputLimit": 8000,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "perplexity/sonar",
+      "id": "perplexity\/sonar",
       "name": "Sonar",
       "family": "sonar",
       "releaseDate": "2025-02-19",
@@ -3540,7 +3187,7 @@
       ]
     },
     {
-      "id": "perplexity/sonar-reasoning-pro",
+      "id": "perplexity\/sonar-reasoning-pro",
       "name": "Sonar Reasoning Pro",
       "family": "sonar-reasoning",
       "releaseDate": "2025-02-19",
@@ -3558,7 +3205,7 @@
       ]
     },
     {
-      "id": "perplexity/sonar-pro",
+      "id": "perplexity\/sonar-pro",
       "name": "Sonar Pro",
       "family": "sonar-pro",
       "releaseDate": "2025-02-19",
@@ -3577,7 +3224,7 @@
       ]
     },
     {
-      "id": "arcee-ai/trinity-mini",
+      "id": "arcee-ai\/trinity-mini",
       "name": "Trinity Mini",
       "family": "trinity",
       "releaseDate": "2025-12",
@@ -3595,7 +3242,7 @@
       ]
     },
     {
-      "id": "arcee-ai/trinity-large-thinking",
+      "id": "arcee-ai\/trinity-large-thinking",
       "name": "Trinity Large Thinking",
       "family": "trinity",
       "releaseDate": "2026-04-01",
@@ -3613,7 +3260,7 @@
       ]
     },
     {
-      "id": "arcee-ai/trinity-large-preview",
+      "id": "arcee-ai\/trinity-large-preview",
       "name": "Trinity Large Preview",
       "family": "trinity",
       "releaseDate": "2025-01",
@@ -3631,7 +3278,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-max-preview",
+      "id": "alibaba\/qwen3-max-preview",
       "name": "Qwen3 Max Preview",
       "family": "qwen",
       "releaseDate": "2025-09-23",
@@ -3649,7 +3296,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3.5-plus",
+      "id": "alibaba\/qwen3.5-plus",
       "name": "Qwen 3.5 Plus",
       "family": "qwen",
       "releaseDate": "2026-02-16",
@@ -3669,7 +3316,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-vl-235b-a22b-instruct",
+      "id": "alibaba\/qwen3-vl-235b-a22b-instruct",
       "name": "Qwen3 VL 235B A22B Instruct",
       "family": "qwen",
       "releaseDate": "2025-09-24",
@@ -3688,7 +3335,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3.6-27b",
+      "id": "alibaba\/qwen3.6-27b",
       "name": "Qwen 3.6 27B",
       "family": "qwen3.6",
       "releaseDate": "2026-04-22",
@@ -3708,7 +3355,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-vl-thinking",
+      "id": "alibaba\/qwen3-vl-thinking",
       "name": "Qwen3 VL Thinking",
       "family": "qwen",
       "releaseDate": "2025-09-24",
@@ -3727,7 +3374,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen-3-235b",
+      "id": "alibaba\/qwen-3-235b",
       "name": "Qwen3 235B A22B Instruct 2507",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -3745,7 +3392,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen-3-32b",
+      "id": "alibaba\/qwen-3-32b",
       "name": "Qwen 3.32B",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -3763,7 +3410,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3.7-max",
+      "id": "alibaba\/qwen3.7-max",
       "name": "Qwen 3.7 Max",
       "family": "qwen",
       "releaseDate": "2026-05-21",
@@ -3783,7 +3430,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-max-thinking",
+      "id": "alibaba\/qwen3-max-thinking",
       "name": "Qwen 3 Max Thinking",
       "family": "qwen",
       "releaseDate": "2025-01",
@@ -3801,7 +3448,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-max",
+      "id": "alibaba\/qwen3-max",
       "name": "Qwen3 Max",
       "family": "qwen",
       "releaseDate": "2025-09-23",
@@ -3819,7 +3466,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-coder-next",
+      "id": "alibaba\/qwen3-coder-next",
       "name": "Qwen3 Coder Next",
       "family": "qwen",
       "releaseDate": "2025-07-22",
@@ -3837,7 +3484,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-embedding-0.6b",
+      "id": "alibaba\/qwen3-embedding-0.6b",
       "name": "Qwen3 Embedding 0.6B",
       "family": "qwen",
       "releaseDate": "2025-11-14",
@@ -3855,7 +3502,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-embedding-8b",
+      "id": "alibaba\/qwen3-embedding-8b",
       "name": "Qwen3 Embedding 8B",
       "family": "qwen",
       "releaseDate": "2025-06-05",
@@ -3873,7 +3520,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-coder",
+      "id": "alibaba\/qwen3-coder",
       "name": "Qwen3 Coder 480B A35B Instruct",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -3891,7 +3538,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3.6-plus",
+      "id": "alibaba\/qwen3.6-plus",
       "name": "Qwen 3.6 Plus",
       "family": "qwen",
       "releaseDate": "2026-04-02",
@@ -3911,7 +3558,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-next-80b-a3b-thinking",
+      "id": "alibaba\/qwen3-next-80b-a3b-thinking",
       "name": "Qwen3 Next 80B A3B Thinking",
       "family": "qwen",
       "releaseDate": "2025-09-12",
@@ -3929,7 +3576,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen-3-14b",
+      "id": "alibaba\/qwen-3-14b",
       "name": "Qwen3-14B",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -3947,7 +3594,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen-3-30b",
+      "id": "alibaba\/qwen-3-30b",
       "name": "Qwen3-30B-A3B",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -3965,7 +3612,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3.5-flash",
+      "id": "alibaba\/qwen3.5-flash",
       "name": "Qwen 3.5 Flash",
       "family": "qwen",
       "releaseDate": "2026-02-24",
@@ -3985,7 +3632,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-vl-instruct",
+      "id": "alibaba\/qwen3-vl-instruct",
       "name": "Qwen3 VL Instruct",
       "family": "qwen",
       "releaseDate": "2025-09-24",
@@ -4004,7 +3651,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-embedding-4b",
+      "id": "alibaba\/qwen3-embedding-4b",
       "name": "Qwen3 Embedding 4B",
       "family": "qwen",
       "releaseDate": "2025-06-05",
@@ -4022,7 +3669,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-coder-30b-a3b",
+      "id": "alibaba\/qwen3-coder-30b-a3b",
       "name": "Qwen 3 Coder 30B A3B Instruct",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -4040,7 +3687,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-next-80b-a3b-instruct",
+      "id": "alibaba\/qwen3-next-80b-a3b-instruct",
       "name": "Qwen3 Next 80B A3B Instruct",
       "family": "qwen",
       "releaseDate": "2025-09-12",
@@ -4058,7 +3705,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen-3.6-max-preview",
+      "id": "alibaba\/qwen-3.6-max-preview",
       "name": "Qwen 3.6 Max Preview",
       "family": "qwen",
       "releaseDate": "2026-04-20",
@@ -4078,7 +3725,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-235b-a22b-thinking",
+      "id": "alibaba\/qwen3-235b-a22b-thinking",
       "name": "Qwen3 235B A22B Thinking 2507",
       "family": "qwen",
       "releaseDate": "2025-04",
@@ -4098,7 +3745,7 @@
       ]
     },
     {
-      "id": "alibaba/qwen3-coder-plus",
+      "id": "alibaba\/qwen3-coder-plus",
       "name": "Qwen3 Coder Plus",
       "family": "qwen",
       "releaseDate": "2025-07-23",
@@ -4116,7 +3763,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.20-reasoning",
+      "id": "xai\/grok-4.20-reasoning",
       "name": "Grok 4.20 Reasoning",
       "family": "grok",
       "releaseDate": "2026-03-09",
@@ -4136,7 +3783,7 @@
       ]
     },
     {
-      "id": "xai/grok-build-0.1",
+      "id": "xai\/grok-build-0.1",
       "name": "Grok Build 0.1",
       "family": "grok-build",
       "releaseDate": "2026-05-20",
@@ -4155,7 +3802,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.1-fast-reasoning",
+      "id": "xai\/grok-4.1-fast-reasoning",
       "name": "Grok 4.1 Fast Reasoning",
       "family": "grok",
       "releaseDate": "2025-07-09",
@@ -4173,7 +3820,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.20-non-reasoning",
+      "id": "xai\/grok-4.20-non-reasoning",
       "name": "Grok 4.20 Non-Reasoning",
       "family": "grok",
       "releaseDate": "2026-03-09",
@@ -4193,7 +3840,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.1-fast-non-reasoning",
+      "id": "xai\/grok-4.1-fast-non-reasoning",
       "name": "Grok 4.1 Fast Non-Reasoning",
       "family": "grok",
       "releaseDate": "2025-07-09",
@@ -4211,7 +3858,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.20-multi-agent",
+      "id": "xai\/grok-4.20-multi-agent",
       "name": "Grok 4.20 Multi-Agent",
       "family": "grok",
       "releaseDate": "2026-03-09",
@@ -4229,7 +3876,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.20-non-reasoning-beta",
+      "id": "xai\/grok-4.20-non-reasoning-beta",
       "name": "Grok 4.20 Beta Non-Reasoning",
       "family": "grok",
       "releaseDate": "2026-03-11",
@@ -4249,7 +3896,7 @@
       ]
     },
     {
-      "id": "xai/grok-imagine-image",
+      "id": "xai\/grok-imagine-image",
       "name": "Grok Imagine Image",
       "family": "grok",
       "releaseDate": "2026-01-28",
@@ -4268,7 +3915,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.3",
+      "id": "xai\/grok-4.3",
       "name": "Grok 4.3",
       "family": "grok",
       "releaseDate": "2026-04-30",
@@ -4288,7 +3935,7 @@
       ]
     },
     {
-      "id": "xai/grok-4.20-reasoning-beta",
+      "id": "xai\/grok-4.20-reasoning-beta",
       "name": "Grok 4.20 Beta Reasoning",
       "family": "grok",
       "releaseDate": "2026-03-11",
@@ -4308,26 +3955,7 @@
       ]
     },
     {
-      "id": "xai/grok-imagine-image-pro",
-      "name": "Grok Imagine Image Pro",
-      "family": "grok",
-      "releaseDate": "2026-01-28",
-      "contextLimit": 0,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text",
-        "image"
-      ]
-    },
-    {
-      "id": "xai/grok-4.20-multi-agent-beta",
+      "id": "xai\/grok-4.20-multi-agent-beta",
       "name": "Grok 4.20 Multi Agent Beta",
       "family": "grok",
       "releaseDate": "2026-03-11",
@@ -4345,25 +3973,7 @@
       ]
     },
     {
-      "id": "xai/grok-4-fast-reasoning",
-      "name": "Grok 4 Fast Reasoning",
-      "family": "grok",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 2000000,
-      "outputLimit": 256000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "interfaze/interfaze-beta",
+      "id": "interfaze\/interfaze-beta",
       "name": "Interfaze Beta",
       "releaseDate": "2025-10-07",
       "contextLimit": 1000000,
@@ -4380,7 +3990,7 @@
       ]
     },
     {
-      "id": "meituan/longcat-flash-chat",
+      "id": "meituan\/longcat-flash-chat",
       "name": "LongCat Flash Chat",
       "family": "longcat",
       "releaseDate": "2025-08-30",
@@ -4398,25 +4008,7 @@
       ]
     },
     {
-      "id": "meituan/longcat-flash-thinking",
-      "name": "LongCat Flash Thinking",
-      "family": "longcat",
-      "releaseDate": "2025-09-23",
-      "contextLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "meituan/longcat-flash-thinking-2601",
+      "id": "meituan\/longcat-flash-thinking-2601",
       "name": "LongCat Flash Thinking 2601",
       "family": "longcat",
       "releaseDate": "2026-03-13",
@@ -4434,7 +4026,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.1-70b",
+      "id": "meta\/llama-3.1-70b",
       "name": "Llama 3.1 70B Instruct",
       "family": "llama",
       "releaseDate": "2024-07-23",
@@ -4452,7 +4044,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.1-8b",
+      "id": "meta\/llama-3.1-8b",
       "name": "Llama 3.1 8B Instruct",
       "family": "llama",
       "releaseDate": "2024-07-23",
@@ -4470,7 +4062,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.2-90b",
+      "id": "meta\/llama-3.2-90b",
       "name": "Llama 3.2 90B Vision Instruct",
       "family": "llama",
       "releaseDate": "2024-09-25",
@@ -4489,7 +4081,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.2-3b",
+      "id": "meta\/llama-3.2-3b",
       "name": "Llama 3.2 3B Instruct",
       "family": "llama",
       "releaseDate": "2024-09-18",
@@ -4507,7 +4099,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.2-1b",
+      "id": "meta\/llama-3.2-1b",
       "name": "Llama 3.2 1B Instruct",
       "family": "llama",
       "releaseDate": "2024-09-18",
@@ -4525,7 +4117,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.2-11b",
+      "id": "meta\/llama-3.2-11b",
       "name": "Llama 3.2 11B Vision Instruct",
       "family": "llama",
       "releaseDate": "2024-09-25",
@@ -4544,7 +4136,7 @@
       ]
     },
     {
-      "id": "meta/llama-4-maverick",
+      "id": "meta\/llama-4-maverick",
       "name": "Llama-4-Maverick-17B-128E-Instruct-FP8",
       "family": "llama",
       "releaseDate": "2025-04-05",
@@ -4563,7 +4155,7 @@
       ]
     },
     {
-      "id": "meta/llama-4-scout",
+      "id": "meta\/llama-4-scout",
       "name": "Llama-4-Scout-17B-16E-Instruct-FP8",
       "family": "llama",
       "releaseDate": "2025-04-05",
@@ -4582,7 +4174,7 @@
       ]
     },
     {
-      "id": "meta/llama-3.3-70b",
+      "id": "meta\/llama-3.3-70b",
       "name": "Llama-3.3-70B-Instruct",
       "family": "llama",
       "releaseDate": "2024-12-06",
@@ -4600,7 +4192,7 @@
       ]
     },
     {
-      "id": "xiaomi/mimo-v2.5-pro",
+      "id": "xiaomi\/mimo-v2.5-pro",
       "name": "MiMo V2.5 Pro",
       "family": "mimo-v2.5-pro",
       "releaseDate": "2026-04-22",
@@ -4618,7 +4210,7 @@
       ]
     },
     {
-      "id": "xiaomi/mimo-v2-flash",
+      "id": "xiaomi\/mimo-v2-flash",
       "name": "MiMo V2 Flash",
       "family": "mimo",
       "releaseDate": "2025-12-17",
@@ -4636,7 +4228,7 @@
       ]
     },
     {
-      "id": "xiaomi/mimo-v2-pro",
+      "id": "xiaomi\/mimo-v2-pro",
       "name": "MiMo V2 Pro",
       "family": "mimo",
       "releaseDate": "2026-03-18",
@@ -4654,7 +4246,7 @@
       ]
     },
     {
-      "id": "xiaomi/mimo-v2.5",
+      "id": "xiaomi\/mimo-v2.5",
       "name": "MiMo M2.5",
       "family": "mimo-v2.5",
       "releaseDate": "2026-04-22",

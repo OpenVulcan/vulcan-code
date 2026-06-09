@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://api.cerebras.ai/v1",
+    "value": "https:\/\/api.cerebras.ai\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -23,24 +23,6 @@
       "releaseDate": "2026-01-10",
       "contextLimit": 131072,
       "outputLimit": 40000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen-3-235b-a22b-instruct-2507",
-      "name": "Qwen 3 235B Instruct",
-      "family": "qwen",
-      "releaseDate": "2025-07-22",
-      "contextLimit": 131000,
-      "outputLimit": 32000,
       "reasoning": false,
       "toolCall": true,
       "temperature": true,

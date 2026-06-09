@@ -18,27 +18,6 @@
   },
   "models": [
     {
-      "id": "DeepSeek-V4-Pro",
-      "name": "DeepSeek V4 Pro",
-      "family": "deepseek-thinking",
-      "releaseDate": "2026-04-24",
-      "contextLimit": 1000000,
-      "outputLimit": 384000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "GLM-5.1",
       "name": "GLM-5.1",
       "family": "glm",

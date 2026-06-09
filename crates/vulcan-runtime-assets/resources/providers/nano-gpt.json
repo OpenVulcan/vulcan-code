@@ -127,67 +127,12 @@
       ]
     },
     {
-      "id": "allenai\/molmo-2-8b",
-      "name": "Molmo 2 8B",
-      "family": "allenai",
-      "releaseDate": "2026-02-14",
-      "contextLimit": 36864,
-      "inputLimit": 36864,
-      "outputLimit": 36864,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "allenai\/olmo-3-32b-think",
       "name": "Olmo 3 32B Think",
       "family": "allenai",
       "releaseDate": "2025-11-01",
       "contextLimit": 128000,
       "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "allenai\/olmo-3.1-32b-instruct",
-      "name": "Olmo 3.1 32B Instruct",
-      "family": "allenai",
-      "releaseDate": "2026-01-25",
-      "contextLimit": 65536,
-      "inputLimit": 65536,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "allenai\/olmo-3.1-32b-think",
-      "name": "Olmo 3.1 32B Think",
-      "family": "allenai",
-      "releaseDate": "2026-01-25",
-      "contextLimit": 65536,
-      "inputLimit": 65536,
       "outputLimit": 8192,
       "reasoning": true,
       "toolCall": false,
@@ -449,24 +394,6 @@
       ]
     },
     {
-      "id": "arcee-ai\/trinity-large",
-      "name": "Trinity Large",
-      "family": "trinity",
-      "releaseDate": "2025-12-01",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "arcee-ai\/trinity-mini",
       "name": "Trinity Mini",
       "family": "trinity-mini",
@@ -709,24 +636,6 @@
       ]
     },
     {
-      "id": "baidu\/ernie-4.5-300b-a47b",
-      "name": "ERNIE 4.5 300B",
-      "family": "ernie",
-      "releaseDate": "2025-06-30",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "baidu\/ernie-4.5-vl-28b-a3b",
       "name": "ERNIE 4.5 VL 28B",
       "family": "ernie",
@@ -815,23 +724,6 @@
       ]
     },
     {
-      "id": "chroma",
-      "name": "Chroma",
-      "releaseDate": "2025-08-12",
-      "contextLimit": 0,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "image"
-      ]
-    },
-    {
       "id": "chutesai\/Mistral-Small-3.2-24B-Instruct-2506",
       "name": "Mistral Small 3.2 24b Instruct",
       "family": "chutesai",
@@ -857,175 +749,6 @@
       "inputLimit": 200000,
       "outputLimit": 8192,
       "reasoning": false,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-5-sonnet-20240620",
-      "name": "Claude 3.5 Sonnet Old",
-      "releaseDate": "2024-06-20",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-5-sonnet-20241022",
-      "name": "Claude 3.5 Sonnet",
-      "releaseDate": "2025-08-26",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-20250219",
-      "name": "Claude 3.7 Sonnet",
-      "releaseDate": "2025-02-19",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 16000,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-reasoner",
-      "name": "Claude 3.7 Sonnet Reasoner",
-      "releaseDate": "2025-03-29",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-thinking",
-      "name": "Claude 3.7 Sonnet Thinking",
-      "releaseDate": "2025-02-24",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 16000,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-thinking:1024",
-      "name": "Claude 3.7 Sonnet Thinking (1K)",
-      "releaseDate": "2025-02-24",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-thinking:128000",
-      "name": "Claude 3.7 Sonnet Thinking (128K)",
-      "releaseDate": "2025-02-24",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-thinking:32768",
-      "name": "Claude 3.7 Sonnet Thinking (32K)",
-      "releaseDate": "2025-07-15",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "claude-3-7-sonnet-thinking:8192",
-      "name": "Claude 3.7 Sonnet Thinking (8K)",
-      "releaseDate": "2025-02-24",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 64000,
-      "reasoning": true,
       "toolCall": true,
       "attachment": true,
       "inputModalities": [
@@ -1546,24 +1269,6 @@
       ]
     },
     {
-      "id": "CrucibleLab\/L3.3-70B-Loki-V2.0",
-      "name": "L3.3 70B Loki v2.0",
-      "family": "llama",
-      "releaseDate": "2026-01-22",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "deepclaude",
       "name": "DeepClaude",
       "releaseDate": "2025-02-01",
@@ -1590,24 +1295,6 @@
       "inputLimit": 128000,
       "outputLimit": 32768,
       "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepcogito\/cogito-v2.1-671b",
-      "name": "Cogito v2.1 671B MoE",
-      "family": "cogito",
-      "releaseDate": "2025-11-19",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 16384,
-      "reasoning": true,
       "toolCall": false,
       "attachment": false,
       "inputModalities": [
@@ -2254,23 +1941,6 @@
       ]
     },
     {
-      "id": "doubao-seed-code-preview-latest",
-      "name": "Doubao Seed Code Preview",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "Envoid\/Llama-3.05-Nemotron-Tenyxchat-Storybreaker-70B",
       "name": "Nemotron Tenyxchat Storybreaker 70b",
       "family": "nemotron",
@@ -2349,24 +2019,6 @@
       "inputLimit": 32000,
       "outputLimit": 16384,
       "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "ernie-5.0-thinking-latest",
-      "name": "Ernie 5.0 Thinking",
-      "releaseDate": "2025-11-18",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 16384,
-      "reasoning": true,
       "toolCall": false,
       "attachment": true,
       "inputModalities": [
@@ -2709,24 +2361,6 @@
       "attachment": false,
       "inputModalities": [
         "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemini-2.0-flash-lite",
-      "name": "Gemini 2.0 Flash Lite",
-      "releaseDate": "2024-12-11",
-      "contextLimit": 1000000,
-      "inputLimit": 1000000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
       ],
       "outputModalities": [
         "text"
@@ -3132,42 +2766,6 @@
       ]
     },
     {
-      "id": "gemini-3-pro-preview",
-      "name": "Gemini 3 Pro",
-      "releaseDate": "2025-11-18",
-      "contextLimit": 1048756,
-      "inputLimit": 1048756,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemini-3-pro-preview-thinking",
-      "name": "Gemini 3 Pro Thinking",
-      "releaseDate": "2025-11-18",
-      "contextLimit": 1048756,
-      "inputLimit": 1048756,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "gemini-exp-1206",
       "name": "Gemini 2.0 Pro 1206",
       "releaseDate": "2024-12-06",
@@ -3180,125 +2778,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-ArliAI-RPMax-v3",
-      "name": "Gemma 3 27B RPMax v3",
-      "releaseDate": "2025-07-03",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-Big-Tiger-v3",
-      "name": "Gemma 3 27B Big Tiger v3",
-      "releaseDate": "2025-08-08",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-CardProjector-v4",
-      "name": "Gemma 3 27B CardProjector v4",
-      "releaseDate": "2025-03-10",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-Glitter",
-      "name": "Gemma 3 27B Glitter",
-      "releaseDate": "2025-03-10",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-it",
-      "name": "Gemma 3 27B IT",
-      "releaseDate": "2025-03-10",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-it-Abliterated",
-      "name": "Gemma 3 27B IT Abliterated",
-      "releaseDate": "2025-07-03",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 96000,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Gemma-3-27B-Nidum-Uncensored",
-      "name": "Gemma 3 27B Nidum Uncensored",
-      "releaseDate": "2025-08-08",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 96000,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -3477,125 +2956,6 @@
       ]
     },
     {
-      "id": "GLM-4.5-Air-Derestricted",
-      "name": "GLM 4.5 Air Derestricted",
-      "releaseDate": "2025-07-28",
-      "contextLimit": 202600,
-      "inputLimit": 202600,
-      "outputLimit": 98304,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Iceblink",
-      "name": "GLM 4.5 Air Derestricted Iceblink",
-      "releaseDate": "2025-07-28",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 98304,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Iceblink-ReExtract",
-      "name": "GLM 4.5 Air Derestricted Iceblink ReExtract",
-      "releaseDate": "2025-12-12",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 98304,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Iceblink-v2",
-      "name": "GLM 4.5 Air Derestricted Iceblink v2",
-      "releaseDate": "2025-07-28",
-      "contextLimit": 158600,
-      "inputLimit": 158600,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Iceblink-v2-ReExtract",
-      "name": "GLM 4.5 Air Derestricted Iceblink v2 ReExtract",
-      "releaseDate": "2025-12-12",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Steam",
-      "name": "GLM 4.5 Air Derestricted Steam",
-      "releaseDate": "2025-07-28",
-      "contextLimit": 220600,
-      "inputLimit": 220600,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "GLM-4.5-Air-Derestricted-Steam-ReExtract",
-      "name": "GLM 4.5 Air Derestricted Steam ReExtract",
-      "releaseDate": "2025-12-12",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "GLM-4.6-Derestricted-v5",
       "name": "GLM 4.6 Derestricted v5",
       "releaseDate": "2025-12-23",
@@ -3720,75 +3080,6 @@
       ]
     },
     {
-      "id": "grok-3-beta",
-      "name": "Grok 3 Beta",
-      "releaseDate": "2025-09-29",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 131072,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-3-fast-beta",
-      "name": "Grok 3 Fast Beta",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 131072,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-3-mini-beta",
-      "name": "Grok 3 Mini Beta",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 131072,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-3-mini-fast-beta",
-      "name": "Grok 3 Mini Fast Beta",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 131072,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "Gryphe\/MythoMax-L2-13b",
       "name": "MythoMax 13B",
       "family": "llama",
@@ -3804,23 +3095,6 @@
       ],
       "outputModalities": [
         "text"
-      ]
-    },
-    {
-      "id": "hidream",
-      "name": "Hidream",
-      "releaseDate": "2024-01-01",
-      "contextLimit": 0,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "image"
       ]
     },
     {
@@ -3860,24 +3134,6 @@
       ]
     },
     {
-      "id": "huihui-ai\/Llama-3.1-Nemotron-70B-Instruct-HF-abliterated",
-      "name": "Nemotron 3.1 70B abliterated",
-      "family": "nemotron",
-      "releaseDate": "2024-07-23",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "huihui-ai\/Llama-3.3-70B-Instruct-abliterated",
       "name": "Llama 3.3 70B Instruct abliterated",
       "family": "llama",
@@ -3903,23 +3159,6 @@
       "contextLimit": 32768,
       "inputLimit": 32768,
       "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "hunyuan-t1-latest",
-      "name": "Hunyuan T1",
-      "releaseDate": "2025-03-22",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 16384,
       "reasoning": false,
       "toolCall": false,
       "attachment": false,
@@ -4156,23 +3395,6 @@
       ]
     },
     {
-      "id": "KAT-Coder-Pro-V1",
-      "name": "KAT Coder Pro V1",
-      "releaseDate": "2025-10-28",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "kimi-k2-instruct-fast",
       "name": "Kimi K2 0711 Fast",
       "releaseDate": "2025-07-15",
@@ -4233,737 +3455,6 @@
       "contextLimit": 32767,
       "inputLimit": 32767,
       "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Anthrobomination",
-      "name": "Llama 3.3 70B Anthrobomination",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Argunaut-1-SFT",
-      "name": "Llama 3.3 70B Argunaut 1 SFT",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-ArliAI-RPMax-v1.4",
-      "name": "Llama 3.3 70B RPMax v1.4",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-ArliAI-RPMax-v2",
-      "name": "Llama 3.3 70B ArliAI RPMax v2",
-      "releaseDate": "2025-08-08",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-ArliAI-RPMax-v3",
-      "name": "Llama 3.3 70B ArliAI RPMax v3",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Aurora-Borealis",
-      "name": "Llama 3.3 70B Aurora Borealis",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Bigger-Body",
-      "name": "Llama 3.3 70B Bigger Body",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Cirrus-x1",
-      "name": "Llama 3.3 70B Cirrus x1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Cu-Mai-R1",
-      "name": "Llama 3.3 70B Cu Mai R1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Damascus-R1",
-      "name": "Damascus R1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Dark-Ages-v0.1",
-      "name": "Llama 3.3 70B Dark Ages v0.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Electra-R1",
-      "name": "Llama 3.3 70B Electra R1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Electranova-v1.0",
-      "name": "Llama 3.3 70B Electranova v1.0",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Fallen-R1-v1",
-      "name": "Llama 3.3 70B Fallen R1 v1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Fallen-v1",
-      "name": "Llama 3.3 70B Fallen v1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Forgotten-Abomination-v5.0",
-      "name": "Llama 3.3 70B Forgotten Abomination v5.0",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Forgotten-Safeword-3.6",
-      "name": "Llama 3.3 70B Forgotten Safeword 3.6",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-GeneticLemonade-Opus",
-      "name": "Llama 3.3 70B GeneticLemonade Opus",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-GeneticLemonade-Unleashed-v3",
-      "name": "Llama 3.3 70B GeneticLemonade Unleashed v3",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Ignition-v0.1",
-      "name": "Llama 3.3 70B Ignition v0.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Incandescent-Malevolence",
-      "name": "Llama 3.3 70B Incandescent Malevolence",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Legion-V2.1",
-      "name": "Llama 3.3 70B Legion V2.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Magnum-v4-SE",
-      "name": "Llama 3.3 70B Magnum v4 SE",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Magnum-v4-SE-Cirrus-x1-SLERP",
-      "name": "Llama 3.3 70B Magnum v4 SE Cirrus x1 SLERP",
-      "releaseDate": "2025-07-26",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Mhnnn-x1",
-      "name": "Llama 3.3 70B Mhnnn x1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-MiraiFanfare",
-      "name": "Llama 3.3 70b Mirai Fanfare",
-      "releaseDate": "2025-07-26",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Mokume-Gane-R1",
-      "name": "Llama 3.3 70B Mokume Gane R1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-MS-Nevoria",
-      "name": "Llama 3.3 70B MS Nevoria",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Nova",
-      "name": "Llama 3.3 70B Nova",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Predatorial-Extasy",
-      "name": "Llama 3.3 70B Predatorial Extasy",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Progenitor-V3.3",
-      "name": "Llama 3.3 70B Progenitor V3.3",
-      "releaseDate": "2025-07-26",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-RAWMAW",
-      "name": "Llama 3.3 70B RAWMAW",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Sapphira-0.1",
-      "name": "Llama 3.3 70B Sapphira 0.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Sapphira-0.2",
-      "name": "Llama 3.3 70B Sapphira 0.2",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Shakudo",
-      "name": "Llama 3.3 70B Shakudo",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-StrawberryLemonade-v1.0",
-      "name": "Llama 3.3 70B StrawberryLemonade v1.0",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Strawberrylemonade-v1.2",
-      "name": "Llama 3.3 70B StrawberryLemonade v1.2",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-The-Omega-Directive-Unslop-v2.0",
-      "name": "Llama 3.3 70B Omega Directive Unslop v2.0",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-The-Omega-Directive-Unslop-v2.1",
-      "name": "Llama 3.3 70B Omega Directive Unslop v2.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3-70B-Vulpecula-R1",
-      "name": "Llama 3.3 70B Vulpecula R1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3+(3.1v3.3)-70B-Hanami-x1",
-      "name": "Llama 3.3+ 70B Hanami x1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3+(3.1v3.3)-70B-New-Dawn-v1.1",
-      "name": "Llama 3.3+ 70B New Dawn v1.1",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Llama-3.3+(3v3.3)-70B-TenyxChat-DaybreakStorywriter",
-      "name": "Llama 3.3+ 70B TenyxChat DaybreakStorywriter",
-      "releaseDate": "2024-12-06",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 16384,
       "reasoning": false,
       "toolCall": false,
       "attachment": false,
@@ -5082,24 +3573,6 @@
       ]
     },
     {
-      "id": "meituan-longcat\/LongCat-Flash-Chat-FP8",
-      "name": "LongCat Flash",
-      "family": "longcat",
-      "releaseDate": "2025-08-31",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "Meta-Llama-3-1-8B-Instruct-FP8",
       "name": "Llama 3.1 8B (decentralized)",
       "releaseDate": "2024-07-23",
@@ -5148,24 +3621,6 @@
       "inputModalities": [
         "text",
         "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "meta-llama\/llama-3.2-90b-vision-instruct",
-      "name": "Llama 3.2 Medium",
-      "family": "llama",
-      "releaseDate": "2025-09-25",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -5222,25 +3677,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "microsoft\/MAI-DS-R1-FP8",
-      "name": "Microsoft DeepSeek R1",
-      "family": "deepseek",
-      "releaseDate": "2025-09-25",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
       ],
       "outputModalities": [
         "text"
@@ -5409,42 +3845,6 @@
       ]
     },
     {
-      "id": "miromind-ai\/mirothinker-v1.5-235b",
-      "name": "MiroThinker v1.5 235B",
-      "family": "gpt",
-      "releaseDate": "2026-01-07",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 4000,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "Mistral-Nemo-12B-Instruct-2407",
-      "name": "Mistral Nemo 12B Instruct 2407",
-      "releaseDate": "2024-07-18",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "mistral-small-31-24b-instruct",
       "name": "Mistral Small 31 24b Instruct",
       "releaseDate": "2025-04-15",
@@ -5590,25 +3990,6 @@
       ]
     },
     {
-      "id": "mistralai\/mistral-7b-instruct",
-      "name": "Mistral 7B Instruct",
-      "family": "mistral",
-      "releaseDate": "2024-05-27",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "mistralai\/mistral-large",
       "name": "Mistral Large 2411",
       "family": "mistral-large",
@@ -5719,42 +4100,6 @@
       ]
     },
     {
-      "id": "mistralai\/mistral-small-creative",
-      "name": "Mistral Small Creative",
-      "family": "mistral-small",
-      "releaseDate": "2025-12-16",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "mistralai\/mistral-tiny",
-      "name": "Mistral Tiny",
-      "family": "mistral",
-      "releaseDate": "2023-12-11",
-      "contextLimit": 32000,
-      "inputLimit": 32000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "mistralai\/mixtral-8x22b-instruct-v0.1",
       "name": "Mixtral 8x22B",
       "family": "mixtral",
@@ -5803,25 +4148,6 @@
       "attachment": false,
       "inputModalities": [
         "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai\/Kimi-Dev-72B",
-      "name": "Kimi Dev 72B",
-      "family": "kimi",
-      "releaseDate": "2025-04-15",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 131072,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
       ],
       "outputModalities": [
         "text"
@@ -6010,25 +4336,6 @@
       ]
     },
     {
-      "id": "NeverSleep\/Llama-3-Lumimaid-70B-v0.1",
-      "name": "Lumimaid 70b",
-      "family": "llama",
-      "releaseDate": "2024-07-01",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "NeverSleep\/Lumimaid-v0.2-70B",
       "name": "Lumimaid v0.2",
       "family": "llama",
@@ -6083,114 +4390,6 @@
       ]
     },
     {
-      "id": "NousResearch 2\/DeepHermes-3-Mistral-24B-Preview",
-      "name": "DeepHermes-3 Mistral 24B (Preview)",
-      "family": "nousresearch",
-      "releaseDate": "2025-05-10",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "NousResearch 2\/hermes-3-llama-3.1-70b",
-      "name": "Hermes 3 70B",
-      "family": "nousresearch",
-      "releaseDate": "2026-01-07",
-      "contextLimit": 65536,
-      "inputLimit": 65536,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "NousResearch 2\/hermes-4-405b",
-      "name": "Hermes 4 Large",
-      "family": "nousresearch",
-      "releaseDate": "2025-08-26",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "NousResearch 2\/hermes-4-405b:thinking",
-      "name": "Hermes 4 Large (Thinking)",
-      "family": "nousresearch",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "NousResearch 2\/hermes-4-70b",
-      "name": "Hermes 4 Medium",
-      "family": "nousresearch",
-      "releaseDate": "2025-07-03",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "NousResearch 2\/Hermes-4-70B:thinking",
-      "name": "Hermes 4 (Thinking)",
-      "family": "nousresearch",
-      "releaseDate": "2025-09-17",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "nvidia\/Llama-3_3-Nemotron-Super-49B-v1_5",
       "name": "Nvidia Nemotron Super 49B v1.5",
       "family": "nemotron",
@@ -6216,24 +4415,6 @@
       "contextLimit": 16384,
       "inputLimit": 16384,
       "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "nvidia\/Llama-3.1-Nemotron-Ultra-253B-v1",
-      "name": "Nvidia Nemotron Ultra 253B",
-      "family": "nemotron",
-      "releaseDate": "2025-07-03",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 16384,
       "reasoning": false,
       "toolCall": false,
       "attachment": false,
@@ -6293,25 +4474,6 @@
       "attachment": false,
       "inputModalities": [
         "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "openai\/chatgpt-4o-latest",
-      "name": "ChatGPT 4o",
-      "family": "gpt",
-      "releaseDate": "2024-05-13",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
       ],
       "outputModalities": [
         "text"
@@ -6565,25 +4727,6 @@
       ]
     },
     {
-      "id": "openai\/gpt-5-chat-latest",
-      "name": "GPT 5 Chat",
-      "family": "gpt",
-      "releaseDate": "2025-08-07",
-      "contextLimit": 400000,
-      "inputLimit": 400000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "openai\/gpt-5-codex",
       "name": "GPT-5 Codex",
       "family": "gpt-codex",
@@ -6697,44 +4840,6 @@
       ]
     },
     {
-      "id": "openai\/gpt-5.1-chat",
-      "name": "GPT 5.1 Chat",
-      "family": "gpt",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 400000,
-      "inputLimit": 400000,
-      "outputLimit": 128000,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "openai\/gpt-5.1-chat-latest",
-      "name": "GPT 5.1 Chat (Latest)",
-      "family": "gpt",
-      "releaseDate": "2025-11-13",
-      "contextLimit": 400000,
-      "inputLimit": 400000,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "openai\/gpt-5.1-codex",
       "name": "GPT 5.1 Codex",
       "family": "gpt-codex",
@@ -6807,25 +4912,6 @@
         "text",
         "image",
         "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "openai\/gpt-5.2-chat",
-      "name": "GPT 5.2 Chat",
-      "family": "gpt",
-      "releaseDate": "2026-01-01",
-      "contextLimit": 400000,
-      "inputLimit": 400000,
-      "outputLimit": 16384,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
       ],
       "outputModalities": [
         "text"
@@ -7233,24 +5319,6 @@
       ]
     },
     {
-      "id": "qwen-image",
-      "name": "Qwen Image",
-      "releaseDate": "2025-08-07",
-      "contextLimit": 0,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "image"
-      ]
-    },
-    {
       "id": "qwen-long",
       "name": "Qwen Long 10M",
       "releaseDate": "2025-01-25",
@@ -7534,42 +5602,6 @@
       ]
     },
     {
-      "id": "QwQ-32B-ArliAI-RpR-v1",
-      "name": "QwQ 32b Arli V1",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "raifle\/sorcererlm-8x22b",
-      "name": "SorcererLM 8x22B",
-      "family": "mixtral",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 16000,
-      "inputLimit": 16000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "ReadyArt\/MS3.2-The-Omega-Directive-24B-Unslop-v2.0",
       "name": "Omega Directive 24B Unslop v2.0",
       "family": "llama",
@@ -7577,24 +5609,6 @@
       "contextLimit": 16384,
       "inputLimit": 16384,
       "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "ReadyArt\/The-Omega-Abomination-L-70B-v1.0",
-      "name": "The Omega Abomination V1",
-      "family": "llama",
-      "releaseDate": "2024-12-01",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 16384,
       "reasoning": false,
       "toolCall": false,
       "attachment": false,
@@ -7684,23 +5698,6 @@
       "releaseDate": "2024-12-06",
       "contextLimit": 20480,
       "inputLimit": 20480,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "sarvan-medium",
-      "name": "Sarvam Medium",
-      "releaseDate": "2025-01-01",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
       "outputLimit": 16384,
       "reasoning": false,
       "toolCall": false,
@@ -8066,60 +6063,6 @@
       ]
     },
     {
-      "id": "stepfun-ai\/step-3.5-flash:thinking",
-      "name": "Step 3.5 Flash Thinking",
-      "family": "step",
-      "releaseDate": "2026-02-02",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 256000,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "study_gpt-chatgpt-4o-latest",
-      "name": "Study Mode",
-      "releaseDate": "2024-05-13",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TEE\/deepseek-r1-0528",
-      "name": "DeepSeek R1 0528 TEE",
-      "family": "deepseek",
-      "releaseDate": "2025-05-28",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "TEE\/deepseek-v3.1",
       "name": "DeepSeek V3.1 TEE",
       "family": "deepseek",
@@ -8163,24 +6106,6 @@
       "contextLimit": 131072,
       "inputLimit": 131072,
       "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TEE\/glm-4.6",
-      "name": "GLM 4.6 TEE",
-      "family": "glm",
-      "releaseDate": "2025-09-30",
-      "contextLimit": 203000,
-      "inputLimit": 203000,
-      "outputLimit": 65535,
       "reasoning": false,
       "toolCall": false,
       "attachment": false,
@@ -8282,24 +6207,6 @@
       ]
     },
     {
-      "id": "TEE\/kimi-k2-thinking",
-      "name": "Kimi K2 Thinking TEE",
-      "family": "kimi-thinking",
-      "releaseDate": "2025-11-06",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 65535,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "TEE\/kimi-k2.5",
       "name": "Kimi K2.5 TEE",
       "family": "kimi",
@@ -8354,24 +6261,6 @@
       ]
     },
     {
-      "id": "TEE\/minimax-m2.1",
-      "name": "MiniMax M2.1 TEE",
-      "family": "minimax",
-      "releaseDate": "2025-12-23",
-      "contextLimit": 200000,
-      "inputLimit": 200000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "TEE\/qwen2.5-vl-72b-instruct",
       "name": "Qwen2.5 VL 72B TEE",
       "family": "qwen",
@@ -8397,24 +6286,6 @@
       "releaseDate": "2025-07-29",
       "contextLimit": 262000,
       "inputLimit": 262000,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TEE\/qwen3-coder",
-      "name": "Qwen3 Coder 480B TEE",
-      "family": "qwen",
-      "releaseDate": "2025-07-23",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
       "outputLimit": 32768,
       "reasoning": false,
       "toolCall": false,
@@ -8457,188 +6328,6 @@
       "attachment": false,
       "inputModalities": [
         "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Anubis-70B-v1",
-      "name": "Anubis 70B v1",
-      "family": "llama",
-      "releaseDate": "2024-07-01",
-      "contextLimit": 65536,
-      "inputLimit": 65536,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Anubis-70B-v1.1",
-      "name": "Anubis 70B v1.1",
-      "family": "llama",
-      "releaseDate": "2024-07-01",
-      "contextLimit": 131072,
-      "inputLimit": 131072,
-      "outputLimit": 16384,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Cydonia-24B-v2",
-      "name": "The Drummer Cydonia 24B v2",
-      "family": "llama",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Cydonia-24B-v4",
-      "name": "The Drummer Cydonia 24B v4",
-      "family": "llama",
-      "releaseDate": "2025-07-22",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Cydonia-24B-v4.1",
-      "name": "The Drummer Cydonia 24B v4.1",
-      "family": "llama",
-      "releaseDate": "2025-08-19",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Cydonia-24B-v4.3",
-      "name": "The Drummer Cydonia 24B v4.3",
-      "family": "llama",
-      "releaseDate": "2025-12-25",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Magidonia-24B-v4.3",
-      "name": "The Drummer Magidonia 24B v4.3",
-      "family": "llama",
-      "releaseDate": "2025-12-25",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/Rocinante-12B-v1.1",
-      "name": "Rocinante 12b",
-      "family": "llama",
-      "releaseDate": "2024-07-01",
-      "contextLimit": 16384,
-      "inputLimit": 16384,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/skyfall-36b-v2",
-      "name": "TheDrummer Skyfall 36B V2",
-      "family": "llama",
-      "releaseDate": "2025-03-10",
-      "contextLimit": 64000,
-      "inputLimit": 64000,
-      "outputLimit": 32768,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "TheDrummer 2\/UnslopNemo-12B-v4.1",
-      "name": "UnslopNemo 12b v4",
-      "family": "llama",
-      "releaseDate": "2024-07-01",
-      "contextLimit": 32768,
-      "inputLimit": 32768,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "pdf"
       ],
       "outputModalities": [
         "text"
@@ -8717,60 +6406,6 @@
       ]
     },
     {
-      "id": "THUDM\/GLM-Z1-Rumination-32B-0414",
-      "name": "GLM Z1 Rumination 32B 0414",
-      "family": "glm-z",
-      "releaseDate": "2025-04-15",
-      "contextLimit": 32000,
-      "inputLimit": 32000,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "tngtech\/DeepSeek-TNG-R1T2-Chimera",
-      "name": "DeepSeek TNG R1T2 Chimera",
-      "family": "tngtech",
-      "releaseDate": "2025-09-05",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "tngtech\/tng-r1t-chimera",
-      "name": "TNG R1T Chimera",
-      "family": "tngtech",
-      "releaseDate": "2025-11-26",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 65536,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "Tongyi-Zhiwen\/QwenLong-L1-32B",
       "name": "QwenLong L1 32B",
       "family": "qwen",
@@ -8838,24 +6473,6 @@
       "inputModalities": [
         "text",
         "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "unsloth\/gemma-3-1b-it",
-      "name": "Gemma 3 1B IT",
-      "family": "unsloth",
-      "releaseDate": "2025-03-10",
-      "contextLimit": 128000,
-      "inputLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -8993,119 +6610,6 @@
       "inputLimit": 16384,
       "outputLimit": 8192,
       "reasoning": false,
-      "toolCall": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-4-07-09",
-      "name": "Grok 4",
-      "family": "grok",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-4-fast",
-      "name": "Grok 4 Fast",
-      "family": "grok",
-      "releaseDate": "2025-09-20",
-      "contextLimit": 2000000,
-      "inputLimit": 2000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-4-fast:thinking",
-      "name": "Grok 4 Fast Thinking",
-      "family": "grok",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 2000000,
-      "inputLimit": 2000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-4.1-fast",
-      "name": "Grok 4.1 Fast",
-      "family": "grok",
-      "releaseDate": "2025-11-20",
-      "contextLimit": 2000000,
-      "inputLimit": 2000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-4.1-fast-reasoning",
-      "name": "Grok 4.1 Fast Reasoning",
-      "family": "grok",
-      "releaseDate": "2025-11-20",
-      "contextLimit": 2000000,
-      "inputLimit": 2000000,
-      "outputLimit": 131072,
-      "reasoning": true,
-      "toolCall": false,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "x-ai\/grok-code-fast-1",
-      "name": "Grok Code Fast 1",
-      "family": "grok",
-      "releaseDate": "2025-08-28",
-      "contextLimit": 256000,
-      "inputLimit": 256000,
-      "outputLimit": 131072,
-      "reasoning": true,
       "toolCall": false,
       "attachment": false,
       "inputModalities": [
@@ -9310,23 +6814,6 @@
       ],
       "outputModalities": [
         "text"
-      ]
-    },
-    {
-      "id": "z-image-turbo",
-      "name": "Z Image Turbo",
-      "releaseDate": "2025-11-27",
-      "contextLimit": 0,
-      "outputLimit": 0,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "image"
       ]
     },
     {

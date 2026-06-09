@@ -10,7 +10,7 @@
   ],
   "baseUrl": {
     "kind": "fixed",
-    "value": "https://api.llmgateway.io/v1",
+    "value": "https:\/\/api.llmgateway.io\/v1",
     "allowOverride": false
   },
   "modelDiscovery": {
@@ -613,28 +613,6 @@
       ]
     },
     {
-      "id": "gemini-2.5-flash-lite-preview-09-2025",
-      "name": "Gemini 2.5 Flash Lite Preview 09-25",
-      "family": "gemini-flash-lite",
-      "releaseDate": "2025-09-25",
-      "contextLimit": 1048576,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image",
-        "audio",
-        "video",
-        "pdf"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "gemini-2.5-pro",
       "name": "Gemini 2.5 Pro",
       "family": "gemini-pro",
@@ -760,25 +738,6 @@
       ]
     },
     {
-      "id": "gemma-3-12b-it",
-      "name": "Gemma 3 12B",
-      "family": "gemma",
-      "releaseDate": "2025-03-13",
-      "contextLimit": 32768,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "gemma-3-1b-it",
       "name": "Gemma 3 1B IT",
       "family": "gemma",
@@ -810,61 +769,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemma-3-4b-it",
-      "name": "Gemma 3 4B",
-      "family": "gemma",
-      "releaseDate": "2025-03-13",
-      "contextLimit": 32768,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemma-3n-e2b-it",
-      "name": "Gemma 3n 2B",
-      "family": "gemma",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 8192,
-      "outputLimit": 2000,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "gemma-3n-e4b-it",
-      "name": "Gemma 3n 4B",
-      "family": "gemma",
-      "releaseDate": "2025-05-20",
-      "contextLimit": 8192,
-      "outputLimit": 2000,
-      "reasoning": false,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -1807,42 +1711,6 @@
       ]
     },
     {
-      "id": "grok-3",
-      "name": "Grok 3",
-      "family": "grok",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-4",
-      "name": "Grok 4",
-      "family": "grok",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 256000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "grok-4-0709",
       "name": "Grok 4 (0709)",
       "family": "grok",
@@ -1855,44 +1723,6 @@
       "attachment": false,
       "inputModalities": [
         "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-4-1-fast",
-      "name": "Grok 4.1 Fast",
-      "family": "grok",
-      "releaseDate": "2025-11-19",
-      "contextLimit": 2000000,
-      "outputLimit": 30000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-4-1-fast-non-reasoning",
-      "name": "Grok 4.1 Fast (Non-Reasoning)",
-      "family": "grok",
-      "releaseDate": "2025-11-19",
-      "contextLimit": 2000000,
-      "outputLimit": 30000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
       ],
       "outputModalities": [
         "text"
@@ -1956,44 +1786,6 @@
       ]
     },
     {
-      "id": "grok-4-fast",
-      "name": "Grok 4 Fast",
-      "family": "grok",
-      "releaseDate": "2025-09-19",
-      "contextLimit": 2000000,
-      "outputLimit": 30000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-4-fast-non-reasoning",
-      "name": "Grok 4 Fast (Non-Reasoning)",
-      "family": "grok",
-      "releaseDate": "2025-09-19",
-      "contextLimit": 2000000,
-      "outputLimit": 30000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "grok-4-fast-reasoning",
       "name": "Grok 4 Fast Reasoning",
       "family": "grok",
@@ -2007,24 +1799,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-code-fast-1",
-      "name": "Grok Code Fast 1",
-      "family": "grok",
-      "releaseDate": "2025-08-28",
-      "contextLimit": 256000,
-      "outputLimit": 10000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -3659,24 +3433,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "qwen37-max",
-      "name": "Qwen3.7 Max",
-      "family": "qwen",
-      "releaseDate": "2026-05-21",
-      "contextLimit": 1000000,
-      "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"

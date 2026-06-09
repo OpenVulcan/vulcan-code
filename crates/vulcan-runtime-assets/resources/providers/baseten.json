@@ -18,24 +18,6 @@
   },
   "models": [
     {
-      "id": "deepseek-ai\/DeepSeek-V3-0324",
-      "name": "DeepSeek V3 0324",
-      "family": "deepseek",
-      "releaseDate": "2025-03-24",
-      "contextLimit": 164000,
-      "outputLimit": 131000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "deepseek-ai\/DeepSeek-V3.1",
       "name": "DeepSeek V3.1",
       "family": "deepseek",
@@ -46,28 +28,6 @@
       "toolCall": true,
       "temperature": true,
       "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "deepseek-ai\/DeepSeek-V3.2",
-      "name": "DeepSeek V3.2",
-      "status": "deprecated",
-      "family": "deepseek",
-      "releaseDate": "2025-12-01",
-      "contextLimit": 163800,
-      "outputLimit": 131100,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
       "inputModalities": [
         "text"
       ],
@@ -103,47 +63,6 @@
       "releaseDate": "2026-02-12",
       "contextLimit": 204000,
       "outputLimit": 204000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "interleaved": {
-        "field": "reasoning_content"
-      },
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai\/Kimi-K2-Instruct-0905",
-      "name": "Kimi K2 Instruct 0905",
-      "status": "deprecated",
-      "family": "kimi",
-      "releaseDate": "2025-09-05",
-      "contextLimit": 262144,
-      "outputLimit": 262144,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "moonshotai\/Kimi-K2-Thinking",
-      "name": "Kimi K2 Thinking",
-      "status": "deprecated",
-      "family": "kimi-thinking",
-      "releaseDate": "2025-11-06",
-      "contextLimit": 262144,
-      "outputLimit": 262144,
       "reasoning": true,
       "toolCall": true,
       "temperature": true,
@@ -231,24 +150,6 @@
       "contextLimit": 128000,
       "outputLimit": 128000,
       "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "zai-org\/GLM-4.6",
-      "name": "GLM 4.6",
-      "family": "glm",
-      "releaseDate": "2025-09-16",
-      "contextLimit": 200000,
-      "outputLimit": 200000,
-      "reasoning": false,
       "toolCall": true,
       "temperature": true,
       "attachment": false,

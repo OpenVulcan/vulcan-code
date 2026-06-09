@@ -1070,60 +1070,6 @@
       ]
     },
     {
-      "id": "grok-3",
-      "name": "Grok 3",
-      "family": "grok",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-3-mini",
-      "name": "Grok 3 Mini",
-      "family": "grok",
-      "releaseDate": "2025-02-17",
-      "contextLimit": 131072,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-4",
-      "name": "Grok 4",
-      "family": "grok",
-      "releaseDate": "2025-07-09",
-      "contextLimit": 256000,
-      "outputLimit": 64000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "grok-4-1-fast-non-reasoning",
       "name": "Grok 4.1 Fast (Non-Reasoning)",
       "status": "beta",
@@ -1204,25 +1150,6 @@
       ]
     },
     {
-      "id": "grok-4-fast-non-reasoning",
-      "name": "Grok 4 Fast (Non-Reasoning)",
-      "family": "grok",
-      "releaseDate": "2025-09-19",
-      "contextLimit": 2000000,
-      "outputLimit": 30000,
-      "reasoning": false,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": true,
-      "inputModalities": [
-        "text",
-        "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
       "id": "grok-4-fast-reasoning",
       "name": "Grok 4 Fast (Reasoning)",
       "family": "grok",
@@ -1236,24 +1163,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "grok-code-fast-1",
-      "name": "Grok Code Fast 1",
-      "family": "grok",
-      "releaseDate": "2025-08-28",
-      "contextLimit": 256000,
-      "outputLimit": 10000,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -1407,24 +1316,6 @@
       "inputModalities": [
         "text",
         "image"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "mai-ds-r1",
-      "name": "MAI-DS-R1",
-      "family": "mai",
-      "releaseDate": "2025-01-20",
-      "contextLimit": 128000,
-      "outputLimit": 8192,
-      "reasoning": true,
-      "toolCall": false,
-      "temperature": true,
-      "attachment": false,
-      "inputModalities": [
-        "text"
       ],
       "outputModalities": [
         "text"
@@ -1656,24 +1547,6 @@
       "releaseDate": "2024-09-12",
       "contextLimit": 128000,
       "outputLimit": 65536,
-      "reasoning": true,
-      "toolCall": true,
-      "temperature": false,
-      "attachment": false,
-      "inputModalities": [
-        "text"
-      ],
-      "outputModalities": [
-        "text"
-      ]
-    },
-    {
-      "id": "o1-preview",
-      "name": "o1-preview",
-      "family": "o",
-      "releaseDate": "2024-09-12",
-      "contextLimit": 128000,
-      "outputLimit": 32768,
       "reasoning": true,
       "toolCall": true,
       "temperature": false,
