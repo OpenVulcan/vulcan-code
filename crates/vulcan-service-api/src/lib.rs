@@ -140,6 +140,10 @@ pub struct WorkbenchSnapshot {
     /// Provider summaries shown in the provider area.
     /// Provider 区域展示的供应商摘要。
     pub providers: Vec<ProviderSummary>,
+    /// MCP server summaries shown in the settings area.
+    /// 设置区域展示的 MCP 服务器摘要。
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerSummary>,
     /// Reasoning selector view resolved from the active provider and model.
     /// 根据当前激活 Provider 与模型解析出的思考选择器视图。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +152,14 @@ pub struct WorkbenchSnapshot {
     /// 输入区快捷控制展示的 AI 能力路由摘要。
     #[serde(default)]
     pub ai_capabilities: Vec<AiCapabilitySummary>,
+    /// Shared AI capability vendor summaries shown in settings.
+    /// 设置中展示的共享 AI 能力供应商摘要。
+    #[serde(default)]
+    pub ai_capability_vendors: Vec<AiCapabilityVendorSummary>,
+    /// Shared AI capability vendor catalog choices shown by the add-vendor picker.
+    /// 添加供应商选择器展示的共享 AI 能力供应商目录选项。
+    #[serde(default)]
+    pub ai_capability_vendor_catalog: Vec<AiCapabilityVendorCatalogSummary>,
     /// Composer attachment capability gates resolved by the shared runtime.
     /// 由共享运行时解析出的输入区附件能力门控。
     #[serde(default)]
@@ -659,6 +671,85 @@ pub struct AiCapabilityTargetSummary {
     pub enabled: bool,
 }
 
+/// Summarizes one shared AI capability vendor configuration.
+/// 汇总单个共享 AI 能力供应商配置。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilityVendorSummary {
+    /// Stable vendor instance identifier.
+    /// 稳定供应商实例标识。
+    pub id: String,
+    /// Stable catalog vendor identifier.
+    /// 稳定目录供应商标识。
+    pub vendor_id: String,
+    /// User-facing vendor name.
+    /// 面向用户显示的供应商名称。
+    pub name: String,
+    /// Whether the vendor participates in runtime routing.
+    /// 该供应商是否参与运行时路由。
+    pub enabled: bool,
+    /// Stored API key or environment placeholder.
+    /// 已保存的 API Key 或环境变量占位符。
+    pub api_key: String,
+    /// Stored vendor base URL override.
+    /// 已保存的供应商 Base URL 覆盖值。
+    pub base_url: String,
+    /// Stored vendor region override.
+    /// 已保存的供应商区域覆盖值。
+    pub region: String,
+    /// Stored connection mode key.
+    /// 已保存的连接模式键。
+    pub connection_mode: String,
+    /// Number of configured route targets under the vendor.
+    /// 该供应商下已配置路由目标数量。
+    pub target_count: usize,
+    /// Catalog target choices exposed by this vendor.
+    /// 该供应商暴露的目录目标选项。
+    #[serde(default)]
+    pub target_choices: Vec<AiCapabilityVendorTargetChoiceSummary>,
+}
+
+/// Summarizes one selectable AI capability target under a configured vendor.
+/// 汇总已配置供应商下单个可选择的 AI 能力目标。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilityVendorTargetChoiceSummary {
+    /// Stable semantic capability kind owned by this target.
+    /// 当前目标所属的稳定语义能力类型。
+    pub capability_kind: String,
+    /// Stable target alias exposed below the vendor id.
+    /// 暴露在供应商标识下方的稳定目标别名。
+    pub target_alias: String,
+    /// Default provider request model attached to this target.
+    /// 当前目标默认绑定的 Provider 请求模型。
+    pub default_model_id: String,
+    /// User-facing compact label.
+    /// 面向用户的紧凑标签。
+    pub label: String,
+    /// Whether the target supports editing the request model.
+    /// 当前目标是否支持编辑请求模型。
+    pub supports_model_override: bool,
+    /// Optional finite model choices.
+    /// 可选的有限模型选项。
+    pub model_options: Vec<String>,
+}
+
+/// Summarizes one supported AI capability vendor catalog choice.
+/// 汇总单个受支持 AI 能力供应商目录选项。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AiCapabilityVendorCatalogSummary {
+    /// Stable vendor identifier.
+    /// 稳定供应商标识。
+    pub vendor_id: String,
+    /// User-facing vendor name.
+    /// 面向用户显示的供应商名称。
+    pub name: String,
+    /// Capability labels supported by the vendor.
+    /// 该供应商支持的能力标签集合。
+    pub capabilities: Vec<String>,
+}
+
 /// Summarizes one primary workbench feature area.
 /// 汇总工作台中的单个主功能区域。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -928,6 +1019,10 @@ pub struct ProviderSummary {
     /// Provider status text.
     /// 供应商状态文本。
     pub status: String,
+    /// Whether this provider has a saved local configuration.
+    /// 该供应商是否已经保存本地配置。
+    #[serde(default)]
+    pub configured: bool,
     /// Enabled model count text.
     /// 已启用模型数量文本。
     pub enabled_models: String,
@@ -939,6 +1034,14 @@ pub struct ProviderSummary {
     /// 暴露给 WebUI 模型选择器的已启用模型摘要。
     #[serde(default)]
     pub models: Vec<ProviderModelSummary>,
+    /// Full catalog model summaries before enabled filtering.
+    /// 启用过滤前的完整目录模型摘要。
+    #[serde(default)]
+    pub catalog_models: Vec<ProviderModelSummary>,
+    /// Editable provider form fields projected from the provider catalog definition.
+    /// 从供应商目录定义投影出的可编辑 Provider 表单字段。
+    #[serde(default)]
+    pub fields: Vec<ProviderFieldSummary>,
 }
 
 /// Summarizes one enabled model under a provider.
@@ -956,6 +1059,146 @@ pub struct ProviderModelSummary {
     /// 该模型是否为当前工作台模型。
     #[serde(default)]
     pub active: bool,
+    /// Whether this model is enabled for the provider.
+    /// 该模型是否已在该供应商下启用。
+    #[serde(default)]
+    pub enabled: bool,
+    /// Optional lifecycle status from the provider catalog.
+    /// 来自供应商目录的可选生命周期状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    /// Optional model family from the provider catalog.
+    /// 来自供应商目录的可选模型家族。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family: Option<String>,
+    /// Optional context window limit.
+    /// 可选上下文窗口上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_limit: Option<usize>,
+    /// Optional input token limit.
+    /// 可选输入 Token 上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_limit: Option<usize>,
+    /// Optional output token limit.
+    /// 可选输出 Token 上限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limit: Option<usize>,
+    /// Optional reasoning capability flag.
+    /// 可选推理能力标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<bool>,
+    /// Optional attachment capability flag.
+    /// 可选附件能力标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<bool>,
+    /// Normalized input modality list.
+    /// 归一化输入模态列表。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_modalities: Vec<String>,
+    /// Normalized output modality list.
+    /// 归一化输出模态列表。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_modalities: Vec<String>,
+    /// Optional reasoning profile JSON text.
+    /// 可选推理档位配置 JSON 文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_profile_json: Option<String>,
+}
+
+/// Summarizes one editable provider configuration field.
+/// 汇总单个可编辑 Provider 配置字段。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderFieldSummary {
+    /// Stable field key used by save requests.
+    /// 保存请求使用的稳定字段键。
+    pub key: String,
+    /// User-facing field label.
+    /// 面向用户显示的字段标签。
+    pub label: String,
+    /// Field placeholder text.
+    /// 字段占位提示文本。
+    pub placeholder: String,
+    /// Stored field value.
+    /// 已保存的字段值。
+    pub value: String,
+    /// Whether the field should be edited as a secret.
+    /// 该字段是否应按密文字段编辑。
+    pub secret: bool,
+    /// Whether the field must be non-empty before saving.
+    /// 保存前该字段是否必须非空。
+    pub required: bool,
+}
+
+/// Summarizes one persisted MCP server configuration.
+/// 汇总单个持久化 MCP 服务器配置。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerSummary {
+    /// Stable MCP server identifier.
+    /// 稳定 MCP 服务器标识。
+    pub id: String,
+    /// User-facing server name.
+    /// 面向用户显示的服务器名称。
+    pub name: String,
+    /// Whether the server is enabled.
+    /// 该服务器是否启用。
+    pub enabled: bool,
+    /// Transport key such as `stdio`, `http`, or `sse`.
+    /// 传输键，例如 `stdio`、`http` 或 `sse`。
+    pub transport: String,
+    /// Command used for stdio servers.
+    /// stdio 服务器使用的启动命令。
+    pub command: String,
+    /// Command arguments used for stdio servers.
+    /// stdio 服务器使用的启动参数。
+    pub args: Vec<String>,
+    /// URL used for remote servers.
+    /// 远端服务器使用的 URL。
+    pub url: String,
+    /// Bearer token used for remote servers.
+    /// 远端服务器使用的 Bearer Token。
+    pub bearer_token: String,
+    /// Explicit request headers.
+    /// 显式请求头。
+    pub headers: Vec<KeyValueSummary>,
+    /// Request headers resolved from environment variables.
+    /// 从环境变量解析的请求头。
+    pub headers_from_env: Vec<KeyValueSummary>,
+    /// OAuth client identifier.
+    /// OAuth 客户端标识。
+    pub oauth_client_id: String,
+    /// OAuth client secret.
+    /// OAuth 客户端密钥。
+    pub oauth_client_secret: String,
+    /// OAuth scope list.
+    /// OAuth scope 列表。
+    pub oauth_scopes: Vec<String>,
+    /// OAuth redirect URI.
+    /// OAuth 回调 URI。
+    pub oauth_redirect_uri: String,
+    /// Working directory used by stdio servers.
+    /// stdio 服务器使用的工作目录。
+    pub cwd: String,
+    /// Environment variables injected into stdio servers.
+    /// 注入 stdio 服务器的环境变量。
+    pub env: Vec<KeyValueSummary>,
+    /// Environment variable names passed through to stdio servers.
+    /// 透传给 stdio 服务器的环境变量名。
+    pub env_passthrough: Vec<String>,
+}
+
+/// Summarizes one string key/value pair.
+/// 汇总单个字符串键值对。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyValueSummary {
+    /// Stable key.
+    /// 稳定键。
+    pub key: String,
+    /// Stored value.
+    /// 已保存值。
+    pub value: String,
 }
 
 /// Summarizes the workbench reasoning selector resolved by the backend.

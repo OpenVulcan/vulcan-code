@@ -68,8 +68,8 @@ use vulcan_agent_runtime::{
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
     provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
     provider_config::{
-        self, PersistedAiToolConfiguration, ProviderConfigurationFile, ProviderRuntimeKind,
-        ReasoningEffortLevel,
+        self, PersistedAiToolConfiguration, PersistedModelOverrideEntry,
+        ProviderConfigurationFile, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
     },
     provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
@@ -99,17 +99,23 @@ use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
 use vulcan_provider_config::config::{
-    PersistedLuaSkillToolRegistrationState, PersistedPromptSkillState,
+    AiCapabilityVendorConnectionMode, AiToolKind, PersistedAiCapabilityTargetBinding,
+    PersistedAiCapabilityVendorEntry, PersistedLuaSkillToolRegistrationState,
+    PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
+    PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions,
+    ProviderFieldKey,
 };
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
-    AiCapabilityTargetSummary, CommandSessionSummary, ComposerAttachmentCapabilitySummary,
-    ComposerAttachmentSummary, ContextInjectionCardSummary, ContextInjectionItemSummary,
-    ContextInjectionSnapshot, ContextUsageSnapshot, ConversationMessage, ConversationSummary,
-    FeatureAreaSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
-    LuaSkillsCatalogSummary, MemorySummary, MessageRole, PendingPromptSummary,
-    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
-    PluginSummary, ProjectSummary, ProviderModelSummary, ProviderSummary,
+    AiCapabilityTargetSummary, AiCapabilityVendorCatalogSummary, AiCapabilityVendorSummary,
+    AiCapabilityVendorTargetChoiceSummary, CommandSessionSummary,
+    ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
+    ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
+    ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary,
+    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary,
+    MemorySummary, MessageRole, PendingPromptSummary, PendingQuestionOptionSummary,
+    PendingQuestionPromptSummary, PendingQuestionSnapshot, PluginSummary, ProjectSummary,
+    ProviderFieldSummary, ProviderModelSummary, ProviderSummary,
     ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
     ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
     SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
@@ -202,6 +208,216 @@ struct AgentRuntimeBridge {
     /// Shared VMM hook runtime snapshot used by built-in memory hooks.
     /// 内置记忆 hook 使用的共享 VMM hook 运行时快照。
     vmm_hook_runtime: VmmHookRuntimeHandle,
+}
+
+/// Provider configuration save request sent by the WebUI settings page.
+/// WebUI 设置页发送的 Provider 配置保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConfigurationSaveRequest {
+    /// Stable provider identifier.
+    /// 稳定 Provider 标识。
+    provider_id: String,
+    /// Editable field values keyed by provider field key.
+    /// 按 Provider 字段键保存的可编辑字段值。
+    fields: BTreeMap<String, String>,
+}
+
+/// Provider enabled-model save request sent by the WebUI settings page.
+/// WebUI 设置页发送的 Provider 启用模型保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderEnabledModelsSaveRequest {
+    /// Stable provider identifier.
+    /// 稳定 Provider 标识。
+    provider_id: String,
+    /// Full enabled model identifier list.
+    /// 完整启用模型标识列表。
+    enabled_model_ids: Vec<String>,
+}
+
+/// Provider model capability override request sent by the WebUI settings page.
+/// WebUI 设置页发送的 Provider 模型能力覆盖请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelOverrideSaveRequest {
+    /// Stable provider identifier.
+    /// 稳定 Provider 标识。
+    provider_id: String,
+    /// Stable model identifier.
+    /// 稳定模型标识。
+    model_id: String,
+    /// Optional reasoning capability override.
+    /// 可选推理能力覆盖值。
+    reasoning: Option<bool>,
+    /// Optional attachment marker override.
+    /// 可选附件标记覆盖值。
+    attachment: Option<bool>,
+    /// Optional context-window limit override.
+    /// 可选上下文窗口上限覆盖值。
+    context_limit: Option<usize>,
+    /// Optional input-token limit override.
+    /// 可选输入 Token 上限覆盖值。
+    input_limit: Option<usize>,
+    /// Optional output-token limit override.
+    /// 可选输出 Token 上限覆盖值。
+    output_limit: Option<usize>,
+    /// Optional input-modality override list.
+    /// 可选输入模态覆盖列表。
+    input_modalities: Option<Vec<String>>,
+    /// Optional output-modality override list.
+    /// 可选输出模态覆盖列表。
+    output_modalities: Option<Vec<String>>,
+    /// Optional reasoning profile JSON override.
+    /// 可选推理档位配置 JSON 覆盖值。
+    reasoning_profile_json: Option<String>,
+}
+
+/// Shared AI capability vendor save request sent by the WebUI settings page.
+/// WebUI 设置页发送的共享 AI 能力供应商保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCapabilityVendorSaveRequest {
+    /// Stable vendor catalog identifier.
+    /// 稳定供应商目录标识。
+    vendor_id: String,
+    /// Whether the vendor participates in runtime routing.
+    /// 该供应商是否参与运行时路由。
+    enabled: bool,
+    /// Shared API key or environment placeholder.
+    /// 共享 API Key 或环境变量占位符。
+    api_key: String,
+    /// Shared base URL override.
+    /// 共享 Base URL 覆盖值。
+    base_url: String,
+    /// Shared region override.
+    /// 共享区域覆盖值。
+    region: String,
+    /// Optional connection mode key.
+    /// 可选连接模式键。
+    connection_mode: Option<String>,
+}
+
+/// AI capability target enablement request sent by the WebUI settings page.
+/// WebUI 设置页发送的 AI 能力目标启用状态请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCapabilityTargetEnabledRequest {
+    /// Stable semantic capability key.
+    /// 稳定语义能力键。
+    capability_kind: String,
+    /// Stable vendor identifier.
+    /// 稳定供应商标识。
+    vendor_id: String,
+    /// Stable target alias under the vendor.
+    /// 供应商下的稳定目标别名。
+    target_alias: String,
+    /// Next enabled state.
+    /// 下一启用状态。
+    enabled: bool,
+}
+
+/// AI capability target-list save request sent by the WebUI settings page.
+/// WebUI 设置页发送的 AI 能力目标列表保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCapabilityTargetsSaveRequest {
+    /// Stable semantic capability kind.
+    /// 稳定语义能力类型。
+    capability_kind: String,
+    /// Ordered target bindings to keep for this capability.
+    /// 当前能力需要保留的有序目标绑定集合。
+    targets: Vec<AiCapabilityTargetSaveInput>,
+}
+
+/// AI capability target binding submitted by the WebUI settings page.
+/// WebUI 设置页提交的 AI 能力目标绑定。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCapabilityTargetSaveInput {
+    /// Stable vendor identifier.
+    /// 稳定供应商标识。
+    vendor_id: String,
+    /// Stable target alias under the vendor.
+    /// 供应商下的稳定目标别名。
+    target_alias: String,
+    /// Provider request model id.
+    /// Provider 请求模型标识。
+    model_id: String,
+    /// Whether the binding is enabled.
+    /// 该绑定是否启用。
+    enabled: bool,
+}
+
+/// MCP server configuration save request sent by the WebUI settings page.
+/// WebUI 设置页发送的 MCP 服务器配置保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct McpServerSaveRequest {
+    /// Existing server identifier, or `None` when creating one.
+    /// 已有服务器标识；创建新服务器时为 `None`。
+    server_id: Option<String>,
+    /// User-facing server name.
+    /// 面向用户显示的服务器名称。
+    name: String,
+    /// Whether the server should be registered by the runtime.
+    /// 该服务器是否应由运行时注册。
+    enabled: bool,
+    /// Transport key such as `stdio`, `http`, or `sse`.
+    /// 传输键，例如 `stdio`、`http` 或 `sse`。
+    transport: String,
+    /// Stdio command.
+    /// Stdio 启动命令。
+    command: String,
+    /// Stdio argument vector.
+    /// Stdio 参数列表。
+    args: Vec<String>,
+    /// Remote endpoint URL.
+    /// 远端端点 URL。
+    url: String,
+    /// Remote bearer token.
+    /// 远端 Bearer Token。
+    bearer_token: String,
+    /// Explicit HTTP headers.
+    /// 显式 HTTP 请求头。
+    headers: Vec<KeyValueInput>,
+    /// HTTP headers resolved from environment variables.
+    /// 从环境变量解析的 HTTP 请求头。
+    headers_from_env: Vec<KeyValueInput>,
+    /// OAuth client identifier.
+    /// OAuth 客户端标识。
+    oauth_client_id: String,
+    /// OAuth client secret.
+    /// OAuth 客户端密钥。
+    oauth_client_secret: String,
+    /// OAuth scope list.
+    /// OAuth scope 列表。
+    oauth_scopes: Vec<String>,
+    /// OAuth redirect URI.
+    /// OAuth 回调 URI。
+    oauth_redirect_uri: String,
+    /// Stdio working directory.
+    /// Stdio 工作目录。
+    cwd: String,
+    /// Environment variables injected into stdio servers.
+    /// 注入 stdio 服务器的环境变量。
+    env: Vec<KeyValueInput>,
+    /// Environment variable names passed through to stdio servers.
+    /// 透传给 stdio 服务器的环境变量名。
+    env_passthrough: Vec<String>,
+}
+
+/// Generic string key/value input used by settings save requests.
+/// 设置保存请求使用的通用字符串键值输入。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyValueInput {
+    /// Raw key.
+    /// 原始键。
+    key: String,
+    /// Raw value.
+    /// 原始值。
+    value: String,
 }
 
 /// No-op session lifecycle hook used by the WebUI external stream lifecycle runner.
@@ -1062,6 +1278,16 @@ pub fn run() {
             service_reorder_pending_prompts,
             service_select_workbench_model,
             service_select_workbench_reasoning_effort,
+            service_save_provider_configuration,
+            service_remove_provider_configuration,
+            service_save_provider_enabled_models,
+            service_save_provider_model_override,
+            service_save_ai_capability_vendor,
+            service_remove_ai_capability_vendor,
+            service_set_ai_capability_target_enabled,
+            service_save_ai_capability_targets,
+            service_save_mcp_server_configuration,
+            service_remove_mcp_server_configuration,
             service_open_project_directory,
             service_open_project_directory_path,
             service_add_project_from_folder,
@@ -3624,6 +3850,527 @@ async fn service_select_workbench_reasoning_effort(
     Ok(workbench)
 }
 
+/// Saves one model provider configuration from the WebUI settings page.
+/// 从 WebUI 设置页保存单个模型供应商配置。
+#[tauri::command]
+async fn service_save_provider_configuration(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: ProviderConfigurationSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = request.provider_id.trim().to_ascii_lowercase();
+    let definition = provider_config::supported_provider_by_id(&provider_id)
+        .ok_or_else(|| format!("未找到供应商 `{provider_id}` 的目录定义。"))?;
+    let mut options = PersistedProviderOptions::default();
+    for field in definition.input_fields() {
+        let value = request
+            .fields
+            .get(provider_field_request_key(field))
+            .or_else(|| request.fields.get(provider_field_legacy_key(field)))
+            .cloned()
+            .unwrap_or_default();
+        if value.trim().is_empty() {
+            return Err(format!("请先填写 `{}`。", definition.field_label(field)));
+        }
+        options.set(field, value);
+    }
+
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        let is_new = !next_configuration.provider.contains_key(&provider_id);
+        let entry = next_configuration
+            .provider
+            .entry(provider_id.clone())
+            .or_insert_with(PersistedProviderEntry::default);
+        entry.name = Some(definition.name.clone());
+        entry.options = options;
+        if is_new {
+            entry.set_enabled_models(Vec::<String>::new());
+        }
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存供应商配置失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Removes one model provider configuration from the WebUI settings page.
+/// 从 WebUI 设置页移除单个模型供应商配置。
+#[tauri::command]
+async fn service_remove_provider_configuration(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    provider_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = provider_id.trim().to_ascii_lowercase();
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.provider.remove(&provider_id);
+        if next_configuration
+            .model
+            .as_deref()
+            .and_then(provider_config::parse_active_model_reference)
+            .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id)
+        {
+            next_configuration.model = None;
+        }
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("移除供应商配置失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Saves the enabled model list for one provider from the WebUI settings page.
+/// 从 WebUI 设置页保存单个供应商的启用模型列表。
+#[tauri::command]
+async fn service_save_provider_enabled_models(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: ProviderEnabledModelsSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = request.provider_id.trim().to_ascii_lowercase();
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        let catalog_ids = provider_config::catalog_model_choices(&provider_id, &next_configuration)
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<BTreeSet<_>>();
+        let next_ids = request
+            .enabled_model_ids
+            .into_iter()
+            .map(|model_id| model_id.trim().to_string())
+            .filter(|model_id| !model_id.is_empty() && catalog_ids.contains(model_id))
+            .collect::<Vec<_>>();
+        let entry = next_configuration
+            .provider
+            .get_mut(&provider_id)
+            .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法配置模型。"))?;
+        entry.set_enabled_models(next_ids);
+        reconcile_active_model_after_enabled_models_change(&mut next_configuration, &provider_id);
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存启用模型失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Saves one model capability override for a provider from the WebUI settings page.
+/// 从 WebUI 设置页保存单个供应商模型能力覆盖。
+#[tauri::command]
+async fn service_save_provider_model_override(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: ProviderModelOverrideSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = request.provider_id.trim().to_ascii_lowercase();
+    let model_id = request.model_id.trim().to_string();
+    if provider_id.is_empty() || model_id.is_empty() {
+        return Err(String::from("供应商与模型标识不能为空。"));
+    }
+    let reasoning_profile = match request.reasoning_profile_json.as_deref().map(str::trim) {
+        Some("") | None => None,
+        Some(raw_json) => Some(
+            serde_json::from_str::<ReasoningProfileConfig>(raw_json)
+                .map_err(|error| format!("推理模式附加配置 JSON 无效：{error}"))?,
+        ),
+    };
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        let catalog_ids = provider_config::catalog_model_choices(&provider_id, &next_configuration)
+            .into_iter()
+            .map(|model| model.id)
+            .collect::<BTreeSet<_>>();
+        if !catalog_ids.contains(&model_id) {
+            return Err(format!("模型 `{model_id}` 不属于供应商 `{provider_id}`。"));
+        }
+        let entry = next_configuration
+            .provider
+            .get_mut(&provider_id)
+            .ok_or_else(|| format!("供应商 `{provider_id}` 尚未保存，无法编辑模型能力。"))?;
+        let override_entry = PersistedModelOverrideEntry {
+            reasoning: request.reasoning,
+            attachment: request.attachment,
+            context_limit: request.context_limit,
+            input_limit: request.input_limit,
+            output_limit: request.output_limit,
+            reasoning_profile,
+            input_modalities: request
+                .input_modalities
+                .map(normalize_model_override_text_list)
+                .filter(|items| !items.is_empty()),
+            output_modalities: request
+                .output_modalities
+                .map(normalize_model_override_text_list)
+                .filter(|items| !items.is_empty()),
+        };
+        if override_entry.is_empty() {
+            entry.model_overrides.remove(&model_id);
+        } else {
+            entry.model_overrides.insert(model_id, override_entry);
+        }
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存模型能力失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Normalizes a user-authored string list used by model override fields.
+/// 归一化模型覆盖字段使用的用户字符串列表。
+fn normalize_model_override_text_list(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Saves one shared AI capability vendor from the WebUI settings page.
+/// 从 WebUI 设置页保存单个共享 AI 能力供应商。
+#[tauri::command]
+async fn service_save_ai_capability_vendor(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: AiCapabilityVendorSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let vendor_id = request.vendor_id.trim().to_ascii_lowercase();
+    if vendor_id.is_empty() {
+        return Err(String::from("AI 能力供应商标识不能为空。"));
+    }
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
+        if next_ai_tool_configuration.vendor_by_id(&vendor_id).is_none() {
+            next_ai_tool_configuration
+                .vendors
+                .push(PersistedAiCapabilityVendorEntry::new(vendor_id.clone()));
+        }
+        let vendor = next_ai_tool_configuration
+            .vendor_by_id_mut(&vendor_id)
+            .ok_or_else(|| format!("无法创建 AI 能力供应商 `{vendor_id}`。"))?;
+        vendor.name = provider_config::ai_capability_vendor_display_name(&vendor_id);
+        vendor.enabled = request.enabled;
+        vendor.api_key = request.api_key.trim().to_string();
+        vendor.base_url = request.base_url.trim().to_string();
+        vendor.region = request.region.trim().to_string();
+        vendor.connection_mode = parse_ai_capability_connection_mode(request.connection_mode.as_deref())?;
+        next_ai_tool_configuration.normalize();
+        vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+            &next_ai_tool_configuration,
+        )
+        .map_err(|error| format!("保存 AI 能力供应商失败：{error}"))?;
+        agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
+        let provider_configuration = agent_runtime.provider_configuration.clone();
+        refresh_settings_projection_locked(
+            &mut guard,
+            &provider_configuration,
+            Some(&next_ai_tool_configuration),
+        );
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Removes one shared AI capability vendor from the WebUI settings page.
+/// 从 WebUI 设置页移除单个共享 AI 能力供应商。
+#[tauri::command]
+async fn service_remove_ai_capability_vendor(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    vendor_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let vendor_id = vendor_id.trim().to_ascii_lowercase();
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
+        next_ai_tool_configuration
+            .vendors
+            .retain(|vendor| vendor.vendor_id != vendor_id);
+        next_ai_tool_configuration.normalize();
+        vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+            &next_ai_tool_configuration,
+        )
+        .map_err(|error| format!("移除 AI 能力供应商失败：{error}"))?;
+        agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
+        let provider_configuration = agent_runtime.provider_configuration.clone();
+        refresh_settings_projection_locked(
+            &mut guard,
+            &provider_configuration,
+            Some(&next_ai_tool_configuration),
+        );
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Toggles one configured AI capability target from the WebUI settings page.
+/// 从 WebUI 设置页切换单个已配置 AI 能力目标。
+#[tauri::command]
+async fn service_set_ai_capability_target_enabled(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: AiCapabilityTargetEnabledRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let capability_kind = parse_ai_tool_kind(&request.capability_kind)?;
+    let vendor_id = request.vendor_id.trim().to_ascii_lowercase();
+    let target_alias = request.target_alias.trim().to_ascii_lowercase();
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
+        let vendor = next_ai_tool_configuration
+            .vendor_by_id_mut(&vendor_id)
+            .ok_or_else(|| format!("未找到 AI 能力供应商 `{vendor_id}`。"))?;
+        let binding = vendor
+            .targets
+            .iter_mut()
+            .find(|binding| {
+                binding.capability_kind == capability_kind
+                    && binding.target_alias().eq_ignore_ascii_case(&target_alias)
+            })
+            .ok_or_else(|| format!("未找到 AI 能力目标 `{vendor_id}/{target_alias}`。"))?;
+        binding.enabled = request.enabled;
+        next_ai_tool_configuration.normalize();
+        vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+            &next_ai_tool_configuration,
+        )
+        .map_err(|error| format!("保存 AI 能力目标失败：{error}"))?;
+        agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
+        let provider_configuration = agent_runtime.provider_configuration.clone();
+        refresh_settings_projection_locked(
+            &mut guard,
+            &provider_configuration,
+            Some(&next_ai_tool_configuration),
+        );
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Saves the full ordered target list for one AI capability from the WebUI settings page.
+/// 从 WebUI 设置页保存单个 AI 能力的完整有序目标列表。
+#[tauri::command]
+async fn service_save_ai_capability_targets(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: AiCapabilityTargetsSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let capability_kind = parse_ai_tool_kind(&request.capability_kind)?;
+    let mut target_inputs = Vec::new();
+    let mut ordered_selectors = Vec::new();
+    for target in request.targets {
+        let vendor_id = target.vendor_id.trim().to_ascii_lowercase();
+        let target_alias = target.target_alias.trim().to_ascii_lowercase();
+        if vendor_id.is_empty() || target_alias.is_empty() {
+            continue;
+        }
+        let choice = provider_config::ai_capability_vendor_target_choices(&vendor_id)
+            .into_iter()
+            .find(|choice| {
+                choice.capability_kind == capability_kind
+                    && choice.target_alias.eq_ignore_ascii_case(&target_alias)
+            })
+            .ok_or_else(|| format!("供应商 `{vendor_id}` 不支持目标 `{target_alias}`。"))?;
+        let model_id = if target.model_id.trim().is_empty() {
+            choice.default_model_id
+        } else {
+            target.model_id.trim().to_string()
+        };
+        ordered_selectors.push(format!("{vendor_id}/{target_alias}"));
+        target_inputs.push((vendor_id, target_alias, model_id, target.enabled));
+    }
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
+        for vendor in &mut next_ai_tool_configuration.vendors {
+            vendor.targets.retain(|binding| binding.capability_kind != capability_kind);
+        }
+        let vendor_ids = target_inputs
+            .iter()
+            .map(|(vendor_id, _, _, _)| vendor_id.clone())
+            .collect::<BTreeSet<_>>();
+        for vendor_id in vendor_ids {
+            let vendor = next_ai_tool_configuration
+                .vendor_by_id_mut(&vendor_id)
+                .ok_or_else(|| format!("未找到 AI 能力供应商 `{vendor_id}`。"))?;
+            for (_, target_alias, model_id, enabled) in target_inputs
+                .iter()
+                .filter(|(input_vendor_id, _, _, _)| input_vendor_id == &vendor_id)
+            {
+                let mut binding = PersistedAiCapabilityTargetBinding::new(
+                    capability_kind,
+                    target_alias.clone(),
+                    model_id.clone(),
+                );
+                binding.enabled = *enabled;
+                vendor.targets.push(binding);
+            }
+        }
+        set_ai_capability_target_order_for_kind(
+            &mut next_ai_tool_configuration,
+            capability_kind,
+            ordered_selectors,
+        )?;
+        next_ai_tool_configuration.normalize();
+        vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+            &next_ai_tool_configuration,
+        )
+        .map_err(|error| format!("保存 AI 能力目标列表失败：{error}"))?;
+        agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
+        let provider_configuration = agent_runtime.provider_configuration.clone();
+        refresh_settings_projection_locked(
+            &mut guard,
+            &provider_configuration,
+            Some(&next_ai_tool_configuration),
+        );
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Replaces the persisted target order for one AI capability kind.
+/// 替换单个 AI 能力类型的持久化目标顺序。
+fn set_ai_capability_target_order_for_kind(
+    configuration: &mut vulcan_provider_config::config::PersistedAiToolConfiguration,
+    capability_kind: AiToolKind,
+    ordered_selectors: Vec<String>,
+) -> Result<(), String> {
+    let target_order = match capability_kind {
+        AiToolKind::WebSearch => &mut configuration.web_search.target_order,
+        AiToolKind::UnderstandImage => &mut configuration.understand_image.target_order,
+        AiToolKind::ImageGeneration => &mut configuration.image_generation.target_order,
+        AiToolKind::VideoGeneration => &mut configuration.video_generation.target_order,
+        AiToolKind::SpeechSynthesis => &mut configuration.speech_synthesis.target_order,
+        AiToolKind::MusicGeneration => &mut configuration.music_generation.target_order,
+        AiToolKind::MusicCover => &mut configuration.music_cover.target_order,
+        _ => return Err(format!("AI 能力 `{}` 不支持目标排序。", capability_kind.key())),
+    };
+    *target_order = ordered_selectors;
+    Ok(())
+}
+
+/// Saves one MCP server configuration from the WebUI settings page.
+/// 从 WebUI 设置页保存单个 MCP 服务器配置。
+#[tauri::command]
+async fn service_save_mcp_server_configuration(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    request: McpServerSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let (server_id, entry) = mcp_server_entry_from_request(request)?;
+    let next_configuration = {
+        let mut configuration = provider_configuration_from_state(&state)?;
+        configuration.mcp.servers.insert(server_id.clone(), entry);
+        provider_config::save_configuration_file(&configuration)
+            .map_err(|error| format!("保存 MCP 服务器失败：{error}"))?;
+        configuration
+    };
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone()).await.ok();
+    let workbench = store_provider_and_mcp_configuration_after_change(
+        &state,
+        next_configuration,
+        next_mcp_runtime,
+    )?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Removes one MCP server configuration from the WebUI settings page.
+/// 从 WebUI 设置页移除单个 MCP 服务器配置。
+#[tauri::command]
+async fn service_remove_mcp_server_configuration(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    server_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut next_configuration = provider_configuration_from_state(&state)?;
+    next_configuration
+        .mcp
+        .servers
+        .remove(server_id.trim())
+        .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
+    provider_config::save_configuration_file(&next_configuration)
+        .map_err(|error| format!("移除 MCP 服务器失败：{error}"))?;
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone()).await.ok();
+    let workbench = store_provider_and_mcp_configuration_after_change(
+        &state,
+        next_configuration,
+        next_mcp_runtime,
+    )?;
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Opens one project folder in the host system file manager.
 /// 在宿主系统文件管理器中打开单个项目文件夹。
 #[tauri::command]
@@ -4474,6 +5221,342 @@ where
         runtime.provider_configuration = configuration;
     }
     Ok(())
+}
+
+/// Emits one workbench snapshot to the WebUI event stream.
+/// 向 WebUI 事件流发送单份工作台快照。
+fn emit_workbench_event(app: &tauri::AppHandle, workbench: &WorkbenchSnapshot) {
+    let _ = app.emit(
+        "vulcan://service-event",
+        ServiceEvent::Workbench(Box::new(workbench.clone())),
+    );
+}
+
+/// Refreshes settings-related projections on the retained workbench snapshot.
+/// 刷新保留工作台快照上的设置相关投影。
+fn refresh_settings_projection_locked(
+    guard: &mut ServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: Option<&PersistedAiToolConfiguration>,
+) {
+    let ai_tool_configuration = ai_tool_configuration
+        .cloned()
+        .or_else(|| {
+            guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.ai_tool_configuration.clone())
+        })
+        .unwrap_or_default();
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.providers = providers(provider_configuration);
+    guard.workbench.mcp_servers = mcp_servers(provider_configuration);
+    guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
+    guard.workbench.ai_capabilities = ai_capabilities(&ai_tool_configuration);
+    guard.workbench.ai_capability_vendors = ai_capability_vendors(&ai_tool_configuration);
+    guard.workbench.ai_capability_vendor_catalog = ai_capability_vendor_catalog();
+    guard.workbench.composer_attachment_capabilities =
+        composer_attachment_capabilities(provider_configuration, &ai_tool_configuration);
+}
+
+/// Stores provider and MCP runtime changes after a configuration mutation.
+/// 在配置变更后存储 Provider 与 MCP 运行时变化。
+fn store_provider_and_mcp_configuration_after_change(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    provider_configuration: ProviderConfigurationFile,
+    next_mcp_runtime: Option<McpRuntimeAccess>,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let ai_tool_configuration = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.ai_tool_configuration.clone())
+        .unwrap_or_default();
+    if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
+        if let Some(previous_mcp_runtime) = agent_runtime.mcp_runtime.take() {
+            previous_mcp_runtime.shutdown();
+        }
+        agent_runtime.provider_configuration = provider_configuration.clone();
+        agent_runtime.mcp_runtime = next_mcp_runtime;
+    }
+    refresh_settings_projection_locked(
+        &mut guard,
+        &provider_configuration,
+        Some(&ai_tool_configuration),
+    );
+    Ok(guard.workbench.clone())
+}
+
+/// Reconciles the active model after one provider enabled-model list changed.
+/// 在单个供应商启用模型列表变化后对齐当前激活模型。
+fn reconcile_active_model_after_enabled_models_change(
+    configuration: &mut ProviderConfigurationFile,
+    provider_id: &str,
+) {
+    let active_matches_provider = configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)
+        .is_some_and(|(active_provider_id, _)| active_provider_id == provider_id);
+    if !active_matches_provider {
+        return;
+    }
+    let active_model_id = configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)
+        .map(|(_, model_id)| model_id.to_string());
+    let next_models = provider_config::effective_model_choices(provider_id, configuration);
+    if let Some(active_model_id) = active_model_id
+        && next_models.iter().any(|model| model.id == active_model_id)
+    {
+        return;
+    }
+    configuration.model = next_models
+        .first()
+        .map(|model| format!("{provider_id}/{}", model.id));
+}
+
+/// Returns the canonical WebUI request key for one provider field.
+/// 返回单个 Provider 字段的规范 WebUI 请求键。
+fn provider_field_request_key(field: ProviderFieldKey) -> &'static str {
+    match field {
+        ProviderFieldKey::ApiKey => "apiKey",
+        ProviderFieldKey::BaseUrl => "baseUrl",
+        ProviderFieldKey::ResourceName => "resourceName",
+        ProviderFieldKey::AccountId => "accountId",
+    }
+}
+
+/// Returns a legacy-compatible request key for one provider field.
+/// 返回单个 Provider 字段的旧版兼容请求键。
+fn provider_field_legacy_key(field: ProviderFieldKey) -> &'static str {
+    match field {
+        ProviderFieldKey::ApiKey => "api_key",
+        ProviderFieldKey::BaseUrl => "base_url",
+        ProviderFieldKey::ResourceName => "resource_name",
+        ProviderFieldKey::AccountId => "account_id",
+    }
+}
+
+/// Parses one MCP transport key from the WebUI request payload.
+/// 从 WebUI 请求载荷解析单个 MCP 传输键。
+fn parse_mcp_transport(value: &str) -> Result<PersistedMcpTransportKind, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "stdio" => Ok(PersistedMcpTransportKind::Stdio),
+        "http" => Ok(PersistedMcpTransportKind::Http),
+        "sse" => Ok(PersistedMcpTransportKind::Sse),
+        other => Err(format!("不支持的 MCP 传输类型：{other}")),
+    }
+}
+
+/// Parses one AI capability connection mode from the WebUI request payload.
+/// 从 WebUI 请求载荷解析单个 AI 能力连接模式。
+fn parse_ai_capability_connection_mode(
+    value: Option<&str>,
+) -> Result<Option<AiCapabilityVendorConnectionMode>, String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        None => Ok(None),
+        Some("local") => Ok(Some(AiCapabilityVendorConnectionMode::Local)),
+        Some("cloud") | Some("ollama-cloud") => Ok(Some(AiCapabilityVendorConnectionMode::Cloud)),
+        Some(other) => Err(format!("不支持的 AI 能力连接模式：{other}")),
+    }
+}
+
+/// Parses one AI tool kind key from the WebUI request payload.
+/// 从 WebUI 请求载荷解析单个 AI 工具类型键。
+fn parse_ai_tool_kind(value: &str) -> Result<AiToolKind, String> {
+    match value.trim() {
+        "web_search" => Ok(AiToolKind::WebSearch),
+        "understand_image" => Ok(AiToolKind::UnderstandImage),
+        "image_generation" => Ok(AiToolKind::ImageGeneration),
+        "video_generation" => Ok(AiToolKind::VideoGeneration),
+        "speech_synthesis" => Ok(AiToolKind::SpeechSynthesis),
+        "music_generation" => Ok(AiToolKind::MusicGeneration),
+        "music_cover" => Ok(AiToolKind::MusicCover),
+        other => Err(format!("不支持的 AI 能力类型：{other}")),
+    }
+}
+
+/// Converts a WebUI key/value list into one validated map.
+/// 将 WebUI 键值列表转换为经过校验的映射。
+fn key_value_inputs_to_map(
+    inputs: Vec<KeyValueInput>,
+    subject_label: &str,
+    value_label: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut map = BTreeMap::new();
+    for input in inputs {
+        let key = input.key.trim();
+        let value = input.value.trim();
+        if key.is_empty() && value.is_empty() {
+            continue;
+        }
+        if key.is_empty() {
+            return Err(format!("{subject_label} 的键不能为空。"));
+        }
+        if value.is_empty() {
+            return Err(format!("{subject_label} 的{value_label}不能为空。"));
+        }
+        if map.insert(key.to_string(), value.to_string()).is_some() {
+            return Err(format!("{subject_label} `{key}` 重复，请保留一条即可。"));
+        }
+    }
+    Ok(map)
+}
+
+/// Converts optional text into an owned option after trimming.
+/// 裁剪可选文本并转换为自有可选值。
+fn trim_to_option(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// Builds one persisted MCP server entry from a WebUI save request.
+/// 从 WebUI 保存请求构建单个持久化 MCP 服务器条目。
+fn mcp_server_entry_from_request(
+    request: McpServerSaveRequest,
+) -> Result<(String, PersistedMcpServerEntry), String> {
+    let name = request.name.trim();
+    if name.is_empty() {
+        return Err(String::from("请先填写 MCP 服务器名称。"));
+    }
+    let server_id = request
+        .server_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| stable_identifier_from_label(name));
+    let transport = parse_mcp_transport(&request.transport)?;
+    let oauth = mcp_oauth_config_from_request(&request);
+    match transport {
+        PersistedMcpTransportKind::Stdio => {
+            let command = request.command.trim();
+            if command.is_empty() {
+                return Err(String::from("请先填写 MCP 服务器启动命令。"));
+            }
+            Ok((
+                server_id,
+                PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: request.enabled,
+                    transport,
+                    command: command.to_string(),
+                    args: request
+                        .args
+                        .into_iter()
+                        .map(|arg| arg.trim().to_string())
+                        .filter(|arg| !arg.is_empty())
+                        .collect(),
+                    url: None,
+                    bearer_token: None,
+                    headers: BTreeMap::new(),
+                    headers_from_env: BTreeMap::new(),
+                    oauth: None,
+                    cwd: trim_to_option(&request.cwd),
+                    env: key_value_inputs_to_map(request.env, "环境变量", "值")?,
+                    env_passthrough: request
+                        .env_passthrough
+                        .into_iter()
+                        .map(|value| value.trim().to_string())
+                        .filter(|value| !value.is_empty())
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                },
+            ))
+        }
+        PersistedMcpTransportKind::Http | PersistedMcpTransportKind::Sse => {
+            let url = request.url.trim();
+            if url.is_empty() {
+                return Err(String::from("请先填写 MCP 远端服务器 URL。"));
+            }
+            if !(url.starts_with("http://") || url.starts_with("https://")) {
+                return Err(String::from(
+                    "MCP 远端服务器 URL 必须以 `http://` 或 `https://` 开头。",
+                ));
+            }
+            Ok((
+                server_id,
+                PersistedMcpServerEntry {
+                    name: name.to_string(),
+                    enabled: request.enabled,
+                    transport,
+                    command: String::new(),
+                    args: Vec::new(),
+                    url: Some(url.to_string()),
+                    bearer_token: trim_to_option(&request.bearer_token),
+                    headers: key_value_inputs_to_map(request.headers, "请求头", "值")?,
+                    headers_from_env: key_value_inputs_to_map(
+                        request.headers_from_env,
+                        "来自环境变量的请求头",
+                        "环境变量名",
+                    )?,
+                    oauth,
+                    cwd: None,
+                    env: BTreeMap::new(),
+                    env_passthrough: Vec::new(),
+                },
+            ))
+        }
+    }
+}
+
+/// Builds an optional MCP OAuth block from a WebUI save request.
+/// 从 WebUI 保存请求构建可选 MCP OAuth 配置块。
+fn mcp_oauth_config_from_request(request: &McpServerSaveRequest) -> Option<PersistedMcpOAuthConfig> {
+    let client_id = trim_to_option(&request.oauth_client_id);
+    let client_secret = trim_to_option(&request.oauth_client_secret);
+    let redirect_uri = trim_to_option(&request.oauth_redirect_uri);
+    let scopes = request
+        .oauth_scopes
+        .iter()
+        .map(|scope| scope.trim().to_string())
+        .filter(|scope| !scope.is_empty())
+        .collect::<Vec<_>>();
+    if client_id.is_none() && client_secret.is_none() && redirect_uri.is_none() && scopes.is_empty()
+    {
+        None
+    } else {
+        Some(PersistedMcpOAuthConfig {
+            client_id,
+            client_secret,
+            scopes,
+            redirect_uri,
+        })
+    }
+}
+
+/// Builds one stable identifier from a human-readable label.
+/// 从人类可读标签构建单个稳定标识。
+fn stable_identifier_from_label(label: &str) -> String {
+    let mut normalized = label
+        .trim()
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while normalized.contains("--") {
+        normalized = normalized.replace("--", "-");
+    }
+    let trimmed = normalized.trim_matches('-');
+    if trimmed.is_empty() {
+        format!("mcp-{}", current_unix_millis_value())
+    } else {
+        trimmed.to_string()
+    }
 }
 
 /// Reprojects Agent Skills after a focused prompt-skill configuration change.
@@ -14813,8 +15896,11 @@ fn workbench_from_runtime(
         agent_skills: agent_skills_catalog_summary(provider_configuration),
         settings: settings(),
         providers: providers(provider_configuration),
+        mcp_servers: mcp_servers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
         ai_capabilities: ai_capabilities(ai_tool_configuration),
+        ai_capability_vendors: ai_capability_vendors(ai_tool_configuration),
+        ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
             provider_configuration,
             ai_tool_configuration,
@@ -15325,8 +16411,11 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         agent_skills: agent_skills_catalog_summary(&ProviderConfigurationFile::default()),
         settings: settings(),
         providers: providers(&ProviderConfigurationFile::default()),
+        mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
+        ai_capability_vendors: ai_capability_vendors(&ProviderConfigurationFile::default().ai_tools),
+        ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
             &ProviderConfigurationFile::default(),
             &ProviderConfigurationFile::default().ai_tools,
@@ -15665,67 +16754,97 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
         .as_deref()
         .and_then(provider_config::parse_active_model_reference)
         .map(|(provider_id, model_id)| (provider_id.to_string(), model_id.to_string()));
-    let mut configured_providers = provider_config::supported_provider_choices()
-        .into_iter()
-        .filter(|provider_choice| {
-            provider_configuration
-                .provider
-                .contains_key(&provider_choice.id)
-        })
-        .map(|provider_choice| {
-            let models = provider_config::effective_model_choices(
-                &provider_choice.id,
+    let mut providers = provider_config::supported_providers()
+        .iter()
+        .map(|definition| {
+            let configured = provider_configuration.provider.contains_key(&definition.id);
+            let enabled_ids = provider_config::enabled_model_ids(&definition.id, provider_configuration);
+            let catalog_models = provider_config::catalog_model_choices(
+                &definition.id,
                 provider_configuration,
             )
             .into_iter()
             .map(|model_choice| {
+                let catalog_model_id = model_choice.id;
+                let reasoning_profile_json = model_choice
+                    .reasoning_profile
+                    .as_ref()
+                    .and_then(|profile| serde_json::to_string_pretty(profile).ok());
                 let active =
                     active_model_reference
                         .as_ref()
-                        .is_some_and(|(provider_id, model_id)| {
-                            provider_id == &provider_choice.id && model_id == &model_choice.id
-                        });
+                        .is_some_and(|(active_provider_id, active_model_id)| {
+                            active_provider_id == &definition.id
+                                && active_model_id == &catalog_model_id
+                });
                 ProviderModelSummary {
-                    id: model_choice.id,
+                    enabled: configured && enabled_ids.contains(&catalog_model_id),
+                    id: catalog_model_id,
                     name: model_choice.name,
                     active,
+                    status: model_choice.status,
+                    family: model_choice.family,
+                    context_limit: model_choice.context_limit,
+                    input_limit: model_choice.input_limit,
+                    output_limit: model_choice.output_limit,
+                    reasoning: model_choice.reasoning,
+                    attachment: model_choice.attachment,
+                    input_modalities: model_choice.input_modalities,
+                    output_modalities: model_choice.output_modalities,
+                    reasoning_profile_json,
                 }
             })
             .collect::<Vec<_>>();
+            let models = catalog_models
+                .iter()
+                .filter(|model| model.enabled)
+                .cloned()
+                .collect::<Vec<_>>();
             let active = models.iter().any(|model| model.active);
             ProviderSummary {
-                id: provider_choice.id,
-                name: provider_choice.name,
-                status: String::from("已配置"),
+                id: definition.id.clone(),
+                name: definition.name.clone(),
+                status: if configured { "已配置" } else { "未配置" }.to_string(),
+                configured,
                 enabled_models: format!("{} 个已启用模型", models.len()),
                 active,
                 models,
+                catalog_models,
+                fields: provider_fields(definition, provider_configuration),
             }
         })
         .collect::<Vec<_>>();
-    configured_providers.sort_by(|left, right| {
+    providers.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.id.cmp(&right.id))
     });
-    if !configured_providers.is_empty() {
-        return configured_providers;
-    }
+    providers
+}
 
-    let provider_root = vulcan_runtime_assets::resolve_provider_catalog_directory();
-    vec![ProviderSummary {
-        id: String::from("provider-catalog"),
-        name: String::from("Provider Catalog"),
-        status: if provider_root.is_dir() {
-            "已载入"
-        } else {
-            "未找到"
-        }
-        .to_string(),
-        enabled_models: provider_root.display().to_string(),
-        active: false,
-        models: Vec::new(),
-    }]
+/// Creates editable provider field summaries for one provider definition.
+/// 为单个供应商定义创建可编辑字段摘要。
+fn provider_fields(
+    definition: &provider_config::SupportedProviderDefinition,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Vec<ProviderFieldSummary> {
+    let options = provider_configuration
+        .provider
+        .get(&definition.id)
+        .map(|entry| entry.options.clone())
+        .unwrap_or_default();
+    definition
+        .input_fields()
+        .into_iter()
+        .map(|field| ProviderFieldSummary {
+            key: provider_field_request_key(field).to_string(),
+            label: definition.field_label(field).to_string(),
+            placeholder: definition.field_placeholder(field),
+            value: options.get(field),
+            secret: field.is_secret(),
+            required: true,
+        })
+        .collect()
 }
 
 /// Creates composer AI capability summaries from the shared provider configuration.
@@ -15767,6 +16886,120 @@ fn ai_capabilities(
                 enabled: available && !configuration.disabled_capability_kinds.contains(&kind),
                 targets,
             }
+        })
+        .collect()
+}
+
+/// Creates shared AI capability vendor summaries from the standalone AI tool configuration.
+/// 从独立 AI 工具配置创建共享 AI 能力供应商摘要。
+fn ai_capability_vendors(
+    configuration: &vulcan_provider_config::config::PersistedAiToolConfiguration,
+) -> Vec<AiCapabilityVendorSummary> {
+    configuration
+        .vendors
+        .iter()
+        .map(|vendor| AiCapabilityVendorSummary {
+            target_choices: provider_config::ai_capability_vendor_target_choices(&vendor.vendor_id)
+                .into_iter()
+                .map(|choice| AiCapabilityVendorTargetChoiceSummary {
+                    capability_kind: choice.capability_kind.key().to_string(),
+                    target_alias: choice.target_alias,
+                    default_model_id: choice.default_model_id,
+                    label: choice.label,
+                    supports_model_override: choice.supports_model_override,
+                    model_options: choice.model_options,
+                })
+                .collect(),
+            id: vendor.id.clone(),
+            vendor_id: vendor.vendor_id.clone(),
+            name: vendor.name.clone(),
+            enabled: vendor.enabled,
+            api_key: vendor.api_key.clone(),
+            base_url: vendor.base_url.clone(),
+            region: vendor.region.clone(),
+            connection_mode: match vendor.resolved_connection_mode() {
+                AiCapabilityVendorConnectionMode::Local => String::from("local"),
+                AiCapabilityVendorConnectionMode::Cloud => String::from("cloud"),
+            },
+            target_count: vendor.targets.len(),
+        })
+        .collect()
+}
+
+/// Creates supported AI capability vendor catalog choices for the add-vendor picker.
+/// 为添加供应商选择器创建受支持 AI 能力供应商目录选项。
+fn ai_capability_vendor_catalog() -> Vec<AiCapabilityVendorCatalogSummary> {
+    vulcan_provider_config::ai_capability_provider_catalog::supported_ai_capability_vendor_ids()
+        .into_iter()
+        .map(|vendor_id| {
+            let capabilities = provider_config::ai_capability_vendor_target_choices(&vendor_id)
+                .into_iter()
+                .map(|choice| choice.capability_kind.label().to_string())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            AiCapabilityVendorCatalogSummary {
+                name: provider_config::ai_capability_vendor_display_name(&vendor_id),
+                vendor_id,
+                capabilities,
+            }
+        })
+        .collect()
+}
+
+/// Creates MCP server summaries from the shared provider configuration.
+/// 从共享 Provider 配置创建 MCP 服务器摘要。
+fn mcp_servers(provider_configuration: &ProviderConfigurationFile) -> Vec<McpServerSummary> {
+    provider_configuration
+        .mcp
+        .servers
+        .iter()
+        .map(|(server_id, entry)| McpServerSummary {
+            id: server_id.clone(),
+            name: entry.name.clone(),
+            enabled: entry.enabled,
+            transport: entry.transport.label().to_string(),
+            command: entry.command.clone(),
+            args: entry.args.clone(),
+            url: entry.url.clone().unwrap_or_default(),
+            bearer_token: entry.bearer_token.clone().unwrap_or_default(),
+            headers: key_value_summaries(&entry.headers),
+            headers_from_env: key_value_summaries(&entry.headers_from_env),
+            oauth_client_id: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_id.clone())
+                .unwrap_or_default(),
+            oauth_client_secret: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.client_secret.clone())
+                .unwrap_or_default(),
+            oauth_scopes: entry
+                .oauth
+                .as_ref()
+                .map(|oauth| oauth.scopes.clone())
+                .unwrap_or_default(),
+            oauth_redirect_uri: entry
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.redirect_uri.clone())
+                .unwrap_or_default(),
+            cwd: entry.cwd.clone().unwrap_or_default(),
+            env: key_value_summaries(&entry.env),
+            env_passthrough: entry.env_passthrough.clone(),
+        })
+        .collect()
+}
+
+/// Converts one ordered map into WebUI key/value summaries.
+/// 将单个有序映射转换为 WebUI 键值摘要。
+fn key_value_summaries(values: &BTreeMap<String, String>) -> Vec<KeyValueSummary> {
+    values
+        .iter()
+        .map(|(key, value)| KeyValueSummary {
+            key: key.clone(),
+            value: value.clone(),
         })
         .collect()
 }

@@ -1994,6 +1994,128 @@ async function selectWorkbenchReasoningEffort(effort: string): Promise<Workbench
   return invoke<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
 }
 
+// saveProviderConfiguration persists one provider form through the desktop service.
+// saveProviderConfiguration 通过桌面服务持久化单个 Provider 表单。
+async function saveProviderConfiguration(request: { providerId: string; fields: Record<string, string> }): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_provider_configuration", { request });
+}
+
+// removeProviderConfiguration removes one provider through the desktop service.
+// removeProviderConfiguration 通过桌面服务移除单个 Provider。
+async function removeProviderConfiguration(providerId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_remove_provider_configuration", { providerId });
+}
+
+// saveProviderEnabledModels persists one provider enabled-model list.
+// saveProviderEnabledModels 持久化单个 Provider 的启用模型列表。
+async function saveProviderEnabledModels(request: { providerId: string; enabledModelIds: string[] }): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_provider_enabled_models", { request });
+}
+
+// saveProviderModelOverride persists one provider model capability override.
+// saveProviderModelOverride 持久化单个 Provider 模型能力覆盖。
+async function saveProviderModelOverride(request: {
+  providerId: string;
+  modelId: string;
+  reasoning: boolean | null;
+  attachment: boolean | null;
+  contextLimit: number | null;
+  inputLimit: number | null;
+  outputLimit: number | null;
+  inputModalities: string[] | null;
+  outputModalities: string[] | null;
+  reasoningProfileJson: string | null;
+}): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_provider_model_override", { request });
+}
+
+// saveAiCapabilityVendor persists one shared AI capability vendor.
+// saveAiCapabilityVendor 持久化单个共享 AI 能力供应商。
+async function saveAiCapabilityVendor(request: {
+  providerId?: never;
+  vendorId: string;
+  enabled: boolean;
+  apiKey: string;
+  baseUrl: string;
+  region: string;
+  connectionMode?: string | null;
+}): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_ai_capability_vendor", { request });
+}
+
+// removeAiCapabilityVendor removes one shared AI capability vendor.
+// removeAiCapabilityVendor 移除单个共享 AI 能力供应商。
+async function removeAiCapabilityVendor(vendorId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_remove_ai_capability_vendor", { vendorId });
+}
+
+// setAiCapabilityTargetEnabled persists one AI capability target enabled state.
+// setAiCapabilityTargetEnabled 持久化单个 AI 能力目标启用状态。
+async function setAiCapabilityTargetEnabled(request: { capabilityKind: string; vendorId: string; targetAlias: string; enabled: boolean }): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_set_ai_capability_target_enabled", { request });
+}
+
+// saveAiCapabilityTargets persists one ordered AI capability target list.
+// saveAiCapabilityTargets 持久化单个有序 AI 能力目标列表。
+async function saveAiCapabilityTargets(request: {
+  capabilityKind: string;
+  targets: Array<{ vendorId: string; targetAlias: string; modelId: string; enabled: boolean }>;
+}): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_ai_capability_targets", { request });
+}
+
+// saveMcpServerConfiguration persists one MCP server through the desktop service.
+// saveMcpServerConfiguration 通过桌面服务持久化单个 MCP 服务器。
+async function saveMcpServerConfiguration(request: Record<string, unknown>): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_save_mcp_server_configuration", { request });
+}
+
+// removeMcpServerConfiguration removes one MCP server through the desktop service.
+// removeMcpServerConfiguration 通过桌面服务移除单个 MCP 服务器。
+async function removeMcpServerConfiguration(serverId: string): Promise<WorkbenchSnapshot | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<WorkbenchSnapshot>("service_remove_mcp_server_configuration", { serverId });
+}
+
 // openProjectDirectoryPath asks the desktop shell to reveal one filesystem folder.
 // openProjectDirectoryPath 请求桌面壳打开单个文件系统文件夹。
 async function openProjectDirectoryPath(path: string): Promise<string | null> {
@@ -2436,7 +2558,7 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
   // activeSettingsSubArea stores the selected settings sidebar page.
   // activeSettingsSubArea 保存设置侧栏当前选择的页面。
-  const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("general");
+  const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("model-providers");
   // hydratedConversationIds stores conversations already requested from the service.
   // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
@@ -3404,6 +3526,18 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
+            }}
+            settingsActions={{
+              onSaveProvider: (request) => applySkillWorkbenchAction(async () => (await saveProviderConfiguration(request)) ?? workbenchStateRef.current),
+              onRemoveProvider: (providerId) => applySkillWorkbenchAction(async () => (await removeProviderConfiguration(providerId)) ?? workbenchStateRef.current),
+              onSaveProviderEnabledModels: (request) => applySkillWorkbenchAction(async () => (await saveProviderEnabledModels(request)) ?? workbenchStateRef.current),
+              onSaveProviderModelOverride: (request) => applySkillWorkbenchAction(async () => (await saveProviderModelOverride(request)) ?? workbenchStateRef.current),
+              onSaveAiCapabilityVendor: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityVendor(request)) ?? workbenchStateRef.current),
+              onRemoveAiCapabilityVendor: (vendorId) => applySkillWorkbenchAction(async () => (await removeAiCapabilityVendor(vendorId)) ?? workbenchStateRef.current),
+              onSetAiCapabilityTargetEnabled: (request) => applySkillWorkbenchAction(async () => (await setAiCapabilityTargetEnabled(request)) ?? workbenchStateRef.current),
+              onSaveAiCapabilityTargets: (request) => applySkillWorkbenchAction(async () => (await saveAiCapabilityTargets(request)) ?? workbenchStateRef.current),
+              onSaveMcpServer: (request) => applySkillWorkbenchAction(async () => (await saveMcpServerConfiguration(request as unknown as Record<string, unknown>)) ?? workbenchStateRef.current),
+              onRemoveMcpServer: (serverId) => applySkillWorkbenchAction(async () => (await removeMcpServerConfiguration(serverId)) ?? workbenchStateRef.current),
             }}
             startup={props.startup}
             workbench={workbenchState}
@@ -4970,6 +5104,10 @@ function contextCompactionRoleOrder(role?: string): number {
   return 4;
 }
 
+// conversationProcessCollapseMemory keeps manual process fold state for this WebUI session only.
+// conversationProcessCollapseMemory 仅在当前 WebUI 会话内保留手动处理过程折叠状态。
+const conversationProcessCollapseMemory = new Map<string, boolean>();
+
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
 // projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
 function projectConversationTimelineItems(
@@ -4978,6 +5116,8 @@ function projectConversationTimelineItems(
   nowMs: number,
 ): ConversationTimelineItem[] {
   const timeline: ConversationTimelineItem[] = [];
+  const turnStartUserIds = conversationTurnStartUserIds(renderItems);
+  const turnStartIdsWithLaterTurn = new Set(turnStartUserIds.slice(0, -1));
   let currentTurn: {
     userItem: ConversationRenderItem;
     bodyItems: ConversationRenderItem[];
@@ -4998,6 +5138,7 @@ function projectConversationTimelineItems(
     const bodyItems = [...currentTurn.bodyItems];
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
     const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item));
+    const shouldDefaultCollapse = Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(currentTurn.userItem.id);
     const startedAtMs = conversationMessageUnixMillis(currentTurn.userItem.sourceMessage ?? currentTurn.userItem.userMessage);
     const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
     const projectedDurationMs = startedAtMs && terminalMessageMs
@@ -5014,7 +5155,7 @@ function projectConversationTimelineItems(
           items: processItems,
           guidanceItems: currentTurn.guidanceItems,
           collapsible: Boolean(finalItem) && !running && !stopped,
-          defaultCollapsed: Boolean(finalItem) && !running && !stopped,
+          defaultCollapsed: shouldDefaultCollapse,
           running,
           stopped,
           startedAtMs,
@@ -5052,6 +5193,31 @@ function projectConversationTimelineItems(
 
   flushTurn(conversationIsRunning(conversation));
   return timeline;
+}
+
+// conversationTurnStartUserIds derives true user-turn starts, excluding guidance prompts inside a running turn.
+// conversationTurnStartUserIds 推导真实用户轮次起点，并排除运行中追加的引导输入。
+function conversationTurnStartUserIds(renderItems: ConversationRenderItem[]): string[] {
+  const turnStartIds: string[] = [];
+  let hasOpenTurn = false;
+  let currentTurnHasStats = false;
+  for (const item of renderItems) {
+    if (item.role === "user") {
+      if (!hasOpenTurn || currentTurnHasStats) {
+        turnStartIds.push(item.id);
+        hasOpenTurn = true;
+        currentTurnHasStats = false;
+      }
+      continue;
+    }
+    if (!hasOpenTurn) {
+      continue;
+    }
+    if (isTurnStatsRenderItem(item)) {
+      currentTurnHasStats = true;
+    }
+  }
+  return turnStartIds;
 }
 
 // isTurnStatsRenderItem returns whether one projected row is the terminal turn-statistics row.
@@ -9508,6 +9674,11 @@ function ConversationWorkspace(props: {
   // mediaPlayer 保存当前在独立播放窗口中打开的生成媒体。
   const [mediaPlayer, setMediaPlayer] = React.useState<GeneratedMediaAttachment | null>(null);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
+  // processCollapseOverrides stores user-toggled process fold states for the current UI session.
+  // processCollapseOverrides 存储当前 UI 会话中用户手动切换的处理过程折叠状态。
+  const [processCollapseOverrides, setProcessCollapseOverrides] = React.useState<Map<string, boolean>>(
+    () => new Map(conversationProcessCollapseMemory),
+  );
   const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
   const sessionRunning = conversationIsRunning(props.conversation);
   const timelineItems = React.useMemo(
@@ -9517,6 +9688,19 @@ function ConversationWorkspace(props: {
   const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
     ? latestThinkingBlockIdAfterLastUser(renderItems)
     : null;
+  const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem) => {
+    const surfaceId = props.conversation?.id ?? props.parentConversationId ?? "unknown";
+    return `${surfaceId}:${process.id}`;
+  }, [props.conversation?.id, props.parentConversationId]);
+  const handleProcessCollapsedChange = React.useCallback((process: ConversationProcessRenderItem, collapsed: boolean) => {
+    const key = processCollapseKey(process);
+    conversationProcessCollapseMemory.set(key, collapsed);
+    setProcessCollapseOverrides((current) => {
+      const next = new Map(current);
+      next.set(key, collapsed);
+      return next;
+    });
+  }, [processCollapseKey]);
 
   React.useEffect(() => {
     if (!sessionRunning) {
@@ -9557,12 +9741,14 @@ function ConversationWorkspace(props: {
           ) : (
             <ConversationProcessGroup
               autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+              collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
               hiddenThinkingBlockId={props.hiddenThinkingBlockId}
               key={timelineItem.process.id}
               nowMs={nowMs}
               parentConversationId={props.parentConversationId}
               process={timelineItem.process}
               sessionRunning={sessionRunning}
+              onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
               onOpenDetail={setDetail}
               onOpenMedia={setMediaPlayer}
               onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -9590,6 +9776,9 @@ function ConversationProcessGroup(props: {
   // autoExpandThinkingBlockId keeps parity with normal block rendering.
   // autoExpandThinkingBlockId 保持与普通块渲染一致。
   autoExpandThinkingBlockId: string | null;
+  // Optional user-controlled collapsed state remembered by the conversation surface.
+  // 会话界面记住的可选用户控制折叠状态。
+  collapsedOverride?: boolean;
   // hiddenThinkingBlockId hides the block currently shown in the floating thinking overlay.
   // hiddenThinkingBlockId 隐藏当前在浮动思考面板中展示的块。
   hiddenThinkingBlockId: string | null;
@@ -9605,6 +9794,9 @@ function ConversationProcessGroup(props: {
   // Whether the owning session is currently running.
   // 所属会话是否正在运行。
   sessionRunning: boolean;
+  // Records one user-triggered collapsed state change.
+  // 记录一次用户触发的折叠状态变化。
+  onCollapsedChange: (collapsed: boolean) => void;
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -9615,12 +9807,11 @@ function ConversationProcessGroup(props: {
   // 子代理面板打开器。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
 }) {
-  const [collapsed, setCollapsed] = React.useState(props.process.defaultCollapsed);
   const fallbackStartedAtMsRef = React.useRef(Date.now());
   React.useEffect(() => {
-    setCollapsed(props.process.defaultCollapsed);
     fallbackStartedAtMsRef.current = Date.now();
-  }, [props.process.defaultCollapsed, props.process.id]);
+  }, [props.process.id]);
+  const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
     : null;
@@ -9635,7 +9826,7 @@ function ConversationProcessGroup(props: {
         aria-expanded={bodyVisible}
         className="work-process-toggle"
         disabled={!props.process.collapsible}
-        onClick={() => props.process.collapsible && setCollapsed((current) => !current)}
+        onClick={() => props.process.collapsible && props.onCollapsedChange(!collapsed)}
         type="button"
       >
         <Clock3 className="work-process-icon" size={14} />

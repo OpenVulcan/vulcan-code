@@ -6,9 +6,26 @@ export type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "e
 // MainAreaId 描述 WebUI 顶层可选择区域。
 export type MainAreaId = "chat" | "skills" | "automation" | "plugins" | "memory" | "settings";
 
-// SettingsSubAreaId describes secondary settings pages that absorb legacy top-level pages.
-// SettingsSubAreaId 描述承接旧顶层页面的设置二级页面。
-export type SettingsSubAreaId = "general" | "projects" | "providers" | "tools" | "diagnostics";
+// SettingsSubAreaId describes secondary settings pages aligned with the legacy iced settings tree.
+// SettingsSubAreaId 描述与旧 iced 设置树对齐的设置二级页面。
+export type SettingsSubAreaId =
+  | "model-providers"
+  | "model-list"
+  | "ai-vendors"
+  | "ai-web-search"
+  | "ai-understand-image"
+  | "ai-understand-video"
+  | "ai-understand-audio"
+  | "ai-image-generation"
+  | "ai-video-generation"
+  | "ai-speech-synthesis"
+  | "ai-music-generation"
+  | "ai-music-cover"
+  | "mcp-servers"
+  | "runtime-diagnostics"
+  | "prompt-composer"
+  | "about-licenses"
+  | "archived-restore";
 
 // StartupStepSnapshot describes one startup step displayed by the startup panel.
 // StartupStepSnapshot 描述启动面板展示的单个启动步骤。
@@ -105,6 +122,78 @@ export interface AiCapabilitySummary {
   // Configured targets under this capability.
   // 当前能力下已配置的目标。
   targets: AiCapabilityTargetSummary[];
+}
+
+// AiCapabilityVendorSummary describes one shared AI capability vendor.
+// AiCapabilityVendorSummary 描述单个共享 AI 能力供应商。
+export interface AiCapabilityVendorSummary {
+  // Stable vendor instance id.
+  // 稳定供应商实例标识。
+  id: string;
+  // Stable catalog vendor id.
+  // 稳定目录供应商标识。
+  vendorId: string;
+  // Vendor display name.
+  // 供应商显示名称。
+  name: string;
+  // Whether the vendor is enabled.
+  // 供应商是否启用。
+  enabled: boolean;
+  // Stored API key or environment placeholder.
+  // 已保存 API Key 或环境变量占位符。
+  apiKey: string;
+  // Stored base URL override.
+  // 已保存 Base URL 覆盖值。
+  baseUrl: string;
+  // Stored region override.
+  // 已保存区域覆盖值。
+  region: string;
+  // Stored connection mode.
+  // 已保存连接模式。
+  connectionMode: string;
+  // Configured target count.
+  // 已配置目标数量。
+  targetCount: number;
+  // Catalog target choices exposed by this vendor.
+  // 该供应商暴露的目录目标选项。
+  targetChoices?: AiCapabilityVendorTargetChoiceSummary[];
+}
+
+// AiCapabilityVendorTargetChoiceSummary describes one selectable target below a configured vendor.
+// AiCapabilityVendorTargetChoiceSummary 描述已配置供应商下单个可选择目标。
+export interface AiCapabilityVendorTargetChoiceSummary {
+  // Stable semantic capability kind owned by this target.
+  // 当前目标所属的稳定语义能力类型。
+  capabilityKind: string;
+  // Stable target alias under the vendor.
+  // 供应商下的稳定目标别名。
+  targetAlias: string;
+  // Default provider request model attached to the target.
+  // 当前目标默认绑定的 Provider 请求模型。
+  defaultModelId: string;
+  // User-facing compact label.
+  // 面向用户的紧凑标签。
+  label: string;
+  // Whether this target supports editing request model.
+  // 当前目标是否支持编辑请求模型。
+  supportsModelOverride: boolean;
+  // Optional finite model choices.
+  // 可选的有限模型选项。
+  modelOptions: string[];
+}
+
+// AiCapabilityVendorCatalogSummary describes one supported vendor picker choice.
+// AiCapabilityVendorCatalogSummary 描述单个受支持供应商选择项。
+export interface AiCapabilityVendorCatalogSummary {
+  // Stable vendor identifier.
+  // 稳定供应商标识。
+  vendorId: string;
+  // Vendor display name.
+  // 供应商显示名称。
+  name: string;
+  // Supported capability labels.
+  // 支持的能力标签。
+  capabilities: string[];
 }
 
 // ProjectSummary describes one project shown in the sidebar.
@@ -502,6 +591,9 @@ export interface ProviderSummary {
   // Provider status.
   // Provider 状态。
   status: string;
+  // Whether this provider has a saved local configuration.
+  // 该 Provider 是否已保存本地配置。
+  configured?: boolean;
   // Enabled model count text.
   // 已启用模型数量文本。
   enabledModels: string;
@@ -511,6 +603,12 @@ export interface ProviderSummary {
   // Enabled models exposed to the model picker.
   // 暴露给模型选择器的已启用模型。
   models?: ProviderModelSummary[];
+  // Full catalog model list before enabled filtering.
+  // 启用过滤前的完整目录模型列表。
+  catalogModels?: ProviderModelSummary[];
+  // Editable provider fields.
+  // 可编辑 Provider 字段。
+  fields?: ProviderFieldSummary[];
 }
 
 // ProviderModelSummary describes one enabled model under a provider.
@@ -525,6 +623,129 @@ export interface ProviderModelSummary {
   // Whether this model is currently active.
   // 该模型当前是否处于激活状态。
   active?: boolean;
+  // Whether this model is enabled.
+  // 该模型是否启用。
+  enabled?: boolean;
+  // Optional model status.
+  // 可选模型状态。
+  status?: string | null;
+  // Optional model family.
+  // 可选模型家族。
+  family?: string | null;
+  // Optional context window limit.
+  // 可选上下文窗口上限。
+  contextLimit?: number | null;
+  // Optional input token limit.
+  // 可选输入 Token 上限。
+  inputLimit?: number | null;
+  // Optional output token limit.
+  // 可选输出 Token 上限。
+  outputLimit?: number | null;
+  // Optional reasoning capability flag.
+  // 可选推理能力标记。
+  reasoning?: boolean | null;
+  // Optional attachment capability flag.
+  // 可选附件能力标记。
+  attachment?: boolean | null;
+  // Input modalities accepted by the model.
+  // 模型接受的输入模态集合。
+  inputModalities?: string[];
+  // Output modalities emitted by the model.
+  // 模型输出的模态集合。
+  outputModalities?: string[];
+  // Optional reasoning profile JSON text.
+  // 可选推理档位配置 JSON 文本。
+  reasoningProfileJson?: string | null;
+}
+
+// ProviderFieldSummary describes one editable provider field.
+// ProviderFieldSummary 描述单个可编辑 Provider 字段。
+export interface ProviderFieldSummary {
+  // Stable field key.
+  // 稳定字段键。
+  key: string;
+  // Field display label.
+  // 字段显示名称。
+  label: string;
+  // Field placeholder text.
+  // 字段占位提示。
+  placeholder: string;
+  // Stored field value.
+  // 已保存字段值。
+  value: string;
+  // Whether this field should use password input.
+  // 该字段是否使用密码输入。
+  secret: boolean;
+  // Whether this field is required.
+  // 该字段是否必填。
+  required: boolean;
+}
+
+// KeyValueSummary describes one string key/value pair.
+// KeyValueSummary 描述单个字符串键值对。
+export interface KeyValueSummary {
+  // Stable key.
+  // 稳定键。
+  key: string;
+  // Stored value.
+  // 已保存值。
+  value: string;
+}
+
+// McpServerSummary describes one persisted MCP server.
+// McpServerSummary 描述单个持久化 MCP 服务器。
+export interface McpServerSummary {
+  // Stable server identifier.
+  // 稳定服务器标识。
+  id: string;
+  // Server display name.
+  // 服务器显示名称。
+  name: string;
+  // Whether this server is enabled.
+  // 该服务器是否启用。
+  enabled: boolean;
+  // Transport key.
+  // 传输键。
+  transport: string;
+  // Stdio command.
+  // Stdio 启动命令。
+  command: string;
+  // Stdio arguments.
+  // Stdio 参数。
+  args: string[];
+  // Remote endpoint URL.
+  // 远端端点 URL。
+  url: string;
+  // Remote bearer token.
+  // 远端 Bearer Token。
+  bearerToken: string;
+  // Explicit request headers.
+  // 显式请求头。
+  headers: KeyValueSummary[];
+  // Request headers resolved from environment variables.
+  // 从环境变量解析的请求头。
+  headersFromEnv: KeyValueSummary[];
+  // OAuth client id.
+  // OAuth 客户端标识。
+  oauthClientId: string;
+  // OAuth client secret.
+  // OAuth 客户端密钥。
+  oauthClientSecret: string;
+  // OAuth scopes.
+  // OAuth scope 列表。
+  oauthScopes: string[];
+  // OAuth redirect URI.
+  // OAuth 回调 URI。
+  oauthRedirectUri: string;
+  // Stdio working directory.
+  // Stdio 工作目录。
+  cwd: string;
+  // Stdio environment variables.
+  // Stdio 环境变量。
+  env: KeyValueSummary[];
+  // Stdio environment passthrough names.
+  // Stdio 环境变量透传名称。
+  envPassthrough: string[];
 }
 
 // ReasoningSelectionOptionSummary describes one backend-resolved reasoning selector option.
@@ -951,12 +1172,21 @@ export interface WorkbenchSnapshot {
   // Provider summaries.
   // Provider 摘要。
   providers: ProviderSummary[];
+  // MCP server summaries.
+  // MCP 服务器摘要。
+  mcpServers?: McpServerSummary[];
   // Backend-resolved reasoning selector view for the active model.
   // 后端根据当前激活模型解析出的思考选择器视图。
   reasoningSelection?: ReasoningSelectionSummary | null;
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];
+  // Shared AI capability vendor summaries.
+  // 共享 AI 能力供应商摘要。
+  aiCapabilityVendors?: AiCapabilityVendorSummary[];
+  // Shared AI capability vendor catalog choices.
+  // 共享 AI 能力供应商目录选项。
+  aiCapabilityVendorCatalog?: AiCapabilityVendorCatalogSummary[];
   // Attachment capability gates for the composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   composerAttachmentCapabilities?: ComposerAttachmentCapabilitySummary[];

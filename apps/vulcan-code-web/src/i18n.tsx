@@ -93,6 +93,42 @@ export type TranslationKey =
   | "settings.providers.description"
   | "settings.tools.description"
   | "settings.diagnostics.description"
+  | "settings.group.models"
+  | "settings.group.aiCapabilities"
+  | "settings.modelProviders"
+  | "settings.modelList"
+  | "settings.aiVendors"
+  | "settings.aiWebSearch"
+  | "settings.aiUnderstandImage"
+  | "settings.aiUnderstandVideo"
+  | "settings.aiUnderstandAudio"
+  | "settings.aiImageGeneration"
+  | "settings.aiVideoGeneration"
+  | "settings.aiSpeechSynthesis"
+  | "settings.aiMusicGeneration"
+  | "settings.aiMusicCover"
+  | "settings.mcpServers"
+  | "settings.runtimeDiagnostics"
+  | "settings.promptComposer"
+  | "settings.aboutLicenses"
+  | "settings.archivedRestore"
+  | "settings.modelProviders.description"
+  | "settings.modelList.description"
+  | "settings.aiVendors.description"
+  | "settings.aiWebSearch.description"
+  | "settings.aiUnderstandImage.description"
+  | "settings.aiUnderstandVideo.description"
+  | "settings.aiUnderstandAudio.description"
+  | "settings.aiImageGeneration.description"
+  | "settings.aiVideoGeneration.description"
+  | "settings.aiSpeechSynthesis.description"
+  | "settings.aiMusicGeneration.description"
+  | "settings.aiMusicCover.description"
+  | "settings.mcpServers.description"
+  | "settings.runtimeDiagnostics.description"
+  | "settings.promptComposer.description"
+  | "settings.aboutLicenses.description"
+  | "settings.archivedRestore.description"
   | "skills.action.refresh"
   | "skills.action.refreshing"
   | "skills.action.installLua"
@@ -245,6 +281,42 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "settings.providers.description": "Provider、模型、推理与工具能力",
     "settings.tools.description": "工具调用、命令会话与输出",
     "settings.diagnostics.description": "启动日志、错误与运行时事件",
+    "settings.group.models": "模型设置",
+    "settings.group.aiCapabilities": "AI 能力",
+    "settings.modelProviders": "模型供应商",
+    "settings.modelList": "模型列表",
+    "settings.aiVendors": "能力供应商",
+    "settings.aiWebSearch": "网页搜索",
+    "settings.aiUnderstandImage": "图片理解",
+    "settings.aiUnderstandVideo": "视频理解",
+    "settings.aiUnderstandAudio": "音频理解",
+    "settings.aiImageGeneration": "图片生成",
+    "settings.aiVideoGeneration": "视频生成",
+    "settings.aiSpeechSynthesis": "语音合成",
+    "settings.aiMusicGeneration": "音乐生成",
+    "settings.aiMusicCover": "音乐翻唱",
+    "settings.mcpServers": "MCP 服务器",
+    "settings.runtimeDiagnostics": "运行诊断",
+    "settings.promptComposer": "提示词组合",
+    "settings.aboutLicenses": "关于与许可证",
+    "settings.archivedRestore": "归档恢复",
+    "settings.modelProviders.description": "对话模型供应商、当前模型和已启用模型状态。",
+    "settings.modelList.description": "按供应商查看已启用模型，并核对当前工作台模型。",
+    "settings.aiVendors.description": "多个语义 AI 工具共用的能力供应商与路由目标。",
+    "settings.aiWebSearch.description": "网页搜索能力的启用状态与可用目标。",
+    "settings.aiUnderstandImage.description": "图片理解能力的启用状态与可用目标。",
+    "settings.aiUnderstandVideo.description": "视频理解能力入口与接入状态。",
+    "settings.aiUnderstandAudio.description": "音频理解能力入口与接入状态。",
+    "settings.aiImageGeneration.description": "图片生成能力的启用状态与可用目标。",
+    "settings.aiVideoGeneration.description": "视频生成能力的启用状态与可用目标。",
+    "settings.aiSpeechSynthesis.description": "语音合成能力的启用状态与可用目标。",
+    "settings.aiMusicGeneration.description": "音乐生成能力的启用状态与可用目标。",
+    "settings.aiMusicCover.description": "音乐翻唱能力的启用状态与可用目标。",
+    "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
+    "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
+    "settings.promptComposer.description": "输入区 slash 指令、附件能力与推理选择。",
+    "settings.aboutLicenses.description": "应用版本、许可证入口与合规说明。",
+    "settings.archivedRestore.description": "归档项目与会话恢复入口。",
     "skills.action.refresh": "刷新",
     "skills.action.refreshing": "刷新中",
     "skills.action.installLua": "安装 LuaSkills",
@@ -394,6 +466,42 @@ const translations: Record<LocaleCode, Record<TranslationKey, string>> = {
     "settings.providers.description": "Providers, models, reasoning, and tool capability",
     "settings.tools.description": "Tool calls, command sessions, and output",
     "settings.diagnostics.description": "Startup logs, errors, and runtime events",
+    "settings.group.models": "Model settings",
+    "settings.group.aiCapabilities": "AI capabilities",
+    "settings.modelProviders": "Model providers",
+    "settings.modelList": "Model list",
+    "settings.aiVendors": "Capability vendors",
+    "settings.aiWebSearch": "Web search",
+    "settings.aiUnderstandImage": "Image understanding",
+    "settings.aiUnderstandVideo": "Video understanding",
+    "settings.aiUnderstandAudio": "Audio understanding",
+    "settings.aiImageGeneration": "Image generation",
+    "settings.aiVideoGeneration": "Video generation",
+    "settings.aiSpeechSynthesis": "Speech synthesis",
+    "settings.aiMusicGeneration": "Music generation",
+    "settings.aiMusicCover": "Music cover",
+    "settings.mcpServers": "MCP servers",
+    "settings.runtimeDiagnostics": "Runtime diagnostics",
+    "settings.promptComposer": "Prompt composer",
+    "settings.aboutLicenses": "About and licenses",
+    "settings.archivedRestore": "Archived restore",
+    "settings.modelProviders.description": "Chat model providers, current model, and enabled model status.",
+    "settings.modelList.description": "Review enabled models by provider and the active workbench model.",
+    "settings.aiVendors.description": "Capability vendors and route targets shared by semantic AI tools.",
+    "settings.aiWebSearch.description": "Web-search capability state and available targets.",
+    "settings.aiUnderstandImage.description": "Image-understanding capability state and available targets.",
+    "settings.aiUnderstandVideo.description": "Video-understanding capability entry and connection status.",
+    "settings.aiUnderstandAudio.description": "Audio-understanding capability entry and connection status.",
+    "settings.aiImageGeneration.description": "Image-generation capability state and available targets.",
+    "settings.aiVideoGeneration.description": "Video-generation capability state and available targets.",
+    "settings.aiSpeechSynthesis.description": "Speech-synthesis capability state and available targets.",
+    "settings.aiMusicGeneration.description": "Music-generation capability state and available targets.",
+    "settings.aiMusicCover.description": "Music-cover capability state and available targets.",
+    "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
+    "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
+    "settings.promptComposer.description": "Composer slash commands, attachment capability, and reasoning selection.",
+    "settings.aboutLicenses.description": "Application version, license entry points, and compliance notes.",
+    "settings.archivedRestore.description": "Archived project and conversation restore entry.",
     "skills.action.refresh": "Refresh",
     "skills.action.refreshing": "Refreshing",
     "skills.action.installLua": "Install LuaSkills",

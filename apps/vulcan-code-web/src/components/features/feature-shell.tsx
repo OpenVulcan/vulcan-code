@@ -1,5 +1,21 @@
 import * as React from "react"
 import {
+  closestCenter,
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import {
+  arrayMove,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
+import {
+  Archive,
   Bot,
   Boxes,
   BrainCircuit,
@@ -8,9 +24,12 @@ import {
   FileText,
   FolderTree,
   GitBranch,
+  GripVertical,
   Hammer,
   History,
+  Image,
   ListRestart,
+  Music,
   PanelTopOpen,
   PackagePlus,
   PlugZap,
@@ -25,6 +44,8 @@ import {
   TerminalSquare,
   Trash2,
   User,
+  Video,
+  Volume2,
   Wrench,
 } from "lucide-react"
 
@@ -56,11 +77,20 @@ import {
   SidebarMenuItem,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { useI18n } from "@/i18n"
 import type {
+  AiCapabilitySummary,
+  AiCapabilityTargetSummary,
+  AiCapabilityVendorCatalogSummary,
+  AiCapabilityVendorSummary,
+  AiCapabilityVendorTargetChoiceSummary,
   AgentSkillSummary,
   CommandSessionSummary,
+  ComposerAttachmentCapabilitySummary,
+  ComposerSlashCommandSummary,
+  ConversationSummary,
   FeatureAreaSummary,
   LuaSkillSummary,
   LuaSkillToolSummary,
@@ -69,7 +99,9 @@ import type {
   MemorySummary,
   PluginSummary,
   ProjectSummary,
+  ProviderModelSummary,
   ProviderSummary,
+  McpServerSummary,
   RuntimeModuleSnapshot,
   SettingsSubAreaId,
   SettingSectionSummary,
@@ -127,6 +159,222 @@ interface MemoryActionProps {
   // Saves one VMM memory configuration draft.
   // 保存单个 VMM 记忆配置草稿。
   onSaveVmmConfig: (request: VmmConfigSaveRequest) => Promise<void>
+}
+
+// ProviderConfigurationSaveRequest describes one provider form submission.
+// ProviderConfigurationSaveRequest 描述单次 Provider 表单提交。
+interface ProviderConfigurationSaveRequest {
+  // Stable provider identifier.
+  // 稳定 Provider 标识。
+  providerId: string
+  // Field values keyed by provider field key.
+  // 按 Provider 字段键保存的字段值。
+  fields: Record<string, string>
+}
+
+// ProviderEnabledModelsSaveRequest describes one provider model enablement submission.
+// ProviderEnabledModelsSaveRequest 描述单次 Provider 模型启用提交。
+interface ProviderEnabledModelsSaveRequest {
+  // Stable provider identifier.
+  // 稳定 Provider 标识。
+  providerId: string
+  // Enabled model identifiers.
+  // 启用模型标识集合。
+  enabledModelIds: string[]
+}
+
+// ProviderModelOverrideSaveRequest describes one model capability override submission.
+// ProviderModelOverrideSaveRequest 描述单个模型能力覆盖提交。
+interface ProviderModelOverrideSaveRequest {
+  // Stable provider identifier.
+  // 稳定 Provider 标识。
+  providerId: string
+  // Stable model identifier.
+  // 稳定模型标识。
+  modelId: string
+  // Optional reasoning capability override.
+  // 可选推理能力覆盖值。
+  reasoning: boolean | null
+  // Optional attachment marker override.
+  // 可选附件标记覆盖值。
+  attachment: boolean | null
+  // Optional context-window limit override.
+  // 可选上下文窗口上限覆盖值。
+  contextLimit: number | null
+  // Optional input-token limit override.
+  // 可选输入 Token 上限覆盖值。
+  inputLimit: number | null
+  // Optional output-token limit override.
+  // 可选输出 Token 上限覆盖值。
+  outputLimit: number | null
+  // Optional input-modality override list.
+  // 可选输入模态覆盖列表。
+  inputModalities: string[] | null
+  // Optional output-modality override list.
+  // 可选输出模态覆盖列表。
+  outputModalities: string[] | null
+  // Optional reasoning profile JSON override.
+  // 可选推理档位 JSON 覆盖值。
+  reasoningProfileJson: string | null
+}
+
+// AiCapabilityVendorSaveRequest describes one shared AI capability vendor submission.
+// AiCapabilityVendorSaveRequest 描述单次共享 AI 能力供应商提交。
+interface AiCapabilityVendorSaveRequest {
+  // Stable vendor identifier.
+  // 稳定供应商标识。
+  vendorId: string
+  // Whether the vendor is enabled.
+  // 供应商是否启用。
+  enabled: boolean
+  // Shared API key or environment placeholder.
+  // 共享 API Key 或环境变量占位符。
+  apiKey: string
+  // Shared base URL override.
+  // 共享 Base URL 覆盖值。
+  baseUrl: string
+  // Shared region override.
+  // 共享区域覆盖值。
+  region: string
+  // Optional connection mode.
+  // 可选连接模式。
+  connectionMode?: string | null
+}
+
+// AiCapabilityTargetEnabledRequest describes one target enabled-state submission.
+// AiCapabilityTargetEnabledRequest 描述单次目标启用状态提交。
+interface AiCapabilityTargetEnabledRequest {
+  // Stable capability kind.
+  // 稳定能力类型。
+  capabilityKind: string
+  // Stable vendor identifier.
+  // 稳定供应商标识。
+  vendorId: string
+  // Stable target alias.
+  // 稳定目标别名。
+  targetAlias: string
+  // Next enabled state.
+  // 下一启用状态。
+  enabled: boolean
+}
+
+// AiCapabilityTargetsSaveRequest describes one ordered capability target-list submission.
+// AiCapabilityTargetsSaveRequest 描述单次有序能力目标列表提交。
+interface AiCapabilityTargetsSaveRequest {
+  // Stable semantic capability kind.
+  // 稳定语义能力类型。
+  capabilityKind: string
+  // Ordered target bindings to keep for this capability.
+  // 当前能力需要保留的有序目标绑定集合。
+  targets: AiCapabilityTargetSaveInput[]
+}
+
+// AiCapabilityTargetSaveInput describes one saved capability target binding.
+// AiCapabilityTargetSaveInput 描述单个待保存能力目标绑定。
+interface AiCapabilityTargetSaveInput {
+  // Stable vendor identifier.
+  // 稳定供应商标识。
+  vendorId: string
+  // Stable target alias under the vendor.
+  // 供应商下的稳定目标别名。
+  targetAlias: string
+  // Provider request model id.
+  // Provider 请求模型标识。
+  modelId: string
+  // Whether the binding is enabled.
+  // 该绑定是否启用。
+  enabled: boolean
+}
+
+// McpServerSaveRequest describes one MCP server form submission.
+// McpServerSaveRequest 描述单次 MCP 服务器表单提交。
+interface McpServerSaveRequest {
+  // Existing server id, or null when creating one.
+  // 已有服务器标识，创建时为 null。
+  serverId?: string | null
+  // Server display name.
+  // 服务器显示名称。
+  name: string
+  // Whether the server is enabled.
+  // 服务器是否启用。
+  enabled: boolean
+  // Transport key.
+  // 传输键。
+  transport: string
+  // Stdio command.
+  // Stdio 命令。
+  command: string
+  // Stdio arguments.
+  // Stdio 参数。
+  args: string[]
+  // Remote endpoint URL.
+  // 远端端点 URL。
+  url: string
+  // Remote bearer token.
+  // 远端 Bearer Token。
+  bearerToken: string
+  // Explicit request headers.
+  // 显式请求头。
+  headers: Array<{ key: string; value: string }>
+  // Headers resolved from environment variables.
+  // 从环境变量解析的请求头。
+  headersFromEnv: Array<{ key: string; value: string }>
+  // OAuth client id.
+  // OAuth 客户端标识。
+  oauthClientId: string
+  // OAuth client secret.
+  // OAuth 客户端密钥。
+  oauthClientSecret: string
+  // OAuth scopes.
+  // OAuth scope 列表。
+  oauthScopes: string[]
+  // OAuth redirect URI.
+  // OAuth 回调 URI。
+  oauthRedirectUri: string
+  // Stdio working directory.
+  // Stdio 工作目录。
+  cwd: string
+  // Stdio environment variables.
+  // Stdio 环境变量。
+  env: Array<{ key: string; value: string }>
+  // Stdio environment passthrough names.
+  // Stdio 环境变量透传名称。
+  envPassthrough: string[]
+}
+
+// SettingsActionProps groups service-backed actions used by the settings page.
+// SettingsActionProps 分组设置页面使用的服务端动作。
+interface SettingsActionProps {
+  // Saves one provider configuration.
+  // 保存单个 Provider 配置。
+  onSaveProvider: (request: ProviderConfigurationSaveRequest) => Promise<void>
+  // Removes one provider configuration.
+  // 移除单个 Provider 配置。
+  onRemoveProvider: (providerId: string) => Promise<void>
+  // Saves enabled model identifiers for one provider.
+  // 保存单个 Provider 的启用模型标识集合。
+  onSaveProviderEnabledModels: (request: ProviderEnabledModelsSaveRequest) => Promise<void>
+  // Saves one provider model capability override.
+  // 保存单个 Provider 模型能力覆盖。
+  onSaveProviderModelOverride: (request: ProviderModelOverrideSaveRequest) => Promise<void>
+  // Saves one shared AI capability vendor.
+  // 保存单个共享 AI 能力供应商。
+  onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>
+  // Removes one shared AI capability vendor.
+  // 移除单个共享 AI 能力供应商。
+  onRemoveAiCapabilityVendor: (vendorId: string) => Promise<void>
+  // Toggles one AI capability target.
+  // 切换单个 AI 能力目标。
+  onSetAiCapabilityTargetEnabled: (request: AiCapabilityTargetEnabledRequest) => Promise<void>
+  // Saves one ordered AI capability target list.
+  // 保存单个有序 AI 能力目标列表。
+  onSaveAiCapabilityTargets: (request: AiCapabilityTargetsSaveRequest) => Promise<void>
+  // Saves one MCP server configuration.
+  // 保存单个 MCP 服务器配置。
+  onSaveMcpServer: (request: McpServerSaveRequest) => Promise<void>
+  // Removes one MCP server configuration.
+  // 移除单个 MCP 服务器配置。
+  onRemoveMcpServer: (serverId: string) => Promise<void>
 }
 
 // SkillSubAreaId identifies the selected skill management category.
@@ -190,6 +438,12 @@ function localizedAgentSkillScope(scope: string, t: ReturnType<typeof useI18n>["
   return scope
 }
 
+// localizedLiteral chooses a short local component label by the active WebUI locale.
+// localizedLiteral 根据当前 WebUI 语言选择组件内短文案。
+function localizedLiteral(locale: string, zh: string, en: string): string {
+  return locale === "zh-CN" ? zh : en
+}
+
 // SkillHeaderSummary describes the active skill page header copy.
 // SkillHeaderSummary 描述当前技能页标题文案。
 interface SkillHeaderSummary {
@@ -198,6 +452,17 @@ interface SkillHeaderSummary {
   title: string
   // Compact metrics shown on the second line.
   // 第二行展示的紧凑统计。
+  detail: string
+}
+
+// SettingsHeaderSummary describes the active settings page header copy.
+// SettingsHeaderSummary 描述当前设置页标题文案。
+interface SettingsHeaderSummary {
+  // Header title shown on the first line.
+  // 第一行展示的标题。
+  title: string
+  // Compact description shown on the second line.
+  // 第二行展示的紧凑说明。
   detail: string
 }
 
@@ -222,6 +487,9 @@ function FeatureShell(props: {
   // Service-backed VMM memory page actions.
   // 服务端支持的 VMM 记忆页面动作。
   memoryActions: MemoryActionProps
+  // Service-backed settings page actions.
+  // 服务端支持的设置页面动作。
+  settingsActions: SettingsActionProps
   // Startup snapshot used by diagnostics.
   // 诊断页面使用的启动快照。
   startup: StartupSnapshot
@@ -229,7 +497,7 @@ function FeatureShell(props: {
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  const { t } = useI18n()
+  const { locale, t } = useI18n()
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
   // activeSkillSubArea 保持左侧菜单与右侧技能页签同步。
   const [activeSkillSubArea, setActiveSkillSubArea] = React.useState<SkillSubAreaId>("lua")
@@ -242,6 +510,21 @@ function FeatureShell(props: {
   // skillHeaderBusyAction stores the title-bar action that should show busy feedback.
   // skillHeaderBusyAction 保存需要在标题栏展示忙碌反馈的动作。
   const [skillHeaderBusyAction, setSkillHeaderBusyAction] = React.useState<SkillHeaderBusyActionId | null>(null)
+  // providerPickerOpen controls the model-provider catalog dialog from the shared header.
+  // providerPickerOpen 从共享标题栏控制模型供应商目录弹窗。
+  const [providerPickerOpen, setProviderPickerOpen] = React.useState(false)
+  // editingProvider stores the provider currently being configured.
+  // editingProvider 保存当前正在配置的模型供应商。
+  const [editingProvider, setEditingProvider] = React.useState<ProviderSummary | null>(null)
+  // modelListDialogOpen controls the enabled-model configuration dialog from the shared header.
+  // modelListDialogOpen 从共享标题栏控制启用模型配置弹窗。
+  const [modelListDialogOpen, setModelListDialogOpen] = React.useState(false)
+  // capabilityTargetsDialogOpen controls the capability target dialog from the shared header.
+  // capabilityTargetsDialogOpen 从共享标题栏控制能力目标配置弹窗。
+  const [capabilityTargetsDialogOpen, setCapabilityTargetsDialogOpen] = React.useState(false)
+  React.useEffect(() => {
+    setCapabilityTargetsDialogOpen(false)
+  }, [props.activeSettingsSubArea])
   // runSkillHeaderAction wraps title-bar actions with disabled and spinner feedback.
   // runSkillHeaderAction 为标题栏动作包裹禁用与旋转反馈。
   const runSkillHeaderAction = React.useCallback(async (actionId: SkillHeaderBusyActionId, action: () => Promise<void>) => {
@@ -299,10 +582,36 @@ function FeatureShell(props: {
       </button>
     </div>
   ) : null
+  // settingsHeaderAction renders actions for the active settings page in the shared title bar.
+  // settingsHeaderAction 在共享标题栏中渲染当前设置页操作。
+  const settingsHeaderAction = props.activeArea === "settings" && props.activeSettingsSubArea === "model-providers" ? (
+    <div className="feature-header-actions">
+      <button className="skill-action-button" onClick={() => setProviderPickerOpen(true)} type="button">
+        <span>{localizedLiteral(locale, "添加 Provider", "Add provider")}</span>
+      </button>
+    </div>
+  ) : props.activeArea === "settings" && props.activeSettingsSubArea === "model-list" ? (
+    <div className="feature-header-actions">
+      <button className="skill-action-button" onClick={() => setModelListDialogOpen(true)} type="button">
+        <span>{localizedLiteral(locale, "调整模型列表", "Configure model list")}</span>
+      </button>
+    </div>
+  ) : props.activeArea === "settings" && settingsSubAreaCapabilityKind(props.activeSettingsSubArea) ? (
+    <div className="feature-header-actions">
+      <button className="skill-action-button" onClick={() => setCapabilityTargetsDialogOpen(true)} type="button">
+        <span>{localizedLiteral(locale, "配置接口", "Configure targets")}</span>
+      </button>
+    </div>
+  ) : null
   // skillHeaderSummary stores the active skill page title and compact metrics.
   // skillHeaderSummary 保存当前技能页标题与紧凑统计。
   const skillHeaderSummary = props.activeArea === "skills"
     ? activeSkillHeaderSummary(activeSkillSubArea, props.workbench, t)
+    : null
+  // settingsHeaderSummary stores the selected settings section title and description.
+  // settingsHeaderSummary 保存当前设置分区标题与说明。
+  const settingsHeaderSummary = props.activeArea === "settings"
+    ? activeSettingsHeaderSummary(props.activeSettingsSubArea, t)
     : null
   // headerFeature overrides the generic feature title while a skill sub page is active.
   // headerFeature 在技能子页面激活时覆盖通用功能标题。
@@ -312,6 +621,12 @@ function FeatureShell(props: {
       label: skillHeaderSummary.title,
       description: skillHeaderSummary.detail,
     }
+    : settingsHeaderSummary
+      ? {
+        ...(props.activeFeature ?? { id: "settings" as MainAreaId, label: t("area.settings"), description: "", status: "" }),
+        label: settingsHeaderSummary.title,
+        description: settingsHeaderSummary.detail,
+      }
     : props.activeFeature
 
   return (
@@ -329,18 +644,27 @@ function FeatureShell(props: {
       <SidebarInset>
         <div className="feature-main-shell">
           <FeatureHeader
-            action={skillHeaderAction}
+            action={skillHeaderAction ?? settingsHeaderAction}
             feature={headerFeature}
           />
           <FeatureContent
-          activeArea={props.activeArea}
-          activeMemorySubArea={activeMemorySubArea}
-          activeSkillSubArea={activeSkillSubArea}
-          activeSettingsSubArea={props.activeSettingsSubArea}
-          memoryActions={props.memoryActions}
-          skillActions={props.skillActions}
-          startup={props.startup}
-          workbench={props.workbench}
+            activeArea={props.activeArea}
+            activeMemorySubArea={activeMemorySubArea}
+            capabilityTargetsDialogOpen={capabilityTargetsDialogOpen}
+            activeSkillSubArea={activeSkillSubArea}
+            activeSettingsSubArea={props.activeSettingsSubArea}
+            editingProvider={editingProvider}
+            memoryActions={props.memoryActions}
+            modelListDialogOpen={modelListDialogOpen}
+            onEditingProviderChange={setEditingProvider}
+            onCapabilityTargetsDialogOpenChange={setCapabilityTargetsDialogOpen}
+            onModelListDialogOpenChange={setModelListDialogOpen}
+            onProviderPickerOpenChange={setProviderPickerOpen}
+            providerPickerOpen={providerPickerOpen}
+            settingsActions={props.settingsActions}
+            skillActions={props.skillActions}
+            startup={props.startup}
+            workbench={props.workbench}
           />
         </div>
         <LuaSkillInstallDialog
@@ -531,28 +855,186 @@ function SettingsSidebarMenu(props: {
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
 }) {
   const { t } = useI18n()
+  const { state: sidebarState } = useSidebar()
+  const groups = settingsSubAreaGroups(t)
   return (
-    <SidebarGroup>
-      <SidebarGroupLabel><Settings size={15} /><span>{t("sidebar.settingsCategories")}</span></SidebarGroupLabel>
-      <SidebarMenu>
-        {settingsSubAreas(t).map((area) => (
-          <SidebarMenuItem key={area.id}>
-            <SidebarMenuButton
-              active={props.activeSettingsSubArea === area.id}
-              className="feature-sidebar-row"
-              onClick={() => props.onSelectSettingsSubArea(area.id)}
-              tooltip={area.description}
-            >
-              {area.icon}
-              <span className="vcn-sidebar-label">
-                <strong>{area.label}</strong>
-                <small>{area.description}</small>
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+    <SidebarGroup className="settings-tree-section">
+      <SidebarMenu className="settings-tree-list">
+        {groups.map((group) => (
+          <SettingsSidebarGroupRow
+            activeSettingsSubArea={props.activeSettingsSubArea}
+            group={group}
+            key={group.id}
+            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+            sidebarState={sidebarState}
+          />
         ))}
       </SidebarMenu>
     </SidebarGroup>
+  )
+}
+
+// SettingsSidebarGroupRow renders one settings category with always-expanded children.
+// SettingsSidebarGroupRow 渲染单个设置分类及其默认展开的子菜单。
+function SettingsSidebarGroupRow(props: {
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId
+  // Settings category group.
+  // 设置分类分组。
+  group: SettingsSubAreaGroup
+  // Updates the selected settings sub page.
+  // 更新设置二级页面选择。
+  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
+  // Current sidebar collapsed or expanded state.
+  // 当前侧栏展开或折叠状态。
+  sidebarState: ReturnType<typeof useSidebar>["state"]
+}) {
+  const groupActive = props.group.items.some((item) => item.id === props.activeSettingsSubArea)
+  return (
+    <SidebarMenuItem className="project-tree-item settings-tree-item">
+      {props.sidebarState === "collapsed" ? (
+        <CollapsedSettingsGroupMenu
+          activeSettingsSubArea={props.activeSettingsSubArea}
+          group={props.group}
+          groupActive={groupActive}
+          onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+        />
+      ) : (
+        <>
+          <div className="project-folder-row settings-folder-row">
+            <SidebarMenuButton
+              aria-expanded="true"
+              className={`project-folder-button settings-folder-button ${groupActive ? "project-folder-active" : ""}`}
+              onClick={() => {
+                const firstItem = props.group.items[0]
+                if (firstItem) {
+                  props.onSelectSettingsSubArea(firstItem.id)
+                }
+              }}
+              tooltip={props.group.label}
+            >
+              {props.group.icon}
+              <span className="vcn-sidebar-label project-folder-label">
+                <strong>{props.group.label}</strong>
+              </span>
+              <span className="project-folder-arrow" aria-hidden="true">
+                <ChevronDown size={14} />
+              </span>
+            </SidebarMenuButton>
+          </div>
+          <SidebarMenu className="project-conversation-list settings-subarea-list">
+            {props.group.items.map((area) => (
+              <SidebarMenuItem key={area.id}>
+                <SidebarMenuButton
+                  active={props.activeSettingsSubArea === area.id}
+                  className="conversation-tree-button settings-subarea-button"
+                  onClick={() => props.onSelectSettingsSubArea(area.id)}
+                  tooltip={area.label}
+                >
+                  <span className="vcn-sidebar-label conversation-tree-label">
+                    <strong>{area.label}</strong>
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+        </>
+      )}
+    </SidebarMenuItem>
+  )
+}
+
+// CollapsedSettingsGroupMenu renders one settings category hover menu while the sidebar is collapsed.
+// CollapsedSettingsGroupMenu 在侧栏折叠时渲染单个设置分类的悬停菜单。
+function CollapsedSettingsGroupMenu(props: {
+  // Selected settings sub page.
+  // 当前设置二级页面。
+  activeSettingsSubArea: SettingsSubAreaId
+  // Settings category group.
+  // 设置分类分组。
+  group: SettingsSubAreaGroup
+  // Whether this group contains the active page.
+  // 当前分组是否包含活动页面。
+  groupActive: boolean
+  // Updates the selected settings sub page.
+  // 更新设置二级页面选择。
+  onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
+}) {
+  const anchorRef = React.useRef<HTMLDivElement | null>(null)
+  const closeTimerRef = React.useRef<number | null>(null)
+  const [flyoutOpen, setFlyoutOpen] = React.useState(false)
+  const [flyoutPosition, setFlyoutPosition] = React.useState<{ left: number; top: number } | null>(null)
+  const clearCloseTimer = React.useCallback(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }, [])
+  const openFlyout = React.useCallback(() => {
+    clearCloseTimer()
+    const rect = anchorRef.current?.getBoundingClientRect()
+    if (!rect) {
+      return
+    }
+    setFlyoutPosition({ left: rect.right + 8, top: rect.top })
+    setFlyoutOpen(true)
+  }, [clearCloseTimer])
+  const scheduleClose = React.useCallback(() => {
+    clearCloseTimer()
+    closeTimerRef.current = window.setTimeout(() => setFlyoutOpen(false), 140)
+  }, [clearCloseTimer])
+  React.useEffect(() => clearCloseTimer, [clearCloseTimer])
+  const selectArea = React.useCallback((areaId: SettingsSubAreaId) => {
+    setFlyoutOpen(false)
+    props.onSelectSettingsSubArea(areaId)
+  }, [props])
+  return (
+    <>
+      <div
+        className="collapsed-project-hover-root settings-collapsed-hover-root"
+        onMouseEnter={openFlyout}
+        onMouseLeave={scheduleClose}
+        ref={anchorRef}
+      >
+        <SidebarMenuButton
+          aria-label={props.group.label}
+          className={`project-folder-button collapsed-project-button settings-collapsed-button ${props.groupActive ? "project-folder-active" : ""}`}
+          onClick={(event) => event.preventDefault()}
+        >
+          {props.group.icon}
+          <span className="vcn-sidebar-label project-folder-label">
+            <strong>{props.group.label}</strong>
+          </span>
+        </SidebarMenuButton>
+      </div>
+      {flyoutOpen && flyoutPosition ? (
+        <div
+          aria-label={props.group.label}
+          className="collapsed-project-flyout settings-collapsed-flyout"
+          onMouseEnter={openFlyout}
+          onMouseLeave={scheduleClose}
+          role="menu"
+          style={{ left: flyoutPosition.left, top: flyoutPosition.top }}
+        >
+          <div className="collapsed-project-flyout-title" role="presentation">
+            {props.group.label}
+          </div>
+          {props.group.items.map((area) => (
+            <button
+              className={`collapsed-project-flyout-item ${props.activeSettingsSubArea === area.id ? "active" : ""}`}
+              key={area.id}
+              onClick={() => selectArea(area.id)}
+              role="menuitem"
+              type="button"
+            >
+              {area.icon}
+              <span className="collapsed-project-menu-title">{area.label}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -571,12 +1053,39 @@ function FeatureContent(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
+  // Provider currently opened in the edit dialog.
+  // 当前在编辑弹窗中打开的模型供应商。
+  editingProvider: ProviderSummary | null
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps
   // Service-backed VMM memory page actions.
   // 服务端支持的 VMM 记忆页面动作。
   memoryActions: MemoryActionProps
+  // Service-backed settings page actions.
+  // 服务端支持的设置页面动作。
+  settingsActions: SettingsActionProps
+  // Whether the capability target configuration dialog is open.
+  // 能力目标配置弹窗是否打开。
+  capabilityTargetsDialogOpen: boolean
+  // Whether the enabled-model configuration dialog is open.
+  // 启用模型配置弹窗是否打开。
+  modelListDialogOpen: boolean
+  // Updates the provider edit dialog target.
+  // 更新模型供应商编辑弹窗目标。
+  onEditingProviderChange: (provider: ProviderSummary | null) => void
+  // Updates the capability target configuration dialog open state.
+  // 更新能力目标配置弹窗打开状态。
+  onCapabilityTargetsDialogOpenChange: (open: boolean) => void
+  // Updates the enabled-model configuration dialog open state.
+  // 更新启用模型配置弹窗打开状态。
+  onModelListDialogOpenChange: (open: boolean) => void
+  // Updates the add-provider picker open state.
+  // 更新添加模型供应商选择弹窗的打开状态。
+  onProviderPickerOpenChange: (open: boolean) => void
+  // Whether the add-provider picker is open.
+  // 添加模型供应商选择弹窗是否打开。
+  providerPickerOpen: boolean
   // Startup snapshot used by settings diagnostics.
   // 设置诊断页面使用的启动快照。
   startup: StartupSnapshot
@@ -626,6 +1135,15 @@ function FeatureContent(props: {
       <div className="feature-content">
         <SettingsFeatureContent
           activeSettingsSubArea={props.activeSettingsSubArea}
+          actions={props.settingsActions}
+          capabilityTargetsDialogOpen={props.capabilityTargetsDialogOpen}
+          editingProvider={props.editingProvider}
+          modelListDialogOpen={props.modelListDialogOpen}
+          onCapabilityTargetsDialogOpenChange={props.onCapabilityTargetsDialogOpenChange}
+          onEditingProviderChange={props.onEditingProviderChange}
+          onModelListDialogOpenChange={props.onModelListDialogOpenChange}
+          onProviderPickerOpenChange={props.onProviderPickerOpenChange}
+          providerPickerOpen={props.providerPickerOpen}
           startup={props.startup}
           workbench={props.workbench}
         />
@@ -642,6 +1160,33 @@ function SettingsFeatureContent(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
+  // Service-backed settings page actions.
+  // 服务端支持的设置页面动作。
+  actions: SettingsActionProps
+  // Whether the capability target configuration dialog is open.
+  // 能力目标配置弹窗是否打开。
+  capabilityTargetsDialogOpen: boolean
+  // Provider currently opened in the edit dialog.
+  // 当前在编辑弹窗中打开的模型供应商。
+  editingProvider: ProviderSummary | null
+  // Whether the enabled-model configuration dialog is open.
+  // 启用模型配置弹窗是否打开。
+  modelListDialogOpen: boolean
+  // Updates the provider edit dialog target.
+  // 更新模型供应商编辑弹窗目标。
+  onEditingProviderChange: (provider: ProviderSummary | null) => void
+  // Updates the capability target configuration dialog open state.
+  // 更新能力目标配置弹窗打开状态。
+  onCapabilityTargetsDialogOpenChange: (open: boolean) => void
+  // Updates the enabled-model configuration dialog open state.
+  // 更新启用模型配置弹窗打开状态。
+  onModelListDialogOpenChange: (open: boolean) => void
+  // Updates the add-provider picker open state.
+  // 更新添加模型供应商选择弹窗的打开状态。
+  onProviderPickerOpenChange: (open: boolean) => void
+  // Whether the add-provider picker is open.
+  // 添加模型供应商选择弹窗是否打开。
+  providerPickerOpen: boolean
   // Startup snapshot used by diagnostics.
   // 诊断页面使用的启动快照。
   startup: StartupSnapshot
@@ -649,23 +1194,81 @@ function SettingsFeatureContent(props: {
   // 设置页面使用的工作台快照。
   workbench: WorkbenchSnapshot
 }) {
-  if (props.activeSettingsSubArea === "projects") {
-    return <ProjectsArea projects={props.workbench.projects} modules={props.workbench.modules} />
+  if (props.activeSettingsSubArea === "model-providers") {
+    return (
+      <ProvidersArea
+        actions={props.actions}
+        editingProvider={props.editingProvider}
+        onEditingProviderChange={props.onEditingProviderChange}
+        onProviderPickerOpenChange={props.onProviderPickerOpenChange}
+        pickerOpen={props.providerPickerOpen}
+        providers={props.workbench.providers}
+      />
+    )
   }
-  if (props.activeSettingsSubArea === "providers") {
-    return <ProvidersArea providers={props.workbench.providers} modules={props.workbench.modules} />
+  if (props.activeSettingsSubArea === "model-list") {
+    return <ModelListSettingsArea actions={props.actions} dialogOpen={props.modelListDialogOpen} onDialogOpenChange={props.onModelListDialogOpenChange} providers={props.workbench.providers} />
   }
-  if (props.activeSettingsSubArea === "tools") {
-    return <ToolsArea toolCalls={props.workbench.toolCalls} commandSessions={props.workbench.commandSessions} />
+  if (props.activeSettingsSubArea === "ai-vendors") {
+    return <AiCapabilityVendorsArea actions={props.actions} capabilities={props.workbench.aiCapabilities ?? []} catalog={props.workbench.aiCapabilityVendorCatalog ?? []} providers={props.workbench.providers} vendors={props.workbench.aiCapabilityVendors ?? []} />
   }
-  if (props.activeSettingsSubArea === "diagnostics") {
+  if (settingsSubAreaCapabilityKind(props.activeSettingsSubArea)) {
+    return (
+      <AiCapabilitySettingsArea
+        actions={props.actions}
+        activeArea={props.activeSettingsSubArea}
+        capabilities={props.workbench.aiCapabilities ?? []}
+        configDialogOpen={props.capabilityTargetsDialogOpen}
+        onConfigDialogOpenChange={props.onCapabilityTargetsDialogOpenChange}
+        vendors={props.workbench.aiCapabilityVendors ?? []}
+      />
+    )
+  }
+  if (props.activeSettingsSubArea === "mcp-servers") {
+    return <McpSettingsArea actions={props.actions} logs={props.workbench.logs} modules={props.workbench.modules} servers={props.workbench.mcpServers ?? []} startup={props.startup} />
+  }
+  if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return <LogsArea startup={props.startup} logs={props.workbench.logs} />
   }
-  return <SettingsArea settings={props.workbench.settings} />
+  if (props.activeSettingsSubArea === "prompt-composer") {
+    return (
+      <PromptComposerSettingsArea
+        attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
+        reasoningSelection={props.workbench.reasoningSelection ?? null}
+        slashCommands={props.workbench.composerSlashCommands ?? []}
+      />
+    )
+  }
+  if (props.activeSettingsSubArea === "about-licenses") {
+    return <AboutLicensesSettingsArea appVersion={props.workbench.appVersion} />
+  }
+  if (props.activeSettingsSubArea === "archived-restore") {
+    return <ArchivedRestoreSettingsArea conversations={props.workbench.conversations} projects={props.workbench.projects} />
+  }
+  return (
+    <ProvidersArea
+      actions={props.actions}
+      editingProvider={props.editingProvider}
+      onEditingProviderChange={props.onEditingProviderChange}
+      onProviderPickerOpenChange={props.onProviderPickerOpenChange}
+      pickerOpen={props.providerPickerOpen}
+      providers={props.workbench.providers}
+    />
+  )
 }
 
 // SkillsArea renders LuaSkills and tool capability status.
 // SkillsArea 渲染 LuaSkills 与工具能力状态。
+// activeSettingsHeaderSummary returns the title and description for the current settings page.
+// activeSettingsHeaderSummary 返回当前设置页的标题与说明。
+function activeSettingsHeaderSummary(activeArea: SettingsSubAreaId, t: ReturnType<typeof useI18n>["t"]): SettingsHeaderSummary {
+  const area = settingsSubAreas(t).find((entry) => entry.id === activeArea)
+  return {
+    title: area?.label ?? t("area.settings"),
+    detail: area?.description ?? t("area.settings.description"),
+  }
+}
+
 // activeSkillHeaderSummary returns the title and metrics for the current skill sub page.
 // activeSkillHeaderSummary 返回当前技能子页面的标题与统计。
 function activeSkillHeaderSummary(activeTab: SkillSubAreaId, workbench: WorkbenchSnapshot, t: ReturnType<typeof useI18n>["t"]): SkillHeaderSummary {
@@ -1449,30 +2052,1777 @@ function ProjectsArea(props: {
 // ProvidersArea renders model provider status.
 // ProvidersArea 渲染模型 Provider 状态。
 function ProvidersArea(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Provider currently opened in the edit dialog.
+  // 当前在编辑弹窗中打开的模型供应商。
+  editingProvider: ProviderSummary | null
+  // Updates the provider edit dialog target.
+  // 更新模型供应商编辑弹窗目标。
+  onEditingProviderChange: (provider: ProviderSummary | null) => void
+  // Updates the add-provider picker open state.
+  // 更新添加模型供应商选择弹窗的打开状态。
+  onProviderPickerOpenChange: (open: boolean) => void
+  // Whether the add-provider picker is open.
+  // 添加模型供应商选择弹窗是否打开。
+  pickerOpen: boolean
   // Provider summaries shown in settings.
   // 设置中展示的 Provider 摘要。
   providers: ProviderSummary[]
-  // Runtime module summaries shown beside providers.
-  // Provider 旁展示的运行时模块摘要。
-  modules: RuntimeModuleSnapshot[]
 }) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const configuredProviders = props.providers.filter((provider) => provider.configured)
+  return (
+    <div className="settings-direct-content">
+      <div className="card-grid">
+        {configuredProviders.length === 0 ? (
+          <article className="settings-card">
+            <strong>{text("暂无模型供应商", "No model providers")}</strong>
+            <p>{text("点击添加后从目录中筛选供应商，再填写密钥等信息。", "Click Add, filter the catalog, then fill credentials and settings.")}</p>
+          </article>
+        ) : configuredProviders.map((provider) => (
+          <article className="data-card" key={provider.id}>
+            <StatusPill status={provider.configured ? "ready" : "pending"} label={provider.status} />
+            <strong>{provider.name}</strong>
+            <span>{provider.id}</span>
+            <span>{text("已启用模型", "Enabled models")}：{provider.enabledModels}</span>
+            <div className="settings-card-actions">
+              <button className="skill-action-button secondary" onClick={() => props.onEditingProviderChange(provider)} type="button">{text("编辑", "Edit")}</button>
+              <button className="skill-action-button secondary danger" onClick={() => void props.actions.onRemoveProvider(provider.id)} type="button">{text("删除", "Delete")}</button>
+            </div>
+          </article>
+        ))}
+      </div>
+      <ProviderPickerDialog
+        onOpenChange={props.onProviderPickerOpenChange}
+        onSelect={(provider) => {
+          props.onProviderPickerOpenChange(false)
+          props.onEditingProviderChange(provider)
+        }}
+        open={props.pickerOpen}
+        providers={props.providers.filter((provider) => !provider.configured)}
+      />
+      <ProviderEditDialog
+        actions={props.actions}
+        onOpenChange={(open) => {
+          if (!open) {
+            props.onEditingProviderChange(null)
+          }
+        }}
+        open={props.editingProvider !== null}
+        provider={props.editingProvider}
+      />
+    </div>
+  )
+}
+
+// ModelCapabilityTarget identifies one provider/model pair opened for capability editing.
+// ModelCapabilityTarget 标识一个正在编辑能力的供应商与模型组合。
+interface ModelCapabilityTarget {
+  // Provider that owns the model.
+  // 拥有该模型的供应商。
+  provider: ProviderSummary
+  // Model whose capability metadata is being edited.
+  // 正在编辑能力元数据的模型。
+  model: ProviderModelSummary
+}
+
+// ModelListSettingsArea renders enabled models with an iced-style provider/model split.
+// ModelListSettingsArea 使用 iced 风格供应商/模型分栏渲染已启用模型。
+function ModelListSettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Whether the enabled-model configuration dialog is open.
+  // 启用模型配置弹窗是否打开。
+  dialogOpen: boolean
+  // Updates the enabled-model configuration dialog open state.
+  // 更新启用模型配置弹窗打开状态。
+  onDialogOpenChange: (open: boolean) => void
+  // Provider summaries containing enabled model rows.
+  // 包含已启用模型行的 Provider 摘要。
+  providers: ProviderSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const configuredProviders = React.useMemo(() => props.providers.filter((provider) => provider.configured), [props.providers])
+  const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
+  const [capabilityTarget, setCapabilityTarget] = React.useState<ModelCapabilityTarget | null>(null)
+  React.useEffect(() => {
+    if (configuredProviders.length === 0) {
+      setSelectedProviderId(null)
+      return
+    }
+    if (!selectedProviderId || !configuredProviders.some((provider) => provider.id === selectedProviderId)) {
+      setSelectedProviderId(configuredProviders[0]?.id ?? null)
+    }
+  }, [configuredProviders, selectedProviderId])
+  const enabledModelCount = props.providers.reduce((count, provider) => count + (provider.models?.length ?? 0), 0)
+  const selectedProvider = configuredProviders.find((provider) => provider.id === selectedProviderId) ?? configuredProviders[0] ?? null
+  return (
+    <div className="settings-direct-content model-list-surface">
+      <div className="settings-split-layout">
+        <aside className="settings-provider-nav" aria-label={text("供应商", "Providers")}>
+          <div className="settings-split-column-title">{text("供应商", "Providers")}</div>
+          {configuredProviders.map((provider) => (
+            <button
+              className={`settings-provider-nav-row ${selectedProvider?.id === provider.id ? "active" : ""}`}
+              key={provider.id}
+              onClick={() => setSelectedProviderId(provider.id)}
+              type="button"
+            >
+              <FileText size={14} />
+              <span>{provider.name}</span>
+              <small>[{provider.models?.length ?? 0}]</small>
+            </button>
+          ))}
+        </aside>
+        <section className="settings-model-list-pane" aria-label={text("已启用模型", "Enabled models")}>
+          <div className="settings-model-pane-header">
+            <div>
+              <div className="settings-split-column-title">{text("已启用模型", "Enabled models")}</div>
+              <small>{selectedProvider ? selectedProvider.name : text("未选择供应商", "No provider selected")} · {text("总启用", "Total enabled")} {enabledModelCount}</small>
+            </div>
+            {selectedProvider ? <span className="settings-muted-line">{selectedProvider.name}</span> : null}
+          </div>
+          <div className="settings-model-row-list">
+            {!selectedProvider ? (
+              <p className="settings-muted-line">{text("当前没有已配置供应商。", "No configured provider is available.")}</p>
+            ) : (selectedProvider.models ?? []).length === 0 ? (
+              <p className="settings-muted-line">{text("该供应商当前没有启用模型。", "This provider has no enabled model.")}</p>
+            ) : selectedProvider.models?.map((model) => (
+              <article className="settings-model-row" key={`${selectedProvider.id}-${model.id}`}>
+                <div>
+                  <strong>{model.name}</strong>
+                  <span>{formatProviderModelMeta(model, text)}</span>
+                </div>
+                <button className="skill-action-button secondary" onClick={() => setCapabilityTarget({ provider: selectedProvider, model })} type="button">{text("编辑能力", "Edit capabilities")}</button>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+      <ProviderModelsDialog
+        actions={props.actions}
+        initialProviderId={selectedProvider?.id ?? null}
+        onEditCapability={setCapabilityTarget}
+        onOpenChange={props.onDialogOpenChange}
+        open={props.dialogOpen}
+        providers={configuredProviders}
+      />
+      <ModelCapabilityDialog
+        actions={props.actions}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCapabilityTarget(null)
+          }
+        }}
+        open={capabilityTarget !== null}
+        target={capabilityTarget}
+      />
+    </div>
+  )
+}
+
+// ProviderEditDialog renders the provider add/edit form.
+// ProviderEditDialog 渲染 Provider 新增/编辑表单。
+function ProviderEditDialog(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Provider being edited.
+  // 当前编辑的 Provider。
+  provider: ProviderSummary | null
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [fields, setFields] = React.useState<Record<string, string>>({})
+  React.useEffect(() => {
+    const nextFields: Record<string, string> = {}
+    props.provider?.fields?.forEach((field) => {
+      nextFields[field.key] = field.value
+    })
+    setFields(nextFields)
+  }, [props.provider])
+  const save = React.useCallback(async () => {
+    if (!props.provider) {
+      return
+    }
+    await props.actions.onSaveProvider({ providerId: props.provider.id, fields })
+    props.onOpenChange(false)
+  }, [fields, props])
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog">
+        <DialogHeader>
+          <DialogTitle>{props.provider?.configured ? text("编辑 Provider", "Edit provider") : text("添加 Provider", "Add provider")}</DialogTitle>
+          <DialogDescription>{props.provider?.name}</DialogDescription>
+        </DialogHeader>
+        <div className="settings-form-grid">
+          {(props.provider?.fields ?? []).map((field) => (
+            <label className="settings-form-field" key={field.key}>
+              <span>{field.label}</span>
+              <input
+                className="settings-input"
+                onChange={(event) => setFields((current) => ({ ...current, [field.key]: event.target.value }))}
+                placeholder={field.placeholder}
+                type={field.secret ? "password" : "text"}
+                value={fields[field.key] ?? ""}
+              />
+            </label>
+          ))}
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ProviderPickerDialog renders the add-provider catalog picker.
+// ProviderPickerDialog 渲染添加 Provider 的目录选择器。
+function ProviderPickerDialog(props: {
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Provider catalog choices.
+  // Provider 目录选项。
+  providers: ProviderSummary[]
+  // Handles one selected provider.
+  // 处理单个已选择 Provider。
+  onSelect: (provider: ProviderSummary) => void
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [filter, setFilter] = React.useState("")
+  React.useEffect(() => {
+    if (!props.open) {
+      setFilter("")
+    }
+  }, [props.open])
+  const query = filter.trim().toLowerCase()
+  const visibleProviders = props.providers.filter((provider) => {
+    if (!query) {
+      return true
+    }
+    return provider.id.toLowerCase().includes(query) || provider.name.toLowerCase().includes(query)
+  })
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog wide">
+        <DialogHeader>
+          <DialogTitle>{text("添加模型供应商", "Add model provider")}</DialogTitle>
+          <DialogDescription>{text("输入关键字过滤供应商，选择后填写密钥等配置。", "Filter providers, then select one to fill credentials and settings.")}</DialogDescription>
+        </DialogHeader>
+        <input
+          className="settings-input"
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder={text("搜索供应商", "Search providers")}
+          value={filter}
+        />
+        <div className="settings-modal-list">
+          {visibleProviders.length === 0 ? (
+            <p className="settings-muted-line">{text("当前没有可新增的供应商，或者过滤后没有匹配结果。", "No provider can be added, or no result matches the filter.")}</p>
+          ) : visibleProviders.map((provider) => (
+            <button className="settings-picker-row" key={provider.id} onClick={() => props.onSelect(provider)} type="button">
+              <strong>{provider.name}</strong>
+              <span>{provider.id} · {(provider.catalogModels ?? []).length} models</span>
+            </button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ProviderModelsDialog renders the iced-style enabled-model picker across providers.
+// ProviderModelsDialog 渲染跨供应商的 iced 风格启用模型选择器。
+function ProviderModelsDialog(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Initial provider id selected when the dialog opens.
+  // 弹窗打开时初始选中的供应商标识。
+  initialProviderId: string | null
+  // Opens the capability editor for one provider/model pair.
+  // 打开单个供应商/模型组合的能力编辑器。
+  onEditCapability: (target: ModelCapabilityTarget) => void
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Configured providers available in the left column.
+  // 左侧可用的已配置供应商。
+  providers: ProviderSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [draftEnabledIds, setDraftEnabledIds] = React.useState<Record<string, Set<string>>>({})
+  const [filter, setFilter] = React.useState("")
+  const [selectedProviderId, setSelectedProviderId] = React.useState<string | null>(null)
+  React.useEffect(() => {
+    if (!props.open) {
+      return
+    }
+    const nextDrafts = Object.fromEntries(props.providers.map((provider) => [
+      provider.id,
+      new Set((provider.catalogModels ?? []).filter((model) => model.enabled).map((model) => model.id)),
+    ]))
+    setDraftEnabledIds(nextDrafts)
+    setSelectedProviderId(props.initialProviderId && props.providers.some((provider) => provider.id === props.initialProviderId)
+      ? props.initialProviderId
+      : props.providers[0]?.id ?? null)
+    setFilter("")
+  }, [props.initialProviderId, props.open, props.providers])
+  const selectedProvider = props.providers.find((provider) => provider.id === selectedProviderId) ?? props.providers[0] ?? null
+  const selectedEnabledIds = selectedProvider ? draftEnabledIds[selectedProvider.id] ?? new Set<string>() : new Set<string>()
+  const visibleModels = (selectedProvider?.catalogModels ?? []).filter((model) => {
+    const query = filter.trim().toLowerCase()
+    if (!query) {
+      return true
+    }
+    return model.id.toLowerCase().includes(query) || model.name.toLowerCase().includes(query) || (model.family ?? "").toLowerCase().includes(query)
+  })
+  const toggle = React.useCallback((providerId: string, modelId: string, enabled: boolean) => {
+    setDraftEnabledIds((current) => {
+      const next = new Set(current[providerId] ?? [])
+      if (enabled) {
+        next.add(modelId)
+      } else {
+        next.delete(modelId)
+      }
+      return { ...current, [providerId]: next }
+    })
+  }, [])
+  const save = React.useCallback(async () => {
+    for (const provider of props.providers) {
+      const nextIds = Array.from(draftEnabledIds[provider.id] ?? [])
+      if (sameStringSet(nextIds, (provider.catalogModels ?? []).filter((model) => model.enabled).map((model) => model.id))) {
+        continue
+      }
+      await props.actions.onSaveProviderEnabledModels({
+        providerId: provider.id,
+        enabledModelIds: nextIds,
+      })
+    }
+    props.onOpenChange(false)
+  }, [draftEnabledIds, props])
+  const selectCurrentFiltered = React.useCallback((enabled: boolean) => {
+    if (!selectedProvider) {
+      return
+    }
+    setDraftEnabledIds((current) => {
+      const next = new Set(current[selectedProvider.id] ?? [])
+      visibleModels.forEach((model) => {
+        if (enabled) {
+          next.add(model.id)
+        } else {
+          next.delete(model.id)
+        }
+      })
+      return { ...current, [selectedProvider.id]: next }
+    })
+  }, [selectedProvider, visibleModels])
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog model-list-dialog">
+        <DialogHeader>
+          <DialogTitle>{text("配置启用模型", "Configure enabled models")}</DialogTitle>
+          <DialogDescription>{text("左侧切换供应商，右侧编辑完整模型目录。全选、取消等操作都会写入草稿，只有点击保存才会真正落盘。", "Switch providers on the left and edit the full model catalog on the right. Changes are drafted until Save.")}</DialogDescription>
+        </DialogHeader>
+        <div className="settings-split-layout modal">
+          <aside className="settings-provider-nav" aria-label={text("供应商", "Providers")}>
+            <div className="settings-split-column-title">{text("供应商", "Providers")}</div>
+            {props.providers.map((provider) => (
+              <button
+                className={`settings-provider-nav-row ${selectedProvider?.id === provider.id ? "active" : ""}`}
+                key={provider.id}
+                onClick={() => setSelectedProviderId(provider.id)}
+                type="button"
+              >
+                <FileText size={14} />
+                <span>{provider.name}</span>
+                <small>[{draftEnabledIds[provider.id]?.size ?? 0}]</small>
+              </button>
+            ))}
+          </aside>
+          <section className="settings-model-list-pane" aria-label={text("模型目录", "Model catalog")}>
+            <div className="settings-model-pane-header">
+              <div>
+                <div className="settings-split-column-title">{text("模型目录", "Model catalog")}</div>
+                <small>{selectedProvider?.name ?? text("未选择供应商", "No provider selected")}</small>
+              </div>
+              <input
+                className="settings-input settings-model-filter"
+                onChange={(event) => setFilter(event.target.value)}
+                placeholder={text("输入模型名称或 ID 过滤", "Filter by model name or id")}
+                value={filter}
+              />
+            </div>
+            <div className="settings-card-actions">
+              <button className="skill-action-button secondary" onClick={() => selectCurrentFiltered(true)} type="button">{text("全选当前结果", "Select filtered")}</button>
+              <button className="skill-action-button secondary" onClick={() => selectCurrentFiltered(false)} type="button">{text("取消当前结果", "Clear filtered")}</button>
+            </div>
+            <div className="settings-model-row-list modal">
+              {visibleModels.map((model) => (
+                <label className="settings-model-row selectable" key={model.id}>
+                  <input
+                    checked={selectedEnabledIds.has(model.id)}
+                    onChange={(event) => selectedProvider ? toggle(selectedProvider.id, model.id, event.target.checked) : undefined}
+                    type="checkbox"
+                  />
+                  <span>
+                    <strong>{model.name}</strong>
+                    <small>{formatProviderModelMeta(model, text)}</small>
+                  </span>
+                  {selectedProvider ? (
+                    <button
+                      className="skill-action-button secondary"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        props.onEditCapability({ provider: selectedProvider, model })
+                      }}
+                      type="button"
+                    >
+                      {text("编辑能力", "Edit capabilities")}
+                    </button>
+                  ) : null}
+                </label>
+              ))}
+            </div>
+          </section>
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ModelCapabilityDialog renders the model capability override editor.
+// ModelCapabilityDialog 渲染模型能力覆盖编辑器。
+function ModelCapabilityDialog(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Provider and model being edited.
+  // 正在编辑的供应商与模型。
+  target: ModelCapabilityTarget | null
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [reasoning, setReasoning] = React.useState(false)
+  const [attachment, setAttachment] = React.useState(false)
+  const [inputModalities, setInputModalities] = React.useState<Set<string>>(() => new Set(["text"]))
+  const [outputModalities, setOutputModalities] = React.useState<Set<string>>(() => new Set(["text"]))
+  const [contextLimit, setContextLimit] = React.useState("")
+  const [inputLimit, setInputLimit] = React.useState("")
+  const [outputLimit, setOutputLimit] = React.useState("")
+  const [reasoningProfileJson, setReasoningProfileJson] = React.useState("")
+  React.useEffect(() => {
+    const model = props.target?.model
+    setReasoning(model?.reasoning ?? false)
+    setAttachment(model?.attachment ?? false)
+    setInputModalities(new Set((model?.inputModalities?.length ? model.inputModalities : ["text"]).map((item) => item.toLowerCase())))
+    setOutputModalities(new Set((model?.outputModalities?.length ? model.outputModalities : ["text"]).map((item) => item.toLowerCase())))
+    setContextLimit(model?.contextLimit ? String(model.contextLimit) : "")
+    setInputLimit(model?.inputLimit ? String(model.inputLimit) : "")
+    setOutputLimit(model?.outputLimit ? String(model.outputLimit) : "")
+    setReasoningProfileJson(model?.reasoningProfileJson ?? "")
+  }, [props.target])
+  const toggleModality = React.useCallback((kind: "input" | "output", value: string, checked: boolean) => {
+    const setter = kind === "input" ? setInputModalities : setOutputModalities
+    setter((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(value)
+      } else {
+        next.delete(value)
+      }
+      return next
+    })
+  }, [])
+  const save = React.useCallback(async () => {
+    if (!props.target) {
+      return
+    }
+    await props.actions.onSaveProviderModelOverride({
+      providerId: props.target.provider.id,
+      modelId: props.target.model.id,
+      reasoning,
+      attachment,
+      contextLimit: nullablePositiveInteger(contextLimit),
+      inputLimit: nullablePositiveInteger(inputLimit),
+      outputLimit: nullablePositiveInteger(outputLimit),
+      inputModalities: Array.from(inputModalities),
+      outputModalities: Array.from(outputModalities),
+      reasoningProfileJson: reasoningProfileJson.trim() || null,
+    })
+    props.onOpenChange(false)
+  }, [attachment, contextLimit, inputLimit, inputModalities, outputLimit, outputModalities, props, reasoning, reasoningProfileJson])
+  const model = props.target?.model
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog wide">
+        <DialogHeader>
+          <DialogTitle>{text("编辑模型能力", "Edit model capabilities")}</DialogTitle>
+          <DialogDescription>{props.target ? `${props.target.provider.name} · ${model?.name}` : ""}</DialogDescription>
+        </DialogHeader>
+        <div className="model-capability-form">
+          <div className="settings-card-actions">
+            <label className="settings-check-row inline"><input checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} type="checkbox" />{text("声明支持思考 / 推理", "Supports reasoning")}</label>
+            <label className="settings-check-row inline"><input checked={attachment} onChange={(event) => setAttachment(event.target.checked)} type="checkbox" />{text("声明附件标记", "Supports attachments")}</label>
+          </div>
+          <fieldset className="settings-modality-box">
+            <legend>{text("输入能力", "Input capability")}</legend>
+            {["text", "image", "audio", "video", "pdf"].map((item) => (
+              <label className="settings-check-row inline" key={item}>
+                <input checked={inputModalities.has(item)} onChange={(event) => toggleModality("input", item, event.target.checked)} type="checkbox" />
+                {localizedModalityLabel("input", item, text)}
+              </label>
+            ))}
+          </fieldset>
+          <fieldset className="settings-modality-box">
+            <legend>{text("输出能力", "Output capability")}</legend>
+            {["text", "image", "audio", "video"].map((item) => (
+              <label className="settings-check-row inline" key={item}>
+                <input checked={outputModalities.has(item)} onChange={(event) => toggleModality("output", item, event.target.checked)} type="checkbox" />
+                {localizedModalityLabel("output", item, text)}
+              </label>
+            ))}
+          </fieldset>
+          <div className="settings-form-grid three">
+            <label className="settings-form-field"><span>{text("上下文长度", "Context limit")}</span><input className="settings-input" onChange={(event) => setContextLimit(event.target.value)} value={contextLimit} /></label>
+            <label className="settings-form-field"><span>{text("输入长度", "Input limit")}</span><input className="settings-input" onChange={(event) => setInputLimit(event.target.value)} value={inputLimit} /></label>
+            <label className="settings-form-field"><span>{text("输出长度", "Output limit")}</span><input className="settings-input" onChange={(event) => setOutputLimit(event.target.value)} value={outputLimit} /></label>
+          </div>
+          <label className="settings-form-field">
+            <span>{text("思考模式附加配置（可选 JSON）", "Reasoning profile override (optional JSON)")}</span>
+            <textarea className="settings-input textarea large" onChange={(event) => setReasoningProfileJson(event.target.value)} value={reasoningProfileJson} />
+          </label>
+          <p className="settings-muted-line">{text("修改只会写入该模型的用户覆盖配置，保存后会刷新模型能力结果。", "Changes are saved as user overrides for this model only and refresh the resolved capability result.")}</p>
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// sameStringSet compares two string lists as unordered sets.
+// sameStringSet 将两个字符串列表作为无序集合比较。
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false
+  }
+  const rightSet = new Set(right)
+  return left.every((item) => rightSet.has(item))
+}
+
+// nullablePositiveInteger parses a positive integer field while treating blanks as null.
+// nullablePositiveInteger 解析正整数输入，并将空值视为 null。
+function nullablePositiveInteger(value: string): number | null {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+  const parsed = Number.parseInt(trimmed, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+// formatProviderModelMeta renders the compact capability line for a model row.
+// formatProviderModelMeta 渲染模型行的紧凑能力信息。
+function formatProviderModelMeta(model: ProviderModelSummary, text: (zh: string, en: string) => string): string {
+  const modalities = model.inputModalities?.length ? model.inputModalities.join("+") : "text"
+  const limits = [
+    model.contextLimit ? `${text("上下文", "context")} ${model.contextLimit}` : null,
+    model.inputLimit ? `${text("输入", "input")} ${model.inputLimit}` : null,
+    model.outputLimit ? `${text("输出", "output")} ${model.outputLimit}` : null,
+  ].filter(Boolean)
+  return [model.id, model.family, modalities, ...limits].filter(Boolean).join(" · ")
+}
+
+// localizedModalityLabel returns the compact label for one model modality direction.
+// localizedModalityLabel 返回单个模型模态方向的紧凑标签。
+function localizedModalityLabel(direction: "input" | "output", value: string, text: (zh: string, en: string) => string): string {
+  const suffix = direction === "input" ? text("输入", "input") : text("输出", "output")
+  switch (value) {
+    case "text":
+      return text(`文本${suffix}`, `Text ${suffix}`)
+    case "image":
+      return text(`图片${suffix}`, `Image ${suffix}`)
+    case "audio":
+      return text(`音频${suffix}`, `Audio ${suffix}`)
+    case "video":
+      return text(`视频${suffix}`, `Video ${suffix}`)
+    case "pdf":
+      return text(`PDF / 文件${suffix}`, `PDF / file ${suffix}`)
+    default:
+      return value
+  }
+}
+
+// AiCapabilityVendorsArea renders shared capability vendors and route targets.
+// AiCapabilityVendorsArea 渲染共享能力供应商与路由目标。
+function AiCapabilityVendorsArea(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Semantic AI capability summaries.
+  // 语义 AI 能力摘要。
+  capabilities: AiCapabilitySummary[]
+  // Shared AI capability vendor summaries.
+  // 共享 AI 能力供应商摘要。
+  vendors: AiCapabilityVendorSummary[]
+  // Supported AI capability vendor catalog choices.
+  // 受支持 AI 能力供应商目录选项。
+  catalog: AiCapabilityVendorCatalogSummary[]
+  // Provider summaries used as model-provider context.
+  // 作为模型供应商上下文的 Provider 摘要。
+  providers: ProviderSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [editingVendor, setEditingVendor] = React.useState<AiCapabilityVendorSummary | null>(null)
+  const [pickerOpen, setPickerOpen] = React.useState(false)
+  const targets = props.capabilities.flatMap((capability) => capability.targets.map((target) => ({ capability, target })))
+  const configuredVendorIds = new Set(props.vendors.map((vendor) => vendor.vendorId.toLowerCase()))
+  const availableVendors = props.catalog.filter((vendor) => !configuredVendorIds.has(vendor.vendorId.toLowerCase()))
   return (
     <div className="area-grid two-columns">
-      <section className="panel">
-        <PanelTitle icon={<SlidersHorizontal size={17} />} title="模型与 Provider" />
-        <div className="card-grid">
-          {props.providers.map((provider) => (
-            <article className="data-card" key={provider.id}>
-              <StatusPill status="ready" label={provider.status} />
-              <strong>{provider.name}</strong>
-              <span>已启用模型：{provider.enabledModels}</span>
+      <section className="panel settings-detail-panel">
+        <div className="settings-panel-title-row">
+          <PanelTitle icon={<FileText size={17} />} title={text("能力供应商", "Capability vendors")} />
+          <button className="skill-action-button" onClick={() => setPickerOpen(true)} type="button">{text("添加供应商", "Add vendor")}</button>
+        </div>
+        <div className="settings-grid compact">
+          {props.vendors.length === 0 ? (
+            <article className="settings-card"><strong>{text("暂无能力供应商", "No capability vendors")}</strong><p>{text("当前没有已配置的 AI 能力路由目标。", "No configured AI capability route targets.")}</p></article>
+          ) : props.vendors.map((vendor) => (
+            <article className="settings-card" key={vendor.vendorId}>
+              <StatusPill status={vendor.enabled ? "ready" : "pending"} label={vendor.enabled ? text("启用", "Enabled") : text("停用", "Disabled")} />
+              <strong>{vendor.name}</strong>
+              <p>{vendor.vendorId} · {text(`${vendor.targetCount} 个能力目标`, `${vendor.targetCount} targets`)}</p>
+              <div className="settings-card-actions">
+                <button className="skill-action-button secondary" onClick={() => setEditingVendor(vendor)} type="button">{text("编辑", "Edit")}</button>
+                <button className="skill-action-button secondary danger" onClick={() => void props.actions.onRemoveAiCapabilityVendor(vendor.vendorId)} type="button">{text("删除", "Delete")}</button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <AiCapabilityVendorPickerDialog
+          catalog={availableVendors}
+          onOpenChange={setPickerOpen}
+          onSelect={(vendor) => {
+            setPickerOpen(false)
+            setEditingVendor({
+              id: vendor.vendorId,
+              vendorId: vendor.vendorId,
+              name: vendor.name,
+              enabled: true,
+              apiKey: "",
+              baseUrl: "",
+              region: "",
+              connectionMode: "local",
+              targetCount: 0,
+              targetChoices: [],
+            })
+          }}
+          open={pickerOpen}
+        />
+        <AiCapabilityVendorDialog
+          actions={props.actions}
+          onOpenChange={(open) => {
+            if (!open) {
+              setEditingVendor(null)
+            }
+          }}
+          open={editingVendor !== null}
+          vendor={editingVendor}
+        />
+      </section>
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("路由目标", "Route targets")} />
+        <div className="settings-target-list">
+          {targets.length === 0 ? (
+            <p className="settings-muted-line">{text("没有可展示的能力路由目标。", "No capability route targets to display.")}</p>
+          ) : targets.map(({ capability, target }) => (
+            <article className="settings-target-row" key={`${capability.kind}-${target.targetSelector}`}>
+              <div>
+                <strong>{target.targetName || target.targetAlias}</strong>
+                <span>{capability.label} · {target.vendorName} · {target.modelId}</span>
+              </div>
+              <button
+                className={`skill-action-button ${target.enabled ? "" : "secondary"}`}
+                onClick={() => void props.actions.onSetAiCapabilityTargetEnabled({
+                  capabilityKind: capability.kind,
+                  vendorId: target.vendorId,
+                  targetAlias: target.targetAlias,
+                  enabled: !target.enabled,
+                })}
+                type="button"
+              >
+                {target.enabled ? text("停用", "Disable") : text("启用", "Enable")}
+              </button>
             </article>
           ))}
         </div>
       </section>
-      <RuntimeModulesPanel modules={props.modules.filter((module) => module.id === "providers" || module.id === "core")} />
+      <RuntimeModulesPanel modules={props.providers.map((provider) => ({
+        id: provider.id,
+        label: provider.name,
+        status: provider.active ? "ready" as const : "pending" as const,
+        message: provider.enabledModels,
+      }))} />
     </div>
   )
+}
+
+// AiCapabilityVendorDialog renders the shared AI capability vendor editor.
+// AiCapabilityVendorDialog 渲染共享 AI 能力供应商编辑器。
+function AiCapabilityVendorDialog(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Vendor being edited.
+  // 当前编辑的供应商。
+  vendor: AiCapabilityVendorSummary | null
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [vendorId, setVendorId] = React.useState("")
+  const [enabled, setEnabled] = React.useState(true)
+  const [apiKey, setApiKey] = React.useState("")
+  const [baseUrl, setBaseUrl] = React.useState("")
+  const [region, setRegion] = React.useState("")
+  const [connectionMode, setConnectionMode] = React.useState("local")
+  React.useEffect(() => {
+    setVendorId(props.vendor?.vendorId ?? "")
+    setEnabled(props.vendor?.enabled ?? true)
+    setApiKey(props.vendor?.apiKey ?? "")
+    setBaseUrl(props.vendor?.baseUrl ?? "")
+    setRegion(props.vendor?.region ?? "")
+    setConnectionMode(props.vendor?.connectionMode ?? "local")
+  }, [props.vendor])
+  const save = React.useCallback(async () => {
+    await props.actions.onSaveAiCapabilityVendor({
+      vendorId,
+      enabled,
+      apiKey,
+      baseUrl,
+      region,
+      connectionMode,
+    })
+    props.onOpenChange(false)
+  }, [apiKey, baseUrl, connectionMode, enabled, props, region, vendorId])
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog">
+        <DialogHeader>
+          <DialogTitle>{props.vendor ? text("编辑能力供应商", "Edit capability vendor") : text("添加能力供应商", "Add capability vendor")}</DialogTitle>
+          <DialogDescription>{text("供应商 ID 例如 minimax、tavily、ollama。", "Vendor id examples: minimax, tavily, ollama.")}</DialogDescription>
+        </DialogHeader>
+        <div className="settings-form-grid">
+          <label className="settings-form-field">
+            <span>{text("供应商 ID", "Vendor ID")}</span>
+            <input className="settings-input" disabled onChange={(event) => setVendorId(event.target.value)} value={vendorId} />
+          </label>
+          <label className="settings-check-row inline">
+            <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+            <span>{text("启用供应商", "Enable vendor")}</span>
+          </label>
+          <label className="settings-form-field">
+            <span>API Key</span>
+            <input className="settings-input" onChange={(event) => setApiKey(event.target.value)} type="password" value={apiKey} />
+          </label>
+          <label className="settings-form-field">
+            <span>Base URL</span>
+            <input className="settings-input" onChange={(event) => setBaseUrl(event.target.value)} value={baseUrl} />
+          </label>
+          <label className="settings-form-field">
+            <span>{text("区域", "Region")}</span>
+            <input className="settings-input" onChange={(event) => setRegion(event.target.value)} value={region} />
+          </label>
+          <label className="settings-form-field">
+            <span>{text("连接模式", "Connection mode")}</span>
+            <select className="settings-input" onChange={(event) => setConnectionMode(event.target.value)} value={connectionMode}>
+              <option value="local">{text("本地", "Local")}</option>
+              <option value="cloud">Ollama Cloud</option>
+            </select>
+          </label>
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// AiCapabilityVendorPickerDialog renders the add-vendor catalog picker.
+// AiCapabilityVendorPickerDialog 渲染添加能力供应商的目录选择器。
+function AiCapabilityVendorPickerDialog(props: {
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Supported vendor catalog choices.
+  // 支持的供应商目录选项。
+  catalog: AiCapabilityVendorCatalogSummary[]
+  // Handles one selected vendor.
+  // 处理单个已选择供应商。
+  onSelect: (vendor: AiCapabilityVendorCatalogSummary) => void
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [filter, setFilter] = React.useState("")
+  React.useEffect(() => {
+    if (!props.open) {
+      setFilter("")
+    }
+  }, [props.open])
+  const query = filter.trim().toLowerCase()
+  const visibleVendors = props.catalog.filter((vendor) => {
+    if (!query) {
+      return true
+    }
+    return vendor.vendorId.toLowerCase().includes(query)
+      || vendor.name.toLowerCase().includes(query)
+      || vendor.capabilities.some((capability) => capability.toLowerCase().includes(query))
+  })
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog wide">
+        <DialogHeader>
+          <DialogTitle>{text("添加能力供应商", "Add capability vendor")}</DialogTitle>
+          <DialogDescription>{text("输入关键字过滤供应商或能力，选择后进入配置弹窗。", "Filter vendors or capabilities, then select one to configure.")}</DialogDescription>
+        </DialogHeader>
+        <input
+          className="settings-input"
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder={text("搜索供应商或能力", "Search vendors or capabilities")}
+          value={filter}
+        />
+        <div className="settings-modal-list">
+          {visibleVendors.length === 0 ? (
+            <p className="settings-muted-line">{text("当前没有可新增的供应商，或者过滤后没有匹配结果。", "No vendor can be added, or no result matches the filter.")}</p>
+          ) : visibleVendors.map((vendor) => (
+            <button className="settings-picker-row" key={vendor.vendorId} onClick={() => props.onSelect(vendor)} type="button">
+              <strong>{vendor.name}</strong>
+              <span>{vendor.vendorId} · {vendor.capabilities.length ? vendor.capabilities.join("、") : text("暂无能力", "No capabilities")}</span>
+            </button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// AiCapabilitySettingsArea renders one semantic AI capability page.
+// AiCapabilitySettingsArea 渲染单个语义 AI 能力页面。
+function AiCapabilitySettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Active settings sub area.
+  // 当前设置子页面。
+  activeArea: SettingsSubAreaId
+  // Semantic AI capability summaries.
+  // 语义 AI 能力摘要。
+  capabilities: AiCapabilitySummary[]
+  // Whether the target configuration dialog is open.
+  // 目标配置弹窗是否打开。
+  configDialogOpen: boolean
+  // Updates the target configuration dialog open state.
+  // 更新目标配置弹窗打开状态。
+  onConfigDialogOpenChange: (open: boolean) => void
+  // Configured AI capability vendors with target choices.
+  // 带目标选项的已配置 AI 能力供应商。
+  vendors: AiCapabilityVendorSummary[]
+}) {
+  const { locale, t } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  // displayedTargets keeps drag sorting optimistic while the service snapshot catches up.
+  // displayedTargets 在服务快照追上前保持拖拽排序的乐观展示顺序。
+  const [displayedTargets, setDisplayedTargets] = React.useState<AiCapabilityTargetSummary[]>([])
+  // pendingRemoveSelector stores the route waiting for a second remove click.
+  // pendingRemoveSelector 保存等待第二次点击确认移除的路由。
+  const [pendingRemoveSelector, setPendingRemoveSelector] = React.useState<string | null>(null)
+  const capabilityKind = settingsSubAreaCapabilityKind(props.activeArea)
+  const capability = props.capabilities.find((entry) => entry.kind === capabilityKind)
+  const header = settingsSubAreas(t).find((entry) => entry.id === props.activeArea)
+  const targetDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }))
+  const snapshotTargets = capability?.targets ?? []
+  const snapshotTargetSignature = React.useMemo(() => aiCapabilityTargetSummarySignature(snapshotTargets), [snapshotTargets])
+  React.useEffect(() => {
+    setDisplayedTargets(snapshotTargets)
+    setPendingRemoveSelector(null)
+  }, [capability?.kind, snapshotTargetSignature])
+  const saveTargets = React.useCallback(async (targets: AiCapabilityTargetSaveInput[]) => {
+    if (!capability) {
+      return
+    }
+    await props.actions.onSaveAiCapabilityTargets({
+      capabilityKind: capability.kind,
+      targets,
+    })
+  }, [capability, props.actions])
+  const targetInputs = React.useMemo(() => (
+    displayedTargets.map((target) => aiCapabilityTargetInputFromSummary(target))
+  ), [displayedTargets])
+  const targetSortableIds = React.useMemo(() => (
+    targetInputs.map((target) => aiCapabilityTargetInputSelector(target))
+  ), [targetInputs])
+  const handleTargetDragEnd = React.useCallback((event: DragEndEvent) => {
+    const activeId = String(event.active.id)
+    const overId = event.over ? String(event.over.id) : null
+    if (!overId || activeId === overId) {
+      return
+    }
+    const oldIndex = targetSortableIds.indexOf(activeId)
+    const newIndex = targetSortableIds.indexOf(overId)
+    if (oldIndex < 0 || newIndex < 0) {
+      return
+    }
+    const nextDisplayedTargets = arrayMove(displayedTargets, oldIndex, newIndex)
+    const nextTargetInputs = arrayMove(targetInputs, oldIndex, newIndex)
+    setDisplayedTargets(nextDisplayedTargets)
+    void saveTargets(nextTargetInputs).catch(() => setDisplayedTargets(snapshotTargets))
+  }, [displayedTargets, saveTargets, snapshotTargets, targetInputs, targetSortableIds])
+  if (!capability) {
+    return (
+      <div className="settings-direct-content">
+        <PanelTitle icon={header?.icon ?? <SlidersHorizontal size={17} />} title={header?.label ?? "AI 能力"} />
+        <article className="settings-card">
+          <StatusPill status="warning" label="reserved" />
+          <strong>{header?.label ?? props.activeArea}</strong>
+          <p>{header?.description ?? text("该能力入口已预留，当前 snapshot 没有可用目标。", "This capability entry is reserved and has no available target in the current snapshot.")}</p>
+        </article>
+      </div>
+    )
+  }
+  return (
+    <div className="settings-direct-content settings-capability-page">
+      {displayedTargets.length === 0 ? (
+        <div className="composer-capability-dialog-empty settings-capability-empty">
+          {text("该能力还没有配置目标。", "This capability has no configured targets.")}
+        </div>
+      ) : (
+        <DndContext sensors={targetDragSensors} collisionDetection={closestCenter} onDragEnd={handleTargetDragEnd}>
+          <SortableContext items={targetSortableIds} strategy={verticalListSortingStrategy}>
+            <div className="settings-capability-route-list">
+              {displayedTargets.map((target, index) => (
+                <SortableAiCapabilityTargetRow
+                  confirmRemove={pendingRemoveSelector === target.targetSelector}
+                  index={index}
+                  key={target.targetSelector}
+                  onCancelRemove={() => setPendingRemoveSelector(null)}
+                  onRemove={() => {
+                    const nextTargets = targetInputs.filter((item) => !(item.vendorId === target.vendorId && item.targetAlias === target.targetAlias))
+                    setPendingRemoveSelector(null)
+                    setDisplayedTargets((current) => current.filter((item) => item.targetSelector !== target.targetSelector))
+                    void saveTargets(nextTargets).catch(() => setDisplayedTargets(snapshotTargets))
+                  }}
+                  onRequestRemove={() => setPendingRemoveSelector(target.targetSelector)}
+                  onToggle={(enabled) => {
+                    setPendingRemoveSelector(null)
+                    const nextTargets = targetInputs.map((item) => (
+                      item.vendorId === target.vendorId && item.targetAlias === target.targetAlias
+                        ? { ...item, enabled }
+                        : item
+                    ))
+                    setDisplayedTargets((current) => current.map((item) => (
+                      item.targetSelector === target.targetSelector ? { ...item, enabled } : item
+                    )))
+                    void saveTargets(nextTargets).catch(() => setDisplayedTargets(snapshotTargets))
+                  }}
+                  target={target}
+                  text={text}
+                />
+              ))}
+            </div>
+          </SortableContext>
+        </DndContext>
+      )}
+      <AiCapabilityTargetsDialog
+        capability={capability}
+        onOpenChange={props.onConfigDialogOpenChange}
+        onSave={saveTargets}
+        open={props.configDialogOpen}
+        vendors={props.vendors}
+      />
+    </div>
+  )
+}
+
+// SortableAiCapabilityTargetRow renders one settings capability route with dnd-kit sorting.
+// SortableAiCapabilityTargetRow 使用 dnd-kit 排序渲染单个设置能力路由。
+function SortableAiCapabilityTargetRow(props: {
+  // Whether the remove action is waiting for confirmation.
+  // 移除操作是否正在等待确认。
+  confirmRemove: boolean
+  // Zero-based row index shown to the user.
+  // 展示给用户的零基行序号。
+  index: number
+  // Target route summary displayed by the row.
+  // 当前行展示的目标路由摘要。
+  target: AiCapabilityTargetSummary
+  // Localized literal helper.
+  // 本地化字面量辅助函数。
+  text: (zh: string, en: string) => string
+  // Toggles whether this target is enabled.
+  // 切换当前目标是否启用。
+  onToggle: (enabled: boolean) => void
+  // Removes this target from the capability route list.
+  // 从能力路由列表移除当前目标。
+  onRemove: () => void
+  // Enters remove-confirmation state.
+  // 进入移除确认状态。
+  onRequestRemove: () => void
+  // Cancels remove-confirmation state.
+  // 取消移除确认状态。
+  onCancelRemove: () => void
+}) {
+  const sortable = useVerticalSortableItem(props.target.targetSelector, false)
+  return (
+    <article
+      className={`settings-capability-route-row ${sortable.isDragging ? "dragging" : ""}`}
+      onMouseLeave={() => {
+        if (props.confirmRemove) {
+          props.onCancelRemove()
+        }
+      }}
+      ref={sortable.setNodeRef}
+      style={sortable.sortableStyle}
+      {...sortable.attributes}
+      {...sortable.listeners}
+    >
+      <GripVertical className="settings-drag-handle" size={14} />
+      <input
+        checked={props.target.enabled}
+        onChange={(event) => props.onToggle(event.target.checked)}
+        onPointerDown={(event) => event.stopPropagation()}
+        type="checkbox"
+      />
+      <span className="settings-route-index">{String(props.index + 1).padStart(2, "0")}</span>
+      <span className="settings-route-separator">·</span>
+      <div className="settings-route-main">
+        <strong>{props.target.vendorName} / {props.target.targetName || props.target.targetAlias}</strong>
+        <small>{props.target.modelId} · {props.target.targetSelector}</small>
+      </div>
+      <button
+        className={`skill-action-button secondary danger ${props.confirmRemove ? "confirm" : ""}`}
+        onClick={(event) => {
+          event.stopPropagation()
+          if (props.confirmRemove) {
+            props.onRemove()
+            return
+          }
+          props.onRequestRemove()
+        }}
+        onPointerDown={(event) => event.stopPropagation()}
+        type="button"
+      >
+        {props.confirmRemove ? props.text("确认移除", "Confirm remove") : props.text("移除", "Remove")}
+      </button>
+    </article>
+  )
+}
+
+// AiCapabilityTargetsDialog renders the iced-style target configuration modal.
+// AiCapabilityTargetsDialog 渲染 iced 风格能力目标配置弹窗。
+function AiCapabilityTargetsDialog(props: {
+  // Capability being configured.
+  // 正在配置的能力。
+  capability: AiCapabilitySummary
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Saves the ordered target list.
+  // 保存有序目标列表。
+  onSave: (targets: AiCapabilityTargetSaveInput[]) => Promise<void>
+  // Configured vendors with catalog target choices.
+  // 带目录目标选项的已配置供应商。
+  vendors: AiCapabilityVendorSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [selectedVendorId, setSelectedVendorId] = React.useState<string | null>(null)
+  const [drafts, setDrafts] = React.useState<AiCapabilityTargetDraft[]>([])
+  React.useEffect(() => {
+    if (!props.open) {
+      return
+    }
+    setDrafts(props.capability.targets.map((target) => ({
+      vendorId: target.vendorId,
+      vendorName: target.vendorName,
+      targetAlias: target.targetAlias,
+      targetName: target.targetName || target.targetAlias,
+      modelId: target.modelId,
+      enabled: target.enabled,
+      supportsModelOverride: true,
+      modelOptions: [],
+    })))
+    setSelectedVendorId(props.vendors[0]?.vendorId ?? null)
+  }, [props.capability.targets, props.open, props.vendors])
+  const selectedVendor = props.vendors.find((vendor) => vendor.vendorId === selectedVendorId) ?? props.vendors[0] ?? null
+  const choices = (selectedVendor?.targetChoices ?? []).filter((choice) => choice.capabilityKind === props.capability.kind)
+  const selectedCount = drafts.filter((draft) => draft.enabled).length
+  const toggleChoice = React.useCallback((vendor: AiCapabilityVendorSummary, choice: AiCapabilityVendorTargetChoiceSummary, checked: boolean) => {
+    setDrafts((current) => {
+      const existingIndex = current.findIndex((draft) => draft.vendorId === vendor.vendorId && draft.targetAlias === choice.targetAlias)
+      if (!checked) {
+        return existingIndex >= 0 ? current.filter((_, index) => index !== existingIndex) : current
+      }
+      const nextDraft: AiCapabilityTargetDraft = {
+        vendorId: vendor.vendorId,
+        vendorName: vendor.name,
+        targetAlias: choice.targetAlias,
+        targetName: choice.label,
+        modelId: choice.defaultModelId || choice.targetAlias,
+        enabled: true,
+        supportsModelOverride: choice.supportsModelOverride,
+        modelOptions: choice.modelOptions,
+      }
+      if (existingIndex < 0) {
+        return [...current, nextDraft]
+      }
+      return current.map((draft, index) => index === existingIndex ? { ...draft, enabled: true } : draft)
+    })
+  }, [])
+  const updateDraftModel = React.useCallback((vendorId: string, targetAlias: string, modelId: string) => {
+    setDrafts((current) => current.map((draft) => (
+      draft.vendorId === vendorId && draft.targetAlias === targetAlias ? { ...draft, modelId } : draft
+    )))
+  }, [])
+  const save = React.useCallback(async () => {
+    await props.onSave(drafts.map((draft) => ({
+      vendorId: draft.vendorId,
+      targetAlias: draft.targetAlias,
+      modelId: draft.modelId,
+      enabled: draft.enabled,
+    })))
+    props.onOpenChange(false)
+  }, [drafts, props])
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog model-list-dialog">
+        <DialogHeader>
+          <DialogTitle>{text(`配置接口 · ${props.capability.label}`, `Configure targets · ${props.capability.label}`)}</DialogTitle>
+          <DialogDescription>{text("左侧选择供应商，右侧勾选要启用的接口。保存后会写回当前能力页的接口、顺序与配置。", "Select a vendor on the left and choose targets on the right. Save persists targets, order, and model config.")}</DialogDescription>
+        </DialogHeader>
+        <div className="settings-split-layout modal">
+          <aside className="settings-provider-nav" aria-label={text("供应商", "Providers")}>
+            <div className="settings-split-column-title">{text("供应商", "Providers")}</div>
+            {props.vendors.map((vendor) => {
+              const vendorChoices = (vendor.targetChoices ?? []).filter((choice) => choice.capabilityKind === props.capability.kind)
+              return (
+                <button
+                  className={`settings-provider-nav-row ${selectedVendor?.vendorId === vendor.vendorId ? "active" : ""}`}
+                  key={vendor.vendorId}
+                  onClick={() => setSelectedVendorId(vendor.vendorId)}
+                  type="button"
+                >
+                  <FileText size={14} />
+                  <span>{vendor.name}</span>
+                  <small>[{vendorChoices.length}]</small>
+                </button>
+              )
+            })}
+          </aside>
+          <section className="settings-model-list-pane">
+            <div className="settings-model-pane-header">
+              <div>
+                <div className="settings-split-column-title">{text("接口列表", "Target list")}</div>
+                <small>{selectedVendor?.name ?? text("未选择供应商", "No provider selected")}</small>
+              </div>
+              <span className="settings-muted-line">{text("已勾选", "Selected")} {selectedCount}</span>
+            </div>
+            <div className="settings-model-row-list modal">
+              {!selectedVendor ? (
+                <p className="settings-muted-line">{text("当前没有能力供应商。", "No capability vendor is configured.")}</p>
+              ) : choices.length === 0 ? (
+                <p className="settings-muted-line">{text("该供应商没有当前能力的接口。", "This vendor has no target for the current capability.")}</p>
+              ) : choices.map((choice) => {
+                const draft = drafts.find((item) => item.vendorId === selectedVendor.vendorId && item.targetAlias === choice.targetAlias)
+                return (
+                  <label className="settings-model-row selectable capability-target-choice" key={`${selectedVendor.vendorId}-${choice.targetAlias}`}>
+                    <input
+                      checked={Boolean(draft)}
+                      onChange={(event) => toggleChoice(selectedVendor, choice, event.target.checked)}
+                      type="checkbox"
+                    />
+                    <span>
+                      <strong>{choice.label}</strong>
+                      <small>{selectedVendor.vendorId}/{choice.targetAlias}</small>
+                    </span>
+                    {draft ? (
+                      choice.modelOptions.length > 0 ? (
+                        <select className="settings-input compact" onChange={(event) => updateDraftModel(selectedVendor.vendorId, choice.targetAlias, event.target.value)} value={draft.modelId}>
+                          {choice.modelOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                        </select>
+                      ) : choice.supportsModelOverride ? (
+                        <input className="settings-input compact" onChange={(event) => updateDraftModel(selectedVendor.vendorId, choice.targetAlias, event.target.value)} value={draft.modelId} />
+                      ) : (
+                        <span className="settings-muted-line">{draft.modelId}</span>
+                      )
+                    ) : null}
+                  </label>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// AiCapabilityTargetDraft stores one dialog-local target binding draft.
+// AiCapabilityTargetDraft 保存弹窗内单个目标绑定草稿。
+interface AiCapabilityTargetDraft {
+  // Stable vendor identifier.
+  // 稳定供应商标识。
+  vendorId: string
+  // User-facing vendor name.
+  // 面向用户显示的供应商名称。
+  vendorName: string
+  // Stable target alias.
+  // 稳定目标别名。
+  targetAlias: string
+  // User-facing target name.
+  // 面向用户显示的目标名称。
+  targetName: string
+  // Provider request model id.
+  // Provider 请求模型标识。
+  modelId: string
+  // Whether the target is enabled.
+  // 目标是否启用。
+  enabled: boolean
+  // Whether the request model can be edited.
+  // 请求模型是否可编辑。
+  supportsModelOverride: boolean
+  // Optional finite model choices.
+  // 可选有限模型选项。
+  modelOptions: string[]
+}
+
+// aiCapabilityTargetInputFromSummary converts one rendered summary into a save input.
+// aiCapabilityTargetInputFromSummary 将渲染摘要转换为保存输入。
+function aiCapabilityTargetInputFromSummary(target: AiCapabilityTargetSummary): AiCapabilityTargetSaveInput {
+  return {
+    vendorId: target.vendorId,
+    targetAlias: target.targetAlias,
+    modelId: target.modelId,
+    enabled: target.enabled,
+  }
+}
+
+// aiCapabilityTargetInputSelector builds the same stable selector used by rendered summaries.
+// aiCapabilityTargetInputSelector 构建与渲染摘要一致的稳定选择器。
+function aiCapabilityTargetInputSelector(input: AiCapabilityTargetSaveInput): string {
+  return `${input.vendorId}/${input.targetAlias}`
+}
+
+// aiCapabilityTargetSummarySignature tracks meaningful snapshot changes without depending on array identity.
+// aiCapabilityTargetSummarySignature 跟踪快照的关键变化，避免依赖数组引用身份。
+function aiCapabilityTargetSummarySignature(targets: AiCapabilityTargetSummary[]): string {
+  return targets.map((target) => [
+    target.targetSelector,
+    target.vendorId,
+    target.targetAlias,
+    target.modelId,
+    target.enabled ? "1" : "0",
+  ].join(":")).join("|")
+}
+
+// useVerticalSortableItem centralizes vertical-only dnd-kit row behavior for settings lists.
+// useVerticalSortableItem 集中设置列表纵向 dnd-kit 行为并限制横向漂移。
+function useVerticalSortableItem(id: string, disabled = false) {
+  const sortable = useSortable({ id, disabled })
+  const sortableTransform = sortable.transform ? { ...sortable.transform, x: 0, scaleX: 1, scaleY: 1 } : null
+  const sortableStyle: React.CSSProperties = {
+    transform: CSS.Transform.toString(sortableTransform),
+    transition: sortable.transition,
+  }
+  return {
+    ...sortable,
+    sortableStyle,
+  }
+}
+
+// McpSettingsArea renders MCP runtime status using startup and diagnostic snapshots.
+// McpSettingsArea 使用启动与诊断快照渲染 MCP 运行态。
+function McpSettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Diagnostic log entries.
+  // 诊断日志条目。
+  logs: LogEntrySummary[]
+  // Runtime modules used to locate MCP status.
+  // 用于定位 MCP 状态的运行时模块。
+  modules: RuntimeModuleSnapshot[]
+  // Persisted MCP servers.
+  // 持久化 MCP 服务器。
+  servers: McpServerSummary[]
+  // Startup snapshot used to locate MCP startup steps.
+  // 用于定位 MCP 启动步骤的启动快照。
+  startup: StartupSnapshot
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [editingServer, setEditingServer] = React.useState<McpServerSummary | null>(null)
+  const [creatingServer, setCreatingServer] = React.useState(false)
+  const mcpModules = props.modules.filter((module) => module.id.toLowerCase().includes("mcp"))
+  const mcpSteps = props.startup.steps.filter((step) => step.id.toLowerCase().includes("mcp") || step.label.toLowerCase().includes("mcp"))
+  const mcpLogs = props.logs.filter((log) => log.source.toLowerCase().includes("mcp") || log.message.toLowerCase().includes("mcp"))
+  return (
+    <div className="area-grid two-columns">
+      <section className="panel settings-detail-panel">
+        <div className="settings-panel-title-row">
+          <PanelTitle icon={<FolderTree size={17} />} title={text("MCP 服务器", "MCP servers")} />
+          <button className="skill-action-button" onClick={() => setCreatingServer(true)} type="button">{text("添加 MCP", "Add MCP")}</button>
+        </div>
+        <div className="settings-provider-list">
+          {props.servers.length === 0 ? (
+            <p className="settings-muted-line">{text("当前没有 MCP 服务器配置。", "No MCP servers are configured.")}</p>
+          ) : props.servers.map((server) => (
+            <article className="settings-provider-row" key={server.id}>
+              <header>
+                <div>
+                  <strong>{server.name}</strong>
+                  <span>{server.id} · {server.transport}</span>
+                </div>
+                <div className="chip-row">
+                  <StatusPill status={server.enabled ? "ready" : "pending"} label={server.enabled ? text("启用", "Enabled") : text("停用", "Disabled")} />
+                  <button className="skill-action-button secondary" onClick={() => setEditingServer(server)} type="button">{text("编辑", "Edit")}</button>
+                  <button className="skill-action-button secondary danger" onClick={() => void props.actions.onRemoveMcpServer(server.id)} type="button">{text("删除", "Delete")}</button>
+                </div>
+              </header>
+              <span className="settings-muted-line">{server.transport === "stdio" ? server.command : server.url}</span>
+            </article>
+          ))}
+        </div>
+        <McpServerDialog
+          actions={props.actions}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCreatingServer(false)
+              setEditingServer(null)
+            }
+          }}
+          open={creatingServer || editingServer !== null}
+          server={editingServer}
+        />
+      </section>
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<History size={17} />} title={text("MCP 状态", "MCP status")} />
+        <RuntimeModulesPanel modules={mcpModules.length ? mcpModules : props.modules.filter((module) => module.id === "core")} />
+        <div className="step-list">
+          {mcpSteps.map((step) => (
+            <div className="step-item" key={step.id}>
+              <StatusIcon status={step.status} />
+              <div>
+                <strong>{step.label}</strong>
+                <span>{step.message ?? step.id}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="log-list">
+          {mcpLogs.length === 0 ? (
+            <p className="settings-muted-line">{text("当前没有 MCP 相关诊断日志。", "No MCP diagnostic logs are available.")}</p>
+          ) : mcpLogs.map((log) => (
+            <article className="log-row" key={log.id}>
+              <StatusPill status={log.level === "info" ? "ready" : "warning"} label={log.level} />
+              <strong>{log.source}</strong>
+              <span>{log.message}</span>
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// McpServerDialog renders the MCP server add/edit form.
+// McpServerDialog 渲染 MCP 服务器新增/编辑表单。
+function McpServerDialog(props: {
+  // Service-backed settings actions.
+  // 服务端支持的设置动作。
+  actions: SettingsActionProps
+  // Whether the dialog is open.
+  // 弹窗是否打开。
+  open: boolean
+  // Updates the dialog open state.
+  // 更新弹窗打开状态。
+  onOpenChange: (open: boolean) => void
+  // Server being edited.
+  // 当前编辑的服务器。
+  server: McpServerSummary | null
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const [name, setName] = React.useState("")
+  const [enabled, setEnabled] = React.useState(true)
+  const [transport, setTransport] = React.useState("stdio")
+  const [command, setCommand] = React.useState("")
+  const [argsText, setArgsText] = React.useState("")
+  const [url, setUrl] = React.useState("")
+  const [bearerToken, setBearerToken] = React.useState("")
+  const [headersText, setHeadersText] = React.useState("")
+  const [headersFromEnvText, setHeadersFromEnvText] = React.useState("")
+  const [oauthClientId, setOauthClientId] = React.useState("")
+  const [oauthClientSecret, setOauthClientSecret] = React.useState("")
+  const [oauthScopesText, setOauthScopesText] = React.useState("")
+  const [oauthRedirectUri, setOauthRedirectUri] = React.useState("")
+  const [cwd, setCwd] = React.useState("")
+  const [envText, setEnvText] = React.useState("")
+  const [envPassthroughText, setEnvPassthroughText] = React.useState("")
+  React.useEffect(() => {
+    const server = props.server
+    setName(server?.name ?? "")
+    setEnabled(server?.enabled ?? true)
+    setTransport(server?.transport ?? "stdio")
+    setCommand(server?.command ?? "")
+    setArgsText((server?.args ?? []).join("\n"))
+    setUrl(server?.url ?? "")
+    setBearerToken(server?.bearerToken ?? "")
+    setHeadersText(formatKeyValueLines(server?.headers ?? []))
+    setHeadersFromEnvText(formatKeyValueLines(server?.headersFromEnv ?? []))
+    setOauthClientId(server?.oauthClientId ?? "")
+    setOauthClientSecret(server?.oauthClientSecret ?? "")
+    setOauthScopesText((server?.oauthScopes ?? []).join("\n"))
+    setOauthRedirectUri(server?.oauthRedirectUri ?? "")
+    setCwd(server?.cwd ?? "")
+    setEnvText(formatKeyValueLines(server?.env ?? []))
+    setEnvPassthroughText((server?.envPassthrough ?? []).join("\n"))
+  }, [props.server])
+  const save = React.useCallback(async () => {
+    await props.actions.onSaveMcpServer({
+      serverId: props.server?.id ?? null,
+      name,
+      enabled,
+      transport,
+      command,
+      args: parseLines(argsText),
+      url,
+      bearerToken,
+      headers: parseKeyValueLines(headersText),
+      headersFromEnv: parseKeyValueLines(headersFromEnvText),
+      oauthClientId,
+      oauthClientSecret,
+      oauthScopes: parseLines(oauthScopesText),
+      oauthRedirectUri,
+      cwd,
+      env: parseKeyValueLines(envText),
+      envPassthrough: parseLines(envPassthroughText),
+    })
+    props.onOpenChange(false)
+  }, [argsText, bearerToken, command, cwd, enabled, envPassthroughText, envText, headersFromEnvText, headersText, name, oauthClientId, oauthClientSecret, oauthRedirectUri, oauthScopesText, props, transport, url])
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent className="settings-dialog wide">
+        <DialogHeader>
+          <DialogTitle>{props.server ? text("编辑 MCP 服务器", "Edit MCP server") : text("添加 MCP 服务器", "Add MCP server")}</DialogTitle>
+          <DialogDescription>{text("多值字段每行一个；键值字段使用 KEY=VALUE。", "Use one line per value; key/value fields use KEY=VALUE.")}</DialogDescription>
+        </DialogHeader>
+        <div className="settings-form-grid two">
+          <label className="settings-form-field">
+            <span>{text("名称", "Name")}</span>
+            <input className="settings-input" onChange={(event) => setName(event.target.value)} value={name} />
+          </label>
+          <label className="settings-form-field">
+            <span>{text("传输", "Transport")}</span>
+            <select className="settings-input" onChange={(event) => setTransport(event.target.value)} value={transport}>
+              <option value="stdio">stdio</option>
+              <option value="http">http</option>
+              <option value="sse">sse</option>
+            </select>
+          </label>
+          <label className="settings-check-row inline">
+            <input checked={enabled} onChange={(event) => setEnabled(event.target.checked)} type="checkbox" />
+            <span>{text("启用服务器", "Enable server")}</span>
+          </label>
+          {transport === "stdio" ? (
+            <>
+              <label className="settings-form-field">
+                <span>{text("命令", "Command")}</span>
+                <input className="settings-input" onChange={(event) => setCommand(event.target.value)} value={command} />
+              </label>
+              <label className="settings-form-field">
+                <span>{text("参数", "Arguments")}</span>
+                <textarea className="settings-input textarea" onChange={(event) => setArgsText(event.target.value)} value={argsText} />
+              </label>
+              <label className="settings-form-field">
+                <span>CWD</span>
+                <input className="settings-input" onChange={(event) => setCwd(event.target.value)} value={cwd} />
+              </label>
+              <label className="settings-form-field">
+                <span>Env</span>
+                <textarea className="settings-input textarea" onChange={(event) => setEnvText(event.target.value)} value={envText} />
+              </label>
+              <label className="settings-form-field">
+                <span>{text("环境透传", "Env passthrough")}</span>
+                <textarea className="settings-input textarea" onChange={(event) => setEnvPassthroughText(event.target.value)} value={envPassthroughText} />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="settings-form-field">
+                <span>URL</span>
+                <input className="settings-input" onChange={(event) => setUrl(event.target.value)} value={url} />
+              </label>
+              <label className="settings-form-field">
+                <span>Bearer Token</span>
+                <input className="settings-input" onChange={(event) => setBearerToken(event.target.value)} type="password" value={bearerToken} />
+              </label>
+              <label className="settings-form-field">
+                <span>Headers</span>
+                <textarea className="settings-input textarea" onChange={(event) => setHeadersText(event.target.value)} value={headersText} />
+              </label>
+              <label className="settings-form-field">
+                <span>Headers from env</span>
+                <textarea className="settings-input textarea" onChange={(event) => setHeadersFromEnvText(event.target.value)} value={headersFromEnvText} />
+              </label>
+              <label className="settings-form-field">
+                <span>OAuth Client ID</span>
+                <input className="settings-input" onChange={(event) => setOauthClientId(event.target.value)} value={oauthClientId} />
+              </label>
+              <label className="settings-form-field">
+                <span>OAuth Client Secret</span>
+                <input className="settings-input" onChange={(event) => setOauthClientSecret(event.target.value)} type="password" value={oauthClientSecret} />
+              </label>
+              <label className="settings-form-field">
+                <span>OAuth Scopes</span>
+                <textarea className="settings-input textarea" onChange={(event) => setOauthScopesText(event.target.value)} value={oauthScopesText} />
+              </label>
+              <label className="settings-form-field">
+                <span>OAuth Redirect URI</span>
+                <input className="settings-input" onChange={(event) => setOauthRedirectUri(event.target.value)} value={oauthRedirectUri} />
+              </label>
+            </>
+          )}
+        </div>
+        <DialogFooter>
+          <button className="skill-action-button secondary" onClick={() => props.onOpenChange(false)} type="button">{text("取消", "Cancel")}</button>
+          <button className="skill-action-button" onClick={() => void save()} type="button">{text("保存", "Save")}</button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// parseLines converts a multiline text area into a trimmed string list.
+// parseLines 将多行文本框转换为裁剪后的字符串列表。
+function parseLines(value: string): string[] {
+  return value.split(/\r?\n/g).map((line) => line.trim()).filter(Boolean)
+}
+
+// parseKeyValueLines converts KEY=VALUE lines into key/value rows.
+// parseKeyValueLines 将 KEY=VALUE 行转换为键值行。
+function parseKeyValueLines(value: string): Array<{ key: string; value: string }> {
+  return parseLines(value).map((line) => {
+    const separatorIndex = line.indexOf("=")
+    if (separatorIndex < 0) {
+      return { key: line, value: "" }
+    }
+    return {
+      key: line.slice(0, separatorIndex).trim(),
+      value: line.slice(separatorIndex + 1).trim(),
+    }
+  })
+}
+
+// formatKeyValueLines converts key/value rows into KEY=VALUE lines.
+// formatKeyValueLines 将键值行转换为 KEY=VALUE 行。
+function formatKeyValueLines(values: Array<{ key: string; value: string }>): string {
+  return values.map((entry) => `${entry.key}=${entry.value}`).join("\n")
+}
+
+// PromptComposerSettingsArea renders composer command and capability settings status.
+// PromptComposerSettingsArea 渲染输入区指令与能力设置状态。
+function PromptComposerSettingsArea(props: {
+  // Composer attachment capability gates.
+  // 输入区附件能力门控。
+  attachmentCapabilities: ComposerAttachmentCapabilitySummary[]
+  // Backend-resolved reasoning selector view.
+  // 后端解析出的推理选择器视图。
+  reasoningSelection: WorkbenchSnapshot["reasoningSelection"] | null
+  // Composer slash commands.
+  // 输入区 slash 指令。
+  slashCommands: ComposerSlashCommandSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  return (
+    <div className="area-grid two-columns">
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<FileText size={17} />} title={text("Slash 指令", "Slash commands")} />
+        <div className="settings-target-list">
+          {props.slashCommands.map((command) => (
+            <article className="settings-target-row" key={command.id}>
+              <div>
+                <strong>{command.command}</strong>
+                <span>{command.descriptionZh || command.descriptionEn}</span>
+              </div>
+              <Badge variant="outline">{command.id}</Badge>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<PackagePlus size={17} />} title={text("附件能力", "Attachment capability")} />
+        <div className="settings-grid compact">
+          {props.attachmentCapabilities.map((capability) => (
+            <article className="settings-card" key={capability.kind}>
+              <StatusPill status={capability.enabled ? "ready" : "warning"} label={capability.enabled ? "enabled" : "disabled"} />
+              <strong>{capability.label}</strong>
+              <p>{capability.native ? text("模型原生支持", "Native model support") : capability.bridged ? text("通过宿主工具桥接", "Bridged by host tools") : text("当前不可用", "Currently unavailable")}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="panel settings-detail-panel">
+        <PanelTitle icon={<SlidersHorizontal size={17} />} title={text("推理选择", "Reasoning selection")} />
+        <div className="settings-target-list">
+          {(props.reasoningSelection?.options ?? []).map((option) => (
+            <article className="settings-target-row" key={option.value}>
+              <div>
+                <strong>{option.label}</strong>
+                <span>{option.value}</span>
+              </div>
+              {option.value === props.reasoningSelection?.selectedEffort ? <Badge className="skill-card-enabled-badge">Selected</Badge> : <Badge variant="outline">Available</Badge>}
+            </article>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+// AboutLicensesSettingsArea renders application version and license entry information.
+// AboutLicensesSettingsArea 渲染应用版本与许可证入口信息。
+function AboutLicensesSettingsArea(props: {
+  // Current application version.
+  // 当前应用版本。
+  appVersion: string
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  return (
+    <section className="panel full-height settings-detail-panel">
+      <PanelTitle icon={<ScrollText size={17} />} title={text("关于与许可证", "About and licenses")} />
+      <div className="settings-grid">
+        <article className="settings-card">
+          <StatusPill status="ready" label="version" />
+          <strong>Vulcan Code</strong>
+          <p>{text(`当前版本：${props.appVersion}`, `Current version: ${props.appVersion}`)}</p>
+        </article>
+        <article className="settings-card">
+          <StatusPill status="pending" label="licenses" />
+          <strong>{text("许可证目录", "License directory")}</strong>
+          <p>{text("iced 版本包含许可证目录打开与加载状态；WebUI 当前展示入口状态，后续接入目录命令后可直接打开。", "The iced version exposes license loading and directory opening. WebUI shows the entry state until the directory command is connected.")}</p>
+        </article>
+      </div>
+    </section>
+  )
+}
+
+// ArchivedRestoreSettingsArea renders archived restore entry state from visible snapshots.
+// ArchivedRestoreSettingsArea 根据可见快照渲染归档恢复入口状态。
+function ArchivedRestoreSettingsArea(props: {
+  // Conversation summaries.
+  // 会话摘要。
+  conversations: ConversationSummary[]
+  // Project summaries.
+  // 项目摘要。
+  projects: ProjectSummary[]
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const archivedConversations = props.conversations.filter((conversation) => conversation.status.toLowerCase().includes("archive") || conversation.status.includes("归档"))
+  return (
+    <section className="panel full-height settings-detail-panel">
+      <PanelTitle icon={<Archive size={17} />} title={text("归档恢复", "Archived restore")} />
+      <div className="settings-summary-strip">
+        <StatusPill status={archivedConversations.length > 0 ? "warning" : "ready"} label={`${archivedConversations.length}`} />
+        <span>{text(`当前 WebUI snapshot 暴露 ${props.projects.length} 个项目与 ${props.conversations.length} 个会话。`, `The current WebUI snapshot exposes ${props.projects.length} projects and ${props.conversations.length} conversations.`)}</span>
+      </div>
+      <div className="settings-target-list">
+        {archivedConversations.length === 0 ? (
+          <p className="settings-muted-line">{text("当前快照中没有可恢复的归档会话。", "No restorable archived conversations are exposed in the current snapshot.")}</p>
+        ) : archivedConversations.map((conversation) => (
+          <article className="settings-target-row" key={conversation.id}>
+            <div>
+              <strong>{conversation.title}</strong>
+              <span>{conversation.projectId ?? "standalone"} · {conversation.lastUpdatedLabel ?? ""}</span>
+            </div>
+            <StatusPill status="warning" label={conversation.status} />
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
+// settingsSubAreaCapabilityKind maps a settings page to the backend AI capability kind.
+// settingsSubAreaCapabilityKind 将设置页面映射到后端 AI 能力类型。
+function settingsSubAreaCapabilityKind(area: SettingsSubAreaId): string | null {
+  const mapping: Partial<Record<SettingsSubAreaId, string>> = {
+    "ai-web-search": "web_search",
+    "ai-understand-image": "understand_image",
+    "ai-understand-video": "understand_video",
+    "ai-understand-audio": "understand_audio",
+    "ai-image-generation": "image_generation",
+    "ai-video-generation": "video_generation",
+    "ai-speech-synthesis": "speech_synthesis",
+    "ai-music-generation": "music_generation",
+    "ai-music-cover": "music_cover",
+  }
+  return mapping[area] ?? null
 }
 
 // ToolsArea renders tool calls and command sessions.
@@ -2397,15 +4747,88 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
   ]
 }
 
-// settingsSubAreas returns localized settings sidebar entries.
-// settingsSubAreas 返回本地化设置侧栏入口。
-function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): Array<{ id: SettingsSubAreaId; label: string; icon: React.ReactNode; description: string }> {
+// SettingsSubAreaEntry describes one leaf row in the settings sidebar tree.
+// SettingsSubAreaEntry 描述设置侧栏树中的单个叶子行。
+interface SettingsSubAreaEntry {
+  // Stable settings page identifier.
+  // 稳定设置页面标识。
+  id: SettingsSubAreaId
+  // Localized settings page label.
+  // 本地化设置页面标签。
+  label: string
+  // Icon shown before the page label.
+  // 显示在页面标签前的图标。
+  icon: React.ReactNode
+  // Localized settings page description.
+  // 本地化设置页面说明。
+  description: string
+}
+
+// SettingsSubAreaGroup describes one parent group in the settings sidebar tree.
+// SettingsSubAreaGroup 描述设置侧栏树中的单个父级分组。
+interface SettingsSubAreaGroup {
+  // Stable group identifier.
+  // 稳定分组标识。
+  id: string
+  // Localized group label.
+  // 本地化分组标签。
+  label: string
+  // Group icon.
+  // 分组图标。
+  icon: React.ReactNode
+  // Leaf settings pages in the group.
+  // 分组下的叶子设置页面。
+  items: SettingsSubAreaEntry[]
+}
+
+// settingsSubAreas returns localized settings sidebar leaf entries.
+// settingsSubAreas 返回本地化设置侧栏叶子入口。
+function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaEntry[] {
+  return settingsSubAreaGroups(t).flatMap((group) => group.items)
+}
+
+// settingsSubAreaGroups returns the settings tree aligned with the iced settings navigation.
+// settingsSubAreaGroups 返回与 iced 设置导航对齐的设置树。
+function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaGroup[] {
   return [
-    { id: "general", label: t("settings.general"), icon: <Settings size={16} />, description: t("settings.general.description") },
-    { id: "projects", label: t("settings.projects"), icon: <Boxes size={16} />, description: t("settings.projects.description") },
-    { id: "providers", label: t("settings.providers"), icon: <SlidersHorizontal size={16} />, description: t("settings.providers.description") },
-    { id: "tools", label: t("settings.tools"), icon: <Hammer size={16} />, description: t("settings.tools.description") },
-    { id: "diagnostics", label: t("settings.diagnostics"), icon: <ScrollText size={16} />, description: t("settings.diagnostics.description") },
+    {
+      id: "models",
+      label: t("settings.group.models"),
+      icon: <Bot size={16} />,
+      items: [
+        { id: "model-providers", label: t("settings.modelProviders"), icon: <FileText size={16} />, description: t("settings.modelProviders.description") },
+        { id: "model-list", label: t("settings.modelList"), icon: <FileText size={16} />, description: t("settings.modelList.description") },
+      ],
+    },
+    {
+      id: "ai-capabilities",
+      label: t("settings.group.aiCapabilities"),
+      icon: <BrainCircuit size={16} />,
+      items: [
+        { id: "ai-vendors", label: t("settings.aiVendors"), icon: <FileText size={16} />, description: t("settings.aiVendors.description") },
+        { id: "ai-web-search", label: t("settings.aiWebSearch"), icon: <Search size={16} />, description: t("settings.aiWebSearch.description") },
+        { id: "ai-understand-image", label: t("settings.aiUnderstandImage"), icon: <Image size={16} />, description: t("settings.aiUnderstandImage.description") },
+        { id: "ai-understand-video", label: t("settings.aiUnderstandVideo"), icon: <Video size={16} />, description: t("settings.aiUnderstandVideo.description") },
+        { id: "ai-understand-audio", label: t("settings.aiUnderstandAudio"), icon: <Volume2 size={16} />, description: t("settings.aiUnderstandAudio.description") },
+        { id: "ai-image-generation", label: t("settings.aiImageGeneration"), icon: <Image size={16} />, description: t("settings.aiImageGeneration.description") },
+        { id: "ai-video-generation", label: t("settings.aiVideoGeneration"), icon: <Video size={16} />, description: t("settings.aiVideoGeneration.description") },
+        { id: "ai-speech-synthesis", label: t("settings.aiSpeechSynthesis"), icon: <Volume2 size={16} />, description: t("settings.aiSpeechSynthesis.description") },
+        { id: "ai-music-generation", label: t("settings.aiMusicGeneration"), icon: <Music size={16} />, description: t("settings.aiMusicGeneration.description") },
+        { id: "ai-music-cover", label: t("settings.aiMusicCover"), icon: <RotateCw size={16} />, description: t("settings.aiMusicCover.description") },
+      ],
+    },
+    {
+      id: "system",
+      label: t("area.settings"),
+      icon: <Settings size={16} />,
+      items: [
+        { id: "mcp-servers", label: t("settings.mcpServers"), icon: <FolderTree size={16} />, description: t("settings.mcpServers.description") },
+        { id: "runtime-diagnostics", label: t("settings.runtimeDiagnostics"), icon: <RefreshCw size={16} />, description: t("settings.runtimeDiagnostics.description") },
+        { id: "prompt-composer", label: t("settings.promptComposer"), icon: <FileText size={16} />, description: t("settings.promptComposer.description") },
+        { id: "about-licenses", label: t("settings.aboutLicenses"), icon: <ScrollText size={16} />, description: t("settings.aboutLicenses.description") },
+        { id: "archived-restore", label: t("settings.archivedRestore"), icon: <Archive size={16} />, description: t("settings.archivedRestore.description") },
+      ],
+    },
   ]
 }
 
