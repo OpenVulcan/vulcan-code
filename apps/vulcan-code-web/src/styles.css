@@ -1266,6 +1266,7 @@ button {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
+  gap: 4px;
 }
 
 .subagent-title-menu::after {
@@ -1284,6 +1285,17 @@ button {
   height: 28px;
   color: var(--muted-foreground);
   border-radius: 8px;
+}
+
+.subagent-title-return {
+  width: 28px;
+  height: 28px;
+  color: var(--muted-foreground);
+  border-radius: 8px;
+}
+
+.subagent-title-return:hover {
+  color: var(--foreground);
 }
 
 .subagent-title-menu.running .subagent-title-trigger {

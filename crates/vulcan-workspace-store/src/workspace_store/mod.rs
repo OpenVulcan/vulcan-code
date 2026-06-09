@@ -715,7 +715,59 @@ pub fn load_segmented_session_task_mirrors(
     else {
         return Ok(Vec::new());
     };
-    let metadata = segmented_session_store::read_session_metadata(&session_dir)?;
+    load_segmented_session_task_mirrors_from_dir(&session_dir)
+}
+
+/// Loads lightweight child-task mirrors by checking only one known owning project.
+/// 仅检查一个已知所属项目来加载轻量子任务镜像。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the Vulcan Code data root containing segmented session directories.
+/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
+/// `project_id` is the known segmented project tag for the parent session.
+/// `project_id` 是父会话已知的分段项目标签。
+/// `session_id` identifies the parent session whose child task mirrors should be read.
+/// `session_id` 标识需要读取子任务镜像的父会话。
+///
+/// # Returns
+/// 返回值
+/// Lightweight task mirror rows from the parent `metadata.json`; missing sessions return an empty list.
+/// 来自父级 `metadata.json` 的轻量任务镜像；会话缺失时返回空列表。
+pub fn load_segmented_session_task_mirrors_for_project(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
+    let session_id_text = session_id.to_string();
+    let active_dir =
+        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?;
+    let session_dir = match active_dir {
+        Some(session_dir) => Some(session_dir),
+        None => find_segmented_session_directory(data_root, true, project_id, &session_id_text)?,
+    };
+    let Some(session_dir) = session_dir else {
+        return Ok(Vec::new());
+    };
+    load_segmented_session_task_mirrors_from_dir(&session_dir)
+}
+
+/// Loads lightweight child-task mirrors from one already resolved session directory.
+/// 从一个已解析的会话目录加载轻量子任务镜像。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` points at the resolved segmented parent session directory.
+/// `session_dir` 指向已解析的分段父会话目录。
+///
+/// # Returns
+/// 返回值
+/// Lightweight task mirror rows from the parent `metadata.json`.
+/// 来自父级 `metadata.json` 的轻量任务镜像行。
+fn load_segmented_session_task_mirrors_from_dir(
+    session_dir: &std::path::Path,
+) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
+    let metadata = segmented_session_store::read_session_metadata(session_dir)?;
     Ok(metadata
         .tasks
         .into_iter()

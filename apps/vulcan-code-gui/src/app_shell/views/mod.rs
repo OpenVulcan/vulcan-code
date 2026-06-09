@@ -159,6 +159,23 @@ fn subagent_navigation_panel_height(task_count: usize) -> f32 {
     content_height.max(SUBAGENT_NAVIGATION_PANEL_HEIGHT)
 }
 
+/// Returns the total left-edge subagent overlay width, including the optional return button.
+/// 返回左侧子代理覆盖层的总宽度，并包含可选返回按钮占位。
+fn subagent_navigation_overlay_width(is_expanded: bool, shows_return_button: bool) -> f32 {
+    let base_width = if is_expanded {
+        SUBAGENT_NAVIGATION_EXPANDED_WIDTH
+    } else {
+        SUBAGENT_NAVIGATION_COLLAPSED_WIDTH
+    };
+    let return_button_width = if shows_return_button {
+        SUBAGENT_NAVIGATION_ROW_GAP + COMPOSER_TRIGGER_BUTTON_SIZE
+    } else {
+        0.0
+    };
+
+    base_width + return_button_width
+}
+
 /// Builds a live watcher subscription for the active workspace `AGENTS.md`.
 /// 为当前工作区的 `AGENTS.md` 构建实时监听订阅。
 fn project_rules_watch_subscription(workspace_path: &str) -> Subscription<Message> {
@@ -1934,16 +1951,21 @@ impl VulcanWorkbench {
         }
 
         let is_expanded = self.subagent_navigation_expanded;
+        let shows_return_button = active_subagent_panel_state.is_some();
         let handle = self.view_subagent_navigation_handle(is_expanded);
         let panel_height = if is_expanded {
             subagent_navigation_panel_height(navigation_tasks.len())
         } else {
             SUBAGENT_NAVIGATION_PANEL_HEIGHT
         };
-        let overlay_width = if is_expanded {
-            SUBAGENT_NAVIGATION_EXPANDED_WIDTH
+        let overlay_width = subagent_navigation_overlay_width(is_expanded, shows_return_button);
+        let navigation_controls: Element<'_, Message> = if shows_return_button {
+            row![handle, self.view_subagent_panel_return_button()]
+                .spacing(SUBAGENT_NAVIGATION_ROW_GAP)
+                .align_y(Center)
+                .into()
         } else {
-            SUBAGENT_NAVIGATION_COLLAPSED_WIDTH
+            handle
         };
         let overlay_content: Element<'_, Message> = if is_expanded {
             row![
@@ -1952,13 +1974,13 @@ impl VulcanWorkbench {
                     navigation_tasks,
                     panel_height
                 ),
-                handle
+                navigation_controls
             ]
             .spacing(0)
             .align_y(iced::Alignment::Start)
             .into()
         } else {
-            handle
+            navigation_controls
         };
 
         Some(

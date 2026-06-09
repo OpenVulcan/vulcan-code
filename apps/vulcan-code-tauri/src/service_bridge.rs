@@ -2019,40 +2019,39 @@ async fn service_session_messages(
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
-    let (controller_runtime, agent_runtime, live_listener_task_ids, in_memory_messages) = {
+    let (controller_runtime, agent_runtime, live_listener_task_ids, project_id, in_memory_messages) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
+        let project_id = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace_snapshot| {
+                owning_project_id_for_session(workspace_snapshot, parsed_session_id)
+            });
         let in_memory_messages =
             in_memory_session_messages_for_service(&guard.workspace_snapshot, parsed_session_id);
         (
             controller_runtime,
             guard.agent_runtime.clone(),
             guard.detached_subagent_task_listeners.clone(),
+            project_id,
             in_memory_messages,
         )
     };
     if let Some(mut messages) = in_memory_messages {
-        let task_mirrors =
-            vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
-                &controller_runtime.data_root,
-                parsed_session_id,
-            )?;
-        apply_task_mirror_statuses_to_parent_messages(
+        apply_task_mirror_statuses_to_surface_messages_if_needed(
+            &controller_runtime,
+            agent_runtime.as_ref(),
+            &live_listener_task_ids,
+            project_id.as_deref(),
+            parsed_session_id,
             messages.as_mut_slice(),
             None,
-            task_mirrors.as_slice(),
-            |task_id| {
-                webui_subagent_task_has_live_run(
-                    agent_runtime.as_ref().map(|runtime| &runtime.task_runtime),
-                    live_listener_task_ids.contains(&task_id),
-                    task_id,
-                )
-            },
-        );
+        )?;
         return Ok(conversation_messages_from_session(
             &session_id,
             messages.as_slice(),
@@ -2072,23 +2071,15 @@ async fn service_session_messages(
             }
             Err(error) => return Err(error),
         };
-    let task_mirrors =
-        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
-            &controller_runtime.data_root,
-            parsed_session_id,
-        )?;
-    apply_task_mirror_statuses_to_parent_messages(
+    apply_task_mirror_statuses_to_surface_messages_if_needed(
+        &controller_runtime,
+        agent_runtime.as_ref(),
+        &live_listener_task_ids,
+        project_id.as_deref(),
+        parsed_session_id,
         hydration_snapshot.messages.as_mut_slice(),
         hydration_snapshot.runtime_state.as_mut(),
-        task_mirrors.as_slice(),
-        |task_id| {
-            webui_subagent_task_has_live_run(
-                agent_runtime.as_ref().map(|runtime| &runtime.task_runtime),
-                live_listener_task_ids.contains(&task_id),
-                task_id,
-            )
-        },
-    );
+    )?;
 
     Ok(conversation_messages_from_session(
         &session_id,
@@ -2445,6 +2436,7 @@ async fn service_submit_conversation_prompt(
                 .and_then(|workspace_snapshot| {
                     retained_submission_snapshot_is_usable(
                         workspace_snapshot,
+                        project_id.as_deref(),
                         submission_session_id,
                     )
                     .then(|| workspace_snapshot.clone())
@@ -6450,13 +6442,16 @@ async fn load_workspace_for_submission(
 /// 草稿提交或既有会话存在于保留快照中时返回 `true`。
 fn retained_submission_snapshot_is_usable(
     workspace_snapshot: &WorkspaceSnapshot,
+    project_id: Option<&str>,
     session_id: Option<SessionId>,
 ) -> bool {
     match session_id {
         Some(session_id) => {
             workspace_snapshot_contains_regular_session(workspace_snapshot, session_id)
         }
-        None => true,
+        None => project_id.is_some_and(|project_id| {
+            workspace_snapshot_contains_active_project(workspace_snapshot, project_id)
+        }),
     }
 }
 
@@ -7914,6 +7909,30 @@ fn workspace_snapshot_contains_regular_session(
         .iter()
         .chain(workspace_snapshot.archived_sessions.iter())
         .any(|session| session.id == session_id)
+}
+
+/// Returns whether the retained workspace snapshot contains one active project.
+/// 返回保留工作区快照是否包含一个活动项目。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the current retained WebUI workspace snapshot.
+/// `workspace_snapshot` 是当前保留的 WebUI 工作区快照。
+/// `project_id` is the project id required for a new draft submission.
+/// `project_id` 是新建草稿提交所需的项目标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the active project list contains the requested project id.
+/// 当活动项目列表包含请求的项目标识时返回 `true`。
+fn workspace_snapshot_contains_active_project(
+    workspace_snapshot: &WorkspaceSnapshot,
+    project_id: &str,
+) -> bool {
+    workspace_snapshot
+        .task_projects
+        .iter()
+        .any(|project| project.id == project_id)
 }
 
 /// Persists one WebUI session snapshot in the background without blocking visible UI updates.
@@ -11308,6 +11327,7 @@ fn build_subagent_display_route_workbench_snapshot_locked(
     );
     repair_task_mirror_statuses_for_surface_messages_locked(
         guard,
+        workspace_snapshot,
         active_session_id,
         surface_messages.as_mut_slice(),
     );
@@ -12550,6 +12570,96 @@ fn merge_webui_task_session_tool_message_metadata(
     updated
 }
 
+/// Loads parent task mirrors with a project-scoped lookup when the project is already known.
+/// 在已知项目时使用项目范围查询加载父级任务镜像。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `project_id` optionally narrows the lookup to one known parent project.
+/// `project_id` 可选将查询收窄到一个已知父项目。
+/// `session_id` identifies the parent session whose task mirrors should be read.
+/// `session_id` 标识需要读取任务镜像的父会话。
+///
+/// # Returns
+/// 返回值
+/// Lightweight task mirrors for the parent session, or an empty list when no segmented session exists.
+/// 父会话的轻量任务镜像；没有分段会话时返回空列表。
+fn load_segmented_session_task_mirrors_for_service(
+    controller_runtime: &ControllerRuntimeHandle,
+    project_id: Option<&str>,
+    session_id: SessionId,
+) -> Result<Vec<SessionTaskMirrorSnapshot>, String> {
+    if let Some(project_id) = project_id.filter(|project_id| !project_id.trim().is_empty()) {
+        return vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors_for_project(
+            &controller_runtime.data_root,
+            project_id,
+            session_id,
+        );
+    }
+    vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
+        &controller_runtime.data_root,
+        session_id,
+    )
+}
+
+/// Applies persisted task mirrors only when the visible surface contains task-session cards.
+/// 仅当可见界面包含 task-session 卡片时应用持久化任务镜像。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `agent_runtime` optionally reports live subagent runtime state.
+/// `agent_runtime` 可选报告实时子代理运行态。
+/// `live_listener_task_ids` contains detached subagent listener ids still owned by WebUI.
+/// `live_listener_task_ids` 包含 WebUI 仍持有的分离子代理监听标识。
+/// `project_id` optionally narrows the mirror lookup to the known parent project.
+/// `project_id` 可选将镜像查询收窄到已知父项目。
+/// `session_id` identifies the parent session displayed by the surface.
+/// `session_id` 标识界面正在显示的父会话。
+/// `messages` is the mutable projected transcript window.
+/// `messages` 是可变的投影转录窗口。
+/// `runtime_state` optionally carries canonical records to repair in parallel.
+/// `runtime_state` 可选携带需要同步修复的规范记录。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when no mirror work is needed or after eligible task cards are repaired.
+/// 无需镜像处理或已修复符合条件的任务卡片后返回 `Ok(())`。
+fn apply_task_mirror_statuses_to_surface_messages_if_needed(
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: Option<&AgentRuntimeBridge>,
+    live_listener_task_ids: &BTreeSet<SessionId>,
+    project_id: Option<&str>,
+    session_id: SessionId,
+    messages: &mut [SessionMessageEntry],
+    mut runtime_state: Option<&mut SessionRuntimeStateEntry>,
+) -> Result<(), String> {
+    if !surface_contains_task_session_tool_card(messages.iter(), runtime_state.as_deref()) {
+        return Ok(());
+    }
+    let task_mirrors =
+        load_segmented_session_task_mirrors_for_service(controller_runtime, project_id, session_id)?;
+    if task_mirrors.is_empty() {
+        return Ok(());
+    }
+    apply_task_mirror_statuses_to_parent_messages(
+        messages,
+        runtime_state.as_deref_mut(),
+        task_mirrors.as_slice(),
+        |task_id| {
+            webui_subagent_task_has_live_run(
+                agent_runtime.map(|runtime| &runtime.task_runtime),
+                live_listener_task_ids.contains(&task_id),
+                task_id,
+            )
+        },
+    );
+    Ok(())
+}
+
 /// Applies lightweight persisted child-task mirror states to parent spawn-agent tool cards.
 /// 将持久化轻量子任务镜像状态应用到父级 spawn_agent 工具卡片。
 ///
@@ -12577,11 +12687,11 @@ fn apply_persisted_task_mirror_statuses_to_workspace<F>(
 where
     F: FnMut(SessionId) -> bool,
 {
-    let task_mirrors =
-        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
-            &controller_runtime.data_root,
-            parent_session_id,
-        )?;
+    let task_mirrors = load_segmented_session_task_mirrors_for_service(
+        controller_runtime,
+        owning_project_id_for_session(workspace_snapshot, parent_session_id).as_deref(),
+        parent_session_id,
+    )?;
     if task_mirrors.is_empty() {
         return Ok(());
     }
@@ -12710,21 +12820,27 @@ fn apply_task_mirror_statuses_to_parent_messages<F>(
 /// `messages` 是需要原地修复的投影消息窗口。
 fn repair_task_mirror_statuses_for_surface_messages_locked(
     guard: &ServiceBridgeState,
+    workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
     messages: &mut [SessionMessageEntry],
 ) {
     if messages.is_empty() {
         return;
     }
+    if !surface_contains_task_session_tool_card(messages.iter(), None) {
+        return;
+    }
     let Some(controller_runtime) = guard.controller_runtime.as_ref() else {
         return;
     };
-    let Ok(task_mirrors) =
-        vulcan_workspace_store::workspace_store::load_segmented_session_task_mirrors(
-            &controller_runtime.data_root,
-            session_id,
-        )
-    else {
+    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+        return;
+    };
+    let Ok(task_mirrors) = load_segmented_session_task_mirrors_for_service(
+        controller_runtime,
+        Some(project_id.as_str()),
+        session_id,
+    ) else {
         return;
     };
     if task_mirrors.is_empty() {
@@ -12794,6 +12910,74 @@ fn find_task_session_tool_message_ids_for_payload<'a>(
         }
     }
     message_ids
+}
+
+/// Returns whether the current surface contains any visible task-session tool card.
+/// 返回当前界面是否包含任何可见 task-session 工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `messages` yields projected transcript messages that may contain tool-display metadata.
+/// `messages` 产出可能包含工具展示元数据的投影转录消息。
+/// `runtime_state` optionally carries canonical conversation records for the same surface.
+/// `runtime_state` 可选携带同一界面的规范会话记录。
+///
+/// # Returns
+/// 返回值
+/// `true` when a visible tool row has parseable task-session metadata.
+/// 当可见工具行拥有可解析的 task-session 元数据时返回 `true`。
+fn surface_contains_task_session_tool_card<'a>(
+    messages: impl Iterator<Item = &'a SessionMessageEntry>,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> bool {
+    messages.into_iter().any(session_message_is_task_session_tool_card)
+        || runtime_state.is_some_and(|runtime_state| {
+            runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .any(session_record_is_task_session_tool_card)
+        })
+}
+
+/// Returns whether one projected message is a visible task-session tool card.
+/// 返回一条投影消息是否是可见 task-session 工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `message` is the projected transcript message to inspect.
+/// `message` 是待检查的投影转录消息。
+///
+/// # Returns
+/// 返回值
+/// `true` when the message kind can display status and metadata has a task-session payload.
+/// 当消息类型可展示状态且元数据包含 task-session 载荷时返回 `true`。
+fn session_message_is_task_session_tool_card(message: &SessionMessageEntry) -> bool {
+    task_session_record_kind_can_display_status(message.record_kind)
+        && message
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
+}
+
+/// Returns whether one canonical record is a visible task-session tool card.
+/// 返回一条规范记录是否是可见 task-session 工具卡片。
+///
+/// # Parameters
+/// 参数
+/// `record` is the canonical conversation record to inspect.
+/// `record` 是待检查的规范会话记录。
+///
+/// # Returns
+/// 返回值
+/// `true` when the record kind can display status and metadata has a task-session payload.
+/// 当记录类型可展示状态且元数据包含 task-session 载荷时返回 `true`。
+fn session_record_is_task_session_tool_card(record: &SessionConversationRecord) -> bool {
+    task_session_record_kind_can_display_status(record.record_kind)
+        && record
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
 }
 
 /// Returns whether one record kind can be a visible task-session tool row.
@@ -17903,8 +18087,18 @@ mod tests {
     /// 验证草稿提交可以复用保留工作区，而不是重载所有工作区会话。
     #[test]
     fn retained_submission_snapshot_accepts_draft_submission() {
+        let project_id = String::from("project-a");
         let workspace_snapshot = WorkspaceSnapshot {
-            task_projects: Vec::new(),
+            task_projects: vec![TaskProjectSummary::new(
+                project_id.clone(),
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                Vec::new(),
+            )],
             archived_task_projects: Vec::new(),
             sessions: Vec::new(),
             archived_sessions: Vec::new(),
@@ -17922,6 +18116,12 @@ mod tests {
 
         assert!(retained_submission_snapshot_is_usable(
             &workspace_snapshot,
+            Some(project_id.as_str()),
+            None
+        ));
+        assert!(!retained_submission_snapshot_is_usable(
+            &workspace_snapshot,
+            Some("missing-project"),
             None
         ));
     }
@@ -17960,10 +18160,12 @@ mod tests {
 
         assert!(retained_submission_snapshot_is_usable(
             &workspace_snapshot,
+            None,
             Some(session_id)
         ));
         assert!(!retained_submission_snapshot_is_usable(
             &workspace_snapshot,
+            None,
             Some(missing_session_id)
         ));
     }
@@ -20063,6 +20265,45 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("running")
         );
+    }
+
+    /// Verifies ordinary tool rows do not trigger persisted task mirror loading.
+    /// 验证普通工具行不会触发持久化任务镜像加载。
+    #[test]
+    fn task_mirror_gate_ignores_non_task_tool_rows() {
+        let mut message = SessionMessageEntry::new(
+            SessionMessageKind::Assistant,
+            "调用 shell_command 工具",
+            "ok",
+        )
+        .with_runtime_metadata("tool-shell", "1780000000000");
+        message.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        message.metadata = Some(json!({
+            "tool_name": "shell_command",
+            "display_state": "completed"
+        }));
+        let messages = vec![message];
+
+        assert!(!surface_contains_task_session_tool_card(
+            messages.iter(),
+            None
+        ));
+    }
+
+    /// Verifies task-session tool rows pass the persisted mirror repair gate.
+    /// 验证 task-session 工具行会通过持久化镜像修复门禁。
+    #[test]
+    fn task_mirror_gate_accepts_task_session_tool_rows() {
+        let messages = vec![test_spawn_agent_tool_message(
+            SessionId::new_v4(),
+            "running",
+            SessionMessageRecordKind::ToolCallOutput,
+        )];
+
+        assert!(surface_contains_task_session_tool_card(
+            messages.iter(),
+            None
+        ));
     }
 
     /// Builds one parent spawn-agent tool output message with task-session metadata.

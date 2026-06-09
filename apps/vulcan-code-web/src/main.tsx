@@ -9556,11 +9556,32 @@ function SubagentNavigationMenu(props: {
   const tasks = navigation?.tasks ?? [];
   const activeTaskId = navigation?.activeTaskId ?? null;
   const runningCount = tasks.filter((task) => task.isRunning).length;
+  const canReturnToParent = Boolean(activeTaskId);
   if (!navigation || tasks.length === 0) {
     return null;
   }
   return (
     <div className={cn("subagent-title-menu", runningCount > 0 && "running")}>
+      {canReturnToParent ? (
+        <Button
+          aria-label="返回主会话"
+          className="subagent-title-return"
+          onClick={() => {
+            webuiClickTrace("subagent.menu.return", {
+              parentConversationId: navigation.parentConversationId,
+              activeTaskId,
+              runningCount,
+            });
+            void props.onCloseSubagentPanel();
+          }}
+          size="icon-sm"
+          title="返回主会话"
+          type="button"
+          variant="ghost"
+        >
+          <ChevronLeft size={15} />
+        </Button>
+      ) : null}
       <Button
         aria-label={runningCount > 0 ? `${runningCount} 个子代理正在运行` : "子代理调度"}
         className="subagent-title-trigger"
@@ -9571,23 +9592,6 @@ function SubagentNavigationMenu(props: {
         <Bot size={15} />
       </Button>
       <nav className="subagent-title-flyout" aria-label="子代理调度切换">
-        <Button
-          className={cn("subagent-title-row", !activeTaskId && "active")}
-          onClick={() => {
-            webuiClickTrace("subagent.menu.main", {
-              parentConversationId: navigation.parentConversationId,
-              activeTaskId,
-              runningCount,
-            });
-            void props.onCloseSubagentPanel();
-          }}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          <MessageSquareText size={14} />
-          <span>主会话</span>
-        </Button>
         {tasks.map((task) => (
           <div className={cn("subagent-title-row-group", task.isActive && "active")} key={task.taskId}>
             <Button
@@ -10840,6 +10844,25 @@ function GeneratedMediaPlayerWindow(props: {
   const MediaIcon = generatedMediaIcon(props.attachment.kind);
   const isImage = props.attachment.kind === "image";
   const imageFitScale = generatedMediaFitScale(imageViewportSize, imageNaturalSize) ?? 1;
+  // measureImageViewportSize reads the live viewer bounds and stores usable image viewport dimensions.
+  // measureImageViewportSize 读取实时查看器边界并保存可用的图片视口尺寸。
+  const measureImageViewportSize = React.useCallback((): GeneratedMediaImageSize | null => {
+    const node = imageStageRef.current;
+    if (!node || !isImage) {
+      return null;
+    }
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    const nextSize = { width: rect.width, height: rect.height };
+    setImageViewportSize((current) => (
+      current && Math.abs(current.width - nextSize.width) < 0.5 && Math.abs(current.height - nextSize.height) < 0.5
+        ? current
+        : nextSize
+    ));
+    return nextSize;
+  }, [isImage]);
   React.useEffect(() => {
     imageInitializedRef.current = false;
     imageDragRef.current = null;
@@ -10878,15 +10901,15 @@ function GeneratedMediaPlayerWindow(props: {
     if (!node || !isImage) {
       return undefined;
     }
-    const updateSize = () => {
-      const rect = node.getBoundingClientRect();
-      setImageViewportSize({ width: rect.width, height: rect.height });
-    };
-    updateSize();
-    const observer = new ResizeObserver(updateSize);
+    measureImageViewportSize();
+    const animationFrame = window.requestAnimationFrame(measureImageViewportSize);
+    const observer = new ResizeObserver(measureImageViewportSize);
     observer.observe(node);
-    return () => observer.disconnect();
-  }, [isImage, isMaximized]);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      observer.disconnect();
+    };
+  }, [isImage, isMaximized, measureImageViewportSize]);
   React.useEffect(() => {
     syncImageNaturalSize(imageElementRef.current);
   }, [syncImageNaturalSize, source]);
@@ -10902,7 +10925,8 @@ function GeneratedMediaPlayerWindow(props: {
     setImageOffset((offset) => clampGeneratedMediaImageOffset(offset, imageScale, imageViewportSize, imageNaturalSize));
   }, [imageNaturalSize, imageScale, imageViewportSize]);
   const applyImageScaleAroundCenter = React.useCallback((nextScale: number) => {
-    if (!imageNaturalSize || !imageViewportSize) {
+    const viewportSize = measureImageViewportSize() ?? imageViewportSize;
+    if (!imageNaturalSize || !viewportSize) {
       return;
     }
     const clampedScale = clampGeneratedMediaZoom(nextScale);
@@ -10911,28 +10935,31 @@ function GeneratedMediaPlayerWindow(props: {
       imageScale,
       clampedScale,
       { x: 0, y: 0 },
-      imageViewportSize,
+      viewportSize,
       imageNaturalSize,
     ));
     setImageScale(clampedScale);
-  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  }, [imageNaturalSize, imageScale, imageViewportSize, measureImageViewportSize]);
   const handleImageFit = React.useCallback(() => {
-    const nextScale = generatedMediaFitScale(imageViewportSize, imageNaturalSize);
+    const viewportSize = measureImageViewportSize() ?? imageViewportSize;
+    const nextScale = generatedMediaFitScale(viewportSize, imageNaturalSize);
     if (nextScale === null) {
       return;
     }
     setImageScale(nextScale);
     setImageOffset({ x: 0, y: 0 });
-  }, [imageNaturalSize, imageViewportSize]);
+  }, [imageNaturalSize, imageViewportSize, measureImageViewportSize]);
   const handleImageOriginalSize = React.useCallback(() => {
-    if (!imageNaturalSize || !imageViewportSize) {
+    const viewportSize = measureImageViewportSize() ?? imageViewportSize;
+    if (!imageNaturalSize || !viewportSize) {
       return;
     }
     setImageScale(1);
     setImageOffset({ x: 0, y: 0 });
-  }, [imageNaturalSize, imageViewportSize]);
+  }, [imageNaturalSize, imageViewportSize, measureImageViewportSize]);
   const zoomImageAtPoint = React.useCallback((deltaY: number, clientX: number, clientY: number, target: HTMLElement) => {
-    if (!imageNaturalSize || !imageViewportSize) {
+    const viewportSize = measureImageViewportSize() ?? imageViewportSize;
+    if (!imageNaturalSize || !viewportSize) {
       return;
     }
     const rect = target.getBoundingClientRect();
@@ -10946,11 +10973,11 @@ function GeneratedMediaPlayerWindow(props: {
       imageScale,
       nextScale,
       anchor,
-      imageViewportSize,
+      viewportSize,
       imageNaturalSize,
     ));
     setImageScale(nextScale);
-  }, [imageNaturalSize, imageScale, imageViewportSize]);
+  }, [imageNaturalSize, imageScale, imageViewportSize, measureImageViewportSize]);
   React.useEffect(() => {
     const node = imageStageRef.current;
     if (!node || !isImage) {
@@ -10964,7 +10991,8 @@ function GeneratedMediaPlayerWindow(props: {
     return () => node.removeEventListener("wheel", handleWheel);
   }, [isImage, zoomImageAtPoint]);
   const handleImagePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || !imageNaturalSize || !imageViewportSize) {
+    const viewportSize = measureImageViewportSize() ?? imageViewportSize;
+    if (event.button !== 0 || !imageNaturalSize || !viewportSize) {
       return;
     }
     event.preventDefault();
@@ -10976,7 +11004,7 @@ function GeneratedMediaPlayerWindow(props: {
     };
     event.currentTarget.setPointerCapture(event.pointerId);
     setIsImageDragging(true);
-  }, [imageNaturalSize, imageOffset, imageViewportSize]);
+  }, [imageNaturalSize, imageOffset, imageViewportSize, measureImageViewportSize]);
   const handleImagePointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const drag = imageDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) {
