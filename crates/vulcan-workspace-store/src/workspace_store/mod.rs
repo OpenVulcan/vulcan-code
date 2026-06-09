@@ -51,7 +51,10 @@ pub use persistence::{
     persist_workspace_snapshot, rename_project, restore_project_with_sessions,
     restore_single_session, toggle_project_pinned,
 };
-pub use session_load::{load_session_history_page, load_session_hydration_snapshot};
+pub use session_load::{
+    load_session_history_page, load_session_hydration_snapshot,
+    load_session_hydration_snapshot_for_project,
+};
 
 /// Describes the completed workspace-snapshot persistence pass, including any non-fatal auxiliary warnings.
 /// 描述一次已完成的工作台快照持久化过程，并携带所有非致命的辅助告警。

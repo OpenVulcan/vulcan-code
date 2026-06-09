@@ -2,10 +2,11 @@
 //! 从主工作区存储模块中抽取的会话加载辅助逻辑。
 
 use super::segmented_session_store::{
-    SegmentedSessionReplayResult, find_segmented_session_directory_by_id,
-    read_segmented_session_complete_tool_detail_turn, read_segmented_session_event_window,
-    read_segmented_session_tool_detail_window, read_segmented_session_turn_window, read_state,
-    replay_segmented_session_context, segmented_lines_to_session_messages,
+    SegmentedSessionReplayResult, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, read_segmented_session_complete_tool_detail_turn,
+    read_segmented_session_event_window, read_segmented_session_tool_detail_window,
+    read_segmented_session_turn_window, read_state, replay_segmented_session_context,
+    segmented_lines_to_session_messages,
 };
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
@@ -55,10 +56,67 @@ pub async fn load_session_hydration_snapshot(
     session_id: SessionId,
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
+    let locator = query_session_locator(&controller, session_id).await?;
+    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
+        .await
+}
+
+/// Lazily loads one session by constraining segmented lookup to its owning project.
+/// 按所属项目约束分段目录查找，并懒加载单个会话的最近转录窗口与轻量运行态。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `project_id` is the known owning project identifier used as the segmented project tag.
+/// `project_id` 是已知的所属项目标识，用作分段项目标签。
+/// `session_id` selects the session to hydrate.
+/// `session_id` 选择要水合的会话。
+/// `requested_limit` is the requested recent-turn window size before clamping.
+/// `requested_limit` 是裁剪前请求的最近轮次窗口大小。
+///
+/// # Returns
+/// 返回值
+/// A hydration snapshot for the target session, or an empty snapshot if no segmented directory exists.
+/// 返回目标会话的水合快照；若分段目录不存在则返回空快照。
+pub async fn load_session_hydration_snapshot_for_project(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+    requested_limit: usize,
+) -> Result<SessionHydrationSnapshot, String> {
+    let locator = query_session_locator_for_project(&controller, project_id, session_id).await?;
+    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
+        .await
+}
+
+/// Builds a session hydration snapshot from an already resolved segmented locator.
+/// 根据已经解析出的分段定位信息构建会话水合快照。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `session_id` selects the session to hydrate.
+/// `session_id` 选择要水合的会话。
+/// `requested_limit` is the requested recent-turn window size before clamping.
+/// `requested_limit` 是裁剪前请求的最近轮次窗口大小。
+/// `locator` points at the segmented session directory when one was found.
+/// `locator` 在找到分段会话目录时指向该目录。
+///
+/// # Returns
+/// 返回值
+/// A hydration snapshot assembled from the locator and segmented state.
+/// 返回基于定位信息与分段状态组装出的水合快照。
+async fn load_session_hydration_snapshot_from_locator(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_limit: usize,
+    locator: Option<StoredSessionLocatorRow>,
+) -> Result<SessionHydrationSnapshot, String> {
     let requested_limit = requested_limit
         .max(1)
         .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
-    let locator = query_session_locator(&controller, session_id).await?;
     let compactions = Vec::new();
     let runtime_state_row = None;
     let target_turn_count = resolve_initial_hydration_turn_count(
@@ -256,6 +314,49 @@ async fn query_session_locator(
                 latest_turn_index: -1,
             }),
     )
+}
+
+/// Resolves one segmented session locator by checking only the known owning project.
+/// 仅检查已知所属项目来解析单个分段会话定位信息。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `project_id` is the known segmented project tag for this session.
+/// `project_id` 是该会话已知的分段项目标签。
+/// `session_id` selects the session directory suffix.
+/// `session_id` 选择会话目录后缀。
+///
+/// # Returns
+/// 返回值
+/// The locator when a matching active or archived segmented session directory exists.
+/// 当活动或归档分段会话目录存在匹配项时返回定位信息。
+async fn query_session_locator_for_project(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Option<StoredSessionLocatorRow>, String> {
+    let session_id_text = session_id.to_string();
+    let active_dir = find_segmented_session_directory(
+        &controller.data_root,
+        false,
+        project_id,
+        &session_id_text,
+    )?;
+    let session_dir = match active_dir {
+        Some(session_dir) => Some(session_dir),
+        None => find_segmented_session_directory(
+            &controller.data_root,
+            true,
+            project_id,
+            &session_id_text,
+        )?,
+    };
+    Ok(session_dir.map(|session_dir| StoredSessionLocatorRow {
+        session_dir,
+        latest_turn_index: -1,
+    }))
 }
 
 /// Loads one segmented transcript window when the new session directory exists.

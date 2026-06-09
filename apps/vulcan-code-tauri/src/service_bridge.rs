@@ -2436,11 +2436,19 @@ async fn service_submit_conversation_prompt(
                     retained_submission_snapshot_has_session_context(workspace_snapshot, session_id)
                 })
         });
-        // Reuses the already hydrated workspace on the submit hot path when it contains the selected session context.
-        // 当保留工作区已经包含选中会话上下文时，在发送热路径直接复用它。
-        let retained_workspace_snapshot = retained_context_available
-            .then(|| guard.workspace_snapshot.clone())
-            .flatten();
+        // Reuses the retained workspace on the submit hot path before falling back to full disk reload.
+        // 在发送热路径优先复用保留工作区，再按需回退到完整磁盘重载。
+        let retained_workspace_snapshot =
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .and_then(|workspace_snapshot| {
+                    retained_submission_snapshot_is_usable(
+                        workspace_snapshot,
+                        submission_session_id,
+                    )
+                    .then(|| workspace_snapshot.clone())
+                });
         let preserved_workspace_run_state = capture_preserved_workspace_run_state(
             guard.workspace_snapshot.as_ref(),
             &active_kernel_sessions,
@@ -2476,6 +2484,16 @@ async fn service_submit_conversation_prompt(
             "disk",
         )
     };
+    if workspace_source == "retained"
+        && let Some(session_id) = submission_session_id
+    {
+        hydrate_retained_submission_session_if_needed(
+            controller_runtime.clone(),
+            &mut workspace_snapshot,
+            session_id,
+        )
+        .await?;
+    }
     webui_trace(
         "submit_prompt_workspace_ready",
         format!(
@@ -6397,20 +6415,11 @@ async fn load_workspace_for_submission(
         .await
         {
             Ok(hydration) => {
-                workspace_snapshot
-                    .session_messages
-                    .insert(session_id, hydration.messages);
-                if let Some(runtime_state) = hydration.runtime_state {
-                    workspace_snapshot
-                        .session_runtime_state
-                        .insert(session_id, runtime_state);
-                }
-                workspace_snapshot.hydrated_session_ids.insert(session_id);
-                apply_persisted_task_mirror_statuses_to_workspace(
+                apply_submission_session_hydration(
                     &controller_runtime,
                     &mut workspace_snapshot,
                     session_id,
-                    |_| false,
+                    hydration,
                 )?;
             }
             Err(error) if is_missing_segmented_session_file_error(&error) => {}
@@ -6423,6 +6432,128 @@ async fn load_workspace_for_submission(
         );
     }
     Ok(workspace_snapshot)
+}
+
+/// Returns whether a retained WebUI snapshot can be used as the submit base snapshot.
+/// 判断保留的 WebUI 快照能否作为本次提交的基础快照。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the in-memory snapshot retained by the service bridge.
+/// `workspace_snapshot` 是服务桥保留的内存工作区快照。
+/// `session_id` optionally selects an existing submitted conversation.
+/// `session_id` 可选选择本次提交的既有会话。
+///
+/// # Returns
+/// 返回值
+/// `true` for a draft submission or when the existing session is present in the retained snapshot.
+/// 草稿提交或既有会话存在于保留快照中时返回 `true`。
+fn retained_submission_snapshot_is_usable(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: Option<SessionId>,
+) -> bool {
+    match session_id {
+        Some(session_id) => {
+            workspace_snapshot_contains_regular_session(workspace_snapshot, session_id)
+        }
+        None => true,
+    }
+}
+
+/// Hydrates the submitted retained session only when the retained snapshot lacks concrete context.
+/// 仅在保留快照缺少具体上下文时水合本次提交的目标会话。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` is the retained WebUI workspace snapshot being submitted.
+/// `workspace_snapshot` 是本次提交正在使用的保留 WebUI 工作区快照。
+/// `session_id` selects the submitted existing session.
+/// `session_id` 选择本次提交的既有会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after the session either already had context or has been hydrated.
+/// 当会话已具备上下文或已完成水合后返回 `Ok(())`。
+async fn hydrate_retained_submission_session_if_needed(
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
+        return Ok(());
+    }
+    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
+        return Ok(());
+    };
+    let hydration_started_at = current_unix_millis_value();
+    match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
+        controller_runtime.clone(),
+        &project_id,
+        session_id,
+        SELECTED_SESSION_TURN_LOAD_LIMIT,
+    )
+    .await
+    {
+        Ok(hydration) => {
+            apply_submission_session_hydration(
+                &controller_runtime,
+                workspace_snapshot,
+                session_id,
+                hydration,
+            )?;
+        }
+        Err(error) if is_missing_segmented_session_file_error(&error) => {}
+        Err(error) => return Err(error),
+    }
+    webui_trace_if_slow(
+        "submit_prompt_retained_session_hydration_slow",
+        hydration_started_at,
+        format!("session={session_id} project_id={project_id}"),
+    );
+    Ok(())
+}
+
+/// Applies one session hydration snapshot to the submit workspace snapshot.
+/// 将单个会话水合快照应用到提交工作区快照。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` receives the hydrated messages and runtime state.
+/// `workspace_snapshot` 接收已水合的消息与运行态。
+/// `session_id` selects the hydrated session.
+/// `session_id` 选择被水合的会话。
+/// `hydration` contains the lazy-loaded session data.
+/// `hydration` 包含懒加载出的会话数据。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after hydration data and task mirror statuses have been applied.
+/// 应用水合数据与任务镜像状态后返回 `Ok(())`。
+fn apply_submission_session_hydration(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    hydration: SessionHydrationSnapshot,
+) -> Result<(), String> {
+    workspace_snapshot
+        .session_messages
+        .insert(session_id, hydration.messages);
+    if let Some(runtime_state) = hydration.runtime_state {
+        workspace_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+    }
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    apply_persisted_task_mirror_statuses_to_workspace(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        |_| false,
+    )
 }
 
 /// Returns whether a retained WebUI snapshot has enough session context for prompt submission.
@@ -17766,6 +17897,75 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    /// Verifies draft submissions can reuse the retained workspace instead of reloading every workspace session.
+    /// 验证草稿提交可以复用保留工作区，而不是重载所有工作区会话。
+    #[test]
+    fn retained_submission_snapshot_accepts_draft_submission() {
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        assert!(retained_submission_snapshot_is_usable(
+            &workspace_snapshot,
+            None
+        ));
+    }
+
+    /// Verifies retained old-session submissions require only the target session to exist in memory.
+    /// 验证保留的老会话提交只要求目标会话存在于内存快照中。
+    #[test]
+    fn retained_submission_snapshot_accepts_existing_session_only_when_present() {
+        let session_id = SessionId::new_v4();
+        let missing_session_id = SessionId::new_v4();
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "已有会话",
+                "",
+                SessionState::Draft,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        assert!(retained_submission_snapshot_is_usable(
+            &workspace_snapshot,
+            Some(session_id)
+        ));
+        assert!(!retained_submission_snapshot_is_usable(
+            &workspace_snapshot,
+            Some(missing_session_id)
+        ));
     }
 
     /// Verifies WebUI regular-session detection excludes persisted TaskSession identifiers from workspace-store writes.
