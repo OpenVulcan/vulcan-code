@@ -59,6 +59,9 @@ pub enum SessionMessageRecordKind {
     /// Hidden explore output produced when a session is seeded from one project.
     /// 从某个项目播种会话时产生的隐藏探索输出。
     ExploreOutput,
+    /// Hidden tool-detail payload used for on-demand WebUI tool expansion.
+    /// 用于 WebUI 工具按需展开的隐藏工具详情载荷。
+    ToolDetailOutput,
     /// Hidden compaction summary used as the new context anchor.
     /// 作为新上下文锚点使用的隐藏压缩摘要。
     CompactionSummary,
@@ -86,6 +89,7 @@ impl SessionMessageRecordKind {
             Self::TitleOutput => "title-output",
             Self::SummaryOutput => "summary-output",
             Self::ExploreOutput => "explore-output",
+            Self::ToolDetailOutput => "tool-detail-output",
             Self::CompactionSummary => "compaction-summary",
             Self::CompactionStatus => "compaction-status",
             Self::TurnTerminated => "turn-terminated",
@@ -102,6 +106,7 @@ impl SessionMessageRecordKind {
                 | Self::ThinkingOutput
                 | Self::SummaryOutput
                 | Self::ExploreOutput
+                | Self::ToolDetailOutput
                 | Self::CompactionStatus
                 | Self::TurnTerminated
                 | Self::TurnStats
@@ -119,6 +124,7 @@ impl SessionMessageRecordKind {
             "title-output" => Self::TitleOutput,
             "summary-output" => Self::SummaryOutput,
             "explore-output" => Self::ExploreOutput,
+            "tool-detail-output" => Self::ToolDetailOutput,
             "compaction-summary" => Self::CompactionSummary,
             "compaction-status" => Self::CompactionStatus,
             "turn-terminated" => Self::TurnTerminated,

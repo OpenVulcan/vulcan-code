@@ -280,6 +280,42 @@ export interface ConversationMessage {
   attachments?: ComposerAttachmentSummary[];
 }
 
+// AppendMessageBodyDelta appends streamed text to one visible conversation message.
+// AppendMessageBodyDelta 向单条可见会话消息追加流式文本。
+export interface AppendMessageBodyDelta {
+  // Stable conversation identifier that owns the message.
+  // 拥有该消息的稳定会话标识。
+  conversationId: string;
+  // Stable message identifier receiving the appended text.
+  // 接收追加文本的稳定消息标识。
+  messageId: string;
+  // Text appended by this event only.
+  // 本事件单独追加的文本片段。
+  bodyDelta: string;
+  // Initial full message metadata when the row does not exist yet.
+  // 当消息行尚不存在时使用的初始完整消息元数据。
+  initialMessage?: ConversationMessage | null;
+  // Current backend run phase after this delta.
+  // 本次增量后的后端运行阶段。
+  runPhase?: string | null;
+}
+
+// WorkbenchDelta describes one partial workbench update emitted on hot paths.
+// WorkbenchDelta 描述热路径上发出的单条局部工作台更新。
+export type WorkbenchDelta =
+  | { kind: "appendMessageBody"; payload: AppendMessageBodyDelta };
+
+// WorkbenchDeltaEnvelope carries one ordered partial workbench update.
+// WorkbenchDeltaEnvelope 携带一条有序的局部工作台更新。
+export interface WorkbenchDeltaEnvelope {
+  // Monotonic backend generation used for diagnostics and ordering.
+  // 用于诊断与排序的后端单调版本号。
+  generation: number;
+  // Partial workbench update payload.
+  // 局部工作台更新载荷。
+  delta: WorkbenchDelta;
+}
+
 // ComposerAttachmentCapabilitySummary describes whether one attachment kind is allowed.
 // ComposerAttachmentCapabilitySummary 描述单种附件类型当前是否允许使用。
 export interface ComposerAttachmentCapabilitySummary {

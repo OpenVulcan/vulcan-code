@@ -1777,6 +1777,10 @@ pub struct SessionRuntimeStateEntry {
     /// 运行时使用的规范会话状态，用于替代从转录投影重建历史。
     #[serde(default, skip_serializing_if = "session_conversation_state_is_empty")]
     pub conversation_state: SessionConversationState,
+    /// Open tool-call record ids keyed by tool_call_id for direct result attachment.
+    /// 按 tool_call_id 索引的未闭合工具调用记录标识，用于直接挂接工具返回。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tool_call_record_ids: BTreeMap<String, String>,
     /// Latest provider usage snapshot retained for budget calibration across turns.
     /// 为跨轮预算校准保留的最近一次 Provider 用量快照。
     pub last_provider_usage: Option<ProviderUsageSnapshot>,

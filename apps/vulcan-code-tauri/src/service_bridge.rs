@@ -108,9 +108,10 @@ use vulcan_provider_config::config::{
     PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions, ProviderFieldKey,
 };
 use vulcan_service_api::{
-    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
-    AiCapabilityTargetSummary, AiCapabilityVendorCatalogSummary, AiCapabilityVendorSummary,
-    AiCapabilityVendorTargetChoiceSummary, CommandSessionSummary,
+    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
+    AiCapabilitySummary, AiCapabilityTargetSummary, AiCapabilityVendorCatalogSummary,
+    AiCapabilityVendorSummary, AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta,
+    CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
     ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary,
@@ -123,7 +124,7 @@ use vulcan_service_api::{
     SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
     VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
-    WorkbenchSnapshot,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
 };
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionLifecycleBeginRequest, SessionLifecycleFinishRequest,
@@ -1265,6 +1266,7 @@ pub fn run() {
             service_preview_project_attachment_cleanup,
             service_execute_project_attachment_cleanup,
             service_session_messages,
+            service_session_tool_detail,
             service_pick_composer_attachments,
             service_stage_composer_attachment_paths,
             service_stage_composer_attachment_bytes,
@@ -1977,8 +1979,9 @@ fn store_and_emit_pending_question_workbench_snapshot(
         guard.workbench.pending_question = pending_question;
         guard.workbench.clone()
     };
-    let _ = app.emit(
-        "vulcan://service-event",
+    emit_service_event_with_trace(
+        app,
+        "pending_question_workbench_emit",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
     Ok(workbench)
@@ -2089,6 +2092,188 @@ async fn service_session_messages(
         &session_id,
         transcript_page.messages.as_slice(),
     ))
+}
+
+/// Loads one hidden tool-detail payload by stable record id or tool-call id fallback.
+/// 按稳定记录标识加载隐藏工具详情载荷，并支持工具调用标识回退。
+#[tauri::command]
+async fn service_session_tool_detail(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    session_id: String,
+    record_id: Option<String>,
+    tool_call_id: Option<String>,
+    seq: Option<u64>,
+    message_index: Option<usize>,
+) -> Result<Value, String> {
+    let parsed_session_id = session_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
+    let controller_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        if let Some(payload) = guard
+            .workspace_snapshot
+            .as_ref()
+            .and_then(|workspace| workspace.session_runtime_state.get(&parsed_session_id))
+            .and_then(|runtime_state| {
+                find_tool_detail_record(
+                    runtime_state.conversation_state.records.iter(),
+                    record_id.as_deref(),
+                    tool_call_id.as_deref(),
+                    message_index,
+                )
+                .map(|record| tool_detail_payload_from_session_record(record, seq, message_index))
+            })
+        {
+            return Ok(payload);
+        }
+        guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?
+    };
+    let transcript_page = vulcan_workspace_store::workspace_store::load_session_transcript_window(
+        controller_runtime,
+        parsed_session_id,
+        SELECTED_SESSION_TURN_LOAD_LIMIT,
+    )
+    .await?;
+    let transcript_messages = transcript_page
+        .messages
+        .iter()
+        .chain(transcript_page.tool_detail_messages.iter())
+        .collect::<Vec<_>>();
+    find_tool_detail_message(
+        transcript_messages.iter().copied(),
+        record_id.as_deref(),
+        tool_call_id.as_deref(),
+        message_index,
+    )
+        .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
+        .ok_or_else(|| {
+            record_id
+                .map(|record_id| format!("tool detail record not found: {record_id}"))
+                .unwrap_or_else(|| {
+                    format!(
+                        "tool detail record not found for tool call: {}",
+                        tool_call_id.unwrap_or_else(|| String::from("<missing>"))
+                    )
+                })
+        })
+}
+
+/// Finds a hidden tool-detail message by precise record id first, then by tool-call id.
+/// 先按精确记录标识查找隐藏工具详情，再按工具调用标识回退查找。
+fn find_tool_detail_message<'a>(
+    messages: impl IntoIterator<Item = &'a SessionMessageEntry>,
+    record_id: Option<&str>,
+    tool_call_id: Option<&str>,
+    message_index: Option<usize>,
+) -> Option<&'a SessionMessageEntry> {
+    let messages = messages.into_iter().collect::<Vec<_>>();
+    if let Some(record_id) = record_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(message) = message_index
+            .and_then(|index| messages.get(index).copied())
+            .filter(|message| message.id == record_id)
+        {
+            return Some(message);
+        }
+        if let Some(message) = messages.iter().copied().find(|message| message.id == record_id) {
+            return Some(message);
+        }
+    }
+    let tool_call_id = tool_call_id?.trim();
+    if tool_call_id.is_empty() {
+        return None;
+    }
+    messages.iter().copied().find(|message| {
+        matches!(
+            message.record_kind,
+            SessionMessageRecordKind::ToolDetailOutput | SessionMessageRecordKind::ToolResultOutput
+        ) && session_message_tool_call_id(message) == Some(tool_call_id)
+    })
+}
+
+/// Finds a hidden runtime conversation record by precise record id first, then by tool-call id.
+/// 先按精确记录标识查找隐藏运行时会话记录，再按工具调用标识回退查找。
+fn find_tool_detail_record<'a>(
+    records: impl IntoIterator<Item = &'a SessionConversationRecord>,
+    record_id: Option<&str>,
+    tool_call_id: Option<&str>,
+    message_index: Option<usize>,
+) -> Option<&'a SessionConversationRecord> {
+    let records = records.into_iter().collect::<Vec<_>>();
+    if let Some(record_id) = record_id.filter(|value| !value.trim().is_empty()) {
+        if let Some(record) = message_index
+            .and_then(|index| records.get(index).copied())
+            .filter(|record| record.id == record_id)
+        {
+            return Some(record);
+        }
+        if let Some(record) = records.iter().copied().find(|record| record.id == record_id) {
+            return Some(record);
+        }
+    }
+    let tool_call_id = tool_call_id?.trim();
+    if tool_call_id.is_empty() {
+        return None;
+    }
+    records.iter().copied().find(|record| {
+        matches!(
+            record.record_kind,
+            SessionMessageRecordKind::ToolDetailOutput | SessionMessageRecordKind::ToolResultOutput
+        ) && session_record_tool_call_id(record) == Some(tool_call_id)
+    })
+}
+
+/// Builds the JSON payload returned to the WebUI detail modal.
+/// 构建返回给 WebUI 详情弹窗的 JSON 载荷。
+fn tool_detail_payload_from_session_message(
+    message: &SessionMessageEntry,
+    seq: Option<u64>,
+    message_index: Option<usize>,
+) -> Value {
+    json!({
+        "body": message.body.clone(),
+        "metadata": message.metadata.clone(),
+        "seq": seq,
+        "message_index": message_index,
+    })
+}
+
+/// Builds the JSON payload returned from an in-memory runtime conversation record.
+/// 从内存态运行时会话记录构建返回给 WebUI 的 JSON 载荷。
+fn tool_detail_payload_from_session_record(
+    record: &SessionConversationRecord,
+    seq: Option<u64>,
+    message_index: Option<usize>,
+) -> Value {
+    json!({
+        "body": record.body.clone(),
+        "metadata": record.metadata.clone(),
+        "seq": seq,
+        "message_index": message_index,
+    })
+}
+
+/// Extracts the stable tool-call id from session message metadata.
+/// 从会话消息元数据中提取稳定工具调用标识。
+fn session_message_tool_call_id(message: &SessionMessageEntry) -> Option<&str> {
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_call_id").or_else(|| metadata.get("toolCallId")))
+        .and_then(Value::as_str)
+}
+
+/// Extracts the stable tool-call id from runtime record metadata.
+/// 从运行时记录元数据中提取稳定工具调用标识。
+fn session_record_tool_call_id(record: &SessionConversationRecord) -> Option<&str> {
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("tool_call_id").or_else(|| metadata.get("toolCallId")))
+        .and_then(Value::as_str)
 }
 
 /// Opens the native attachment picker and stages selected files for composer use.
@@ -5276,10 +5461,21 @@ where
 /// Emits one workbench snapshot to the WebUI event stream.
 /// 向 WebUI 事件流发送单份工作台快照。
 fn emit_workbench_event(app: &tauri::AppHandle, workbench: &WorkbenchSnapshot) {
-    let _ = app.emit(
-        "vulcan://service-event",
+    emit_service_event_with_trace(
+        app,
+        "workbench_snapshot_emit",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
+}
+
+/// Emits one service event and traces the serialized payload size when diagnostics are enabled.
+/// 发送单条服务事件，并在诊断开启时记录序列化载荷大小。
+fn emit_service_event_with_trace(app: &tauri::AppHandle, stage: &str, event: ServiceEvent) {
+    if webui_trace_enabled() {
+        let payload_bytes = serde_json::to_vec(&event).map(|bytes| bytes.len()).unwrap_or(0);
+        webui_trace(stage, format!("payload_bytes={payload_bytes}"));
+    }
+    let _ = app.emit("vulcan://service-event", event);
 }
 
 /// Refreshes settings-related projections on the retained workbench snapshot.
@@ -11980,39 +12176,165 @@ fn append_stream_delta_record(
     if delta.is_empty() {
         return Ok(());
     }
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+    let conversation_id = session_id.to_string();
+    let event = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let workspace = guard.workspace_snapshot.as_mut().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
         let now = current_unix_millis_text();
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        append_stream_delta_record_to_state(
-            runtime_state,
-            session_id,
-            &now,
-            record_id_slot,
-            record_kind,
-            title,
-            delta,
-            collapsed_by_default,
-        );
-        workspace.session_messages.insert(
-            session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
-        );
-        workspace.session_run_phases.insert(
-            session_id,
-            match record_kind {
-                SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
-                _ => SessionRunPhase::Requesting,
-            },
-        );
+        let is_new_message = record_id_slot.is_none();
+        let run_phase = match record_kind {
+            SessionMessageRecordKind::ThinkingOutput => SessionRunPhase::Thinking,
+            _ => SessionRunPhase::Requesting,
+        };
+        let projected_entry = {
+            let runtime_state =
+                workspace
+                    .session_runtime_state
+                    .entry(session_id)
+                    .or_insert_with(|| SessionRuntimeStateEntry {
+                        updated_at: now.clone(),
+                        ..SessionRuntimeStateEntry::default()
+                    });
+            append_stream_delta_record_to_state(
+                runtime_state,
+                session_id,
+                &now,
+                record_id_slot,
+                record_kind,
+                title,
+                delta,
+                collapsed_by_default,
+            );
+            let Some(message_id) = record_id_slot.as_deref() else {
+                return Err(String::from("streaming record id was not materialized"));
+            };
+            let projected_entry = runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .find(|record| record.id == message_id)
+                .map(session_message_entry_from_conversation_record);
+            runtime_state.updated_at = now.clone();
+            projected_entry
+        };
+        if let Some(projected_entry) = projected_entry.as_ref()
+            && projected_entry.is_visible_to_user()
+            && !projected_entry.body.trim().is_empty()
+        {
+            let messages = workspace.session_messages.entry(session_id).or_default();
+            if let Some(existing) = messages
+                .iter_mut()
+                .find(|message| message.id == projected_entry.id)
+            {
+                *existing = projected_entry.clone();
+            } else {
+                messages.push(projected_entry.clone());
+            }
+        }
+        workspace.session_run_phases.insert(session_id, run_phase);
         workspace.hydrated_session_ids.insert(session_id);
-    })
-    .map(|_| ())
+        let Some(projected_entry) = projected_entry else {
+            return Ok(());
+        };
+        let projected_message =
+            conversation_message_from_session_entry(&conversation_id, &projected_entry);
+        let initial_message = is_new_message.then(|| projected_message.clone());
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        let generation = guard.workbench_generation;
+        if let Some(existing) = guard
+            .workbench
+            .messages
+            .iter_mut()
+            .find(|message| message.id == projected_message.id)
+        {
+            *existing = projected_message.clone();
+        } else if workbench_surface_matches_conversation(&guard.workbench, &conversation_id) {
+            guard.workbench.messages.push(projected_message.clone());
+        }
+        for conversation in &mut guard.workbench.conversations {
+            if conversation.id == conversation_id {
+                conversation.run_phase = run_phase.to_string();
+                conversation.status = SessionState::Running.label().to_string();
+                conversation.last_updated_label = String::from("刚刚");
+                conversation.last_updated_at = now.clone();
+                break;
+            }
+        }
+        WorkbenchDeltaEnvelope {
+            generation,
+            delta: WorkbenchDelta::AppendMessageBody(AppendMessageBodyDelta {
+                conversation_id,
+                message_id: projected_entry.id,
+                body_delta: delta.to_string(),
+                initial_message,
+                run_phase: Some(run_phase.to_string()),
+            }),
+        }
+    };
+    emit_service_event_with_trace(
+        app,
+        "workbench_delta_emit",
+        ServiceEvent::WorkbenchDelta(Box::new(event)),
+    );
+    Ok(())
+}
+
+/// Returns whether the retained workbench currently displays one conversation surface.
+/// 返回保留工作台当前是否正在展示指定会话界面。
+fn workbench_surface_matches_conversation(workbench: &WorkbenchSnapshot, conversation_id: &str) -> bool {
+    workbench.selected_conversation_id.as_deref() == Some(conversation_id)
+        || workbench
+            .subagent_navigation
+            .as_ref()
+            .is_some_and(|navigation| navigation.active_conversation_id == conversation_id)
+}
+
+/// Converts one canonical conversation record into the transcript entry projection.
+/// 将单条规范会话记录转换为转录项投影。
+fn session_message_entry_from_conversation_record(
+    record: &SessionConversationRecord,
+) -> SessionMessageEntry {
+    SessionMessageEntry {
+        id: record.id.clone(),
+        kind: record.kind,
+        record_kind: record.record_kind,
+        visible: record.visible,
+        title: record.title.clone(),
+        body: record.body.clone(),
+        metadata: record.metadata.clone(),
+        created_at: record.created_at.clone(),
+    }
+}
+
+/// Converts one session transcript entry into a WebUI conversation message.
+/// 将单条会话转录项转换为 WebUI 会话消息。
+fn conversation_message_from_session_entry(
+    conversation_id: &str,
+    message: &SessionMessageEntry,
+) -> ConversationMessage {
+    ConversationMessage {
+        id: if message.id.is_empty() {
+            format!("{}-{}", conversation_id, message.created_at)
+        } else {
+            message.id.clone()
+        },
+        conversation_id: conversation_id.to_string(),
+        created_at: message.created_at.clone(),
+        role: match message.kind {
+            SessionMessageKind::User => MessageRole::User,
+            SessionMessageKind::Assistant => MessageRole::Assistant,
+            SessionMessageKind::Error => MessageRole::System,
+        },
+        title: non_empty_string(&message.title),
+        record_kind: Some(message.record_kind.as_persisted_key().to_string()),
+        body: message.body.clone(),
+        metadata: message.metadata.clone(),
+        attachments: composer_message_attachments_from_metadata(message.metadata.as_ref()),
+    }
 }
 
 /// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
@@ -14667,8 +14989,9 @@ where
     };
     if should_emit {
         let trace_emit_started_at = current_unix_millis_value();
-        let _ = app.emit(
-            "vulcan://service-event",
+        emit_service_event_with_trace(
+            app,
+            "workspace_mutation_emit",
             ServiceEvent::Workbench(Box::new(workbench)),
         );
         webui_trace_if_slow(
@@ -16596,12 +16919,14 @@ fn emit_service_snapshots(
     startup: &StartupSnapshot,
     workbench: &WorkbenchSnapshot,
 ) {
-    let _ = app.emit(
-        "vulcan://service-event",
+    emit_service_event_with_trace(
+        app,
+        "startup_snapshot_emit",
         ServiceEvent::Startup(Box::new(startup.clone())),
     );
-    let _ = app.emit(
-        "vulcan://service-event",
+    emit_service_event_with_trace(
+        app,
+        "service_workbench_snapshot_emit",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
 }
@@ -17150,26 +17475,17 @@ fn conversation_messages_from_session(
     messages
         .iter()
         .filter(|message| message.is_visible_to_user())
-        .filter(|message| !message.body.trim().is_empty())
-        .map(|message| ConversationMessage {
-            id: if message.id.is_empty() {
-                format!("{}-{}", conversation_id, message.created_at)
-            } else {
-                message.id.clone()
-            },
-            conversation_id: conversation_id.to_string(),
-            created_at: message.created_at.clone(),
-            role: match message.kind {
-                SessionMessageKind::User => MessageRole::User,
-                SessionMessageKind::Assistant => MessageRole::Assistant,
-                SessionMessageKind::Error => MessageRole::System,
-            },
-            title: non_empty_string(&message.title),
-            record_kind: Some(message.record_kind.as_persisted_key().to_string()),
-            body: message.body.clone(),
-            metadata: message.metadata.clone(),
-            attachments: composer_message_attachments_from_metadata(message.metadata.as_ref()),
+        .filter(|message| {
+            !message.body.trim().is_empty()
+                || matches!(
+                    message.record_kind,
+                    SessionMessageRecordKind::ToolCallOutput
+                        | SessionMessageRecordKind::ToolResultOutput
+                        | SessionMessageRecordKind::TurnStats
+                        | SessionMessageRecordKind::CompactionStatus
+                )
         })
+        .map(|message| conversation_message_from_session_entry(conversation_id, message))
         .collect()
 }
 

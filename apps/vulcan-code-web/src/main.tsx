@@ -132,6 +132,7 @@ import type {
   VmmConfigSaveRequest,
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
+  WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
 import { toast } from "sonner";
@@ -729,6 +730,9 @@ interface ConversationBlock {
   // Optional tool name detected from tool-call or tool-result formats.
   // 从工具调用或工具返回格式中识别出的可选工具名称。
   toolName?: string;
+  // Whether this block carries explicit tool execution metadata or a legacy tool marker.
+  // 该块是否携带明确工具执行元数据或旧版工具标记。
+  toolEvidence?: boolean;
   // Optional provider or host-visible tool call identifier.
   // 可选 Provider 或宿主可见工具调用标识。
   toolCallId?: string;
@@ -862,6 +866,40 @@ interface ConversationDetail {
   // Optional generated media outputs rendered by the detail modal.
   // 可选生成媒体输出，由详情弹窗渲染。
   mediaAttachments?: GeneratedMediaAttachment[];
+  // Optional hidden detail record reference loaded on demand.
+  // 可选按需加载的隐藏详情记录引用。
+  detailRef?: ConversationDetailRef;
+}
+
+// ConversationDetailRef identifies one hidden detail record stored outside the visible timeline.
+// ConversationDetailRef 标识一条存放在可见时间线之外的隐藏详情记录。
+interface ConversationDetailRef {
+  // Session id that owns the hidden detail record.
+  // 拥有隐藏详情记录的会话标识。
+  sessionId: string;
+  // Stable hidden detail record id.
+  // 稳定隐藏详情记录标识。
+  recordId?: string;
+  // Tool-call id used when the visible call row has not received a detail record id.
+  // 当可见调用行尚未收到详情记录标识时使用的工具调用标识。
+  toolCallId?: string;
+  // Optional JSONL event sequence for direct detail lookup.
+  // 用于直接定位详情的可选 JSONL 事件序号。
+  seq?: number;
+  // Optional conversation message index used when seq is unavailable.
+  // seq 不可用时使用的可选会话消息索引。
+  messageIndex?: number;
+}
+
+// ToolDetailPayload carries one hidden structured tool-detail record.
+// ToolDetailPayload 承载单条隐藏结构化工具详情记录。
+interface ToolDetailPayload {
+  // Model-facing assembled tool result body.
+  // 面向模型的组合工具返回正文。
+  body: string;
+  // Structured metadata used by display renderers.
+  // 展示渲染器使用的结构化元数据。
+  metadata?: unknown;
 }
 
 // TauriInvoke invokes a backend command when the app runs inside Tauri.
@@ -896,7 +934,19 @@ interface TauriWindowHandle {
 // ServiceEvent 描述 Tauri 服务桥接层发出的带标签事件。
 type ServiceEvent =
   | { kind: "startup"; payload: StartupSnapshot }
-  | { kind: "workbench"; payload: WorkbenchSnapshot };
+  | { kind: "workbench"; payload: WorkbenchSnapshot }
+  | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope };
+
+// WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
+// WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
+interface WorkbenchDeltaSignal {
+  // Monotonic frontend sequence that makes repeated delta objects observable.
+  // 前端单调序号，用于让重复增量对象也能被观察到。
+  seq: number;
+  // Backend partial workbench update envelopes batched for one render frame.
+  // 单个渲染帧内批处理的后端局部工作台更新信封。
+  envelopes: WorkbenchDeltaEnvelope[];
+}
 
 // BrowserFallbackStartup is used when the WebUI runs outside Tauri during frontend development.
 // BrowserFallbackStartup 用于 WebUI 在 Tauri 外部进行前端开发时展示。
@@ -1638,6 +1688,22 @@ async function loadConversationMessages(sessionId: string): Promise<Conversation
   return invoke<ConversationMessage[]>("service_session_messages", { sessionId });
 }
 
+// loadConversationToolDetail loads one hidden structured tool result detail on demand.
+// loadConversationToolDetail 按需加载单条隐藏结构化工具结果详情。
+async function loadConversationToolDetail(detailRef: ConversationDetailRef): Promise<ToolDetailPayload | null> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return null;
+  }
+  return invoke<ToolDetailPayload>("service_session_tool_detail", {
+    sessionId: detailRef.sessionId,
+    recordId: detailRef.recordId ?? null,
+    toolCallId: detailRef.toolCallId ?? null,
+    seq: detailRef.seq ?? null,
+    messageIndex: detailRef.messageIndex ?? null,
+  });
+}
+
 // submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
 // submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
 async function submitConversationPrompt(
@@ -2280,6 +2346,15 @@ function App() {
   // workbench stores the latest workbench snapshot.
   // workbench 保存最近一次工作台快照。
   const [workbench, setWorkbench] = React.useState<WorkbenchSnapshot | null>(null);
+  // workbenchDelta stores the latest partial workbench update signal.
+  // workbenchDelta 保存最近一次局部工作台更新信号。
+  const [workbenchDelta, setWorkbenchDelta] = React.useState<WorkbenchDeltaSignal | null>(null);
+  // workbenchDeltaBufferRef batches hot-path deltas until the next scheduled flush.
+  // workbenchDeltaBufferRef 将热路径增量批处理到下一次计划刷新。
+  const workbenchDeltaBufferRef = React.useRef<WorkbenchDeltaEnvelope[]>([]);
+  // workbenchDeltaTimerRef stores the scheduled delta flush timer id.
+  // workbenchDeltaTimerRef 保存已调度的增量刷新定时器标识。
+  const workbenchDeltaTimerRef = React.useRef<number | null>(null);
   // error stores the latest loading error.
   // error 保存最近一次加载错误。
   const [error, setError] = React.useState<string | null>(null);
@@ -2301,6 +2376,22 @@ function App() {
             if (event.payload.kind === "workbench") {
               setWorkbench(event.payload.payload);
             }
+            if (event.payload.kind === "workbenchDelta") {
+              workbenchDeltaBufferRef.current.push(event.payload.payload);
+              if (workbenchDeltaTimerRef.current === null) {
+                workbenchDeltaTimerRef.current = window.setTimeout(() => {
+                  const envelopes = coalesceWorkbenchDeltaEnvelopes(workbenchDeltaBufferRef.current);
+                  workbenchDeltaBufferRef.current = [];
+                  workbenchDeltaTimerRef.current = null;
+                  if (envelopes.length > 0) {
+                    setWorkbenchDelta((current) => ({
+                      seq: (current?.seq ?? 0) + 1,
+                      envelopes,
+                    }));
+                  }
+                }, STREAMING_DELTA_FLUSH_MS);
+              }
+            }
           });
         }
         const [nextStartup, nextWorkbench] = await Promise.all([
@@ -2321,6 +2412,10 @@ function App() {
     void bootstrap();
     return () => {
       cancelled = true;
+      if (workbenchDeltaTimerRef.current !== null) {
+        window.clearTimeout(workbenchDeltaTimerRef.current);
+        workbenchDeltaTimerRef.current = null;
+      }
       unlisten?.();
     };
   }, []);
@@ -2341,7 +2436,7 @@ function App() {
   return (
     <I18nProvider>
       <TooltipProvider>
-        <WorkbenchLayout startup={startup} workbench={workbench} />
+        <WorkbenchLayout startup={startup} workbench={workbench} workbenchDelta={workbenchDelta} />
         <Toaster />
       </TooltipProvider>
     </I18nProvider>
@@ -2448,7 +2543,17 @@ function ErrorScreen(props: { error: string }) {
 
 // WorkbenchLayout renders the GUI-like workbench shell.
 // WorkbenchLayout 渲染接近 GUI 的工作台外壳。
-function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: WorkbenchSnapshot }) {
+function WorkbenchLayout(props: {
+  // Latest startup snapshot displayed by the shell blocker.
+  // 壳层阻塞面板展示的最近启动快照。
+  startup: StartupSnapshot;
+  // Latest full workbench snapshot from the backend.
+  // 后端返回的最近完整工作台快照。
+  workbench: WorkbenchSnapshot;
+  // Latest partial workbench update signal from the backend.
+  // 后端返回的最近局部工作台更新信号。
+  workbenchDelta: WorkbenchDeltaSignal | null;
+}) {
   // i18n provides localized shell labels and the active language.
   // i18n 提供本地化外壳标签与当前语言。
   const i18n = useI18n();
@@ -2572,18 +2677,30 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
+  // selectedConversationMessages stores the current parent conversation message window.
+  // selectedConversationMessages 保存当前父会话消息窗口。
+  const selectedConversationMessages = React.useMemo(
+    () => workbenchState.messages.filter((message) => message.conversationId === selectedConversationId),
+    [selectedConversationId, workbenchState.messages],
+  );
+  // selectedConversationRenderItems stores parsed rows for sidebar/runtime summaries.
+  // selectedConversationRenderItems 保存侧栏与运行状态摘要复用的解析行。
+  const selectedConversationRenderItems = React.useMemo(
+    () => projectConversationRenderItems(selectedConversationMessages),
+    [selectedConversationMessages],
+  );
   // statusbarRuntimeActivities stores bottom-bar tool and subagent runtime badges for the selected parent conversation.
   // statusbarRuntimeActivities 保存当前选中父会话的底部工具与子代理运行徽标。
   const statusbarRuntimeActivities = React.useMemo(
     () => buildStatusbarRuntimeActivities(
       selectedConversation,
-      workbenchState.messages.filter((message) => message.conversationId === selectedConversationId),
+      selectedConversationRenderItems,
       workbenchState.subagentNavigation?.parentConversationId === selectedConversationId
         ? workbenchState.subagentNavigation
         : null,
       i18n.t,
     ),
-    [i18n.t, selectedConversation, selectedConversationId, workbenchState.messages, workbenchState.subagentNavigation],
+    [i18n.t, selectedConversation, selectedConversationId, selectedConversationRenderItems, workbenchState.subagentNavigation],
   );
   // selectedDraftConversation stores the draft used by the console header and empty state.
   // selectedDraftConversation 保存控制台标题栏与空状态使用的草稿会话。
@@ -3379,6 +3496,35 @@ function WorkbenchLayout(props: { startup: StartupSnapshot; workbench: Workbench
       return nextSelected;
     });
   }, [props.workbench]);
+
+  React.useEffect(() => {
+    if (!props.workbenchDelta) {
+      return;
+    }
+    setWorkbenchState((current) => applySubagentRoutePreference(
+      props.workbenchDelta!.envelopes.reduce(
+        (nextWorkbench, envelope) => applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
+          nextWorkbench,
+          envelope,
+          subagentSurfaceMessageCacheRef.current,
+        ),
+        current,
+      ),
+      subagentRoutePreferenceRef.current,
+    ));
+    const conversationIds = props.workbenchDelta.envelopes
+      .map(workbenchDeltaConversationId)
+      .filter((conversationId): conversationId is string => Boolean(conversationId));
+    if (conversationIds.length > 0) {
+      setHydratedConversationIds((current) => {
+        const next = new Set(current);
+        for (const conversationId of conversationIds) {
+          next.add(conversationId);
+        }
+        return next;
+      });
+    }
+  }, [props.workbenchDelta]);
 
   React.useEffect(() => {
     if (!selectedConversationId) {
@@ -4302,6 +4448,278 @@ function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchS
   };
 }
 
+// workbenchDeltaConversationId returns the conversation touched by one partial update.
+// workbenchDeltaConversationId 返回单条局部更新影响的会话标识。
+function workbenchDeltaConversationId(envelope: WorkbenchDeltaEnvelope): string | null {
+  switch (envelope.delta.kind) {
+    case "appendMessageBody":
+      return envelope.delta.payload.conversationId;
+  }
+}
+
+// coalesceWorkbenchDeltaEnvelopes merges adjacent append-only chunks for the same message.
+// coalesceWorkbenchDeltaEnvelopes 合并同一消息的相邻追加式片段。
+function coalesceWorkbenchDeltaEnvelopes(envelopes: WorkbenchDeltaEnvelope[]): WorkbenchDeltaEnvelope[] {
+  const coalesced: WorkbenchDeltaEnvelope[] = [];
+  for (const envelope of envelopes) {
+    const previous = coalesced.at(-1);
+    if (previous && canCoalesceAppendMessageBodyDelta(previous, envelope)) {
+      const previousPayload = previous.delta.payload;
+      const nextPayload = envelope.delta.payload;
+      previous.generation = Math.max(previous.generation, envelope.generation);
+      previousPayload.bodyDelta += nextPayload.bodyDelta;
+      previousPayload.runPhase = nextPayload.runPhase ?? previousPayload.runPhase;
+      continue;
+    }
+    coalesced.push(cloneWorkbenchDeltaEnvelope(envelope));
+  }
+  return coalesced;
+}
+
+// canCoalesceAppendMessageBodyDelta checks whether two envelopes target the same append-only row.
+// canCoalesceAppendMessageBodyDelta 检查两个信封是否指向同一条追加式消息行。
+function canCoalesceAppendMessageBodyDelta(previous: WorkbenchDeltaEnvelope, next: WorkbenchDeltaEnvelope): boolean {
+  if (previous.delta.kind !== "appendMessageBody" || next.delta.kind !== "appendMessageBody") {
+    return false;
+  }
+  return previous.delta.payload.conversationId === next.delta.payload.conversationId
+    && previous.delta.payload.messageId === next.delta.payload.messageId;
+}
+
+// cloneWorkbenchDeltaEnvelope clones mutable delta envelopes before frame-level coalescing edits them.
+// cloneWorkbenchDeltaEnvelope 在帧级合并修改信封前克隆可变增量数据。
+function cloneWorkbenchDeltaEnvelope(envelope: WorkbenchDeltaEnvelope): WorkbenchDeltaEnvelope {
+  if (envelope.delta.kind === "appendMessageBody") {
+    return {
+      generation: envelope.generation,
+      delta: {
+        kind: "appendMessageBody",
+        payload: {
+          ...envelope.delta.payload,
+          initialMessage: envelope.delta.payload.initialMessage
+            ? { ...envelope.delta.payload.initialMessage }
+            : envelope.delta.payload.initialMessage,
+        },
+      },
+    };
+  }
+  return envelope;
+}
+
+// applyWorkbenchDeltaWithSubagentSurfaceMessageCache applies one partial update while keeping child transcript caches coherent.
+// applyWorkbenchDeltaWithSubagentSurfaceMessageCache 应用单条局部更新，并保持子代理转录缓存一致。
+function applyWorkbenchDeltaWithSubagentSurfaceMessageCache(
+  workbench: WorkbenchSnapshot,
+  envelope: WorkbenchDeltaEnvelope,
+  cache: SubagentSurfaceMessageCache,
+): WorkbenchSnapshot {
+  switch (envelope.delta.kind) {
+    case "appendMessageBody": {
+      const nextWorkbench = applyAppendMessageBodyDelta(workbench, envelope.delta.payload);
+      syncSubagentSurfaceMessageCacheForDelta(cache, nextWorkbench, envelope.delta.payload.conversationId);
+      return injectCachedSubagentSurfaceMessages(nextWorkbench, cache);
+    }
+  }
+}
+
+// applyAppendMessageBodyDelta appends streamed text to one local workbench message window.
+// applyAppendMessageBodyDelta 将流式文本追加到本地工作台的单个消息窗口。
+function applyAppendMessageBodyDelta(
+  workbench: WorkbenchSnapshot,
+  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+): WorkbenchSnapshot {
+  const messages = appendMessageBodyDeltaToMessages(workbench.messages, delta);
+  const runPhase = delta.runPhase ?? undefined;
+  return {
+    ...workbench,
+    conversations: workbench.conversations.map((conversation) => {
+      if (conversation.id !== delta.conversationId) {
+        return conversation;
+      }
+      return {
+        ...conversation,
+        runPhase: runPhase ?? conversation.runPhase,
+        status: runPhase && !["idle", "ready", "failed", "stopped"].includes(normalizedSessionRunPhase(runPhase) ?? "")
+          ? "Running"
+          : conversation.status,
+        lastUpdatedLabel: "刚刚",
+      };
+    }),
+    subagentNavigation: updateSubagentNavigationRunPhase(workbench.subagentNavigation, delta.conversationId, runPhase),
+    messages,
+  };
+}
+
+// appendMessageBodyDeltaToMessages updates one message array without cloning unrelated message objects.
+// appendMessageBodyDeltaToMessages 更新单个消息数组，并避免克隆无关消息对象。
+function appendMessageBodyDeltaToMessages(
+  messages: ConversationMessage[],
+  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+): ConversationMessage[] {
+  let found = false;
+  const nextMessages = messages.map((message) => {
+    if (message.id !== delta.messageId) {
+      return message;
+    }
+    found = true;
+    return mergeAppendMessageBodyDelta(message, delta);
+  });
+  if (found || !delta.initialMessage) {
+    return nextMessages;
+  }
+
+  const appendedInitialMessage = appendInitialMessageBodyDelta(delta.initialMessage, delta.bodyDelta);
+  const replacementIndex = findAppendMessageBodyReplacementIndex(nextMessages, delta, appendedInitialMessage);
+  if (replacementIndex >= 0) {
+    return nextMessages.map((message, index) => (index === replacementIndex ? appendedInitialMessage : message));
+  }
+  return [...nextMessages, appendedInitialMessage];
+}
+
+// mergeAppendMessageBodyDelta applies a streamed append over an existing row or a fuller initial snapshot.
+// mergeAppendMessageBodyDelta 将流式追加应用到已有行或更完整的初始快照上。
+function mergeAppendMessageBodyDelta(
+  message: ConversationMessage,
+  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+): ConversationMessage {
+  if (delta.initialMessage && delta.initialMessage.body.length > message.body.length) {
+    return appendInitialMessageBodyDelta(delta.initialMessage, delta.bodyDelta);
+  }
+  return {
+    ...message,
+    body: appendTextWithOverlap(message.body, delta.bodyDelta),
+  };
+}
+
+// appendInitialMessageBodyDelta combines a new streamed row with its first body delta without duplicating overlap.
+// appendInitialMessageBodyDelta 将新流式行与首个正文增量合并，并去除重叠内容。
+function appendInitialMessageBodyDelta(message: ConversationMessage, bodyDelta: string): ConversationMessage {
+  return {
+    ...message,
+    body: appendTextWithOverlap(message.body, bodyDelta),
+  };
+}
+
+// findAppendMessageBodyReplacementIndex finds a live row that already represents the same streamed assistant output.
+// findAppendMessageBodyReplacementIndex 查找已经代表同一条流式助手输出的实时行。
+function findAppendMessageBodyReplacementIndex(
+  messages: ConversationMessage[],
+  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  candidate: ConversationMessage,
+): number {
+  if (!isAssistantOutputMessage(candidate)) {
+    return -1;
+  }
+  let lastUserIndex = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message?.conversationId === delta.conversationId && message.role === "user") {
+      lastUserIndex = index;
+    }
+  }
+  for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+    const message = messages[index];
+    if (
+      message?.conversationId === delta.conversationId
+      && message.id !== candidate.id
+      && isAssistantOutputMessage(message)
+      && assistantOutputsLookLikeSameStream(candidate, message)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+// isAssistantOutputMessage checks whether one message is a visible assistant prose row.
+// isAssistantOutputMessage 检查单条消息是否为可见助手正文行。
+function isAssistantOutputMessage(message: ConversationMessage): boolean {
+  return message.role === "assistant"
+    && normalizedRecordKind(message.recordKind) === "assistantoutput"
+    && message.body.trim().length > 0;
+}
+
+// assistantOutputsLookLikeSameStream compares two assistant rows using their overlapping streamed body.
+// assistantOutputsLookLikeSameStream 通过重叠的流式正文比较两条助手行是否属于同一输出。
+function assistantOutputsLookLikeSameStream(left: ConversationMessage, right: ConversationMessage): boolean {
+  if (left.conversationId !== right.conversationId) {
+    return false;
+  }
+  const leftBody = left.body.trim();
+  const rightBody = right.body.trim();
+  if (!leftBody || !rightBody) {
+    return false;
+  }
+  if (leftBody === rightBody || leftBody.includes(rightBody) || rightBody.includes(leftBody)) {
+    return true;
+  }
+  const shorterLength = Math.min(leftBody.length, rightBody.length);
+  const prefixLength = Math.min(96, shorterLength);
+  return shorterLength >= 16 && leftBody.slice(0, prefixLength) === rightBody.slice(0, prefixLength);
+}
+
+// appendTextWithOverlap appends streamed text while removing the duplicated boundary prefix.
+// appendTextWithOverlap 追加流式文本，并移除边界处重复的前缀。
+function appendTextWithOverlap(current: string, incoming: string): string {
+  if (!incoming) {
+    return current;
+  }
+  if (!current) {
+    return incoming;
+  }
+  if (incoming.startsWith(current)) {
+    return incoming;
+  }
+  if (current.endsWith(incoming)) {
+    return current;
+  }
+  const maxOverlap = Math.min(current.length, incoming.length);
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (current.endsWith(incoming.slice(0, length))) {
+      return `${current}${incoming.slice(length)}`;
+    }
+  }
+  return `${current}${incoming}`;
+}
+
+// updateSubagentNavigationRunPhase mirrors delta progress into the active child-task badge.
+// updateSubagentNavigationRunPhase 将增量进度同步到活动子任务徽标。
+function updateSubagentNavigationRunPhase(
+  navigation: WorkbenchSnapshot["subagentNavigation"],
+  conversationId: string,
+  runPhase?: string,
+): WorkbenchSnapshot["subagentNavigation"] {
+  if (!navigation?.tasks?.some((task) => task.taskId === conversationId)) {
+    return navigation;
+  }
+  const running = Boolean(runPhase && !["idle", "ready", "failed", "stopped"].includes(normalizedSessionRunPhase(runPhase) ?? ""));
+  return {
+    ...navigation,
+    tasks: navigation.tasks.map((task) => (
+      task.taskId === conversationId
+        ? { ...task, isRunning: running || task.isRunning, runState: running ? "running" : task.runState }
+        : task
+    )),
+  };
+}
+
+// syncSubagentSurfaceMessageCacheForDelta updates the cached child transcript touched by one delta.
+// syncSubagentSurfaceMessageCacheForDelta 更新单条增量影响的子代理转录缓存。
+function syncSubagentSurfaceMessageCacheForDelta(
+  cache: SubagentSurfaceMessageCache,
+  workbench: WorkbenchSnapshot,
+  conversationId: string,
+): void {
+  const belongsToVisibleTask = workbench.subagentNavigation?.tasks?.some((task) => task.taskId === conversationId) ?? false;
+  if (!belongsToVisibleTask && !cache.has(conversationId)) {
+    return;
+  }
+  cache.set(
+    conversationId,
+    workbench.messages.filter((message) => message.conversationId === conversationId),
+  );
+}
+
 // groupMessagesByConversation groups a flat message window by owning conversation.
 // groupMessagesByConversation 按所属会话分组扁平消息窗口。
 function groupMessagesByConversation(messages: ConversationMessage[]): Map<string, ConversationMessage[]> {
@@ -4327,8 +4745,13 @@ function mergeIncomingConversationMessages(
     return incomingMessages;
   }
   const incomingOutput = latestAssistantOutputAfterLastUser(incomingMessages);
-  if (incomingOutput && assistantOutputCoversStreamedOutput(incomingOutput, latestCurrentOutput)) {
-    return incomingMessages;
+  if (incomingOutput) {
+    if (assistantOutputCoversStreamedOutput(incomingOutput, latestCurrentOutput)) {
+      return incomingMessages;
+    }
+    if (assistantOutputCoversStreamedOutput(latestCurrentOutput, incomingOutput)) {
+      return replaceIncomingAssistantOutput(incomingMessages, incomingOutput.id, latestCurrentOutput);
+    }
   }
   const incomingTerminal = incomingConversationHasTerminalStats(incomingMessages);
   const currentRunning = conversationIsRunning(currentConversation);
@@ -4351,9 +4774,7 @@ function latestAssistantOutputAfterLastUser(messages: ConversationMessage[]): Co
   return [...messages]
     .reverse()
     .find((message) => (
-      message.role === "assistant"
-      && normalizedRecordKind(message.recordKind) === "assistantoutput"
-      && message.body.trim().length > 0
+      isAssistantOutputMessage(message)
       && conversationMessageCreatedAtValue(message) >= lastUserTime
     )) ?? null;
 }
@@ -4374,11 +4795,38 @@ function incomingConversationHasTerminalStats(messages: ConversationMessage[]): 
   return messages.some((message) => normalizedRecordKind(message.recordKind) === "turnstats");
 }
 
+// replaceIncomingAssistantOutput swaps a stale snapshot row for the newer streamed row without showing both.
+// replaceIncomingAssistantOutput 用更新的流式行替换滞后的快照行，避免同时显示两份输出。
+function replaceIncomingAssistantOutput(
+  messages: ConversationMessage[],
+  incomingOutputId: string,
+  streamedOutput: ConversationMessage,
+): ConversationMessage[] {
+  let replaced = false;
+  const nextMessages: ConversationMessage[] = [];
+  for (const message of messages) {
+    if (message.id === streamedOutput.id && message.id !== incomingOutputId) {
+      continue;
+    }
+    if (message.id === incomingOutputId) {
+      nextMessages.push(streamedOutput);
+      replaced = true;
+      continue;
+    }
+    nextMessages.push(message);
+  }
+  return replaced ? nextMessages : insertCarriedStreamingOutput(messages, streamedOutput);
+}
+
 // insertCarriedStreamingOutput inserts a carried streamed output before terminal-looking records.
 // insertCarriedStreamingOutput 将保留的流式输出插入到终态记录之前。
 function insertCarriedStreamingOutput(messages: ConversationMessage[], output: ConversationMessage): ConversationMessage[] {
   if (messages.some((message) => message.id === output.id)) {
     return messages;
+  }
+  const duplicateIndex = messages.findIndex((message) => isAssistantOutputMessage(message) && assistantOutputsLookLikeSameStream(message, output));
+  if (duplicateIndex >= 0) {
+    return messages.map((message, index) => (index === duplicateIndex ? output : message));
   }
   const insertIndex = messages.findIndex((message) => {
     const recordKind = normalizedRecordKind(message.recordKind);
@@ -5046,25 +5494,29 @@ const markdownSanitizers = [rehypeSanitize];
 // MarkdownImageWorkspacePathContext 为相对图片链接携带当前项目根目录。
 const MarkdownImageWorkspacePathContext = React.createContext<string | null>(null);
 
-// StreamingRevealFrameContext lets smoothed transcript rendering keep the viewport pinned to the live tail.
-// StreamingRevealFrameContext 允许平滑转录渲染在展开时持续保持视口贴近实时尾部。
-const StreamingRevealFrameContext = React.createContext<(() => void) | null>(null);
+// MarkdownViewportRootRefContext carries the transcript scroll root for lazy Markdown chunks.
+// MarkdownViewportRootRefContext 为懒加载 Markdown 分块携带转录滚动根节点。
+const MarkdownViewportRootRefContext = React.createContext<React.RefObject<HTMLElement | null> | null>(null);
 
-// STREAMING_REVEAL_DIRECT_APPEND_LIMIT is the largest append shown immediately without smoothing.
-// STREAMING_REVEAL_DIRECT_APPEND_LIMIT 是无需平滑即可立即展示的最大追加长度。
-const STREAMING_REVEAL_DIRECT_APPEND_LIMIT = 16;
+// STREAMING_DELTA_FLUSH_MS batches hot transcript deltas so React and GC are not driven at display-frame cadence.
+// STREAMING_DELTA_FLUSH_MS 将高频转录增量批处理，避免 React 与 GC 被显示帧率牵引。
+const STREAMING_DELTA_FLUSH_MS = 80;
 
-// STREAMING_REVEAL_FRAME_MS is the display-layer cadence for revealing buffered provider chunks.
-// STREAMING_REVEAL_FRAME_MS 是显示层揭示已缓冲 Provider 分块的刷新节奏。
-const STREAMING_REVEAL_FRAME_MS = 16;
+// LAZY_MARKDOWN_RENDER_THRESHOLD enables chunk-level unmounting for large finalized Markdown messages.
+// LAZY_MARKDOWN_RENDER_THRESHOLD 为较大的终态 Markdown 消息启用分块卸载。
+const LAZY_MARKDOWN_RENDER_THRESHOLD = 6000;
 
-// STREAMING_REVEAL_MIN_STEP_CHARS is the minimum number of UTF-16 code units revealed per frame.
-// STREAMING_REVEAL_MIN_STEP_CHARS 是每帧至少揭示的 UTF-16 码元数量。
-const STREAMING_REVEAL_MIN_STEP_CHARS = 8;
+// LAZY_MARKDOWN_TARGET_CHARS is the preferred chunk size before the next safe Markdown boundary.
+// LAZY_MARKDOWN_TARGET_CHARS 是到达下一个安全 Markdown 边界前的目标分块大小。
+const LAZY_MARKDOWN_TARGET_CHARS = 4000;
 
-// STREAMING_REVEAL_MAX_STEP_CHARS caps one animation-frame reveal so large provider chunks still feel fluid.
-// STREAMING_REVEAL_MAX_STEP_CHARS 限制单帧揭示量，使较大的 Provider 分块仍保持流动感。
-const STREAMING_REVEAL_MAX_STEP_CHARS = 48;
+// LAZY_MARKDOWN_ROOT_MARGIN keeps nearby Markdown chunks mounted before they enter the viewport.
+// LAZY_MARKDOWN_ROOT_MARGIN 让即将进入视口的 Markdown 分块提前保持挂载。
+const LAZY_MARKDOWN_ROOT_MARGIN = "900px 0px";
+
+// STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT limits tail-follow signatures to messages that can affect the viewport tail.
+// STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT 将尾部追随签名限制在会影响视口尾部的消息范围。
+const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
 
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
 // webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
@@ -5270,7 +5722,7 @@ function projectConversationTimelineItems(
     const running = forceRunning && !terminal;
     const bodyItems = [...currentTurn.bodyItems];
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
-    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item));
+    const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
     const shouldDefaultCollapse = Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(currentTurn.userItem.id);
     const startedAtMs = conversationMessageUnixMillis(currentTurn.userItem.sourceMessage ?? currentTurn.userItem.userMessage);
     const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
@@ -5375,6 +5827,61 @@ function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRen
   return null;
 }
 
+// dedupeProcessAssistantMarkdownItems hides repeated short assistant prose inside one turn process group.
+// dedupeProcessAssistantMarkdownItems 隐藏同一轮处理过程中的重复短助手正文。
+function dedupeProcessAssistantMarkdownItems(items: ConversationRenderItem[]): ConversationRenderItem[] {
+  const hiddenIndexes = new Set<number>();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const body = processAssistantMarkdownBody(item);
+    if (!body) {
+      continue;
+    }
+    for (let nextIndex = index + 1; nextIndex < items.length; nextIndex += 1) {
+      const nextBody = processAssistantMarkdownBody(items[nextIndex]);
+      if (!nextBody) {
+        continue;
+      }
+      if (assistantMarkdownProcessBodyCoveredByLater(body, nextBody)) {
+        hiddenIndexes.add(index);
+        break;
+      }
+    }
+  }
+  return items.filter((_, index) => !hiddenIndexes.has(index));
+}
+
+// processAssistantMarkdownBody returns the plain Markdown body for assistant prose rows only.
+// processAssistantMarkdownBody 仅返回助手正文行的 Markdown 正文。
+function processAssistantMarkdownBody(item: ConversationRenderItem | undefined): string | null {
+  const block = item?.blocks.length === 1 ? item.blocks[0] : undefined;
+  if (!block || item?.role !== "assistant" || block.kind !== "markdown") {
+    return null;
+  }
+  const body = block.body.trim();
+  return body ? body : null;
+}
+
+// assistantMarkdownProcessBodyCoveredByLater detects duplicate or superseded streamed process prose.
+// assistantMarkdownProcessBodyCoveredByLater 检测重复或已被后续流式正文覆盖的过程正文。
+function assistantMarkdownProcessBodyCoveredByLater(body: string, laterBody: string): boolean {
+  const normalizedBody = normalizeProcessAssistantText(body);
+  const normalizedLaterBody = normalizeProcessAssistantText(laterBody);
+  if (!normalizedBody || !normalizedLaterBody) {
+    return false;
+  }
+  if (normalizedBody === normalizedLaterBody) {
+    return true;
+  }
+  return normalizedBody.length <= 240 && normalizedLaterBody.includes(normalizedBody);
+}
+
+// normalizeProcessAssistantText normalizes prose for duplicate checks without changing display content.
+// normalizeProcessAssistantText 规范化正文以便去重检查，但不改变显示内容。
+function normalizeProcessAssistantText(source: string): string {
+  return source.replace(/\s+/g, " ").trim();
+}
+
 // conversationMessageUnixMillis parses the optional Unix-millis timestamp carried by one message.
 // conversationMessageUnixMillis 解析单条消息携带的可选 Unix 毫秒时间戳。
 function conversationMessageUnixMillis(message?: ConversationMessage): number | null {
@@ -5446,9 +5953,23 @@ function thinkingOverlayBlockSignature(block: ConversationBlock): string {
 // isMergeableToolBlock 返回某个块是否属于同一工具执行行。
 function isMergeableToolBlock(block: ConversationBlock): boolean {
   if (block.kind === "tool-call" || block.kind === "tool-result" || block.kind === "command") {
+    return blockHasToolExecutionEvidence(block);
+  }
+  return block.kind === "diff" && blockHasToolExecutionEvidence(block);
+}
+
+// blockHasToolExecutionEvidence checks that a special block really belongs to a tool execution.
+// blockHasToolExecutionEvidence 检查特殊块确实属于一次工具执行。
+function blockHasToolExecutionEvidence(block: ConversationBlock): boolean {
+  if (block.toolEvidence || block.toolCallId || block.toolResultId || block.commandSessionId || block.taskSessionId || block.toolName) {
     return true;
   }
-  return block.kind === "diff" && Boolean(block.toolCallId || block.toolResultId || block.toolName);
+  const hostKind = metadataString(block.rawMetadata, [
+    "host_result.kind",
+    "hostResult.kind",
+    "kind",
+  ]);
+  return Boolean(hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind));
 }
 
 // findToolMergeItem resolves an existing tool execution row using exact ids before the tool-name fallback.
@@ -5521,7 +6042,11 @@ function parseConversationBlocks(message: ConversationMessage): ConversationBloc
 
   const structuredKind = structuredMessageBlockKind(message);
   if (structuredKind) {
-    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, structuredMessageAttributes(message), message.metadata)];
+    const attributes = structuredMessageAttributes(message);
+    if (structuredKindLooksLikeToolBlock(structuredKind) && !structuredMessageHasToolEvidence(message, attributes)) {
+      return [conversationMarkdownBlock(message.id, 0, message.body)];
+    }
+    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, attributes, message.metadata)];
   }
 
   const source = message.body.replace(/\r\n/g, "\n");
@@ -5558,9 +6083,15 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "toolName",
     "host_result.tool_name",
     "hostResult.toolName",
+    "host_result.payload.tool_name",
+    "hostResult.payload.toolName",
     "payload.tool_name",
     "payload.toolName",
     "tool.name",
+    "payload.tool",
+    "host_result.payload.tool",
+    "hostResult.payload.tool",
+    "tool",
     "name",
   ]) ?? extractToolNameFromText(message.title ?? "");
   const toolCallId = metadataString(message.metadata, [
@@ -5568,14 +6099,20 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "toolCallId",
     "host_result.tool_call_id",
     "hostResult.toolCallId",
+    "host_result.payload.tool_call_id",
+    "hostResult.payload.toolCallId",
     "payload.tool_call_id",
     "payload.toolCallId",
   ]);
   const toolResultId = metadataString(message.metadata, [
+    "result.tool_result_id",
+    "result.toolResultId",
     "tool_result_id",
     "toolResultId",
     "host_result.tool_result_id",
     "hostResult.toolResultId",
+    "host_result.payload.tool_result_id",
+    "hostResult.payload.toolResultId",
     "payload.tool_result_id",
     "payload.toolResultId",
   ]);
@@ -5584,6 +6121,8 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "commandSessionId",
     "host_result.command_session_id",
     "hostResult.commandSessionId",
+    "host_result.payload.command_session_id",
+    "hostResult.payload.commandSessionId",
     "payload.command_session_id",
     "payload.commandSessionId",
   ]);
@@ -5599,6 +6138,7 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
       "hostResult.payload.executionStatus",
     ]) : null;
   const explicitStatus = metadataString(message.metadata, [
+      "result.status",
       "tool_display_state",
       "toolDisplayState",
       "display_state",
@@ -5621,7 +6161,11 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
       ?? metadataToolFailureStatus(message.metadata)
       ?? turnStatsStatus(message.metadata);
   const status = taskSessionStatus ?? fallbackStatus;
-  const summary = turnStatsSummary(message.metadata);
+  const summary = metadataString(message.metadata, [
+      "result.summary",
+      "preview",
+      "summary",
+    ]) ?? turnStatsSummary(message.metadata);
   if (message.title) attributes.title = message.title;
   if (message.recordKind) attributes.record_kind = message.recordKind;
   if (toolName) attributes.tool_name = toolName;
@@ -5876,10 +6420,10 @@ function detectToolBlockKind(source: string): ConversationBlockKind | null {
   if (normalized.includes("turn stats") || normalized.includes("provider 调用") || normalized.includes("总 tokens")) {
     return "turn-stats";
   }
-  if (source.includes("## Tool Call") || normalized.includes("tool_call_id") || normalized.includes("tool call")) {
+  if (hasLegacyToolCallBlockMarker(source)) {
     return "tool-call";
   }
-  if (source.includes("## Tool Result") || normalized.includes("tool_result_id") || normalized.includes("tool result")) {
+  if (hasLegacyToolResultBlockMarker(source)) {
     return "tool-result";
   }
   if (hasLegacyCommandBlockMarker(source)) {
@@ -5889,6 +6433,24 @@ function detectToolBlockKind(source: string): ConversationBlockKind | null {
     return "thinking";
   }
   return null;
+}
+
+// hasLegacyToolCallBlockMarker detects explicit legacy tool-call transcript blocks.
+// hasLegacyToolCallBlockMarker 检测明确的旧版工具调用转录块。
+function hasLegacyToolCallBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*Tool Call\b/im.test(source)
+    || /(?:^|\n)\s*tool_call_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*工具调用\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*调用\s+[A-Za-z0-9_.:-]+\s+工具\s*(?:进行中|运行中|已完成|失败)?\s*$/im.test(source);
+}
+
+// hasLegacyToolResultBlockMarker detects explicit legacy tool-result transcript blocks.
+// hasLegacyToolResultBlockMarker 检测明确的旧版工具返回转录块。
+function hasLegacyToolResultBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*Tool Result\b/im.test(source)
+    || /^#{1,6}\s*Result ID\b/im.test(source)
+    || /(?:^|\n)\s*tool_result_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*工具返回\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source);
 }
 
 // hasLegacyCommandBlockMarker detects explicit command-session transcript blocks without matching ordinary tool lists.
@@ -5918,11 +6480,13 @@ function detectToolAttributes(source: string): Record<string, string> {
   const toolResultId = extractToolResultIdFromText(source);
   const commandSessionId = source.match(/command_session_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
   const status = extractToolStatusFromText(source);
+  const hasToolMarker = hasLegacyToolCallBlockMarker(source) || hasLegacyToolResultBlockMarker(source);
   if (toolName) attributes.tool_name = toolName;
   if (toolCallId) attributes.tool_call_id = toolCallId;
   if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
   if (status) attributes.status = status;
+  if (hasToolMarker) attributes.tool_evidence = "true";
   return attributes;
 }
 
@@ -6012,9 +6576,10 @@ function conversationSpecialBlock(
   attributes: Record<string, string>,
   rawMetadata?: unknown,
 ): ConversationBlock {
-  const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "") ?? extractToolNameFromText(body);
+  const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "");
   const title = attributes.title ?? blockTitle(kind, toolName);
   const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
+  const toolEvidence = conversationBlockHasToolEvidence(kind, attributes, rawMetadata);
   const compactionSectionId = metadataString(rawMetadata, ["context_compaction_section_id"]);
   const compactionRole = metadataString(rawMetadata, ["context_compaction_role"]);
   const compactionState = metadataString(rawMetadata, ["context_compaction_state"]);
@@ -6031,6 +6596,7 @@ function conversationSpecialBlock(
     summary: attributes.summary ?? compactTextPreview(body),
     status,
     toolName,
+    toolEvidence,
     toolCallId: attributes.tool_call_id,
     toolResultId: attributes.tool_result_id,
     commandSessionId: attributes.command_session_id,
@@ -6338,10 +6904,32 @@ function ConsoleShell(props: {
 // generatedMediaAttachmentsFromMetadata 从嵌套或扁平工具元数据中提取宿主生成媒体输出。
 function generatedMediaAttachmentsFromMetadata(metadata: unknown): GeneratedMediaAttachment[] {
   const hostResult = resolvedHostResult(metadata);
-  if (!hostResult || hostResult.kind !== "generated_attachments") {
-    return [];
+  if (hostResult?.kind === "generated_attachments") {
+    return generatedMediaAttachmentsFromPayload(hostResult.payload);
   }
-  const outputs = Array.isArray(hostResult.payload?.outputs) ? hostResult.payload.outputs : [];
+  const directAttachments = generatedMediaAttachmentsFromPayload(metadata);
+  if (directAttachments.length > 0) {
+    return directAttachments;
+  }
+  return generatedMediaAttachmentsFromPayload(metadataValue(metadata, ["display"]));
+}
+
+// generatedMediaAttachmentsFromToolDetailPayload extracts media outputs from the hidden full tool detail row.
+// generatedMediaAttachmentsFromToolDetailPayload 从隐藏完整工具详情行中提取媒体输出。
+function generatedMediaAttachmentsFromToolDetailPayload(payload: ToolDetailPayload): GeneratedMediaAttachment[] {
+  const metadataAttachments = generatedMediaAttachmentsFromMetadata(payload.metadata);
+  if (metadataAttachments.length > 0) {
+    return metadataAttachments;
+  }
+  const parsedBody = parseJsonObject(payload.body);
+  return generatedMediaAttachmentsFromPayload(parsedBody);
+}
+
+// generatedMediaAttachmentsFromPayload maps a generated-capability JSON payload to WebUI attachments.
+// generatedMediaAttachmentsFromPayload 将生成能力 JSON 载荷映射为 WebUI 附件。
+function generatedMediaAttachmentsFromPayload(payload: unknown): GeneratedMediaAttachment[] {
+  const object = objectValue(payload);
+  const outputs = Array.isArray(object?.outputs) ? object.outputs : [];
   return outputs
     .map((output): GeneratedMediaAttachment | null => {
       if (!output || typeof output !== "object") {
@@ -6363,6 +6951,20 @@ function generatedMediaAttachmentsFromMetadata(metadata: unknown): GeneratedMedi
       };
     })
     .filter((output): output is GeneratedMediaAttachment => output !== null);
+}
+
+// parseJsonObject parses one JSON object string without treating plain tool text as structured data.
+// parseJsonObject 解析单个 JSON 对象字符串，并避免把普通工具文本当成结构化数据。
+function parseJsonObject(source: string): Record<string, unknown> | null {
+  const trimmed = source.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    return objectValue(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
 }
 
 // resolvedHostResult returns a normalized generated/tool host-result object from known runtime metadata shapes.
@@ -6431,6 +7033,41 @@ function normalizeMarkdownImageSource(src: string | undefined, workspacePath?: s
     return relativeSource;
   }
   return src;
+}
+
+// structuredKindLooksLikeToolBlock returns whether a structured kind needs tool evidence before special rendering.
+// structuredKindLooksLikeToolBlock 返回结构化类型是否需要工具证据才能按特殊块渲染。
+function structuredKindLooksLikeToolBlock(kind: ConversationBlockKind): boolean {
+  return kind === "tool-call" || kind === "tool-result" || kind === "command" || kind === "diff";
+}
+
+// structuredMessageHasToolEvidence prevents assistant prose from being misrendered as a failed tool row.
+// structuredMessageHasToolEvidence 防止助手正文被误渲染为失败工具行。
+function structuredMessageHasToolEvidence(message: ConversationMessage, attributes: Record<string, string>): boolean {
+  if (attributes.tool_evidence === "true" || attributes.tool_name || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
+    return true;
+  }
+  const hostKind = metadataString(message.metadata, [
+    "host_result.kind",
+    "hostResult.kind",
+    "kind",
+  ]);
+  if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
+    return true;
+  }
+  const payloadTool = metadataString(message.metadata, [
+    "payload.tool",
+    "host_result.payload.tool",
+    "hostResult.payload.tool",
+    "payload.tool_name",
+    "host_result.payload.tool_name",
+    "hostResult.payload.toolName",
+  ]);
+  if (payloadTool) {
+    return true;
+  }
+  const title = message.title ?? "";
+  return /调用\s+\S+\s+工具|工具调用|工具返回|Tool Call|Tool Result|Command Session|命令会话/i.test(title);
 }
 
 // markdownImageAttachment converts one rendered Markdown image URL into a preview attachment.
@@ -6627,6 +7264,40 @@ function splitMarkdownImagePathSuffix(value: string): { path: string; suffix: st
     path: match?.[1]?.trim() ?? value.trim(),
     suffix: match?.[2] ?? "",
   };
+}
+
+// conversationBlockHasToolEvidence separates real tool metadata from prose-derived display text.
+// conversationBlockHasToolEvidence 将真实工具元数据与正文推断出的展示文本分离。
+function conversationBlockHasToolEvidence(
+  kind: ConversationBlockKind,
+  attributes: Record<string, string>,
+  rawMetadata?: unknown,
+): boolean {
+  if (!structuredKindLooksLikeToolBlock(kind)) {
+    return false;
+  }
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
+    return true;
+  }
+  if (attributes.tool_name || attributes.name) {
+    return true;
+  }
+  const hostKind = metadataString(rawMetadata, [
+    "host_result.kind",
+    "hostResult.kind",
+    "kind",
+  ]);
+  if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
+    return true;
+  }
+  return Boolean(metadataString(rawMetadata, [
+    "payload.tool",
+    "host_result.payload.tool",
+    "hostResult.payload.tool",
+    "payload.tool_name",
+    "host_result.payload.tool_name",
+    "hostResult.payload.toolName",
+  ]));
 }
 
 // normalizeRelativeMarkdownImagePath removes harmless relative prefixes without allowing root escapes.
@@ -9357,7 +10028,13 @@ function ChatArea(props: {
       projectId: selectedConversation?.projectId ?? null,
     }
     : selectedConversation;
-  const messages = props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId);
+  const messages = React.useMemo(
+    () => props.workbench.messages.filter((message) => message.conversationId === activeSurfaceConversationId),
+    [activeSurfaceConversationId, props.workbench.messages],
+  );
+  // renderItems stores parsed transcript rows for this active surface.
+  // renderItems 保存当前活动界面的已解析转录行。
+  const renderItems = React.useMemo(() => projectConversationRenderItems(messages), [messages]);
   const isLoading = props.loadingConversationId === props.selectedConversationId;
   // showConversationLoadingOnly is true only when no cached messages can be shown during hydration.
   // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
@@ -9376,7 +10053,7 @@ function ChatArea(props: {
   const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
   // runtimeCue stores the compact in-progress label shown above the composer.
   // runtimeCue 保存显示在输入区上方的紧凑进行中提示。
-  const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, messages);
+  const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, renderItems);
   const displayedStreamingThinkingBlock = thinkingOverlayEnabled ? streamingThinkingBlock : null;
   // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
   // streamingThinkingOverlayBlock 在思考弹窗延迟退场期间保留最后一个思考块。
@@ -9399,7 +10076,7 @@ function ChatArea(props: {
       || normalizedSessionRunPhase(surfaceConversation?.runPhase) === "toolrunning");
   const runtimeCue = visibleStreamingThinkingOverlayBlock || suppressSubagentOnlyMainCue
     ? null
-    : conversationRuntimeCue(surfaceConversation, messages, t);
+    : conversationRuntimeCue(surfaceConversation, renderItems, t);
   const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
@@ -9475,20 +10152,6 @@ function ChatArea(props: {
     }
     element.scrollTop = element.scrollHeight;
     return true;
-  }, []);
-
-  // handleStreamingRevealFrame keeps display-only streaming smoothing aligned with the live transcript tail.
-  // handleStreamingRevealFrame 让仅显示层的流式平滑展开持续对齐实时转录尾部。
-  const handleStreamingRevealFrame = React.useCallback(() => {
-    const element = workspaceRef.current;
-    if (!element) {
-      return;
-    }
-    if (!shouldFollowConversationTailRef.current && !conversationViewportAllowsTailFollow(element)) {
-      return;
-    }
-    element.scrollTop = element.scrollHeight;
-    shouldFollowConversationTailRef.current = true;
   }, []);
 
   React.useLayoutEffect(() => {
@@ -9642,26 +10305,25 @@ function ChatArea(props: {
               projectName={emptyProjectName}
             />
           ) : null}
-          <StreamingRevealFrameContext.Provider value={handleStreamingRevealFrame}>
-            <ConversationWorkspace
-              conversation={surfaceConversation}
-              hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
-              messages={messages}
-              error={props.conversationLoadError}
-              parentConversationId={activeSurfaceConversationId ?? null}
-              workspacePath={selectedProject?.path ?? null}
-              onScrollStateChange={updateConversationBottomState}
-              onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
-              scrollRef={workspaceRef}
-              suppressEmptyPlaceholder={isEmptyConversation}
+          <ConversationWorkspace
+            conversation={surfaceConversation}
+            hiddenThinkingBlockId={displayedStreamingThinkingBlock?.id ?? null}
+            messages={messages}
+            renderItems={renderItems}
+            error={props.conversationLoadError}
+            parentConversationId={activeSurfaceConversationId ?? null}
+            workspacePath={selectedProject?.path ?? null}
+            onScrollStateChange={updateConversationBottomState}
+            onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
+            scrollRef={workspaceRef}
+            suppressEmptyPlaceholder={isEmptyConversation}
+          />
+          {visibleStreamingThinkingOverlayBlock ? (
+            <StreamingThinkingOverlay
+              block={visibleStreamingThinkingOverlayBlock}
+              leaving={streamingThinkingOverlayLeaving}
             />
-            {visibleStreamingThinkingOverlayBlock ? (
-              <StreamingThinkingOverlay
-                block={visibleStreamingThinkingOverlayBlock}
-                leaving={streamingThinkingOverlayLeaving}
-              />
-            ) : null}
-          </StreamingRevealFrameContext.Provider>
+          ) : null}
           <ComposerDock
             aiCapabilities={props.workbench.aiCapabilities ?? []}
             attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
@@ -9813,6 +10475,9 @@ function ConversationWorkspace(props: {
   conversation?: ConversationSummary;
   hiddenThinkingBlockId: string | null;
   messages: ConversationMessage[];
+  // Parsed rows for the same message window.
+  // 同一消息窗口对应的已解析展示行。
+  renderItems: ConversationRenderItem[];
   error: string | null;
   parentConversationId: string | null;
   // Project workspace path used to resolve relative Markdown media references.
@@ -9835,14 +10500,13 @@ function ConversationWorkspace(props: {
   const [processCollapseOverrides, setProcessCollapseOverrides] = React.useState<Map<string, boolean>>(
     () => new Map(conversationProcessCollapseMemory),
   );
-  const renderItems = React.useMemo(() => projectConversationRenderItems(props.messages), [props.messages]);
   const sessionRunning = conversationIsRunning(props.conversation);
   const timelineItems = React.useMemo(
-    () => projectConversationTimelineItems(renderItems, props.conversation, nowMs),
-    [renderItems, props.conversation, nowMs],
+    () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs),
+    [props.renderItems, props.conversation, nowMs],
   );
   const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
-    ? latestThinkingBlockIdAfterLastUser(renderItems)
+    ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
   const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem) => {
     const surfaceId = props.conversation?.id ?? props.parentConversationId ?? "unknown";
@@ -9868,62 +10532,72 @@ function ConversationWorkspace(props: {
 
   return (
     <MarkdownImageWorkspacePathContext.Provider value={props.workspacePath?.trim() || null}>
-      <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
-        <div className="timeline">
-          {props.error ? (
-            <article className="message-card system error-message">
-              <span>system</span>
-              <p>会话正文加载失败：{props.error}</p>
-            </article>
-          ) : null}
-          {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
-            <article className="message-card system">
-              <span>system</span>
-              <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
-            </article>
-          ) : null}
-          {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
-            <ConversationRenderItemView
-              item={timelineItem.item}
-              key={timelineItem.item.id}
-              autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
-              parentConversationId={props.parentConversationId}
-              sessionRunning={sessionRunning}
-              onOpenDetail={setDetail}
+      <MarkdownViewportRootRefContext.Provider value={props.scrollRef}>
+        <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
+          <div className="timeline">
+            {props.error ? (
+              <article className="message-card system error-message">
+                <span>system</span>
+                <p>会话正文加载失败：{props.error}</p>
+              </article>
+            ) : null}
+            {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
+              <article className="message-card system">
+                <span>system</span>
+                <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
+              </article>
+            ) : null}
+            {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
+              renderItemHiddenByThinkingOverlay(timelineItem.item, props.hiddenThinkingBlockId) ? null : (
+                <ConversationRenderItemView
+                  item={timelineItem.item}
+                  key={timelineItem.item.id}
+                  autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+                  hiddenThinkingBlockId={null}
+                  parentConversationId={props.parentConversationId}
+                  sessionRunning={sessionRunning}
+                  onOpenDetail={setDetail}
+                  onOpenMedia={setMediaPlayer}
+                  onOpenSubagentPanel={props.onOpenSubagentPanel}
+                />
+              )
+            ) : (
+              <ConversationProcessGroup
+                autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+                collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
+                hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+                key={timelineItem.process.id}
+                nowMs={nowMs}
+                parentConversationId={props.parentConversationId}
+                process={timelineItem.process}
+                sessionRunning={sessionRunning}
+                onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
+                onOpenDetail={setDetail}
+                onOpenMedia={setMediaPlayer}
+                onOpenSubagentPanel={props.onOpenSubagentPanel}
+              />
+            ))}
+          </div>
+          {detail ? (
+            <ConversationDetailModal
+              detail={detail}
+              onClose={() => setDetail(null)}
               onOpenMedia={setMediaPlayer}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
             />
-          ) : (
-            <ConversationProcessGroup
-              autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-              collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
-              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
-              key={timelineItem.process.id}
-              nowMs={nowMs}
-              parentConversationId={props.parentConversationId}
-              process={timelineItem.process}
-              sessionRunning={sessionRunning}
-              onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
-              onOpenDetail={setDetail}
-              onOpenMedia={setMediaPlayer}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
-            />
-          ))}
-        </div>
-        {detail ? (
-          <ConversationDetailModal
-            detail={detail}
-            onClose={() => setDetail(null)}
-            onOpenMedia={setMediaPlayer}
-          />
-        ) : null}
-        {mediaPlayer ? (
-          <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
-        ) : null}
-      </section>
+          ) : null}
+          {mediaPlayer ? (
+            <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
+          ) : null}
+        </section>
+      </MarkdownViewportRootRefContext.Provider>
     </MarkdownImageWorkspacePathContext.Provider>
   );
+}
+
+// renderItemHiddenByThinkingOverlay hides the whole render row that is mirrored by the live thinking overlay.
+// renderItemHiddenByThinkingOverlay 隐藏被实时思考浮层镜像展示的整条渲染行。
+function renderItemHiddenByThinkingOverlay(item: ConversationRenderItem, hiddenThinkingBlockId: string | null): boolean {
+  return Boolean(hiddenThinkingBlockId && item.blocks.some((block) => block.id === hiddenThinkingBlockId));
 }
 
 // ConversationProcessGroup renders one per-turn process header and its foldable rows.
@@ -9968,6 +10642,8 @@ function ConversationProcessGroup(props: {
     fallbackStartedAtMsRef.current = Date.now();
   }, [props.process.id]);
   const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
+  const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
+  const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
     : null;
@@ -9990,10 +10666,10 @@ function ConversationProcessGroup(props: {
         {props.process.collapsible ? (collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />) : null}
       </button>
       <div className="work-process-guidance">
-        {props.process.guidanceItems.map((item) => (
+        {visibleGuidanceItems.map((item) => (
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-            hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+            hiddenThinkingBlockId={null}
             item={item}
             key={item.id}
             parentConversationId={props.parentConversationId}
@@ -10006,10 +10682,10 @@ function ConversationProcessGroup(props: {
       </div>
       {bodyVisible ? (
         <div className="work-process-body">
-          {props.process.items.map((item) => (
+          {visibleProcessItems.map((item) => (
             <ConversationRenderItemView
               autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-              hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+              hiddenThinkingBlockId={null}
               item={item}
               key={item.id}
               parentConversationId={props.parentConversationId}
@@ -10082,9 +10758,9 @@ function ConversationRenderItemView(props: {
         <ConversationBlocksView
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
+          conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
           parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
-          smoothStreamingMarkdown={props.sessionRunning && props.item.role === "assistant"}
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -10107,9 +10783,9 @@ function stripUserPromptHeading(body: string): string {
 function ConversationBlocksView(props: {
   autoExpandThinkingBlockId: string | null;
   blocks: ConversationBlock[];
+  conversationId: string | null;
   parentConversationId: string | null;
   sessionRunning: boolean;
-  smoothStreamingMarkdown: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -10118,6 +10794,7 @@ function ConversationBlocksView(props: {
     return (
       <ToolExecutionBlock
         blocks={props.blocks}
+        conversationId={props.conversationId}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
@@ -10143,7 +10820,7 @@ function ConversationBlocksView(props: {
     return (
       <MarkdownMessage
         content={block.body}
-        smoothStreaming={props.smoothStreamingMarkdown}
+        streaming={props.sessionRunning}
         onOpenMedia={props.onOpenMedia}
       />
     );
@@ -10152,6 +10829,7 @@ function ConversationBlocksView(props: {
     <SpecialConversationBlock
       autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
+      conversationId={props.conversationId}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
@@ -10163,154 +10841,337 @@ function ConversationBlocksView(props: {
 
 // MarkdownMessage renders assistant Markdown with Vulcan-specific component styling.
 // MarkdownMessage 使用 Vulcan 定制组件样式渲染 assistant Markdown。
-function MarkdownMessage(props: {
+const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   // Markdown source content to render.
   // 需要渲染的 Markdown 源内容。
   content: string;
-  // Whether large streaming appends should be revealed gradually in the display layer.
-  // 是否应在显示层渐进揭示较大的流式追加内容。
-  smoothStreaming?: boolean;
+  // Whether to bypass viewport lazy mounting for overlays and modal surfaces.
+  // 是否为浮层和弹窗界面绕过视口懒挂载。
+  eager?: boolean;
+  // Whether the content is still growing and should avoid parsing incomplete block syntax.
+  // 内容是否仍在增长，需要避免解析未闭合的块级语法。
+  streaming?: boolean;
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const workspacePath = React.useContext(MarkdownImageWorkspacePathContext);
-  const displayedContent = useSmoothedStreamingContent(props.content, props.smoothStreaming === true);
+  // content keeps streaming and finalized Markdown on the same renderer path.
+  // content 让流式与终态 Markdown 使用同一条渲染路径。
   const content = React.useMemo(
-    () => normalizeMarkdownLocalImageLinks(displayedContent, workspacePath),
-    [displayedContent, workspacePath],
+    () => normalizeMarkdownLocalImageLinks(props.content, workspacePath),
+    [props.content, workspacePath],
   );
   return (
     <div className="markdown-message">
-      <ReactMarkdown
-        components={{
-          a: ({ children, href }) => (
-            <a href={href} rel="noreferrer" target="_blank">{children}</a>
-          ),
-          code: ({ children, className }) => {
-            const inline = !className;
-            return inline ? <code className="inline-code">{children}</code> : <code className={className}>{children}</code>;
-          },
-          img: ({ alt, src, title }) => {
-            const width = markdownImageWidthFromTitle(title);
-            const imageSource = normalizeMarkdownImageSource(src, workspacePath) ?? src;
-            const imageAttachment = markdownImageAttachment(imageSource, alt);
-            const imageStyle = width ? { width, maxWidth: 800 } : undefined;
-            if (imageAttachment && props.onOpenMedia) {
-              return (
-                <button
-                  className="markdown-image-button"
-                  onClick={() => props.onOpenMedia?.(imageAttachment)}
-                  style={imageStyle}
-                  type="button"
-                >
-                  <img
-                    alt={alt ?? ""}
-                    src={imageSource}
-                  />
-                </button>
-              );
-            }
-            return (
-              <img
-                alt={alt ?? ""}
-                src={imageSource}
-                style={imageStyle}
-              />
-            );
-          },
-          pre: ({ children }) => <pre className="markdown-code-block">{children}</pre>,
-          table: ({ children }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
-        }}
-        rehypePlugins={markdownSanitizers}
-        remarkPlugins={markdownPlugins}
-      >
-        {content}
-      </ReactMarkdown>
+      {props.streaming ? (
+        <StreamingMarkdownMessage
+          content={content}
+          onOpenMedia={props.onOpenMedia}
+          workspacePath={workspacePath}
+        />
+      ) : (
+        <LazyMarkdownMessage
+          content={content}
+          eager={props.eager}
+          onOpenMedia={props.onOpenMedia}
+          workspacePath={workspacePath}
+        />
+      )}
+    </div>
+  );
+});
+
+// StreamingMarkdownMessage renders only stable Markdown blocks while the tail is still changing.
+// StreamingMarkdownMessage 在尾部仍变化时只渲染稳定 Markdown 块。
+function StreamingMarkdownMessage(props: {
+  // Already-normalized Markdown content.
+  // 已经规范化的 Markdown 内容。
+  content: string;
+  // Current project workspace path for image source resolution.
+  // 当前项目工作区路径，用于解析图片来源。
+  workspacePath: string | null;
+  // Optional media opener used by Markdown images.
+  // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  return (
+    <MarkdownContentRenderer
+      content={props.content}
+      onOpenMedia={props.onOpenMedia}
+      workspacePath={props.workspacePath}
+    />
+  );
+}
+
+// MarkdownContentRenderer renders one already-normalized Markdown fragment.
+// MarkdownContentRenderer 渲染单个已经规范化的 Markdown 片段。
+function MarkdownContentRenderer(props: {
+  // Markdown fragment to render.
+  // 需要渲染的 Markdown 片段。
+  content: string;
+  // Current project workspace path for image source resolution.
+  // 当前项目工作区路径，用于解析图片来源。
+  workspacePath: string | null;
+  // Optional media opener used by Markdown images.
+  // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  const components = React.useMemo(() => ({
+    a: ({ children, href }: { children?: React.ReactNode; href?: string }) => (
+      <a href={href} rel="noreferrer" target="_blank">{children}</a>
+    ),
+    code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
+      const inline = !className;
+      return inline ? <code className="inline-code">{children}</code> : <code className={className}>{children}</code>;
+    },
+    img: ({ alt, src, title }: { alt?: string; src?: string; title?: string }) => {
+      const width = markdownImageWidthFromTitle(title);
+      const imageSource = normalizeMarkdownImageSource(src, props.workspacePath) ?? src;
+      const imageAttachment = markdownImageAttachment(imageSource, alt);
+      const imageStyle = width ? { width, maxWidth: 800 } : undefined;
+      if (imageAttachment && props.onOpenMedia) {
+        return (
+          <button
+            className="markdown-image-button"
+            onClick={() => props.onOpenMedia?.(imageAttachment)}
+            style={imageStyle}
+            type="button"
+          >
+            <img
+              alt={alt ?? ""}
+              src={imageSource}
+            />
+          </button>
+        );
+      }
+      return (
+        <img
+          alt={alt ?? ""}
+          src={imageSource}
+          style={imageStyle}
+        />
+      );
+    },
+    pre: ({ children }: { children?: React.ReactNode }) => <pre className="markdown-code-block">{children}</pre>,
+    table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
+  }), [props.onOpenMedia, props.workspacePath]);
+  return (
+    <ReactMarkdown
+      components={components}
+      rehypePlugins={markdownSanitizers}
+      remarkPlugins={markdownPlugins}
+    >
+      {props.content}
+    </ReactMarkdown>
+  );
+}
+
+// LazyMarkdownMessage splits large finalized Markdown into viewport-managed chunks.
+// LazyMarkdownMessage 将较大的终态 Markdown 拆成由视口管理的分块。
+function LazyMarkdownMessage(props: {
+  // Already-normalized Markdown content.
+  // 已经规范化的 Markdown 内容。
+  content: string;
+  // Whether every chunk should render immediately outside the transcript viewport.
+  // 是否在转录视口外立即渲染所有分块。
+  eager?: boolean;
+  // Current project workspace path for image source resolution.
+  // 当前项目工作区路径，用于解析图片来源。
+  workspacePath: string | null;
+  // Optional media opener used by Markdown images.
+  // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  const chunks = React.useMemo(() => splitMarkdownIntoLazyChunks(props.content), [props.content]);
+  if (props.eager) {
+    if (chunks.length <= 1) {
+      return (
+        <MarkdownContentRenderer
+          content={props.content}
+          onOpenMedia={props.onOpenMedia}
+          workspacePath={props.workspacePath}
+        />
+      );
+    }
+    return (
+      <div className="markdown-lazy-chunk-list">
+        {chunks.map((chunk, index) => (
+          <MarkdownContentRenderer
+            content={chunk}
+            key={`${index}:${chunk.length}`}
+            onOpenMedia={props.onOpenMedia}
+            workspacePath={props.workspacePath}
+          />
+        ))}
+      </div>
+    );
+  }
+  if (chunks.length <= 1) {
+    return (
+      <LazyMarkdownChunk
+        content={props.content}
+        onOpenMedia={props.onOpenMedia}
+        workspacePath={props.workspacePath}
+      />
+    );
+  }
+  return (
+    <div className="markdown-lazy-chunk-list">
+      {chunks.map((chunk, index) => (
+        <LazyMarkdownChunk
+          content={chunk}
+          key={`${index}:${chunk.length}`}
+          onOpenMedia={props.onOpenMedia}
+          workspacePath={props.workspacePath}
+        />
+      ))}
     </div>
   );
 }
 
-// useSmoothedStreamingContent reveals large append-only transcript updates over several animation frames.
-// useSmoothedStreamingContent 将较大的追加式转录更新拆到多个动画帧中揭示。
-function useSmoothedStreamingContent(content: string, enabled: boolean): string {
-  const onRevealFrame = React.useContext(StreamingRevealFrameContext);
-  const [displayedContent, setDisplayedContent] = React.useState(content);
-  const displayedContentRef = React.useRef(content);
+// LazyMarkdownChunk unmounts expensive Markdown DOM when its measured block is far offscreen.
+// LazyMarkdownChunk 在已测量分块远离视口时卸载昂贵的 Markdown DOM。
+function LazyMarkdownChunk(props: {
+  // Already-normalized Markdown chunk.
+  // 已经规范化的 Markdown 分块。
+  content: string;
+  // Current project workspace path for image source resolution.
+  // 当前项目工作区路径，用于解析图片来源。
+  workspacePath: string | null;
+  // Optional media opener used by Markdown images.
+  // Markdown 图片使用的可选媒体打开器。
+  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
+}) {
+  const rootRef = React.useContext(MarkdownViewportRootRefContext);
+  const elementRef = React.useRef<HTMLDivElement | null>(null);
+  const measuredHeightRef = React.useRef<number | null>(null);
+  const [visible, setVisible] = React.useState(true);
+  const [measuredHeight, setMeasuredHeight] = React.useState<number | null>(null);
+
+  React.useLayoutEffect(() => {
+    if (!visible) {
+      return;
+    }
+    const element = elementRef.current;
+    if (!element) {
+      return;
+    }
+    const updateHeight = () => {
+      const height = Math.ceil(element.getBoundingClientRect().height);
+      if (height <= 0) {
+        return;
+      }
+      measuredHeightRef.current = height;
+      setMeasuredHeight(height);
+    };
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.content, visible]);
 
   React.useEffect(() => {
-    displayedContentRef.current = displayedContent;
-  }, [displayedContent]);
-
-  React.useEffect(() => {
-    if (!enabled) {
-      displayedContentRef.current = content;
-      setDisplayedContent(content);
+    const element = elementRef.current;
+    if (!element || typeof IntersectionObserver === "undefined") {
       return;
     }
-
-    const current = displayedContentRef.current;
-    if (content === current) {
-      return;
-    }
-    if (!content.startsWith(current)) {
-      displayedContentRef.current = content;
-      setDisplayedContent(content);
-      return;
-    }
-
-    const pendingLength = content.length - current.length;
-    if (pendingLength <= STREAMING_REVEAL_DIRECT_APPEND_LIMIT) {
-      displayedContentRef.current = content;
-      setDisplayedContent(content);
-      onRevealFrame?.();
-      return;
-    }
-
-    let cancelled = false;
-    let timerId: number | null = null;
-
-    const revealNextFrame = () => {
-      if (cancelled) {
+    const observer = new IntersectionObserver((entries) => {
+      const [entry] = entries;
+      if (!entry) {
         return;
       }
-      const visible = displayedContentRef.current;
-      if (!content.startsWith(visible)) {
-        displayedContentRef.current = content;
-        setDisplayedContent(content);
-        onRevealFrame?.();
+      if (entry.isIntersecting) {
+        setVisible(true);
         return;
       }
-      const remainingLength = content.length - visible.length;
-      if (remainingLength <= 0) {
-        return;
+      if (measuredHeightRef.current !== null) {
+        setVisible(false);
       }
-      const stepLength = Math.min(
-        STREAMING_REVEAL_MAX_STEP_CHARS,
-        Math.max(
-          STREAMING_REVEAL_MIN_STEP_CHARS,
-          Math.ceil(remainingLength / 12),
-        ),
-      );
-      const nextContent = content.slice(0, Math.min(content.length, visible.length + stepLength));
-      displayedContentRef.current = nextContent;
-      setDisplayedContent(nextContent);
-      onRevealFrame?.();
-      if (nextContent.length < content.length) {
-        timerId = window.setTimeout(revealNextFrame, STREAMING_REVEAL_FRAME_MS);
-      }
-    };
+    }, {
+      root: rootRef?.current ?? null,
+      rootMargin: LAZY_MARKDOWN_ROOT_MARGIN,
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [rootRef]);
 
-    timerId = window.setTimeout(revealNextFrame, STREAMING_REVEAL_FRAME_MS);
-    return () => {
-      cancelled = true;
-      if (timerId !== null) {
-        window.clearTimeout(timerId);
-      }
-    };
-  }, [content, enabled, onRevealFrame]);
+  return (
+    <div
+      className="markdown-lazy-chunk"
+      ref={elementRef}
+      style={!visible && measuredHeight ? { minHeight: measuredHeight } : undefined}
+    >
+      {visible ? (
+        <MarkdownContentRenderer
+          content={props.content}
+          onOpenMedia={props.onOpenMedia}
+          workspacePath={props.workspacePath}
+        />
+      ) : null}
+    </div>
+  );
+}
 
-  return displayedContent;
+// splitMarkdownIntoLazyChunks groups finalized Markdown by safe boundaries for offscreen unmounting.
+// splitMarkdownIntoLazyChunks 按安全边界拆分终态 Markdown，便于离屏卸载。
+function splitMarkdownIntoLazyChunks(content: string): string[] {
+  if (content.length <= LAZY_MARKDOWN_RENDER_THRESHOLD) {
+    return [content];
+  }
+  const boundaries = collectSafeMarkdownBoundaryIndexes(content).filter((boundary) => boundary > 0 && boundary < content.length);
+  const chunks: string[] = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    if (boundary - start < LAZY_MARKDOWN_TARGET_CHARS) {
+      continue;
+    }
+    chunks.push(content.slice(start, boundary));
+    start = boundary;
+  }
+  if (start < content.length) {
+    chunks.push(content.slice(start));
+  }
+  return chunks.length > 1 ? chunks : [content];
+}
+
+// collectSafeMarkdownBoundaryIndexes finds positions that should not split open Markdown structures.
+// collectSafeMarkdownBoundaryIndexes 查找不会切开未闭合 Markdown 结构的位置。
+function collectSafeMarkdownBoundaryIndexes(content: string): number[] {
+  const boundaries: number[] = [];
+  const lines = content.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g) ?? [];
+  let offset = 0;
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+  for (const line of lines) {
+    if (line.length === 0) {
+      continue;
+    }
+    const nextOffset = offset + line.length;
+    const lineText = line.replace(/[\r\n]+$/u, "");
+    const fenceMatch = lineText.match(/^[ \t]{0,3}(`{3,}|~{3,})/u);
+    let closedFence = false;
+    if (fenceMatch) {
+      const markerText = fenceMatch[1] ?? "";
+      const marker = markerText.startsWith("~") ? "~" : "`";
+      if (!fence) {
+        fence = { marker, length: markerText.length };
+      } else if (marker === fence.marker && markerText.length >= fence.length) {
+        fence = null;
+        closedFence = true;
+      }
+    }
+    if (!fence && (lineText.trim().length === 0 || closedFence)) {
+      boundaries.push(nextOffset);
+    }
+    offset = nextOffset;
+  }
+  if (content.length > 0 && boundaries.at(-1) === content.length) {
+    return boundaries;
+  }
+  return boundaries;
 }
 
 // SpecialConversationBlock renders compact tool, command, diff, thinking, and notice rows.
@@ -10318,6 +11179,7 @@ function useSmoothedStreamingContent(content: string, enabled: boolean): string 
 function SpecialConversationBlock(props: {
   autoExpandThinkingBlockId: string | null;
   block: ConversationBlock;
+  conversationId: string | null;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -10332,6 +11194,7 @@ function SpecialConversationBlock(props: {
     return (
       <ToolExecutionBlock
         blocks={[props.block]}
+        conversationId={props.conversationId}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
@@ -10443,7 +11306,7 @@ function ContextCompactionBlock(props: {
             return (
               <div className="context-compaction-thinking thinking-block" key={block.id}>
                 <div className="thinking-body">
-                  <MarkdownMessage content={`**Thinking:** ${content}`} onOpenMedia={props.onOpenMedia} />
+                  <MarkdownMessage content={`**Thinking:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
                 </div>
               </div>
             );
@@ -10480,7 +11343,7 @@ function ThinkingBlock(props: {
   return (
     <section className="thinking-block">
       <div className="thinking-body">
-        <MarkdownMessage content={`**Thinking:** ${content}`} onOpenMedia={props.onOpenMedia} />
+        <MarkdownMessage content={`**Thinking:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
       </div>
     </section>
   );
@@ -10490,6 +11353,7 @@ function ThinkingBlock(props: {
 // ToolExecutionBlock 渲染单条紧凑的合并工具执行行。
 function ToolExecutionBlock(props: {
   blocks: ConversationBlock[];
+  conversationId: string | null;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -10509,12 +11373,21 @@ function ToolExecutionBlock(props: {
   const displayState = toolExecutionDisplayState(props.blocks, props.sessionRunning);
   const mediaAttachments = toolExecutionMediaAttachments(props.blocks);
   const taskSessionId = props.blocks.find((block) => block.taskSessionId)?.taskSessionId ?? null;
-  const detailBody = props.blocks
-    .map((block) => `## ${blockTitle(block.kind, block.toolName)}\n\n${block.body}`)
-    .join("\n\n---\n\n");
+  const identifier = toolExecutionIdentifier(props.blocks);
+  const errorPreview = toolExecutionErrorPreview(props.blocks);
+  const detailRefFields = toolExecutionDetailRef(props.blocks);
+  const detailRef = props.conversationId && (detailRefFields || primaryBlock.toolCallId)
+    ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
+    : undefined;
+  const hydratedMediaAttachments = useToolDetailMediaAttachments(
+    detailRef,
+    mediaAttachments.length === 0 && toolExecutionMayHaveGeneratedMedia(toolName),
+  );
+  const displayedMediaAttachments = mergeGeneratedMediaAttachments(mediaAttachments, hydratedMediaAttachments);
   const metadata = [
-    ...(primaryBlock.toolCallId ? [["调用", primaryBlock.toolCallId] as [string, string]] : []),
     ...(toolName ? [["工具", toolName] as [string, string]] : []),
+    ...(identifier ? [["标识", identifier] as [string, string]] : []),
+    ...(errorPreview ? [["错误", errorPreview] as [string, string]] : []),
     ["状态", toolDisplayStateLabel(displayState)] as [string, string],
     ...(resultBlock ? [["结果", "已返回"] as [string, string]] : []),
   ];
@@ -10530,9 +11403,10 @@ function ToolExecutionBlock(props: {
     props.onOpenDetail({
       title: summary,
       kind: primaryBlock.kind,
-      body: detailBody,
+      body: buildToolExecutionDetailBody(props.blocks),
+      detailRef,
       metadata,
-      mediaAttachments,
+      mediaAttachments: displayedMediaAttachments,
     });
   };
   const openDetail = () => {
@@ -10570,9 +11444,9 @@ function ToolExecutionBlock(props: {
         <Wrench size={15} />
         <span>{summary}</span>
       </button>
-      {mediaAttachments.length > 0 ? (
+      {displayedMediaAttachments.length > 0 ? (
         <GeneratedMediaStrip
-          attachments={mediaAttachments}
+          attachments={displayedMediaAttachments}
           onOpenDetail={openDetail}
           onOpenMedia={props.onOpenMedia}
         />
@@ -10581,50 +11455,242 @@ function ToolExecutionBlock(props: {
   );
 }
 
+// useToolDetailMediaAttachments hydrates generated media from hidden tool details when the visible call row is compact.
+// useToolDetailMediaAttachments 在可见工具调用行较紧凑时，从隐藏工具详情中水合生成媒体。
+function useToolDetailMediaAttachments(
+  detailRef: ConversationDetailRef | undefined,
+  enabled: boolean,
+): GeneratedMediaAttachment[] {
+  const [attachments, setAttachments] = React.useState<GeneratedMediaAttachment[]>([]);
+  React.useEffect(() => {
+    setAttachments([]);
+    if (!enabled || !detailRef || (!detailRef.recordId && !detailRef.toolCallId)) {
+      return;
+    }
+    let cancelled = false;
+    void loadConversationToolDetail(detailRef)
+      .then((payload) => {
+        if (!cancelled && payload) {
+          setAttachments(generatedMediaAttachmentsFromToolDetailPayload(payload));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAttachments([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    detailRef?.messageIndex,
+    detailRef?.recordId,
+    detailRef?.seq,
+    detailRef?.sessionId,
+    detailRef?.toolCallId,
+    enabled,
+  ]);
+  return attachments;
+}
+
+// toolExecutionMayHaveGeneratedMedia gates detail hydration to media-producing tools.
+// toolExecutionMayHaveGeneratedMedia 将详情水合限制在会生成媒体的工具上。
+function toolExecutionMayHaveGeneratedMedia(toolName: string | null): boolean {
+  const normalized = toolName?.trim().toLowerCase();
+  return normalized === "image_generation"
+    || normalized === "video_generation"
+    || normalized === "speech_synthesis"
+    || normalized === "music_generation";
+}
+
+// mergeGeneratedMediaAttachments combines visible and hydrated media without duplicate cards.
+// mergeGeneratedMediaAttachments 合并可见与水合媒体，并避免重复卡片。
+function mergeGeneratedMediaAttachments(
+  visibleAttachments: GeneratedMediaAttachment[],
+  hydratedAttachments: GeneratedMediaAttachment[],
+): GeneratedMediaAttachment[] {
+  const seen = new Set<string>();
+  const merged: GeneratedMediaAttachment[] = [];
+  for (const attachment of [...visibleAttachments, ...hydratedAttachments]) {
+    const key = `${attachment.kind}:${attachment.localPath}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(attachment);
+  }
+  return merged;
+}
+
+// buildToolExecutionDetailBody builds the expensive modal body only when the user opens details.
+// buildToolExecutionDetailBody 仅在用户打开详情时构建成本较高的弹窗正文。
+function buildToolExecutionDetailBody(blocks: ConversationBlock[]): string {
+  return blocks
+    .map((block) => {
+      const sections = [`## ${blockTitle(block.kind, block.toolName)}`];
+      const argumentsValue = metadataValue(block.rawMetadata, ["arguments", "payload.arguments"]);
+      if (argumentsValue !== undefined) {
+        sections.push(`### Arguments\n\n\`\`\`json\n${JSON.stringify(argumentsValue, null, 2)}\n\`\`\``);
+      }
+      const resultStatus = metadataString(block.rawMetadata, ["result.status"]);
+      const detailRecordId = metadataString(block.rawMetadata, [
+        "result.detail_ref.record_id",
+        "result.detailRef.recordId",
+      ]);
+      if (resultStatus || detailRecordId) {
+        sections.push(`### Result\n\n${[
+          resultStatus ? `Status: ${resultStatus}` : null,
+          detailRecordId ? `Detail Record: ${detailRecordId}` : null,
+        ].filter(Boolean).join("\n")}`);
+      }
+      if (block.body.trim()) {
+        sections.push(block.body);
+      }
+      return sections.join("\n\n");
+    })
+    .join("\n\n---\n\n");
+}
+
 // toolExecutionSummary builds the compact transcript row summary for one tool execution.
 // toolExecutionSummary 为单次工具执行构建紧凑转录行摘要。
 function toolExecutionSummary(blocks: ConversationBlock[], sessionRunning: boolean): string {
   const commandBlock = blocks.find((block) => block.kind === "command");
-  const resultBlock = blocks.find((block) => block.kind === "tool-result");
-  const callBlock = blocks.find((block) => block.kind === "tool-call");
-  const source = `${resultBlock?.body ?? ""}\n${callBlock?.body ?? ""}`;
   const toolName = toolExecutionName(blocks);
-  const statusLabel = toolDisplayStateLabel(toolExecutionDisplayState(blocks, sessionRunning));
+  const displayState = toolExecutionDisplayState(blocks, sessionRunning);
+  const statusLabel = toolDisplayStateLabel(displayState);
+  const identifier = toolExecutionIdentifier(blocks);
+  const errorPreview = displayState === "failed" ? toolExecutionErrorPreview(blocks) : null;
   if (commandBlock && !toolName) {
     return commandBlock.summary.includes("命令")
       ? commandBlock.summary
       : "已运行 1 条命令";
   }
 
-  const editedFiles = source.match(/已编辑\s+(\d+)\s+个文件|edited\s+(\d+)\s+file/i);
-  let activity: string | null = null;
-  if (editedFiles) {
-    const count = editedFiles[1] ?? editedFiles[2] ?? "1";
-    activity = `已编辑 ${count} 个文件`;
-  }
-
-  const commands = source.match(/已运行\s+(\d+)\s+条命令|ran\s+(\d+)\s+command/i);
-  if (!activity && commands) {
-    const count = commands[1] ?? commands[2] ?? "1";
-    activity = `已运行 ${count} 条命令`;
-  }
-
   if (toolName) {
-    return `调用 ${toolName} 工具 · ${statusLabel}${activity ? ` · ${activity}` : ""}`;
+    return `调用 ${toolName} 工具 · ${statusLabel}${errorPreview ? ` · ${errorPreview}` : ""}`;
   }
-  return `工具执行 · ${statusLabel}${activity ? ` · ${activity}` : ""}`;
+  return `工具执行 · ${statusLabel}${identifier ? ` · ${identifier}` : ""}${errorPreview ? ` · ${errorPreview}` : ""}`;
 }
 
 // toolExecutionName resolves the best human-visible tool name across merged call and result blocks.
 // toolExecutionName 从合并后的调用与返回块中解析最佳人类可见工具名。
 function toolExecutionName(blocks: ConversationBlock[]): string | null {
   for (const block of blocks) {
-    const name = block.toolName ?? extractToolNameFromText(block.title) ?? extractToolNameFromText(block.body);
+    const name = block.toolName ?? extractToolNameFromText(block.title);
     if (name) {
       return name;
     }
   }
   return null;
+}
+
+// toolExecutionIdentifier resolves the most useful fallback identifier for a tool row.
+// toolExecutionIdentifier 为工具行解析最有用的兜底标识。
+function toolExecutionIdentifier(blocks: ConversationBlock[]): string | null {
+  for (const block of blocks) {
+    const identifier = block.toolCallId
+      ?? block.toolResultId
+      ?? block.commandSessionId
+      ?? block.taskSessionId
+      ?? metadataString(block.rawMetadata, [
+        "tool_call_id",
+        "toolCallId",
+        "payload.tool_call_id",
+        "payload.toolCallId",
+        "host_result.payload.tool_call_id",
+        "hostResult.payload.toolCallId",
+        "task_session_id",
+        "taskSessionId",
+        "payload.task_session_id",
+        "payload.taskSessionId",
+        "host_result.payload.task_session_id",
+        "hostResult.payload.taskSessionId",
+      ]);
+    if (identifier) {
+      return shortenToolExecutionIdentifier(identifier);
+    }
+  }
+  return null;
+}
+
+// toolExecutionDetailRef resolves the hidden full-detail reference for one tool execution.
+// toolExecutionDetailRef 解析单次工具执行对应的隐藏完整详情引用。
+function toolExecutionDetailRef(blocks: ConversationBlock[]): Omit<ConversationDetailRef, "sessionId"> | null {
+  for (const block of blocks) {
+    const recordId = metadataString(block.rawMetadata, [
+      "result.detail_ref.record_id",
+      "result.detailRef.recordId",
+    ]);
+    if (recordId) {
+      const seq = numericMetadata(metadataValue(block.rawMetadata, [
+        "result.detail_ref.seq",
+        "result.detailRef.seq",
+      ]));
+      const messageIndex = numericMetadata(metadataValue(block.rawMetadata, [
+        "result.detail_ref.message_index",
+        "result.detailRef.messageIndex",
+      ]));
+      return {
+        recordId,
+        ...(seq !== null ? { seq: Math.trunc(seq) } : {}),
+        ...(messageIndex !== null ? { messageIndex: Math.trunc(messageIndex) } : {}),
+      };
+    }
+  }
+  return null;
+}
+
+// shortenToolExecutionIdentifier keeps long UUID-like ids readable in compact rows.
+// shortenToolExecutionIdentifier 让较长的 UUID 类标识在紧凑行中保持可读。
+function shortenToolExecutionIdentifier(identifier: string): string {
+  const trimmed = identifier.trim();
+  if (trimmed.length <= 18) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+}
+
+// toolExecutionErrorPreview extracts a compact failure reason from metadata or body text.
+// toolExecutionErrorPreview 从元数据或正文中提取紧凑失败原因。
+function toolExecutionErrorPreview(blocks: ConversationBlock[]): string | null {
+  for (const block of blocks) {
+    const metadataError = metadataString(block.rawMetadata, [
+      "result.error",
+      "result.reason",
+      "host_result.payload.message",
+      "hostResult.payload.message",
+      "host_result.payload.error",
+      "hostResult.payload.error",
+      "host_result.payload.reason",
+      "hostResult.payload.reason",
+      "payload.message",
+      "payload.error",
+      "payload.reason",
+      "message",
+      "error",
+      "reason",
+    ]);
+    if (metadataError) {
+      return compactToolExecutionErrorPreview(metadataError);
+    }
+  }
+  const failedBlock = blocks.find((block) => normalizeToolDisplayState(block.status) === "failed")
+    ?? blocks.find((block) => /失败|报错|错误|failed|error|panic/i.test(block.body));
+  const preview = failedBlock?.body || failedBlock?.summary;
+  return preview ? compactToolExecutionErrorPreview(preview) : null;
+}
+
+// compactToolExecutionErrorPreview normalizes verbose error text for one-line tool summaries.
+// compactToolExecutionErrorPreview 将冗长错误文本规整为工具摘要中的单行内容。
+function compactToolExecutionErrorPreview(source: string): string | null {
+  const line = source
+    .split(/\r?\n/u)
+    .map((part) => part.trim())
+    .find((part) => part.length > 0 && !/^#+\s/.test(part));
+  if (!line) {
+    return null;
+  }
+  return compactTextPreview(line).slice(0, 96);
 }
 
 // preferredTaskSessionDisplayBlock keeps routed task-session rows anchored to the newest terminal metadata.
@@ -10672,21 +11738,22 @@ function toolExecutionDisplayState(blocks: ConversationBlock[], sessionRunning: 
   if (taskSessionState) {
     return taskSessionState;
   }
-  if (blocks.some((block) => block.kind === "tool-result" && toolMetadataContainsReturnPayload(block.rawMetadata, block.body))) {
+  const explicitStates = blocks
+    .map((block) => normalizeToolDisplayState(block.status))
+    .filter((state): state is string => Boolean(state));
+  if (explicitStates.includes("failed")) {
+    return "failed";
+  }
+  if (explicitStates.includes("stopped")) {
+    return "stopped";
+  }
+  if (explicitStates.includes("completed")) {
     return "completed";
   }
-  const source = blocks.map((block) => `${block.status ?? ""}\n${block.title}\n${block.body}`).join("\n");
-  const textState = normalizeToolDisplayState(extractToolStatusFromText(source));
-  if (textState === "failed") {
-    return "failed";
-  }
-  if (blocks.some((block) => block.status === "failed" || block.status === "error")) {
-    return "failed";
+  if (blocks.some((block) => block.toolResultId || toolExecutionDetailRef([block]))) {
+    return "completed";
   }
   if (blocks.some((block) => block.kind === "tool-result" || block.kind === "command")) {
-    return "completed";
-  }
-  if (textState === "completed") {
     return "completed";
   }
   if (!sessionRunning) {
@@ -10862,6 +11929,117 @@ function blockIcon(kind: ConversationBlockKind) {
   return ScrollText;
 }
 
+// renderToolDetailPayloadMarkdown converts structured tool detail metadata into Markdown for the modal.
+// renderToolDetailPayloadMarkdown 将结构化工具详情元数据转换为弹窗使用的 Markdown。
+function renderToolDetailPayloadMarkdown(payload: ToolDetailPayload): string {
+  const display = metadataValue(payload.metadata, ["display"]);
+  const modelOutput = payload.body;
+  const displayMarkdown = renderToolDisplayMarkdown(display);
+  const sections = displayMarkdown ? [`## Structured Display\n\n${displayMarkdown}`] : [];
+  if (modelOutput.trim()) {
+    sections.push(`## Model Output\n\n${fencedMarkdownBlock(modelOutput, "")}`);
+  }
+  return sections.join("\n\n---\n\n") || payload.body;
+}
+
+// renderToolDisplayMarkdown renders a structured display payload without parsing model-output text.
+// renderToolDisplayMarkdown 渲染结构化展示载荷，不解析模型组合输出文本。
+function renderToolDisplayMarkdown(display: unknown): string | null {
+  const object = objectValue(display);
+  if (!object) {
+    return null;
+  }
+  const kind = stringValue(object.kind);
+  if (kind === "shell_command") {
+    return renderShellCommandDisplayMarkdown(object);
+  }
+  if (kind === "vulcan_file_list") {
+    return renderFileListDisplayMarkdown(object);
+  }
+  const status = stringValue(object.status);
+  const summary = stringValue(object.summary);
+  const sections = [
+    `Kind: ${kind ?? "generic"}`,
+    status ? `Status: ${status}` : null,
+  ].filter(Boolean);
+  if (object.arguments !== undefined) {
+    sections.push(`Arguments:\n\n${fencedMarkdownBlock(JSON.stringify(object.arguments, null, 2), "json")}`);
+  }
+  if (summary) {
+    sections.push(`Summary: ${summary}`);
+  }
+  return sections.join("\n\n");
+}
+
+// renderFileListDisplayMarkdown renders structured file-list fields without duplicating raw output.
+// renderFileListDisplayMarkdown 渲染结构化文件列表字段，避免重复原始输出。
+function renderFileListDisplayMarkdown(display: Record<string, unknown>): string {
+  const rows = [
+    ["Root", stringValue(display.root)],
+    ["Pattern", stringValue(display.pattern)],
+    ["Recursive", display.recursive === undefined ? null : String(display.recursive)],
+    ["Ignore", display.ignore === undefined ? null : String(display.ignore)],
+    ["Files", display.files_count === undefined ? null : String(display.files_count)],
+    ["Truncated", display.truncated === undefined ? null : String(display.truncated)],
+    ["Ignored", display.ignored_count === undefined ? null : String(display.ignored_count)],
+    ["Status", stringValue(display.status)],
+  ] as Array<[string, string | null]>;
+  const sections = rows
+    .filter(([, value]) => value)
+    .map(([label, value]) => `- ${label}: ${value}`);
+  const argumentsValue = display.arguments;
+  if (argumentsValue !== undefined) {
+    sections.push(`### Arguments\n\n${fencedMarkdownBlock(JSON.stringify(argumentsValue, null, 2), "json")}`);
+  }
+  const files = Array.isArray(display.files)
+    ? display.files.map((file) => String(file)).filter(Boolean)
+    : [];
+  if (files.length > 0) {
+    sections.push(`### Files\n\n${files.map((file) => `- \`${file}\``).join("\n")}`);
+  }
+  return sections.join("\n");
+}
+
+// renderShellCommandDisplayMarkdown renders shell_command fields as stable rows and stream blocks.
+// renderShellCommandDisplayMarkdown 将 shell_command 字段渲染为稳定信息行和输出流块。
+function renderShellCommandDisplayMarkdown(display: Record<string, unknown>): string {
+  const rows = [
+    ["Command", stringValue(display.command)],
+    ["Shell", stringValue(display.shell)],
+    ["Working directory", stringValue(display.working_directory)],
+    ["Status", stringValue(display.status)],
+    ["Duration", stringValue(display.duration)],
+    ["Exit code", display.exit_code === undefined ? null : String(display.exit_code)],
+  ] as Array<[string, string | null]>;
+  const sections = rows
+    .filter(([, value]) => value)
+    .map(([label, value]) => `- ${label}: ${value}`);
+  const stdout = stringValue(display.stdout);
+  const stderr = stringValue(display.stderr);
+  if (stdout) {
+    sections.push(`### stdout\n\n${fencedMarkdownBlock(stdout, "")}`);
+  }
+  if (stderr) {
+    sections.push(`### stderr\n\n${fencedMarkdownBlock(stderr, "")}`);
+  }
+  return sections.join("\n");
+}
+
+// fencedMarkdownBlock wraps arbitrary text in a Markdown code fence with backtick escaping.
+// fencedMarkdownBlock 使用 Markdown 代码围栏包裹任意文本并规避反引号冲突。
+function fencedMarkdownBlock(source: string, language: string): string {
+  const fence = source.includes("```") ? "````" : "```";
+  return `${fence}${language}\n${source}\n${fence}`;
+}
+
+// objectValue narrows an unknown JSON value into a plain object record.
+// objectValue 将未知 JSON 值收窄为普通对象记录。
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
 // ConversationDetailModal renders the enlarged detail surface for special transcript blocks.
 // ConversationDetailModal 渲染特殊转录块的放大详情界面。
 function ConversationDetailModal(props: {
@@ -10869,11 +12047,51 @@ function ConversationDetailModal(props: {
   onClose: () => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  // loadedToolDetail stores the hidden structured tool result loaded after the modal opens.
+  // loadedToolDetail 保存弹窗打开后按需加载到的隐藏结构化工具结果。
+  const [loadedToolDetail, setLoadedToolDetail] = React.useState<ToolDetailPayload | null>(null);
+  // detailLoadError stores a short failure note for on-demand detail hydration.
+  // detailLoadError 保存按需详情水合失败时的简短提示。
+  const [detailLoadError, setDetailLoadError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setLoadedToolDetail(null);
+    setDetailLoadError(null);
+    const detailRef = props.detail.detailRef;
+    if (!detailRef) {
+      return;
+    }
+    let cancelled = false;
+    void loadConversationToolDetail(detailRef)
+      .then((payload) => {
+        if (!cancelled) {
+          setLoadedToolDetail(payload);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setDetailLoadError(error instanceof Error ? error.message : String(error));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    props.detail.detailRef?.messageIndex,
+    props.detail.detailRef?.recordId,
+    props.detail.detailRef?.seq,
+    props.detail.detailRef?.sessionId,
+    props.detail.detailRef?.toolCallId,
+  ]);
   const DetailIcon = blockIcon(props.detail.kind);
   const detailType = blockTitle(props.detail.kind);
   const detailSubtitle = props.detail.metadata
     ?.map(([label, value]) => `${label}: ${value}`)
     .join(" · ");
+  const fullBody = loadedToolDetail
+    ? `${props.detail.body}\n\n---\n\n${renderToolDetailPayloadMarkdown(loadedToolDetail)}`
+    : detailLoadError
+      ? `${props.detail.body}\n\n---\n\nDetail load failed: ${detailLoadError}`
+      : props.detail.body;
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent className={cn("detail-modal sm:max-w-[min(1080px,96vw)]", props.detail.kind === "thinking" && "thinking-detail-modal")} showCloseButton={false}>
@@ -10889,7 +12107,7 @@ function ConversationDetailModal(props: {
             </div>
           </div>
           <div className="detail-modal-actions">
-            <Button aria-label="复制详情" className="icon-button" onClick={() => void copyText(props.detail.body)} size="icon" type="button" variant="outline">
+            <Button aria-label="复制详情" className="icon-button" onClick={() => void copyText(fullBody)} size="icon" type="button" variant="outline">
               <Copy size={17} />
             </Button>
             <Button aria-label="关闭详情" className="icon-button" onClick={props.onClose} size="icon" type="button" variant="outline">
@@ -10905,9 +12123,9 @@ function ConversationDetailModal(props: {
             />
           ) : null}
           {props.detail.kind === "diff" ? (
-            <pre className="diff-detail"><code>{props.detail.body}</code></pre>
+            <pre className="diff-detail"><code>{fullBody}</code></pre>
           ) : (
-      <MarkdownMessage content={props.detail.body} onOpenMedia={props.onOpenMedia} />
+            <MarkdownMessage content={fullBody} eager onOpenMedia={props.onOpenMedia} />
           )}
         </div>
       </DialogContent>
@@ -11499,12 +12717,12 @@ function GeneratedMediaImageZoomIconButton(props: {
 // activeStreamingThinkingBlock 返回当前选中会话在流式思考时应浮动展示的思考块。
 function activeStreamingThinkingBlock(
   conversation: ConversationSummary | undefined,
-  messages: ConversationMessage[],
+  renderItems: ConversationRenderItem[],
 ): ConversationBlock | null {
   if (normalizedSessionRunPhase(conversation?.runPhase) !== "thinking") {
     return null;
   }
-  const blocks = projectConversationRenderItems(messages)
+  const blocks = renderItems
     .filter((item) => item.role !== "user")
     .flatMap((item) => item.blocks);
   return [...blocks].reverse().find((block) => block.kind === "thinking") ?? null;
@@ -11545,7 +12763,7 @@ function StreamingThinkingOverlay(props: {
         <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
       </header>
       <div className="streaming-thinking-body" ref={bodyRef}>
-        <MarkdownMessage content={props.block.body || t("runtime.thinking")} />
+        <MarkdownMessage content={props.block.body || t("runtime.thinking")} eager />
       </div>
     </section>
   );
@@ -11555,7 +12773,7 @@ function StreamingThinkingOverlay(props: {
 // conversationRuntimeCue 解析显示在输入区上方的紧凑运行状态提示。
 function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
-  messages: ConversationMessage[],
+  renderItems: ConversationRenderItem[],
   t: ReturnType<typeof useI18n>["t"],
 ): RuntimeCue | null {
   if (!conversation) {
@@ -11565,7 +12783,7 @@ function conversationRuntimeCue(
     return null;
   }
   const normalizedPhase = normalizedSessionRunPhase(conversation.runPhase);
-  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(messages);
+  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(renderItems);
   const phaseCue = sessionRunPhaseCue(conversation.runPhase, t);
   if (phaseCue) {
     return phaseCue;
@@ -11630,7 +12848,7 @@ function sessionRunPhaseCanUseFallbackCue(normalizedPhase: string): boolean {
 // buildStatusbarRuntimeActivities 为当前选中会话推导仅显示在底部栏的工具与子代理活动。
 function buildStatusbarRuntimeActivities(
   conversation: ConversationSummary | undefined,
-  messages: ConversationMessage[],
+  projectedItems: ConversationRenderItem[],
   subagentNavigation: WorkbenchSnapshot["subagentNavigation"] | null | undefined,
   t: ReturnType<typeof useI18n>["t"],
 ): StatusbarRuntimeActivity[] {
@@ -11639,7 +12857,6 @@ function buildStatusbarRuntimeActivities(
   }
   const normalized = normalizedSessionRunPhase(conversation.runPhase);
   const conversationRunning = conversationIsRunning(conversation);
-  const projectedItems = projectConversationRenderItems(messages);
   const activeToolItems = projectedItems.filter((item) => item.blocks.some(isMergeableToolBlock)
     && toolExecutionDisplayState(item.blocks, conversationRunning) === "running");
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
@@ -11666,8 +12883,8 @@ function buildStatusbarRuntimeActivities(
 
 // lastMeaningfulAssistantBlock returns the newest non-stat assistant/system block for state inference.
 // lastMeaningfulAssistantBlock 返回用于状态推断的最新非统计助手或系统块。
-function lastMeaningfulAssistantBlock(messages: ConversationMessage[]): ConversationBlock | null {
-  const blocks = projectConversationRenderItems(messages)
+function lastMeaningfulAssistantBlock(renderItems: ConversationRenderItem[]): ConversationBlock | null {
+  const blocks = renderItems
     .filter((item) => item.role !== "user")
     .flatMap((item) => item.blocks);
   return [...blocks].reverse().find((block) => block.kind !== "turn-stats") ?? null;
@@ -11677,6 +12894,7 @@ function lastMeaningfulAssistantBlock(messages: ConversationMessage[]): Conversa
 // buildConversationStreamSignature 返回用于尾部追随判定的紧凑内容签名。
 function buildConversationStreamSignature(messages: ConversationMessage[]): string {
   return messages
+    .slice(-STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT)
     .map((message) => {
       const bodyTail = message.body.slice(-48);
       return `${message.id}:${message.recordKind ?? ""}:${message.body.length}:${bodyTail}`;

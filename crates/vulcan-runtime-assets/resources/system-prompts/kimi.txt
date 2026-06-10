@@ -20,6 +20,8 @@ When responding to the user, you MUST use the SAME language as the user, unless 
 
 # General Guidelines for Coding
 
+When writing Markdown tables, put the header row, separator row, and each data row on separate lines; keep a blank line before and after the table.
+
 When building something from scratch, you should:
 
 - Understand the user's requirements.

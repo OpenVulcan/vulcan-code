@@ -82,7 +82,9 @@ fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTransc
             CoreTranscriptRole::Summary
         }
         SessionMessageRecordKind::CompactionStatus => CoreTranscriptRole::System,
-        SessionMessageRecordKind::ExploreOutput => CoreTranscriptRole::Explore,
+        SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::ToolDetailOutput => {
+            CoreTranscriptRole::Explore
+        }
         _ => match record.kind {
             SessionMessageKind::User => CoreTranscriptRole::User,
             SessionMessageKind::Assistant => CoreTranscriptRole::Assistant,
@@ -107,7 +109,9 @@ fn session_record_to_core_record_kind(
         | SessionMessageRecordKind::SummaryOutput
         | SessionMessageRecordKind::CompactionStatus
         | SessionMessageRecordKind::TurnTerminated => CoreTranscriptRecordKind::Hidden,
-        SessionMessageRecordKind::ExploreOutput => CoreTranscriptRecordKind::ProjectionOnly,
+        SessionMessageRecordKind::ExploreOutput | SessionMessageRecordKind::ToolDetailOutput => {
+            CoreTranscriptRecordKind::ProjectionOnly
+        }
         SessionMessageRecordKind::CompactionSummary => CoreTranscriptRecordKind::Checkpoint,
     }
 }

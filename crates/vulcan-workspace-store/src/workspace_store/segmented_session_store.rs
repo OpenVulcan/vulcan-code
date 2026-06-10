@@ -1146,7 +1146,7 @@ pub(super) fn append_segmented_session_message_tail(
     }
     let turn_indexes =
         assign_segmented_tail_message_turn_indexes(&metadata, &messages[first_new_index..]);
-    let events = messages
+    let mut events = messages
         .iter()
         .enumerate()
         .skip(first_new_index)
@@ -1155,6 +1155,7 @@ pub(super) fn append_segmented_session_message_tail(
             segmented_event_input_from_message(index, message, turn_index)
         })
         .collect::<Result<Vec<_>, _>>()?;
+    backfill_tool_detail_ref_sequences(&mut events, metadata.next_global_seq);
     let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
     update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
@@ -1214,6 +1215,7 @@ fn append_segmented_session_replacement(
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
+    backfill_tool_detail_ref_sequences(&mut events[1..], metadata.next_global_seq.saturating_add(1));
     let lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
     update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
@@ -2847,6 +2849,79 @@ fn segmented_event_input_from_message(
     })
 }
 
+/// Backfills JSONL sequence numbers into visible tool-call detail references before append.
+/// 追加前将 JSONL 序号回填到可见工具调用的详情引用中。
+fn backfill_tool_detail_ref_sequences(
+    events: &mut [SegmentedSessionEventInput],
+    first_event_seq: u64,
+) {
+    let mut detail_seq_by_index = BTreeMap::new();
+    let mut detail_seq_by_id = BTreeMap::new();
+    for (offset, event) in events.iter().enumerate() {
+        if event.kind != SegmentedSessionEventKind::DisplayEvent {
+            continue;
+        }
+        if event
+            .payload
+            .get("record_kind")
+            .and_then(Value::as_str)
+            != Some(SessionMessageRecordKind::ToolDetailOutput.as_persisted_key())
+        {
+            continue;
+        }
+        let seq = first_event_seq.saturating_add(offset as u64);
+        if let Some(message_index) = event
+            .payload
+            .get("message_index")
+            .and_then(Value::as_u64)
+        {
+            detail_seq_by_index.insert(message_index, seq);
+        }
+        if let Some(message_id) = event
+            .payload
+            .get("message_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            detail_seq_by_id.insert(message_id.to_string(), seq);
+        }
+    }
+    if detail_seq_by_index.is_empty() && detail_seq_by_id.is_empty() {
+        return;
+    }
+    for event in events {
+        let Some(detail_ref) = event
+            .payload
+            .get_mut("message")
+            .and_then(Value::as_object_mut)
+            .and_then(|message| message.get_mut("metadata"))
+            .and_then(Value::as_object_mut)
+            .and_then(|metadata| metadata.get_mut("result"))
+            .and_then(Value::as_object_mut)
+            .and_then(|result| result.get_mut("detail_ref"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        let seq = detail_ref
+            .get("record_id")
+            .and_then(Value::as_str)
+            .and_then(|record_id| detail_seq_by_id.get(record_id).copied())
+            .or_else(|| {
+                detail_ref
+                    .get("message_index")
+                    .and_then(Value::as_u64)
+                    .and_then(|message_index| detail_seq_by_index.get(&message_index).copied())
+            });
+        if let Some(seq) = seq {
+            detail_ref.insert(
+                String::from("seq"),
+                Value::Number(serde_json::Number::from(seq)),
+            );
+        }
+    }
+}
+
 /// Maps one transcript message onto the coarse segmented event kind used by reducers.
 /// 将一条转录消息映射到 reducer 使用的粗粒度分段事件类型。
 fn segmented_event_kind_from_message(message: &SessionMessageEntry) -> SegmentedSessionEventKind {
@@ -4091,6 +4166,62 @@ mod tests {
             read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
         assert_eq!(metadata.next_global_seq, 4);
         assert_eq!(metadata.message_count, 3);
+    }
+
+    /// Verifies tool-call detail references are backfilled with assigned JSONL sequence numbers.
+    /// 验证工具调用详情引用会回填已分配的 JSONL 序号。
+    #[test]
+    fn append_message_tail_backfills_tool_detail_ref_sequence() {
+        let root = test_root("append_message_tail_backfills_tool_detail_ref_sequence");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let user = test_message(
+            "m-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "prompt",
+        );
+        let mut call = test_message(
+            "m-call",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolCallOutput,
+            "",
+        );
+        call.metadata = Some(json!({
+            "tool_call_id": "call-1",
+            "tool_name": "shell_command",
+            "result": {
+                "status": "completed",
+                "tool_result_id": "tool-result-call-1",
+                "detail_ref": {
+                    "kind": "session_record",
+                    "record_id": "m-detail",
+                    "message_index": 2
+                }
+            }
+        }));
+        let mut detail = test_message(
+            "m-detail",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::ToolDetailOutput,
+            "result",
+        );
+        detail.visible = false;
+        detail.metadata = Some(json!({
+            "tool_detail": true,
+            "tool_call_id": "call-1",
+            "tool_result_id": "tool-result-call-1"
+        }));
+
+        let lines = append_segmented_session_message_tail(&session_dir, &[user, call, detail])
+            .expect("append messages");
+
+        assert_eq!(
+            lines[1].payload["message"]["metadata"]["result"]["detail_ref"]["seq"],
+            json!(3)
+        );
+        assert_eq!(lines[2].seq, 3);
     }
 
     /// Verifies non-tail transcript changes are rejected instead of being silently appended out of order.

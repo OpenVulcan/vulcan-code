@@ -453,6 +453,7 @@ fn canonical_compaction_message_label(message: &SessionMessageEntry) -> &'static
         SessionMessageRecordKind::ToolResultOutput => "TOOL_RESULT",
         SessionMessageRecordKind::SummaryOutput => "SUMMARY",
         SessionMessageRecordKind::ExploreOutput => "EXPLORE",
+        SessionMessageRecordKind::ToolDetailOutput => "TOOL_DETAIL",
         SessionMessageRecordKind::CompactionSummary => "COMPACTION",
         SessionMessageRecordKind::CompactionStatus => "COMPACTION_STATUS",
         SessionMessageRecordKind::TitleOutput => "TITLE",
@@ -480,6 +481,7 @@ fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
         }
         SessionMessageRecordKind::SummaryOutput => String::from("Execution Summary"),
         SessionMessageRecordKind::ExploreOutput => String::from("Explore Context"),
+        SessionMessageRecordKind::ToolDetailOutput => String::from("Tool Detail"),
         SessionMessageRecordKind::CompactionSummary => String::from("Context Compaction Summary"),
         SessionMessageRecordKind::CompactionStatus => String::from("Context Compaction Status"),
         SessionMessageRecordKind::TitleOutput => String::from("Title Update"),

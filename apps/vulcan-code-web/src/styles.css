@@ -2828,6 +2828,16 @@ button {
   scrollbar-gutter: stable;
 }
 
+.conversation-panel .message-row,
+.conversation-panel .work-process-group {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 180px;
+}
+
+.conversation-panel .markdown-message {
+  contain: layout paint style;
+}
+
 .conversation-loading-center {
   position: absolute;
   inset: 0;
@@ -4984,6 +4994,19 @@ button {
   font-size: 13px;
   line-height: 1.62;
   overflow-wrap: anywhere;
+}
+
+.markdown-lazy-chunk-list,
+.markdown-lazy-chunk {
+  min-width: 0;
+}
+
+.markdown-lazy-chunk:first-child > :first-child {
+  margin-top: 0;
+}
+
+.markdown-lazy-chunk:last-child > :last-child {
+  margin-bottom: 0;
 }
 
 .markdown-message > :first-child {

@@ -1589,6 +1589,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             row.conversation_state_json,
             row.continuation_json,
         ),
+        tool_call_record_ids: Default::default(),
         last_provider_usage: provider_usage.clone(),
         last_successful_provider_usage: provider_usage,
         last_safe_provider_request_count: None,

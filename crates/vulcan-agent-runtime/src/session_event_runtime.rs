@@ -207,24 +207,23 @@ fn append_tool_started_projection_to_state(
         now,
         runtime_state.conversation_state.records.len(),
     );
+    let metadata = normalize_tool_call_metadata(event.metadata.clone(), &tool_call_id, &tool_name);
     append_record(
         &mut runtime_state.conversation_state,
         SessionConversationRecord {
-            id: record_id,
+            id: record_id.clone(),
             kind: SessionMessageKind::Assistant,
             record_kind: SessionMessageRecordKind::ToolCallOutput,
             visible: true,
-            title: human_tool_display_title(&tool_name, "running"),
-            body: event.detail.clone(),
-            metadata: Some(normalize_tool_event_metadata(
-                event.metadata.clone(),
-                &tool_call_id,
-                Some(&tool_name),
-                "running",
-            )),
+            title: String::new(),
+            body: String::new(),
+            metadata: Some(metadata),
             created_at: now.to_string(),
         },
     );
+    runtime_state
+        .tool_call_record_ids
+        .insert(tool_call_id, record_id);
     runtime_state.updated_at = now.to_string();
     true
 }
@@ -259,31 +258,60 @@ fn append_tool_finished_projection_to_state(
                 .rev()
                 .find_map(|record| tool_record_name_for_call_id(record, &tool_call_id))
         });
-    let title = tool_name
-        .as_deref()
-        .map(|name| human_tool_display_title(name, display_state))
-        .unwrap_or_else(|| human_tool_display_title(&tool_call_id, display_state));
-    let record_id = build_session_record_message_id(
+    let tool_result_id = tool_result_id_from_metadata(event.metadata.as_ref(), &tool_call_id);
+    let detail_ref = append_tool_result_detail_record(
+        runtime_state,
         session_id,
         now,
-        runtime_state.conversation_state.records.len(),
+        &tool_call_id,
+        &tool_result_id,
+        tool_name.as_deref(),
+        display_state,
+        event.metadata.as_ref(),
+        &event.detail,
     );
-    let record = SessionConversationRecord {
-        id: record_id,
-        kind: SessionMessageKind::Assistant,
-        record_kind: SessionMessageRecordKind::ToolResultOutput,
-        visible: true,
-        title,
-        body: event.detail.clone(),
-        metadata: Some(normalize_tool_event_metadata(
-            event.metadata.clone(),
-            &tool_call_id,
-            tool_name.as_deref(),
-            display_state,
-        )),
-        created_at: now.to_string(),
-    };
-    runtime_state.conversation_state.records.push(record);
+    let result_metadata = normalize_tool_result_metadata(
+        &tool_call_id,
+        &tool_result_id,
+        tool_name.as_deref(),
+        display_state,
+        detail_ref.as_ref(),
+        false,
+    );
+    let attached = runtime_state
+        .tool_call_record_ids
+        .remove(&tool_call_id)
+        .and_then(|record_id| {
+            attach_tool_result_to_record(
+                &mut runtime_state.conversation_state,
+                &record_id,
+                result_metadata.clone(),
+            )
+            .then_some(())
+        })
+        .is_some();
+    if !attached {
+        let record_id = build_session_record_message_id(
+            session_id,
+            now,
+            runtime_state.conversation_state.records.len(),
+        );
+        let mut orphan_metadata = result_metadata;
+        if let serde_json::Value::Object(object) = &mut orphan_metadata {
+            object.insert(String::from("orphan"), serde_json::Value::Bool(true));
+        }
+        let record = SessionConversationRecord {
+            id: record_id,
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolResultOutput,
+            visible: true,
+            title: String::new(),
+            body: String::new(),
+            metadata: Some(orphan_metadata),
+            created_at: now.to_string(),
+        };
+        runtime_state.conversation_state.records.push(record);
+    }
     runtime_state.updated_at = now.to_string();
     true
 }
@@ -315,17 +343,6 @@ fn parse_tool_finished_runtime_event_title(title: &str) -> Option<String> {
         }
         _ => None,
     }
-}
-
-/// Builds one stable human-facing title for a tool execution card from the tool name and display state.
-/// 根据工具名称与显示状态构建一条稳定的人类可读工具执行卡片标题。
-fn human_tool_display_title(tool_name: &str, display_state: &str) -> String {
-    let status_label = match display_state {
-        "failed" => "失败",
-        "completed" => "已完成",
-        _ => "进行中",
-    };
-    format!("调用 {tool_name} 工具 {status_label}")
 }
 
 /// Returns the stable display state used by one human-facing tool execution card.
@@ -416,18 +433,82 @@ fn tool_metadata_represents_failed_result(metadata: &serde_json::Value) -> bool 
         || metadata.get("status").and_then(serde_json::Value::as_str) == Some("failed")
 }
 
-/// Normalizes tool event metadata so every UI surface can merge and open detail cards consistently.
-/// 规范化工具事件元数据，使所有界面都能稳定合并并打开详情卡片。
-fn normalize_tool_event_metadata(
+/// Normalizes tool-call metadata for one durable structured tool execution node.
+/// 为单个持久结构化工具执行节点规范化工具调用元数据。
+fn normalize_tool_call_metadata(
     metadata: Option<serde_json::Value>,
     tool_call_id: &str,
-    tool_name: Option<&str>,
-    display_state: &str,
+    tool_name: &str,
 ) -> serde_json::Value {
-    let mut object = match metadata {
+    let source = match metadata {
         Some(serde_json::Value::Object(object)) => object,
         _ => serde_json::Map::new(),
     };
+    let mut object = serde_json::Map::new();
+    for (key, value) in source {
+        if !key.starts_with("webui_") {
+            object.insert(key, value);
+        }
+    }
+    object.insert(
+        String::from("tool_call_id"),
+        serde_json::Value::String(tool_call_id.to_string()),
+    );
+    object.insert(
+        String::from("tool_name"),
+        serde_json::Value::String(tool_name.to_string()),
+    );
+    serde_json::Value::Object(object)
+}
+
+/// Resolves the stable host-visible tool-result id for one tool call.
+/// 为单次工具调用解析稳定的宿主可见工具返回标识。
+fn tool_result_id_from_metadata(
+    metadata: Option<&serde_json::Value>,
+    tool_call_id: &str,
+) -> String {
+    metadata
+        .and_then(|metadata| metadata.get("tool_result_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("tool-result-{tool_call_id}"))
+}
+
+/// Builds compact tool-result metadata that is safe to keep on the visible tool execution node.
+/// 构建可安全保存在可见工具执行节点上的紧凑工具返回元数据。
+fn normalize_tool_result_metadata(
+    tool_call_id: &str,
+    tool_result_id: &str,
+    tool_name: Option<&str>,
+    display_state: &str,
+    detail_ref: Option<&ToolDetailRecordRef>,
+    synthetic: bool,
+) -> serde_json::Value {
+    let mut result = serde_json::Map::new();
+    result.insert(
+        String::from("tool_result_id"),
+        serde_json::Value::String(tool_result_id.to_string()),
+    );
+    result.insert(
+        String::from("status"),
+        serde_json::Value::String(display_state.to_string()),
+    );
+    if synthetic {
+        result.insert(String::from("synthetic"), serde_json::Value::Bool(true));
+    }
+    if let Some(detail_ref) = detail_ref {
+        result.insert(
+            String::from("detail_ref"),
+            json!({
+                "kind": "session_record",
+                "record_id": detail_ref.record_id,
+                "message_index": detail_ref.message_index,
+            }),
+        );
+    }
+
+    let mut object = serde_json::Map::new();
     object.insert(
         String::from("tool_call_id"),
         serde_json::Value::String(tool_call_id.to_string()),
@@ -438,11 +519,388 @@ fn normalize_tool_event_metadata(
             serde_json::Value::String(tool_name.to_string()),
         );
     }
+    object.insert(String::from("result"), serde_json::Value::Object(result));
+    serde_json::Value::Object(object)
+}
+
+/// Attaches one compact tool result to an existing visible tool-call record.
+/// 将一条紧凑工具返回挂接到已有的可见工具调用记录上。
+fn attach_tool_result_to_record(
+    state: &mut SessionConversationState,
+    record_id: &str,
+    result_metadata: serde_json::Value,
+) -> bool {
+    let Some(record) = state
+        .records
+        .iter_mut()
+        .find(|record| record.id == record_id)
+    else {
+        return false;
+    };
+    let mut merged = match record.metadata.take() {
+        Some(serde_json::Value::Object(object)) => object,
+        _ => serde_json::Map::new(),
+    };
+    if let serde_json::Value::Object(result_object) = result_metadata {
+        for (key, value) in result_object {
+            merged.insert(key, value);
+        }
+    }
+    record.title.clear();
+    record.body.clear();
+    record.metadata = Some(serde_json::Value::Object(merged));
+    true
+}
+
+/// Identifies the hidden tool-detail record created for one visible tool call.
+/// 标识为单条可见工具调用创建的隐藏工具详情记录。
+#[derive(Debug, Clone)]
+struct ToolDetailRecordRef {
+    /// Stable hidden session record id.
+    /// 稳定隐藏会话记录标识。
+    record_id: String,
+    /// Zero-based message index inside the current conversation record list.
+    /// 当前会话记录列表中的零基消息索引。
+    message_index: usize,
+}
+
+/// Stores the full tool-result detail outside the visible transcript stream and returns its record id.
+/// 将完整工具返回详情存放在可见转录流之外，并返回对应记录标识。
+fn append_tool_result_detail_record(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    tool_call_id: &str,
+    tool_result_id: &str,
+    tool_name: Option<&str>,
+    display_state: &str,
+    metadata: Option<&serde_json::Value>,
+    detail: &str,
+) -> Option<ToolDetailRecordRef> {
+    let model_output = tool_result_model_output_from_detail(detail);
+    if model_output.trim().is_empty() {
+        return None;
+    }
+    let display = tool_result_display_payload(tool_name, display_state, metadata, &model_output);
+    let mut metadata_object = serde_json::Map::new();
+    metadata_object.insert(String::from("tool_detail"), serde_json::Value::Bool(true));
+    metadata_object.insert(
+        String::from("tool_call_id"),
+        serde_json::Value::String(tool_call_id.to_string()),
+    );
+    metadata_object.insert(
+        String::from("tool_result_id"),
+        serde_json::Value::String(tool_result_id.to_string()),
+    );
+    if let Some(tool_name) = tool_name.filter(|value| !value.trim().is_empty()) {
+        metadata_object.insert(
+            String::from("tool_name"),
+            serde_json::Value::String(tool_name.to_string()),
+        );
+    }
+    if let Some(arguments) = metadata.and_then(|metadata| metadata.get("arguments")) {
+        metadata_object.insert(String::from("arguments"), arguments.clone());
+    }
+    metadata_object.insert(String::from("display"), display);
+    metadata_object.insert(
+        String::from("detail_chars"),
+        serde_json::Value::Number(serde_json::Number::from(model_output.chars().count() as u64)),
+    );
+    let message_index = runtime_state.conversation_state.records.len();
+    let record_id = build_session_record_message_id(
+        session_id,
+        now,
+        message_index,
+    );
+    append_record(
+        &mut runtime_state.conversation_state,
+        SessionConversationRecord {
+            id: record_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolDetailOutput,
+            visible: false,
+            title: String::new(),
+            body: model_output,
+            metadata: Some(serde_json::Value::Object(metadata_object)),
+            created_at: now.to_string(),
+        },
+    );
+    Some(ToolDetailRecordRef {
+        record_id,
+        message_index,
+    })
+}
+
+/// Extracts the model-facing tool result text from the host detail wrapper.
+/// 从宿主详情包装中提取面向模型的工具返回文本。
+fn tool_result_model_output_from_detail(detail: &str) -> String {
+    const MARKER: &str = "## Tool Result";
+    let output = detail
+        .find(MARKER)
+        .map(|index| &detail[index + MARKER.len()..])
+        .unwrap_or(detail)
+        .trim_start_matches(['\r', '\n'])
+        .trim();
+    output.to_string()
+}
+
+/// Builds the structured display payload used by WebUI tool-specific renderers.
+/// 构建 WebUI 工具专属渲染器使用的结构化展示载荷。
+fn tool_result_display_payload(
+    tool_name: Option<&str>,
+    display_state: &str,
+    metadata: Option<&serde_json::Value>,
+    model_output: &str,
+) -> serde_json::Value {
+    if tool_name == Some("shell_command") {
+        return shell_command_display_payload(display_state, model_output);
+    }
+    if tool_name == Some("vulcan_file_list") {
+        return vulcan_file_list_display_payload(display_state, metadata, model_output);
+    }
+    let mut object = serde_json::Map::new();
     object.insert(
-        String::from("display_state"),
+        String::from("kind"),
+        serde_json::Value::String(tool_name.unwrap_or("generic").to_string()),
+    );
+    object.insert(
+        String::from("status"),
         serde_json::Value::String(display_state.to_string()),
     );
+    if let Some(arguments) = metadata.and_then(|metadata| metadata.get("arguments")) {
+        object.insert(String::from("arguments"), arguments.clone());
+    }
+    object.insert(
+        String::from("summary"),
+        serde_json::Value::String(compact_display_summary(model_output)),
+    );
     serde_json::Value::Object(object)
+}
+
+/// Builds a compact structured display payload for the file-list tool.
+/// 为文件列表工具构建紧凑结构化展示载荷。
+fn vulcan_file_list_display_payload(
+    display_state: &str,
+    metadata: Option<&serde_json::Value>,
+    model_output: &str,
+) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        String::from("kind"),
+        serde_json::Value::String(String::from("vulcan_file_list")),
+    );
+    object.insert(
+        String::from("status"),
+        serde_json::Value::String(display_state.to_string()),
+    );
+    if let Some(arguments) = metadata.and_then(|metadata| metadata.get("arguments")) {
+        object.insert(String::from("arguments"), arguments.clone());
+    }
+    if let Some(first_line) = model_output.lines().next() {
+        merge_file_list_header_fields(&mut object, first_line);
+    }
+    let files = model_output
+        .lines()
+        .skip(1)
+        .flat_map(|line| line.split_whitespace())
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| serde_json::Value::String(value.to_string()))
+        .collect::<Vec<_>>();
+    if !files.is_empty() {
+        object.insert(String::from("files"), serde_json::Value::Array(files));
+    }
+    object.insert(
+        String::from("summary"),
+        serde_json::Value::String(compact_display_summary(model_output)),
+    );
+    serde_json::Value::Object(object)
+}
+
+/// Merges known `vulcan_file_list` header counters into one display object.
+/// 将已知的 `vulcan_file_list` 头部计数字段合并到展示对象。
+fn merge_file_list_header_fields(object: &mut serde_json::Map<String, serde_json::Value>, line: &str) {
+    let header = line.trim().trim_start_matches('[').trim_end_matches(']');
+    if let Some((label, rest)) = header.split_once(':') {
+        object.insert(
+            String::from("label"),
+            serde_json::Value::String(label.trim().to_string()),
+        );
+        let mut pending_key: Option<String> = None;
+        for token in rest.split_whitespace() {
+            if let Some((key, value)) = token.split_once(':') {
+                insert_file_list_header_field(object, key, value);
+                pending_key = None;
+            } else if pending_key.is_none() {
+                object.insert(
+                    String::from("root"),
+                    serde_json::Value::String(token.to_string()),
+                );
+                pending_key = Some(String::from("root"));
+            }
+        }
+    }
+}
+
+/// Inserts one typed file-list header field into the display object.
+/// 向展示对象写入单个带类型的文件列表头部字段。
+fn insert_file_list_header_field(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: &str,
+) {
+    let normalized_key = match key {
+        "Pattern" => "pattern",
+        "Recursive" => "recursive",
+        "Ignore" => "ignore",
+        "Files" => "files_count",
+        "Truncated" => "truncated",
+        "Ignored" => "ignored_count",
+        _ => return,
+    };
+    let typed_value = match value {
+        "true" | "True" => serde_json::Value::Bool(true),
+        "false" | "False" => serde_json::Value::Bool(false),
+        _ => value
+            .parse::<u64>()
+            .map(|number| serde_json::Value::Number(serde_json::Number::from(number)))
+            .unwrap_or_else(|_| serde_json::Value::String(value.to_string())),
+    };
+    object.insert(normalized_key.to_string(), typed_value);
+}
+
+/// Builds a bounded one-line display summary without duplicating the full model output.
+/// 构建有界单行展示摘要，避免重复保存完整模型输出。
+fn compact_display_summary(source: &str) -> String {
+    let compact = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    const MAX_SUMMARY_CHARS: usize = 240;
+    if compact.chars().count() <= MAX_SUMMARY_CHARS {
+        return compact;
+    }
+    format!(
+        "{}...",
+        compact.chars().take(MAX_SUMMARY_CHARS).collect::<String>()
+    )
+}
+
+/// Parses a shell-command model output into command, status, and stream fields for display.
+/// 将 shell_command 模型输出解析为命令、状态和输出流字段用于展示。
+fn shell_command_display_payload(display_state: &str, model_output: &str) -> serde_json::Value {
+    let mut object = serde_json::Map::new();
+    object.insert(
+        String::from("kind"),
+        serde_json::Value::String(String::from("shell_command")),
+    );
+    object.insert(
+        String::from("status"),
+        serde_json::Value::String(display_state.to_string()),
+    );
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut section: Option<&str> = None;
+    for line in model_output.lines() {
+        let trimmed = line.trim();
+        match trimmed {
+            "[stdout]" => {
+                section = Some("stdout");
+                continue;
+            }
+            "[stderr]" => {
+                section = Some("stderr");
+                continue;
+            }
+            _ => {}
+        }
+        match section {
+            Some("stdout") => stdout.push(line),
+            Some("stderr") => stderr.push(line),
+            _ => {
+                if let Some((key, value)) = line.split_once(": ") {
+                    let normalized_key = match key.trim() {
+                        "Command" => Some("command"),
+                        "Shell" => Some("shell"),
+                        "Working directory" => Some("working_directory"),
+                        "Status" => Some("status"),
+                        "Duration" => Some("duration"),
+                        "Exit code" => Some("exit_code"),
+                        _ => None,
+                    };
+                    if let Some(normalized_key) = normalized_key {
+                        if normalized_key == "exit_code" {
+                            if let Ok(exit_code) = value.trim().parse::<i64>() {
+                                object.insert(
+                                    normalized_key.to_string(),
+                                    serde_json::Value::Number(serde_json::Number::from(exit_code)),
+                                );
+                                continue;
+                            }
+                        }
+                        object.insert(
+                            normalized_key.to_string(),
+                            serde_json::Value::String(value.trim().to_string()),
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if !stdout.is_empty() {
+        object.insert(
+            String::from("stdout"),
+            serde_json::Value::String(stdout.join("\n").trim().to_string()),
+        );
+    }
+    if !stderr.is_empty() {
+        object.insert(
+            String::from("stderr"),
+            serde_json::Value::String(stderr.join("\n").trim().to_string()),
+        );
+    }
+    serde_json::Value::Object(object)
+}
+
+/// Completes every still-open visible tool execution with one synthetic terminal result.
+/// 使用一条合成终态结果闭合所有仍未返回的可见工具执行节点。
+fn complete_open_tool_records(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    display_state: &str,
+    message: &str,
+) {
+    let open_records = std::mem::take(&mut runtime_state.tool_call_record_ids);
+    for (tool_call_id, record_id) in open_records {
+        let tool_name = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.id == record_id)
+            .and_then(|record| tool_record_name_for_call_id(record, &tool_call_id));
+        let tool_result_id = format!("tool-result-{tool_call_id}");
+        let detail_ref = append_tool_result_detail_record(
+            runtime_state,
+            session_id,
+            now,
+            &tool_call_id,
+            &tool_result_id,
+            tool_name.as_deref(),
+            display_state,
+            None,
+            message,
+        );
+        let metadata = normalize_tool_result_metadata(
+            &tool_call_id,
+            &tool_result_id,
+            tool_name.as_deref(),
+            display_state,
+            detail_ref.as_ref(),
+            true,
+        );
+        attach_tool_result_to_record(
+            &mut runtime_state.conversation_state,
+            &record_id,
+            metadata,
+        );
+    }
 }
 
 /// Finds the tool name stored on an earlier tool-call card for the same call identifier.
@@ -603,6 +1061,23 @@ pub fn apply_terminal_execution_report_to_state(
     }
     if report.provider_request_count > 0 {
         runtime_state.last_safe_provider_request_count = Some(report.provider_request_count);
+    }
+    if is_success {
+        complete_open_tool_records(
+            runtime_state,
+            session_id,
+            now,
+            "failed",
+            "Tool call ended before returning a result.",
+        );
+    } else {
+        complete_open_tool_records(
+            runtime_state,
+            session_id,
+            now,
+            "failed",
+            "Tool call failed or was interrupted before returning a result.",
+        );
     }
     let closing_record_id = if is_success {
         ensure_terminal_success_records(runtime_state, session_id, now, report);
@@ -1145,7 +1620,7 @@ mod tests {
         let finished = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
             "工具返回 · call-1",
-            "## Tool Result",
+            "## Result ID\n\n`tool-result-call-1`\n\n## Tool Result\n\nlisted files",
         )
         .with_metadata(Some(json!({
             "tool_call_id": "call-1",
@@ -1173,8 +1648,62 @@ mod tests {
                 SessionMessageRecordKind::Transcript,
                 SessionMessageRecordKind::ToolCallOutput,
                 SessionMessageRecordKind::AssistantOutput,
-                SessionMessageRecordKind::ToolResultOutput,
             ]
+        );
+        let tool_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+            .expect("tool call record should remain visible");
+        assert!(tool_record.title.is_empty());
+        assert!(tool_record.body.is_empty());
+        let metadata = tool_record.metadata.as_ref().expect("tool metadata");
+        assert_eq!(
+            metadata
+                .get("result")
+                .and_then(|result| result.get("status"))
+                .and_then(serde_json::Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            metadata
+                .get("result")
+                .and_then(|result| result.get("tool_result_id"))
+                .and_then(serde_json::Value::as_str),
+            Some("tool-result-call-1")
+        );
+        assert!(metadata.get("tool_result_id").is_none());
+        assert_eq!(
+            metadata
+                .get("result")
+                .and_then(|result| result.get("detail_ref"))
+                .and_then(|detail_ref| detail_ref.get("message_index"))
+                .and_then(serde_json::Value::as_u64),
+            Some(3)
+        );
+        assert!(
+            metadata
+                .get("result")
+                .and_then(|result| result.get("preview"))
+                .is_none()
+        );
+        let detail_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+            .expect("tool detail record should be hidden");
+        assert!(!detail_record.visible);
+        assert_eq!(detail_record.body, "listed files");
+        let detail_metadata = detail_record.metadata.as_ref().expect("detail metadata");
+        assert!(detail_metadata.get("model_output").is_none());
+        assert!(
+            detail_metadata
+                .get("display")
+                .and_then(|display| display.get("kind"))
+                .and_then(serde_json::Value::as_str)
+                .is_some()
         );
     }
 

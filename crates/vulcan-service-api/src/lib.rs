@@ -869,6 +869,53 @@ pub struct ConversationMessage {
     pub attachments: Vec<ComposerAttachmentSummary>,
 }
 
+/// Carries one ordered partial workbench update that avoids resending the full snapshot.
+/// 携带一条有序的局部工作台更新，避免重复发送完整快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchDeltaEnvelope {
+    /// Monotonic backend workbench generation used by clients for diagnostics and ordering.
+    /// 客户端用于诊断与排序的后端工作台单调版本号。
+    pub generation: u64,
+    /// Partial workbench update payload.
+    /// 局部工作台更新载荷。
+    pub delta: WorkbenchDelta,
+}
+
+/// Describes one partial workbench update emitted on hot paths.
+/// 描述热路径上发出的单条局部工作台更新。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", tag = "kind", content = "payload")]
+pub enum WorkbenchDelta {
+    /// Append-only body delta for a visible conversation message.
+    /// 针对可见会话消息的追加式正文增量。
+    AppendMessageBody(AppendMessageBodyDelta),
+}
+
+/// Appends streamed text to one visible conversation message.
+/// 向单条可见会话消息追加流式文本。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendMessageBodyDelta {
+    /// Stable conversation identifier that owns the message.
+    /// 拥有该消息的稳定会话标识。
+    pub conversation_id: String,
+    /// Stable message identifier that should receive the appended body text.
+    /// 接收正文追加片段的稳定消息标识。
+    pub message_id: String,
+    /// Text appended by this event only.
+    /// 本事件单独追加的文本片段。
+    pub body_delta: String,
+    /// Initial full message metadata when this delta creates the row on the client.
+    /// 当本次增量在客户端创建行时携带的初始完整消息元数据。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_message: Option<ConversationMessage>,
+    /// Current per-conversation run phase after applying this delta.
+    /// 应用本次增量后的当前会话运行阶段。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_phase: Option<String>,
+}
+
 /// Summarizes one composer attachment kind exposed to WebUI controls.
 /// 汇总 WebUI 输入区控件可使用的单种附件类型。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1571,4 +1618,7 @@ pub enum ServiceEvent {
     /// Workbench snapshot event.
     /// 工作台快照事件。
     Workbench(Box<WorkbenchSnapshot>),
+    /// Partial workbench update event.
+    /// 局部工作台更新事件。
+    WorkbenchDelta(Box<WorkbenchDeltaEnvelope>),
 }
