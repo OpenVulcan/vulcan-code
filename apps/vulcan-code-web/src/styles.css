@@ -2854,18 +2854,8 @@ button {
   pointer-events: auto;
 }
 
-.conversation-panel .message-row {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 180px;
-}
-
 .conversation-panel .work-process-group {
   contain: layout paint style;
-}
-
-.conversation-panel .work-process-group .message-row {
-  content-visibility: visible;
-  contain-intrinsic-size: auto none;
 }
 
 .conversation-panel .markdown-message {

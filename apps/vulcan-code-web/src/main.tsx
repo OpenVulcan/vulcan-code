@@ -862,6 +862,14 @@ interface ConversationTimelineVirtualWindow {
   measuring: boolean;
 }
 
+// ConversationTimelineVirtualRestoreState stores reusable layout measurements for one transcript surface.
+// ConversationTimelineVirtualRestoreState 保存单个转录界面可复用的布局测量信息。
+interface ConversationTimelineVirtualRestoreState {
+  // Measured row heights keyed by stable timeline item id.
+  // 按稳定时间线条目标识记录的已测量行高。
+  rowHeightsByKey: Record<string, number>;
+}
+
 // ConversationTimelineItem describes either one normal row or one grouped process row.
 // ConversationTimelineItem 描述单条普通行或单条分组过程行。
 type ConversationTimelineItem =
@@ -921,6 +929,18 @@ interface ToolDetailPayload {
   // 展示渲染器使用的结构化元数据。
   metadata?: unknown;
 }
+
+// conversationToolDetailPayloadCache keeps hidden tool details stable across transcript remounts.
+// conversationToolDetailPayloadCache 在转录重新挂载之间稳定保存隐藏工具详情。
+const conversationToolDetailPayloadCache = new Map<string, ToolDetailPayload | null>();
+
+// conversationToolDetailPromiseCache deduplicates in-flight hidden tool detail requests.
+// conversationToolDetailPromiseCache 对进行中的隐藏工具详情请求去重。
+const conversationToolDetailPromiseCache = new Map<string, Promise<ToolDetailPayload | null>>();
+
+// conversationToolDetailMediaCache keeps generated media cards stable across transcript remounts.
+// conversationToolDetailMediaCache 在转录重新挂载之间稳定保存生成媒体卡片。
+const conversationToolDetailMediaCache = new Map<string, GeneratedMediaAttachment[]>();
 
 // TauriInvoke invokes a backend command when the app runs inside Tauri.
 // TauriInvoke 在应用运行于 Tauri 内部时调用后端命令。
@@ -1722,6 +1742,46 @@ async function loadConversationToolDetail(detailRef: ConversationDetailRef): Pro
     seq: detailRef.seq ?? null,
     messageIndex: detailRef.messageIndex ?? null,
   });
+}
+
+// conversationDetailRefCacheKey builds a stable cache key for one hidden tool detail reference.
+// conversationDetailRefCacheKey 为单条隐藏工具详情引用构建稳定缓存键。
+function conversationDetailRefCacheKey(detailRef: ConversationDetailRef): string {
+  const locator = detailRef.recordId
+    ? `record:${detailRef.recordId}`
+    : detailRef.seq != null
+      ? `seq:${detailRef.seq}`
+      : detailRef.toolCallId
+        ? `tool:${detailRef.toolCallId}`
+        : detailRef.messageIndex != null
+          ? `message:${detailRef.messageIndex}`
+          : "unknown";
+  return `${detailRef.sessionId}:${locator}`;
+}
+
+// loadCachedConversationToolDetail loads hidden tool detail once per stable reference.
+// loadCachedConversationToolDetail 按稳定引用仅加载一次隐藏工具详情。
+async function loadCachedConversationToolDetail(detailRef: ConversationDetailRef): Promise<ToolDetailPayload | null> {
+  const cacheKey = conversationDetailRefCacheKey(detailRef);
+  if (conversationToolDetailPayloadCache.has(cacheKey)) {
+    return conversationToolDetailPayloadCache.get(cacheKey) ?? null;
+  }
+  const existingPromise = conversationToolDetailPromiseCache.get(cacheKey);
+  if (existingPromise) {
+    return existingPromise;
+  }
+  const promise = loadConversationToolDetail(detailRef)
+    .then((payload) => {
+      conversationToolDetailPayloadCache.set(cacheKey, payload);
+      conversationToolDetailPromiseCache.delete(cacheKey);
+      return payload;
+    })
+    .catch((error) => {
+      conversationToolDetailPromiseCache.delete(cacheKey);
+      throw error;
+    });
+  conversationToolDetailPromiseCache.set(cacheKey, promise);
+  return promise;
 }
 
 // submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
@@ -10106,6 +10166,9 @@ function ChatArea(props: {
   // conversationScrollSnapshotsRef keeps scroll restoration data per parent or child surface.
   // conversationScrollSnapshotsRef 按主会话或子代理界面保存滚动恢复数据。
   const conversationScrollSnapshotsRef = React.useRef<Map<string, ConversationScrollSnapshot>>(new Map());
+  // conversationVirtualizerStatesRef keeps measured row heights per parent or child surface.
+  // conversationVirtualizerStatesRef 按主会话或子代理界面保存已测量行高。
+  const conversationVirtualizerStatesRef = React.useRef<Map<string, ConversationTimelineVirtualRestoreState>>(new Map());
   // scrollRestoreGuardRef prevents transient restore measurements from overwriting tail-pinned memory.
   // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
   const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
@@ -10271,6 +10334,19 @@ function ChatArea(props: {
       }
       return height;
     });
+  }, []);
+
+  // handleTimelineVirtualizerStateChange remembers measured row heights for the active surface.
+  // handleTimelineVirtualizerStateChange 记住当前界面的已测量行高。
+  const handleTimelineVirtualizerStateChange = React.useCallback((surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => {
+    if (!surfaceId) {
+      return;
+    }
+    if (!state || Object.keys(state.rowHeightsByKey).length === 0) {
+      conversationVirtualizerStatesRef.current.delete(surfaceId);
+      return;
+    }
+    conversationVirtualizerStatesRef.current.set(surfaceId, state);
   }, []);
 
   React.useLayoutEffect(() => {
@@ -10488,6 +10564,13 @@ function ChatArea(props: {
             onScrollStateChange={updateConversationBottomState}
             onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
             scrollRef={workspaceRef}
+            initialScrollDistanceFromBottom={activeSurfaceConversationId
+              ? conversationScrollSnapshotsRef.current.get(activeSurfaceConversationId)?.distanceFromBottom ?? 0
+              : 0}
+            initialVirtualizerState={activeSurfaceConversationId
+              ? conversationVirtualizerStatesRef.current.get(activeSurfaceConversationId) ?? null
+              : null}
+            onVirtualizerStateChange={handleTimelineVirtualizerStateChange}
             footer={isEmptyConversation ? null : composerDock}
             suppressEmptyPlaceholder={isEmptyConversation}
           />
@@ -10621,6 +10704,9 @@ function useConversationTimelineVirtualWindow(
   items: ConversationTimelineItem[],
   scrollRef: React.RefObject<HTMLElement | null>,
   cacheScopeKey: string,
+  initialDistanceFromBottom: number,
+  initialVirtualizerState: ConversationTimelineVirtualRestoreState | null,
+  onVirtualizerStateChange: (surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => void,
 ): {
   // Current virtual window projection.
   // 当前虚拟窗口投影。
@@ -10632,10 +10718,18 @@ function useConversationTimelineVirtualWindow(
   // 按稳定时间线键保存测量后的行高。
   onRowHeight: (key: string, height: number) => void;
 } {
-  const measuredHeightsRef = React.useRef<Map<string, number>>(new Map());
+  const measuredHeightsRef = React.useRef<Map<string, number>>(
+    new Map(Object.entries(initialVirtualizerState?.rowHeightsByKey ?? {})),
+  );
   const cacheScopeKeyRef = React.useRef(cacheScopeKey);
+  const pendingInitialDistanceFromBottomRef = React.useRef<number | null>(Math.max(0, initialDistanceFromBottom));
   const [measureVersion, setMeasureVersion] = React.useState(0);
   const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0, width: 0 });
+  if (cacheScopeKeyRef.current !== cacheScopeKey) {
+    measuredHeightsRef.current = new Map(Object.entries(initialVirtualizerState?.rowHeightsByKey ?? {}));
+    cacheScopeKeyRef.current = cacheScopeKey;
+    pendingInitialDistanceFromBottomRef.current = Math.max(0, initialDistanceFromBottom);
+  }
   const onScroll = React.useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -10666,13 +10760,51 @@ function useConversationTimelineVirtualWindow(
     return () => observer.disconnect();
   }, [onScroll, scrollRef]);
 
+  React.useLayoutEffect(() => {
+    if (pendingInitialDistanceFromBottomRef.current === null) {
+      return;
+    }
+    let cancelled = false;
+    let frame: number | null = null;
+    // restorePendingBottomDistance aligns the DOM scroll position with the virtual projection.
+    // restorePendingBottomDistance 让 DOM 滚动位置与虚拟窗口投影保持一致。
+    const restorePendingBottomDistance = () => {
+      const element = scrollRef.current;
+      const distanceFromBottom = pendingInitialDistanceFromBottomRef.current;
+      if (!element || distanceFromBottom === null) {
+        return;
+      }
+      if (distanceFromBottom <= 0) {
+        element.scrollTop = element.scrollHeight;
+        return;
+      }
+      conversationScrollToDistanceFromBottom(element, distanceFromBottom);
+    };
+    const clearAfterFrame = (remainingFrames: number) => {
+      frame = window.requestAnimationFrame(() => {
+        if (cancelled) {
+          return;
+        }
+        restorePendingBottomDistance();
+        if (remainingFrames <= 0) {
+          pendingInitialDistanceFromBottomRef.current = null;
+          onScroll();
+          return;
+        }
+        clearAfterFrame(remainingFrames - 1);
+      });
+    };
+    clearAfterFrame(3);
+    return () => {
+      cancelled = true;
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+    };
+  }, [cacheScopeKey, onScroll, scrollRef]);
+
   React.useEffect(() => {
     let changed = false;
-    if (cacheScopeKeyRef.current !== cacheScopeKey) {
-      measuredHeightsRef.current.clear();
-      cacheScopeKeyRef.current = cacheScopeKey;
-      changed = true;
-    }
     const liveKeys = new Set(items.map(conversationTimelineItemKey));
     for (const key of measuredHeightsRef.current.keys()) {
       if (!liveKeys.has(key)) {
@@ -10682,8 +10814,11 @@ function useConversationTimelineVirtualWindow(
     }
     if (changed) {
       setMeasureVersion((version) => version + 1);
+      onVirtualizerStateChange(cacheScopeKey, {
+        rowHeightsByKey: Object.fromEntries(measuredHeightsRef.current),
+      });
     }
-  }, [cacheScopeKey, items]);
+  }, [cacheScopeKey, items, onVirtualizerStateChange]);
 
   const onRowHeight = React.useCallback((key: string, height: number) => {
     if (!Number.isFinite(height) || height <= 0) {
@@ -10720,6 +10855,9 @@ function useConversationTimelineVirtualWindow(
       && rowBottomBefore <= scrollElement.scrollTop + 1,
     );
     measuredHeightsRef.current.set(key, rounded);
+    onVirtualizerStateChange(cacheScopeKey, {
+      rowHeightsByKey: Object.fromEntries(measuredHeightsRef.current),
+    });
     setMeasureVersion((version) => version + 1);
     if (!scrollElement) {
       return;
@@ -10733,7 +10871,7 @@ function useConversationTimelineVirtualWindow(
     if (shouldPreserveViewport) {
       scrollElement.scrollTop += heightDelta;
     }
-  }, [items, scrollRef]);
+  }, [cacheScopeKey, items, onVirtualizerStateChange, scrollRef]);
 
   const virtualWindow = React.useMemo<ConversationTimelineVirtualWindow>(() => {
     void measureVersion;
@@ -10754,8 +10892,12 @@ function useConversationTimelineVirtualWindow(
       offsets.push(totalHeight);
       totalHeight += height;
     }
-    const windowTop = Math.max(0, viewport.scrollTop - CONVERSATION_VIRTUALIZATION_OVERSCAN_PX);
-    const windowBottom = viewport.scrollTop + viewport.height + CONVERSATION_VIRTUALIZATION_OVERSCAN_PX;
+    const pendingDistanceFromBottom = pendingInitialDistanceFromBottomRef.current;
+    const effectiveScrollTop = pendingDistanceFromBottom === null
+      ? viewport.scrollTop
+      : Math.max(0, totalHeight - viewport.height - pendingDistanceFromBottom);
+    const windowTop = Math.max(0, effectiveScrollTop - CONVERSATION_VIRTUALIZATION_OVERSCAN_PX);
+    const windowBottom = effectiveScrollTop + viewport.height + CONVERSATION_VIRTUALIZATION_OVERSCAN_PX;
     let startIndex = 0;
     while (startIndex < items.length && offsets[startIndex] + heights[startIndex] < windowTop) {
       startIndex += 1;
@@ -10776,7 +10918,7 @@ function useConversationTimelineVirtualWindow(
       measuring: true,
       virtualized: true,
     };
-  }, [items, measureVersion, viewport.height, viewport.scrollTop, viewport.width]);
+  }, [cacheScopeKey, items, measureVersion, viewport.height, viewport.scrollTop, viewport.width]);
   return { window: virtualWindow, onScroll, onRowHeight };
 }
 
@@ -10849,6 +10991,15 @@ function ConversationWorkspace(props: {
   onScrollStateChange: () => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   scrollRef: React.RefObject<HTMLElement | null>;
+  // Initial bottom distance used before the virtual window has measured this surface.
+  // 虚拟窗口测量当前界面前使用的初始底部距离。
+  initialScrollDistanceFromBottom: number;
+  // Previously measured virtualizer state for this transcript surface.
+  // 当前转录界面此前测量过的虚拟列表状态。
+  initialVirtualizerState: ConversationTimelineVirtualRestoreState | null;
+  // Persists the latest measured virtualizer state for the active surface.
+  // 持久保存当前界面最新测量到的虚拟列表状态。
+  onVirtualizerStateChange: (surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => void;
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
   footer?: React.ReactNode;
@@ -10880,6 +11031,9 @@ function ConversationWorkspace(props: {
     visibleTimelineItems,
     props.scrollRef,
     timelineCacheScopeKey,
+    props.initialScrollDistanceFromBottom,
+    props.initialVirtualizerState,
+    props.onVirtualizerStateChange,
   );
   const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
@@ -11722,17 +11876,31 @@ function useToolDetailMediaAttachments(
   detailRef: ConversationDetailRef | undefined,
   enabled: boolean,
 ): GeneratedMediaAttachment[] {
-  const [attachments, setAttachments] = React.useState<GeneratedMediaAttachment[]>([]);
+  const detailCacheKey = detailRef ? conversationDetailRefCacheKey(detailRef) : null;
+  const [attachments, setAttachments] = React.useState<GeneratedMediaAttachment[]>(
+    () => detailCacheKey ? conversationToolDetailMediaCache.get(detailCacheKey) ?? [] : [],
+  );
   React.useEffect(() => {
-    setAttachments([]);
-    if (!enabled || !detailRef || (!detailRef.recordId && !detailRef.toolCallId)) {
+    const cachedAttachments = detailCacheKey
+      ? conversationToolDetailMediaCache.get(detailCacheKey)
+      : undefined;
+    setAttachments(cachedAttachments ?? []);
+    if (
+      !enabled
+      || !detailRef
+      || (!detailRef.recordId && !detailRef.toolCallId && detailRef.seq == null && detailRef.messageIndex == null)
+    ) {
       return;
     }
     let cancelled = false;
-    void loadConversationToolDetail(detailRef)
+    void loadCachedConversationToolDetail(detailRef)
       .then((payload) => {
         if (!cancelled && payload) {
-          setAttachments(generatedMediaAttachmentsFromToolDetailPayload(payload));
+          const nextAttachments = generatedMediaAttachmentsFromToolDetailPayload(payload);
+          if (detailCacheKey) {
+            conversationToolDetailMediaCache.set(detailCacheKey, nextAttachments);
+          }
+          setAttachments(nextAttachments);
         }
       })
       .catch(() => {
@@ -11744,6 +11912,7 @@ function useToolDetailMediaAttachments(
       cancelled = true;
     };
   }, [
+    detailCacheKey,
     detailRef?.messageIndex,
     detailRef?.recordId,
     detailRef?.seq,
@@ -12322,7 +12491,7 @@ function ConversationDetailModal(props: {
       return;
     }
     let cancelled = false;
-    void loadConversationToolDetail(detailRef)
+    void loadCachedConversationToolDetail(detailRef)
       .then((payload) => {
         if (!cancelled) {
           setLoadedToolDetail(payload);
