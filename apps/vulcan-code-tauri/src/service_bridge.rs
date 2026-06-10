@@ -2,7 +2,7 @@
 //! Tauri WebUI 使用的本地服务桥接层。
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque, hash_map::DefaultHasher},
     fs::{self, File},
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom},
@@ -68,8 +68,8 @@ use vulcan_agent_runtime::{
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
     provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
     provider_config::{
-        self, PersistedAiToolConfiguration, PersistedModelOverrideEntry,
-        ProviderConfigurationFile, ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        self, PersistedAiToolConfiguration, PersistedModelOverrideEntry, ProviderConfigurationFile,
+        ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
     },
     provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
@@ -95,15 +95,17 @@ use vulcan_context::{
     append_record_body_delta,
 };
 use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
-use vulcan_context_injection::{InjectionKind, InjectionPanelCard};
+use vulcan_context_injection::{ContextInjectionState, InjectionKind, InjectionPanelCard};
 use vulcan_core::controller::VulcanCoreController;
-use vulcan_core::types::{ConversationAttachment, ConversationAttachmentKind};
+use vulcan_core::types::{
+    ConversationAttachment, ConversationAttachmentKind, ProviderRequestSnapshot,
+    ProviderUsageSnapshot,
+};
 use vulcan_provider_config::config::{
     AiCapabilityVendorConnectionMode, AiToolKind, PersistedAiCapabilityTargetBinding,
     PersistedAiCapabilityVendorEntry, PersistedLuaSkillToolRegistrationState,
     PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
-    PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions,
-    ProviderFieldKey,
+    PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions, ProviderFieldKey,
 };
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
@@ -111,15 +113,15 @@ use vulcan_service_api::{
     AiCapabilityVendorTargetChoiceSummary, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
-    ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary,
-    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary,
-    MemorySummary, MessageRole, PendingPromptSummary, PendingQuestionOptionSummary,
-    PendingQuestionPromptSummary, PendingQuestionSnapshot, PluginSummary, ProjectSummary,
-    ProviderFieldSummary, ProviderModelSummary, ProviderSummary,
-    ReasoningSelectionOptionSummary, ReasoningSelectionSummary, RuntimeModuleSnapshot,
-    ServiceEvent, SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
-    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary,
+    LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary,
+    MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
+    PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderFieldSummary,
+    ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
+    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary,
+    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
+    SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
+    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
     WorkbenchSnapshot,
 };
@@ -1079,8 +1081,10 @@ fn active_kernel_session_ids(state: &ServiceBridgeState) -> BTreeSet<SessionId> 
 fn execution_stream_event_session_id(event: &ExecutionStreamEvent) -> SessionId {
     match event {
         ExecutionStreamEvent::Prepared(preparation) => preparation.session_id,
-        ExecutionStreamEvent::RequestReady { session_id }
+        ExecutionStreamEvent::ProviderRequestCheckpoint { session_id, .. }
+        | ExecutionStreamEvent::RequestReady { session_id }
         | ExecutionStreamEvent::WireRequestReady { session_id }
+        | ExecutionStreamEvent::ProviderLoweringRepair { session_id, .. }
         | ExecutionStreamEvent::RequestStarted { session_id }
         | ExecutionStreamEvent::ThinkingDelta { session_id, .. }
         | ExecutionStreamEvent::ThinkingCompleted { session_id }
@@ -2057,8 +2061,8 @@ async fn service_session_messages(
             messages.as_slice(),
         ));
     }
-    let mut hydration_snapshot =
-        match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+    let mut transcript_page =
+        match vulcan_workspace_store::workspace_store::load_session_transcript_window(
             controller_runtime.clone(),
             parsed_session_id,
             SELECTED_SESSION_TURN_LOAD_LIMIT,
@@ -2077,13 +2081,13 @@ async fn service_session_messages(
         &live_listener_task_ids,
         project_id.as_deref(),
         parsed_session_id,
-        hydration_snapshot.messages.as_mut_slice(),
-        hydration_snapshot.runtime_state.as_mut(),
+        transcript_page.messages.as_mut_slice(),
+        None,
     )?;
 
     Ok(conversation_messages_from_session(
         &session_id,
-        hydration_snapshot.messages.as_slice(),
+        transcript_page.messages.as_slice(),
     ))
 }
 
@@ -2723,6 +2727,27 @@ async fn service_submit_conversation_prompt(
             ),
         );
     }
+    mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
+    let begin_emit_started_at = current_unix_millis_value();
+    let _ = store_and_emit_workbench_snapshot_preserving_subagent_navigation(
+        &app,
+        &state,
+        &controller_runtime,
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+        workspace_snapshot.clone(),
+        &logs,
+    )?;
+    webui_trace(
+        "submit_prompt_begin_workbench_emitted",
+        format!(
+            "session={session_id} elapsed_ms={}",
+            current_unix_millis_value().saturating_sub(begin_emit_started_at)
+        ),
+    );
     let outer_steps_started_at = current_unix_millis_value();
     apply_webui_prompt_begin_outer_steps(
         &controller_runtime,
@@ -4099,7 +4124,10 @@ async fn service_save_ai_capability_vendor(
             .as_mut()
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
         let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
-        if next_ai_tool_configuration.vendor_by_id(&vendor_id).is_none() {
+        if next_ai_tool_configuration
+            .vendor_by_id(&vendor_id)
+            .is_none()
+        {
             next_ai_tool_configuration
                 .vendors
                 .push(PersistedAiCapabilityVendorEntry::new(vendor_id.clone()));
@@ -4112,7 +4140,8 @@ async fn service_save_ai_capability_vendor(
         vendor.api_key = request.api_key.trim().to_string();
         vendor.base_url = request.base_url.trim().to_string();
         vendor.region = request.region.trim().to_string();
-        vendor.connection_mode = parse_ai_capability_connection_mode(request.connection_mode.as_deref())?;
+        vendor.connection_mode =
+            parse_ai_capability_connection_mode(request.connection_mode.as_deref())?;
         next_ai_tool_configuration.normalize();
         vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
             &next_ai_tool_configuration,
@@ -4262,7 +4291,9 @@ async fn service_save_ai_capability_targets(
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
         let mut next_ai_tool_configuration = agent_runtime.ai_tool_configuration.clone();
         for vendor in &mut next_ai_tool_configuration.vendors {
-            vendor.targets.retain(|binding| binding.capability_kind != capability_kind);
+            vendor
+                .targets
+                .retain(|binding| binding.capability_kind != capability_kind);
         }
         let vendor_ids = target_inputs
             .iter()
@@ -4323,7 +4354,12 @@ fn set_ai_capability_target_order_for_kind(
         AiToolKind::SpeechSynthesis => &mut configuration.speech_synthesis.target_order,
         AiToolKind::MusicGeneration => &mut configuration.music_generation.target_order,
         AiToolKind::MusicCover => &mut configuration.music_cover.target_order,
-        _ => return Err(format!("AI 能力 `{}` 不支持目标排序。", capability_kind.key())),
+        _ => {
+            return Err(format!(
+                "AI 能力 `{}` 不支持目标排序。",
+                capability_kind.key()
+            ));
+        }
     };
     *target_order = ordered_selectors;
     Ok(())
@@ -4345,7 +4381,9 @@ async fn service_save_mcp_server_configuration(
             .map_err(|error| format!("保存 MCP 服务器失败：{error}"))?;
         configuration
     };
-    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone()).await.ok();
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
+        .await
+        .ok();
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
@@ -4371,7 +4409,9 @@ async fn service_remove_mcp_server_configuration(
         .ok_or_else(|| format!("未找到 MCP 服务器 `{}`。", server_id.trim()))?;
     provider_config::save_configuration_file(&next_configuration)
         .map_err(|error| format!("移除 MCP 服务器失败：{error}"))?;
-    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone()).await.ok();
+    let next_mcp_runtime = bootstrap_mcp_runtime_access(next_configuration.clone())
+        .await
+        .ok();
     let workbench = store_provider_and_mcp_configuration_after_change(
         &state,
         next_configuration,
@@ -5521,7 +5561,9 @@ fn mcp_server_entry_from_request(
 
 /// Builds an optional MCP OAuth block from a WebUI save request.
 /// 从 WebUI 保存请求构建可选 MCP OAuth 配置块。
-fn mcp_oauth_config_from_request(request: &McpServerSaveRequest) -> Option<PersistedMcpOAuthConfig> {
+fn mcp_oauth_config_from_request(
+    request: &McpServerSaveRequest,
+) -> Option<PersistedMcpOAuthConfig> {
     let client_id = trim_to_option(&request.oauth_client_id);
     let client_secret = trim_to_option(&request.oauth_client_secret);
     let redirect_uri = trim_to_option(&request.oauth_redirect_uri);
@@ -7446,11 +7488,30 @@ fn apply_webui_prompt_begin_outer_steps(
     if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
-        && remove_legacy_vmm_profile_context_injection_state(
-            &mut runtime_state.context_injection_state,
-        )
     {
-        runtime_state.updated_at = current_unix_millis_text();
+        let previous_persistent_fingerprint =
+            persistent_injection_fingerprint(&runtime_state.context_injection_state);
+        if remove_legacy_vmm_profile_context_injection_state(
+            &mut runtime_state.context_injection_state,
+        ) {
+            let timestamp = current_unix_millis_text();
+            runtime_state.updated_at = timestamp.clone();
+            let event = legacy_vmm_injection_cancelled_event(
+                previous_persistent_fingerprint,
+                "legacy_vmm_profile_webui_prompt_cleanup",
+            );
+            if let Err(error) = record_webui_runtime_injection_cancelled(
+                controller_runtime,
+                session_id,
+                event,
+                &timestamp,
+            ) {
+                webui_trace(
+                    "runtime_injection_cancelled_audit_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+        }
     }
     persist_webui_context_current_document(
         controller_runtime,
@@ -8566,6 +8627,7 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         .get(&session_id)
         .and_then(|runtime_state| runtime_state.active_reasoning_effort);
     let session_title_for_context = start.session_title.clone();
+    let prompt_turn_id = start.precheck_request.turn_id().to_string();
     let shared_continue_started_at = current_unix_millis_value();
     let continuation = continue_shared_prompt_turn_after_precheck(
         &mut workspace_snapshot,
@@ -8625,6 +8687,40 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         .ok()
         .flatten()
     });
+    request.runtime_system_updates =
+        match vulcan_workspace_store::workspace_store::load_session_runtime_system_updates(
+            &controller_runtime.data_root,
+            session_id,
+        ) {
+            Ok(updates) => updates,
+            Err(error) => {
+                webui_trace(
+                    "runtime_system_updates_load_failed",
+                    format!("session={session_id} error={error}"),
+                );
+                Vec::new()
+            }
+        };
+    if let Some(injection) = request.context_injection.as_ref()
+        && let Err(error) =
+            vulcan_workspace_store::workspace_store::record_session_runtime_injection_applied(
+                &controller_runtime.data_root,
+                session_id,
+                Some(prompt_turn_id),
+                Some(injection.fingerprint.clone()),
+                &injection.persistent_blocks,
+                injection
+                    .has_transient()
+                    .then_some(injection.transient_prefix.as_str()),
+                None,
+                &current_unix_millis_text(),
+            )
+    {
+        webui_trace(
+            "runtime_injection_audit_failed",
+            format!("session={session_id} error={error}"),
+        );
+    }
     if runs_user_prompt_precheck {
         let context_persist_started_at = current_unix_millis_value();
         persist_webui_context_current_document(
@@ -9082,6 +9178,27 @@ fn spawn_agent_stream_task(
                         eprintln!("[tauri-service] apply preparation failed: {error}");
                     }
                 }
+                ExecutionStreamEvent::ProviderRequestCheckpoint {
+                    session_id,
+                    snapshot,
+                } => {
+                    if let Err(error) = record_webui_provider_request_checkpoint(
+                        &controller_runtime,
+                        session_id,
+                        &snapshot,
+                    ) {
+                        eprintln!("[tauri-service] provider request checkpoint failed: {error}");
+                    }
+                }
+                ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
+                    if let Err(error) = record_webui_provider_lowering_repair(
+                        &controller_runtime,
+                        session_id,
+                        event,
+                    ) {
+                        eprintln!("[tauri-service] provider lowering repair failed: {error}");
+                    }
+                }
                 ExecutionStreamEvent::RequestReady { session_id } => {
                     webui_trace(
                         "stream_provider_request_ready",
@@ -9090,6 +9207,14 @@ fn spawn_agent_stream_task(
                             current_unix_millis_value().saturating_sub(stream_task_started_at)
                         ),
                     );
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Requesting,
+                    ) {
+                        eprintln!("[tauri-service] apply request-ready phase failed: {error}");
+                    }
                 }
                 ExecutionStreamEvent::WireRequestReady { session_id } => {
                     webui_trace(
@@ -9104,6 +9229,14 @@ fn spawn_agent_stream_task(
                             current_unix_millis_value().saturating_sub(stream_task_started_at)
                         ),
                     );
+                    if let Err(error) = apply_session_phase(
+                        &app,
+                        &task_state,
+                        session_id,
+                        SessionRunPhase::Requesting,
+                    ) {
+                        eprintln!("[tauri-service] apply wire-request-ready phase failed: {error}");
+                    }
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
                     current_provider_request_started_at = Some(current_unix_millis_value());
@@ -9397,6 +9530,13 @@ fn spawn_agent_stream_task(
                                 .unwrap_or(0)
                         ),
                     );
+                    if let Err(error) =
+                        record_webui_provider_response_checkpoint(&controller_runtime, &report)
+                    {
+                        eprintln!(
+                            "[tauri-service] provider response checkpoint write failed: {error}"
+                        );
+                    }
                     if let Ok(mut guard) = task_state.lock() {
                         guard.active_stream_tasks.remove(&finished_session_id);
                         finish_webui_session_kernel_turn(
@@ -10237,8 +10377,14 @@ async fn handle_webui_detached_child_execution_event(
 ) -> Result<(), String> {
     match event {
         ExecutionStreamEvent::Prepared(_) => Ok(()),
-        ExecutionStreamEvent::RequestReady { .. }
-        | ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
+        ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => Ok(()),
+        ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
+            record_webui_provider_lowering_repair(controller_runtime, session_id, event)
+        }
+        ExecutionStreamEvent::RequestReady { session_id }
+        | ExecutionStreamEvent::WireRequestReady { session_id } => {
+            apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
+        }
         ExecutionStreamEvent::RequestStarted { session_id } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
         }
@@ -11489,6 +11635,336 @@ fn apply_session_phase(
     .map(|_| ())
 }
 
+/// Marks the in-flight prompt snapshot as preparing before slower outer steps run.
+/// 在较慢的外层步骤执行前，将当前提示词快照标记为准备中。
+fn mark_webui_prompt_snapshot_preparing(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) {
+    let now = current_unix_millis_text();
+    workspace_snapshot
+        .session_run_phases
+        .insert(session_id, SessionRunPhase::Preparing);
+    if let Some(runtime_state) = workspace_snapshot
+        .session_runtime_state
+        .get_mut(&session_id)
+    {
+        runtime_state.updated_at = now.clone();
+    }
+    if let Some(session) = workspace_snapshot
+        .sessions
+        .iter_mut()
+        .find(|session| session.id == session_id)
+    {
+        session.status = SessionState::Running;
+        session.focus = String::from("正在准备请求");
+        session.last_updated_label = String::from("刚刚");
+    }
+}
+
+/// Records one provider request checkpoint into the segmented session runtime audit log.
+/// 将单个 Provider 请求检查点记录到分段会话运行时审计日志。
+fn record_webui_provider_request_checkpoint(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    snapshot: &ProviderRequestSnapshot,
+) -> Result<(), String> {
+    let event = vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(
+        vulcan_context::RuntimeProviderRequestCheckpointEvent {
+            turn_id: None,
+            checkpoint_id: format!(
+                "provider-request-{}-{}",
+                session_id,
+                stable_provider_request_snapshot_hash(snapshot)
+            ),
+            provider_id: snapshot.provider_id.clone(),
+            model_id: snapshot.model_id.clone(),
+            provider_family: snapshot.provider_id.clone(),
+            capability_fingerprint: None,
+            prompt_fingerprint: Some(stable_provider_prompt_fingerprint(snapshot)),
+            injection_fingerprint: None,
+            request_fingerprint: Some(stable_provider_request_snapshot_hash(snapshot)),
+            cache_policy_fingerprint: Some(stable_provider_cache_policy_fingerprint(snapshot)),
+            cache_policy_diagnostic: provider_cache_policy_diagnostic(snapshot),
+            converter_version: 1,
+        },
+    );
+    vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
+        &controller_runtime.data_root,
+        session_id,
+        event,
+        &current_unix_millis_text(),
+    )
+    .map(|_| ())
+}
+
+/// Records one provider lowering repair into the segmented session runtime audit log.
+/// 将单个 Provider 转换修复记录到分段会话运行时审计日志。
+fn record_webui_provider_lowering_repair(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    event: vulcan_context::RuntimeProviderLoweringRepairEvent,
+) -> Result<(), String> {
+    vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
+        &controller_runtime.data_root,
+        session_id,
+        vulcan_context::RuntimeLogEvent::ProviderLoweringRepair(event),
+        &current_unix_millis_text(),
+    )
+    .map(|_| ())
+}
+
+/// Records one context-injection merge event into the segmented session runtime audit log.
+/// 将单个上下文注入合并事件记录到分段会话运行时审计日志。
+fn record_webui_runtime_injection_merged(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    event: vulcan_context::RuntimeInjectionMergedEvent,
+    timestamp: &str,
+) -> Result<(), String> {
+    vulcan_workspace_store::workspace_store::record_session_runtime_injection_merged(
+        &controller_runtime.data_root,
+        session_id,
+        event,
+        timestamp,
+    )
+    .map(|_| ())
+}
+
+/// Records one context-injection cancellation event into the segmented session runtime audit log.
+/// 将单个上下文注入取消事件记录到分段会话运行时审计日志。
+fn record_webui_runtime_injection_cancelled(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    event: vulcan_context::RuntimeInjectionCancelledEvent,
+    timestamp: &str,
+) -> Result<(), String> {
+    vulcan_workspace_store::workspace_store::record_session_runtime_injection_cancelled(
+        &controller_runtime.data_root,
+        session_id,
+        event,
+        timestamp,
+    )
+    .map(|_| ())
+}
+
+/// Records one provider response checkpoint into the segmented session runtime audit log.
+/// 将单个 Provider 响应检查点记录到分段会话运行时审计日志。
+fn record_webui_provider_response_checkpoint(
+    controller_runtime: &ControllerRuntimeHandle,
+    report: &ExecutionRunReport,
+) -> Result<(), String> {
+    let Some(preparation) = report.preparation.as_ref() else {
+        return Ok(());
+    };
+    let finish_reason = if report.error.is_some() {
+        "failed"
+    } else {
+        "completed"
+    };
+    let native_state = latest_provider_native_state_envelope_from_conversation_state(
+        report.conversation_state.as_ref(),
+        &preparation.model_blueprint.provider_id,
+        &preparation.model_blueprint.model_id,
+    );
+    let event = vulcan_context::RuntimeLogEvent::ProviderResponseCheckpoint(
+        vulcan_context::RuntimeProviderResponseCheckpointEvent {
+            turn_id: preparation
+                .boundary_events
+                .first()
+                .and_then(|event| event.turn_id.clone()),
+            checkpoint_id: format!(
+                "provider-response-{}-{}",
+                report.session_id,
+                stable_provider_response_checkpoint_hash(
+                    preparation,
+                    report.provider_request_count,
+                    report.last_successful_provider_usage.as_ref(),
+                    report.error.as_ref(),
+                )
+            ),
+            provider_id: preparation.model_blueprint.provider_id.clone(),
+            model_id: preparation.model_blueprint.model_id.clone(),
+            provider_family: preparation.model_blueprint.api_family_key().to_string(),
+            finish_reason: Some(finish_reason.to_string()),
+            native_state,
+            usage: report.last_successful_provider_usage.clone(),
+        },
+    );
+    vulcan_workspace_store::workspace_store::record_session_runtime_audit_event(
+        &controller_runtime.data_root,
+        report.session_id,
+        event,
+        &current_unix_millis_text(),
+    )
+    .map(|_| ())
+}
+
+/// Builds a stable fingerprint for one provider request snapshot without persisting raw prompt text.
+/// 为单个 Provider 请求快照构建稳定指纹，同时不持久化原始提示词正文。
+fn stable_provider_request_snapshot_hash(snapshot: &ProviderRequestSnapshot) -> String {
+    let serialized = serde_json::to_string(snapshot).unwrap_or_else(|_| {
+        format!(
+            "{}:{}:{}:{}",
+            snapshot.provider_id,
+            snapshot.model_id,
+            snapshot.history.len(),
+            snapshot.tool_schemas.len()
+        )
+    });
+    let mut hasher = DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Builds a stable prompt fingerprint for provider request audit records.
+/// 为 Provider 请求审计记录构建稳定提示词指纹。
+fn stable_provider_prompt_fingerprint(snapshot: &ProviderRequestSnapshot) -> String {
+    let mut hasher = DefaultHasher::new();
+    snapshot.provider_id.hash(&mut hasher);
+    snapshot.model_id.hash(&mut hasher);
+    snapshot.system_prompt.hash(&mut hasher);
+    snapshot.prompt.hash(&mut hasher);
+    snapshot.history.len().hash(&mut hasher);
+    snapshot.tool_schemas.len().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Builds a stable cache-policy fingerprint for one request without storing prompt bodies.
+/// 为单个请求构建稳定缓存策略指纹，同时不存储提示词正文。
+fn stable_provider_cache_policy_fingerprint(snapshot: &ProviderRequestSnapshot) -> String {
+    let mut hasher = DefaultHasher::new();
+    snapshot.provider_id.hash(&mut hasher);
+    snapshot.model_id.hash(&mut hasher);
+    (!snapshot.system_prompt.trim().is_empty()).hash(&mut hasher);
+    snapshot.history.len().hash(&mut hasher);
+    snapshot.tool_schemas.len().hash(&mut hasher);
+    (!snapshot.prompt.trim().is_empty()).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Returns the cache-policy diagnostic for providers that cannot represent cache hints.
+/// 返回无法表达缓存提示的 Provider 对应缓存策略诊断。
+fn provider_cache_policy_diagnostic(snapshot: &ProviderRequestSnapshot) -> Option<String> {
+    let has_cacheable_boundary = !snapshot.system_prompt.trim().is_empty()
+        || !snapshot.prompt.trim().is_empty()
+        || !snapshot.tool_schemas.is_empty()
+        || !snapshot.history.is_empty();
+    if has_cacheable_boundary
+        && !snapshot
+            .provider_id
+            .to_ascii_lowercase()
+            .contains("anthropic")
+    {
+        Some(String::from("cache_hints_unsupported"))
+    } else {
+        None
+    }
+}
+
+/// Builds a stable hash for a provider response checkpoint without storing response bodies.
+/// 为 Provider 响应检查点构建稳定哈希，且不存储响应正文。
+fn stable_provider_response_checkpoint_hash(
+    preparation: &ExecutionPreparation,
+    provider_request_count: usize,
+    usage: Option<&ProviderUsageSnapshot>,
+    error: Option<&String>,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    preparation.model_blueprint.provider_id.hash(&mut hasher);
+    preparation.model_blueprint.model_id.hash(&mut hasher);
+    preparation
+        .model_blueprint
+        .api_family_key()
+        .hash(&mut hasher);
+    preparation
+        .boundary_events
+        .first()
+        .and_then(|event| event.turn_id.as_deref())
+        .hash(&mut hasher);
+    provider_request_count.hash(&mut hasher);
+    error.is_some().hash(&mut hasher);
+    if let Some(error) = error {
+        error.hash(&mut hasher);
+    }
+    if let Some(usage) = usage
+        && let Ok(serialized_usage) = serde_json::to_string(usage)
+    {
+        serialized_usage.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// Extracts the latest scoped provider-native state envelope from one terminal conversation state.
+/// 从单个终态会话状态中提取最新的带作用域 Provider 原生状态 envelope。
+fn latest_provider_native_state_envelope_from_conversation_state(
+    state: Option<&vulcan_agent_runtime::conversation_protocol::SessionConversationState>,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<vulcan_context::RuntimeProviderNativeStateEnvelope> {
+    state?
+        .messages
+        .iter()
+        .rev()
+        .filter_map(|message| {
+            match &message.payload {
+            vulcan_agent_runtime::conversation_protocol::SessionConversationPayload::Assistant {
+                provider_message_state: Some(provider_message_state),
+                ..
+            } => serde_json::from_value::<vulcan_context::RuntimeProviderNativeStateEnvelope>(
+                provider_message_state.clone(),
+            )
+            .ok(),
+            _ => None,
+        }
+        })
+        .find(|envelope| envelope.provider_id == provider_id && envelope.model_id == model_id)
+}
+
+/// Builds a stable fingerprint for persistent injection blocks without storing their content.
+/// 为长期注入块构建稳定指纹，同时不保存注入正文。
+fn persistent_injection_fingerprint(state: &ContextInjectionState) -> Option<String> {
+    let view = state.resolve_view();
+    if view.persistent_blocks.is_empty() {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    view.persistent_blocks.hash(&mut hasher);
+    Some(format!("{:016x}", hasher.finish()))
+}
+
+/// Returns stable non-content source identifiers for persistent injection items.
+/// 返回长期注入内容项的稳定非正文来源标识。
+fn persistent_injection_source_node_ids(state: &ContextInjectionState) -> Vec<String> {
+    state
+        .groups
+        .values()
+        .filter(|group| group.kind == InjectionKind::Persistent)
+        .flat_map(|group| {
+            group
+                .items
+                .values()
+                .map(move |item| format!("{}:{}", group.tag, item.content_hash))
+        })
+        .collect()
+}
+
+/// Builds one runtime audit event for legacy VMM injection cleanup.
+/// 为旧版 VMM 注入清理构建一条运行时审计事件。
+fn legacy_vmm_injection_cancelled_event(
+    previous_persistent_fingerprint: Option<String>,
+    reason: &str,
+) -> vulcan_context::RuntimeInjectionCancelledEvent {
+    vulcan_context::RuntimeInjectionCancelledEvent {
+        turn_id: None,
+        cancellation_id: format!("{reason}-{}", current_unix_millis_text()),
+        source_node_ids: vec![String::from("persistent:vmm_profile")],
+        previous_persistent_fingerprint,
+        previous_transient_fingerprint: None,
+        reason: Some(reason.to_string()),
+    }
+}
+
 /// Appends or extends one streaming transcript record.
 /// 追加或扩展单条流式转录记录。
 fn append_stream_delta_record(
@@ -11695,7 +12171,10 @@ fn apply_webui_context_compaction_stream_event(
     event: ExecutionStreamEvent,
 ) -> Result<(), String> {
     match event {
-        ExecutionStreamEvent::Prepared(_) | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
+        ExecutionStreamEvent::Prepared(_)
+        | ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
+        | ExecutionStreamEvent::ProviderLoweringRepair { .. }
+        | ExecutionStreamEvent::RequestReady { .. } => Ok(()),
         ExecutionStreamEvent::WireRequestReady { .. } => Ok(()),
         ExecutionStreamEvent::RequestStarted { .. } => {
             apply_session_phase(app, state, session_id, SessionRunPhase::Requesting)
@@ -11900,9 +12379,38 @@ fn finish_webui_context_compaction_execution(
     }
     let summary_body = execution.compaction_result.summary_record.body.clone();
     let provider_request_count = execution.provider_request_count;
+    let runtime_backup_controller = state
+        .lock()
+        .ok()
+        .and_then(|guard| guard.controller_runtime.clone());
+    if let Some(controller_runtime) = runtime_backup_controller.as_ref() {
+        match vulcan_workspace_store::workspace_store::backup_session_runtime_log_before_compaction(
+            &controller_runtime.data_root,
+            session_id,
+            &execution.compaction_result.compaction_id,
+            &execution.compaction_result.created_at,
+        ) {
+            Ok(copied_files) if !copied_files.is_empty() => {
+                webui_trace(
+                    "context_compaction_runtime_backup",
+                    format!("session={session_id} files={}", copied_files.len()),
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                webui_trace(
+                    "context_compaction_runtime_backup_failed",
+                    format!("session={session_id} error={error}"),
+                );
+            }
+        }
+    }
+    let mut injection_merge_event = None;
+    let mut injection_merge_timestamp = String::new();
     let workspace =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
             let now = current_unix_millis_text();
+            injection_merge_timestamp = now.clone();
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -11946,7 +12454,26 @@ fn finish_webui_context_compaction_execution(
                 checkpoint.context_budget_fingerprint.clone();
             runtime_state.anchor_context_assembly_fingerprint =
                 checkpoint.context_assembly_fingerprint.clone();
+            let previous_persistent_fingerprint =
+                persistent_injection_fingerprint(&runtime_state.context_injection_state);
             runtime_state.context_injection_state.apply_compaction();
+            let merged_baseline_fingerprint =
+                persistent_injection_fingerprint(&runtime_state.context_injection_state);
+            let source_node_ids =
+                persistent_injection_source_node_ids(&runtime_state.context_injection_state);
+            if previous_persistent_fingerprint.is_some()
+                || merged_baseline_fingerprint.is_some()
+                || !source_node_ids.is_empty()
+            {
+                injection_merge_event = Some(vulcan_context::RuntimeInjectionMergedEvent {
+                    turn_id: None,
+                    merge_id: format!("injection-merge-{session_id}-{}", checkpoint.id),
+                    compaction_id: Some(checkpoint.id.clone()),
+                    previous_persistent_fingerprint,
+                    merged_baseline_fingerprint,
+                    source_node_ids,
+                });
+            }
             compact_conversation_with_summary(
                 &mut runtime_state.conversation_state,
                 summary_message_id.clone(),
@@ -12006,6 +12533,20 @@ fn finish_webui_context_compaction_execution(
                     workspace,
                 ));
         })?;
+    if let (Some(controller_runtime), Some(event)) =
+        (runtime_backup_controller.as_ref(), injection_merge_event)
+        && let Err(error) = record_webui_runtime_injection_merged(
+            controller_runtime,
+            session_id,
+            event,
+            &injection_merge_timestamp,
+        )
+    {
+        webui_trace(
+            "runtime_injection_merged_audit_failed",
+            format!("session={session_id} error={error}"),
+        );
+    }
     if let Ok(mut hook_runtime) = agent_runtime.conversation_hook_runtime.lock() {
         hook_runtime.record_compacted(
             session_id,
@@ -12640,8 +13181,11 @@ fn apply_task_mirror_statuses_to_surface_messages_if_needed(
     if !surface_contains_task_session_tool_card(messages.iter(), runtime_state.as_deref()) {
         return Ok(());
     }
-    let task_mirrors =
-        load_segmented_session_task_mirrors_for_service(controller_runtime, project_id, session_id)?;
+    let task_mirrors = load_segmented_session_task_mirrors_for_service(
+        controller_runtime,
+        project_id,
+        session_id,
+    )?;
     if task_mirrors.is_empty() {
         return Ok(());
     }
@@ -12930,7 +13474,9 @@ fn surface_contains_task_session_tool_card<'a>(
     messages: impl Iterator<Item = &'a SessionMessageEntry>,
     runtime_state: Option<&SessionRuntimeStateEntry>,
 ) -> bool {
-    messages.into_iter().any(session_message_is_task_session_tool_card)
+    messages
+        .into_iter()
+        .any(session_message_is_task_session_tool_card)
         || runtime_state.is_some_and(|runtime_state| {
             runtime_state
                 .conversation_state
@@ -15246,6 +15792,12 @@ fn detached_task_event_trace_detail(event: &DetachedTaskRuntimeEvent) -> String 
             delta,
         }) => format!("session={session_id} delta_chars={}", delta.chars().count()),
         DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderLoweringRepair { session_id, event },
+        ) => format!(
+            "session={session_id} provider={} model={} action={} affected_items={}",
+            event.provider_id, event.model_id, event.action, event.affected_items
+        ),
+        DetachedTaskRuntimeEvent::ChildExecution(
             ExecutionStreamEvent::ConversationCheckpoint {
                 session_id,
                 conversation_state,
@@ -15281,6 +15833,12 @@ fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'static str {
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::Prepared(_)) => {
             "child.prepared"
         }
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderRequestCheckpoint { .. },
+        ) => "child.provider_request_checkpoint",
+        DetachedTaskRuntimeEvent::ChildExecution(
+            ExecutionStreamEvent::ProviderLoweringRepair { .. },
+        ) => "child.provider_lowering_repair",
         DetachedTaskRuntimeEvent::ChildExecution(ExecutionStreamEvent::RequestReady { .. }) => {
             "child.request_ready"
         }
@@ -16729,7 +17287,9 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
-        ai_capability_vendors: ai_capability_vendors(&ProviderConfigurationFile::default().ai_tools),
+        ai_capability_vendors: ai_capability_vendors(
+            &ProviderConfigurationFile::default().ai_tools,
+        ),
         ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
             &ProviderConfigurationFile::default(),
@@ -17073,43 +17633,41 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
         .iter()
         .map(|definition| {
             let configured = provider_configuration.provider.contains_key(&definition.id);
-            let enabled_ids = provider_config::enabled_model_ids(&definition.id, provider_configuration);
-            let catalog_models = provider_config::catalog_model_choices(
-                &definition.id,
-                provider_configuration,
-            )
-            .into_iter()
-            .map(|model_choice| {
-                let catalog_model_id = model_choice.id;
-                let reasoning_profile_json = model_choice
-                    .reasoning_profile
-                    .as_ref()
-                    .and_then(|profile| serde_json::to_string_pretty(profile).ok());
-                let active =
-                    active_model_reference
-                        .as_ref()
-                        .is_some_and(|(active_provider_id, active_model_id)| {
-                            active_provider_id == &definition.id
-                                && active_model_id == &catalog_model_id
-                });
-                ProviderModelSummary {
-                    enabled: configured && enabled_ids.contains(&catalog_model_id),
-                    id: catalog_model_id,
-                    name: model_choice.name,
-                    active,
-                    status: model_choice.status,
-                    family: model_choice.family,
-                    context_limit: model_choice.context_limit,
-                    input_limit: model_choice.input_limit,
-                    output_limit: model_choice.output_limit,
-                    reasoning: model_choice.reasoning,
-                    attachment: model_choice.attachment,
-                    input_modalities: model_choice.input_modalities,
-                    output_modalities: model_choice.output_modalities,
-                    reasoning_profile_json,
-                }
-            })
-            .collect::<Vec<_>>();
+            let enabled_ids =
+                provider_config::enabled_model_ids(&definition.id, provider_configuration);
+            let catalog_models =
+                provider_config::catalog_model_choices(&definition.id, provider_configuration)
+                    .into_iter()
+                    .map(|model_choice| {
+                        let catalog_model_id = model_choice.id;
+                        let reasoning_profile_json = model_choice
+                            .reasoning_profile
+                            .as_ref()
+                            .and_then(|profile| serde_json::to_string_pretty(profile).ok());
+                        let active = active_model_reference.as_ref().is_some_and(
+                            |(active_provider_id, active_model_id)| {
+                                active_provider_id == &definition.id
+                                    && active_model_id == &catalog_model_id
+                            },
+                        );
+                        ProviderModelSummary {
+                            enabled: configured && enabled_ids.contains(&catalog_model_id),
+                            id: catalog_model_id,
+                            name: model_choice.name,
+                            active,
+                            status: model_choice.status,
+                            family: model_choice.family,
+                            context_limit: model_choice.context_limit,
+                            input_limit: model_choice.input_limit,
+                            output_limit: model_choice.output_limit,
+                            reasoning: model_choice.reasoning,
+                            attachment: model_choice.attachment,
+                            input_modalities: model_choice.input_modalities,
+                            output_modalities: model_choice.output_modalities,
+                            reasoning_profile_json,
+                        }
+                    })
+                    .collect::<Vec<_>>();
             let models = catalog_models
                 .iter()
                 .filter(|model| model.enabled)

@@ -237,9 +237,13 @@ pub(crate) fn process_provider_stream_delta(
 ) -> Vec<ExecutionStreamEvent> {
     match item {
         Ok(ProviderStreamDelta::RequestSnapshot(snapshot)) => {
-            state.latest_request_snapshot = Some(snapshot);
+            state.latest_request_snapshot = Some(snapshot.clone());
             state.provider_request_count = state.provider_request_count.saturating_add(1);
             vec![
+                ExecutionStreamEvent::ProviderRequestCheckpoint {
+                    session_id,
+                    snapshot,
+                },
                 ExecutionStreamEvent::RequestReady { session_id },
                 ExecutionStreamEvent::RequestStarted { session_id },
             ]
@@ -255,6 +259,9 @@ pub(crate) fn process_provider_stream_delta(
         Ok(ProviderStreamDelta::Output(delta)) => state.process_output_delta(session_id, delta),
         Ok(ProviderStreamDelta::RuntimeEvent(event)) => {
             state.process_runtime_event(session_id, event)
+        }
+        Ok(ProviderStreamDelta::LoweringRepair(event)) => {
+            vec![ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }]
         }
         Ok(ProviderStreamDelta::FinalConversationState(
             conversation_state,
@@ -403,6 +410,37 @@ mod tests {
         assert!(matches!(
             follow_up_events.as_slice(),
             [ExecutionStreamEvent::ThinkingDelta { delta, .. }] if delta == "继续分析"
+        ));
+    }
+
+    /// Forwards provider lowering repair deltas as audit-only execution events.
+    /// 将 Provider 转换修复增量转发为仅用于审计的执行事件。
+    #[test]
+    fn lowering_repair_delta_becomes_audit_execution_event() {
+        let session_id = Uuid::nil();
+        let mut state = build_delta_state();
+
+        let events = process_provider_stream_delta(
+            session_id,
+            &mut state,
+            Ok(ProviderStreamDelta::LoweringRepair(
+                vulcan_context::RuntimeProviderLoweringRepairEvent {
+                    turn_id: None,
+                    repair_id: String::from("repair-1"),
+                    provider_id: String::from("anthropic"),
+                    model_id: String::from("claude-test"),
+                    provider_family: String::from("anthropic"),
+                    action: String::from("downgrade_orphan_tool_result_to_text"),
+                    reason: String::from("test"),
+                    affected_items: 2,
+                },
+            )),
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [ExecutionStreamEvent::ProviderLoweringRepair { event, .. }]
+                if event.repair_id == "repair-1" && event.affected_items == 2
         ));
     }
 

@@ -4114,8 +4114,19 @@ impl VulcanWorkbench {
                         self.push_activity(ActivityLevel::Success, "执行准备已完成", detail);
                         Task::none()
                     }
+                    ExecutionStreamEvent::ProviderRequestCheckpoint {
+                        session_id,
+                        snapshot,
+                    } => {
+                        self.record_provider_request_checkpoint(session_id, &snapshot);
+                        Task::none()
+                    }
                     ExecutionStreamEvent::RequestReady { .. }
                     | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
+                    ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
+                        self.record_provider_lowering_repair(session_id, event);
+                        Task::none()
+                    }
                     ExecutionStreamEvent::RequestStarted { session_id } => {
                         self.mark_session_pending_provider_response(session_id);
                         Task::none()
@@ -4203,8 +4214,13 @@ impl VulcanWorkbench {
                             self.push_activity(ActivityLevel::Info, "上下文压缩请求已准备", detail);
                             Task::none()
                         }
-                        ExecutionStreamEvent::RequestReady { .. }
+                        ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
+                        | ExecutionStreamEvent::RequestReady { .. }
                         | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
+                        ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
+                            self.record_provider_lowering_repair(session_id, event);
+                            Task::none()
+                        }
                         ExecutionStreamEvent::RequestStarted { session_id } => {
                             self.mark_session_pending_provider_response(session_id);
                             Task::none()
@@ -4287,8 +4303,13 @@ impl VulcanWorkbench {
             Message::DetachedSubagentTaskEvent { task_id, event } => match event {
                 DetachedTaskRuntimeEvent::ChildExecution(event) => match event {
                     ExecutionStreamEvent::Prepared(_) => Task::none(),
-                    ExecutionStreamEvent::RequestReady { .. }
+                    ExecutionStreamEvent::ProviderRequestCheckpoint { .. }
+                    | ExecutionStreamEvent::RequestReady { .. }
                     | ExecutionStreamEvent::WireRequestReady { .. } => Task::none(),
+                    ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
+                        self.record_provider_lowering_repair(session_id, event);
+                        Task::none()
+                    }
                     ExecutionStreamEvent::RequestStarted { session_id } => {
                         self.mark_session_pending_provider_response(session_id);
                         Task::none()

@@ -4277,7 +4277,19 @@ interface ConversationScrollSnapshot {
 // mergeWorkbenchSnapshot 合并后端工作台更新且不丢弃已懒加载的会话正文。
 function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchSnapshot): WorkbenchSnapshot {
   const incomingConversationIds = new Set(incoming.messages.map((message) => message.conversationId));
-  const incomingMessageIds = new Set(incoming.messages.map((message) => message.id));
+  const currentMessagesByConversation = groupMessagesByConversation(current.messages);
+  const incomingMessagesByConversation = groupMessagesByConversation(incoming.messages);
+  const incomingConversationsById = new Map(incoming.conversations.map((conversation) => [conversation.id, conversation]));
+  const currentConversationsById = new Map(current.conversations.map((conversation) => [conversation.id, conversation]));
+  const mergedIncomingMessages = [...incomingMessagesByConversation.entries()].flatMap(([conversationId, messages]) => (
+    mergeIncomingConversationMessages(
+      currentMessagesByConversation.get(conversationId) ?? [],
+      messages,
+      currentConversationsById.get(conversationId),
+      incomingConversationsById.get(conversationId),
+    )
+  ));
+  const incomingMessageIds = new Set(mergedIncomingMessages.map((message) => message.id));
   const retainedMessages = current.messages.filter((message) => (
     !incomingConversationIds.has(message.conversationId) && !incomingMessageIds.has(message.id)
   ));
@@ -4286,8 +4298,109 @@ function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchS
     ...incoming,
     selectedConversationId,
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
-    messages: [...retainedMessages, ...incoming.messages],
+    messages: [...retainedMessages, ...mergedIncomingMessages],
   };
+}
+
+// groupMessagesByConversation groups a flat message window by owning conversation.
+// groupMessagesByConversation 按所属会话分组扁平消息窗口。
+function groupMessagesByConversation(messages: ConversationMessage[]): Map<string, ConversationMessage[]> {
+  const grouped = new Map<string, ConversationMessage[]>();
+  for (const message of messages) {
+    const bucket = grouped.get(message.conversationId) ?? [];
+    bucket.push(message);
+    grouped.set(message.conversationId, bucket);
+  }
+  return grouped;
+}
+
+// mergeIncomingConversationMessages preserves a live streamed answer until the durable final answer appears.
+// mergeIncomingConversationMessages 在持久化最终回答出现前保留实时流式回答。
+function mergeIncomingConversationMessages(
+  currentMessages: ConversationMessage[],
+  incomingMessages: ConversationMessage[],
+  currentConversation: ConversationSummary | undefined,
+  incomingConversation: ConversationSummary | undefined,
+): ConversationMessage[] {
+  const latestCurrentOutput = latestAssistantOutputAfterLastUser(currentMessages);
+  if (!latestCurrentOutput) {
+    return incomingMessages;
+  }
+  const incomingOutput = latestAssistantOutputAfterLastUser(incomingMessages);
+  if (incomingOutput && assistantOutputCoversStreamedOutput(incomingOutput, latestCurrentOutput)) {
+    return incomingMessages;
+  }
+  const incomingTerminal = incomingConversationHasTerminalStats(incomingMessages);
+  const currentRunning = conversationIsRunning(currentConversation);
+  const incomingRunning = conversationIsRunning(incomingConversation);
+  if (!currentRunning && !incomingRunning && !incomingTerminal) {
+    return incomingMessages;
+  }
+  return insertCarriedStreamingOutput(incomingMessages, latestCurrentOutput);
+}
+
+// latestAssistantOutputAfterLastUser returns the newest visible assistant output in the active user turn.
+// latestAssistantOutputAfterLastUser 返回当前用户回合内最新的可见助手输出。
+function latestAssistantOutputAfterLastUser(messages: ConversationMessage[]): ConversationMessage | null {
+  const lastUserTime = Math.max(
+    -1,
+    ...messages
+      .filter((message) => message.role === "user")
+      .map((message) => conversationMessageCreatedAtValue(message)),
+  );
+  return [...messages]
+    .reverse()
+    .find((message) => (
+      message.role === "assistant"
+      && normalizedRecordKind(message.recordKind) === "assistantoutput"
+      && message.body.trim().length > 0
+      && conversationMessageCreatedAtValue(message) >= lastUserTime
+    )) ?? null;
+}
+
+// assistantOutputCoversStreamedOutput checks whether a durable output already supersedes a streamed output.
+// assistantOutputCoversStreamedOutput 判断持久化输出是否已经覆盖临时流式输出。
+function assistantOutputCoversStreamedOutput(incoming: ConversationMessage, streamed: ConversationMessage): boolean {
+  const incomingBody = incoming.body.trim();
+  const streamedBody = streamed.body.trim();
+  return incomingBody === streamedBody
+    || incomingBody.includes(streamedBody)
+    || (incomingBody.length >= streamedBody.length && incomingBody.startsWith(streamedBody.slice(0, Math.min(96, streamedBody.length))));
+}
+
+// incomingConversationHasTerminalStats detects whether the backend has already published turn completion records.
+// incomingConversationHasTerminalStats 检测后端是否已经发布回合完成统计记录。
+function incomingConversationHasTerminalStats(messages: ConversationMessage[]): boolean {
+  return messages.some((message) => normalizedRecordKind(message.recordKind) === "turnstats");
+}
+
+// insertCarriedStreamingOutput inserts a carried streamed output before terminal-looking records.
+// insertCarriedStreamingOutput 将保留的流式输出插入到终态记录之前。
+function insertCarriedStreamingOutput(messages: ConversationMessage[], output: ConversationMessage): ConversationMessage[] {
+  if (messages.some((message) => message.id === output.id)) {
+    return messages;
+  }
+  const insertIndex = messages.findIndex((message) => {
+    const recordKind = normalizedRecordKind(message.recordKind);
+    return recordKind === "summaryoutput" || recordKind === "turnstats";
+  });
+  if (insertIndex < 0) {
+    return [...messages, output];
+  }
+  return [...messages.slice(0, insertIndex), output, ...messages.slice(insertIndex)];
+}
+
+// normalizedRecordKind normalizes backend record kind text for semantic comparisons.
+// normalizedRecordKind 规范化后端记录类型文本以便语义比较。
+function normalizedRecordKind(recordKind?: string | null): string {
+  return recordKind?.trim().toLowerCase().replace(/[-_]/g, "") ?? "";
+}
+
+// conversationMessageCreatedAtValue parses a message timestamp for turn-local ordering.
+// conversationMessageCreatedAtValue 解析消息时间戳用于回合内排序。
+function conversationMessageCreatedAtValue(message: ConversationMessage): number {
+  const value = Number.parseInt(message.createdAt ?? "", 10);
+  return Number.isFinite(value) ? value : -1;
 }
 
 // workbenchWithSubagentSurfaceMessageCache absorbs and injects cached child transcript windows for one snapshot.
@@ -4933,6 +5046,26 @@ const markdownSanitizers = [rehypeSanitize];
 // MarkdownImageWorkspacePathContext 为相对图片链接携带当前项目根目录。
 const MarkdownImageWorkspacePathContext = React.createContext<string | null>(null);
 
+// StreamingRevealFrameContext lets smoothed transcript rendering keep the viewport pinned to the live tail.
+// StreamingRevealFrameContext 允许平滑转录渲染在展开时持续保持视口贴近实时尾部。
+const StreamingRevealFrameContext = React.createContext<(() => void) | null>(null);
+
+// STREAMING_REVEAL_DIRECT_APPEND_LIMIT is the largest append shown immediately without smoothing.
+// STREAMING_REVEAL_DIRECT_APPEND_LIMIT 是无需平滑即可立即展示的最大追加长度。
+const STREAMING_REVEAL_DIRECT_APPEND_LIMIT = 16;
+
+// STREAMING_REVEAL_FRAME_MS is the display-layer cadence for revealing buffered provider chunks.
+// STREAMING_REVEAL_FRAME_MS 是显示层揭示已缓冲 Provider 分块的刷新节奏。
+const STREAMING_REVEAL_FRAME_MS = 16;
+
+// STREAMING_REVEAL_MIN_STEP_CHARS is the minimum number of UTF-16 code units revealed per frame.
+// STREAMING_REVEAL_MIN_STEP_CHARS 是每帧至少揭示的 UTF-16 码元数量。
+const STREAMING_REVEAL_MIN_STEP_CHARS = 8;
+
+// STREAMING_REVEAL_MAX_STEP_CHARS caps one animation-frame reveal so large provider chunks still feel fluid.
+// STREAMING_REVEAL_MAX_STEP_CHARS 限制单帧揭示量，使较大的 Provider 分块仍保持流动感。
+const STREAMING_REVEAL_MAX_STEP_CHARS = 48;
+
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
 // webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
 function webuiClickTrace(action: string, detail: Record<string, unknown> = {}): void {
@@ -5165,6 +5298,9 @@ function projectConversationTimelineItems(
     }
     if (finalItem) {
       timeline.push({ kind: "item", item: finalItem });
+    }
+    if (currentTurn.statsItem) {
+      timeline.push({ kind: "item", item: currentTurn.statsItem });
     }
     currentTurn = null;
   };
@@ -9341,6 +9477,20 @@ function ChatArea(props: {
     return true;
   }, []);
 
+  // handleStreamingRevealFrame keeps display-only streaming smoothing aligned with the live transcript tail.
+  // handleStreamingRevealFrame 让仅显示层的流式平滑展开持续对齐实时转录尾部。
+  const handleStreamingRevealFrame = React.useCallback(() => {
+    const element = workspaceRef.current;
+    if (!element) {
+      return;
+    }
+    if (!shouldFollowConversationTailRef.current && !conversationViewportAllowsTailFollow(element)) {
+      return;
+    }
+    element.scrollTop = element.scrollHeight;
+    shouldFollowConversationTailRef.current = true;
+  }, []);
+
   React.useLayoutEffect(() => {
     if (!props.selectedConversationId || isEmptyConversation || showConversationLoadingOnly) {
       return;
@@ -9492,24 +9642,26 @@ function ChatArea(props: {
               projectName={emptyProjectName}
             />
           ) : null}
-          <ConversationWorkspace
-            conversation={surfaceConversation}
-            hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
-            messages={messages}
-            error={props.conversationLoadError}
-            parentConversationId={activeSurfaceConversationId ?? null}
-            workspacePath={selectedProject?.path ?? null}
-            onScrollStateChange={updateConversationBottomState}
-            onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
-            scrollRef={workspaceRef}
-            suppressEmptyPlaceholder={isEmptyConversation}
-          />
-          {visibleStreamingThinkingOverlayBlock ? (
-            <StreamingThinkingOverlay
-              block={visibleStreamingThinkingOverlayBlock}
-              leaving={streamingThinkingOverlayLeaving}
+          <StreamingRevealFrameContext.Provider value={handleStreamingRevealFrame}>
+            <ConversationWorkspace
+              conversation={surfaceConversation}
+              hiddenThinkingBlockId={visibleStreamingThinkingOverlayBlock?.id ?? null}
+              messages={messages}
+              error={props.conversationLoadError}
+              parentConversationId={activeSurfaceConversationId ?? null}
+              workspacePath={selectedProject?.path ?? null}
+              onScrollStateChange={updateConversationBottomState}
+              onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
+              scrollRef={workspaceRef}
+              suppressEmptyPlaceholder={isEmptyConversation}
             />
-          ) : null}
+            {visibleStreamingThinkingOverlayBlock ? (
+              <StreamingThinkingOverlay
+                block={visibleStreamingThinkingOverlayBlock}
+                leaving={streamingThinkingOverlayLeaving}
+              />
+            ) : null}
+          </StreamingRevealFrameContext.Provider>
           <ComposerDock
             aiCapabilities={props.workbench.aiCapabilities ?? []}
             attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
@@ -9932,6 +10084,7 @@ function ConversationRenderItemView(props: {
           blocks={visibleBlocks}
           parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
+          smoothStreamingMarkdown={props.sessionRunning && props.item.role === "assistant"}
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -9956,6 +10109,7 @@ function ConversationBlocksView(props: {
   blocks: ConversationBlock[];
   parentConversationId: string | null;
   sessionRunning: boolean;
+  smoothStreamingMarkdown: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -9986,7 +10140,13 @@ function ConversationBlocksView(props: {
     return null;
   }
   if (block.kind === "markdown") {
-    return <MarkdownMessage content={block.body} onOpenMedia={props.onOpenMedia} />;
+    return (
+      <MarkdownMessage
+        content={block.body}
+        smoothStreaming={props.smoothStreamingMarkdown}
+        onOpenMedia={props.onOpenMedia}
+      />
+    );
   }
   return (
     <SpecialConversationBlock
@@ -10007,14 +10167,18 @@ function MarkdownMessage(props: {
   // Markdown source content to render.
   // 需要渲染的 Markdown 源内容。
   content: string;
+  // Whether large streaming appends should be revealed gradually in the display layer.
+  // 是否应在显示层渐进揭示较大的流式追加内容。
+  smoothStreaming?: boolean;
   // Optional media opener used by Markdown images.
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const workspacePath = React.useContext(MarkdownImageWorkspacePathContext);
+  const displayedContent = useSmoothedStreamingContent(props.content, props.smoothStreaming === true);
   const content = React.useMemo(
-    () => normalizeMarkdownLocalImageLinks(props.content, workspacePath),
-    [props.content, workspacePath],
+    () => normalizeMarkdownLocalImageLinks(displayedContent, workspacePath),
+    [displayedContent, workspacePath],
   );
   return (
     <div className="markdown-message">
@@ -10065,6 +10229,88 @@ function MarkdownMessage(props: {
       </ReactMarkdown>
     </div>
   );
+}
+
+// useSmoothedStreamingContent reveals large append-only transcript updates over several animation frames.
+// useSmoothedStreamingContent 将较大的追加式转录更新拆到多个动画帧中揭示。
+function useSmoothedStreamingContent(content: string, enabled: boolean): string {
+  const onRevealFrame = React.useContext(StreamingRevealFrameContext);
+  const [displayedContent, setDisplayedContent] = React.useState(content);
+  const displayedContentRef = React.useRef(content);
+
+  React.useEffect(() => {
+    displayedContentRef.current = displayedContent;
+  }, [displayedContent]);
+
+  React.useEffect(() => {
+    if (!enabled) {
+      displayedContentRef.current = content;
+      setDisplayedContent(content);
+      return;
+    }
+
+    const current = displayedContentRef.current;
+    if (content === current) {
+      return;
+    }
+    if (!content.startsWith(current)) {
+      displayedContentRef.current = content;
+      setDisplayedContent(content);
+      return;
+    }
+
+    const pendingLength = content.length - current.length;
+    if (pendingLength <= STREAMING_REVEAL_DIRECT_APPEND_LIMIT) {
+      displayedContentRef.current = content;
+      setDisplayedContent(content);
+      onRevealFrame?.();
+      return;
+    }
+
+    let cancelled = false;
+    let timerId: number | null = null;
+
+    const revealNextFrame = () => {
+      if (cancelled) {
+        return;
+      }
+      const visible = displayedContentRef.current;
+      if (!content.startsWith(visible)) {
+        displayedContentRef.current = content;
+        setDisplayedContent(content);
+        onRevealFrame?.();
+        return;
+      }
+      const remainingLength = content.length - visible.length;
+      if (remainingLength <= 0) {
+        return;
+      }
+      const stepLength = Math.min(
+        STREAMING_REVEAL_MAX_STEP_CHARS,
+        Math.max(
+          STREAMING_REVEAL_MIN_STEP_CHARS,
+          Math.ceil(remainingLength / 12),
+        ),
+      );
+      const nextContent = content.slice(0, Math.min(content.length, visible.length + stepLength));
+      displayedContentRef.current = nextContent;
+      setDisplayedContent(nextContent);
+      onRevealFrame?.();
+      if (nextContent.length < content.length) {
+        timerId = window.setTimeout(revealNextFrame, STREAMING_REVEAL_FRAME_MS);
+      }
+    };
+
+    timerId = window.setTimeout(revealNextFrame, STREAMING_REVEAL_FRAME_MS);
+    return () => {
+      cancelled = true;
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
+  }, [content, enabled, onRevealFrame]);
+
+  return displayedContent;
 }
 
 // SpecialConversationBlock renders compact tool, command, diff, thinking, and notice rows.
@@ -11333,7 +11579,7 @@ function conversationRuntimeCue(
   if (blockLooksLikeMemoryRecall(lastMeaningfulBlock)) {
     return { kind: "default", text: t("runtime.memoryRecall") };
   }
-  return { kind: "default", text: t("runtime.requesting") };
+  return null;
 }
 
 // conversationIsRunning derives the send-button stop state from backend session status.
@@ -11342,8 +11588,11 @@ function conversationIsRunning(conversation: ConversationSummary | undefined): b
   if (!conversation) {
     return false;
   }
-  const phase = (conversation.runPhase ?? "").trim().toLowerCase();
-  if (phase && !["idle", "ready", "failed", "stopped"].includes(phase)) {
+  const phase = normalizedSessionRunPhase(conversation.runPhase);
+  if (phase && ["idle", "ready", "failed", "stopped"].includes(phase)) {
+    return false;
+  }
+  if (phase) {
     return true;
   }
   return conversation.status.trim().toLowerCase() === "running";

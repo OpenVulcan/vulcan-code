@@ -11,11 +11,24 @@ use crate::model::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::fs::{self, File, OpenOptions};
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use vulcan_context::{
+    RuntimeContextCompactionAppliedEvent, RuntimeInjectionAppliedEvent, RuntimeLogEvent,
+    RuntimeLogEventLine, RuntimeRepairEvent, conversation_state_from_runtime_log_lines,
+    runtime_log_lines_from_conversation_state,
+};
+#[cfg(test)]
+use vulcan_context::{
+    RuntimeInjectionCancelledEvent, RuntimeInjectionMergedEvent,
+    RuntimeProviderLoweringRepairEvent, RuntimeProviderNativeStateEnvelope,
+    RuntimeProviderRequestCheckpointEvent, RuntimeProviderResponseCheckpointEvent,
+    RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
+};
 use vulcan_session_boundary::SessionBoundaryEvent;
 
 /// Directory name used for active sessions below the Vulcan code data root.
@@ -30,6 +43,18 @@ pub(super) const SEGMENTED_METADATA_FILE: &str = "metadata.json";
 /// Runtime state file name stored in every main session and task session directory.
 /// 每个主会话与子任务会话目录内保存的运行状态文件名。
 pub(super) const SEGMENTED_STATE_FILE: &str = "state.json";
+/// Runtime metadata file name stored beside display transcript segments.
+/// 保存在展示转录分段旁边的运行时元数据文件名。
+pub(super) const SEGMENTED_RUNTIME_METADATA_FILE: &str = "runtime_metadata.json";
+/// Runtime index file name rebuilt from runtime JSONL when needed.
+/// 需要时可从 runtime JSONL 重建的运行时索引文件名。
+pub(super) const SEGMENTED_RUNTIME_INDEX_FILE: &str = "runtime.index.json";
+/// Runtime segment directory name used for provider-facing fact logs.
+/// 用于 Provider 可见事实日志的运行时分段目录名。
+pub(super) const SEGMENTED_RUNTIME_DIR: &str = "runtime";
+/// Runtime backup directory name used before context compaction.
+/// 上下文压缩前使用的运行时备份目录名。
+pub(super) const SEGMENTED_RUNTIME_BACKUP_DIR: &str = "runtime_backup";
 /// Child task directory name used by the new session layout.
 /// 新会话布局中用于保存子任务的目录名称。
 pub(super) const SEGMENTED_TASK_DIR: &str = "task";
@@ -42,6 +67,9 @@ pub(super) const DEFAULT_SEGMENT_MAX_LINES: u64 = 3000;
 /// Default maximum byte count allowed in one segment before rollover.
 /// 单个分段在滚动前默认允许的最大字节数。
 pub(super) const DEFAULT_SEGMENT_MAX_BYTES: u64 = 8 * 1024 * 1024;
+/// Maximum runtime-log backups retained after context compaction.
+/// 上下文压缩后保留的运行时日志备份最大数量。
+const RUNTIME_COMPACTION_BACKUP_LIMIT: usize = 5;
 /// Process-local mutex protecting overwrite-only state read/modify/write operations.
 /// 保护覆盖式状态读改写操作的进程内互斥锁。
 static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -176,6 +204,145 @@ impl SegmentMetadata {
             last_compaction_seq: None,
         }
     }
+}
+
+/// Metadata for one provider-facing runtime JSONL segment.
+/// 单个 Provider 可见运行时 JSONL 分段的元数据。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct RuntimeSegmentMetadata {
+    /// Segment file path relative to the owning session directory.
+    /// 相对所属会话目录的分段文件路径。
+    pub file: String,
+    /// First sequence number expected in this runtime segment.
+    /// 当前运行时分段内预期的首个序号。
+    pub start_seq: u64,
+    /// Last sequence number written to this runtime segment.
+    /// 当前运行时分段已写入的最后序号。
+    pub end_seq: Option<u64>,
+    /// Number of JSONL lines currently written to this runtime segment.
+    /// 当前运行时分段已经写入的 JSONL 行数。
+    pub line_count: u64,
+    /// Number of bytes currently written to this runtime segment.
+    /// 当前运行时分段已经写入的字节数。
+    pub byte_len: u64,
+    /// Timestamp captured when this runtime segment was created.
+    /// 创建该运行时分段时捕获的时间戳。
+    pub created_at: String,
+    /// Timestamp of the last event written to this runtime segment.
+    /// 写入该运行时分段的最后事件时间戳。
+    pub updated_at: Option<String>,
+    /// Whether this segment has been sealed against further appends.
+    /// 该分段是否已经封存且不再追加。
+    pub sealed: bool,
+}
+
+impl RuntimeSegmentMetadata {
+    /// Creates an empty runtime segment metadata record.
+    /// 创建一条空运行时分段元数据记录。
+    fn empty(file: String, start_seq: u64, created_at: String) -> Self {
+        Self {
+            file,
+            start_seq,
+            end_seq: None,
+            line_count: 0,
+            byte_len: 0,
+            created_at,
+            updated_at: None,
+            sealed: false,
+        }
+    }
+}
+
+/// Metadata document that indexes provider-facing runtime JSONL segments.
+/// 为 Provider 可见运行时 JSONL 分段建立索引的元数据文档。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct RuntimeLogMetadata {
+    /// Runtime metadata schema version.
+    /// 运行时元数据结构版本。
+    pub schema_version: u32,
+    /// Active runtime segment path relative to the session directory.
+    /// 相对会话目录的活动运行时分段路径。
+    pub active_segment: String,
+    /// Next runtime sequence number to assign.
+    /// 下一个待分配的运行时序号。
+    pub next_seq: u64,
+    /// Timestamp captured when this runtime metadata was created.
+    /// 创建该运行时元数据时捕获的时间戳。
+    pub created_at: String,
+    /// Timestamp captured when this runtime metadata was last updated.
+    /// 最近更新该运行时元数据时捕获的时间戳。
+    pub updated_at: String,
+    /// Ordered runtime segment metadata records.
+    /// 有序运行时分段元数据记录。
+    pub segments: Vec<RuntimeSegmentMetadata>,
+}
+
+/// Rebuildable index document used to accelerate runtime-log reads.
+/// 用于加速运行时日志读取的可重建索引文档。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct RuntimeLogIndex {
+    /// Runtime index schema version.
+    /// 运行时索引结构版本。
+    pub schema_version: u32,
+    /// Last sequence observed while rebuilding the index.
+    /// 重建索引时观察到的最后序号。
+    pub last_seq: Option<u64>,
+    /// Number of runtime JSONL lines indexed.
+    /// 已索引的运行时 JSONL 行数。
+    pub line_count: u64,
+    /// Latest context compaction sequence when present.
+    /// 存在时最近一次上下文压缩序号。
+    pub latest_compaction_seq: Option<u64>,
+    /// Message identifiers mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的消息标识。
+    pub message_offsets: std::collections::BTreeMap<String, u64>,
+    /// Tool-call identifiers mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的工具调用标识。
+    pub tool_call_offsets: std::collections::BTreeMap<String, u64>,
+    /// Provider conversion checkpoints mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的 Provider 转换检查点。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_checkpoint_offsets: std::collections::BTreeMap<String, u64>,
+    /// Runtime repair records mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的运行时修复记录。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub repair_offsets: std::collections::BTreeMap<String, u64>,
+    /// Injection fingerprints mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的注入指纹。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub injection_offsets: std::collections::BTreeMap<String, u64>,
+    /// Chronological system-update identifiers mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的时间顺序系统更新标识。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub system_update_offsets: std::collections::BTreeMap<String, u64>,
+    /// Cancelled injection identifiers mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的已取消注入标识。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub injection_cancelled_offsets: std::collections::BTreeMap<String, u64>,
+    /// Merged injection identifiers mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的已合并注入标识。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub injection_merged_offsets: std::collections::BTreeMap<String, u64>,
+    /// Provider response checkpoints mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的 Provider 响应检查点。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_response_checkpoint_offsets: std::collections::BTreeMap<String, u64>,
+    /// Provider lowering repairs mapped to their latest runtime sequence.
+    /// 映射到最近运行时序号的 Provider 转换修复记录。
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub provider_lowering_repair_offsets: std::collections::BTreeMap<String, u64>,
+}
+
+/// Result returned by tolerant runtime-log reads.
+/// 容错读取运行时日志时返回的结果。
+#[derive(Debug, Clone, Default)]
+struct RuntimeLogRepairRead {
+    /// Parsed runtime lines that are still valid.
+    /// 仍然有效且已解析的运行时日志行。
+    lines: Vec<RuntimeLogEventLine>,
+    /// One-based source line numbers that failed JSON decoding.
+    /// JSON 解码失败的 1 基源文件行号。
+    corrupt_line_numbers: Vec<usize>,
 }
 
 /// Agent profile source kind recorded for one subagent task session.
@@ -1361,6 +1528,757 @@ pub(super) fn replay_segmented_session_context(
         context_start_message_id,
         updated_at,
     }))
+}
+
+/// Rebuilds provider-facing runtime JSONL from the canonical conversation state.
+/// 根据规范会话状态重建 Provider 可见运行时 JSONL。
+pub(super) fn rebuild_runtime_log_from_conversation_state(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+) -> Result<RuntimeLogMetadata, String> {
+    rebuild_runtime_log_from_conversation_state_with_extra_events(
+        session_dir,
+        conversation_state,
+        updated_at,
+        Vec::new(),
+    )
+}
+
+/// Rebuilds provider-facing runtime JSONL while preserving audit-only runtime events.
+/// 在保留仅审计运行时事件的同时重建 Provider 可见运行时 JSONL。
+fn rebuild_runtime_log_from_conversation_state_with_extra_events(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+    extra_events: Vec<RuntimeLogEventLine>,
+) -> Result<RuntimeLogMetadata, String> {
+    let runtime_dir = runtime_dir_path(session_dir);
+    if runtime_dir.exists() {
+        fs::remove_dir_all(&runtime_dir).map_err(to_store_error)?;
+    }
+    create_dir_all(&runtime_dir)?;
+    let active_segment = runtime_segment_file_name(1);
+    let active_segment_path = session_dir.join(&active_segment);
+    let mut lines = runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1);
+    append_runtime_extra_events_with_fresh_sequences(&mut lines, extra_events);
+    write_json_lines_file_atomic(&active_segment_path, &lines)?;
+    let byte_len = fs::metadata(&active_segment_path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    let mut segment =
+        RuntimeSegmentMetadata::empty(active_segment.clone(), 1, updated_at.to_string());
+    segment.line_count = lines.len() as u64;
+    segment.byte_len = byte_len;
+    segment.end_seq = lines.last().map(|line| line.seq);
+    segment.updated_at = lines.last().map(|line| line.created_at.clone());
+    let metadata = RuntimeLogMetadata {
+        schema_version: 1,
+        active_segment,
+        next_seq: lines
+            .last()
+            .map(|line| line.seq.saturating_add(1))
+            .unwrap_or(1),
+        created_at: updated_at.to_string(),
+        updated_at: updated_at.to_string(),
+        segments: vec![segment],
+    };
+    write_runtime_metadata(session_dir, &metadata)?;
+    write_runtime_index(session_dir, &rebuild_runtime_log_index(&lines))?;
+    Ok(metadata)
+}
+
+/// Appends runtime JSONL tail lines when possible and rebuilds when history no longer matches.
+/// 在可能时追加 runtime JSONL 尾部，并在历史不再匹配时重建。
+pub(super) fn sync_runtime_log_from_conversation_state(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+) -> Result<RuntimeLogMetadata, String> {
+    if !runtime_metadata_path(session_dir).exists() {
+        return rebuild_runtime_log_from_conversation_state(
+            session_dir,
+            conversation_state,
+            updated_at,
+        );
+    }
+    let desired_lines =
+        runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1);
+    let existing_lines = match read_runtime_log_lines(session_dir) {
+        Ok(Some(lines)) => lines,
+        Ok(None) => {
+            return rebuild_runtime_log_from_conversation_state(
+                session_dir,
+                conversation_state,
+                updated_at,
+            );
+        }
+        Err(_) => {
+            return rebuild_runtime_log_from_conversation_state(
+                session_dir,
+                conversation_state,
+                updated_at,
+            );
+        }
+    };
+    let extra_events = runtime_extra_event_lines(&existing_lines);
+    let existing_conversation_lines = runtime_conversation_event_lines(&existing_lines);
+    if !runtime_log_prefix_matches(&existing_conversation_lines, &desired_lines) {
+        return rebuild_runtime_log_from_conversation_state_with_extra_events(
+            session_dir,
+            conversation_state,
+            updated_at,
+            extra_events,
+        );
+    }
+    if existing_conversation_lines.len() == desired_lines.len() {
+        return read_runtime_metadata(session_dir);
+    }
+    if !extra_events.is_empty() {
+        return rebuild_runtime_log_from_conversation_state_with_extra_events(
+            session_dir,
+            conversation_state,
+            updated_at,
+            extra_events,
+        );
+    }
+    let tail = &desired_lines[existing_conversation_lines.len()..];
+    append_runtime_log_tail(session_dir, tail)
+}
+
+/// Ensures a provider-facing runtime log exists, rebuilding it from display segments when needed.
+/// 确保存在 Provider 可见运行时日志，缺失时从展示分段重建。
+pub(super) fn ensure_runtime_log_from_segmented_context(
+    session_dir: &Path,
+) -> Result<Option<SessionConversationState>, String> {
+    if runtime_metadata_path(session_dir).exists() {
+        match read_runtime_conversation_state(session_dir) {
+            Ok(Some(conversation_state)) if !conversation_state.messages.is_empty() => {
+                return Ok(Some(conversation_state));
+            }
+            Ok(Some(conversation_state)) => {
+                if replay_segmented_session_context(session_dir)?
+                    .as_ref()
+                    .map(|replay| replay.conversation_state.messages.is_empty())
+                    .unwrap_or(true)
+                {
+                    return Ok(Some(conversation_state));
+                }
+            }
+            Ok(None) => return Ok(None),
+            Err(error) => {
+                let Some(replay) = replay_segmented_session_context(session_dir)? else {
+                    return Err(error);
+                };
+                let updated_at = replay
+                    .updated_at
+                    .clone()
+                    .unwrap_or_else(current_unix_millis_text);
+                rebuild_runtime_log_from_conversation_state(
+                    session_dir,
+                    &replay.conversation_state,
+                    &updated_at,
+                )?;
+                return Ok(Some(replay.conversation_state));
+            }
+        }
+    }
+    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+        return Ok(None);
+    };
+    let updated_at = replay
+        .updated_at
+        .clone()
+        .unwrap_or_else(current_unix_millis_text);
+    rebuild_runtime_log_from_conversation_state(
+        session_dir,
+        &replay.conversation_state,
+        &updated_at,
+    )?;
+    Ok(Some(replay.conversation_state))
+}
+
+/// Reads provider-facing runtime log lines in metadata segment order.
+/// 按元数据分段顺序读取 Provider 可见运行时日志行。
+pub(super) fn read_runtime_log_lines(
+    session_dir: &Path,
+) -> Result<Option<Vec<RuntimeLogEventLine>>, String> {
+    let metadata_path = runtime_metadata_path(session_dir);
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+    let metadata = read_runtime_metadata(session_dir)?;
+    let mut segments = metadata.segments.clone();
+    segments.sort_by_key(|segment| segment.start_seq);
+    let mut lines = Vec::new();
+    let mut repair_summaries = Vec::new();
+    for segment in segments {
+        let segment_path = session_dir.join(&segment.file);
+        let repair_read = read_runtime_segment_lines_tolerant(&segment_path)?;
+        if !repair_read.corrupt_line_numbers.is_empty() {
+            backup_corrupt_runtime_segment(&segment_path)?;
+            write_json_lines_file_atomic(&segment_path, &repair_read.lines)?;
+            repair_summaries.push(format!(
+                "{} lines {}",
+                segment.file,
+                compact_runtime_line_number_summary(&repair_read.corrupt_line_numbers)
+            ));
+        }
+        lines.extend(repair_read.lines);
+    }
+    if !repair_summaries.is_empty() {
+        if lines.is_empty() {
+            return Err(format!(
+                "Runtime log is fully damaged after repairing segments: {}",
+                repair_summaries.join(", ")
+            ));
+        }
+        let repair_detail = format!(
+            "Removed corrupt runtime JSONL rows from segments: {}",
+            repair_summaries.join(", ")
+        );
+        lines.push(RuntimeLogEventLine::new(
+            next_runtime_line_seq(&lines),
+            current_unix_millis_text(),
+            RuntimeLogEvent::RuntimeRepair(RuntimeRepairEvent {
+                repair_id: format!(
+                    "runtime-repair-{}-{}",
+                    current_unix_millis_text(),
+                    uuid::Uuid::new_v4()
+                ),
+                source: String::from("runtime_jsonl_tolerant_read"),
+                detail: repair_detail,
+                downgraded_tool_segments: 0,
+            }),
+        ));
+        append_runtime_line_to_active_segment(
+            session_dir,
+            &metadata,
+            lines.last().expect("repair line"),
+        )?;
+        refresh_runtime_metadata_from_lines(session_dir, &metadata, &lines)?;
+        write_runtime_index(session_dir, &rebuild_runtime_log_index(&lines))?;
+    }
+    Ok(Some(lines))
+}
+
+/// Reads the provider-facing runtime log as a canonical conversation state.
+/// 将 Provider 可见运行时日志读取为规范会话状态。
+pub(super) fn read_runtime_conversation_state(
+    session_dir: &Path,
+) -> Result<Option<SessionConversationState>, String> {
+    let Some(lines) = read_runtime_log_lines(session_dir)? else {
+        return Ok(None);
+    };
+    Ok(Some(conversation_state_from_runtime_log_lines(&lines)))
+}
+
+/// Copies active runtime-log files before context compaction mutates the conversation window.
+/// 在上下文压缩修改会话窗口前复制当前运行时日志文件。
+pub(super) fn backup_runtime_log_before_compaction(
+    session_dir: &Path,
+    compaction_id: &str,
+    timestamp: &str,
+) -> Result<Vec<String>, String> {
+    let metadata_path = runtime_metadata_path(session_dir);
+    let index_path = runtime_index_path(session_dir);
+    let runtime_dir = runtime_dir_path(session_dir);
+    if !metadata_path.exists() && !index_path.exists() && !runtime_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let backup_root = runtime_backup_dir_path(session_dir);
+    create_dir_all(&backup_root)?;
+    let base_name = runtime_compaction_backup_dir_name(session_dir, compaction_id, timestamp);
+    let mut backup_dir = backup_root.join(&base_name);
+    if backup_dir.exists() {
+        backup_dir = backup_root.join(format!("{base_name}-{}", uuid::Uuid::new_v4()));
+    }
+    create_dir_all(&backup_dir)?;
+
+    let mut copied_files = Vec::new();
+    copy_runtime_file_into_backup(session_dir, &metadata_path, &backup_dir, &mut copied_files)?;
+    copy_runtime_file_into_backup(session_dir, &index_path, &backup_dir, &mut copied_files)?;
+    if runtime_dir.exists() {
+        copy_runtime_dir_into_backup(
+            session_dir,
+            &runtime_dir,
+            &backup_dir.join(SEGMENTED_RUNTIME_DIR),
+            &mut copied_files,
+        )?;
+    }
+    prune_runtime_log_backups(session_dir, RUNTIME_COMPACTION_BACKUP_LIMIT)?;
+    append_runtime_log_event_if_present(
+        session_dir,
+        timestamp,
+        RuntimeLogEvent::ContextCompactionApplied(RuntimeContextCompactionAppliedEvent {
+            compaction_id: compaction_id.to_string(),
+            summary_message_id: None,
+            backup_files: copied_files.clone(),
+            compaction_fingerprint: Some(runtime_compaction_fingerprint(
+                compaction_id,
+                timestamp,
+                &copied_files,
+            )),
+            merged_injection_fingerprint: None,
+        }),
+    )?;
+    Ok(copied_files)
+}
+
+/// Records the injection view that was applied to one provider-facing turn.
+/// 记录单个 Provider 可见回合已应用的注入视图。
+pub(super) fn record_runtime_injection_applied(
+    session_dir: &Path,
+    timestamp: &str,
+    event: RuntimeInjectionAppliedEvent,
+) -> Result<bool, String> {
+    append_runtime_log_event_if_present(
+        session_dir,
+        timestamp,
+        RuntimeLogEvent::InjectionApplied(event),
+    )
+}
+
+/// Records one runtime-only audit event without projecting it into the visible conversation.
+/// 记录单个仅运行时审计事件，不将其投影进可见会话。
+pub(super) fn record_runtime_audit_event(
+    session_dir: &Path,
+    timestamp: &str,
+    event: RuntimeLogEvent,
+) -> Result<bool, String> {
+    append_runtime_log_event_if_present(session_dir, timestamp, event)
+}
+
+/// Appends one runtime event when the session already owns a runtime log.
+/// 当会话已经拥有 runtime 日志时追加一条运行时事件。
+fn append_runtime_log_event_if_present(
+    session_dir: &Path,
+    timestamp: &str,
+    event: RuntimeLogEvent,
+) -> Result<bool, String> {
+    if !runtime_metadata_path(session_dir).exists() {
+        let _ = ensure_runtime_log_from_segmented_context(session_dir)?;
+    }
+    if !runtime_metadata_path(session_dir).exists() {
+        return Ok(false);
+    }
+    let metadata = read_runtime_metadata(session_dir)?;
+    let line = RuntimeLogEventLine::new(metadata.next_seq, timestamp.to_string(), event);
+    append_runtime_log_tail(session_dir, &[line])?;
+    Ok(true)
+}
+
+/// Rebuilds the lightweight runtime index from runtime JSONL lines.
+/// 从运行时 JSONL 行重建轻量运行时索引。
+fn rebuild_runtime_log_index(lines: &[RuntimeLogEventLine]) -> RuntimeLogIndex {
+    let mut index = RuntimeLogIndex {
+        schema_version: 1,
+        last_seq: lines.last().map(|line| line.seq),
+        line_count: lines.len() as u64,
+        latest_compaction_seq: None,
+        message_offsets: Default::default(),
+        tool_call_offsets: Default::default(),
+        provider_checkpoint_offsets: Default::default(),
+        repair_offsets: Default::default(),
+        injection_offsets: Default::default(),
+        system_update_offsets: Default::default(),
+        injection_cancelled_offsets: Default::default(),
+        injection_merged_offsets: Default::default(),
+        provider_response_checkpoint_offsets: Default::default(),
+        provider_lowering_repair_offsets: Default::default(),
+    };
+    for line in lines {
+        match &line.event {
+            vulcan_context::RuntimeLogEvent::UserMessage(event) => {
+                index
+                    .message_offsets
+                    .insert(event.message_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::AssistantMessage(event) => {
+                index
+                    .message_offsets
+                    .insert(event.message_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::ToolCall(event) => {
+                index
+                    .tool_call_offsets
+                    .insert(event.runtime_tool_call_id.clone(), line.seq);
+                if let Some(provider_tool_call_id) = &event.provider_tool_call_id {
+                    index
+                        .tool_call_offsets
+                        .insert(provider_tool_call_id.clone(), line.seq);
+                }
+            }
+            vulcan_context::RuntimeLogEvent::ToolResult(event) => {
+                index
+                    .message_offsets
+                    .insert(event.tool_result_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::ContextCompactionApplied(_) => {
+                index.latest_compaction_seq = Some(line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::ProviderTurnCheckpoint(event) => {
+                index.provider_checkpoint_offsets.insert(
+                    format!(
+                        "{}:{}:{}",
+                        event.provider_id, event.model_id, event.converter_version
+                    ),
+                    line.seq,
+                );
+            }
+            vulcan_context::RuntimeLogEvent::RuntimeRepair(event) => {
+                index
+                    .repair_offsets
+                    .insert(event.repair_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::InjectionApplied(event) => {
+                if let Some(fingerprint) = event
+                    .transient_fingerprint
+                    .as_ref()
+                    .or(event.persistent_fingerprint.as_ref())
+                {
+                    index
+                        .injection_offsets
+                        .insert(fingerprint.clone(), line.seq);
+                }
+            }
+            vulcan_context::RuntimeLogEvent::SystemUpdate(event) => {
+                index
+                    .system_update_offsets
+                    .insert(event.update_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::InjectionCancelled(event) => {
+                index
+                    .injection_cancelled_offsets
+                    .insert(event.cancellation_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::InjectionMerged(event) => {
+                index
+                    .injection_merged_offsets
+                    .insert(event.merge_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(event) => {
+                index.provider_checkpoint_offsets.insert(
+                    format!(
+                        "{}:{}:{}:{}",
+                        event.provider_family,
+                        event.provider_id,
+                        event.model_id,
+                        event.checkpoint_id
+                    ),
+                    line.seq,
+                );
+            }
+            vulcan_context::RuntimeLogEvent::ProviderResponseCheckpoint(event) => {
+                index.provider_response_checkpoint_offsets.insert(
+                    format!(
+                        "{}:{}:{}:{}",
+                        event.provider_family,
+                        event.provider_id,
+                        event.model_id,
+                        event.checkpoint_id
+                    ),
+                    line.seq,
+                );
+            }
+            vulcan_context::RuntimeLogEvent::ProviderLoweringRepair(event) => {
+                index
+                    .provider_lowering_repair_offsets
+                    .insert(event.repair_id.clone(), line.seq);
+            }
+            vulcan_context::RuntimeLogEvent::ToolBatchStarted(_)
+            | vulcan_context::RuntimeLogEvent::ToolBatchCompleted(_) => {}
+        }
+    }
+    index
+}
+
+/// Returns runtime lines that rebuild the canonical provider conversation.
+/// 返回用于重建规范 Provider 会话的运行时日志行。
+fn runtime_conversation_event_lines(lines: &[RuntimeLogEventLine]) -> Vec<RuntimeLogEventLine> {
+    lines
+        .iter()
+        .filter(|line| runtime_event_projects_to_conversation(&line.event))
+        .cloned()
+        .collect()
+}
+
+/// Returns runtime-only audit lines that must survive conversation projection rebuilds.
+/// 返回必须在会话投影重建后继续保留的仅审计运行时日志行。
+fn runtime_extra_event_lines(lines: &[RuntimeLogEventLine]) -> Vec<RuntimeLogEventLine> {
+    lines
+        .iter()
+        .filter(|line| !runtime_event_projects_to_conversation(&line.event))
+        .cloned()
+        .collect()
+}
+
+/// Reports whether one runtime event contributes to canonical conversation replay.
+/// 判断单条运行时事件是否参与规范会话回放。
+fn runtime_event_projects_to_conversation(event: &RuntimeLogEvent) -> bool {
+    matches!(
+        event,
+        RuntimeLogEvent::UserMessage(_)
+            | RuntimeLogEvent::AssistantMessage(_)
+            | RuntimeLogEvent::ToolBatchStarted(_)
+            | RuntimeLogEvent::ToolCall(_)
+            | RuntimeLogEvent::ToolResult(_)
+            | RuntimeLogEvent::ToolBatchCompleted(_)
+    )
+}
+
+/// Appends audit events after conversation lines while assigning fresh sequence numbers.
+/// 将审计事件追加到会话日志之后，并分配新的连续序号。
+fn append_runtime_extra_events_with_fresh_sequences(
+    lines: &mut Vec<RuntimeLogEventLine>,
+    extra_events: Vec<RuntimeLogEventLine>,
+) {
+    let mut next_seq = next_runtime_line_seq(lines);
+    for event_line in extra_events {
+        lines.push(RuntimeLogEventLine::new(
+            next_seq,
+            event_line.created_at,
+            event_line.event,
+        ));
+        next_seq = next_seq.saturating_add(1);
+    }
+}
+
+/// Computes the next runtime sequence number after the provided lines.
+/// 根据已提供日志行计算下一个运行时序号。
+fn next_runtime_line_seq(lines: &[RuntimeLogEventLine]) -> u64 {
+    lines
+        .iter()
+        .map(|line| line.seq)
+        .max()
+        .map(|seq| seq.saturating_add(1))
+        .unwrap_or(1)
+}
+
+/// Reads one runtime JSONL segment while preserving valid lines around corrupt records.
+/// 读取单个 runtime JSONL 分段，并在损坏记录周围保留有效行。
+fn read_runtime_segment_lines_tolerant(path: &Path) -> Result<RuntimeLogRepairRead, String> {
+    if !path.exists() {
+        return Ok(RuntimeLogRepairRead::default());
+    }
+    let file = File::open(path).map_err(to_store_error)?;
+    let reader = BufReader::new(file);
+    let mut read = RuntimeLogRepairRead::default();
+    for (line_index, line) in reader.lines().enumerate() {
+        let line_number = line_index.saturating_add(1);
+        let line = line.map_err(|error| {
+            format!(
+                "读取 runtime JSONL 文件 `{}` 第 {line_number} 行失败：{error}",
+                path.display()
+            )
+        })?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<RuntimeLogEventLine>(&line) {
+            Ok(value) => read.lines.push(value),
+            Err(_) => {
+                read.corrupt_line_numbers.push(line_number);
+            }
+        }
+    }
+    Ok(read)
+}
+
+/// Compacts one-based line numbers into a short comma-separated repair summary.
+/// 将 1 基行号压缩为简短的逗号分隔修复摘要。
+fn compact_runtime_line_number_summary(line_numbers: &[usize]) -> String {
+    const MAX_VISIBLE_LINES: usize = 6;
+    if line_numbers.is_empty() {
+        return "unknown".to_string();
+    }
+    let mut visible = line_numbers
+        .iter()
+        .take(MAX_VISIBLE_LINES)
+        .map(|line_number| line_number.to_string())
+        .collect::<Vec<_>>();
+    if line_numbers.len() > MAX_VISIBLE_LINES {
+        visible.push(format!("+{} more", line_numbers.len() - MAX_VISIBLE_LINES));
+    }
+    visible.join(",")
+}
+
+/// Preserves a damaged runtime segment before rewriting the cleaned JSONL file.
+/// 在重写清洁 JSONL 文件前保留损坏的运行时分段。
+fn backup_corrupt_runtime_segment(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("runtime.jsonl");
+    let backup_name = format!(
+        "{file_name}.corrupt-{}-{}.bak",
+        current_unix_millis_text(),
+        uuid::Uuid::new_v4()
+    );
+    fs::copy(path, path.with_file_name(backup_name))
+        .map(|_| ())
+        .map_err(to_store_error)
+}
+
+/// Refreshes runtime metadata after a tolerant read removed corrupt JSONL rows.
+/// 在容错读取移除损坏 JSONL 行后刷新运行时元数据。
+fn refresh_runtime_metadata_from_lines(
+    session_dir: &Path,
+    metadata: &RuntimeLogMetadata,
+    lines: &[RuntimeLogEventLine],
+) -> Result<(), String> {
+    let mut next_metadata = metadata.clone();
+    next_metadata.next_seq = lines
+        .last()
+        .map(|line| line.seq.saturating_add(1))
+        .unwrap_or(1);
+    next_metadata.updated_at = lines
+        .last()
+        .map(|line| line.created_at.clone())
+        .unwrap_or_else(current_unix_millis_text);
+    for segment in &mut next_metadata.segments {
+        let segment_path = session_dir.join(&segment.file);
+        let segment_lines = read_json_lines::<RuntimeLogEventLine>(&segment_path)?;
+        segment.line_count = segment_lines.len() as u64;
+        segment.byte_len = fs::metadata(&segment_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        segment.end_seq = segment_lines.last().map(|line| line.seq);
+        segment.updated_at = segment_lines.last().map(|line| line.created_at.clone());
+    }
+    write_runtime_metadata(session_dir, &next_metadata)
+}
+
+/// Appends one already-sequenced runtime line to the active segment without refreshing metadata.
+/// 将一条已分配序号的运行时日志行追加到活动分段，但不刷新元数据。
+fn append_runtime_line_to_active_segment(
+    session_dir: &Path,
+    metadata: &RuntimeLogMetadata,
+    line: &RuntimeLogEventLine,
+) -> Result<(), String> {
+    let active_segment_path = session_dir.join(&metadata.active_segment);
+    if !active_segment_path.exists() {
+        return Err(format!(
+            "Runtime active segment is missing: {}",
+            active_segment_path.display()
+        ));
+    }
+    append_json_lines_file(&active_segment_path, std::slice::from_ref(line))
+}
+
+/// Appends new runtime lines to the active segment and refreshes metadata plus index.
+/// 将新的运行时行追加到活动分段，并刷新元数据与索引。
+fn append_runtime_log_tail(
+    session_dir: &Path,
+    tail: &[RuntimeLogEventLine],
+) -> Result<RuntimeLogMetadata, String> {
+    let mut metadata = read_runtime_metadata(session_dir)?;
+    let active_segment_path = session_dir.join(&metadata.active_segment);
+    if !active_segment_path.exists() {
+        return Err(format!(
+            "Runtime active segment is missing: {}",
+            active_segment_path.display()
+        ));
+    }
+    append_json_lines_file(&active_segment_path, tail)?;
+    let all_lines = read_runtime_log_lines(session_dir)?.unwrap_or_default();
+    metadata.next_seq = all_lines
+        .last()
+        .map(|line| line.seq.saturating_add(1))
+        .unwrap_or(1);
+    metadata.updated_at = tail
+        .last()
+        .map(|line| line.created_at.clone())
+        .unwrap_or_else(current_unix_millis_text);
+    for segment in &mut metadata.segments {
+        if segment.file != metadata.active_segment {
+            continue;
+        }
+        let segment_lines = read_json_lines::<RuntimeLogEventLine>(&active_segment_path)?;
+        segment.line_count = segment_lines.len() as u64;
+        segment.byte_len = fs::metadata(&active_segment_path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+        segment.end_seq = segment_lines.last().map(|line| line.seq);
+        segment.updated_at = segment_lines.last().map(|line| line.created_at.clone());
+        break;
+    }
+    write_runtime_metadata(session_dir, &metadata)?;
+    write_runtime_index(session_dir, &rebuild_runtime_log_index(&all_lines))?;
+    Ok(metadata)
+}
+
+/// Returns whether the existing runtime log is a provider-equivalent prefix of the desired log.
+/// 返回现有运行时日志是否为目标日志的 Provider 等价前缀。
+fn runtime_log_prefix_matches(
+    existing_lines: &[RuntimeLogEventLine],
+    desired_lines: &[RuntimeLogEventLine],
+) -> bool {
+    existing_lines.len() <= desired_lines.len()
+        && existing_lines
+            .iter()
+            .zip(desired_lines)
+            .all(|(existing, desired)| runtime_log_line_matches(existing, desired))
+}
+
+/// Compares two runtime lines while ignoring write timestamps that can differ across saves.
+/// 比较两条运行时日志行，并忽略不同保存时可能变化的写入时间戳。
+fn runtime_log_line_matches(existing: &RuntimeLogEventLine, desired: &RuntimeLogEventLine) -> bool {
+    existing.seq == desired.seq
+        && existing.schema_version == desired.schema_version
+        && serde_json::to_value(&existing.event).ok() == serde_json::to_value(&desired.event).ok()
+}
+
+/// Reads runtime metadata for one segmented session directory.
+/// 读取某个分段会话目录的运行时元数据。
+fn read_runtime_metadata(session_dir: &Path) -> Result<RuntimeLogMetadata, String> {
+    read_required_json::<RuntimeLogMetadata>(&runtime_metadata_path(session_dir))
+}
+
+/// Writes runtime metadata for one segmented session directory.
+/// 写入某个分段会话目录的运行时元数据。
+fn write_runtime_metadata(session_dir: &Path, metadata: &RuntimeLogMetadata) -> Result<(), String> {
+    write_json_file_atomic(&runtime_metadata_path(session_dir), metadata)
+}
+
+/// Writes the rebuildable runtime index for one segmented session directory.
+/// 写入某个分段会话目录的可重建运行时索引。
+fn write_runtime_index(session_dir: &Path, index: &RuntimeLogIndex) -> Result<(), String> {
+    write_json_file_atomic(&runtime_index_path(session_dir), index)
+}
+
+/// Returns the runtime metadata path for one session directory.
+/// 返回某个会话目录的运行时元数据路径。
+fn runtime_metadata_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(SEGMENTED_RUNTIME_METADATA_FILE)
+}
+
+/// Returns the runtime index path for one session directory.
+/// 返回某个会话目录的运行时索引路径。
+fn runtime_index_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(SEGMENTED_RUNTIME_INDEX_FILE)
+}
+
+/// Returns the runtime segment directory path for one session directory.
+/// 返回某个会话目录的运行时分段目录路径。
+fn runtime_dir_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(SEGMENTED_RUNTIME_DIR)
+}
+
+/// Returns the runtime backup directory path for one session directory.
+/// 返回某个会话目录的运行时备份目录路径。
+fn runtime_backup_dir_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(SEGMENTED_RUNTIME_BACKUP_DIR)
+}
+
+/// Builds a runtime segment file name relative to the session directory.
+/// 构建相对会话目录的运行时分段文件名。
+fn runtime_segment_file_name(index: usize) -> String {
+    format!("{SEGMENTED_RUNTIME_DIR}/r{index:03}.jsonl")
 }
 
 /// Overwrites the state document for one main session or task session directory.
@@ -2640,6 +3558,52 @@ where
     })
 }
 
+/// Writes JSONL values through a temporary file and rename.
+/// 通过临时文件与重命名写入 JSONL 值集合。
+fn write_json_lines_file_atomic<T>(path: &Path, values: &[T]) -> Result<(), String>
+where
+    T: Serialize,
+{
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
+    let temp_path = unique_json_temp_path(path);
+    let mut file = File::create(&temp_path).map_err(to_store_error)?;
+    for value in values {
+        serde_json::to_writer(&mut file, value).map_err(to_store_error)?;
+        file.write_all(b"\n").map_err(to_store_error)?;
+    }
+    file.flush().map_err(to_store_error)?;
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
+        to_store_error(error)
+    })
+}
+
+/// Appends JSONL values to an existing file, creating its parent directory when needed.
+/// 将 JSONL 值追加到已有文件，并在需要时创建父目录。
+fn append_json_lines_file<T>(path: &Path, values: &[T]) -> Result<(), String>
+where
+    T: Serialize,
+{
+    if values.is_empty() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        create_dir_all(parent)?;
+    }
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(path)
+        .map_err(to_store_error)?;
+    for value in values {
+        serde_json::to_writer(&mut file, value).map_err(to_store_error)?;
+        file.write_all(b"\n").map_err(to_store_error)?;
+    }
+    file.flush().map_err(to_store_error)
+}
+
 /// Builds a collision-free temporary JSON path next to the target file.
 /// 在目标文件旁构建不会互相冲突的 JSON 临时路径。
 fn unique_json_temp_path(path: &Path) -> PathBuf {
@@ -2720,6 +3684,155 @@ fn sanitize_file_component(value: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Builds a compaction backup directory name with enough runtime scope to audit source coverage.
+/// 构建包含足够运行时范围信息的压缩备份目录名，便于审计源文件覆盖情况。
+fn runtime_compaction_backup_dir_name(
+    session_dir: &Path,
+    compaction_id: &str,
+    timestamp: &str,
+) -> String {
+    let (segment_id, event_range) = runtime_compaction_backup_scope(session_dir)
+        .unwrap_or_else(|| ("segment-unknown".to_string(), "seq-unknown".to_string()));
+    format!(
+        "compact-{}-{}-{}-{}",
+        sanitize_file_component(timestamp),
+        sanitize_file_component(compaction_id),
+        sanitize_file_component(&segment_id),
+        sanitize_file_component(&event_range)
+    )
+}
+
+/// Reads the active runtime segment and sequence range used in one compaction backup name.
+/// 读取用于单个压缩备份目录名的活动运行时分段与序号范围。
+fn runtime_compaction_backup_scope(session_dir: &Path) -> Option<(String, String)> {
+    let metadata = read_runtime_metadata(session_dir).ok()?;
+    let active_segment = metadata
+        .segments
+        .iter()
+        .find(|segment| segment.file == metadata.active_segment)
+        .or_else(|| metadata.segments.last())?;
+    let raw_segment_file = metadata
+        .active_segment
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(metadata.active_segment.as_str());
+    let segment_stem = raw_segment_file
+        .strip_suffix(".jsonl")
+        .unwrap_or(raw_segment_file);
+    let end_seq = active_segment
+        .end_seq
+        .unwrap_or_else(|| metadata.next_seq.saturating_sub(1));
+    let event_range = if active_segment.line_count == 0 || end_seq < active_segment.start_seq {
+        "seq-empty".to_string()
+    } else {
+        format!("seq{}-{}", active_segment.start_seq, end_seq)
+    };
+    Some((format!("segment-{segment_stem}"), event_range))
+}
+
+/// Builds a stable fingerprint for one compaction audit boundary and copied runtime files.
+/// 为单个压缩审计边界及已复制 runtime 文件构建稳定指纹。
+fn runtime_compaction_fingerprint(
+    compaction_id: &str,
+    timestamp: &str,
+    copied_files: &[String],
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    compaction_id.hash(&mut hasher);
+    timestamp.hash(&mut hasher);
+    copied_files.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Copies one runtime file into a compaction backup directory when the source exists.
+/// 当源文件存在时，将单个运行时文件复制到压缩备份目录。
+fn copy_runtime_file_into_backup(
+    session_dir: &Path,
+    source: &Path,
+    backup_dir: &Path,
+    copied_files: &mut Vec<String>,
+) -> Result<(), String> {
+    if !source.exists() {
+        return Ok(());
+    }
+    let file_name = source.file_name().ok_or_else(|| {
+        format!(
+            "Runtime backup source has no file name: {}",
+            source.display()
+        )
+    })?;
+    let destination = backup_dir.join(file_name);
+    fs::copy(source, &destination).map_err(to_store_error)?;
+    copied_files.push(relative_session_path(session_dir, &destination));
+    Ok(())
+}
+
+/// Recursively copies the runtime segment directory into a compaction backup.
+/// 将运行时分段目录递归复制到压缩备份中。
+fn copy_runtime_dir_into_backup(
+    session_dir: &Path,
+    source_dir: &Path,
+    destination_dir: &Path,
+    copied_files: &mut Vec<String>,
+) -> Result<(), String> {
+    create_dir_all(destination_dir)?;
+    for entry in fs::read_dir(source_dir).map_err(to_store_error)? {
+        let entry = entry.map_err(to_store_error)?;
+        let source_path = entry.path();
+        let destination_path = destination_dir.join(entry.file_name());
+        let file_type = entry.file_type().map_err(to_store_error)?;
+        if file_type.is_dir() {
+            copy_runtime_dir_into_backup(
+                session_dir,
+                &source_path,
+                &destination_path,
+                copied_files,
+            )?;
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &destination_path).map_err(to_store_error)?;
+            copied_files.push(relative_session_path(session_dir, &destination_path));
+        }
+    }
+    Ok(())
+}
+
+/// Removes old runtime-log backups while keeping the newest requested count.
+/// 删除旧的运行时日志备份，并保留指定数量的最新备份。
+fn prune_runtime_log_backups(session_dir: &Path, keep: usize) -> Result<(), String> {
+    let backup_root = runtime_backup_dir_path(session_dir);
+    if !backup_root.exists() {
+        return Ok(());
+    }
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(&backup_root).map_err(to_store_error)? {
+        let entry = entry.map_err(to_store_error)?;
+        let file_type = entry.file_type().map_err(to_store_error)?;
+        if !file_type.is_dir() {
+            continue;
+        }
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        backups.push((modified, entry.path()));
+    }
+    backups.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let prune_count = backups.len().saturating_sub(keep);
+    for (_, path) in backups.into_iter().take(prune_count) {
+        fs::remove_dir_all(path).map_err(to_store_error)?;
+    }
+    Ok(())
+}
+
+/// Formats a path relative to the session directory for compact audit messages.
+/// 将路径格式化为相对会话目录的紧凑审计文本。
+fn relative_session_path(session_dir: &Path, path: &Path) -> String {
+    path.strip_prefix(session_dir)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 /// Converts any displayable error into a storage error string.
@@ -3419,6 +4532,613 @@ mod tests {
         );
         assert!(state.runtime_state.get("conversation_state").is_none());
         assert!(state.current_context.get("conversation_state").is_none());
+    }
+
+    /// Verifies runtime JSONL can be rebuilt from canonical conversation state and read back.
+    /// 验证 runtime JSONL 可从规范会话状态重建并读取还原。
+    #[test]
+    fn runtime_log_rebuilds_and_restores_conversation_state() {
+        let root = test_root("runtime_log_rebuilds_and_restores_conversation_state");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        let conversation_state = conversation_state_from_session_messages(&messages);
+
+        let metadata = rebuild_runtime_log_from_conversation_state(
+            &session_dir,
+            &conversation_state,
+            "2026-06-09T10:00:00Z",
+        )
+        .expect("rebuild runtime log");
+        let restored = read_runtime_conversation_state(&session_dir)
+            .expect("read runtime conversation")
+            .expect("runtime conversation exists");
+
+        assert_eq!(metadata.active_segment, "runtime/r001.jsonl");
+        assert!(session_dir.join(SEGMENTED_RUNTIME_METADATA_FILE).exists());
+        assert!(session_dir.join(SEGMENTED_RUNTIME_INDEX_FILE).exists());
+        assert!(session_dir.join("runtime").join("r001.jsonl").exists());
+        assert_eq!(restored.messages.len(), conversation_state.messages.len());
+    }
+
+    /// Verifies missing runtime logs are rebuilt from metadata-indexed display segments.
+    /// 验证缺失的 runtime 日志会从 metadata 索引的展示分段重建。
+    #[test]
+    fn runtime_log_missing_rebuilds_from_segmented_display_segments() {
+        let root = test_root("runtime_log_missing_rebuilds_from_segmented_display_segments");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+
+        let restored = ensure_runtime_log_from_segmented_context(&session_dir)
+            .expect("ensure runtime log")
+            .expect("restored conversation");
+
+        assert!(session_dir.join(SEGMENTED_RUNTIME_METADATA_FILE).exists());
+        assert_eq!(restored.messages.len(), 2);
+        assert_eq!(restored.messages[0].id, "m-user-1");
+    }
+
+    /// Verifies runtime rebuild follows metadata-indexed display segments after rollover.
+    /// 验证 runtime 重建会在展示分段滚动后继续按 metadata 索引读取。
+    #[test]
+    fn runtime_log_missing_rebuilds_from_non_initial_display_segments() {
+        let root = test_root("runtime_log_missing_rebuilds_from_non_initial_display_segments");
+        let policy = SegmentPolicy {
+            max_lines: 2,
+            ..SegmentPolicy::default()
+        };
+        let session_dir =
+            create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+            test_message(
+                "m-user-2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "second prompt",
+            ),
+            test_message(
+                "m-assistant-2",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "second answer",
+            ),
+            test_message(
+                "m-user-3",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "third prompt",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+        let metadata = read_session_metadata(&session_dir).expect("read metadata");
+
+        assert_eq!(metadata.active_segment, "s003.jsonl");
+        assert_eq!(metadata.segments.len(), 3);
+
+        let restored = ensure_runtime_log_from_segmented_context(&session_dir)
+            .expect("ensure runtime log")
+            .expect("restored conversation");
+
+        assert_eq!(restored.messages.len(), messages.len());
+        assert_eq!(
+            restored.messages.last().map(|message| message.id.as_str()),
+            Some("m-user-3")
+        );
+        assert!(session_dir.join("runtime").join("r001.jsonl").exists());
+    }
+
+    /// Verifies a corrupt runtime JSONL row is backed up and removed without losing valid rows.
+    /// 验证损坏 runtime JSONL 行会被备份并移除，同时不丢失有效行。
+    #[test]
+    fn runtime_log_tolerates_and_repairs_corrupt_jsonl_tail() {
+        let root = test_root("runtime_log_tolerates_and_repairs_corrupt_jsonl_tail");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        let conversation_state = conversation_state_from_session_messages(&messages);
+        rebuild_runtime_log_from_conversation_state(
+            &session_dir,
+            &conversation_state,
+            "2026-06-09T10:00:00Z",
+        )
+        .expect("rebuild runtime log");
+        let runtime_segment_path = session_dir.join("runtime").join("r001.jsonl");
+        {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .open(&runtime_segment_path)
+                .expect("open runtime segment");
+            writeln!(file, "{{ broken").expect("append corrupt line");
+        }
+
+        let lines = read_runtime_log_lines(&session_dir)
+            .expect("read repaired runtime lines")
+            .expect("runtime lines exist");
+        let cleaned = read_json_lines::<RuntimeLogEventLine>(&runtime_segment_path)
+            .expect("read cleaned runtime segment");
+        let corrupt_backups = fs::read_dir(session_dir.join("runtime"))
+            .expect("read runtime dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".corrupt-"))
+            .count();
+
+        assert_eq!(lines.len(), cleaned.len());
+        assert_eq!(lines.len(), 3);
+        let repair_event = match lines.last().map(|line| &line.event) {
+            Some(RuntimeLogEvent::RuntimeRepair(event)) => event,
+            _ => panic!("expected runtime repair event"),
+        };
+        assert!(repair_event.detail.contains("runtime/r001.jsonl lines 3"));
+        assert_eq!(corrupt_backups, 1);
+        assert!(session_dir.join(SEGMENTED_RUNTIME_INDEX_FILE).exists());
+    }
+
+    /// Verifies fully damaged runtime logs are regenerated from display transcript segments.
+    /// 验证完全损坏的 runtime 日志会从展示转录分段重新生成。
+    #[test]
+    fn runtime_log_full_corruption_falls_back_to_segmented_replay() {
+        let root = test_root("runtime_log_full_corruption_falls_back_to_segmented_replay");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages).expect("append messages");
+        let conversation_state = conversation_state_from_session_messages(&messages);
+        rebuild_runtime_log_from_conversation_state(
+            &session_dir,
+            &conversation_state,
+            "2026-06-09T10:00:00Z",
+        )
+        .expect("rebuild runtime log");
+        fs::write(session_dir.join("runtime").join("r001.jsonl"), "{ broken\n")
+            .expect("damage runtime segment");
+
+        let restored = ensure_runtime_log_from_segmented_context(&session_dir)
+            .expect("ensure runtime log")
+            .expect("restored conversation");
+        let lines = read_runtime_log_lines(&session_dir)
+            .expect("read rebuilt runtime lines")
+            .expect("runtime lines exist");
+
+        assert_eq!(restored.messages.len(), 2);
+        assert_eq!(restored.messages[0].id, "m-user-1");
+        assert_eq!(lines.len(), 2);
+    }
+
+    /// Verifies compaction runtime backups copy active files and keep only the newest five backups.
+    /// 验证压缩运行时备份会复制活动文件，并且仅保留最新五份备份。
+    #[test]
+    fn runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five() {
+        let root =
+            test_root("runtime_log_backup_before_compaction_copies_sources_and_keeps_latest_five");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let messages = vec![test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        )];
+        let conversation_state = conversation_state_from_session_messages(&messages);
+        rebuild_runtime_log_from_conversation_state(
+            &session_dir,
+            &conversation_state,
+            "2026-06-09T10:00:00Z",
+        )
+        .expect("rebuild runtime log");
+
+        for index in 0..6 {
+            let copied_files = backup_runtime_log_before_compaction(
+                &session_dir,
+                &format!("compaction-{index}"),
+                &format!("20260609{index:02}"),
+            )
+            .expect("backup runtime log");
+            assert!(
+                copied_files
+                    .iter()
+                    .any(|path| path.ends_with("runtime/r001.jsonl"))
+            );
+        }
+        let mut backup_names = fs::read_dir(session_dir.join(SEGMENTED_RUNTIME_BACKUP_DIR))
+            .expect("read backup dir")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+        backup_names.sort();
+
+        assert_eq!(backup_names.len(), 5);
+        assert!(
+            !backup_names
+                .iter()
+                .any(|name| name.contains("compaction-0"))
+        );
+        assert!(
+            backup_names
+                .iter()
+                .any(|name| name.contains("compaction-5"))
+        );
+        assert!(
+            backup_names
+                .iter()
+                .all(|name| name.contains("segment-r001"))
+        );
+        assert!(backup_names.iter().all(|name| name.contains("seq1-")));
+        assert!(backup_names.iter().any(|name| name.contains("seq1-6")));
+
+        let runtime_lines = read_runtime_log_lines(&session_dir)
+            .expect("read runtime log")
+            .expect("runtime log should exist");
+        let latest_compaction = runtime_lines
+            .iter()
+            .rev()
+            .find_map(|line| match &line.event {
+                RuntimeLogEvent::ContextCompactionApplied(event) => Some(event),
+                _ => None,
+            })
+            .expect("context compaction audit event should exist");
+        assert!(
+            latest_compaction
+                .backup_files
+                .iter()
+                .any(|path| path.ends_with("runtime/r001.jsonl"))
+        );
+        assert!(
+            latest_compaction
+                .compaction_fingerprint
+                .as_deref()
+                .is_some_and(|fingerprint| !fingerprint.is_empty())
+        );
+    }
+
+    /// Verifies runtime sync appends only new tail lines when the existing log is a prefix.
+    /// 验证现有日志是前缀时 runtime 同步只追加新的尾部行。
+    #[test]
+    fn runtime_log_sync_appends_tail_when_prefix_matches() {
+        let root = test_root("runtime_log_sync_appends_tail_when_prefix_matches");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let first_messages = vec![test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        )];
+        let first_state = conversation_state_from_session_messages(&first_messages);
+        let first_metadata =
+            sync_runtime_log_from_conversation_state(&session_dir, &first_state, "t1")
+                .expect("sync first runtime log");
+        let second_messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        let second_state = conversation_state_from_session_messages(&second_messages);
+
+        let second_metadata =
+            sync_runtime_log_from_conversation_state(&session_dir, &second_state, "t2")
+                .expect("append runtime tail");
+        let lines = read_runtime_log_lines(&session_dir)
+            .expect("read runtime lines")
+            .expect("runtime lines exist");
+
+        assert_eq!(first_metadata.created_at, "t1");
+        assert_eq!(second_metadata.created_at, "t1");
+        assert_eq!(second_metadata.updated_at, "t2");
+        assert_eq!(lines.len(), 2);
+    }
+
+    /// Verifies runtime sync rebuilds when the desired history is not prefixed by the existing log.
+    /// 验证目标历史不再以前缀匹配现有日志时 runtime 同步会重建。
+    #[test]
+    fn runtime_log_sync_rebuilds_when_prefix_mismatches() {
+        let root = test_root("runtime_log_sync_rebuilds_when_prefix_mismatches");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let first_state = conversation_state_from_session_messages(&[test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        )]);
+        sync_runtime_log_from_conversation_state(&session_dir, &first_state, "t1")
+            .expect("sync first runtime log");
+        let rewritten_state = conversation_state_from_session_messages(&[test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "rewritten prompt",
+        )]);
+
+        let rebuilt_metadata =
+            sync_runtime_log_from_conversation_state(&session_dir, &rewritten_state, "t3")
+                .expect("rebuild runtime log");
+        let restored = read_runtime_conversation_state(&session_dir)
+            .expect("read runtime conversation")
+            .expect("runtime conversation exists");
+
+        assert_eq!(rebuilt_metadata.created_at, "t3");
+        let vulcan_context::SessionConversationPayload::UserText { text, .. } =
+            &restored.messages[0].payload
+        else {
+            panic!("expected user text payload");
+        };
+        assert_eq!(text, "rewritten prompt");
+    }
+
+    /// Verifies runtime-only audit events survive a later canonical conversation rebuild.
+    /// 验证仅审计 runtime 事件会在后续规范会话重建后继续保留。
+    #[test]
+    fn runtime_log_sync_preserves_audit_events_when_rebuilding() {
+        let root = test_root("runtime_log_sync_preserves_audit_events_when_rebuilding");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let first_state = conversation_state_from_session_messages(&[test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        )]);
+        sync_runtime_log_from_conversation_state(&session_dir, &first_state, "t1")
+            .expect("sync first runtime log");
+        backup_runtime_log_before_compaction(&session_dir, "compaction-a", "t2")
+            .expect("record compaction backup");
+        record_runtime_injection_applied(
+            &session_dir,
+            "t3",
+            RuntimeInjectionAppliedEvent {
+                turn_id: Some(String::from("turn-a")),
+                combined_fingerprint: Some(String::from("combined-a")),
+                persistent_fingerprint: Some(String::from("persistent-a")),
+                transient_fingerprint: Some(String::from("transient-a")),
+                has_transient: true,
+                merged_baseline_fingerprint: None,
+                source_node_ids: vec![String::from("persistent:0:persistent-a")],
+            },
+        )
+        .expect("record injection audit");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::SystemUpdate(RuntimeSystemUpdateEvent {
+                turn_id: Some(String::from("turn-a")),
+                update_id: String::from("system-update-a"),
+                effective_after_event_id: None,
+                text: String::from("Use concise answers."),
+                trust: RuntimeSystemUpdateTrust::TrustedHost,
+                lowering_hint: RuntimeSystemUpdateLoweringHint::Auto,
+                fingerprint: Some(String::from("system-update-fp")),
+                source: Some(String::from("test")),
+            }),
+        )
+        .expect("record system update audit");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::InjectionCancelled(RuntimeInjectionCancelledEvent {
+                turn_id: Some(String::from("turn-a")),
+                cancellation_id: String::from("cancel-a"),
+                source_node_ids: vec![String::from("node-a")],
+                previous_persistent_fingerprint: Some(String::from("persistent-a")),
+                previous_transient_fingerprint: Some(String::from("transient-a")),
+                reason: Some(String::from("test cancellation")),
+            }),
+        )
+        .expect("record injection cancellation audit");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::InjectionMerged(RuntimeInjectionMergedEvent {
+                turn_id: Some(String::from("turn-a")),
+                merge_id: String::from("merge-a"),
+                compaction_id: Some(String::from("compaction-a")),
+                previous_persistent_fingerprint: Some(String::from("persistent-a")),
+                merged_baseline_fingerprint: Some(String::from("merged-a")),
+                source_node_ids: vec![String::from("node-a")],
+            }),
+        )
+        .expect("record injection merge audit");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::ProviderRequestCheckpoint(RuntimeProviderRequestCheckpointEvent {
+                turn_id: Some(String::from("turn-a")),
+                checkpoint_id: String::from("request-a"),
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude"),
+                provider_family: String::from("anthropic"),
+                capability_fingerprint: Some(String::from("cap-a")),
+                prompt_fingerprint: Some(String::from("prompt-a")),
+                injection_fingerprint: Some(String::from("inject-a")),
+                request_fingerprint: Some(String::from("request-fp-a")),
+                cache_policy_fingerprint: Some(String::from("cache-a")),
+                cache_policy_diagnostic: Some(String::from("cache_hints_unsupported")),
+                converter_version: 1,
+            }),
+        )
+        .expect("record provider request checkpoint");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::ProviderResponseCheckpoint(RuntimeProviderResponseCheckpointEvent {
+                turn_id: Some(String::from("turn-a")),
+                checkpoint_id: String::from("response-a"),
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude"),
+                provider_family: String::from("anthropic"),
+                finish_reason: Some(String::from("stop")),
+                native_state: Some(RuntimeProviderNativeStateEnvelope::new(
+                    "anthropic",
+                    "anthropic",
+                    "claude",
+                    json!({ "content": [] }),
+                )),
+                usage: None,
+            }),
+        )
+        .expect("record provider response checkpoint");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t3",
+            RuntimeLogEvent::ProviderLoweringRepair(RuntimeProviderLoweringRepairEvent {
+                turn_id: Some(String::from("turn-a")),
+                repair_id: String::from("lowering-repair-a"),
+                provider_id: String::from("anthropic"),
+                model_id: String::from("claude"),
+                provider_family: String::from("anthropic"),
+                action: String::from("fallback"),
+                reason: String::from("unsupported native system update"),
+                affected_items: 1,
+            }),
+        )
+        .expect("record provider lowering repair");
+        let rewritten_state = conversation_state_from_session_messages(&[
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "rewritten prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "rewritten answer",
+            ),
+        ]);
+
+        sync_runtime_log_from_conversation_state(&session_dir, &rewritten_state, "t4")
+            .expect("rebuild runtime log");
+        let lines = read_runtime_log_lines(&session_dir)
+            .expect("read runtime lines")
+            .expect("runtime lines exist");
+        let restored = read_runtime_conversation_state(&session_dir)
+            .expect("read runtime conversation")
+            .expect("runtime conversation exists");
+
+        assert_eq!(restored.messages.len(), 2);
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::ContextCompactionApplied(_)) })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::InjectionApplied(_)) })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::SystemUpdate(_)) })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::InjectionCancelled(_)) })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::InjectionMerged(_)) })
+        );
+        assert!(
+            lines.iter().any(|line| {
+                matches!(line.event, RuntimeLogEvent::ProviderRequestCheckpoint(_))
+            })
+        );
+        assert!(
+            lines.iter().any(|line| {
+                matches!(line.event, RuntimeLogEvent::ProviderResponseCheckpoint(_))
+            })
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| { matches!(line.event, RuntimeLogEvent::ProviderLoweringRepair(_)) })
+        );
     }
 
     /// Verifies child task sessions use the same segment model and begin with SubagentTaskMeta.

@@ -5,6 +5,10 @@ use crate::agent_runtime::provider_attachment::{
     build_attachment_transport_error_text, build_missing_attachment_replay_text,
     read_provider_attachment,
 };
+use crate::agent_runtime::provider_cache_policy::{
+    ANTHROPIC_MAX_CACHE_BREAKPOINTS, ProviderCacheHintSupport, ProviderCacheHintTarget,
+    default_provider_cache_candidates, lower_provider_cache_policy,
+};
 use crate::agent_runtime::provider_prompt_layers::provider_fallback_system_prompt;
 use crate::agent_runtime::provider_protocol_anthropic_client::normalize_anthropic_base_url;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
@@ -15,6 +19,7 @@ use crate::agent_runtime::provider_protocol_content::{
     ProviderAssistantContent, ProviderReasoningPart,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
+use crate::agent_runtime::provider_stream::ProviderStreamDelta;
 use crate::agent_runtime::provider_transport_http_support::{
     build_json_http_client, ensure_json_content_type, ensure_static_header, ensure_string_header,
     format_standard_error_response_with_headers,
@@ -31,6 +36,10 @@ use futures_util::StreamExt;
 use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, Value, json};
+use std::collections::BTreeSet;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use vulcan_context::{RuntimeProviderLoweringRepairEvent, RuntimeProviderNativeStateEnvelope};
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -42,6 +51,11 @@ use vulcan_core::types::{
 /// Latest Anthropic API version used by the host-owned direct transport.
 /// 宿主自有直连传输使用的最新 Anthropic API 版本。
 const ANTHROPIC_API_VERSION_LATEST: &str = "2023-06-01";
+
+/// Diagnostic marker used when unsafe Anthropic tool results are downgraded to text.
+/// 当不安全的 Anthropic 工具结果被降级为文本时使用的诊断标记。
+const ANTHROPIC_DOWNGRADED_TOOL_RESULT_MARKER: &str =
+    "Tool result could not be safely replayed as Anthropic tool_result";
 
 /// Provider-message-state key used to persist replayable Anthropic-native assistant content.
 /// 用于持久化可回放 Anthropic 原生助手内容的 provider_message_state 键名。
@@ -326,6 +340,7 @@ where
         build_anthropic_http_client(provider_id, provider_label, api_key, request_headers)?;
     let endpoint = build_anthropic_messages_endpoint(base_url);
     let payload = build_anthropic_request_payload(model_id, request, provider_tool_definitions)?;
+    emit_anthropic_lowering_repair_if_needed(live_sender, provider_id, model_id, &payload);
     let dry_run = provider_request_dry_run_active(api_key);
     let wire_request = emit_provider_wire_request(
         live_sender,
@@ -616,8 +631,13 @@ where
         &assistant_content,
         usage_snapshot,
     );
-    response.provider_message_state = (!finalized_provider_content_blocks.is_empty())
-        .then(|| build_anthropic_provider_message_state(&finalized_provider_content_blocks));
+    response.provider_message_state = (!finalized_provider_content_blocks.is_empty()).then(|| {
+        build_anthropic_provider_message_state(
+            provider_id,
+            model_id,
+            &finalized_provider_content_blocks,
+        )
+    });
     Ok(response)
 }
 
@@ -656,20 +676,50 @@ fn build_anthropic_messages_endpoint(base_url: Option<&str>) -> String {
     format!("{}/v1/messages", normalized_base.trim_end_matches('/'))
 }
 
-/// Wraps replayable Anthropic-native assistant content into the generic provider-message-state payload stored in canonical assistant messages.
-/// 将可回放的 Anthropic 原生助手内容包装成存入规范助手消息中的通用 provider_message_state 载荷。
-fn build_anthropic_provider_message_state(content: &[AnthropicContentBlock]) -> Value {
-    json!({
+/// Builds the Anthropic-native state payload stored in one scoped provider-state envelope.
+/// 构建存入带作用域 Provider 状态信封中的 Anthropic 原生状态载荷。
+fn build_anthropic_provider_message_state(
+    provider_id: &str,
+    model_id: &str,
+    content: &[AnthropicContentBlock],
+) -> Value {
+    let payload = json!({
         ANTHROPIC_PROVIDER_STATE_KEY: {
             "content": content
         }
+    });
+    serde_json::to_value(RuntimeProviderNativeStateEnvelope::new(
+        "anthropic",
+        provider_id,
+        model_id,
+        payload,
+    ))
+    .unwrap_or_else(|_| {
+        json!({
+            ANTHROPIC_PROVIDER_STATE_KEY: {
+                "content": content
+            }
+        })
     })
 }
 
 /// Restores replayable Anthropic-native assistant content from the generic provider-message-state payload when future history replay needs provider-native fidelity.
 /// 当后续历史回放需要 Provider 原生精度时，从通用 provider_message_state 载荷中恢复可回放的 Anthropic 原生助手内容。
-fn parse_anthropic_provider_message_state(state: &Value) -> Option<Vec<AnthropicContentBlock>> {
-    state
+fn parse_anthropic_provider_message_state(
+    state: &Value,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<Vec<AnthropicContentBlock>> {
+    let payload =
+        match serde_json::from_value::<RuntimeProviderNativeStateEnvelope>(state.clone()).ok() {
+            Some(envelope) if envelope.matches_scope("anthropic", provider_id, model_id) => {
+                envelope.payload
+            }
+            Some(_) => return None,
+            None => state.clone(),
+        };
+
+    payload
         .get(ANTHROPIC_PROVIDER_STATE_KEY)?
         .get("content")
         .cloned()
@@ -723,14 +773,279 @@ fn anthropic_user_tool_result_blocks(message: &Value) -> Option<Vec<Value>> {
     }
 
     let content = message.get("content").and_then(Value::as_array)?;
-    if content
-        .iter()
-        .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+    if !content.is_empty()
+        && content
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
     {
         Some(content.clone())
     } else {
         None
     }
+}
+
+/// Repairs Anthropic tool-result message topology before sending so provider switches never replay orphaned tool results as protocol-native blocks.
+/// 在发送前修复 Anthropic 工具结果消息拓扑，避免供应商切换时把孤儿工具结果按协议原生块重放。
+fn repair_anthropic_tool_result_topology(messages: Vec<Value>) -> Vec<Value> {
+    let mut repaired_messages = Vec::with_capacity(messages.len());
+    let mut pending_tool_use_ids: Option<BTreeSet<String>> = None;
+
+    for message in messages {
+        if let Some(tool_use_ids) = anthropic_assistant_tool_use_ids(&message) {
+            pending_tool_use_ids = Some(tool_use_ids);
+            repaired_messages.push(message);
+            continue;
+        }
+
+        let Some(user_content) = anthropic_user_content_blocks(&message) else {
+            pending_tool_use_ids = None;
+            repaired_messages.push(message);
+            continue;
+        };
+
+        let (tool_results, ordinary_blocks) =
+            split_anthropic_tool_result_blocks(user_content.clone());
+        if tool_results.is_empty() {
+            pending_tool_use_ids = None;
+            repaired_messages.push(message);
+            continue;
+        }
+
+        let every_tool_result_matches_pending_assistant =
+            pending_tool_use_ids.as_ref().is_some_and(|tool_use_ids| {
+                !tool_use_ids.is_empty()
+                    && tool_results.iter().all(|block| {
+                        anthropic_tool_result_id(block)
+                            .map(|tool_use_id| tool_use_ids.contains(tool_use_id))
+                            .unwrap_or(false)
+                    })
+            });
+
+        if every_tool_result_matches_pending_assistant {
+            push_anthropic_tool_result_user_message(&mut repaired_messages, tool_results);
+            if !ordinary_blocks.is_empty() {
+                repaired_messages.push(anthropic_user_message_from_content(ordinary_blocks));
+                pending_tool_use_ids = None;
+            }
+            continue;
+        }
+
+        if ordinary_blocks.is_empty() {
+            repaired_messages.push(anthropic_downgraded_tool_result_user_message(&tool_results));
+        } else {
+            repaired_messages.push(anthropic_mixed_downgraded_tool_result_user_message(
+                ordinary_blocks,
+                &tool_results,
+            ));
+        }
+        pending_tool_use_ids = None;
+    }
+
+    repaired_messages
+}
+
+/// Extracts cloned content blocks from one Anthropic user message.
+/// 从一条 Anthropic user 消息中提取克隆后的内容块。
+fn anthropic_user_content_blocks(message: &Value) -> Option<Vec<Value>> {
+    let role = message.get("role").and_then(Value::as_str)?;
+    if role != "user" {
+        return None;
+    }
+    message.get("content").and_then(Value::as_array).cloned()
+}
+
+/// Splits Anthropic user content into protocol-native tool results and ordinary user blocks.
+/// 将 Anthropic user 内容拆分为协议原生工具结果块与普通用户内容块。
+fn split_anthropic_tool_result_blocks(content: Vec<Value>) -> (Vec<Value>, Vec<Value>) {
+    let mut tool_results = Vec::new();
+    let mut ordinary_blocks = Vec::new();
+
+    for block in content {
+        if block.get("type").and_then(Value::as_str) == Some("tool_result") {
+            tool_results.push(block);
+        } else {
+            ordinary_blocks.push(block);
+        }
+    }
+
+    (tool_results, ordinary_blocks)
+}
+
+/// Builds one Anthropic user message from already normalized content blocks.
+/// 根据已规范化的内容块构建一条 Anthropic user 消息。
+fn anthropic_user_message_from_content(content: Vec<Value>) -> Value {
+    json!({
+        "role": "user",
+        "content": content
+    })
+}
+
+/// Pushes or extends one Anthropic tool-result user message so consecutive valid tool results remain a single legal follow-up message.
+/// 推入或扩展一条 Anthropic 工具结果 user 消息，确保连续合法工具结果仍保持为单条后续消息。
+fn push_anthropic_tool_result_user_message(messages: &mut Vec<Value>, tool_results: Vec<Value>) {
+    if let Some(previous_message) = messages.last_mut()
+        && anthropic_user_tool_result_blocks(previous_message).is_some()
+        && let Some(previous_content) = previous_message
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+    {
+        previous_content.extend(tool_results);
+        return;
+    }
+
+    messages.push(anthropic_user_message_from_content(tool_results));
+}
+
+/// Extracts provider-visible Anthropic tool-use identifiers from one assistant message when it can legally accept a following tool-result message.
+/// 从一条可合法承接后续工具结果的 assistant 消息中提取 Provider 可见的 Anthropic 工具使用标识。
+fn anthropic_assistant_tool_use_ids(message: &Value) -> Option<BTreeSet<String>> {
+    let role = message.get("role").and_then(Value::as_str)?;
+    if role != "assistant" {
+        return None;
+    }
+
+    let content = message.get("content").and_then(Value::as_array)?;
+    let tool_use_ids = content
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter_map(|block| block.get("id").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|tool_use_id| !tool_use_id.is_empty())
+        .map(String::from)
+        .collect::<BTreeSet<_>>();
+
+    (!tool_use_ids.is_empty()).then_some(tool_use_ids)
+}
+
+/// Extracts one Anthropic tool-result identifier from a content block.
+/// 从一个 Anthropic 工具结果内容块中提取工具使用标识。
+fn anthropic_tool_result_id(block: &Value) -> Option<&str> {
+    let block_type = block.get("type").and_then(Value::as_str)?;
+    if block_type != "tool_result" {
+        return None;
+    }
+    block
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|tool_use_id| !tool_use_id.is_empty())
+}
+
+/// Converts unsafe Anthropic-native tool results into ordinary user text while preserving their diagnostic payload.
+/// 将不安全的 Anthropic 原生工具结果转换为普通用户文本，同时保留其诊断载荷。
+fn anthropic_downgraded_tool_result_user_message(tool_results: &[Value]) -> Value {
+    json!({
+        "role": "user",
+        "content": [{
+            "type": "text",
+            "text": anthropic_downgraded_tool_result_text(tool_results)
+        }]
+    })
+}
+
+/// Converts unsafe Anthropic-native tool results into ordinary user text while preserving any non-tool user content that had been batched with them.
+/// 将不安全的 Anthropic 原生工具结果转换为普通用户文本，同时保留与其同批混入的非工具用户内容。
+fn anthropic_mixed_downgraded_tool_result_user_message(
+    mut ordinary_blocks: Vec<Value>,
+    tool_results: &[Value],
+) -> Value {
+    ordinary_blocks.push(json!({
+        "type": "text",
+        "text": anthropic_downgraded_tool_result_text(tool_results)
+    }));
+    anthropic_user_message_from_content(ordinary_blocks)
+}
+
+/// Builds a replay-safe text representation for tool results that cannot satisfy Anthropic's strict adjacency rule.
+/// 为无法满足 Anthropic 严格相邻规则的工具结果构建可安全回放的文本表示。
+fn anthropic_downgraded_tool_result_text(tool_results: &[Value]) -> String {
+    let mut text = format!(
+        "{ANTHROPIC_DOWNGRADED_TOOL_RESULT_MARKER} because no immediately preceding matching tool_use was present."
+    );
+
+    for tool_result in tool_results {
+        text.push_str("\n\n<tool_result");
+        if let Some(tool_use_id) = anthropic_tool_result_id(tool_result) {
+            text.push_str(" tool_use_id=\"");
+            text.push_str(tool_use_id);
+            text.push('"');
+        }
+        text.push_str(">\n");
+        text.push_str(
+            &serde_json::to_string_pretty(tool_result).unwrap_or_else(|_| tool_result.to_string()),
+        );
+        text.push_str("\n</tool_result>");
+    }
+
+    text
+}
+
+/// Emits an audit event when the final Anthropic payload contains downgraded tool results.
+/// 当最终 Anthropic 载荷包含已降级工具结果时发出审计事件。
+fn emit_anthropic_lowering_repair_if_needed(
+    live_sender: &ProviderLiveDeltaSender,
+    provider_id: &str,
+    model_id: &str,
+    payload: &Value,
+) {
+    let affected_items = anthropic_downgraded_tool_result_count(payload);
+    if affected_items == 0 {
+        return;
+    }
+
+    let event = RuntimeProviderLoweringRepairEvent {
+        turn_id: None,
+        repair_id: format!(
+            "anthropic-tool-result-topology-{}",
+            stable_anthropic_lowering_repair_hash(provider_id, model_id, payload)
+        ),
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        provider_family: String::from("anthropic"),
+        action: String::from("downgrade_orphan_tool_result_to_text"),
+        reason: String::from(
+            "Anthropic requires each tool_result to immediately follow a matching assistant tool_use.",
+        ),
+        affected_items,
+    };
+    let _ = live_sender.send(Ok(ProviderStreamDelta::LoweringRepair(event)));
+}
+
+/// Counts downgraded Anthropic tool results in the final wire payload.
+/// 统计最终线协议载荷中已降级的 Anthropic 工具结果数量。
+fn anthropic_downgraded_tool_result_count(payload: &Value) -> usize {
+    payload
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|message| message.get("content").and_then(Value::as_array))
+        .flat_map(|content| content.iter())
+        .filter_map(|block| {
+            if block.get("type").and_then(Value::as_str) != Some("text") {
+                return None;
+            }
+            block.get("text").and_then(Value::as_str)
+        })
+        .filter(|text| text.contains(ANTHROPIC_DOWNGRADED_TOOL_RESULT_MARKER))
+        .map(|text| text.matches("<tool_result").count().max(1))
+        .sum()
+}
+
+/// Builds a stable audit hash for one Anthropic lowering repair event.
+/// 为单个 Anthropic 转换修复事件构建稳定审计哈希。
+fn stable_anthropic_lowering_repair_hash(
+    provider_id: &str,
+    model_id: &str,
+    payload: &Value,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    provider_id.hash(&mut hasher);
+    model_id.hash(&mut hasher);
+    if let Ok(serialized_payload) = serde_json::to_string(payload) {
+        serialized_payload.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
 }
 
 /// Builds the final Anthropic JSON payload from one host-controlled turn request and tool schema set.
@@ -764,38 +1079,160 @@ fn build_anthropic_request_payload(
     payload.insert(String::from("stream"), Value::Bool(true));
 
     if !system_prompt.trim().is_empty() {
-        payload.insert(
-            String::from("system"),
-            Value::Array(vec![json!({
-                "type": "text",
-                "text": system_prompt
-            })]),
-        );
+        let mut system_block = json!({
+            "type": "text",
+            "text": system_prompt
+        });
+        apply_anthropic_system_cache_control(&mut system_block);
+        payload.insert(String::from("system"), Value::Array(vec![system_block]));
     }
 
     if let Some(temperature) = snapshot.temperature {
         payload.insert(String::from("temperature"), json!(temperature));
     }
 
-    payload.insert(
-        String::from("messages"),
-        Value::Array(coalesce_consecutive_anthropic_user_messages(
-            current_history
-                .iter()
-                .map(|message| {
-                    core_message_to_anthropic_message(message, provider_tool_definitions)
-                })
-                .chain(std::iter::once(core_message_to_anthropic_message(
-                    &current_prompt,
-                    provider_tool_definitions,
-                )))
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-    );
+    let anthropic_messages = current_history
+        .iter()
+        .map(|message| {
+            core_message_to_anthropic_message(
+                message,
+                provider_tool_definitions,
+                snapshot.provider_id.as_str(),
+                snapshot.model_id.as_str(),
+            )
+        })
+        .chain(std::iter::once(core_message_to_anthropic_message(
+            &current_prompt,
+            provider_tool_definitions,
+            snapshot.provider_id.as_str(),
+            snapshot.model_id.as_str(),
+        )))
+        .collect::<Result<Vec<_>, _>>()?;
+    let anthropic_messages = coalesce_consecutive_anthropic_user_messages(anthropic_messages);
+    let mut anthropic_messages = repair_anthropic_tool_result_topology(anthropic_messages);
+    apply_anthropic_message_cache_control(&mut anthropic_messages);
+    payload.insert(String::from("messages"), Value::Array(anthropic_messages));
 
     append_anthropic_function_tools(&mut payload, provider_tool_definitions)?;
+    apply_anthropic_tool_definition_cache_control(&mut payload);
 
     Ok(Value::Object(payload))
+}
+
+/// Applies Anthropic ephemeral cache-control to one selected system block when the neutral policy chooses the system breakpoint.
+/// 当中立策略选择 system 断点时，为单个 Anthropic system block 应用 ephemeral cache-control。
+fn apply_anthropic_system_cache_control(system_block: &mut Value) {
+    let selected_targets = selected_anthropic_cache_targets();
+    let should_cache_system = selected_targets.contains(&ProviderCacheHintTarget::System);
+    if should_cache_system && let Some(object) = system_block.as_object_mut() {
+        insert_anthropic_ephemeral_cache_control(object);
+    }
+}
+
+/// Returns the provider-neutral cache targets that Anthropic can express in this request.
+/// 返回 Anthropic 在本次请求中可以表达的 Provider 中立缓存目标。
+fn selected_anthropic_cache_targets() -> Vec<ProviderCacheHintTarget> {
+    lower_provider_cache_policy(
+        &default_provider_cache_candidates(),
+        ProviderCacheHintSupport::AnthropicEphemeral {
+            max_breakpoints: ANTHROPIC_MAX_CACHE_BREAKPOINTS,
+        },
+    )
+    .selected
+    .into_iter()
+    .map(|breakpoint| breakpoint.target)
+    .collect()
+}
+
+/// Applies Anthropic ephemeral cache-control to selected message content blocks after topology repair.
+/// 在拓扑修复完成后，把 Anthropic ephemeral 缓存控制应用到已选消息内容块。
+fn apply_anthropic_message_cache_control(messages: &mut [Value]) {
+    let selected_targets = selected_anthropic_cache_targets();
+    if selected_targets.contains(&ProviderCacheHintTarget::LastToolResult) {
+        apply_anthropic_cache_control_to_latest_tool_result(messages);
+    }
+    if selected_targets.contains(&ProviderCacheHintTarget::LastUser) {
+        apply_anthropic_cache_control_to_latest_user_block(messages);
+    }
+}
+
+/// Applies cache-control to the latest Anthropic function tool definition when the neutral policy selects tool-definition caching.
+/// 当中立策略选择工具定义缓存时，将缓存控制应用到最新的 Anthropic 函数工具定义。
+fn apply_anthropic_tool_definition_cache_control(payload: &mut JsonMap<String, Value>) {
+    let selected_targets = selected_anthropic_cache_targets();
+    if !selected_targets.contains(&ProviderCacheHintTarget::LastToolDefinition) {
+        return;
+    }
+
+    let Some(tools) = payload.get_mut("tools").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let Some(tool) = tools.iter_mut().rev().find(|tool| {
+        tool.get("input_schema").is_some()
+            && tool
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| !name.trim().is_empty())
+    }) else {
+        return;
+    };
+    if let Some(object) = tool.as_object_mut() {
+        insert_anthropic_ephemeral_cache_control(object);
+    }
+}
+
+/// Applies cache-control to the latest valid Anthropic `tool_result` block.
+/// 将缓存控制应用到最新的合法 Anthropic `tool_result` 内容块。
+fn apply_anthropic_cache_control_to_latest_tool_result(messages: &mut [Value]) {
+    for message in messages.iter_mut().rev() {
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let Some(block) = content
+            .iter_mut()
+            .rev()
+            .find(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        else {
+            continue;
+        };
+        if let Some(object) = block.as_object_mut() {
+            insert_anthropic_ephemeral_cache_control(object);
+        }
+        return;
+    }
+}
+
+/// Applies cache-control to the latest user-authored Anthropic content block.
+/// 将缓存控制应用到最新的用户创作 Anthropic 内容块。
+fn apply_anthropic_cache_control_to_latest_user_block(messages: &mut [Value]) {
+    for message in messages.iter_mut().rev() {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            continue;
+        }
+        let Some(content) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let Some(block) = content
+            .iter_mut()
+            .rev()
+            .find(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
+        else {
+            continue;
+        };
+        if let Some(object) = block.as_object_mut() {
+            insert_anthropic_ephemeral_cache_control(object);
+        }
+        return;
+    }
+}
+
+/// Inserts Anthropic ephemeral cache-control into one JSON object block.
+/// 向单个 JSON 对象内容块写入 Anthropic ephemeral 缓存控制。
+fn insert_anthropic_ephemeral_cache_control(object: &mut JsonMap<String, Value>) {
+    object.insert(
+        String::from("cache_control"),
+        json!({ "type": "ephemeral" }),
+    );
 }
 
 /// Appends Anthropic function tools without replacing provider-native server tools already present in the payload.
@@ -853,6 +1290,8 @@ fn extract_anthropic_max_tokens(model_id: &str, payload: &mut JsonMap<String, Va
 fn core_message_to_anthropic_message(
     message: &CoreConversationMessage,
     provider_tool_definitions: &[ProviderToolDefinition],
+    provider_id: &str,
+    model_id: &str,
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
@@ -927,10 +1366,9 @@ fn core_message_to_anthropic_message(
             tool_calls,
             ..
         } => {
-            if let Some(content) = provider_message_state
-                .as_ref()
-                .and_then(parse_anthropic_provider_message_state)
-            {
+            if let Some(content) = provider_message_state.as_ref().and_then(|state| {
+                parse_anthropic_provider_message_state(state, provider_id, model_id)
+            }) {
                 let replayable_content =
                     repair_replayable_anthropic_provider_content(content, tool_calls);
                 return Ok(json!({
@@ -1230,9 +1668,10 @@ mod tests {
     use super::{
         AnthropicContentBlock, PendingAnthropicServerToolUse, PendingAnthropicToolUse,
         anthropic_content_block_from_pending_server_tool_use,
-        anthropic_content_block_from_pending_tool_use, build_anthropic_provider_message_state,
+        anthropic_content_block_from_pending_tool_use, anthropic_downgraded_tool_result_count,
+        anthropic_user_tool_result_blocks, build_anthropic_provider_message_state,
         build_anthropic_provider_tool_name, build_anthropic_request_payload,
-        finalize_pending_anthropic_tool_use,
+        finalize_pending_anthropic_tool_use, repair_anthropic_tool_result_topology,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -1273,6 +1712,250 @@ mod tests {
             preview_local_path: None,
             mime_type: String::from(mime_type),
         }
+    }
+
+    /// Builds one reusable Anthropic request snapshot for request-payload topology tests.
+    /// 构建一份供请求载荷拓扑测试复用的 Anthropic 请求快照。
+    fn build_test_request_snapshot(prompt: &str) -> CoreProviderRequestSnapshot {
+        CoreProviderRequestSnapshot {
+            provider_id: String::from("anthropic"),
+            model_id: String::from("claude-sonnet-4-6"),
+            system_prompt: String::from("system prompt"),
+            prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                String::from("system prompt"),
+            ),
+            prompt: String::from(prompt),
+            history: Vec::new(),
+            temperature: Some(0.2),
+            max_turns: 8,
+            tool_schemas: Vec::new(),
+            additional_params: Some(json!({})),
+            request_headers: None,
+            continuation: CoreProviderContinuation::default(),
+        }
+    }
+
+    /// Verifies Anthropic request payloads attach an ephemeral cache-control hint to the stable system block.
+    /// 验证 Anthropic 请求载荷会把 ephemeral 缓存提示附加到稳定 system block。
+    #[test]
+    fn request_payload_marks_system_block_with_ephemeral_cache_control() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("hello"),
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("hello"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("anthropic payload should build");
+
+        assert_eq!(
+            payload["system"][0]["cache_control"]["type"],
+            json!("ephemeral")
+        );
+    }
+
+    /// Verifies Anthropic request payloads attach an ephemeral cache-control hint to the latest user-authored block.
+    /// 验证 Anthropic 请求载荷会把 ephemeral 缓存提示附加到最新用户创作内容块。
+    #[test]
+    fn request_payload_marks_latest_user_block_with_ephemeral_cache_control() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("new prompt"),
+            current_history: vec![CoreConversationMessage {
+                id: String::from("user-0"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("old prompt"),
+                    attachments: Vec::new(),
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("new prompt"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("anthropic payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let latest_content = messages[1]["content"]
+            .as_array()
+            .expect("content should be an array")
+            .last()
+            .expect("latest user block should exist");
+
+        assert_eq!(latest_content["text"], "new prompt");
+        assert_eq!(latest_content["cache_control"]["type"], "ephemeral");
+    }
+
+    /// Verifies Anthropic request payloads attach an ephemeral cache-control hint to the latest tool result block.
+    /// 验证 Anthropic 请求载荷会把 ephemeral 缓存提示附加到最新工具结果内容块。
+    #[test]
+    fn request_payload_marks_latest_tool_result_block_with_ephemeral_cache_control() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("tool result body"),
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("我会读取文件。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: json!({ "path": "src/main.rs" }),
+                    }],
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+        )
+        .expect("anthropic payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let tool_result = &messages[1]["content"][0];
+
+        assert_eq!(tool_result["type"], "tool_result");
+        assert_eq!(tool_result["tool_use_id"], "call-1");
+        assert_eq!(tool_result["cache_control"]["type"], "ephemeral");
+    }
+
+    /// Verifies Anthropic request payloads attach an ephemeral cache-control hint to the latest tool definition.
+    /// 验证 Anthropic 请求载荷会把 ephemeral 缓存提示附加到最新工具定义。
+    #[test]
+    fn request_payload_marks_latest_tool_definition_with_ephemeral_cache_control() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("hello"),
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("hello"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[
+                ProviderToolDefinition {
+                    name: String::from("read_file"),
+                    description: String::from("Read one file"),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" }
+                        },
+                        "required": ["path"]
+                    }),
+                },
+                ProviderToolDefinition {
+                    name: String::from("write_file"),
+                    description: String::from("Write one file"),
+                    parameters: json!({
+                        "type": "object",
+                        "properties": {
+                            "path": { "type": "string" },
+                            "content": { "type": "string" }
+                        },
+                        "required": ["path", "content"]
+                    }),
+                },
+            ],
+        )
+        .expect("anthropic payload should build");
+
+        assert!(payload["tools"][0].get("cache_control").is_none());
+        assert_eq!(payload["tools"][1]["name"], "write_file");
+        assert_eq!(payload["tools"][1]["cache_control"]["type"], "ephemeral");
+    }
+
+    /// Verifies the Anthropic golden payload keeps the stable system block, cache hint, text prompt, and image part shape.
+    /// 验证 Anthropic golden 载荷会保留稳定 system 块、缓存提示、文本提示与图片 Part 形状。
+    #[test]
+    fn golden_fixture_anthropic_image_understanding_payload_shape() {
+        let attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "scene.png",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("请分析这张图片"),
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-image"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("请分析这张图片"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("anthropic golden payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("content should be an array");
+
+        assert_eq!(payload["model"], "claude-sonnet-4-6");
+        assert_eq!(payload["system"][0]["type"], "text");
+        assert_eq!(payload["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "请分析这张图片");
+        assert_eq!(content[1]["type"], "image");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "AAECAw==");
+
+        let _ = std::fs::remove_file(&attachment.local_path);
     }
 
     /// Verifies the direct Anthropic request payload replays legacy tool-turn reasoning blocks while preserving tool-use and tool-result message shapes.
@@ -1548,20 +2231,24 @@ mod tests {
     /// 验证一份已存储的 Anthropic provider_message_state 能在后续历史回放中保留原生 thinking 签名与 Provider 可见工具元数据。
     #[test]
     fn request_payload_replays_stored_anthropic_provider_message_state() {
-        let assistant_state = build_anthropic_provider_message_state(&[
-            AnthropicContentBlock::Thinking {
-                thinking: String::from("先检查目录。"),
-                signature: Some(String::from("sig-1")),
-            },
-            AnthropicContentBlock::Text {
-                text: String::from("我先读取文件。"),
-            },
-            AnthropicContentBlock::ToolUse {
-                id: String::from("call-1"),
-                name: String::from("functions_shell_command"),
-                input: json!({ "command": "Get-ChildItem" }),
-            },
-        ]);
+        let assistant_state = build_anthropic_provider_message_state(
+            "anthropic",
+            "claude-sonnet-4-6",
+            &[
+                AnthropicContentBlock::Thinking {
+                    thinking: String::from("先检查目录。"),
+                    signature: Some(String::from("sig-1")),
+                },
+                AnthropicContentBlock::Text {
+                    text: String::from("我先读取文件。"),
+                },
+                AnthropicContentBlock::ToolUse {
+                    id: String::from("call-1"),
+                    name: String::from("functions_shell_command"),
+                    input: json!({ "command": "Get-ChildItem" }),
+                },
+            ],
+        );
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("anthropic"),
@@ -1811,28 +2498,32 @@ mod tests {
     /// 验证 Anthropic 请求回放会修复历史上已存入空白 tool-use id 的 provider-message-state，从而让旧的损坏会话仍能重放并行工具结果。
     #[test]
     fn request_payload_repairs_stored_blank_tool_use_ids_for_parallel_tool_results() {
-        let assistant_state = build_anthropic_provider_message_state(&[
-            AnthropicContentBlock::ToolUse {
-                id: String::new(),
-                name: String::from("spawn_agent"),
-                input: json!({ "task": "delegate-1" }),
-            },
-            AnthropicContentBlock::ToolUse {
-                id: String::new(),
-                name: String::from("spawn_agent"),
-                input: json!({ "task": "delegate-2" }),
-            },
-            AnthropicContentBlock::ToolUse {
-                id: String::new(),
-                name: String::from("spawn_agent"),
-                input: json!({ "task": "delegate-3" }),
-            },
-            AnthropicContentBlock::ToolUse {
-                id: String::new(),
-                name: String::from("spawn_agent"),
-                input: json!({ "task": "delegate-4" }),
-            },
-        ]);
+        let assistant_state = build_anthropic_provider_message_state(
+            "anthropic",
+            "claude-sonnet-4-6",
+            &[
+                AnthropicContentBlock::ToolUse {
+                    id: String::new(),
+                    name: String::from("spawn_agent"),
+                    input: json!({ "task": "delegate-1" }),
+                },
+                AnthropicContentBlock::ToolUse {
+                    id: String::new(),
+                    name: String::from("spawn_agent"),
+                    input: json!({ "task": "delegate-2" }),
+                },
+                AnthropicContentBlock::ToolUse {
+                    id: String::new(),
+                    name: String::from("spawn_agent"),
+                    input: json!({ "task": "delegate-3" }),
+                },
+                AnthropicContentBlock::ToolUse {
+                    id: String::new(),
+                    name: String::from("spawn_agent"),
+                    input: json!({ "task": "delegate-4" }),
+                },
+            ],
+        );
         let request = OpenAiCompatibleCoreTurnRequest {
             snapshot: CoreProviderRequestSnapshot {
                 provider_id: String::from("anthropic"),
@@ -2082,6 +2773,223 @@ mod tests {
         assert_eq!(tool_results[1]["tool_use_id"], "call-2");
         assert_eq!(tool_results[2]["tool_use_id"], "call-3");
         assert_eq!(tool_results[3]["tool_use_id"], "call-4");
+    }
+
+    /// Verifies empty user content is not treated as a tool-result-only Anthropic message.
+    /// 验证空 user 内容不会被误判为仅包含工具结果的 Anthropic 消息。
+    #[test]
+    fn anthropic_user_tool_result_blocks_ignores_empty_user_content() {
+        let message = json!({
+            "role": "user",
+            "content": []
+        });
+
+        assert!(anthropic_user_tool_result_blocks(&message).is_none());
+    }
+
+    /// Verifies mixed Anthropic user content is split so a valid tool result remains adjacent to its assistant tool-use while ordinary text stays replayable.
+    /// 验证混合 Anthropic user 内容会被拆分，使合法工具结果仍紧邻其 assistant 工具调用，同时普通文本仍可回放。
+    #[test]
+    fn repair_anthropic_tool_result_topology_splits_mixed_valid_tool_result_content() {
+        let repaired = repair_anthropic_tool_result_topology(vec![
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "image_generation",
+                    "input": { "prompt": "mountain" }
+                }]
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "historical note"
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": [{
+                            "type": "text",
+                            "text": "tool result body"
+                        }]
+                    }
+                ]
+            }),
+        ]);
+
+        assert_eq!(repaired.len(), 3);
+        assert_eq!(repaired[1]["role"], "user");
+        assert_eq!(repaired[1]["content"][0]["type"], "tool_result");
+        assert_eq!(repaired[1]["content"][0]["tool_use_id"], "call-1");
+        assert_eq!(repaired[2]["role"], "user");
+        assert_eq!(repaired[2]["content"][0]["type"], "text");
+        assert_eq!(repaired[2]["content"][0]["text"], "historical note");
+    }
+
+    /// Verifies mixed Anthropic user content downgrades a tool result after ordinary text has broken the required assistant adjacency.
+    /// 验证普通文本已打断必需的 assistant 相邻关系后，混合 Anthropic user 内容中的工具结果会被降级。
+    #[test]
+    fn repair_anthropic_tool_result_topology_downgrades_mixed_orphan_after_user_text() {
+        let repaired = repair_anthropic_tool_result_topology(vec![
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "call-1",
+                    "name": "image_generation",
+                    "input": { "prompt": "mountain" }
+                }]
+            }),
+            json!({
+                "role": "user",
+                "content": [{
+                    "type": "text",
+                    "text": "historical interruption"
+                }]
+            }),
+            json!({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "preserved note"
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call-1",
+                        "content": [{
+                            "type": "text",
+                            "text": "tool result body"
+                        }]
+                    }
+                ]
+            }),
+        ]);
+
+        assert_eq!(repaired.len(), 3);
+        let content = repaired[2]["content"]
+            .as_array()
+            .expect("mixed downgraded content should be an array");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "preserved note");
+        assert_eq!(content[1]["type"], "text");
+        assert!(
+            content[1]["text"]
+                .as_str()
+                .expect("downgraded content should be text")
+                .contains("no immediately preceding matching tool_use")
+        );
+    }
+
+    /// Verifies Anthropic request payloads downgrade an orphan tool result into ordinary user text instead of sending an illegal leading tool_result block.
+    /// 验证 Anthropic 请求载荷会把孤儿工具结果降级为普通用户文本，而不是发送非法的前置 tool_result 内容块。
+    #[test]
+    fn request_payload_downgrades_leading_orphan_tool_result() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("tool result body"),
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-1")),
+                    text: String::from("tool result body"),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload("claude-sonnet-4-6", request, &[])
+            .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[0]["content"]
+            .as_array()
+            .expect("downgraded content should be an array");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(anthropic_downgraded_tool_result_count(&payload), 1);
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .expect("downgraded content should be text")
+                .contains("no immediately preceding matching tool_use")
+        );
+    }
+
+    /// Verifies Anthropic request payloads downgrade tool results whose ids do not match the immediately preceding assistant tool-use batch.
+    /// 验证 Anthropic 请求载荷会降级与紧邻上一条 assistant 工具调用批次不匹配的工具结果。
+    #[test]
+    fn request_payload_downgrades_mismatched_tool_result_id() {
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: build_test_request_snapshot("tool result body"),
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("我先调用工具。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("resp-1")),
+                    provider_message_state: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("tool-1"),
+                        tool_call_id: Some(String::from("call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: json!({ "path": "src/main.rs" }),
+                    }],
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("call-2")),
+                    text: String::from("tool result body"),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_anthropic_request_payload(
+            "claude-sonnet-4-6",
+            request,
+            &[ProviderToolDefinition {
+                name: String::from("read_file"),
+                description: String::from("Read one file"),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" }
+                    },
+                    "required": ["path"]
+                }),
+            }],
+        )
+        .expect("payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("downgraded content should be an array");
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["content"][1]["id"], "call-1");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(anthropic_downgraded_tool_result_count(&payload), 1);
+        assert!(
+            content[0]["text"]
+                .as_str()
+                .expect("downgraded content should be text")
+                .contains("tool_use_id=\"call-2\"")
+        );
     }
 
     /// Verifies Anthropic tool-use finalization synthesizes one stable local identifier when the provider omits the upstream id.

@@ -2,11 +2,11 @@
 //! 从主工作区存储模块中抽取的会话加载辅助逻辑。
 
 use super::segmented_session_store::{
-    SegmentedSessionReplayResult, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, read_segmented_session_complete_tool_detail_turn,
-    read_segmented_session_event_window, read_segmented_session_tool_detail_window,
-    read_segmented_session_turn_window, read_state, replay_segmented_session_context,
-    segmented_lines_to_session_messages,
+    SegmentedSessionReplayResult, ensure_runtime_log_from_segmented_context,
+    find_segmented_session_directory, find_segmented_session_directory_by_id,
+    read_segmented_session_complete_tool_detail_turn, read_segmented_session_event_window,
+    read_segmented_session_tool_detail_window, read_segmented_session_turn_window, read_state,
+    replay_segmented_session_context, segmented_lines_to_session_messages,
 };
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
@@ -231,6 +231,55 @@ pub async fn load_session_history_page(
         locator.as_ref(),
         session_id,
         Some(before_ordinal),
+        requested_limit,
+    )? {
+        return Ok(SessionHistoryPage {
+            session_id,
+            messages: window.messages,
+            tool_detail_messages: window.tool_detail_messages,
+            earliest_ordinal: window.earliest_ordinal,
+            has_more_history: window.has_more_history,
+        });
+    }
+    Ok(SessionHistoryPage {
+        session_id,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        earliest_ordinal: None,
+        has_more_history: false,
+    })
+}
+
+/// Lazily loads the latest transcript window without hydrating runtime state.
+/// 懒加载最近转录窗口，但不水合运行态。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `session_id` selects the session to read.
+/// `session_id` 选择要读取的会话。
+/// `requested_limit` is the requested recent-turn window size before clamping.
+/// `requested_limit` 是裁剪前请求的最近轮次窗口大小。
+///
+/// # Returns
+/// 返回值
+/// A recent transcript page suitable for display-only WebUI hydration.
+/// 返回适合 WebUI 仅展示水合使用的最近转录页。
+pub async fn load_session_transcript_window(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_limit: usize,
+) -> Result<SessionHistoryPage, String> {
+    let requested_limit = requested_limit
+        .max(1)
+        .min(SESSION_TRANSCRIPT_WINDOW_MAX_TURN_LIMIT);
+    let locator = query_session_locator(&controller, session_id).await?;
+    if let Some(window) = load_segmented_window_messages(
+        &controller,
+        locator.as_ref(),
+        session_id,
+        None,
         requested_limit,
     )? {
         return Ok(SessionHistoryPage {
@@ -568,12 +617,21 @@ fn load_segmented_runtime_state(
     else {
         return Ok(None);
     };
+    let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
-        return runtime_state_from_segmented_replay(session_id, &session_dir);
+        return runtime_state_from_runtime_or_segmented_replay(
+            session_id,
+            runtime_conversation_state,
+            &session_dir,
+        );
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
     if !has_runtime_state && state_document.current_context.is_null() {
-        return runtime_state_from_segmented_replay(session_id, &session_dir);
+        return runtime_state_from_runtime_or_segmented_replay(
+            session_id,
+            runtime_conversation_state,
+            &session_dir,
+        );
     }
     let mut runtime_state = if has_runtime_state {
         serde_json::from_value::<SessionRuntimeStateEntry>(state_document.runtime_state)
@@ -586,13 +644,42 @@ fn load_segmented_runtime_state(
     if runtime_state.updated_at.trim().is_empty() && !state_document.updated_at.trim().is_empty() {
         runtime_state.updated_at = state_document.updated_at;
     }
-    if !has_runtime_state && !applied_context {
+    if let Some(conversation_state) = runtime_conversation_state {
+        runtime_state.conversation_state = conversation_state;
+    }
+    if !has_runtime_state
+        && !applied_context
+        && runtime_state.conversation_state.messages.is_empty()
+        && runtime_state.conversation_state.records.is_empty()
+    {
         return Ok(None);
     }
     let _ =
         repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
     let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
     Ok(Some(runtime_state))
+}
+
+/// Rebuilds runtime state from runtime JSONL when available, otherwise falls back to segmented replay.
+/// 优先从 runtime JSONL 重建运行态，不可用时回退到分段展示重放。
+fn runtime_state_from_runtime_or_segmented_replay(
+    session_id: SessionId,
+    runtime_conversation_state: Option<SessionConversationState>,
+    session_dir: &std::path::Path,
+) -> Result<Option<SessionRuntimeStateEntry>, String> {
+    if let Some(conversation_state) = runtime_conversation_state {
+        let mut runtime_state = SessionRuntimeStateEntry {
+            conversation_state,
+            updated_at: current_unix_millis_text(),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let _ = repair_duplicate_conversation_record_ids(
+            session_id,
+            &mut runtime_state.conversation_state,
+        );
+        return Ok(Some(runtime_state));
+    }
+    runtime_state_from_segmented_replay(session_id, session_dir)
 }
 
 /// Rebuilds runtime state from segmented JSONL replay when state.json has no usable context.

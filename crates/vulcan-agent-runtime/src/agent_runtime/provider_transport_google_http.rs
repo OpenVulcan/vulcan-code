@@ -13,7 +13,7 @@ use crate::agent_runtime::provider_protocol_content::{
 use crate::agent_runtime::provider_protocol_gemini::{
     GeminiCandidate, GeminiContent, GeminiFunctionCall, GeminiFunctionCallingConfig,
     GeminiFunctionDeclaration, GeminiFunctionResponse, GeminiPart, GeminiStreamingChunk,
-    GeminiTool, GeminiToolConfig, build_gemini_provider_message_state,
+    GeminiTool, GeminiToolConfig, build_scoped_gemini_provider_message_state,
     parse_gemini_provider_message_state,
 };
 use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
@@ -210,8 +210,13 @@ where
             .map(ProviderAssistantContent::ToolCall),
     );
 
-    let provider_message_state = (!finalized_parts.is_empty())
-        .then(|| build_gemini_provider_message_state(&GeminiContent::model(finalized_parts)));
+    let provider_message_state = (!finalized_parts.is_empty()).then(|| {
+        build_scoped_gemini_provider_message_state(
+            provider_id,
+            model_id,
+            &GeminiContent::model(finalized_parts),
+        )
+    });
 
     Ok(CoreProviderTurnResponse {
         assistant_text: assistant_content
@@ -336,7 +341,12 @@ fn build_google_gemini_request_payload(
 
     let mut contents = Vec::new();
     for index in 0..all_messages.len() {
-        let content = core_message_to_gemini_content(&all_messages[index], &all_messages[..index])?;
+        let content = core_message_to_gemini_content(
+            &all_messages[index],
+            &all_messages[..index],
+            snapshot.provider_id.as_str(),
+            snapshot.model_id.as_str(),
+        )?;
         if !content.parts.is_empty() {
             contents.push(serde_json::to_value(content).map_err(|error| {
                 VulcanCoreError::InvalidState {
@@ -455,6 +465,8 @@ fn append_gemini_function_tools(
 fn core_message_to_gemini_content(
     message: &CoreConversationMessage,
     previous_messages: &[CoreConversationMessage],
+    provider_id: &str,
+    model_id: &str,
 ) -> Result<GeminiContent, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
@@ -501,7 +513,7 @@ fn core_message_to_gemini_content(
         } => {
             if let Some(content) = provider_message_state
                 .as_ref()
-                .and_then(parse_gemini_provider_message_state)
+                .and_then(|state| parse_gemini_provider_message_state(state, provider_id, model_id))
             {
                 return Ok(if content.role.is_some() {
                     content
@@ -828,6 +840,7 @@ mod tests {
     };
     use crate::agent_runtime::provider_protocol_gemini::{
         GeminiContent, GeminiFunctionCall, GeminiPart, build_gemini_provider_message_state,
+        build_scoped_gemini_provider_message_state,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
     use crate::agent_runtime::provider_transport_turn_request::OpenAiCompatibleCoreTurnRequest;
@@ -877,26 +890,134 @@ mod tests {
             "reasoning text",
             Some(String::from("sig-1")),
         )]);
-        let state = build_gemini_provider_message_state(&content);
+        let state = build_scoped_gemini_provider_message_state("google", "gemini-test", &content);
 
-        let restored = parse_gemini_provider_message_state(&state)
+        let restored = parse_gemini_provider_message_state(&state, "google", "gemini-test")
             .expect("gemini provider state should parse");
 
         assert_eq!(restored, content);
+    }
+
+    /// Verifies Gemini can still read legacy unscoped provider-message-state payloads produced before native state envelopes existed.
+    /// 验证 Gemini 仍可读取原生状态信封出现之前生成的旧版未带作用域 provider_message_state 载荷。
+    #[test]
+    fn gemini_provider_message_state_reads_legacy_unscoped_payload() {
+        let content = GeminiContent::model(vec![GeminiPart::reasoning(
+            "legacy reasoning",
+            Some(String::from("legacy-sig")),
+        )]);
+        let state = build_gemini_provider_message_state(&content);
+
+        let restored = parse_gemini_provider_message_state(&state, "google", "gemini-test")
+            .expect("legacy gemini provider state should parse");
+
+        assert_eq!(restored, content);
+    }
+
+    /// Verifies Gemini rejects scoped provider-message-state payloads when the provider or model no longer matches the current request.
+    /// 验证当 provider 或 model 与当前请求不匹配时，Gemini 会拒绝带作用域的 provider_message_state 载荷。
+    #[test]
+    fn gemini_provider_message_state_ignores_scoped_payload_after_provider_switch() {
+        let content = GeminiContent::model(vec![GeminiPart::reasoning(
+            "foreign reasoning",
+            Some(String::from("foreign-sig")),
+        )]);
+        let state = build_scoped_gemini_provider_message_state("google", "gemini-old", &content);
+
+        assert!(
+            parse_gemini_provider_message_state(&state, "google", "gemini-new").is_none(),
+            "model-scoped gemini provider state must not replay after a model switch"
+        );
+        assert!(
+            parse_gemini_provider_message_state(&state, "minimax-cn", "gemini-old").is_none(),
+            "provider-scoped gemini provider state must not replay after a provider switch"
+        );
+    }
+
+    /// Verifies Gemini request building falls back to canonical assistant text when a stored native state envelope belongs to another provider/model.
+    /// 验证当存储的原生状态信封属于其他 provider/model 时，Gemini 请求构建会回退到规范助手文本。
+    #[test]
+    fn gemini_request_payload_ignores_scoped_state_after_provider_switch() {
+        let assistant_state = build_scoped_gemini_provider_message_state(
+            "google",
+            "gemini-old",
+            &GeminiContent::model(vec![GeminiPart::reasoning(
+                "stale native reasoning",
+                Some(String::from("stale-sig")),
+            )]),
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-new"),
+                system_prompt: String::from("You are helpful."),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("You are helpful."),
+                ),
+                prompt: String::from("继续"),
+                history: Vec::new(),
+                temperature: Some(0.2),
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: Some(json!({})),
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: vec![CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("canonical assistant text"),
+                    reasoning: String::from("local reasoning should not become a native part"),
+                    provider_message_id: None,
+                    provider_message_state: Some(assistant_state),
+                    tool_calls: Vec::new(),
+                    usage: None,
+                },
+            }],
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_google_gemini_request_payload(request, &[])
+            .expect("gemini request payload should build");
+        let contents = payload["contents"]
+            .as_array()
+            .expect("contents should be one array");
+
+        assert_eq!(
+            contents[0]["parts"][0]["text"],
+            json!("canonical assistant text")
+        );
+        assert_eq!(contents[0]["parts"][0].get("thoughtSignature"), None);
+        assert_ne!(
+            contents[0]["parts"][0]["text"],
+            json!("stale native reasoning"),
+            "foreign scoped native state must not override canonical assistant fields"
+        );
     }
 
     /// Verifies Gemini request building replays stored native assistant parts and maps tool results into native function responses with the matching function name.
     /// 验证 Gemini 请求构建会回放已存储的原生助手 Part，并把工具结果映射成带匹配函数名称的原生 function response。
     #[test]
     fn gemini_request_payload_replays_native_parts_and_function_response() {
-        let assistant_state = build_gemini_provider_message_state(&GeminiContent::model(vec![
-            GeminiPart::reasoning("thinking text", Some(String::from("sig-1"))),
-            GeminiPart::function_call(GeminiFunctionCall {
-                id: Some(String::from("provider-call-1")),
-                name: String::from("read_file"),
-                args: json!({"path":"src/main.rs"}),
-            }),
-        ]));
+        let assistant_state = build_scoped_gemini_provider_message_state(
+            "google",
+            "gemini-2.5-flash",
+            &GeminiContent::model(vec![
+                GeminiPart::reasoning("thinking text", Some(String::from("sig-1"))),
+                GeminiPart::function_call(GeminiFunctionCall {
+                    id: Some(String::from("provider-call-1")),
+                    name: String::from("read_file"),
+                    args: json!({"path":"src/main.rs"}),
+                }),
+            ]),
+        );
         let assistant_message = CoreConversationMessage {
             id: String::from("assistant-1"),
             payload: CoreConversationPayload::Assistant {
@@ -1107,8 +1228,13 @@ mod tests {
             },
         };
 
-        let content = core_message_to_gemini_content(&tool_result_message, &[assistant_message])
-            .expect("tool result should convert into gemini content");
+        let content = core_message_to_gemini_content(
+            &tool_result_message,
+            &[assistant_message],
+            "google",
+            "gemini-test",
+        )
+        .expect("tool result should convert into gemini content");
 
         assert!(content.parts[0].function_response.is_some());
         assert_eq!(
@@ -1173,6 +1299,74 @@ mod tests {
         assert_eq!(parts[1]["inlineData"]["data"], "AAECAw==");
 
         let _ = std::fs::remove_file(&attachment.local_path);
+    }
+
+    /// Verifies the Gemini golden payload keeps system instruction and native inline image/video parts.
+    /// 验证 Gemini golden 载荷会保留 system instruction 与原生内联图片/视频 Part。
+    #[test]
+    fn golden_fixture_gemini_multimodal_payload_shape() {
+        let image_attachment = build_test_attachment(
+            "png",
+            ConversationAttachmentKind::Image,
+            "image/png",
+            "scene.png",
+        );
+        let video_attachment = build_test_attachment(
+            "mp4",
+            ConversationAttachmentKind::Video,
+            "video/mp4",
+            "clip.mp4",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("google"),
+                model_id: String::from("gemini-2.5-flash"),
+                system_prompt: String::from("You are helpful."),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("You are helpful."),
+                ),
+                prompt: String::from("分析图片和视频"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-multimodal"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("分析图片和视频"),
+                    attachments: vec![image_attachment.clone(), video_attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_google_gemini_request_payload(request, &[])
+            .expect("Gemini golden payload should build");
+        let contents = payload["contents"]
+            .as_array()
+            .expect("contents should be one array");
+        let parts = contents[0]["parts"]
+            .as_array()
+            .expect("user parts should be one array");
+
+        assert_eq!(
+            payload["systemInstruction"]["parts"][0]["text"],
+            "You are helpful."
+        );
+        assert_eq!(contents[0]["role"], "user");
+        assert_eq!(parts[0]["text"], "分析图片和视频");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[1]["inlineData"]["data"], "AAECAw==");
+        assert_eq!(parts[2]["inlineData"]["mimeType"], "video/mp4");
+        assert_eq!(parts[2]["inlineData"]["data"], "AAECAw==");
+
+        let _ = std::fs::remove_file(&image_attachment.local_path);
+        let _ = std::fs::remove_file(&video_attachment.local_path);
     }
 
     /// Verifies Gemini function declarations normalize nested container schemas before they are sent to the upstream GenerateContent API.

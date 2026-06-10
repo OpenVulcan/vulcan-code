@@ -4605,7 +4605,7 @@ async fn prepare_task_runtime_stream_launch(
         &request,
         preparation,
     )
-    .await;
+    .await?;
     let child_context = TaskExecutionRuntimeContext::new(
         config,
         Arc::clone(&context.foundation),
@@ -5937,6 +5937,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 

@@ -5,6 +5,7 @@ pub mod assembly;
 pub mod budget;
 pub mod protocol;
 pub mod request_mode;
+pub mod runtime;
 pub mod transcript;
 
 pub use assembly::{
@@ -31,6 +32,17 @@ pub use protocol::{
 pub use request_mode::{
     ContextFullRequestReason, ContextIncrementalDisabledReason, ContextRequestMode,
     ContextRequestModeInput, resolve_context_request_mode,
+};
+pub use runtime::{
+    RUNTIME_LOG_SCHEMA_VERSION, RuntimeAssistantMessageEvent, RuntimeContextCompactionAppliedEvent,
+    RuntimeInjectionAppliedEvent, RuntimeInjectionCancelledEvent, RuntimeInjectionMergedEvent,
+    RuntimeLogEvent, RuntimeLogEventLine, RuntimeProviderLoweringRepairEvent,
+    RuntimeProviderNativeStateEnvelope, RuntimeProviderRequestCheckpointEvent,
+    RuntimeProviderResponseCheckpointEvent, RuntimeProviderTurnCheckpointEvent, RuntimeRepairEvent,
+    RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
+    RuntimeToolBatchCompletedEvent, RuntimeToolBatchStartedEvent, RuntimeToolCallEvent,
+    RuntimeToolResultEvent, RuntimeToolResultStatus, RuntimeUserMessageEvent,
+    conversation_state_from_runtime_log_lines, runtime_log_lines_from_conversation_state,
 };
 pub use transcript::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,

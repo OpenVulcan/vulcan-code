@@ -3,11 +3,12 @@
 
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
 use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
+use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
 use crate::conversation_protocol::SessionConversationState;
 use vulcan_core::types::{
     ProviderPromptLayers as CoreProviderPromptLayers,
@@ -40,11 +41,14 @@ pub(crate) async fn build_core_provider_request_snapshot(
         .map(resolved_tool_definition_to_core_tool_schema)
         .collect::<Vec<_>>();
     let mut core_snapshot = build_core_conversation_snapshot(conversation_state);
-    core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
-        &core_snapshot.messages,
-        Some(preparation.model_blueprint.api_family()),
-        Some(&preparation.model_blueprint.capabilities),
-    );
+    core_snapshot.messages =
+        core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &core_snapshot.messages,
+            Some(preparation.model_blueprint.api_family()),
+            Some(&preparation.model_blueprint.capabilities),
+            &preparation.runtime_system_updates,
+            ProviderSystemUpdateLoweringPolicy::default(),
+        )?;
     let mut controller = vulcan_core::controller::VulcanCoreController::new(
         build_core_controller_config_with_layers(
             preparation,

@@ -54,10 +54,10 @@ pub fn context_injection_panel_cards_for_kind(
 pub fn remove_legacy_vmm_profile_context_injection_state(
     state: &mut ContextInjectionState,
 ) -> bool {
-    state
-        .groups
-        .remove(LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG)
-        .is_some()
+    state.remove_group(
+        Some(InjectionKind::Persistent),
+        LEGACY_VMM_PROFILE_CONTEXT_INJECTION_TAG,
+    )
 }
 
 /// Clones one state and removes hidden-user VMM profile leftovers before rendering.
@@ -187,5 +187,32 @@ mod tests {
         assert_eq!(dynamic[0].tag, "vmm_inject");
         assert_eq!(static_cards.len(), 1);
         assert_eq!(static_cards[0].tag, "vmm_profile_delta");
+    }
+
+    /// Verifies cancelled injection groups no longer render into provider overlays.
+    /// 验证已取消的注入分组不会继续渲染进 Provider 覆盖层。
+    #[test]
+    fn provider_overlay_excludes_cancelled_injection_groups() {
+        let mut state = ContextInjectionState::default();
+        state.apply_inserts(
+            vec![
+                persistent_insert("persistent_memory", "stable memory"),
+                InjectionInsert::single(
+                    InjectionKind::Transient,
+                    "turn_memory",
+                    "memory",
+                    "dynamic memory",
+                    Some(2),
+                ),
+            ],
+            "1",
+        );
+
+        assert!(state.remove_group(Some(InjectionKind::Persistent), "persistent_memory"));
+        assert!(state.remove_group(Some(InjectionKind::Transient), "turn_memory"));
+
+        let overlay = core_provider_context_injection_from_state_for_turn(&state, Some("turn-a"));
+
+        assert!(overlay.is_none());
     }
 }

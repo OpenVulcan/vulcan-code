@@ -73,6 +73,27 @@ impl VulcanWorkbench {
                 &effective_vmm_config,
                 system_prompt_hook_phase,
             );
+        let runtime_system_updates = match self.controller_runtime.as_ref() {
+            Some(controller_runtime) => {
+                match crate::workspace_store::load_session_runtime_system_updates(
+                    &controller_runtime.data_root,
+                    session_id,
+                ) {
+                    Ok(updates) => updates,
+                    Err(error) => {
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "Runtime system update 读取失败",
+                            format!(
+                                "会话 `{session_title}` 的 API 请求预览未能读取 runtime system update：{error}"
+                            ),
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
         let request = ExecutionPreparationRequest {
             session_id,
             execution_scope: vulcan_session_core::ExecutionScope::MainSession {
@@ -111,6 +132,7 @@ impl VulcanWorkbench {
             project_vmm,
             session_vmm,
             boundary_events: Vec::new(),
+            runtime_system_updates,
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

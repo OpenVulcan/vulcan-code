@@ -149,6 +149,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -294,6 +295,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -488,7 +490,7 @@ mod tests {
     /// Verifies provider-visible history preserves tool calls while still excluding reasoning replay from assistant turns.
     /// 验证 Provider 可见历史会保留工具调用，同时仍然排除助手回合中的思考回放。
     #[test]
-    fn provider_visible_history_preserves_tool_calls_without_reasoning_replay() {
+    fn provider_visible_history_downgrades_unanswered_tool_calls_without_reasoning_replay() {
         let messages = vec![CoreConversationMessage {
             id: String::from("assistant-1"),
             payload: CoreConversationPayload::Assistant {
@@ -510,26 +512,15 @@ mod tests {
         let [message] = history.as_slice() else {
             panic!("history should contain one assistant message");
         };
-        let CoreConversationPayload::Assistant {
-            text,
-            reasoning,
-            provider_message_id,
-            provider_message_state: _,
-            tool_calls,
-            usage: _,
-        } = &message.payload
-        else {
-            panic!("history should contain one assistant payload");
+        let CoreConversationPayload::UserText { text, attachments } = &message.payload else {
+            panic!("unanswered tool call should be downgraded to user text");
         };
 
-        assert_eq!(provider_message_id.as_deref(), Some("resp-1"));
-        assert_eq!(text, "我先读取文件。");
-        assert!(reasoning.is_empty());
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].id, "tool-1");
-        assert_eq!(tool_calls[0].tool_call_id.as_deref(), Some("call-1"));
-        assert_eq!(tool_calls[0].tool_name, "read_file");
-        assert_eq!(tool_calls[0].arguments, json!({ "path": "src/main.rs" }));
+        assert!(attachments.is_empty());
+        assert!(text.contains("interrupted before every requested tool returned"));
+        assert!(text.contains("我先读取文件。"));
+        assert!(text.contains("read_file"));
+        assert!(text.contains("call-1"));
     }
 
     /// Verifies the runtime leaves multi-turn providers unlimited when no explicit max-turn override exists.
@@ -648,6 +639,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -727,6 +719,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

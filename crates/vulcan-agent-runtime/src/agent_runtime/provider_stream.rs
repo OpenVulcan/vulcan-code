@@ -6,6 +6,7 @@ use crate::conversation_protocol::SessionConversationState;
 use futures_util::Stream;
 use serde_json::Value;
 use std::pin::Pin;
+use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ProviderRequestSnapshot as CoreProviderRequestSnapshot,
     ProviderUsageSnapshot as CoreProviderUsageSnapshot,
@@ -29,6 +30,9 @@ pub(crate) enum ProviderStreamDelta {
     /// Runtime event emitted from one streamed provider-side tool interaction.
     /// 来自某次 Provider 侧流式工具交互的运行时事件。
     RuntimeEvent(RuntimeEvent),
+    /// Provider lowering repair, downgrade, or rejection emitted for runtime audit.
+    /// 为运行时审计发出的 Provider 转换修复、降级或拒绝事件。
+    LoweringRepair(RuntimeProviderLoweringRepairEvent),
     /// Final canonical conversation state plus the latest successful provider usage from the current run.
     /// 当前运行结束后的最终规范会话状态，以及本次运行中最近一次成功 Provider 用量。
     FinalConversationState(SessionConversationState, Option<CoreProviderUsageSnapshot>),

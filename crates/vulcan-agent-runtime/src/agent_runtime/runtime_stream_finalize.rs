@@ -330,6 +330,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 

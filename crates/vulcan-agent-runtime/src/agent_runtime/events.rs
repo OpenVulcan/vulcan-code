@@ -5,7 +5,11 @@ use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionRunR
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
 use serde_json::Value;
-use vulcan_core::types::ProviderUsageSnapshot as CoreProviderUsageSnapshot;
+use vulcan_context::RuntimeProviderLoweringRepairEvent;
+use vulcan_core::types::{
+    ProviderRequestSnapshot as CoreProviderRequestSnapshot,
+    ProviderUsageSnapshot as CoreProviderUsageSnapshot,
+};
 
 /// High-level runtime event kinds emitted by the compose foundation.
 /// compose 基础架构发出的高层运行时事件类型。
@@ -92,6 +96,16 @@ pub enum ExecutionStreamEvent {
         /// 拥有该 Provider 请求的会话标识。
         session_id: SessionId,
     },
+    /// Provider request snapshot checkpoint emitted for runtime audit persistence.
+    /// 为运行时审计持久化发出的 Provider 请求快照检查点。
+    ProviderRequestCheckpoint {
+        /// Session identifier owning the provider request checkpoint.
+        /// 拥有该 Provider 请求检查点的会话标识。
+        session_id: SessionId,
+        /// Provider-neutral request snapshot captured before wire lowering.
+        /// 线协议转换前捕获的 Provider 中立请求快照。
+        snapshot: CoreProviderRequestSnapshot,
+    },
     /// Provider-specific wire request payload has been built immediately before the HTTP/API call.
     /// Provider 专用线缆请求载荷已在 HTTP/API 调用前构建完成。
     WireRequestReady {
@@ -142,6 +156,16 @@ pub enum ExecutionStreamEvent {
         /// Structured runtime event payload to project into host UI.
         /// 需要投影到宿主界面的结构化运行时事件载荷。
         event: RuntimeEvent,
+    },
+    /// Provider lowering repair audit event emitted by a protocol adapter.
+    /// 协议适配器发出的 Provider 转换修复审计事件。
+    ProviderLoweringRepair {
+        /// Session identifier owning the lowering repair event.
+        /// 拥有该转换修复事件的会话标识。
+        session_id: SessionId,
+        /// Structured lowering repair payload to persist into runtime audit.
+        /// 需要持久化到运行时审计中的结构化转换修复载荷。
+        event: RuntimeProviderLoweringRepairEvent,
     },
     /// Safe canonical context checkpoint emitted after one provider/tool cycle becomes replayable.
     /// 在一次 Provider/工具循环已经可回放后发出的安全规范上下文检查点。

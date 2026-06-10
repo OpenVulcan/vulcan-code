@@ -1,6 +1,9 @@
 //! Canonical conversation-message bridge helpers reused by snapshot assembly and provider-visible history projection.
 //! 供快照组装与 Provider 可见历史投影复用的规范会话消息桥接辅助逻辑。
 
+use crate::agent_runtime::provider_system_update_lowering::{
+    ProviderSystemUpdateLowering, ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
+};
 use crate::conversation_protocol::{
     SessionConversationMessage, SessionConversationPayload, SessionConversationToolCall,
 };
@@ -8,6 +11,7 @@ use crate::provider_capabilities::ResolvedModelCapabilities;
 use crate::provider_config::ProviderApiFamily;
 use crate::provider_input_normalizer::normalize_provider_user_input_for_model;
 use std::collections::BTreeSet;
+use vulcan_context::RuntimeSystemUpdateEvent;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
     ConversationToolCall as CoreConversationToolCall,
@@ -118,6 +122,45 @@ pub(crate) fn core_messages_to_provider_visible_history(
 /// Converts canonical core messages into provider-visible history using API-family and model modality projection.
 /// 使用接口族与模型模态投影将规范 core 消息转换为 Provider 可见历史。
 pub(crate) fn core_messages_to_provider_visible_history_for_model(
+    messages: &[CoreConversationMessage],
+    api_family: Option<ProviderApiFamily>,
+    capabilities: Option<&ResolvedModelCapabilities>,
+) -> Vec<CoreConversationMessage> {
+    core_messages_to_provider_visible_history_for_model_with_system_updates(
+        messages,
+        api_family,
+        capabilities,
+        &[],
+        ProviderSystemUpdateLoweringPolicy::default(),
+    )
+    .expect("empty system update overlays should not fail")
+}
+
+/// Converts canonical core messages plus chronological system updates into provider-visible history.
+/// 将规范 core 消息与时间顺序 system update 一起转换为 Provider 可见历史。
+pub(crate) fn core_messages_to_provider_visible_history_for_model_with_system_updates(
+    messages: &[CoreConversationMessage],
+    api_family: Option<ProviderApiFamily>,
+    capabilities: Option<&ResolvedModelCapabilities>,
+    system_updates: &[RuntimeSystemUpdateEvent],
+    system_update_policy: ProviderSystemUpdateLoweringPolicy,
+) -> Result<Vec<CoreConversationMessage>, String> {
+    let mut projected = project_core_messages_to_provider_visible_history_for_model(
+        messages,
+        api_family,
+        capabilities,
+    );
+    apply_provider_visible_system_updates(&mut projected, system_updates, system_update_policy)?;
+
+    #[cfg(debug_assertions)]
+    validate_provider_visible_tool_topology(&projected)?;
+
+    Ok(projected)
+}
+
+/// Projects canonical messages into provider-visible history before runtime system-update overlays are applied.
+/// 在应用 runtime system-update 覆盖之前，将规范消息投影为 Provider 可见历史。
+fn project_core_messages_to_provider_visible_history_for_model(
     messages: &[CoreConversationMessage],
     api_family: Option<ProviderApiFamily>,
     capabilities: Option<&ResolvedModelCapabilities>,
@@ -236,6 +279,222 @@ pub(crate) fn core_messages_to_provider_visible_history_for_model(
     }
 
     projected
+}
+
+/// Applies lowered runtime system updates to the provider-visible history in chronological anchor order.
+/// 按时间锚点顺序把已转换的 runtime system update 应用到 Provider 可见历史。
+fn apply_provider_visible_system_updates(
+    projected: &mut Vec<CoreConversationMessage>,
+    system_updates: &[RuntimeSystemUpdateEvent],
+    policy: ProviderSystemUpdateLoweringPolicy,
+) -> Result<(), String> {
+    for update in system_updates {
+        let text = match lower_provider_system_update(update, policy) {
+            ProviderSystemUpdateLowering::UserWrapper { text } => text,
+            ProviderSystemUpdateLowering::NativeSystem { .. } => {
+                return Err(format!(
+                    "runtime system update `{}` requires native chronological system support that the canonical provider-visible bridge cannot represent",
+                    update.update_id
+                ));
+            }
+            ProviderSystemUpdateLowering::Reject { reason } => {
+                return Err(format!(
+                    "runtime system update `{}` rejected during provider lowering: {reason}",
+                    update.update_id
+                ));
+            }
+        };
+        let message = CoreConversationMessage {
+            id: provider_visible_system_update_message_id(update),
+            payload: CoreConversationPayload::UserText {
+                text,
+                attachments: Vec::new(),
+            },
+        };
+        insert_provider_visible_system_update(projected, update, message);
+    }
+    validate_provider_visible_tool_topology(projected)
+}
+
+/// Inserts one lowered system-update message after its effective runtime anchor, or at the end when no anchor is present.
+/// 在生效 runtime 锚点之后插入一条已转换 system-update 消息；没有锚点时插入末尾。
+fn insert_provider_visible_system_update(
+    projected: &mut Vec<CoreConversationMessage>,
+    update: &RuntimeSystemUpdateEvent,
+    message: CoreConversationMessage,
+) {
+    let insert_index = provider_visible_system_update_insert_index(projected, update);
+    projected.insert(insert_index, message);
+}
+
+/// Resolves the safe provider-visible insertion index for one lowered system update.
+/// 为一条已转换 system update 解析安全的 Provider 可见插入位置。
+fn provider_visible_system_update_insert_index(
+    projected: &[CoreConversationMessage],
+    update: &RuntimeSystemUpdateEvent,
+) -> usize {
+    let insert_index = update
+        .effective_after_event_id
+        .as_deref()
+        .and_then(|anchor| projected.iter().position(|message| message.id == anchor))
+        .map(|index| index + 1)
+        .unwrap_or(projected.len());
+    advance_insert_index_past_tool_batch(projected, insert_index)
+}
+
+/// Moves an insertion point out of a live assistant tool-call batch when possible.
+/// 在可能时将插入点移出正在进行的助手工具调用批次。
+fn advance_insert_index_past_tool_batch(
+    projected: &[CoreConversationMessage],
+    insert_index: usize,
+) -> usize {
+    if insert_index == 0 || insert_index > projected.len() {
+        return insert_index.min(projected.len());
+    }
+    let previous_index = insert_index - 1;
+    match &projected[previous_index].payload {
+        CoreConversationPayload::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+            completed_tool_batch_end_after_assistant(projected, previous_index, insert_index)
+                .unwrap_or(insert_index)
+        }
+        CoreConversationPayload::ToolResult { .. } => {
+            contiguous_tool_result_end(projected, insert_index)
+        }
+        _ => insert_index,
+    }
+}
+
+/// Returns the first index after the complete tool-result batch for one assistant message.
+/// 返回单条助手消息完整工具结果批次之后的第一个索引。
+fn completed_tool_batch_end_after_assistant(
+    projected: &[CoreConversationMessage],
+    assistant_index: usize,
+    result_start_index: usize,
+) -> Option<usize> {
+    let CoreConversationPayload::Assistant { tool_calls, .. } =
+        &projected.get(assistant_index)?.payload
+    else {
+        return None;
+    };
+    let mut pending_tool_call_groups = tool_call_identifier_groups(tool_calls);
+    if pending_tool_call_groups.is_empty() {
+        return None;
+    }
+    let mut cursor = result_start_index;
+    while cursor < projected.len() && !pending_tool_call_groups.is_empty() {
+        let CoreConversationPayload::ToolResult { tool_call_id, .. } = &projected[cursor].payload
+        else {
+            break;
+        };
+        let Some(tool_call_key) = tool_call_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            break;
+        };
+        let Some(group_index) = pending_tool_call_groups.iter().position(|identifiers| {
+            identifiers
+                .iter()
+                .any(|identifier| identifier == tool_call_key)
+        }) else {
+            break;
+        };
+        pending_tool_call_groups.remove(group_index);
+        cursor += 1;
+    }
+    pending_tool_call_groups.is_empty().then_some(cursor)
+}
+
+/// Returns the first index after the contiguous tool-result run starting at the insertion point.
+/// 返回从插入点开始的连续工具结果序列之后的第一个索引。
+fn contiguous_tool_result_end(
+    projected: &[CoreConversationMessage],
+    mut insert_index: usize,
+) -> usize {
+    while insert_index < projected.len()
+        && matches!(
+            projected[insert_index].payload,
+            CoreConversationPayload::ToolResult { .. }
+        )
+    {
+        insert_index += 1;
+    }
+    insert_index
+}
+
+/// Builds a stable synthetic message id for one provider-visible system-update wrapper.
+/// 为一条 Provider 可见 system-update 包装消息构建稳定的合成消息标识。
+fn provider_visible_system_update_message_id(update: &RuntimeSystemUpdateEvent) -> String {
+    format!("runtime-system-update:{}", update.update_id)
+}
+
+/// Validates that provider-visible tool calls and tool results form a strict replayable topology.
+/// 校验 Provider 可见工具调用与工具结果是否形成严格可回放的拓扑。
+pub(crate) fn validate_provider_visible_tool_topology(
+    messages: &[CoreConversationMessage],
+) -> Result<(), String> {
+    let mut pending_tool_call_groups = Vec::<Vec<String>>::new();
+    let mut pending_assistant_index = None::<usize>;
+    for (index, message) in messages.iter().enumerate() {
+        match &message.payload {
+            CoreConversationPayload::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+                if !pending_tool_call_groups.is_empty() {
+                    return Err(format!(
+                        "assistant message at index {index} started a new tool batch before index {} completed",
+                        pending_assistant_index.unwrap_or(index)
+                    ));
+                }
+                pending_tool_call_groups = tool_call_identifier_groups(tool_calls);
+                pending_assistant_index = Some(index);
+                if pending_tool_call_groups.is_empty() {
+                    return Err(format!(
+                        "assistant message at index {index} contains tool calls without replayable identifiers"
+                    ));
+                }
+            }
+            CoreConversationPayload::Assistant { .. }
+            | CoreConversationPayload::UserText { .. } => {
+                if !pending_tool_call_groups.is_empty() {
+                    return Err(format!(
+                        "message at index {index} interrupted assistant tool batch from index {}",
+                        pending_assistant_index.unwrap_or(index)
+                    ));
+                }
+            }
+            CoreConversationPayload::ToolResult { tool_call_id, .. } => {
+                let Some(tool_call_key) = tool_call_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                else {
+                    return Err(format!(
+                        "tool result at index {index} does not carry a replayable tool_call_id"
+                    ));
+                };
+                let Some(group_index) = pending_tool_call_groups.iter().position(|identifiers| {
+                    identifiers
+                        .iter()
+                        .any(|identifier| identifier == tool_call_key)
+                }) else {
+                    return Err(format!(
+                        "tool result at index {index} references unmatched tool call `{tool_call_key}`"
+                    ));
+                };
+                pending_tool_call_groups.remove(group_index);
+                if pending_tool_call_groups.is_empty() {
+                    pending_assistant_index = None;
+                }
+            }
+        }
+    }
+    if !pending_tool_call_groups.is_empty() {
+        return Err(format!(
+            "assistant tool batch from index {} ended without all tool results",
+            pending_assistant_index.unwrap_or(0)
+        ));
+    }
+    Ok(())
 }
 
 /// Detects legacy hidden Explore records that were accidentally mirrored as assistant messages.
@@ -396,6 +655,16 @@ fn tool_call_identifiers(tool_call: &CoreConversationToolCall) -> Vec<String> {
     .collect()
 }
 
+/// Builds grouped replay identifiers so local and provider ids complete the same tool call.
+/// 构建分组后的可回放标识，使本地 id 与 Provider id 完成同一个工具调用。
+fn tool_call_identifier_groups(tool_calls: &[CoreConversationToolCall]) -> Vec<Vec<String>> {
+    tool_calls
+        .iter()
+        .map(tool_call_identifiers)
+        .filter(|identifiers| !identifiers.is_empty())
+        .collect()
+}
+
 /// Builds a provider-visible plain-text fallback for a tool result whose matching tool call was compacted away.
 /// 为匹配工具调用已被压缩移除的工具结果构建 Provider 可见的纯文本回退内容。
 fn orphan_tool_result_text(
@@ -496,9 +765,17 @@ fn core_tool_call_to_session_tool_call(
 
 #[cfg(test)]
 mod tests {
-    use super::core_messages_to_provider_visible_history_for_model;
+    use super::{
+        core_messages_to_provider_visible_history_for_model,
+        core_messages_to_provider_visible_history_for_model_with_system_updates,
+        validate_provider_visible_tool_topology,
+    };
+    use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
     use crate::provider_capabilities::ResolvedModelCapabilities;
     use crate::provider_config::ProviderApiFamily;
+    use vulcan_context::{
+        RuntimeSystemUpdateEvent, RuntimeSystemUpdateLoweringHint, RuntimeSystemUpdateTrust,
+    };
     use vulcan_core::types::{
         ConversationAttachment, ConversationAttachmentKind,
         ConversationMessage as CoreConversationMessage,
@@ -527,6 +804,186 @@ mod tests {
             preview_local_path: None,
             mime_type: mime_type.to_string(),
         }
+    }
+
+    /// Builds one runtime system update used by provider-visible projection tests.
+    /// 构建一条供 Provider 可见投影测试使用的 runtime system update。
+    fn runtime_system_update(
+        update_id: &str,
+        effective_after_event_id: Option<&str>,
+        hint: RuntimeSystemUpdateLoweringHint,
+    ) -> RuntimeSystemUpdateEvent {
+        RuntimeSystemUpdateEvent {
+            turn_id: Some(String::from("turn-1")),
+            update_id: update_id.to_string(),
+            effective_after_event_id: effective_after_event_id.map(str::to_string),
+            text: String::from("Use the compacted project rules from now on."),
+            trust: RuntimeSystemUpdateTrust::TrustedHost,
+            lowering_hint: hint,
+            fingerprint: Some(format!("fp-{update_id}")),
+            source: Some(String::from("context_compaction")),
+        }
+    }
+
+    /// Verifies chronological system updates lower to user-scoped wrapper messages when the provider bridge has no native system-message slot.
+    /// 验证当 Provider 桥接层没有原生 system 消息槽位时，时间顺序 system update 会转换为用户作用域包装消息。
+    #[test]
+    fn provider_visible_history_applies_system_update_as_user_wrapper() {
+        let messages = vec![CoreConversationMessage {
+            id: String::from("user-1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("继续"),
+                attachments: Vec::new(),
+            },
+        }];
+        let updates = vec![runtime_system_update(
+            "system-update-1",
+            Some("user-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        )];
+
+        let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+            &updates,
+            ProviderSystemUpdateLoweringPolicy::default(),
+        )
+        .expect("system update wrapper should project");
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[1].id, "runtime-system-update:system-update-1");
+        let CoreConversationPayload::UserText { text, attachments } = &projected[1].payload else {
+            panic!("system update should become user-scoped wrapper text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("user scoped"));
+        assert!(text.contains("system-update-1"));
+        assert!(text.contains("compacted project rules"));
+    }
+
+    /// Verifies system updates anchored after an assistant tool call are moved after the matching tool result.
+    /// 验证锚定在助手工具调用之后的 system update 会移动到匹配工具结果之后。
+    #[test]
+    fn provider_visible_history_moves_system_update_after_tool_result_gap() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-call-1"),
+                        tool_call_id: Some(String::from("provider-call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                    }],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    text: String::from("file body"),
+                },
+            },
+        ];
+        let updates = vec![runtime_system_update(
+            "system-update-gap",
+            Some("assistant-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        )];
+
+        let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+            &updates,
+            ProviderSystemUpdateLoweringPolicy::default(),
+        )
+        .expect("system update in a tool-result gap should be moved");
+
+        assert_eq!(projected.len(), 3);
+        assert_eq!(projected[0].id, "assistant-1");
+        assert_eq!(projected[1].id, "tool-result-1");
+        assert_eq!(projected[2].id, "runtime-system-update:system-update-gap");
+        validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+    }
+
+    /// Verifies system updates anchored on one result inside a parallel tool batch move after every contiguous result.
+    /// 验证锚定在并行工具批次某个结果上的 system update 会移动到所有连续结果之后。
+    #[test]
+    fn provider_visible_history_moves_system_update_after_parallel_tool_results() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![
+                        CoreConversationToolCall {
+                            id: String::from("local-call-1"),
+                            tool_call_id: Some(String::from("provider-call-1")),
+                            tool_name: String::from("read_file"),
+                            arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                        },
+                        CoreConversationToolCall {
+                            id: String::from("local-call-2"),
+                            tool_call_id: Some(String::from("provider-call-2")),
+                            tool_name: String::from("list_files"),
+                            arguments: serde_json::json!({}),
+                        },
+                    ],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    text: String::from("file body"),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-2"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-2"),
+                    tool_call_id: Some(String::from("provider-call-2")),
+                    text: String::from("file list"),
+                },
+            },
+        ];
+        let updates = vec![runtime_system_update(
+            "system-update-parallel-gap",
+            Some("tool-result-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        )];
+
+        let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+            &updates,
+            ProviderSystemUpdateLoweringPolicy::default(),
+        )
+        .expect("system update in a parallel tool-result gap should be moved");
+
+        assert_eq!(projected.len(), 4);
+        assert_eq!(projected[0].id, "assistant-1");
+        assert_eq!(projected[1].id, "tool-result-1");
+        assert_eq!(projected[2].id, "tool-result-2");
+        assert_eq!(
+            projected[3].id,
+            "runtime-system-update:system-update-parallel-gap"
+        );
+        validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
     }
 
     /// Verifies historical attachments are downgraded before transport encoding when the selected model is text-only.
@@ -657,6 +1114,115 @@ mod tests {
         ));
     }
 
+    /// Verifies projected provider history satisfies the canonical tool topology validator.
+    /// 验证投影后的 Provider 历史满足规范工具拓扑校验器。
+    #[test]
+    fn provider_visible_history_passes_canonical_tool_topology_validator() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![
+                        CoreConversationToolCall {
+                            id: String::from("local-call-1"),
+                            tool_call_id: Some(String::from("provider-call-1")),
+                            tool_name: String::from("first_tool"),
+                            arguments: serde_json::json!({}),
+                        },
+                        CoreConversationToolCall {
+                            id: String::from("local-call-2"),
+                            tool_call_id: Some(String::from("provider-call-2")),
+                            tool_name: String::from("second_tool"),
+                            arguments: serde_json::json!({}),
+                        },
+                    ],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    text: String::from("first done"),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-2"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-2"),
+                    tool_call_id: Some(String::from("local-call-2")),
+                    text: String::from("second done"),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        validate_provider_visible_tool_topology(&projected).expect("valid provider topology");
+    }
+
+    /// Verifies the canonical tool topology validator rejects interrupted live tool batches.
+    /// 验证规范工具拓扑校验器会拒绝被打断的实时工具批次。
+    #[test]
+    fn provider_visible_tool_topology_validator_rejects_interrupted_batch() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::new(),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-call-1"),
+                        tool_call_id: Some(String::from("provider-call-1")),
+                        tool_name: String::from("ask"),
+                        arguments: serde_json::json!({}),
+                    }],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("new prompt"),
+                    attachments: Vec::new(),
+                },
+            },
+        ];
+
+        let error = validate_provider_visible_tool_topology(&messages)
+            .expect_err("interrupted batch should be rejected");
+        assert!(error.contains("interrupted assistant tool batch"));
+    }
+
+    /// Verifies the canonical tool topology validator rejects orphan tool results.
+    /// 验证规范工具拓扑校验器会拒绝孤立工具结果。
+    #[test]
+    fn provider_visible_tool_topology_validator_rejects_orphan_result() {
+        let messages = vec![CoreConversationMessage {
+            id: String::from("tool-result-1"),
+            payload: CoreConversationPayload::ToolResult {
+                tool_result_id: String::from("result-1"),
+                tool_call_id: Some(String::from("missing-call")),
+                text: String::from("orphan body"),
+            },
+        }];
+
+        let error = validate_provider_visible_tool_topology(&messages)
+            .expect_err("orphan result should be rejected");
+        assert!(error.contains("unmatched tool call"));
+    }
+
     /// Verifies orphaned tool results are downgraded to plain user-visible text before provider transport.
     /// 验证孤立工具结果会在 Provider 传输前降级为普通用户可见文本。
     #[test]
@@ -781,5 +1347,274 @@ mod tests {
         assert!(text.contains("interrupted before every requested tool returned"));
         assert!(text.contains("ask"));
         assert!(text.contains("provider-call-1"));
+    }
+
+    /// Verifies the plain-text canonical fixture keeps user and assistant turns in deterministic order.
+    /// 验证普通文本 canonical fixture 会以确定顺序保留用户与助手回合。
+    #[test]
+    fn canonical_fixture_plain_text_history_projects_stably() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("user-1"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("你好"),
+                    attachments: Vec::new(),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("你好，我在。"),
+                    reasoning: String::from("internal reasoning should be stripped"),
+                    provider_message_id: Some(String::from("provider-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("user-2"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("继续"),
+                    attachments: Vec::new(),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 3);
+        assert_eq!(projected[0].id, "user-1");
+        assert_eq!(projected[1].id, "assistant-1");
+        assert_eq!(projected[2].id, "user-2");
+        let CoreConversationPayload::Assistant {
+            text,
+            reasoning,
+            tool_calls,
+            ..
+        } = &projected[1].payload
+        else {
+            panic!("second projected message should be assistant text");
+        };
+        assert_eq!(text, "你好，我在。");
+        assert!(reasoning.is_empty());
+        assert!(tool_calls.is_empty());
+    }
+
+    /// Verifies the tool-call canonical fixture keeps matched tool calls and results as live protocol state.
+    /// 验证工具调用 canonical fixture 会把已匹配的工具调用与结果保留为实时协议状态。
+    #[test]
+    fn canonical_fixture_tool_call_and_result_projects_as_protocol_pair() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-1"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("读取文件。"),
+                    reasoning: String::from("read first"),
+                    provider_message_id: Some(String::from("provider-1")),
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-call-1"),
+                        tool_call_id: Some(String::from("provider-call-1")),
+                        tool_name: String::from("read_file"),
+                        arguments: serde_json::json!({ "path": "Cargo.toml" }),
+                    }],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("tool-result-1"),
+                payload: CoreConversationPayload::ToolResult {
+                    tool_result_id: String::from("result-1"),
+                    tool_call_id: Some(String::from("provider-call-1")),
+                    text: String::from("file body"),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 2);
+        let CoreConversationPayload::Assistant { tool_calls, .. } = &projected[0].payload else {
+            panic!("first projected message should keep assistant tool calls");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(
+            tool_calls[0].tool_call_id.as_deref(),
+            Some("provider-call-1")
+        );
+        let CoreConversationPayload::ToolResult {
+            tool_call_id, text, ..
+        } = &projected[1].payload
+        else {
+            panic!("second projected message should keep the matching tool result");
+        };
+        assert_eq!(tool_call_id.as_deref(), Some("provider-call-1"));
+        assert_eq!(text, "file body");
+        validate_provider_visible_tool_topology(&projected).expect("tool topology should be valid");
+    }
+
+    /// Verifies a provider-switch fixture degrades stale live tool state before the next user turn is projected.
+    /// 验证 provider 切换 fixture 会在下一条用户回合投影前降级过期实时工具状态。
+    #[test]
+    fn canonical_fixture_provider_switch_downgrades_stale_tool_state() {
+        let messages = vec![
+            CoreConversationMessage {
+                id: String::from("assistant-old-provider"),
+                payload: CoreConversationPayload::Assistant {
+                    text: String::from("旧 provider 准备调用工具。"),
+                    reasoning: String::new(),
+                    provider_message_id: Some(String::from("old-provider-message")),
+                    provider_message_state: Some(serde_json::json!({
+                        "protocol": "anthropic",
+                        "payload": { "id": "old" }
+                    })),
+                    usage: None,
+                    tool_calls: vec![CoreConversationToolCall {
+                        id: String::from("local-old-call"),
+                        tool_call_id: Some(String::from("old-provider-call")),
+                        tool_name: String::from("image_generation"),
+                        arguments: serde_json::json!({ "prompt": "demo" }),
+                    }],
+                },
+            },
+            CoreConversationMessage {
+                id: String::from("user-after-switch"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("切到 MiniMax 后继续"),
+                    attachments: Vec::new(),
+                },
+            },
+        ];
+
+        let projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+        );
+
+        assert_eq!(projected.len(), 2);
+        let CoreConversationPayload::UserText { text, attachments } = &projected[0].payload else {
+            panic!("stale tool state should become historical user text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("historical text only"));
+        assert!(text.contains("old-provider-call"));
+        let CoreConversationPayload::UserText { text, .. } = &projected[1].payload else {
+            panic!("latest user prompt should remain user text");
+        };
+        assert_eq!(text, "切到 MiniMax 后继续");
+        validate_provider_visible_tool_topology(&projected)
+            .expect("downgraded switch history should be topology-safe");
+    }
+
+    /// Verifies the injection fixture projects dynamic runtime overlays after the stable user baseline.
+    /// 验证注入 fixture 会在稳定用户基线之后投影动态 runtime 覆盖。
+    #[test]
+    fn canonical_fixture_dynamic_injection_projects_as_system_update_wrapper() {
+        let messages = vec![CoreConversationMessage {
+            id: String::from("user-1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("继续任务"),
+                attachments: Vec::new(),
+            },
+        }];
+        let updates = vec![runtime_system_update(
+            "dynamic-injection-1",
+            Some("user-1"),
+            RuntimeSystemUpdateLoweringHint::Auto,
+        )];
+
+        let projected = core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            None,
+            &updates,
+            ProviderSystemUpdateLoweringPolicy::default(),
+        )
+        .expect("dynamic injection wrapper should project");
+
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0].id, "user-1");
+        assert_eq!(projected[1].id, "runtime-system-update:dynamic-injection-1");
+        let CoreConversationPayload::UserText { text, attachments } = &projected[1].payload else {
+            panic!("dynamic injection should become user-scoped wrapper text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("dynamic-injection-1"));
+        assert!(text.contains("user scoped"));
+    }
+
+    /// Verifies multimodal canonical fixtures preserve image and video attachments only when provider and model support them.
+    /// 验证多模态 canonical fixture 只会在 provider 与模型均支持时保留图片和视频附件。
+    #[test]
+    fn canonical_fixture_image_and_video_understanding_respects_model_capabilities() {
+        let capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![
+                String::from("text"),
+                String::from("image"),
+                String::from("video"),
+            ],
+            ..ResolvedModelCapabilities::default()
+        };
+        let messages = vec![CoreConversationMessage {
+            id: String::from("user-multimodal"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("理解图片和视频"),
+                attachments: vec![
+                    replayable_attachment(
+                        ConversationAttachmentKind::Image,
+                        "scene.png",
+                        "image/png",
+                    ),
+                    replayable_attachment(
+                        ConversationAttachmentKind::Video,
+                        "clip.mp4",
+                        "video/mp4",
+                    ),
+                ],
+            },
+        }];
+
+        let gemini_projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::GoogleGeminiGenerateContent),
+            Some(&capabilities),
+        );
+        let CoreConversationPayload::UserText {
+            attachments: gemini_attachments,
+            ..
+        } = &gemini_projected[0].payload
+        else {
+            panic!("Gemini fixture should remain user text");
+        };
+        assert_eq!(gemini_attachments.len(), 2);
+
+        let openai_projected = core_messages_to_provider_visible_history_for_model(
+            &messages,
+            Some(ProviderApiFamily::OpenAiChatCompatible),
+            Some(&capabilities),
+        );
+        let CoreConversationPayload::UserText {
+            text,
+            attachments: openai_attachments,
+        } = &openai_projected[0].payload
+        else {
+            panic!("OpenAI-compatible fixture should remain user text");
+        };
+        assert_eq!(openai_attachments.len(), 1);
+        assert_eq!(
+            openai_attachments[0].kind,
+            ConversationAttachmentKind::Image
+        );
+        assert!(text.contains("this API path"));
     }
 }

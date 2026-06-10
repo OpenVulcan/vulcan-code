@@ -21,8 +21,9 @@ pub fn drive_runtime_stream_launch(
         let session_id = launch.session_id;
         let preparation = launch.preparation.clone();
         let discovery_events = launch.discovery_events.clone();
+        let lowering_repair_events = launch.lowering_repair_events.clone();
 
-        for event in build_runtime_start_events(session_id, &preparation, discovery_events) {
+        for event in build_runtime_start_events(session_id, &preparation, discovery_events, lowering_repair_events) {
             yield event;
         }
 

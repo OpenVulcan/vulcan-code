@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use vulcan_context::RuntimeProviderNativeStateEnvelope;
 
 /// Stable provider-state namespace used to persist Gemini-native assistant content for future history replays.
 /// 用于持久化 Gemini 原生助手内容并服务后续历史回放的稳定 Provider 状态命名空间。
@@ -277,10 +278,40 @@ pub(crate) fn build_gemini_provider_message_state(content: &GeminiContent) -> Va
     })
 }
 
+/// Wraps one Gemini-native content payload into a scoped provider-native state envelope.
+/// 将一份 Gemini 原生内容载荷包装进带作用域的 Provider 原生状态信封。
+pub(crate) fn build_scoped_gemini_provider_message_state(
+    provider_id: &str,
+    model_id: &str,
+    content: &GeminiContent,
+) -> Value {
+    let payload = build_gemini_provider_message_state(content);
+    serde_json::to_value(RuntimeProviderNativeStateEnvelope::new(
+        "google_gemini",
+        provider_id,
+        model_id,
+        payload.clone(),
+    ))
+    .unwrap_or(payload)
+}
+
 /// Restores one Gemini-native content payload from the generic provider-message-state value when the assistant history needs native replay fidelity.
 /// 当助手历史需要原生回放精度时，从通用 provider_message_state 值中恢复 Gemini 原生内容载荷。
-pub(crate) fn parse_gemini_provider_message_state(state: &Value) -> Option<GeminiContent> {
-    state
+pub(crate) fn parse_gemini_provider_message_state(
+    state: &Value,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<GeminiContent> {
+    let payload =
+        match serde_json::from_value::<RuntimeProviderNativeStateEnvelope>(state.clone()).ok() {
+            Some(envelope) if envelope.matches_scope("google_gemini", provider_id, model_id) => {
+                envelope.payload
+            }
+            Some(_) => return None,
+            None => state.clone(),
+        };
+
+    payload
         .get(GEMINI_PROVIDER_STATE_KEY)?
         .get("content")
         .cloned()

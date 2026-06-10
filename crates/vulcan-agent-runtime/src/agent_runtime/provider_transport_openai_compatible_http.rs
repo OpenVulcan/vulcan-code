@@ -5,6 +5,9 @@ use crate::agent_runtime::provider_attachment::{
     build_attachment_transport_error_text, build_missing_attachment_replay_text,
     read_provider_attachment,
 };
+use crate::agent_runtime::provider_cache_policy::{
+    ProviderCacheHintSupport, default_provider_cache_candidates, lower_provider_cache_policy,
+};
 use crate::agent_runtime::provider_prompt_layers::provider_fallback_system_prompt;
 use crate::agent_runtime::provider_protocol_anthropic_decoders::sse::iter_sse_messages;
 use crate::agent_runtime::provider_protocol_bridge::{
@@ -39,6 +42,7 @@ use reqwest::header::HeaderMap;
 use serde::Deserialize;
 use serde_json::{Map as JsonMap, Value, json};
 use std::collections::{BTreeSet, HashMap};
+use vulcan_context::RuntimeProviderNativeStateEnvelope;
 use vulcan_core::provider::VulcanProviderDeltaSink;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage, ConversationPayload as CoreConversationPayload,
@@ -582,6 +586,8 @@ where
         &finalized_tool_calls,
         saw_reasoning_field.then_some(raw_reasoning_text),
         provider_visible_assistant_fields,
+        provider_id,
+        model_id,
     );
     let mut assistant_content = Vec::new();
     if !assistant_text.is_empty() {
@@ -682,6 +688,10 @@ fn build_openai_compatible_request_payload(
         });
 
     let system_prompt = provider_fallback_system_prompt(&snapshot);
+    let _unsupported_cache_lowering = lower_provider_cache_policy(
+        &default_provider_cache_candidates(),
+        ProviderCacheHintSupport::Unsupported,
+    );
     let mut payload = match snapshot.additional_params {
         Some(Value::Object(object)) => object,
         Some(other) => {
@@ -703,13 +713,20 @@ fn build_openai_compatible_request_payload(
         current_history
             .iter()
             .map(|message| {
-                core_message_to_openai_compatible_message(message, interleaved_reasoning.as_ref())
+                core_message_to_openai_compatible_message(
+                    message,
+                    interleaved_reasoning.as_ref(),
+                    snapshot.provider_id.as_str(),
+                    snapshot.model_id.as_str(),
+                )
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
     messages.push(core_message_to_openai_compatible_message(
         &current_prompt,
         interleaved_reasoning.as_ref(),
+        snapshot.provider_id.as_str(),
+        snapshot.model_id.as_str(),
     )?);
 
     if include_model_field {
@@ -767,6 +784,8 @@ fn ensure_openai_compatible_stream_usage_requested(
 fn core_message_to_openai_compatible_message(
     message: &CoreConversationMessage,
     interleaved_reasoning: Option<&ModelInterleavedCapability>,
+    provider_id: &str,
+    model_id: &str,
 ) -> Result<Value, VulcanCoreError> {
     match &message.payload {
         CoreConversationPayload::UserText { text, attachments } => {
@@ -840,7 +859,13 @@ fn core_message_to_openai_compatible_message(
                 if openai_compatible_supports_native_interleaved_replay(interleaved_reasoning) {
                     provider_message_state
                         .as_ref()
-                        .and_then(parse_openai_compatible_provider_message_state)
+                        .and_then(|state| {
+                            parse_openai_compatible_provider_message_state(
+                                state,
+                                provider_id,
+                                model_id,
+                            )
+                        })
                         .unwrap_or_default()
                 } else {
                     JsonMap::new()
@@ -1146,6 +1171,8 @@ fn build_openai_compatible_provider_message_state(
     finalized_tool_calls: &[CoreConversationToolCall],
     flattened_reasoning_text: Option<String>,
     mut provider_visible_fields: JsonMap<String, Value>,
+    provider_id: &str,
+    model_id: &str,
 ) -> Option<Value> {
     if provider_visible_fields.is_empty() && flattened_reasoning_text.is_none() {
         return None;
@@ -1184,7 +1211,7 @@ fn build_openai_compatible_provider_message_state(
     }
     ensure_openai_compatible_assistant_message_has_required_payload(&mut provider_visible_fields);
 
-    Some(Value::Object(JsonMap::from_iter([
+    let payload = Value::Object(JsonMap::from_iter([
         (
             String::from("protocol"),
             Value::String(String::from(
@@ -1195,13 +1222,40 @@ fn build_openai_compatible_provider_message_state(
             String::from("assistant_message"),
             Value::Object(provider_visible_fields),
         ),
-    ])))
+    ]));
+    Some(
+        serde_json::to_value(RuntimeProviderNativeStateEnvelope::new(
+            OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL,
+            provider_id,
+            model_id,
+            payload.clone(),
+        ))
+        .unwrap_or(payload),
+    )
 }
 
 /// Restores one previously persisted OpenAI-compatible provider_message_state into the raw assistant-message object expected by the wire protocol.
 /// 将一份已持久化的 OpenAI 兼容 provider_message_state 恢复为线协议期望的原生助手消息对象。
-fn parse_openai_compatible_provider_message_state(state: &Value) -> Option<JsonMap<String, Value>> {
-    let object = state.as_object()?;
+fn parse_openai_compatible_provider_message_state(
+    state: &Value,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<JsonMap<String, Value>> {
+    let payload =
+        match serde_json::from_value::<RuntimeProviderNativeStateEnvelope>(state.clone()).ok() {
+            Some(envelope)
+                if envelope.matches_scope(
+                    OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL,
+                    provider_id,
+                    model_id,
+                ) =>
+            {
+                envelope.payload
+            }
+            Some(_) => return None,
+            None => state.clone(),
+        };
+    let object = payload.as_object()?;
     if object.get("protocol")?.as_str()? != OPENAI_COMPATIBLE_PROVIDER_MESSAGE_STATE_PROTOCOL {
         return None;
     }
@@ -1399,6 +1453,7 @@ mod tests {
         augment_openai_compatible_error_with_tool_context,
         build_openai_compatible_provider_message_state, build_openai_compatible_request_payload,
         collect_openai_compatible_function_declaration_indices, normalize_openai_compatible_chunk,
+        parse_openai_compatible_provider_message_state,
         provider_tool_definition_to_openai_compatible_tool,
     };
     use crate::agent_runtime::provider_protocol_tool_definition::ProviderToolDefinition;
@@ -1535,6 +1590,67 @@ mod tests {
         assert_eq!(payload["stream"], true);
         assert_eq!(payload["reasoning"]["effort"], "high");
         assert_eq!(payload["tools"][0]["function"]["name"], "read_file");
+    }
+
+    /// Verifies the MiniMax OpenAI-compatible golden payload uses chat content parts with inline image data URLs.
+    /// 验证 MiniMax OpenAI 兼容 golden 载荷会使用 Chat content parts 并以内联图片 Data URL 表达。
+    #[test]
+    fn golden_fixture_minimax_image_understanding_payload_shape() {
+        let attachment = build_test_attachment(
+            "jpg",
+            ConversationAttachmentKind::Image,
+            "image/jpeg",
+            "minimax-image.jpg",
+        );
+        let request = OpenAiCompatibleCoreTurnRequest {
+            snapshot: CoreProviderRequestSnapshot {
+                provider_id: String::from("minimax-cn-coding-plan"),
+                model_id: String::from("MiniMax-M3"),
+                system_prompt: String::from("system prompt"),
+                prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                    String::from("system prompt"),
+                ),
+                prompt: String::from("理解这个图片"),
+                history: Vec::new(),
+                temperature: None,
+                max_turns: 8,
+                tool_schemas: Vec::new(),
+                additional_params: None,
+                request_headers: None,
+                continuation: CoreProviderContinuation::default(),
+            },
+            current_history: Vec::new(),
+            current_prompt: CoreConversationMessage {
+                id: String::from("user-image"),
+                payload: CoreConversationPayload::UserText {
+                    text: String::from("理解这个图片"),
+                    attachments: vec![attachment.clone()],
+                },
+            },
+            interleaved_reasoning: None,
+        };
+
+        let payload = build_openai_compatible_request_payload("MiniMax-M3", request, &[], true)
+            .expect("MiniMax golden payload should build");
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        let content = messages[1]["content"]
+            .as_array()
+            .expect("user content should be an array");
+
+        assert_eq!(payload["model"], "MiniMax-M3");
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "理解这个图片");
+        assert_eq!(content[1]["type"], "image_url");
+        assert_eq!(
+            content[1]["image_url"]["url"],
+            json!("data:image/jpeg;base64,AAECAw==")
+        );
+
+        let _ = std::fs::remove_file(&attachment.local_path);
     }
 
     /// Verifies OpenAI-compatible request payloads append host function tools after provider-native tool patches instead of overwriting them.
@@ -1809,12 +1925,14 @@ mod tests {
                     { "type": "summary", "text": "再汇总结果。" }
                 ]),
             )]),
+            "openai",
+            "gpt-test",
         )
         .expect("provider message state should exist");
 
-        let assistant_message = state["assistant_message"]
-            .as_object()
-            .expect("assistant message should be one object");
+        let assistant_message =
+            parse_openai_compatible_provider_message_state(&state, "openai", "gpt-test")
+                .expect("assistant message should be one object");
         assert!(assistant_message.get("reasoning_content").is_none());
         assert_eq!(assistant_message["content"], json!("已完成。"));
         assert_eq!(
@@ -2349,6 +2467,76 @@ mod tests {
             .expect("messages should be an array");
         assert!(without_messages[0].get("reasoning_details").is_none());
         assert_eq!(without_messages[0]["content"], "先做规划。");
+    }
+
+    /// Verifies scoped OpenAI-compatible provider state is ignored after provider or model switches.
+    /// 验证带作用域的 OpenAI 兼容 Provider 状态在切换 Provider 或模型后会被忽略。
+    #[test]
+    fn request_payload_ignores_scoped_openai_compatible_state_after_provider_switch() {
+        let assistant_state = build_openai_compatible_provider_message_state(
+            "先做规划。",
+            &[],
+            None,
+            JsonMap::from_iter([(
+                String::from("reasoning_details"),
+                json!([{ "type": "summary", "text": "MiniMax 内部规划。" }]),
+            )]),
+            "minimax-cn-coding-plan",
+            "minimax-m3",
+        )
+        .expect("provider message state should exist");
+        let assistant_message = CoreConversationMessage {
+            id: String::from("assistant-1"),
+            payload: CoreConversationPayload::Assistant {
+                text: String::from("先做规划。"),
+                reasoning: String::new(),
+                provider_message_id: Some(String::from("resp-1")),
+                provider_message_state: Some(assistant_state),
+                tool_calls: Vec::new(),
+                usage: None,
+            },
+        };
+        let current_prompt = CoreConversationMessage {
+            id: String::from("user-1"),
+            payload: CoreConversationPayload::UserText {
+                text: String::from("继续"),
+                attachments: Vec::new(),
+            },
+        };
+
+        let payload = build_openai_compatible_request_payload(
+            "qwen-test",
+            OpenAiCompatibleCoreTurnRequest {
+                snapshot: CoreProviderRequestSnapshot {
+                    provider_id: String::from("openai-compatible"),
+                    model_id: String::from("qwen-test"),
+                    system_prompt: String::new(),
+                    prompt_layers: vulcan_core::types::ProviderPromptLayers::from_system_prompt(
+                        String::new().clone(),
+                    ),
+                    prompt: String::from("继续"),
+                    history: Vec::new(),
+                    temperature: None,
+                    max_turns: 4,
+                    tool_schemas: Vec::new(),
+                    additional_params: None,
+                    request_headers: None,
+                    continuation: CoreProviderContinuation::default(),
+                },
+                current_history: vec![assistant_message],
+                current_prompt,
+                interleaved_reasoning: Some(ModelInterleavedCapability::Enabled(true)),
+            },
+            &[],
+            true,
+        )
+        .expect("payload should build");
+
+        let messages = payload["messages"]
+            .as_array()
+            .expect("messages should be an array");
+        assert!(messages[0].get("reasoning_details").is_none());
+        assert_eq!(messages[0]["content"], "先做规划。");
     }
 
     /// Verifies OpenAI-compatible function-tool conversion fills in explicit array and nested object types so Gemini-backed proxy routes can validate host schemas.

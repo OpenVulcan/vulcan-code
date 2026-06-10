@@ -3,10 +3,174 @@
 
 use super::*;
 use crate::model::VmmWritebackOutboxEntry;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use vulcan_context::{ContextBudgetSeverity, observed_input_tokens_from_usage};
-use vulcan_core::types::ProviderUsageSnapshot;
+use vulcan_core::types::{ProviderRequestSnapshot, ProviderUsageSnapshot};
 
 impl VulcanWorkbench {
+    /// Records one provider request checkpoint into the session runtime audit log.
+    /// 将单个 Provider 请求检查点记录到会话运行时审计日志。
+    pub(super) fn record_provider_request_checkpoint(
+        &mut self,
+        session_id: SessionId,
+        snapshot: &ProviderRequestSnapshot,
+    ) {
+        let Some(controller_runtime) = self.controller_runtime.as_ref() else {
+            return;
+        };
+        let timestamp = current_unix_millis_text();
+        let checkpoint_id = format!(
+            "provider-request-{}-{}",
+            session_id,
+            stable_provider_request_snapshot_hash(snapshot)
+        );
+        let event = vulcan_context::RuntimeLogEvent::ProviderRequestCheckpoint(
+            vulcan_context::RuntimeProviderRequestCheckpointEvent {
+                turn_id: None,
+                checkpoint_id,
+                provider_id: snapshot.provider_id.clone(),
+                model_id: snapshot.model_id.clone(),
+                provider_family: snapshot.provider_id.clone(),
+                capability_fingerprint: None,
+                prompt_fingerprint: Some(stable_provider_prompt_fingerprint(snapshot)),
+                injection_fingerprint: None,
+                request_fingerprint: Some(stable_provider_request_snapshot_hash(snapshot)),
+                cache_policy_fingerprint: Some(stable_provider_cache_policy_fingerprint(snapshot)),
+                cache_policy_diagnostic: provider_cache_policy_diagnostic(snapshot),
+                converter_version: 1,
+            },
+        );
+        if let Err(error) = crate::workspace_store::record_session_runtime_audit_event(
+            &controller_runtime.data_root,
+            session_id,
+            event,
+            &timestamp,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "Provider 请求审计写入失败",
+                format!("会话 `{session_id}` 的 Provider request checkpoint 未能写入：{error}"),
+            );
+        }
+    }
+
+    /// Records one provider response checkpoint into the session runtime audit log.
+    /// 将单个 Provider 响应检查点记录到会话运行时审计日志。
+    pub(super) fn record_provider_response_checkpoint(
+        &mut self,
+        session_id: SessionId,
+        preparation: Option<&ExecutionPreparation>,
+        conversation_state: Option<&crate::conversation_protocol::SessionConversationState>,
+        provider_request_count: usize,
+        usage: Option<&ProviderUsageSnapshot>,
+        error: Option<&String>,
+    ) {
+        let Some(controller_runtime) = self.controller_runtime.as_ref() else {
+            return;
+        };
+        let Some(preparation) = preparation else {
+            return;
+        };
+        let timestamp = current_unix_millis_text();
+        let finish_reason = if error.is_some() {
+            "failed"
+        } else {
+            "completed"
+        };
+        let native_state = latest_provider_native_state_envelope_from_conversation_state(
+            conversation_state,
+            &preparation.model_blueprint.provider_id,
+            &preparation.model_blueprint.model_id,
+        );
+        let checkpoint_id = format!(
+            "provider-response-{}-{}",
+            session_id,
+            stable_provider_response_checkpoint_hash(
+                preparation,
+                provider_request_count,
+                usage,
+                error,
+            )
+        );
+        let event = vulcan_context::RuntimeLogEvent::ProviderResponseCheckpoint(
+            vulcan_context::RuntimeProviderResponseCheckpointEvent {
+                turn_id: preparation
+                    .boundary_events
+                    .first()
+                    .and_then(|event| event.turn_id.clone()),
+                checkpoint_id,
+                provider_id: preparation.model_blueprint.provider_id.clone(),
+                model_id: preparation.model_blueprint.model_id.clone(),
+                provider_family: preparation.model_blueprint.api_family_key().to_string(),
+                finish_reason: Some(finish_reason.to_string()),
+                native_state,
+                usage: usage.cloned(),
+            },
+        );
+        if let Err(error) = crate::workspace_store::record_session_runtime_audit_event(
+            &controller_runtime.data_root,
+            session_id,
+            event,
+            &timestamp,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "Provider 响应审计写入失败",
+                format!("会话 `{session_id}` 的 Provider response checkpoint 未能写入：{error}"),
+            );
+        }
+    }
+
+    /// Records one provider lowering repair into the session runtime audit log.
+    /// 将单个 Provider 转换修复记录到会话运行时审计日志。
+    pub(super) fn record_provider_lowering_repair(
+        &mut self,
+        session_id: SessionId,
+        event: vulcan_context::RuntimeProviderLoweringRepairEvent,
+    ) {
+        let Some(controller_runtime) = self.controller_runtime.as_ref() else {
+            return;
+        };
+        if let Err(error) = crate::workspace_store::record_session_runtime_audit_event(
+            &controller_runtime.data_root,
+            session_id,
+            vulcan_context::RuntimeLogEvent::ProviderLoweringRepair(event),
+            &current_unix_millis_text(),
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "Provider 转换修复审计写入失败",
+                format!("会话 `{session_id}` 的 Provider lowering repair 未能写入：{error}"),
+            );
+        }
+    }
+
+    /// Records one context-injection merge audit event after compaction folds injection state.
+    /// 在压缩折叠注入状态后记录一条上下文注入合并审计事件。
+    fn record_runtime_injection_merged(
+        &mut self,
+        session_id: SessionId,
+        event: vulcan_context::RuntimeInjectionMergedEvent,
+        timestamp: &str,
+    ) {
+        let Some(controller_runtime) = self.controller_runtime.as_ref() else {
+            return;
+        };
+        if let Err(error) = crate::workspace_store::record_session_runtime_injection_merged(
+            &controller_runtime.data_root,
+            session_id,
+            event,
+            timestamp,
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "上下文注入合并审计写入失败",
+                format!("会话 `{session_id}` 的 InjectionMerged 未能写入：{error}"),
+            );
+        }
+    }
+
     /// Pushes a new activity entry while keeping the most recent items first.
     /// 追加新的活动日志项，并保持最新记录位于最前面。
     pub(super) fn push_activity(
@@ -711,19 +875,66 @@ impl VulcanWorkbench {
             .context_assembly_fingerprint
             .clone()
             .or(checkpoint_assembly_fingerprint);
+        if let Some(controller_runtime) = self.controller_runtime.as_ref() {
+            match vulcan_workspace_store::workspace_store::backup_session_runtime_log_before_compaction(
+                &controller_runtime.data_root,
+                session_id,
+                &compaction_id,
+                &created_at,
+            ) {
+                Ok(copied_files) if !copied_files.is_empty() => {
+                    self.push_activity(
+                        ActivityLevel::Info,
+                        "上下文压缩备份",
+                        format!("已备份 runtime 日志文件 {} 个。", copied_files.len()),
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    self.push_activity(
+                        ActivityLevel::Warning,
+                        "上下文压缩备份失败",
+                        error,
+                    );
+                }
+            }
+        }
         self.session_compactions
             .entry(session_id)
             .or_default()
             .push(checkpoint);
         let runtime_state_updated_at = created_at.clone();
+        let mut injection_merge_event = None;
         {
             let runtime_state = self.ensure_session_runtime_state_mut(session_id);
-            runtime_state.last_compaction_id = Some(compaction_id);
+            let previous_persistent_fingerprint =
+                persistent_injection_fingerprint(&runtime_state.context_injection_state);
+            runtime_state.last_compaction_id = Some(compaction_id.clone());
             runtime_state.context_start_message_id = context_start_message_id;
             runtime_state.anchor_context_budget_fingerprint = checkpoint_budget_fingerprint;
             runtime_state.anchor_context_assembly_fingerprint = checkpoint_assembly_fingerprint;
             runtime_state.context_injection_state.apply_compaction();
+            let merged_baseline_fingerprint =
+                persistent_injection_fingerprint(&runtime_state.context_injection_state);
+            let source_node_ids =
+                persistent_injection_source_node_ids(&runtime_state.context_injection_state);
+            if previous_persistent_fingerprint.is_some()
+                || merged_baseline_fingerprint.is_some()
+                || !source_node_ids.is_empty()
+            {
+                injection_merge_event = Some(vulcan_context::RuntimeInjectionMergedEvent {
+                    turn_id: None,
+                    merge_id: format!("injection-merge-{session_id}-{compaction_id}"),
+                    compaction_id: Some(compaction_id.clone()),
+                    previous_persistent_fingerprint,
+                    merged_baseline_fingerprint,
+                    source_node_ids,
+                });
+            }
             runtime_state.updated_at = created_at;
+        }
+        if let Some(event) = injection_merge_event {
+            self.record_runtime_injection_merged(session_id, event, &runtime_state_updated_at);
         }
         self.refresh_vmm_hook_config_snapshot();
         if let Some(summary_message_id) = summary_message_id {
@@ -1688,6 +1899,14 @@ impl VulcanWorkbench {
             controller_events,
         } = report;
         let is_success = error.is_none();
+        self.record_provider_response_checkpoint(
+            session_id,
+            preparation.as_ref(),
+            conversation_state.as_ref(),
+            provider_request_count,
+            last_successful_provider_usage.as_ref(),
+            error.as_ref(),
+        );
         // Main-session membership decides whether completion hooks, VMM side effects, persistence, and queue dispatch may run.
         // 主会话成员关系决定完成 hook、VMM 副作用、持久化与队列分发是否允许执行。
         let is_main_session = self.session_by_id(session_id).is_some();
@@ -2205,6 +2424,157 @@ fn apply_vmm_writeback_effects_to_runtime_state(
             }
         }
     }
+}
+
+/// Builds a stable fingerprint for one provider request snapshot without storing the raw prompt text.
+/// 为单个 Provider 请求快照构建稳定指纹，同时不保存原始提示词正文。
+fn stable_provider_request_snapshot_hash(snapshot: &ProviderRequestSnapshot) -> String {
+    let serialized = serde_json::to_string(snapshot).unwrap_or_else(|_| {
+        format!(
+            "{}:{}:{}:{}",
+            snapshot.provider_id,
+            snapshot.model_id,
+            snapshot.history.len(),
+            snapshot.tool_schemas.len()
+        )
+    });
+    let mut hasher = DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Builds a stable prompt fingerprint for request audit records without persisting prompt content.
+/// 为请求审计记录构建稳定提示词指纹，同时不持久化提示词内容。
+fn stable_provider_prompt_fingerprint(snapshot: &ProviderRequestSnapshot) -> String {
+    let mut hasher = DefaultHasher::new();
+    snapshot.provider_id.hash(&mut hasher);
+    snapshot.model_id.hash(&mut hasher);
+    snapshot.system_prompt.hash(&mut hasher);
+    snapshot.prompt.hash(&mut hasher);
+    snapshot.history.len().hash(&mut hasher);
+    snapshot.tool_schemas.len().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Builds a stable cache-policy fingerprint for one request without storing prompt bodies.
+/// 为单个请求构建稳定缓存策略指纹，同时不存储提示词正文。
+fn stable_provider_cache_policy_fingerprint(snapshot: &ProviderRequestSnapshot) -> String {
+    let mut hasher = DefaultHasher::new();
+    snapshot.provider_id.hash(&mut hasher);
+    snapshot.model_id.hash(&mut hasher);
+    (!snapshot.system_prompt.trim().is_empty()).hash(&mut hasher);
+    snapshot.history.len().hash(&mut hasher);
+    snapshot.tool_schemas.len().hash(&mut hasher);
+    (!snapshot.prompt.trim().is_empty()).hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// Returns the cache-policy diagnostic for providers that cannot represent cache hints.
+/// 返回无法表达缓存提示的 Provider 对应缓存策略诊断。
+fn provider_cache_policy_diagnostic(snapshot: &ProviderRequestSnapshot) -> Option<String> {
+    let has_cacheable_boundary = !snapshot.system_prompt.trim().is_empty()
+        || !snapshot.prompt.trim().is_empty()
+        || !snapshot.tool_schemas.is_empty()
+        || !snapshot.history.is_empty();
+    if has_cacheable_boundary
+        && !snapshot
+            .provider_id
+            .to_ascii_lowercase()
+            .contains("anthropic")
+    {
+        Some(String::from("cache_hints_unsupported"))
+    } else {
+        None
+    }
+}
+
+/// Builds a stable hash for a provider response checkpoint without storing response bodies.
+/// 为 Provider 响应检查点构建稳定哈希，且不存储响应正文。
+fn stable_provider_response_checkpoint_hash(
+    preparation: &ExecutionPreparation,
+    provider_request_count: usize,
+    usage: Option<&ProviderUsageSnapshot>,
+    error: Option<&String>,
+) -> String {
+    let mut hasher = DefaultHasher::new();
+    preparation.model_blueprint.provider_id.hash(&mut hasher);
+    preparation.model_blueprint.model_id.hash(&mut hasher);
+    preparation
+        .model_blueprint
+        .api_family_key()
+        .hash(&mut hasher);
+    preparation
+        .boundary_events
+        .first()
+        .and_then(|event| event.turn_id.as_deref())
+        .hash(&mut hasher);
+    provider_request_count.hash(&mut hasher);
+    error.is_some().hash(&mut hasher);
+    if let Some(error) = error {
+        error.hash(&mut hasher);
+    }
+    if let Some(usage) = usage
+        && let Ok(serialized_usage) = serde_json::to_string(usage)
+    {
+        serialized_usage.hash(&mut hasher);
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+/// Extracts the latest scoped provider-native state envelope from one terminal conversation state.
+/// 从单个终态会话状态中提取最新的带作用域 Provider 原生状态 envelope。
+fn latest_provider_native_state_envelope_from_conversation_state(
+    state: Option<&crate::conversation_protocol::SessionConversationState>,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<vulcan_context::RuntimeProviderNativeStateEnvelope> {
+    state?
+        .messages
+        .iter()
+        .rev()
+        .filter_map(|message| match &message.payload {
+            crate::conversation_protocol::SessionConversationPayload::Assistant {
+                provider_message_state: Some(provider_message_state),
+                ..
+            } => serde_json::from_value::<vulcan_context::RuntimeProviderNativeStateEnvelope>(
+                provider_message_state.clone(),
+            )
+            .ok(),
+            _ => None,
+        })
+        .find(|envelope| envelope.provider_id == provider_id && envelope.model_id == model_id)
+}
+
+/// Builds a stable fingerprint for persistent injection blocks without storing their content.
+/// 为长期注入块构建稳定指纹，同时不保存注入正文。
+fn persistent_injection_fingerprint(
+    state: &vulcan_context_injection::ContextInjectionState,
+) -> Option<String> {
+    let view = state.resolve_view();
+    if view.persistent_blocks.is_empty() {
+        return None;
+    }
+    let mut hasher = DefaultHasher::new();
+    view.persistent_blocks.hash(&mut hasher);
+    Some(format!("{:016x}", hasher.finish()))
+}
+
+/// Returns stable non-content source identifiers for persistent injection items.
+/// 返回长期注入内容项的稳定非正文来源标识。
+fn persistent_injection_source_node_ids(
+    state: &vulcan_context_injection::ContextInjectionState,
+) -> Vec<String> {
+    state
+        .groups
+        .values()
+        .filter(|group| group.kind == vulcan_context_injection::InjectionKind::Persistent)
+        .flat_map(|group| {
+            group
+                .items
+                .values()
+                .map(move |item| format!("{}:{}", group.tag, item.content_hash))
+        })
+        .collect()
 }
 
 /// Builds one stable hash for a VMM writeback request.

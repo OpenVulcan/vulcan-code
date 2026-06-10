@@ -245,6 +245,15 @@ pub fn stream_prompt_compaction_foundation_job(
             preparation,
         )
         .await;
+        let bootstrap = match bootstrap {
+            Ok(bootstrap) => bootstrap,
+            Err(error) => {
+                yield PromptCompactionStreamEvent::Finished(Err(format!(
+                    "Prompt compaction bootstrap failed: {error}"
+                )));
+                return;
+            }
+        };
         let launch = build_runtime_stream_launch_payload(&launch_request, bootstrap, None);
 
         let runtime_stream =
@@ -308,6 +317,7 @@ fn build_prompt_compaction_launch_request(
         project_vmm: Default::default(),
         session_vmm: Default::default(),
         boundary_events: Vec::new(),
+        runtime_system_updates: Vec::new(),
     }
 }
 

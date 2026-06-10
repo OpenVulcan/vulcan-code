@@ -500,6 +500,69 @@ impl ContextInjectionState {
         self.remove_empty_groups();
     }
 
+    /// Removes one whole injection group when its kind and tag match the requested scope.
+    /// 在类型与标签匹配请求范围时移除整个注入分组。
+    pub fn remove_group(&mut self, kind: Option<InjectionKind>, tag: &str) -> bool {
+        let tag = normalize_tag(tag);
+        if tag.is_empty() {
+            return false;
+        }
+        let should_remove = self
+            .groups
+            .get(&tag)
+            .map(|group| kind.is_none_or(|kind| group.kind == kind))
+            .unwrap_or(false);
+        if should_remove {
+            self.groups.remove(&tag);
+        }
+        should_remove
+    }
+
+    /// Removes active injection items by stable dedupe key within the requested kind.
+    /// 在请求类型范围内按稳定去重键移除活动注入内容项。
+    pub fn remove_items_by_dedupe_key(
+        &mut self,
+        kind: Option<InjectionKind>,
+        dedupe_key: &str,
+    ) -> bool {
+        let dedupe_key = normalize_content(dedupe_key);
+        if dedupe_key.is_empty() {
+            return false;
+        }
+        let changed = self.remove_items_matching(kind, |item| {
+            item.dedupe_key.as_deref() == Some(dedupe_key.as_str())
+        });
+        if changed {
+            self.remove_empty_groups();
+        }
+        changed
+    }
+
+    /// Removes active injection items whose structured metadata contains one exact string field.
+    /// 移除结构化元数据包含某个精确字符串字段的活动注入内容项。
+    pub fn remove_items_by_metadata_string(
+        &mut self,
+        kind: Option<InjectionKind>,
+        field: &str,
+        expected: &str,
+    ) -> bool {
+        let field = field.trim();
+        if field.is_empty() {
+            return false;
+        }
+        let changed = self.remove_items_matching(kind, |item| {
+            item.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(field))
+                .and_then(Value::as_str)
+                == Some(expected)
+        });
+        if changed {
+            self.remove_empty_groups();
+        }
+        changed
+    }
+
     /// Builds the provider-facing resolved view without mutating persisted state.
     /// 构建面向 Provider 的解析视图，同时不修改持久化状态。
     pub fn resolve_view(&self) -> ResolvedInjectionView {
@@ -586,6 +649,25 @@ impl ContextInjectionState {
                 .then_with(|| left.tag.cmp(&right.tag))
         });
         groups
+    }
+
+    /// Removes active items selected by one predicate while respecting the requested kind boundary.
+    /// 按一个谓词移除活动内容项，同时遵守请求的注入类型边界。
+    fn remove_items_matching(
+        &mut self,
+        kind: Option<InjectionKind>,
+        mut predicate: impl FnMut(&InjectionStateItem) -> bool,
+    ) -> bool {
+        let mut changed = false;
+        for group in self.groups.values_mut() {
+            if kind.is_some_and(|kind| group.kind != kind) {
+                continue;
+            }
+            let before = group.items.len();
+            group.items.retain(|_, item| !predicate(item));
+            changed |= group.items.len() != before;
+        }
+        changed
     }
 
     /// Removes tag groups that no longer contain active items.
@@ -921,6 +1003,12 @@ mod tests {
         )
     }
 
+    /// Builds one persistent insert for removal boundary tests.
+    /// 为移除边界测试构建一条长期插入操作。
+    fn persistent_insert(tag: &str, content: &str) -> InjectionInsert {
+        InjectionInsert::single(InjectionKind::Persistent, tag, "persistent", content, None)
+    }
+
     #[test]
     fn same_tag_and_content_resets_ttl_without_duplicate_items() {
         let mut state = ContextInjectionState::default();
@@ -953,6 +1041,50 @@ mod tests {
         );
         assert!(!view.transient_prefix.contains("TTL"));
         assert!(!view.transient_prefix.contains("source"));
+    }
+
+    #[test]
+    fn remove_group_respects_injection_kind_boundary() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(transient_insert("desc", "dynamic memory", 2), "1");
+        state.apply_insert(persistent_insert("vmm_profile_delta", "profile"), "1");
+
+        assert!(!state.remove_group(Some(InjectionKind::Persistent), "vmm_inject"));
+        assert!(state.groups.contains_key("vmm_inject"));
+        assert!(state.remove_group(Some(InjectionKind::Persistent), "vmm_profile_delta"));
+        assert!(!state.groups.contains_key("vmm_profile_delta"));
+    }
+
+    #[test]
+    fn remove_items_by_dedupe_key_respects_injection_kind_boundary() {
+        let mut transient = transient_insert("desc", "dynamic memory", 2);
+        transient.items[0].dedupe_key = Some(String::from("memory:1"));
+        let mut persistent = persistent_insert("profile_delta", "profile memory");
+        persistent.items[0].dedupe_key = Some(String::from("memory:1"));
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(transient, "1");
+        state.apply_insert(persistent, "1");
+
+        assert!(state.remove_items_by_dedupe_key(Some(InjectionKind::Transient), "memory:1"));
+
+        assert!(!state.groups.contains_key("vmm_inject"));
+        assert!(state.groups.contains_key("profile_delta"));
+    }
+
+    #[test]
+    fn remove_items_by_metadata_string_removes_matching_dynamic_memory() {
+        let mut insert = transient_insert("desc", "dynamic memory", 2);
+        insert.items[0].metadata = Some(serde_json::json!({ "memory_id": "m-1" }));
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(insert, "1");
+
+        assert!(state.remove_items_by_metadata_string(
+            Some(InjectionKind::Transient),
+            "memory_id",
+            "m-1"
+        ));
+
+        assert!(state.groups.is_empty());
     }
 
     #[test]

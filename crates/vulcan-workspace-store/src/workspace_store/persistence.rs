@@ -8,7 +8,8 @@ use super::segmented_session_store::{
     archive_segmented_session_by_id, create_segmented_session_in_location,
     delete_segmented_session_by_id, find_segmented_session_directory,
     find_segmented_session_directory_by_id, list_segmented_session_catalog,
-    restore_segmented_session_by_id, state_document_from_runtime_state, write_state,
+    restore_segmented_session_by_id, state_document_from_runtime_state,
+    sync_runtime_log_from_conversation_state, write_state,
 };
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
@@ -639,7 +640,13 @@ async fn persist_segmented_session_runtime_state_checkpoint(
         return Ok(());
     };
     let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
-    write_state(&session_dir, &state_document)
+    write_state(&session_dir, &state_document)?;
+    sync_runtime_log_from_conversation_state(
+        &session_dir,
+        &runtime_state.conversation_state,
+        &runtime_state.updated_at,
+    )?;
+    Ok(())
 }
 
 /// Mirrors one full session update into the segmented append-only stream and overwrite state file.
@@ -660,6 +667,11 @@ async fn persist_segmented_session_tail_update(
     if let Some(runtime_state) = runtime_state {
         let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
         write_state(&session_dir, &state_document)?;
+        sync_runtime_log_from_conversation_state(
+            &session_dir,
+            &runtime_state.conversation_state,
+            &runtime_state.updated_at,
+        )?;
     }
     Ok(())
 }

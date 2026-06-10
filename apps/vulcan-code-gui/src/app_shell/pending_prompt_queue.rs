@@ -1179,6 +1179,7 @@ impl VulcanWorkbench {
         let provider_reasoning_effort = None;
         self.hydrated_session_ids.insert(session_id);
         self.dirty_session_payload_ids.insert(session_id);
+        let prompt_turn_id = prompt_turn_start.precheck_request.turn_id().to_string();
         let continuation = {
             let runtime_state = self
                 .session_runtime_state
@@ -1244,6 +1245,27 @@ impl VulcanWorkbench {
                     .flatten()
                 })
         });
+        request.runtime_system_updates = match self.controller_runtime.as_ref() {
+            Some(controller_runtime) => {
+                match crate::workspace_store::load_session_runtime_system_updates(
+                    &controller_runtime.data_root,
+                    session_id,
+                ) {
+                    Ok(updates) => updates,
+                    Err(error) => {
+                        self.push_activity(
+                            ActivityLevel::Warning,
+                            "Runtime system update 读取失败",
+                            format!(
+                                "会话 `{session_title}` 的 runtime system update 未能读取，本轮将不应用时间顺序系统更新：{error}"
+                            ),
+                        );
+                        Vec::new()
+                    }
+                }
+            }
+            None => Vec::new(),
+        };
         if let (Some(project_id), Some(runtime_state), Some(controller_runtime)) = (
             owning_project_id.as_deref(),
             self.session_runtime_state(session_id).cloned(),
@@ -1262,6 +1284,27 @@ impl VulcanWorkbench {
                 format!(
                     "会话 `{session_title}` 的当前上下文未能立即写入独立文件，但内存态执行仍会继续：{error}"
                 ),
+            );
+        }
+        if let (Some(injection), Some(controller_runtime)) = (
+            request.context_injection.as_ref(),
+            self.controller_runtime.as_ref(),
+        ) && let Err(error) = crate::workspace_store::record_session_runtime_injection_applied(
+            &controller_runtime.data_root,
+            session_id,
+            Some(prompt_turn_id),
+            Some(injection.fingerprint.clone()),
+            &injection.persistent_blocks,
+            injection
+                .has_transient()
+                .then_some(injection.transient_prefix.as_str()),
+            None,
+            &current_unix_millis_text(),
+        ) {
+            self.push_activity(
+                ActivityLevel::Warning,
+                "注入审计写入失败",
+                format!("会话 `{session_title}` 的 runtime 注入审计未能写入：{error}"),
             );
         }
         let execution_mode = if self.selected_agent_requires_plan_mode() {

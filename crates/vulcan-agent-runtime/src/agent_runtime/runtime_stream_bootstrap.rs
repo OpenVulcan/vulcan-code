@@ -15,6 +15,7 @@ use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use std::sync::Arc;
+use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
@@ -67,6 +68,9 @@ pub(crate) struct RuntimeStreamBootstrap {
     /// Host-owned controller that tracks streaming deltas and execution events.
     /// 负责跟踪流式增量与执行事件的宿主自有控制器。
     pub core_controller: VulcanCoreController,
+    /// Provider lowering repair events detected before streaming starts.
+    /// 流式执行开始前检测到的 Provider 转换修复事件。
+    pub lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
 }
 
 /// Builds the full bootstrap payload required before provider streaming starts.
@@ -76,7 +80,7 @@ pub(crate) async fn bootstrap_runtime_stream(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     request: &ExecutionPreparationRequest,
     mut preparation: ExecutionPreparation,
-) -> RuntimeStreamBootstrap {
+) -> Result<RuntimeStreamBootstrap, String> {
     let RuntimeBootstrapResources {
         active_agent,
         task_runtime,
@@ -93,7 +97,8 @@ pub(crate) async fn bootstrap_runtime_stream(
         request_history,
         core_snapshot,
         core_controller,
-    } = build_runtime_bootstrap_core(&preparation, request, active_agent.as_ref());
+        lowering_repair_events,
+    } = build_runtime_bootstrap_core(&preparation, request, active_agent.as_ref())?;
     let token_budget_runtime = foundation.token_budget_runtime();
     let prompt_purpose = preparation.prompt_purpose;
     seed_runtime_request_snapshot(
@@ -111,7 +116,7 @@ pub(crate) async fn bootstrap_runtime_stream(
     )
     .await;
 
-    RuntimeStreamBootstrap {
+    Ok(RuntimeStreamBootstrap {
         preparation,
         active_agent,
         task_runtime,
@@ -126,5 +131,6 @@ pub(crate) async fn bootstrap_runtime_stream(
         request_history,
         core_snapshot,
         core_controller,
-    }
+        lowering_repair_events,
+    })
 }

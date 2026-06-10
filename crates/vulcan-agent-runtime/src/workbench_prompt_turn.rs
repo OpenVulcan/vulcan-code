@@ -688,6 +688,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         project_vmm: input.project_configuration.vmm,
         session_vmm: runtime_state.vmm.clone(),
         boundary_events: input.start.boundary_events.clone(),
+        runtime_system_updates: Vec::new(),
     };
     Ok(SharedPromptTurnContinuation {
         request,

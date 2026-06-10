@@ -12,7 +12,9 @@ use crate::provider_config::{
 };
 use serde_json::Value;
 use std::path::PathBuf;
-use vulcan_context::{ContextAssembly, ContextBaseline, ContextRequestMode};
+use vulcan_context::{
+    ContextAssembly, ContextBaseline, ContextRequestMode, RuntimeSystemUpdateEvent,
+};
 use vulcan_core::types::{
     ConversationAttachment, CoreEvent as CoreControllerEvent,
     ProviderContextInjection as CoreProviderContextInjection, ProviderUsageSnapshot,
@@ -101,6 +103,9 @@ pub struct ExecutionPreparationRequest {
     /// session-boundary boundary events accepted before this provider execution starts.
     /// 本次 Provider 执行开始前已经接受的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,
+    /// Chronological runtime system updates loaded from `runtime.jsonl` for provider-visible lowering.
+    /// 从 `runtime.jsonl` 加载并用于 Provider 可见转换的时间顺序 runtime system update。
+    pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -276,6 +281,9 @@ pub struct ExecutionPreparation {
     /// session-boundary boundary events accepted before this prepared execution starts.
     /// 本次已准备执行开始前已经接受的 会话边界边界事件。
     pub boundary_events: Vec<SessionBoundaryEvent>,
+    /// Chronological runtime system updates loaded from `runtime.jsonl` for provider-visible lowering.
+    /// 从 `runtime.jsonl` 加载并用于 Provider 可见转换的时间顺序 runtime system update。
+    pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.

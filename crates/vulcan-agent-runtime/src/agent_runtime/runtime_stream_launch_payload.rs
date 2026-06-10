@@ -10,6 +10,7 @@ use crate::agent_runtime::task_runtime::{TaskExecutionRuntimeContext, TaskRuntim
 use crate::agent_runtime::token_budget_runtime::TokenBudgetRuntime;
 use crate::model::SessionId;
 use std::sync::Arc;
+use vulcan_context::RuntimeProviderLoweringRepairEvent;
 use vulcan_core::types::{
     ConversationMessage as CoreConversationMessage,
     ConversationSnapshot as CoreConversationSnapshot,
@@ -70,6 +71,9 @@ pub struct RuntimeStreamLaunch {
     /// Mutable streaming-loop state seeded from the bootstrapped core controller.
     /// 由已启动核心控制器播种得到的可变流式循环状态。
     pub(crate) stream_state: RuntimeStreamDeltaState,
+    /// Provider lowering repair events detected before the provider loop starts.
+    /// Provider 循环启动前检测到的 Provider 转换修复事件。
+    pub(crate) lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
 }
 
 /// Builds the final runtime-stream launch payload from one execution request and one completed bootstrap payload.
@@ -99,6 +103,7 @@ pub(crate) fn build_runtime_stream_launch_payload(
         request_history: bootstrap.request_history,
         core_snapshot: bootstrap.core_snapshot,
         stream_state: RuntimeStreamDeltaState::new(bootstrap.core_controller),
+        lowering_repair_events: bootstrap.lowering_repair_events,
     }
 }
 
@@ -243,6 +248,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 
@@ -275,6 +281,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 
@@ -330,6 +337,7 @@ mod tests {
             request_history: Vec::new(),
             core_snapshot,
             core_controller,
+            lowering_repair_events: Vec::new(),
         }
     }
 
@@ -518,13 +526,15 @@ mod tests {
         preparation.session_title = String::from("测试会话");
         preparation.workspace_path = String::from(r"D:\workspace");
         preparation.model_blueprint.capabilities.input_modalities = vec![String::from("text")];
-        let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None);
+        let runtime_core = build_runtime_bootstrap_core(&preparation, &request, None)
+            .expect("runtime bootstrap core should build");
         let crate::agent_runtime::runtime_stream_bootstrap_core::RuntimeBootstrapCore {
             system_preamble,
             prompt_layers: _,
             request_history,
             core_snapshot,
             core_controller,
+            lowering_repair_events: _,
         } = runtime_core;
         let latest_projected_message = core_snapshot
             .messages
@@ -559,6 +569,7 @@ mod tests {
             request_history,
             core_snapshot,
             core_controller,
+            lowering_repair_events: Vec::new(),
         };
 
         let launch = build_runtime_stream_launch_payload(&request, bootstrap, None);

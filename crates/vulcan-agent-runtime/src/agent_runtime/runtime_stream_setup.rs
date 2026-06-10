@@ -4,6 +4,7 @@
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::ExecutionPreparation;
 use crate::model::SessionId;
+use vulcan_context::RuntimeProviderLoweringRepairEvent;
 
 /// Builds the standard runtime-context event emitted right after preparation succeeds.
 /// 构建在准备成功后立即发出的标准运行时上下文事件。
@@ -24,13 +25,19 @@ pub(crate) fn build_runtime_start_events(
     session_id: SessionId,
     preparation: &ExecutionPreparation,
     discovery_events: Vec<RuntimeEvent>,
+    lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
 ) -> Vec<ExecutionStreamEvent> {
-    let mut events = Vec::with_capacity(discovery_events.len() + 2);
+    let mut events = Vec::with_capacity(discovery_events.len() + lowering_repair_events.len() + 2);
     events.push(ExecutionStreamEvent::Prepared(preparation.clone()));
     events.push(ExecutionStreamEvent::RuntimeEvent {
         session_id,
         event: build_runtime_context_event(preparation),
     });
+    events.extend(
+        lowering_repair_events
+            .into_iter()
+            .map(|event| ExecutionStreamEvent::ProviderLoweringRepair { session_id, event }),
+    );
     events.extend(
         discovery_events
             .into_iter()
@@ -109,6 +116,7 @@ mod tests {
             project_vmm: Default::default(),
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 
@@ -124,8 +132,12 @@ mod tests {
             "发现 1 个 MCP 服务",
         );
 
-        let events =
-            build_runtime_start_events(session_id, &preparation, vec![discovery_event.clone()]);
+        let events = build_runtime_start_events(
+            session_id,
+            &preparation,
+            vec![discovery_event.clone()],
+            Vec::new(),
+        );
 
         assert!(matches!(
             events.as_slice(),
@@ -136,6 +148,32 @@ mod tests {
             ] if prepared.session_title == "测试会话"
                 && context_event.title == "执行上下文"
                 && projected_discovery.title == discovery_event.title
+        ));
+    }
+
+    /// Verifies startup events include provider lowering repair audits discovered during bootstrap.
+    /// 验证启动事件会包含 bootstrap 期间发现的 Provider 转换修复审计。
+    #[test]
+    fn start_events_include_lowering_repair_audits() {
+        let preparation = build_test_preparation();
+        let session_id = Uuid::nil();
+        let repair = RuntimeProviderLoweringRepairEvent {
+            turn_id: Some(String::from("turn-1")),
+            repair_id: String::from("repair-1"),
+            provider_id: String::from("minimax-cn-coding-plan"),
+            model_id: String::from("MiniMax-M3"),
+            provider_family: String::from("anthropic-messages"),
+            action: String::from("fallback"),
+            reason: String::from("system_update_lowered_to_user_scoped_wrapper"),
+            affected_items: 1,
+        };
+
+        let events = build_runtime_start_events(session_id, &preparation, Vec::new(), vec![repair]);
+
+        assert!(matches!(
+            &events[2],
+            ExecutionStreamEvent::ProviderLoweringRepair { event, .. }
+                if event.reason == "system_update_lowered_to_user_scoped_wrapper"
         ));
     }
 }

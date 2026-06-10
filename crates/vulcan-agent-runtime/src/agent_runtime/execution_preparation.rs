@@ -272,6 +272,7 @@ pub(crate) fn prepare_execution(
         project_vmm,
         session_vmm,
         boundary_events: request.boundary_events.clone(),
+        runtime_system_updates: request.runtime_system_updates.clone(),
     })
 }
 
@@ -1187,6 +1188,7 @@ mod tests {
             project_vmm: VmmConfigLayer::default(),
             session_vmm: VmmConfigLayer::default(),
             boundary_events: Vec::new(),
+            runtime_system_updates: Vec::new(),
         }
     }
 }

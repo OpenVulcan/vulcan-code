@@ -68,13 +68,12 @@ pub(crate) fn build_host_controlled_turn_request(
         &mut current_prompt,
         config.context_injection.as_ref(),
     );
+    let provider_system_prompt = provider_system_prompt_with_persistent_injection(config);
+    let provider_prompt_layers = provider_prompt_layers_with_persistent_injection(config);
     let request_snapshot = build_openai_compatible_turn_request_snapshot(
         provider_id,
         model_id,
-        config
-            .prompt_layers
-            .render_or_legacy(config.system_prompt.as_str())
-            .as_str(),
+        provider_system_prompt.as_str(),
         &snapshot.continuation,
         &current_history,
         &current_prompt,
@@ -85,11 +84,7 @@ pub(crate) fn build_host_controlled_turn_request(
         additional_params,
     );
     let request_snapshot = CoreProviderRequestSnapshot {
-        prompt_layers: if config.prompt_layers.is_empty() {
-            CoreProviderPromptLayers::from_system_prompt(config.system_prompt.clone())
-        } else {
-            config.prompt_layers.clone()
-        },
+        prompt_layers: provider_prompt_layers,
         ..request_snapshot
     };
     let _ = live_sender.send(Ok(ProviderStreamDelta::RequestSnapshot(
@@ -104,6 +99,67 @@ pub(crate) fn build_host_controlled_turn_request(
     })
 }
 
+/// Builds the provider-facing system prompt with persistent injection rendered into the system layer.
+/// 构建 Provider 可见系统提示词，并将长期注入渲染进系统层。
+fn provider_system_prompt_with_persistent_injection(config: &CoreControllerConfig) -> String {
+    let base = config
+        .prompt_layers
+        .render_or_legacy(config.system_prompt.as_str());
+    append_persistent_injection_to_system_prompt(base, config.context_injection.as_ref())
+}
+
+/// Builds request-preview prompt layers with persistent injection carried by runtime context.
+/// 构建请求预览提示词层，并通过运行时上下文携带长期注入。
+fn provider_prompt_layers_with_persistent_injection(
+    config: &CoreControllerConfig,
+) -> CoreProviderPromptLayers {
+    let mut layers = if config.prompt_layers.is_empty() {
+        CoreProviderPromptLayers::from_system_prompt(config.system_prompt.clone())
+    } else {
+        config.prompt_layers.clone()
+    };
+    let Some(injection) = config
+        .context_injection
+        .as_ref()
+        .filter(|injection| !injection.persistent_blocks.is_empty())
+    else {
+        return layers;
+    };
+    let persistent_text = injection.persistent_blocks.join("\n\n");
+    if persistent_text.trim().is_empty() {
+        return layers;
+    }
+    let existing_runtime_context = layers.runtime_context.trim();
+    layers.runtime_context = if existing_runtime_context.is_empty() {
+        persistent_text
+    } else {
+        format!("{existing_runtime_context}\n\n{persistent_text}")
+    };
+    layers
+}
+
+/// Appends persistent injection blocks to a rendered system prompt.
+/// 将长期注入块追加到已渲染的系统提示词。
+fn append_persistent_injection_to_system_prompt(
+    system_prompt: String,
+    injection: Option<&CoreProviderContextInjection>,
+) -> String {
+    let Some(injection) = injection.filter(|injection| !injection.persistent_blocks.is_empty())
+    else {
+        return system_prompt;
+    };
+    let persistent_text = injection.persistent_blocks.join("\n\n");
+    if persistent_text.trim().is_empty() {
+        return system_prompt;
+    }
+    let trimmed_system_prompt = system_prompt.trim();
+    if trimmed_system_prompt.is_empty() {
+        persistent_text
+    } else {
+        format!("{trimmed_system_prompt}\n\n{persistent_text}")
+    }
+}
+
 /// Applies the provider-facing injection overlay to the outgoing request view without mutating canonical history.
 /// 将 Provider 可见注入覆盖层应用到出站请求视图，同时不修改规范历史。
 fn apply_context_injection_overlay(
@@ -114,24 +170,7 @@ fn apply_context_injection_overlay(
     let Some(injection) = injection.filter(|injection| !injection.is_empty()) else {
         return;
     };
-    let current_prompt_is_user = matches!(
-        current_prompt.payload,
-        CoreConversationPayload::UserText { .. }
-    );
-    if current_prompt_is_user && !injection.persistent_blocks.is_empty() {
-        let persistent_text = injection.persistent_blocks.join("\n\n");
-        current_history.push(CoreConversationMessage {
-            id: format!("context-injection-persistent-{}", injection.fingerprint),
-            payload: CoreConversationPayload::UserText {
-                text: persistent_text,
-                attachments: Vec::new(),
-            },
-        });
-    }
     let mut prefixes = Vec::new();
-    if !current_prompt_is_user && !injection.persistent_blocks.is_empty() {
-        prefixes.push(injection.persistent_blocks.join("\n\n"));
-    }
     if injection.has_transient() {
         prefixes.push(injection.transient_prefix.clone());
     }
@@ -259,11 +298,31 @@ mod tests {
         let CoreConversationPayload::UserText { text, .. } = &history[0].payload else {
             panic!("first history item should stay user text");
         };
-        assert!(text.starts_with("<persistent>"));
+        assert!(!text.contains("<persistent>"));
         assert!(text.contains("<manual_inject>"));
         assert!(matches!(
             prompt.payload,
             CoreConversationPayload::ToolResult { .. }
         ));
+    }
+
+    #[test]
+    fn persistent_injection_renders_into_system_prompt() {
+        let config = CoreControllerConfig {
+            system_prompt: String::from("base"),
+            context_injection: Some(CoreProviderContextInjection {
+                persistent_blocks: vec![String::from("<persistent>\n固定内容\n</persistent>")],
+                transient_prefix: String::new(),
+                fingerprint: String::from("p"),
+            }),
+            ..CoreControllerConfig::default()
+        };
+
+        let system_prompt = provider_system_prompt_with_persistent_injection(&config);
+        let prompt_layers = provider_prompt_layers_with_persistent_injection(&config);
+
+        assert!(system_prompt.starts_with("base"));
+        assert!(system_prompt.contains("<persistent>"));
+        assert!(prompt_layers.runtime_context.contains("<persistent>"));
     }
 }

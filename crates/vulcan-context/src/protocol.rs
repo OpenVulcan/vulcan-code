@@ -263,6 +263,7 @@ pub fn conversation_state_from_session_messages(
     messages: &[SessionMessageEntry],
 ) -> SessionConversationState {
     let mut state = SessionConversationState::default();
+    let mut protocol_messages = Vec::new();
     for message in messages {
         state.records.push(SessionConversationRecord {
             id: message.id.clone(),
@@ -276,10 +277,292 @@ pub fn conversation_state_from_session_messages(
         });
 
         if let Some(protocol_message) = session_message_to_protocol_message(message) {
-            state.messages.push(protocol_message);
+            protocol_messages.push(protocol_message);
         }
     }
+    state.messages = normalize_replayed_protocol_messages(protocol_messages);
     state
+}
+
+/// Normalizes replayed protocol messages so display-only tool rows cannot create dangling provider state.
+/// 归一化重放得到的协议消息，避免仅用于展示的工具行生成悬空 Provider 状态。
+pub(crate) fn normalize_replayed_protocol_messages(
+    messages: Vec<SessionConversationMessage>,
+) -> Vec<SessionConversationMessage> {
+    let mut normalized = Vec::with_capacity(messages.len());
+    let mut index = 0usize;
+    while index < messages.len() {
+        match &messages[index].payload {
+            SessionConversationPayload::Assistant { tool_calls, .. } if !tool_calls.is_empty() => {
+                let (assistant_end, merged_assistant) =
+                    collect_adjacent_tool_call_assistant_messages(&messages, index);
+                let (result_end, matched_results, complete) =
+                    collect_matching_tool_results(&messages, assistant_end, &merged_assistant);
+                if complete {
+                    normalized.push(merged_assistant);
+                    normalized.extend(matched_results);
+                    index = result_end;
+                } else {
+                    for message in &messages[index..assistant_end] {
+                        normalized.push(historical_tool_call_text_message(message));
+                    }
+                    index = assistant_end;
+                }
+            }
+            SessionConversationPayload::ToolResult { .. } => {
+                normalized.push(historical_tool_result_text_message(&messages[index]));
+                index += 1;
+            }
+            _ => {
+                normalized.push(messages[index].clone());
+                index += 1;
+            }
+        }
+    }
+    normalized
+}
+
+/// Collects adjacent assistant tool-call rows into one replayable assistant batch.
+/// 将相邻助手工具调用行收集为一个可重放的助手批次。
+fn collect_adjacent_tool_call_assistant_messages(
+    messages: &[SessionConversationMessage],
+    start_index: usize,
+) -> (usize, SessionConversationMessage) {
+    let mut cursor = start_index;
+    let mut text_parts = Vec::new();
+    let mut reasoning_parts = Vec::new();
+    let mut provider_message_id = None;
+    let mut provider_message_state = None;
+    let mut usage = None;
+    let mut tool_calls = Vec::new();
+    while cursor < messages.len() {
+        let SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            provider_message_id: message_provider_id,
+            provider_message_state: message_provider_state,
+            usage: message_usage,
+            tool_calls: message_tool_calls,
+        } = &messages[cursor].payload
+        else {
+            break;
+        };
+        if message_tool_calls.is_empty() {
+            break;
+        }
+        push_non_empty_text_part(&mut text_parts, text);
+        push_non_empty_text_part(&mut reasoning_parts, reasoning);
+        if provider_message_id.is_none() {
+            provider_message_id = message_provider_id.clone();
+        }
+        if provider_message_state.is_none() {
+            provider_message_state = message_provider_state.clone();
+        }
+        if usage.is_none() {
+            usage = message_usage.clone();
+        }
+        tool_calls.extend(message_tool_calls.clone());
+        cursor += 1;
+    }
+    let id = messages
+        .get(start_index)
+        .map(|message| message.id.clone())
+        .unwrap_or_default();
+    (
+        cursor,
+        SessionConversationMessage {
+            id,
+            payload: SessionConversationPayload::Assistant {
+                text: text_parts.join("\n\n"),
+                reasoning: reasoning_parts.join("\n\n"),
+                provider_message_id,
+                provider_message_state,
+                usage,
+                tool_calls,
+            },
+        },
+    )
+}
+
+/// Collects the contiguous tool results that complete one assistant tool batch.
+/// 收集能完整闭合一个助手工具批次的连续工具结果。
+fn collect_matching_tool_results(
+    messages: &[SessionConversationMessage],
+    start_index: usize,
+    assistant: &SessionConversationMessage,
+) -> (usize, Vec<SessionConversationMessage>, bool) {
+    let SessionConversationPayload::Assistant { tool_calls, .. } = &assistant.payload else {
+        return (start_index, Vec::new(), false);
+    };
+    let mut pending_groups = tool_call_identifier_groups(tool_calls);
+    if pending_groups.is_empty() {
+        return (start_index, Vec::new(), false);
+    }
+    let mut cursor = start_index;
+    let mut results = Vec::new();
+    while cursor < messages.len() && !pending_groups.is_empty() {
+        let SessionConversationPayload::ToolResult { tool_call_id, .. } = &messages[cursor].payload
+        else {
+            break;
+        };
+        let Some(tool_call_key) = tool_call_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            break;
+        };
+        let Some(group_index) = pending_groups.iter().position(|identifiers| {
+            identifiers
+                .iter()
+                .any(|identifier| identifier == tool_call_key)
+        }) else {
+            break;
+        };
+        pending_groups.remove(group_index);
+        results.push(messages[cursor].clone());
+        cursor += 1;
+    }
+    let complete = pending_groups.is_empty();
+    (cursor, results, complete)
+}
+
+/// Appends one non-empty text fragment to a replay merge buffer.
+/// 向重放合并缓冲区追加一段非空文本。
+fn push_non_empty_text_part(parts: &mut Vec<String>, text: &str) {
+    let text = text.trim();
+    if !text.is_empty() {
+        parts.push(text.to_string());
+    }
+}
+
+/// Builds grouped identifiers for matching local and provider tool-call ids.
+/// 构建分组标识，用于同时匹配本地与 Provider 工具调用 id。
+fn tool_call_identifier_groups(tool_calls: &[SessionConversationToolCall]) -> Vec<Vec<String>> {
+    tool_calls
+        .iter()
+        .map(tool_call_identifiers)
+        .filter(|identifiers| !identifiers.is_empty())
+        .collect()
+}
+
+/// Builds every replay identifier for one tool call.
+/// 构建单个工具调用的所有可重放标识。
+fn tool_call_identifiers(tool_call: &SessionConversationToolCall) -> Vec<String> {
+    let mut identifiers = Vec::new();
+    push_identifier(&mut identifiers, &tool_call.id);
+    if let Some(tool_call_id) = tool_call.tool_call_id.as_deref() {
+        push_identifier(&mut identifiers, tool_call_id);
+    }
+    identifiers
+}
+
+/// Adds one trimmed identifier if it has not already been collected.
+/// 当标识非空且尚未收集时追加该裁剪后的标识。
+fn push_identifier(identifiers: &mut Vec<String>, value: &str) {
+    let value = value.trim();
+    if !value.is_empty() && !identifiers.iter().any(|identifier| identifier == value) {
+        identifiers.push(value.to_string());
+    }
+}
+
+/// Converts an unsafe replayed tool-call message into historical plain text.
+/// 将不安全的重放工具调用消息转换为历史纯文本。
+fn historical_tool_call_text_message(
+    message: &SessionConversationMessage,
+) -> SessionConversationMessage {
+    let text = match &message.payload {
+        SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            tool_calls,
+            ..
+        } => historical_tool_call_text(text, reasoning, tool_calls),
+        _ => String::new(),
+    };
+    SessionConversationMessage {
+        id: message.id.clone(),
+        payload: SessionConversationPayload::UserText {
+            text,
+            attachments: Vec::new(),
+        },
+    }
+}
+
+/// Converts an unsafe replayed tool-result message into historical plain text.
+/// 将不安全的重放工具结果消息转换为历史纯文本。
+fn historical_tool_result_text_message(
+    message: &SessionConversationMessage,
+) -> SessionConversationMessage {
+    let text = match &message.payload {
+        SessionConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => {
+            let mut parts = Vec::new();
+            parts.push(String::from(
+                "[Historical tool result recovered as text only]",
+            ));
+            parts.push(format!("result_id: {tool_result_id}"));
+            if let Some(tool_call_id) = tool_call_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                parts.push(format!("tool_call_id: {tool_call_id}"));
+            }
+            if !text.trim().is_empty() {
+                parts.push(text.clone());
+            }
+            parts.join("\n\n")
+        }
+        _ => String::new(),
+    };
+    SessionConversationMessage {
+        id: message.id.clone(),
+        payload: SessionConversationPayload::UserText {
+            text,
+            attachments: Vec::new(),
+        },
+    }
+}
+
+/// Builds plain historical text for a replayed tool-call batch that cannot safely remain live.
+/// 为无法安全保留为实时状态的重放工具调用批次构建历史纯文本。
+fn historical_tool_call_text(
+    text: &str,
+    reasoning: &str,
+    tool_calls: &[SessionConversationToolCall],
+) -> String {
+    let mut parts = Vec::new();
+    parts.push(String::from(
+        "[Historical tool call recovered as text only]",
+    ));
+    push_labeled_non_empty_part(&mut parts, "assistant_text", text);
+    push_labeled_non_empty_part(&mut parts, "reasoning", reasoning);
+    for tool_call in tool_calls {
+        let call_id = tool_call
+            .tool_call_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(tool_call.id.as_str());
+        parts.push(format!("tool: {} ({call_id})", tool_call.tool_name));
+        if !tool_call.arguments.is_null() {
+            parts.push(format!("arguments: {}", tool_call.arguments));
+        }
+    }
+    parts.join("\n\n")
+}
+
+/// Adds one labeled text part when the source content is not empty.
+/// 当源内容非空时追加一段带标签文本。
+fn push_labeled_non_empty_part(parts: &mut Vec<String>, label: &str, text: &str) {
+    let text = text.trim();
+    if !text.is_empty() {
+        parts.push(format!("{label}: {text}"));
+    }
 }
 
 /// Projects canonical session records into the persisted transcript model used by the existing GUI surfaces.
@@ -539,4 +822,153 @@ fn resolve_generated_attachment_host_result_from_metadata(metadata: &Value) -> O
             (metadata.get("kind").and_then(Value::as_str) == Some("generated_attachments"))
                 .then_some(metadata)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Protocol replay normalization regression tests.
+    //! 协议重放归一化回归测试。
+
+    use super::*;
+    use serde_json::json;
+
+    /// Builds one transcript entry for replay-normalization tests.
+    /// 为重放归一化测试构建一条转录项。
+    fn transcript_entry(
+        id: &str,
+        kind: SessionMessageKind,
+        record_kind: SessionMessageRecordKind,
+        body: &str,
+        metadata: Option<Value>,
+    ) -> SessionMessageEntry {
+        SessionMessageEntry {
+            id: id.to_string(),
+            kind,
+            record_kind,
+            visible: true,
+            title: String::new(),
+            body: body.to_string(),
+            metadata,
+            created_at: String::from("1"),
+        }
+    }
+
+    /// Builds metadata for one visible tool-call transcript row.
+    /// 为一条可见工具调用转录行构建元数据。
+    fn tool_call_metadata(tool_name: &str, tool_call_id: &str) -> Value {
+        json!({
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "arguments": { "value": tool_call_id }
+        })
+    }
+
+    /// Builds metadata for one visible tool-result transcript row.
+    /// 为一条可见工具结果转录行构建元数据。
+    fn tool_result_metadata(tool_name: &str, tool_call_id: &str) -> Value {
+        json!({
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "tool_result_id": format!("tool-result-{tool_call_id}")
+        })
+    }
+
+    /// Verifies display rows with parallel tool calls replay as one legal assistant batch.
+    /// 验证展示层并行工具调用行会重放为一个合法助手批次。
+    #[test]
+    fn transcript_replay_groups_parallel_tool_rows_into_one_batch() {
+        let messages = vec![
+            transcript_entry(
+                "user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "run tools",
+                None,
+            ),
+            transcript_entry(
+                "call-row-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "{}",
+                Some(tool_call_metadata("first_tool", "call-1")),
+            ),
+            transcript_entry(
+                "call-row-2",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "{}",
+                Some(tool_call_metadata("second_tool", "call-2")),
+            ),
+            transcript_entry(
+                "result-row-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolResultOutput,
+                "first result",
+                Some(tool_result_metadata("first_tool", "call-1")),
+            ),
+            transcript_entry(
+                "result-row-2",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolResultOutput,
+                "second result",
+                Some(tool_result_metadata("second_tool", "call-2")),
+            ),
+        ];
+
+        let state = conversation_state_from_session_messages(&messages);
+
+        assert_eq!(state.messages.len(), 4);
+        let SessionConversationPayload::Assistant { tool_calls, .. } = &state.messages[1].payload
+        else {
+            panic!("second message should be a grouped assistant tool batch");
+        };
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(tool_calls[0].tool_call_id.as_deref(), Some("call-1"));
+        assert_eq!(tool_calls[1].tool_call_id.as_deref(), Some("call-2"));
+        assert!(matches!(
+            state.messages[2].payload,
+            SessionConversationPayload::ToolResult { .. }
+        ));
+        assert!(matches!(
+            state.messages[3].payload,
+            SessionConversationPayload::ToolResult { .. }
+        ));
+    }
+
+    /// Verifies interrupted tool calls replay as plain historical text before the next user turn.
+    /// 验证被中断的工具调用会在下一条用户回合前重放为普通历史文本。
+    #[test]
+    fn transcript_replay_downgrades_interrupted_tool_row_to_text() {
+        let messages = vec![
+            transcript_entry(
+                "call-row-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "{}",
+                Some(tool_call_metadata("first_tool", "call-1")),
+            ),
+            transcript_entry(
+                "user-2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "continue after interruption",
+                None,
+            ),
+        ];
+
+        let state = conversation_state_from_session_messages(&messages);
+
+        assert_eq!(state.messages.len(), 2);
+        let SessionConversationPayload::UserText { text, attachments } = &state.messages[0].payload
+        else {
+            panic!("interrupted tool call should be downgraded to user text");
+        };
+        assert!(attachments.is_empty());
+        assert!(text.contains("Historical tool call"));
+        assert!(text.contains("call-1"));
+        let SessionConversationPayload::UserText { text, .. } = &state.messages[1].payload else {
+            panic!("next message should remain user text");
+        };
+        assert_eq!(text, "continue after interruption");
+    }
 }

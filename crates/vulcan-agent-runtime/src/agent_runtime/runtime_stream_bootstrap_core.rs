@@ -5,7 +5,7 @@ use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::context_request_mode::resolve_preparation_context_request_mode;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
 use crate::agent_runtime::provider_request_bridge_conversation::build_core_conversation_snapshot;
-use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model;
+use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
 use crate::agent_runtime::provider_request_preview::build_provider_request_preview_markdown;
 use crate::agent_runtime::provider_request_snapshot_builder::build_core_provider_request_snapshot;
@@ -13,10 +13,15 @@ use crate::agent_runtime::provider_runtime_context::{
     build_runtime_prompt_layers_for_agent, resolve_runtime_max_turns,
 };
 use crate::agent_runtime::provider_runtime_inputs::resolve_provider_additional_params;
+use crate::agent_runtime::provider_system_update_lowering::{
+    ProviderSystemUpdateLoweringPolicy, lower_provider_system_update,
+    provider_system_update_repair_event,
+};
 use crate::context_budget::build_request_context_compaction_budget_snapshot_with_estimator;
 use crate::provider_usage::latest_provider_usage_from_conversation_state;
 use vulcan_context::{
-    ContextBaseline, ContextTokenEstimator, build_provider_request_context_assembly,
+    ContextBaseline, ContextTokenEstimator, RuntimeProviderLoweringRepairEvent,
+    build_provider_request_context_assembly,
 };
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
@@ -44,6 +49,9 @@ pub(crate) struct RuntimeBootstrapCore {
     /// Host-owned controller that tracks streaming deltas and execution events.
     /// 负责跟踪流式增量与执行事件的宿主自有控制器。
     pub core_controller: VulcanCoreController,
+    /// Provider lowering repair events detected during bootstrap projection.
+    /// 在 bootstrap 投影期间检测到的 Provider 转换修复事件。
+    pub lowering_repair_events: Vec<RuntimeProviderLoweringRepairEvent>,
 }
 
 /// Builds the provider-facing runtime bootstrap core from the canonical conversation state and execution preparation.
@@ -52,15 +60,24 @@ pub(crate) fn build_runtime_bootstrap_core(
     preparation: &ExecutionPreparation,
     request: &ExecutionPreparationRequest,
     active_agent: Option<&RuntimeAgentDefinition>,
-) -> RuntimeBootstrapCore {
+) -> Result<RuntimeBootstrapCore, String> {
     let runtime_prompt = build_runtime_prompt_layers_for_agent(preparation, active_agent);
     let system_preamble = runtime_prompt.fallback_text.clone();
     let mut core_snapshot = build_core_conversation_snapshot(&request.conversation_state);
-    core_snapshot.messages = core_messages_to_provider_visible_history_for_model(
-        &core_snapshot.messages,
-        Some(preparation.model_blueprint.api_family()),
-        Some(&preparation.model_blueprint.capabilities),
+    let system_update_policy = ProviderSystemUpdateLoweringPolicy::default();
+    let lowering_repair_events = collect_system_update_lowering_repairs(
+        preparation,
+        &request.runtime_system_updates,
+        system_update_policy,
     );
+    core_snapshot.messages =
+        core_messages_to_provider_visible_history_for_model_with_system_updates(
+            &core_snapshot.messages,
+            Some(preparation.model_blueprint.api_family()),
+            Some(&preparation.model_blueprint.capabilities),
+            &preparation.runtime_system_updates,
+            system_update_policy,
+        )?;
     let request_history = core_snapshot.messages.clone();
     let core_controller = VulcanCoreController::new(
         build_core_controller_config_with_layers(
@@ -73,13 +90,37 @@ pub(crate) fn build_runtime_bootstrap_core(
         core_snapshot.clone(),
     );
 
-    RuntimeBootstrapCore {
+    Ok(RuntimeBootstrapCore {
         system_preamble,
         prompt_layers: runtime_prompt.provider_layers,
         request_history,
         core_snapshot,
         core_controller,
-    }
+        lowering_repair_events,
+    })
+}
+
+/// Collects audit repair events for runtime system updates that need fallback or rejection.
+/// 收集需要降级或拒绝的 runtime system update 审计修复事件。
+fn collect_system_update_lowering_repairs(
+    preparation: &ExecutionPreparation,
+    updates: &[vulcan_context::RuntimeSystemUpdateEvent],
+    policy: ProviderSystemUpdateLoweringPolicy,
+) -> Vec<RuntimeProviderLoweringRepairEvent> {
+    let provider_family = preparation.model_blueprint.api_family_key().to_string();
+    updates
+        .iter()
+        .filter_map(|update| {
+            let lowered = lower_provider_system_update(update, policy);
+            provider_system_update_repair_event(
+                update,
+                &lowered,
+                &preparation.model_blueprint.provider_id,
+                &preparation.model_blueprint.model_id,
+                &provider_family,
+            )
+        })
+        .collect()
 }
 
 /// Seeds the final request preview and structured request snapshot onto the mutable execution preparation object.
