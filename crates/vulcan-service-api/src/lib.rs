@@ -906,6 +906,10 @@ pub struct AppendMessageBodyDelta {
     /// Text appended by this event only.
     /// 本事件单独追加的文本片段。
     pub body_delta: String,
+    /// Full message body after applying this delta, used by WebUI as the authoritative streaming text.
+    /// 应用本次增量后的完整消息正文，供 WebUI 作为权威流式文本使用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_body: Option<String>,
     /// Initial full message metadata when this delta creates the row on the client.
     /// 当本次增量在客户端创建行时携带的初始完整消息元数据。
     #[serde(default, skip_serializing_if = "Option::is_none")]

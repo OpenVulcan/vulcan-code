@@ -292,6 +292,9 @@ export interface AppendMessageBodyDelta {
   // Text appended by this event only.
   // 本事件单独追加的文本片段。
   bodyDelta: string;
+  // Full message body after this delta, preferred over local append reconstruction.
+  // 本次增量后的完整消息正文，优先于本地追加复原。
+  currentBody?: string | null;
   // Initial full message metadata when the row does not exist yet.
   // 当消息行尚不存在时使用的初始完整消息元数据。
   initialMessage?: ConversationMessage | null;

@@ -842,6 +842,23 @@ interface ConversationProcessRenderItem {
   durationMs: number | null;
 }
 
+// ConversationTimelineVirtualWindow describes the currently mounted timeline slice.
+// ConversationTimelineVirtualWindow 描述当前挂载的时间线切片。
+interface ConversationTimelineVirtualWindow {
+  // Items that should be mounted for the current viewport.
+  // 当前视口需要挂载的条目。
+  items: Array<{ index: number; item: ConversationTimelineItem }>;
+  // Spacer height before the mounted slice.
+  // 挂载切片前方的占位高度。
+  paddingTop: number;
+  // Spacer height after the mounted slice.
+  // 挂载切片后方的占位高度。
+  paddingBottom: number;
+  // Whether virtualization is active for this timeline.
+  // 当前时间线是否启用虚拟化。
+  virtualized: boolean;
+}
+
 // ConversationTimelineItem describes either one normal row or one grouped process row.
 // ConversationTimelineItem 描述单条普通行或单条分组过程行。
 type ConversationTimelineItem =
@@ -4468,6 +4485,15 @@ function coalesceWorkbenchDeltaEnvelopes(envelopes: WorkbenchDeltaEnvelope[]): W
       const nextPayload = envelope.delta.payload;
       previous.generation = Math.max(previous.generation, envelope.generation);
       previousPayload.bodyDelta += nextPayload.bodyDelta;
+      previousPayload.currentBody = nextPayload.currentBody ?? previousPayload.currentBody ?? null;
+      if (nextPayload.initialMessage && (!previousPayload.initialMessage || nextPayload.initialMessage.body.length > previousPayload.initialMessage.body.length)) {
+        previousPayload.initialMessage = { ...nextPayload.initialMessage };
+      } else if (previousPayload.initialMessage) {
+        previousPayload.initialMessage = {
+          ...previousPayload.initialMessage,
+          body: previousPayload.currentBody ?? appendStreamingTextDelta(previousPayload.initialMessage.body, nextPayload.bodyDelta),
+        };
+      }
       previousPayload.runPhase = nextPayload.runPhase ?? previousPayload.runPhase;
       continue;
     }
@@ -4582,21 +4608,28 @@ function mergeAppendMessageBodyDelta(
   message: ConversationMessage,
   delta: WorkbenchDeltaEnvelope["delta"]["payload"],
 ): ConversationMessage {
+  if (typeof delta.currentBody === "string") {
+    return {
+      ...(delta.initialMessage && delta.initialMessage.body.length >= message.body.length ? delta.initialMessage : message),
+      body: delta.currentBody,
+    };
+  }
   if (delta.initialMessage && delta.initialMessage.body.length > message.body.length) {
-    return appendInitialMessageBodyDelta(delta.initialMessage, delta.bodyDelta);
+    return delta.initialMessage;
   }
   return {
     ...message,
-    body: appendTextWithOverlap(message.body, delta.bodyDelta),
+    body: appendStreamingTextDelta(message.body, delta.bodyDelta),
   };
 }
 
-// appendInitialMessageBodyDelta combines a new streamed row with its first body delta without duplicating overlap.
-// appendInitialMessageBodyDelta 将新流式行与首个正文增量合并，并去除重叠内容。
+// appendInitialMessageBodyDelta returns the host-projected full row for a newly materialized stream.
+// appendInitialMessageBodyDelta 返回宿主为新流式记录投影出的完整行。
 function appendInitialMessageBodyDelta(message: ConversationMessage, bodyDelta: string): ConversationMessage {
+  void bodyDelta;
   return {
     ...message,
-    body: appendTextWithOverlap(message.body, bodyDelta),
+    body: message.body,
   };
 }
 
@@ -4617,6 +4650,10 @@ function findAppendMessageBodyReplacementIndex(
       lastUserIndex = index;
     }
   }
+  const stableIndex = findStableAppendMessageBodyReplacementIndex(messages, delta, candidate, lastUserIndex);
+  if (stableIndex >= 0) {
+    return stableIndex;
+  }
   for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
     const message = messages[index];
     if (
@@ -4629,6 +4666,56 @@ function findAppendMessageBodyReplacementIndex(
     }
   }
   return -1;
+}
+
+// findStableAppendMessageBodyReplacementIndex prefers durable stream identifiers over body heuristics.
+// findStableAppendMessageBodyReplacementIndex 优先使用持久流标识，而不是正文启发式。
+function findStableAppendMessageBodyReplacementIndex(
+  messages: ConversationMessage[],
+  delta: WorkbenchDeltaEnvelope["delta"]["payload"],
+  candidate: ConversationMessage,
+  lastUserIndex: number,
+): number {
+  for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
+    const message = messages[index];
+    if (
+      message?.conversationId === delta.conversationId
+      && message.id !== candidate.id
+      && isAssistantOutputMessage(message)
+      && messagesShareStableStreamIdentity(candidate, message)
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+// messagesShareStableStreamIdentity checks metadata keys that identify the same streamed assistant row.
+// messagesShareStableStreamIdentity 检查可识别同一条助手流式行的元数据键。
+function messagesShareStableStreamIdentity(left: ConversationMessage, right: ConversationMessage): boolean {
+  if (left.conversationId !== right.conversationId) {
+    return false;
+  }
+  const sharedMetadataPaths = [
+    "webui_projection_barrier_id",
+    "webuiProjectionBarrierId",
+    "stream_id",
+    "streamId",
+    "response_id",
+    "responseId",
+    "provider_response_id",
+    "providerResponseId",
+    "output_id",
+    "outputId",
+  ];
+  for (const path of sharedMetadataPaths) {
+    const leftValue = metadataString(left.metadata, [path]);
+    const rightValue = metadataString(right.metadata, [path]);
+    if (leftValue && rightValue && leftValue === rightValue) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // isAssistantOutputMessage checks whether one message is a visible assistant prose row.
@@ -4658,26 +4745,11 @@ function assistantOutputsLookLikeSameStream(left: ConversationMessage, right: Co
   return shorterLength >= 16 && leftBody.slice(0, prefixLength) === rightBody.slice(0, prefixLength);
 }
 
-// appendTextWithOverlap appends streamed text while removing the duplicated boundary prefix.
-// appendTextWithOverlap 追加流式文本，并移除边界处重复的前缀。
-function appendTextWithOverlap(current: string, incoming: string): string {
+// appendStreamingTextDelta appends provider deltas without guessing textual overlap.
+// appendStreamingTextDelta 追加 Provider 增量文本，不猜测文本重叠。
+function appendStreamingTextDelta(current: string, incoming: string): string {
   if (!incoming) {
     return current;
-  }
-  if (!current) {
-    return incoming;
-  }
-  if (incoming.startsWith(current)) {
-    return incoming;
-  }
-  if (current.endsWith(incoming)) {
-    return current;
-  }
-  const maxOverlap = Math.min(current.length, incoming.length);
-  for (let length = maxOverlap; length > 0; length -= 1) {
-    if (current.endsWith(incoming.slice(0, length))) {
-      return `${current}${incoming.slice(length)}`;
-    }
   }
   return `${current}${incoming}`;
 }
@@ -5513,6 +5585,22 @@ const LAZY_MARKDOWN_TARGET_CHARS = 4000;
 // LAZY_MARKDOWN_ROOT_MARGIN keeps nearby Markdown chunks mounted before they enter the viewport.
 // LAZY_MARKDOWN_ROOT_MARGIN 让即将进入视口的 Markdown 分块提前保持挂载。
 const LAZY_MARKDOWN_ROOT_MARGIN = "900px 0px";
+
+// CONVERSATION_VIRTUALIZATION_MIN_ITEMS avoids adding measurement wrappers to short transcripts.
+// CONVERSATION_VIRTUALIZATION_MIN_ITEMS 避免给短转录添加测量包装层。
+const CONVERSATION_VIRTUALIZATION_MIN_ITEMS = 80;
+
+// CONVERSATION_VIRTUALIZATION_OVERSCAN_PX keeps nearby transcript rows mounted around the viewport.
+// CONVERSATION_VIRTUALIZATION_OVERSCAN_PX 让视口附近的转录行保持挂载。
+const CONVERSATION_VIRTUALIZATION_OVERSCAN_PX = 1200;
+
+// CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX is the fallback row height before measurement.
+// CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX 是测量前使用的兜底行高。
+const CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX = 220;
+
+// CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX is the fallback process-group height before measurement.
+// CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX 是测量前处理过程分组使用的兜底高度。
+const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
 
 // STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT limits tail-follow signatures to messages that can affect the viewport tail.
 // STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT 将尾部追随签名限制在会影响视口尾部的消息范围。
@@ -10469,6 +10557,178 @@ function subagentRunStateLabel(runState: string): string {
   }
 }
 
+// useConversationTimelineVirtualWindow returns the mounted transcript range for long timelines.
+// useConversationTimelineVirtualWindow 返回长转录当前需要挂载的范围。
+function useConversationTimelineVirtualWindow(
+  items: ConversationTimelineItem[],
+  scrollRef: React.RefObject<HTMLElement | null>,
+  cacheScopeKey: string,
+): {
+  // Current virtual window projection.
+  // 当前虚拟窗口投影。
+  window: ConversationTimelineVirtualWindow;
+  // Refreshes viewport metrics after a scroll event.
+  // 滚动事件后刷新视口指标。
+  onScroll: () => void;
+  // Stores a measured row height by stable timeline key.
+  // 按稳定时间线键保存测量后的行高。
+  onRowHeight: (key: string, height: number) => void;
+} {
+  const measuredHeightsRef = React.useRef<Map<string, number>>(new Map());
+  const cacheScopeKeyRef = React.useRef(cacheScopeKey);
+  const [measureVersion, setMeasureVersion] = React.useState(0);
+  const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0 });
+  const onScroll = React.useCallback(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    setViewport({
+      scrollTop: element.scrollTop,
+      height: element.clientHeight,
+    });
+  }, [scrollRef]);
+  React.useLayoutEffect(() => {
+    onScroll();
+  }, [items.length, onScroll]);
+  React.useEffect(() => {
+    let changed = false;
+    if (cacheScopeKeyRef.current !== cacheScopeKey) {
+      measuredHeightsRef.current.clear();
+      cacheScopeKeyRef.current = cacheScopeKey;
+      changed = true;
+    }
+    const liveKeys = new Set(items.map(conversationTimelineItemKey));
+    for (const key of measuredHeightsRef.current.keys()) {
+      if (!liveKeys.has(key)) {
+        measuredHeightsRef.current.delete(key);
+        changed = true;
+      }
+    }
+    if (changed) {
+      setMeasureVersion((version) => version + 1);
+    }
+  }, [cacheScopeKey, items]);
+  const onRowHeight = React.useCallback((key: string, height: number) => {
+    if (!Number.isFinite(height) || height <= 0) {
+      return;
+    }
+    const rounded = Math.ceil(height);
+    const current = measuredHeightsRef.current.get(key);
+    if (current === rounded) {
+      return;
+    }
+    const scrollElement = scrollRef.current;
+    const heightDelta = current ? rounded - current : 0;
+    const distanceFromBottom = scrollElement
+      ? scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight
+      : Number.POSITIVE_INFINITY;
+    const wasNearBottom = scrollElement
+      ? distanceFromBottom <= 24 || (heightDelta > 0 && distanceFromBottom - heightDelta <= 24)
+      : false;
+    measuredHeightsRef.current.set(key, rounded);
+    setMeasureVersion((version) => version + 1);
+    if (scrollElement && wasNearBottom) {
+      window.requestAnimationFrame(() => {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+      });
+    }
+  }, [scrollRef]);
+  const virtualWindow = React.useMemo<ConversationTimelineVirtualWindow>(() => {
+    void measureVersion;
+    if (items.length < CONVERSATION_VIRTUALIZATION_MIN_ITEMS || viewport.height <= 0) {
+      return {
+        items: items.map((item, index) => ({ index, item })),
+        paddingTop: 0,
+        paddingBottom: 0,
+        virtualized: false,
+      };
+    }
+    const heights = items.map((item) => measuredHeightsRef.current.get(conversationTimelineItemKey(item))
+      ?? conversationTimelineItemEstimatedHeight(item));
+    const offsets: number[] = [];
+    let totalHeight = 0;
+    for (const height of heights) {
+      offsets.push(totalHeight);
+      totalHeight += height;
+    }
+    const windowTop = Math.max(0, viewport.scrollTop - CONVERSATION_VIRTUALIZATION_OVERSCAN_PX);
+    const windowBottom = viewport.scrollTop + viewport.height + CONVERSATION_VIRTUALIZATION_OVERSCAN_PX;
+    let startIndex = 0;
+    while (startIndex < items.length && offsets[startIndex] + heights[startIndex] < windowTop) {
+      startIndex += 1;
+    }
+    let endIndex = startIndex;
+    while (endIndex < items.length && offsets[endIndex] <= windowBottom) {
+      endIndex += 1;
+    }
+    const safeStart = Math.max(0, Math.min(startIndex, items.length - 1));
+    const safeEnd = Math.max(safeStart + 1, Math.min(items.length, endIndex));
+    const paddingTop = offsets[safeStart] ?? 0;
+    const mountedHeight = heights.slice(safeStart, safeEnd).reduce((sum, height) => sum + height, 0);
+    const paddingBottom = Math.max(0, totalHeight - paddingTop - mountedHeight);
+    return {
+      items: items.slice(safeStart, safeEnd).map((item, offset) => ({ index: safeStart + offset, item })),
+      paddingTop,
+      paddingBottom,
+      virtualized: true,
+    };
+  }, [items, measureVersion, viewport.height, viewport.scrollTop]);
+  return { window: virtualWindow, onScroll, onRowHeight };
+}
+
+// conversationTimelineItemKey returns a stable measurement key for one timeline entry.
+// conversationTimelineItemKey 返回单条时间线记录的稳定测量键。
+function conversationTimelineItemKey(item: ConversationTimelineItem): string {
+  return item.kind === "item" ? `item:${item.item.id}` : `process:${item.process.id}`;
+}
+
+// conversationTimelineItemEstimatedHeight returns a conservative initial height by entry kind.
+// conversationTimelineItemEstimatedHeight 按记录类型返回保守初始高度。
+function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem): number {
+  return item.kind === "process"
+    ? CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX
+    : CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX;
+}
+
+// ConversationTimelineVirtualRow measures one mounted timeline entry for the virtual window.
+// ConversationTimelineVirtualRow 为虚拟窗口测量单条已挂载时间线记录。
+function ConversationTimelineVirtualRow(props: {
+  // Stable row key used for height caching.
+  // 用于高度缓存的稳定行键。
+  rowKey: string;
+  // Notifies the virtualizer when the row height changes.
+  // 行高变化时通知虚拟列表。
+  onHeight: (key: string, height: number) => void;
+  // Mounted timeline content.
+  // 已挂载的时间线内容。
+  children: React.ReactNode;
+}) {
+  const elementRef = React.useRef<HTMLDivElement | null>(null);
+  const { onHeight, rowKey } = props;
+  React.useLayoutEffect(() => {
+    const element = elementRef.current;
+    if (!element) {
+      return;
+    }
+    const updateHeight = () => {
+      onHeight(rowKey, element.getBoundingClientRect().height);
+    };
+    updateHeight();
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [onHeight, rowKey]);
+  return (
+    <div className="timeline-virtual-row" ref={elementRef}>
+      {props.children}
+    </div>
+  );
+}
+
 // ConversationWorkspace renders the conversation timeline replacement.
 // ConversationWorkspace 渲染会话时间线替代组件。
 function ConversationWorkspace(props: {
@@ -10505,6 +10765,16 @@ function ConversationWorkspace(props: {
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs),
     [props.renderItems, props.conversation, nowMs],
   );
+  const visibleTimelineItems = React.useMemo(
+    () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockId)),
+    [props.hiddenThinkingBlockId, timelineItems],
+  );
+  const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
+  const timelineVirtualizer = useConversationTimelineVirtualWindow(
+    visibleTimelineItems,
+    props.scrollRef,
+    timelineCacheScopeKey,
+  );
   const autoExpandThinkingBlockId = sessionRunning && !props.hiddenThinkingBlockId
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
@@ -10530,10 +10800,42 @@ function ConversationWorkspace(props: {
     return () => window.clearInterval(interval);
   }, [sessionRunning]);
 
+  const handleConversationScroll = React.useCallback(() => {
+    timelineVirtualizer.onScroll();
+    props.onScrollStateChange();
+  }, [props, timelineVirtualizer]);
+
+  const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => timelineItem.kind === "item" ? (
+    <ConversationRenderItemView
+      item={timelineItem.item}
+      autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+      hiddenThinkingBlockId={null}
+      parentConversationId={props.parentConversationId}
+      sessionRunning={sessionRunning}
+      onOpenDetail={setDetail}
+      onOpenMedia={setMediaPlayer}
+      onOpenSubagentPanel={props.onOpenSubagentPanel}
+    />
+  ) : (
+    <ConversationProcessGroup
+      autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+      collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
+      hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+      nowMs={nowMs}
+      parentConversationId={props.parentConversationId}
+      process={timelineItem.process}
+      sessionRunning={sessionRunning}
+      onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
+      onOpenDetail={setDetail}
+      onOpenMedia={setMediaPlayer}
+      onOpenSubagentPanel={props.onOpenSubagentPanel}
+    />
+  );
+
   return (
     <MarkdownImageWorkspacePathContext.Provider value={props.workspacePath?.trim() || null}>
       <MarkdownViewportRootRefContext.Provider value={props.scrollRef}>
-        <section className="conversation-panel" onScroll={props.onScrollStateChange} ref={props.scrollRef}>
+        <section className="conversation-panel" onScroll={handleConversationScroll} ref={props.scrollRef}>
           <div className="timeline">
             {props.error ? (
               <article className="message-card system error-message">
@@ -10547,36 +10849,28 @@ function ConversationWorkspace(props: {
                 <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
               </article>
             ) : null}
-            {timelineItems.map((timelineItem) => timelineItem.kind === "item" ? (
-              renderItemHiddenByThinkingOverlay(timelineItem.item, props.hiddenThinkingBlockId) ? null : (
-                <ConversationRenderItemView
-                  item={timelineItem.item}
-                  key={timelineItem.item.id}
-                  autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-                  hiddenThinkingBlockId={null}
-                  parentConversationId={props.parentConversationId}
-                  sessionRunning={sessionRunning}
-                  onOpenDetail={setDetail}
-                  onOpenMedia={setMediaPlayer}
-                  onOpenSubagentPanel={props.onOpenSubagentPanel}
-                />
-              )
-            ) : (
-              <ConversationProcessGroup
-                autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-                collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
-                hiddenThinkingBlockId={props.hiddenThinkingBlockId}
-                key={timelineItem.process.id}
-                nowMs={nowMs}
-                parentConversationId={props.parentConversationId}
-                process={timelineItem.process}
-                sessionRunning={sessionRunning}
-                onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
-                onOpenDetail={setDetail}
-                onOpenMedia={setMediaPlayer}
-                onOpenSubagentPanel={props.onOpenSubagentPanel}
-              />
-            ))}
+            {timelineVirtualizer.window.paddingTop > 0 ? (
+              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingTop }} />
+            ) : null}
+            {timelineVirtualizer.window.items.map(({ item: timelineItem }) => {
+              const rowKey = conversationTimelineItemKey(timelineItem);
+              return timelineVirtualizer.window.virtualized ? (
+                <ConversationTimelineVirtualRow
+                  key={rowKey}
+                  rowKey={rowKey}
+                  onHeight={timelineVirtualizer.onRowHeight}
+                >
+                  {renderTimelineItem(timelineItem)}
+                </ConversationTimelineVirtualRow>
+              ) : (
+                <React.Fragment key={rowKey}>
+                  {renderTimelineItem(timelineItem)}
+                </React.Fragment>
+              );
+            })}
+            {timelineVirtualizer.window.paddingBottom > 0 ? (
+              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingBottom }} />
+            ) : null}
           </div>
           {detail ? (
             <ConversationDetailModal
@@ -10598,6 +10892,12 @@ function ConversationWorkspace(props: {
 // renderItemHiddenByThinkingOverlay 隐藏被实时思考浮层镜像展示的整条渲染行。
 function renderItemHiddenByThinkingOverlay(item: ConversationRenderItem, hiddenThinkingBlockId: string | null): boolean {
   return Boolean(hiddenThinkingBlockId && item.blocks.some((block) => block.id === hiddenThinkingBlockId));
+}
+
+// timelineItemVisibleInMainTranscript filters virtualized rows before height estimation.
+// timelineItemVisibleInMainTranscript 在高度估算前过滤主转录中不可见的虚拟行。
+function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockId: string | null): boolean {
+  return item.kind !== "item" || !renderItemHiddenByThinkingOverlay(item.item, hiddenThinkingBlockId);
 }
 
 // ConversationProcessGroup renders one per-turn process header and its foldable rows.
@@ -10644,6 +10944,7 @@ function ConversationProcessGroup(props: {
   const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
   const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
   const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
+  const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
     : null;
@@ -10671,6 +10972,7 @@ function ConversationProcessGroup(props: {
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
             hiddenThinkingBlockId={null}
             item={item}
+            itemStreaming={false}
             key={item.id}
             parentConversationId={props.parentConversationId}
             sessionRunning={props.sessionRunning}
@@ -10687,6 +10989,7 @@ function ConversationProcessGroup(props: {
               autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
               hiddenThinkingBlockId={null}
               item={item}
+              itemStreaming={item.id === streamingProcessItemId}
               key={item.id}
               parentConversationId={props.parentConversationId}
               sessionRunning={props.sessionRunning}
@@ -10712,6 +11015,7 @@ function ConversationRenderItemView(props: {
   item: ConversationRenderItem;
   autoExpandThinkingBlockId: string | null;
   hiddenThinkingBlockId: string | null;
+  itemStreaming?: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -10759,6 +11063,7 @@ function ConversationRenderItemView(props: {
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
           conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
+          itemStreaming={Boolean(props.itemStreaming)}
           parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
           onOpenDetail={props.onOpenDetail}
@@ -10784,6 +11089,7 @@ function ConversationBlocksView(props: {
   autoExpandThinkingBlockId: string | null;
   blocks: ConversationBlock[];
   conversationId: string | null;
+  itemStreaming: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -10820,7 +11126,7 @@ function ConversationBlocksView(props: {
     return (
       <MarkdownMessage
         content={block.body}
-        streaming={props.sessionRunning}
+        streaming={props.itemStreaming}
         onOpenMedia={props.onOpenMedia}
       />
     );
@@ -10830,6 +11136,7 @@ function ConversationBlocksView(props: {
       autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
       conversationId={props.conversationId}
+      itemStreaming={props.itemStreaming}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
@@ -10856,23 +11163,23 @@ const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const workspacePath = React.useContext(MarkdownImageWorkspacePathContext);
-  // content keeps streaming and finalized Markdown on the same renderer path.
-  // content 让流式与终态 Markdown 使用同一条渲染路径。
-  const content = React.useMemo(
-    () => normalizeMarkdownLocalImageLinks(props.content, workspacePath),
-    [props.content, workspacePath],
+  // finalizedContent keeps non-streaming Markdown normalized only when the stable body changes.
+  // finalizedContent 让非流式 Markdown 只在稳定正文变化时执行归一化。
+  const finalizedContent = React.useMemo(
+    () => props.streaming ? props.content : normalizeMarkdownLocalImageLinks(props.content, workspacePath),
+    [props.content, props.streaming, workspacePath],
   );
   return (
     <div className="markdown-message">
       {props.streaming ? (
         <StreamingMarkdownMessage
-          content={content}
+          content={props.content}
           onOpenMedia={props.onOpenMedia}
           workspacePath={workspacePath}
         />
       ) : (
         <LazyMarkdownMessage
-          content={content}
+          content={finalizedContent}
           eager={props.eager}
           onOpenMedia={props.onOpenMedia}
           workspacePath={workspacePath}
@@ -10882,11 +11189,11 @@ const MarkdownMessage = React.memo(function MarkdownMessage(props: {
   );
 });
 
-// StreamingMarkdownMessage renders only stable Markdown blocks while the tail is still changing.
-// StreamingMarkdownMessage 在尾部仍变化时只渲染稳定 Markdown 块。
+// StreamingMarkdownMessage renders the active Markdown block as one complete region.
+// StreamingMarkdownMessage 将活跃 Markdown 块作为完整区域渲染。
 function StreamingMarkdownMessage(props: {
-  // Already-normalized Markdown content.
-  // 已经规范化的 Markdown 内容。
+  // Raw Markdown content for the active streaming block.
+  // 活跃流式块的原始 Markdown 内容。
   content: string;
   // Current project workspace path for image source resolution.
   // 当前项目工作区路径，用于解析图片来源。
@@ -10895,9 +11202,13 @@ function StreamingMarkdownMessage(props: {
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  const normalizedContent = React.useMemo(
+    () => normalizeMarkdownLocalImageLinks(props.content, props.workspacePath),
+    [props.content, props.workspacePath],
+  );
   return (
     <MarkdownContentRenderer
-      content={props.content}
+      content={normalizedContent}
       onOpenMedia={props.onOpenMedia}
       workspacePath={props.workspacePath}
     />
@@ -10940,6 +11251,8 @@ function MarkdownContentRenderer(props: {
           >
             <img
               alt={alt ?? ""}
+              decoding="async"
+              loading="lazy"
               src={imageSource}
             />
           </button>
@@ -10948,6 +11261,8 @@ function MarkdownContentRenderer(props: {
       return (
         <img
           alt={alt ?? ""}
+          decoding="async"
+          loading="lazy"
           src={imageSource}
           style={imageStyle}
         />
@@ -11180,6 +11495,7 @@ function SpecialConversationBlock(props: {
   autoExpandThinkingBlockId: string | null;
   block: ConversationBlock;
   conversationId: string | null;
+  itemStreaming: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -11209,6 +11525,7 @@ function SpecialConversationBlock(props: {
         autoExpanded={props.block.id === props.autoExpandThinkingBlockId}
         block={props.block}
         sessionRunning={props.sessionRunning}
+        streaming={props.itemStreaming}
         onOpenMedia={props.onOpenMedia}
       />
     );
@@ -11335,6 +11652,9 @@ function ThinkingBlock(props: {
   // sessionRunning collapses the current turn thinking block once the turn completes.
   // sessionRunning 用于在当前 turn 完成后自动折叠思考块。
   sessionRunning: boolean;
+  // streaming marks the currently growing thinking row.
+  // streaming 标记当前仍在增长的思考行。
+  streaming: boolean;
   // onOpenMedia opens generated media referenced from markdown content.
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -11343,7 +11663,7 @@ function ThinkingBlock(props: {
   return (
     <section className="thinking-block">
       <div className="thinking-body">
-        <MarkdownMessage content={`**Thinking:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
+        <MarkdownMessage content={`**Thinking:** ${content}`} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
       </div>
     </section>
   );
@@ -11828,7 +12148,7 @@ function GeneratedMediaInlineCard(props: {
   if (props.attachment.kind === "image") {
     return (
       <button className="generated-media-card image" onClick={() => props.onOpenMedia(props.attachment)} type="button">
-        <img alt={props.attachment.fileName} src={source} />
+        <img alt={props.attachment.fileName} decoding="async" loading="lazy" src={source} />
         <span>{props.attachment.fileName}</span>
       </button>
     );
@@ -11843,7 +12163,7 @@ function GeneratedMediaInlineCard(props: {
       >
         <span className="generated-media-video-thumb">
           {props.attachment.previewLocalPath ? (
-            <img alt={props.attachment.fileName} src={source} />
+            <img alt={props.attachment.fileName} decoding="async" loading="lazy" src={source} />
           ) : (
             <video
               aria-label={props.attachment.fileName}
@@ -12763,7 +13083,7 @@ function StreamingThinkingOverlay(props: {
         <span className="streaming-thinking-caption">{t("runtime.thinkingOverlayHint")}</span>
       </header>
       <div className="streaming-thinking-body" ref={bodyRef}>
-        <MarkdownMessage content={props.block.body || t("runtime.thinking")} eager />
+        <MarkdownMessage content={props.block.body || t("runtime.thinking")} eager streaming={!props.leaving} />
       </div>
     </section>
   );

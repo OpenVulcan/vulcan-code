@@ -12270,6 +12270,7 @@ fn append_stream_delta_record(
                 conversation_id,
                 message_id: projected_entry.id,
                 body_delta: delta.to_string(),
+                current_body: Some(projected_message.body.clone()),
                 initial_message,
                 run_phase: Some(run_phase.to_string()),
             }),

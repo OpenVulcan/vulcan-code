@@ -4297,6 +4297,15 @@ button {
   align-content: start;
 }
 
+.timeline-virtual-row,
+.timeline-virtual-spacer {
+  min-width: 0;
+}
+
+.timeline-virtual-spacer {
+  pointer-events: none;
+}
+
 .step-item {
   display: grid;
   grid-template-columns: 22px 1fr;
