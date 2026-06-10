@@ -10242,7 +10242,7 @@ function ChatArea(props: {
   // rememberConversationScrollSnapshot 在路由切换前捕获当前共享滚动元素状态。
   const rememberConversationScrollSnapshot = React.useCallback(() => {
     const element = workspaceRef.current;
-    const surfaceId = renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
     if (!element || !surfaceId) {
       return;
     }
@@ -10264,7 +10264,7 @@ function ChatArea(props: {
       return;
     }
     const shouldFollow = conversationViewportAllowsTailFollow(element);
-    const surfaceId = renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    const surfaceId = element.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
     const restoreGuard = scrollRestoreGuardRef.current;
     if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !shouldFollow) {
       shouldFollowConversationTailRef.current = true;
@@ -11094,7 +11094,12 @@ function ConversationWorkspace(props: {
 
   return (
     <MarkdownImageWorkspacePathContext.Provider value={props.workspacePath?.trim() || null}>
-      <section className="conversation-panel" onScroll={handleConversationScroll} ref={props.scrollRef}>
+      <section
+        className="conversation-panel"
+        data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
+        onScroll={handleConversationScroll}
+        ref={props.scrollRef}
+      >
           <div className="conversation-scroll-content">
             <div className="timeline">
               {props.error ? (
