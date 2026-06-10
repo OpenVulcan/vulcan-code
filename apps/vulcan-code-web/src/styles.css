@@ -2821,17 +2821,51 @@ button {
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 48px 20px 260px;
+  padding: 48px 20px 16px;
   overflow-x: hidden;
   overflow-y: auto;
+  overflow-anchor: none;
   overscroll-behavior: contain;
+  scroll-padding-bottom: calc(var(--composer-dock-height, 132px) + 32px);
   scrollbar-gutter: stable;
 }
 
-.conversation-panel .message-row,
-.conversation-panel .work-process-group {
+.conversation-scroll-content {
+  min-width: 0;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.conversation-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  min-width: 0;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 24px;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.conversation-footer .composer-dock {
+  pointer-events: auto;
+}
+
+.conversation-panel .message-row {
   content-visibility: auto;
   contain-intrinsic-size: auto 180px;
+}
+
+.conversation-panel .work-process-group {
+  contain: layout paint style;
+}
+
+.conversation-panel .work-process-group .message-row {
+  content-visibility: visible;
+  contain-intrinsic-size: auto none;
 }
 
 .conversation-panel .markdown-message {
@@ -2955,9 +2989,7 @@ button {
 }
 
 .composer-dock {
-  position: absolute;
-  right: max(16px, calc((100% - 800px) / 2));
-  bottom: 16px;
+  position: relative;
   z-index: 5;
   width: 800px;
   max-width: calc(100% - 32px);
@@ -2973,7 +3005,13 @@ button {
   will-change: bottom, transform;
 }
 
-.composer-dock.empty-mode {
+.chat-grid > .composer-dock {
+  position: absolute;
+  right: max(16px, calc((100% - 800px) / 2));
+  bottom: 16px;
+}
+
+.chat-grid > .composer-dock.empty-mode {
   bottom: calc(50% - 94px);
 }
 
@@ -5005,19 +5043,6 @@ button {
   overflow-wrap: anywhere;
 }
 
-.markdown-lazy-chunk-list,
-.markdown-lazy-chunk {
-  min-width: 0;
-}
-
-.markdown-lazy-chunk:first-child > :first-child {
-  margin-top: 0;
-}
-
-.markdown-lazy-chunk:last-child > :last-child {
-  margin-bottom: 0;
-}
-
 .markdown-message > :first-child {
   margin-top: 0;
 }
@@ -5221,6 +5246,10 @@ button {
 .work-process-body {
   display: grid;
   gap: 12px;
+}
+
+.work-process-body[hidden] {
+  display: none;
 }
 
 .work-process-stopped-note {

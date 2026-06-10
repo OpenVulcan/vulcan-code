@@ -857,6 +857,9 @@ interface ConversationTimelineVirtualWindow {
   // Whether virtualization is active for this timeline.
   // 当前时间线是否启用虚拟化。
   virtualized: boolean;
+  // Whether mounted rows should be measured even before virtualization starts.
+  // 挂载行是否需要在虚拟化开始前先测量。
+  measuring: boolean;
 }
 
 // ConversationTimelineItem describes either one normal row or one grouped process row.
@@ -4428,12 +4431,25 @@ type SubagentSurfaceMessageCache = Map<string, ConversationMessage[]>;
 // ConversationScrollSnapshot stores one transcript surface scroll restoration point.
 // ConversationScrollSnapshot 保存单个转录界面的滚动恢复点。
 interface ConversationScrollSnapshot {
-  // Scroll offset captured from the shared timeline element.
-  // 从共享时间线元素捕获的滚动偏移。
-  scrollTop: number;
+  // Distance from the visual viewport bottom to the transcript bottom.
+  // 从视觉视口底部到转录底部的距离。
+  distanceFromBottom: number;
   // Whether this surface should continue following newly appended content.
   // 该界面是否应继续跟随新追加的内容。
   wasAtBottom: boolean;
+}
+
+// conversationDistanceFromBottom returns the scroll metric used by the sticky-footer transcript.
+// conversationDistanceFromBottom 返回粘性底部转录布局使用的滚动距离指标。
+function conversationDistanceFromBottom(element: HTMLElement): number {
+  return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
+}
+
+// conversationScrollToDistanceFromBottom restores a visual bottom distance in the current layout.
+// conversationScrollToDistanceFromBottom 在当前布局中恢复视觉底部距离。
+function conversationScrollToDistanceFromBottom(element: HTMLElement, distanceFromBottom: number): void {
+  const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+  element.scrollTop = Math.max(0, Math.min(maxScrollTop, element.scrollHeight - element.clientHeight - distanceFromBottom));
 }
 
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
@@ -5566,25 +5582,9 @@ const markdownSanitizers = [rehypeSanitize];
 // MarkdownImageWorkspacePathContext 为相对图片链接携带当前项目根目录。
 const MarkdownImageWorkspacePathContext = React.createContext<string | null>(null);
 
-// MarkdownViewportRootRefContext carries the transcript scroll root for lazy Markdown chunks.
-// MarkdownViewportRootRefContext 为懒加载 Markdown 分块携带转录滚动根节点。
-const MarkdownViewportRootRefContext = React.createContext<React.RefObject<HTMLElement | null> | null>(null);
-
 // STREAMING_DELTA_FLUSH_MS batches hot transcript deltas so React and GC are not driven at display-frame cadence.
 // STREAMING_DELTA_FLUSH_MS 将高频转录增量批处理，避免 React 与 GC 被显示帧率牵引。
 const STREAMING_DELTA_FLUSH_MS = 80;
-
-// LAZY_MARKDOWN_RENDER_THRESHOLD enables chunk-level unmounting for large finalized Markdown messages.
-// LAZY_MARKDOWN_RENDER_THRESHOLD 为较大的终态 Markdown 消息启用分块卸载。
-const LAZY_MARKDOWN_RENDER_THRESHOLD = 6000;
-
-// LAZY_MARKDOWN_TARGET_CHARS is the preferred chunk size before the next safe Markdown boundary.
-// LAZY_MARKDOWN_TARGET_CHARS 是到达下一个安全 Markdown 边界前的目标分块大小。
-const LAZY_MARKDOWN_TARGET_CHARS = 4000;
-
-// LAZY_MARKDOWN_ROOT_MARGIN keeps nearby Markdown chunks mounted before they enter the viewport.
-// LAZY_MARKDOWN_ROOT_MARGIN 让即将进入视口的 Markdown 分块提前保持挂载。
-const LAZY_MARKDOWN_ROOT_MARGIN = "900px 0px";
 
 // CONVERSATION_VIRTUALIZATION_MIN_ITEMS avoids adding measurement wrappers to short transcripts.
 // CONVERSATION_VIRTUALIZATION_MIN_ITEMS 避免给短转录添加测量包装层。
@@ -10106,6 +10106,9 @@ function ChatArea(props: {
   // conversationScrollSnapshotsRef keeps scroll restoration data per parent or child surface.
   // conversationScrollSnapshotsRef 按主会话或子代理界面保存滚动恢复数据。
   const conversationScrollSnapshotsRef = React.useRef<Map<string, ConversationScrollSnapshot>>(new Map());
+  // scrollRestoreGuardRef prevents transient restore measurements from overwriting tail-pinned memory.
+  // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
+  const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
   const activeSubagentTask = subagentNavigation?.tasks?.find((task) => task.isActive) ?? null;
   const surfaceConversation = activeSubagentTask
     ? {
@@ -10172,7 +10175,6 @@ function ChatArea(props: {
     () => buildConversationStreamSignature(messages),
     [messages],
   );
-
   // rememberConversationScrollSnapshot captures the current shared scroll element before route changes.
   // rememberConversationScrollSnapshot 在路由切换前捕获当前共享滚动元素状态。
   const rememberConversationScrollSnapshot = React.useCallback(() => {
@@ -10183,7 +10185,7 @@ function ChatArea(props: {
     }
     const wasAtBottom = conversationViewportAllowsTailFollow(element);
     conversationScrollSnapshotsRef.current.set(surfaceId, {
-      scrollTop: element.scrollTop,
+      distanceFromBottom: conversationDistanceFromBottom(element),
       wasAtBottom,
     });
     shouldFollowConversationTailRef.current = wasAtBottom;
@@ -10199,11 +10201,21 @@ function ChatArea(props: {
       return;
     }
     const shouldFollow = conversationViewportAllowsTailFollow(element);
-    shouldFollowConversationTailRef.current = shouldFollow;
     const surfaceId = renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    const restoreGuard = scrollRestoreGuardRef.current;
+    if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !shouldFollow) {
+      shouldFollowConversationTailRef.current = true;
+      conversationScrollSnapshotsRef.current.set(surfaceId, {
+        distanceFromBottom: 0,
+        wasAtBottom: true,
+      });
+      setIsAtConversationBottom(true);
+      return;
+    }
+    shouldFollowConversationTailRef.current = shouldFollow;
     if (surfaceId) {
       conversationScrollSnapshotsRef.current.set(surfaceId, {
-        scrollTop: element.scrollTop,
+        distanceFromBottom: conversationDistanceFromBottom(element),
         wasAtBottom: shouldFollow,
       });
     }
@@ -10242,6 +10254,25 @@ function ChatArea(props: {
     return true;
   }, []);
 
+  // handleComposerDockHeightChange keeps the sticky footer from pushing a tail-locked transcript away.
+  // handleComposerDockHeightChange 避免粘性底部输入区高度变化时把贴底转录推离底部。
+  const handleComposerDockHeightChange = React.useCallback((height: number) => {
+    setComposerDockHeight((current) => {
+      if (current === height) {
+        return current;
+      }
+      if (shouldFollowConversationTailRef.current) {
+        window.requestAnimationFrame(() => {
+          const element = workspaceRef.current;
+          if (element) {
+            element.scrollTop = element.scrollHeight;
+          }
+        });
+      }
+      return height;
+    });
+  }, []);
+
   React.useLayoutEffect(() => {
     if (!props.selectedConversationId || isEmptyConversation || showConversationLoadingOnly) {
       return;
@@ -10255,10 +10286,11 @@ function ChatArea(props: {
       && previousSurfaceId
       && element
       && !conversationScrollSnapshotsRef.current.has(previousSurfaceId)
+      && shouldFollowConversationTailRef.current
     ) {
       conversationScrollSnapshotsRef.current.set(previousSurfaceId, {
-        scrollTop: element.scrollTop,
-        wasAtBottom: shouldFollowConversationTailRef.current,
+        distanceFromBottom: 0,
+        wasAtBottom: true,
       });
     }
     selectedConversationTailRef.current = activeSurfaceConversationId;
@@ -10266,22 +10298,41 @@ function ChatArea(props: {
     const savedScrollSnapshot = selectedChanged && activeSurfaceConversationId
       ? conversationScrollSnapshotsRef.current.get(activeSurfaceConversationId)
       : null;
-    if (selectedChanged && savedScrollSnapshot && element) {
+    const restoreSurfaceId = activeSurfaceConversationId;
+    if (selectedChanged && savedScrollSnapshot && element && restoreSurfaceId) {
       const restoreSavedScrollPosition = () => {
         if (savedScrollSnapshot.wasAtBottom) {
           element.scrollTop = element.scrollHeight;
           return;
         }
-        const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
-        element.scrollTop = Math.min(savedScrollSnapshot.scrollTop, maxScrollTop);
+        conversationScrollToDistanceFromBottom(element, savedScrollSnapshot.distanceFromBottom);
       };
       shouldFollowConversationTailRef.current = savedScrollSnapshot.wasAtBottom;
+      scrollRestoreGuardRef.current = {
+        surfaceId: restoreSurfaceId,
+        wasAtBottom: savedScrollSnapshot.wasAtBottom,
+      };
       restoreSavedScrollPosition();
+      let secondFrame: number | null = null;
       const firstFrame = window.requestAnimationFrame(() => {
         restoreSavedScrollPosition();
-        updateConversationBottomState();
+        secondFrame = window.requestAnimationFrame(() => {
+          restoreSavedScrollPosition();
+          updateConversationBottomState();
+          if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
+            scrollRestoreGuardRef.current = null;
+          }
+        });
       });
-      return () => window.cancelAnimationFrame(firstFrame);
+      return () => {
+        window.cancelAnimationFrame(firstFrame);
+        if (secondFrame !== null) {
+          window.cancelAnimationFrame(secondFrame);
+        }
+        if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
+          scrollRestoreGuardRef.current = null;
+        }
+      };
     }
 
     const shouldFollowTail = selectedChanged
@@ -10378,6 +10429,39 @@ function ChatArea(props: {
     return () => window.clearTimeout(timeout);
   }, [emptyPromptVisible, isEmptyConversation]);
 
+  // composerDock renders either inside the scroll footer or as the empty-state floating composer.
+  // composerDock 渲染滚动底部插槽中的输入区，或空会话状态下的浮动输入区。
+  const composerDock = (
+    <ComposerDock
+      aiCapabilities={props.workbench.aiCapabilities ?? []}
+      attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
+      projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
+      conversationId={selectedConversation?.id ?? null}
+      slashCommands={props.workbench.composerSlashCommands ?? []}
+      contextUsage={isEmptyConversation ? null : props.workbench.contextUsage ?? null}
+      emptyMode={isEmptyConversation}
+      onScrollToBottom={() => scrollConversationToBottom()}
+      onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+      onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+      onSlashCommand={props.onSlashCommand}
+      onComposerDockHeightChange={handleComposerDockHeightChange}
+      onSubmitPrompt={props.onSubmitPrompt}
+      onStopConversationRun={props.onStopConversationRun}
+      providers={props.workbench.providers}
+      pendingPrompts={props.workbench.pendingPrompts ?? []}
+      isConversationRunning={isConversationRunning}
+      thinkingOverlayEnabled={thinkingOverlayEnabled}
+      reasoningSelection={props.workbench.reasoningSelection ?? null}
+      runtimeCue={isEmptyConversation ? null : runtimeCue}
+      showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
+      onEditPendingPrompt={props.onEditPendingPrompt}
+      onInsertPendingPrompt={props.onInsertPendingPrompt}
+      onRemovePendingPrompt={props.onRemovePendingPrompt}
+      onReorderPendingPrompts={props.onReorderPendingPrompts}
+      onThinkingOverlayEnabledChange={setThinkingOverlayEnabled}
+    />
+  );
+
   return (
     <div
       className={cn("area-grid chat-grid", isEmptyConversation && "empty-conversation-grid", showConversationLoadingOnly && "loading-conversation-grid")}
@@ -10404,6 +10488,7 @@ function ChatArea(props: {
             onScrollStateChange={updateConversationBottomState}
             onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
             scrollRef={workspaceRef}
+            footer={isEmptyConversation ? null : composerDock}
             suppressEmptyPlaceholder={isEmptyConversation}
           />
           {visibleStreamingThinkingOverlayBlock ? (
@@ -10412,34 +10497,7 @@ function ChatArea(props: {
               leaving={streamingThinkingOverlayLeaving}
             />
           ) : null}
-          <ComposerDock
-            aiCapabilities={props.workbench.aiCapabilities ?? []}
-            attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
-            projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
-            conversationId={selectedConversation?.id ?? null}
-            slashCommands={props.workbench.composerSlashCommands ?? []}
-            contextUsage={isEmptyConversation ? null : props.workbench.contextUsage ?? null}
-            emptyMode={isEmptyConversation}
-            onScrollToBottom={() => scrollConversationToBottom()}
-            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-            onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-            onSlashCommand={props.onSlashCommand}
-            onComposerDockHeightChange={setComposerDockHeight}
-            onSubmitPrompt={props.onSubmitPrompt}
-            onStopConversationRun={props.onStopConversationRun}
-            providers={props.workbench.providers}
-            pendingPrompts={props.workbench.pendingPrompts ?? []}
-            isConversationRunning={isConversationRunning}
-            thinkingOverlayEnabled={thinkingOverlayEnabled}
-            reasoningSelection={props.workbench.reasoningSelection ?? null}
-            runtimeCue={isEmptyConversation ? null : runtimeCue}
-            showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
-            onEditPendingPrompt={props.onEditPendingPrompt}
-            onInsertPendingPrompt={props.onInsertPendingPrompt}
-            onRemovePendingPrompt={props.onRemovePendingPrompt}
-            onReorderPendingPrompts={props.onReorderPendingPrompts}
-            onThinkingOverlayEnabledChange={setThinkingOverlayEnabled}
-          />
+          {isEmptyConversation ? composerDock : null}
         </>
       )}
     </div>
@@ -10577,7 +10635,7 @@ function useConversationTimelineVirtualWindow(
   const measuredHeightsRef = React.useRef<Map<string, number>>(new Map());
   const cacheScopeKeyRef = React.useRef(cacheScopeKey);
   const [measureVersion, setMeasureVersion] = React.useState(0);
-  const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0 });
+  const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0, width: 0 });
   const onScroll = React.useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -10586,11 +10644,28 @@ function useConversationTimelineVirtualWindow(
     setViewport({
       scrollTop: element.scrollTop,
       height: element.clientHeight,
+      width: element.clientWidth,
     });
   }, [scrollRef]);
+
   React.useLayoutEffect(() => {
     onScroll();
   }, [items.length, onScroll]);
+
+  React.useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!element) {
+      return;
+    }
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", onScroll);
+      return () => window.removeEventListener("resize", onScroll);
+    }
+    const observer = new ResizeObserver(onScroll);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [onScroll, scrollRef]);
+
   React.useEffect(() => {
     let changed = false;
     if (cacheScopeKeyRef.current !== cacheScopeKey) {
@@ -10609,6 +10684,7 @@ function useConversationTimelineVirtualWindow(
       setMeasureVersion((version) => version + 1);
     }
   }, [cacheScopeKey, items]);
+
   const onRowHeight = React.useCallback((key: string, height: number) => {
     if (!Number.isFinite(height) || height <= 0) {
       return;
@@ -10619,21 +10695,46 @@ function useConversationTimelineVirtualWindow(
       return;
     }
     const scrollElement = scrollRef.current;
-    const heightDelta = current ? rounded - current : 0;
+    const heightDelta = current == null ? 0 : rounded - current;
+    const measuredHeights = measuredHeightsRef.current;
+    const rowIndex = items.findIndex((item) => conversationTimelineItemKey(item) === key);
+    const rowItem = rowIndex < 0 ? null : items[rowIndex] ?? null;
+    const rowTopBefore = rowIndex < 0
+      ? null
+      : items.slice(0, rowIndex).reduce((sum, item) => (
+        sum + (measuredHeights.get(conversationTimelineItemKey(item)) ?? conversationTimelineItemEstimatedHeight(item))
+      ), 0);
+    const rowBottomBefore = rowTopBefore == null
+      ? null
+      : rowTopBefore + (current ?? (rowItem ? conversationTimelineItemEstimatedHeight(rowItem) : 0));
     const distanceFromBottom = scrollElement
-      ? scrollElement.scrollHeight - scrollElement.scrollTop - scrollElement.clientHeight
+      ? conversationDistanceFromBottom(scrollElement)
       : Number.POSITIVE_INFINITY;
     const wasNearBottom = scrollElement
       ? distanceFromBottom <= 24 || (heightDelta > 0 && distanceFromBottom - heightDelta <= 24)
       : false;
+    const shouldPreserveViewport = Boolean(
+      scrollElement
+      && heightDelta !== 0
+      && rowBottomBefore != null
+      && rowBottomBefore <= scrollElement.scrollTop + 1,
+    );
     measuredHeightsRef.current.set(key, rounded);
     setMeasureVersion((version) => version + 1);
-    if (scrollElement && wasNearBottom) {
+    if (!scrollElement) {
+      return;
+    }
+    if (wasNearBottom) {
       window.requestAnimationFrame(() => {
         scrollElement.scrollTop = scrollElement.scrollHeight;
       });
+      return;
     }
-  }, [scrollRef]);
+    if (shouldPreserveViewport) {
+      scrollElement.scrollTop += heightDelta;
+    }
+  }, [items, scrollRef]);
+
   const virtualWindow = React.useMemo<ConversationTimelineVirtualWindow>(() => {
     void measureVersion;
     if (items.length < CONVERSATION_VIRTUALIZATION_MIN_ITEMS || viewport.height <= 0) {
@@ -10641,6 +10742,7 @@ function useConversationTimelineVirtualWindow(
         items: items.map((item, index) => ({ index, item })),
         paddingTop: 0,
         paddingBottom: 0,
+        measuring: false,
         virtualized: false,
       };
     }
@@ -10671,9 +10773,10 @@ function useConversationTimelineVirtualWindow(
       items: items.slice(safeStart, safeEnd).map((item, offset) => ({ index: safeStart + offset, item })),
       paddingTop,
       paddingBottom,
+      measuring: true,
       virtualized: true,
     };
-  }, [items, measureVersion, viewport.height, viewport.scrollTop]);
+  }, [items, measureVersion, viewport.height, viewport.scrollTop, viewport.width]);
   return { window: virtualWindow, onScroll, onRowHeight };
 }
 
@@ -10746,6 +10849,9 @@ function ConversationWorkspace(props: {
   onScrollStateChange: () => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
   scrollRef: React.RefObject<HTMLElement | null>;
+  // Sticky footer rendered inside the transcript scroll container.
+  // 渲染在转录滚动容器内部的粘性底部插槽。
+  footer?: React.ReactNode;
   suppressEmptyPlaceholder?: boolean;
 }) {
   // detail stores the currently opened transcript detail modal.
@@ -10834,42 +10940,48 @@ function ConversationWorkspace(props: {
 
   return (
     <MarkdownImageWorkspacePathContext.Provider value={props.workspacePath?.trim() || null}>
-      <MarkdownViewportRootRefContext.Provider value={props.scrollRef}>
-        <section className="conversation-panel" onScroll={handleConversationScroll} ref={props.scrollRef}>
-          <div className="timeline">
-            {props.error ? (
-              <article className="message-card system error-message">
-                <span>system</span>
-                <p>会话正文加载失败：{props.error}</p>
-              </article>
-            ) : null}
-            {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
-              <article className="message-card system">
-                <span>system</span>
-                <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
-              </article>
-            ) : null}
-            {timelineVirtualizer.window.paddingTop > 0 ? (
-              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingTop }} />
-            ) : null}
-            {timelineVirtualizer.window.items.map(({ item: timelineItem }) => {
-              const rowKey = conversationTimelineItemKey(timelineItem);
-              return timelineVirtualizer.window.virtualized ? (
-                <ConversationTimelineVirtualRow
-                  key={rowKey}
-                  rowKey={rowKey}
-                  onHeight={timelineVirtualizer.onRowHeight}
-                >
-                  {renderTimelineItem(timelineItem)}
-                </ConversationTimelineVirtualRow>
-              ) : (
-                <React.Fragment key={rowKey}>
-                  {renderTimelineItem(timelineItem)}
-                </React.Fragment>
-              );
-            })}
-            {timelineVirtualizer.window.paddingBottom > 0 ? (
-              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingBottom }} />
+      <section className="conversation-panel" onScroll={handleConversationScroll} ref={props.scrollRef}>
+          <div className="conversation-scroll-content">
+            <div className="timeline">
+              {props.error ? (
+                <article className="message-card system error-message">
+                  <span>system</span>
+                  <p>会话正文加载失败：{props.error}</p>
+                </article>
+              ) : null}
+              {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
+                <article className="message-card system">
+                  <span>system</span>
+                  <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
+                </article>
+              ) : null}
+              {timelineVirtualizer.window.paddingTop > 0 ? (
+                <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingTop }} />
+              ) : null}
+              {timelineVirtualizer.window.items.map(({ item: timelineItem }) => {
+                const rowKey = conversationTimelineItemKey(timelineItem);
+                return timelineVirtualizer.window.measuring ? (
+                  <ConversationTimelineVirtualRow
+                    key={rowKey}
+                    rowKey={rowKey}
+                    onHeight={timelineVirtualizer.onRowHeight}
+                  >
+                    {renderTimelineItem(timelineItem)}
+                  </ConversationTimelineVirtualRow>
+                ) : (
+                  <React.Fragment key={rowKey}>
+                    {renderTimelineItem(timelineItem)}
+                  </React.Fragment>
+                );
+              })}
+              {timelineVirtualizer.window.paddingBottom > 0 ? (
+                <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingBottom }} />
+              ) : null}
+            </div>
+            {props.footer ? (
+              <div className="conversation-footer" data-conversation-scroll-footer="true">
+                {props.footer}
+              </div>
             ) : null}
           </div>
           {detail ? (
@@ -10882,8 +10994,7 @@ function ConversationWorkspace(props: {
           {mediaPlayer ? (
             <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
           ) : null}
-        </section>
-      </MarkdownViewportRootRefContext.Provider>
+      </section>
     </MarkdownImageWorkspacePathContext.Provider>
   );
 }
@@ -10954,7 +11065,11 @@ function ConversationProcessGroup(props: {
   const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
   const bodyVisible = !props.process.collapsible || !collapsed;
   return (
-    <section className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}>
+    <section
+      className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}
+      data-process-body-visible={bodyVisible ? "true" : "false"}
+      data-process-collapsed={collapsed ? "true" : "false"}
+    >
       <button
         aria-expanded={bodyVisible}
         className="work-process-toggle"
@@ -10979,32 +11094,32 @@ function ConversationProcessGroup(props: {
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
+            forceEagerMarkdown
           />
         ))}
       </div>
-      {bodyVisible ? (
-        <div className="work-process-body">
-          {visibleProcessItems.map((item) => (
-            <ConversationRenderItemView
-              autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-              hiddenThinkingBlockId={null}
-              item={item}
-              itemStreaming={item.id === streamingProcessItemId}
-              key={item.id}
-              parentConversationId={props.parentConversationId}
-              sessionRunning={props.sessionRunning}
-              onOpenDetail={props.onOpenDetail}
-              onOpenMedia={props.onOpenMedia}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
-            />
-          ))}
-          {props.process.stopped ? (
-            <div className="work-process-stopped-note">
-              {stoppedText}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <div aria-hidden={!bodyVisible} className="work-process-body" hidden={!bodyVisible}>
+        {visibleProcessItems.map((item) => (
+          <ConversationRenderItemView
+            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={null}
+            item={item}
+            itemStreaming={item.id === streamingProcessItemId}
+            key={item.id}
+            parentConversationId={props.parentConversationId}
+            sessionRunning={props.sessionRunning}
+            onOpenDetail={props.onOpenDetail}
+            onOpenMedia={props.onOpenMedia}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            forceEagerMarkdown
+          />
+        ))}
+        {props.process.stopped ? (
+          <div className="work-process-stopped-note">
+            {stoppedText}
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }
@@ -11016,6 +11131,9 @@ function ConversationRenderItemView(props: {
   autoExpandThinkingBlockId: string | null;
   hiddenThinkingBlockId: string | null;
   itemStreaming?: boolean;
+  // Force Markdown blocks in externally hidden panels to stay mounted when visible.
+  // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
+  forceEagerMarkdown?: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -11063,6 +11181,7 @@ function ConversationRenderItemView(props: {
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
           conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
+          forceEagerMarkdown={props.forceEagerMarkdown}
           itemStreaming={Boolean(props.itemStreaming)}
           parentConversationId={props.parentConversationId}
           sessionRunning={props.sessionRunning}
@@ -11089,6 +11208,9 @@ function ConversationBlocksView(props: {
   autoExpandThinkingBlockId: string | null;
   blocks: ConversationBlock[];
   conversationId: string | null;
+  // Force Markdown blocks in externally hidden panels to stay mounted when visible.
+  // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
+  forceEagerMarkdown?: boolean;
   itemStreaming: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
@@ -11126,6 +11248,7 @@ function ConversationBlocksView(props: {
     return (
       <MarkdownMessage
         content={block.body}
+        eager={props.forceEagerMarkdown}
         streaming={props.itemStreaming}
         onOpenMedia={props.onOpenMedia}
       />
@@ -11282,14 +11405,14 @@ function MarkdownContentRenderer(props: {
   );
 }
 
-// LazyMarkdownMessage splits large finalized Markdown into viewport-managed chunks.
-// LazyMarkdownMessage 将较大的终态 Markdown 拆成由视口管理的分块。
+// LazyMarkdownMessage keeps one complete Markdown document mounted for stable layout.
+// LazyMarkdownMessage 保持完整 Markdown 文档挂载以获得稳定布局。
 function LazyMarkdownMessage(props: {
   // Already-normalized Markdown content.
   // 已经规范化的 Markdown 内容。
   content: string;
-  // Whether every chunk should render immediately outside the transcript viewport.
-  // 是否在转录视口外立即渲染所有分块。
+  // Kept for call-site compatibility after removing chunk-level unmounting.
+  // 移除分块卸载后保留该参数以兼容现有调用点。
   eager?: boolean;
   // Current project workspace path for image source resolution.
   // 当前项目工作区路径，用于解析图片来源。
@@ -11298,195 +11421,13 @@ function LazyMarkdownMessage(props: {
   // Markdown 图片使用的可选媒体打开器。
   onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const chunks = React.useMemo(() => splitMarkdownIntoLazyChunks(props.content), [props.content]);
-  if (props.eager) {
-    if (chunks.length <= 1) {
-      return (
-        <MarkdownContentRenderer
-          content={props.content}
-          onOpenMedia={props.onOpenMedia}
-          workspacePath={props.workspacePath}
-        />
-      );
-    }
-    return (
-      <div className="markdown-lazy-chunk-list">
-        {chunks.map((chunk, index) => (
-          <MarkdownContentRenderer
-            content={chunk}
-            key={`${index}:${chunk.length}`}
-            onOpenMedia={props.onOpenMedia}
-            workspacePath={props.workspacePath}
-          />
-        ))}
-      </div>
-    );
-  }
-  if (chunks.length <= 1) {
-    return (
-      <LazyMarkdownChunk
-        content={props.content}
-        onOpenMedia={props.onOpenMedia}
-        workspacePath={props.workspacePath}
-      />
-    );
-  }
   return (
-    <div className="markdown-lazy-chunk-list">
-      {chunks.map((chunk, index) => (
-        <LazyMarkdownChunk
-          content={chunk}
-          key={`${index}:${chunk.length}`}
-          onOpenMedia={props.onOpenMedia}
-          workspacePath={props.workspacePath}
-        />
-      ))}
-    </div>
+    <MarkdownContentRenderer
+      content={props.content}
+      onOpenMedia={props.onOpenMedia}
+      workspacePath={props.workspacePath}
+    />
   );
-}
-
-// LazyMarkdownChunk unmounts expensive Markdown DOM when its measured block is far offscreen.
-// LazyMarkdownChunk 在已测量分块远离视口时卸载昂贵的 Markdown DOM。
-function LazyMarkdownChunk(props: {
-  // Already-normalized Markdown chunk.
-  // 已经规范化的 Markdown 分块。
-  content: string;
-  // Current project workspace path for image source resolution.
-  // 当前项目工作区路径，用于解析图片来源。
-  workspacePath: string | null;
-  // Optional media opener used by Markdown images.
-  // Markdown 图片使用的可选媒体打开器。
-  onOpenMedia?: (attachment: GeneratedMediaAttachment) => void;
-}) {
-  const rootRef = React.useContext(MarkdownViewportRootRefContext);
-  const elementRef = React.useRef<HTMLDivElement | null>(null);
-  const measuredHeightRef = React.useRef<number | null>(null);
-  const [visible, setVisible] = React.useState(true);
-  const [measuredHeight, setMeasuredHeight] = React.useState<number | null>(null);
-
-  React.useLayoutEffect(() => {
-    if (!visible) {
-      return;
-    }
-    const element = elementRef.current;
-    if (!element) {
-      return;
-    }
-    const updateHeight = () => {
-      const height = Math.ceil(element.getBoundingClientRect().height);
-      if (height <= 0) {
-        return;
-      }
-      measuredHeightRef.current = height;
-      setMeasuredHeight(height);
-    };
-    updateHeight();
-    if (typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [props.content, visible]);
-
-  React.useEffect(() => {
-    const element = elementRef.current;
-    if (!element || typeof IntersectionObserver === "undefined") {
-      return;
-    }
-    const observer = new IntersectionObserver((entries) => {
-      const [entry] = entries;
-      if (!entry) {
-        return;
-      }
-      if (entry.isIntersecting) {
-        setVisible(true);
-        return;
-      }
-      if (measuredHeightRef.current !== null) {
-        setVisible(false);
-      }
-    }, {
-      root: rootRef?.current ?? null,
-      rootMargin: LAZY_MARKDOWN_ROOT_MARGIN,
-    });
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [rootRef]);
-
-  return (
-    <div
-      className="markdown-lazy-chunk"
-      ref={elementRef}
-      style={!visible && measuredHeight ? { minHeight: measuredHeight } : undefined}
-    >
-      {visible ? (
-        <MarkdownContentRenderer
-          content={props.content}
-          onOpenMedia={props.onOpenMedia}
-          workspacePath={props.workspacePath}
-        />
-      ) : null}
-    </div>
-  );
-}
-
-// splitMarkdownIntoLazyChunks groups finalized Markdown by safe boundaries for offscreen unmounting.
-// splitMarkdownIntoLazyChunks 按安全边界拆分终态 Markdown，便于离屏卸载。
-function splitMarkdownIntoLazyChunks(content: string): string[] {
-  if (content.length <= LAZY_MARKDOWN_RENDER_THRESHOLD) {
-    return [content];
-  }
-  const boundaries = collectSafeMarkdownBoundaryIndexes(content).filter((boundary) => boundary > 0 && boundary < content.length);
-  const chunks: string[] = [];
-  let start = 0;
-  for (const boundary of boundaries) {
-    if (boundary - start < LAZY_MARKDOWN_TARGET_CHARS) {
-      continue;
-    }
-    chunks.push(content.slice(start, boundary));
-    start = boundary;
-  }
-  if (start < content.length) {
-    chunks.push(content.slice(start));
-  }
-  return chunks.length > 1 ? chunks : [content];
-}
-
-// collectSafeMarkdownBoundaryIndexes finds positions that should not split open Markdown structures.
-// collectSafeMarkdownBoundaryIndexes 查找不会切开未闭合 Markdown 结构的位置。
-function collectSafeMarkdownBoundaryIndexes(content: string): number[] {
-  const boundaries: number[] = [];
-  const lines = content.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g) ?? [];
-  let offset = 0;
-  let fence: { marker: "`" | "~"; length: number } | null = null;
-  for (const line of lines) {
-    if (line.length === 0) {
-      continue;
-    }
-    const nextOffset = offset + line.length;
-    const lineText = line.replace(/[\r\n]+$/u, "");
-    const fenceMatch = lineText.match(/^[ \t]{0,3}(`{3,}|~{3,})/u);
-    let closedFence = false;
-    if (fenceMatch) {
-      const markerText = fenceMatch[1] ?? "";
-      const marker = markerText.startsWith("~") ? "~" : "`";
-      if (!fence) {
-        fence = { marker, length: markerText.length };
-      } else if (marker === fence.marker && markerText.length >= fence.length) {
-        fence = null;
-        closedFence = true;
-      }
-    }
-    if (!fence && (lineText.trim().length === 0 || closedFence)) {
-      boundaries.push(nextOffset);
-    }
-    offset = nextOffset;
-  }
-  if (content.length > 0 && boundaries.at(-1) === content.length) {
-    return boundaries;
-  }
-  return boundaries;
 }
 
 // SpecialConversationBlock renders compact tool, command, diff, thinking, and notice rows.
@@ -13225,7 +13166,7 @@ function buildConversationStreamSignature(messages: ConversationMessage[]): stri
 // conversationViewportAllowsTailFollow returns whether the timeline is at or near the bottom.
 // conversationViewportAllowsTailFollow 返回时间线是否位于底部或接近底部。
 function conversationViewportAllowsTailFollow(element: HTMLElement): boolean {
-  const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight;
+  const distanceFromBottom = conversationDistanceFromBottom(element);
   return element.scrollHeight <= element.clientHeight + 24 || distanceFromBottom <= 24;
 }
 
@@ -14958,3 +14899,4 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <App />
   </React.StrictMode>,
 );
+
