@@ -1215,7 +1215,10 @@ fn append_segmented_session_replacement(
             })
             .collect::<Result<Vec<_>, _>>()?,
     );
-    backfill_tool_detail_ref_sequences(&mut events[1..], metadata.next_global_seq.saturating_add(1));
+    backfill_tool_detail_ref_sequences(
+        &mut events[1..],
+        metadata.next_global_seq.saturating_add(1),
+    );
     let lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
     update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
@@ -2861,20 +2864,13 @@ fn backfill_tool_detail_ref_sequences(
         if event.kind != SegmentedSessionEventKind::DisplayEvent {
             continue;
         }
-        if event
-            .payload
-            .get("record_kind")
-            .and_then(Value::as_str)
+        if event.payload.get("record_kind").and_then(Value::as_str)
             != Some(SessionMessageRecordKind::ToolDetailOutput.as_persisted_key())
         {
             continue;
         }
         let seq = first_event_seq.saturating_add(offset as u64);
-        if let Some(message_index) = event
-            .payload
-            .get("message_index")
-            .and_then(Value::as_u64)
-        {
+        if let Some(message_index) = event.payload.get("message_index").and_then(Value::as_u64) {
             detail_seq_by_index.insert(message_index, seq);
         }
         if let Some(message_id) = event

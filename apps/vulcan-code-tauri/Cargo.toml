@@ -10,36 +10,12 @@ license.workspace = true
 tauri-build = { version = "=2.6.2", features = [] }
 
 [dependencies]
-base64 = "0.22.1"
-futures-util = "0.3.31"
-http-range = "0.1.5"
-serde.workspace = true
-serde_json.workspace = true
-serde_yaml = "0.9"
 rfd = "0.15.4"
 tauri = { version = "=2.11.2", features = [] }
-time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
-uuid.workspace = true
-vldb-controller-client.workspace = true
-luaskills.workspace = true
-vulcan-agent-runtime.workspace = true
-vulcan-session-boundary.workspace = true
-vulcan-context.workspace = true
-vulcan-context-compaction.workspace = true
-vulcan-context-injection.workspace = true
-vulcan-core.workspace = true
-vulcan-mcp-runtime.workspace = true
-vulcan-provider-config.workspace = true
-vulcan-prompt-skills.workspace = true
-vulcan-runtime-assets.workspace = true
-vulcan-service-api = { path = "../../crates/vulcan-service-api" }
-vulcan-session-core.workspace = true
-vulcan-task-session.workspace = true
-vulcan-token-counter.workspace = true
-vulcan-vmm.workspace = true
-vulcan-workbench-model.workspace = true
-vulcan-workspace-store.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+vulcan-service-api.workspace = true
+vulcan-service-host.workspace = true
+vulcan-service-kernel.workspace = true
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

@@ -1,0 +1,231 @@
+//! Tauri desktop shell for the Vulcan Code service kernel.
+//! Vulcan Code 服务内核的 Tauri 桌面壳。
+
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
+};
+
+use tauri::Emitter;
+use tokio::sync::broadcast;
+use vulcan_service_api::{ServiceEvent, ServiceEventEmitter, ServiceEventSink, WorkbenchSnapshot};
+use vulcan_service_host::webui_service_event_bus_sink;
+
+use vulcan_service_kernel::{
+    ServiceShellHost, SharedServiceBridgeState, create_service_bridge_state,
+    emit_initial_service_events, service_add_project_from_path,
+    service_add_project_initial_directory, spawn_service_bootstrap,
+    spawn_webui_service_http_bridge,
+};
+
+/// Tauri desktop event sink used only by the desktop shell.
+/// 仅桌面壳使用的 Tauri 桌面事件接收器。
+struct TauriServiceEventSink {
+    /// Tauri application handle used for desktop WebView events.
+    /// 用于桌面 WebView 事件的 Tauri 应用句柄。
+    app: tauri::AppHandle,
+}
+
+/// Desktop implementation of host shell capabilities.
+/// 宿主 shell 能力的桌面端实现。
+struct DesktopServiceShellHost;
+
+impl ServiceShellHost for DesktopServiceShellHost {
+    /// Opens a native file picker and returns selected local paths.
+    /// 打开原生文件选择器并返回选中的本地路径。
+    fn pick_composer_attachment_paths(
+        &self,
+        filter_label: &str,
+        filter_extensions: &[&str],
+    ) -> Result<Vec<PathBuf>, String> {
+        let dialog = rfd::FileDialog::new().add_filter(filter_label, filter_extensions);
+        Ok(dialog.pick_files().unwrap_or_default())
+    }
+
+    /// Opens one local path with the system file manager.
+    /// 使用系统文件管理器打开单个本地路径。
+    fn open_path(&self, path: &str) -> Result<(), String> {
+        open_path_in_system_file_manager(path)
+    }
+
+    /// Opens one URL with the system default browser.
+    /// 使用系统默认浏览器打开单个 URL。
+    fn open_url(&self, url: &str) -> Result<(), String> {
+        open_url_in_system_browser(url)
+    }
+}
+
+impl ServiceEventSink for TauriServiceEventSink {
+    /// Emits one event through the desktop Tauri event channel.
+    /// 通过桌面 Tauri 事件通道发送单个事件。
+    fn emit_service_event(&self, event: ServiceEvent) {
+        let _ = self.app.emit("vulcan://service-event", event);
+    }
+}
+
+/// Builds one desktop emitter from the concrete frontend sinks.
+/// 从具体前端 sink 构建桌面事件发送器。
+///
+/// # Parameters
+/// 参数
+/// `app` is the Tauri application handle used for desktop WebView events.
+/// `app` 是用于桌面 WebView 事件的 Tauri 应用句柄。
+/// `service_event_bus` is the broadcast bus consumed by browser WebSocket clients.
+/// `service_event_bus` 是浏览器 WebSocket 客户端消费的广播总线。
+///
+/// # Returns
+/// 返回值
+/// A shared event emitter that sends to both desktop and browser frontends.
+/// 返回同时发送到桌面端和浏览器端前端的共享事件发送器。
+fn service_event_emitter_from_tauri_app(
+    app: tauri::AppHandle,
+    service_event_bus: broadcast::Sender<ServiceEvent>,
+) -> ServiceEventEmitter {
+    ServiceEventEmitter::new(vec![
+        webui_service_event_bus_sink(service_event_bus),
+        Arc::new(TauriServiceEventSink { app }) as Arc<dyn ServiceEventSink>,
+    ])
+}
+
+/// Runs the Tauri application and registers desktop-only commands.
+/// 运行 Tauri 应用并注册仅桌面壳拥有的命令。
+pub fn run() {
+    let (service_event_bus, _) = broadcast::channel(256);
+    let state = create_service_bridge_state(Arc::new(DesktopServiceShellHost));
+    let managed_state = Arc::clone(&state);
+    tauri::Builder::default()
+        .manage(state)
+        .invoke_handler(tauri::generate_handler![service_add_project_from_folder])
+        .setup(move |app| {
+            let event_emitter = service_event_emitter_from_tauri_app(
+                app.handle().clone(),
+                service_event_bus.clone(),
+            );
+            spawn_webui_service_http_bridge(
+                event_emitter.clone(),
+                Arc::clone(&managed_state),
+                service_event_bus.clone(),
+            );
+            emit_initial_service_events(&managed_state, &event_emitter);
+            spawn_service_bootstrap(Arc::clone(&managed_state), event_emitter);
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("failed to run Vulcan Code Tauri shell");
+}
+
+/// Opens the host folder picker and adds or restores the selected project.
+/// 打开宿主文件夹选择器，并新增或恢复选中的项目。
+#[tauri::command]
+async fn service_add_project_from_folder(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+) -> Result<Option<WorkbenchSnapshot>, String> {
+    let shared_state = state.inner().clone();
+    let initial_directory = service_add_project_initial_directory(&shared_state)?;
+    let Some(selected_path) = pick_task_project_folder(&initial_directory)? else {
+        return Ok(None);
+    };
+    service_add_project_from_path(shared_state, selected_path).await
+}
+
+/// Opens one native folder-picker dialog and returns the selected path when confirmed.
+/// 打开一个原生文件夹选择器，并在确认后返回选中的路径。
+///
+/// # Parameters
+/// 参数
+/// `initial_directory` is the preferred directory shown when the picker opens.
+/// `initial_directory` 是选择器打开时优先展示的目录。
+///
+/// # Returns
+/// 返回值
+/// The selected local directory path, or `None` when the user cancels the picker.
+/// 返回选中的本地目录路径；如果用户取消选择则返回 `None`。
+fn pick_task_project_folder(initial_directory: &str) -> Result<Option<PathBuf>, String> {
+    let mut dialog = rfd::FileDialog::new().set_title("选择要添加的项目文件夹");
+    let initial_path = Path::new(initial_directory);
+    if initial_path.exists() {
+        dialog = dialog.set_directory(initial_path);
+    }
+    Ok(dialog.pick_folder())
+}
+
+/// Opens one filesystem directory with the host file manager.
+/// 使用宿主文件管理器打开单个文件系统目录。
+///
+/// # Parameters
+/// 参数
+/// `path` is the local filesystem path to reveal or open.
+/// `path` 是需要展示或打开的本地文件系统路径。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the operating system accepted the open request.
+/// 当操作系统接受打开请求时返回 `Ok(())`。
+fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("explorer");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(path);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(path);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// Opens one URL with the host default browser.
+/// 使用宿主默认浏览器打开单个 URL。
+///
+/// # Parameters
+/// 参数
+/// `url` is the trusted URL to open in the host browser.
+/// `url` 是需要在宿主浏览器中打开的可信 URL。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the operating system accepted the open request.
+/// 当操作系统接受打开请求时返回 `Ok(())`。
+fn open_url_in_system_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", "start", "", url]);
+        command
+    };
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(url);
+        command
+    };
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}

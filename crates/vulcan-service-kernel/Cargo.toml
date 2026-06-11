@@ -1,0 +1,38 @@
+[package]
+name = "vulcan-service-kernel"
+description = "Core service kernel for Vulcan Code WebUI hosts."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+base64 = "0.22.1"
+dirs.workspace = true
+futures-util = "0.3.31"
+serde.workspace = true
+serde_json.workspace = true
+time = { version = "0.3.44", features = ["formatting", "local-offset", "macros", "serde"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+uuid.workspace = true
+vldb-controller-client.workspace = true
+vulcan-agent-runtime.workspace = true
+vulcan-context.workspace = true
+vulcan-context-compaction.workspace = true
+vulcan-context-injection.workspace = true
+vulcan-core.workspace = true
+vulcan-provider-config.workspace = true
+vulcan-prompt-skills.workspace = true
+vulcan-runtime-assets.workspace = true
+vulcan-service-api.workspace = true
+vulcan-service-host.workspace = true
+vulcan-service-runtime.workspace = true
+vulcan-session-boundary.workspace = true
+vulcan-session-core.workspace = true
+vulcan-task-session.workspace = true
+vulcan-vmm.workspace = true
+vulcan-workbench-model.workspace = true
+vulcan-workspace-store.workspace = true

@@ -80,6 +80,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useI18n } from "@/i18n"
+import { localMediaSourceUrl } from "@/resources/localMedia"
 import type {
   AiCapabilitySummary,
   AiCapabilityTargetSummary,
@@ -388,36 +389,6 @@ type SkillHeaderBusyActionId = "lua-refresh" | "agent-refresh" | "agent-sync"
 // MemorySubAreaId identifies the selected VMM memory management page.
 // MemorySubAreaId 标识当前选中的 VMM 记忆管理页面。
 type MemorySubAreaId = string
-
-// encodeBase64UrlUtf8 converts a string to URL-safe base64.
-// encodeBase64UrlUtf8 将字符串转换为 URL 安全的 base64。
-function encodeBase64UrlUtf8(value: string): string {
-  const bytes = new TextEncoder().encode(value)
-  let binary = ""
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
-  })
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")
-}
-
-// isTauriWebRuntime checks whether the current page is running inside Tauri.
-// isTauriWebRuntime 检查当前页面是否运行在 Tauri 内。
-function isTauriWebRuntime(): boolean {
-  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window
-}
-
-// localMediaUrl converts local file paths into URLs usable by WebUI previews.
-// localMediaUrl 将本地文件路径转换为 WebUI 预览可使用的 URL。
-function localMediaUrl(path: string): string {
-  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(path)) {
-    return path
-  }
-  if (isTauriWebRuntime()) {
-    return `http://vulcan-media.localhost/asset/${encodeBase64UrlUtf8(path)}`
-  }
-  const normalized = path.replace(/\\/g, "/")
-  return normalized.startsWith("/") ? `file://${normalized}` : `file:///${normalized}`
-}
 
 // formatSkillText replaces simple named placeholders in one localized skill string.
 // formatSkillText 替换技能本地化字符串中的简单命名占位符。
@@ -1924,7 +1895,7 @@ function AgentSkillIcon(props: {
   }
   return (
     <span className="agent-skill-icon">
-      <img alt="" src={localMediaUrl(props.iconPath)} onError={() => setFailed(true)} />
+      <img alt="" src={localMediaSourceUrl(props.iconPath)} onError={() => setFailed(true)} />
     </span>
   )
 }

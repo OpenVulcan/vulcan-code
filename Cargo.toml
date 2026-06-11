@@ -8,6 +8,9 @@ members = [
     "crates/vulcan-main-session",
     "crates/vulcan-task-session",
     "crates/vulcan-service-api",
+    "crates/vulcan-service-host",
+    "crates/vulcan-service-kernel",
+    "crates/vulcan-service-runtime",
     "crates/vulcan-change-set",
     "crates/vulcan-host-tools",
     "crates/vulcan-provider-config",
@@ -65,6 +68,10 @@ vulcan-host-tools = { path = "crates/vulcan-host-tools" }
 vulcan-workbench-model = { path = "crates/vulcan-workbench-model" }
 vulcan-workspace-store = { path = "crates/vulcan-workspace-store" }
 vulcan-runtime-assets = { path = "crates/vulcan-runtime-assets" }
+vulcan-service-api = { path = "crates/vulcan-service-api" }
+vulcan-service-host = { path = "crates/vulcan-service-host" }
+vulcan-service-kernel = { path = "crates/vulcan-service-kernel" }
+vulcan-service-runtime = { path = "crates/vulcan-service-runtime" }
 vulcan-provider-config = { path = "crates/vulcan-provider-config" }
 vulcan-context = { path = "crates/vulcan-context" }
 vulcan-context-injection = { path = "crates/vulcan-context-injection" }

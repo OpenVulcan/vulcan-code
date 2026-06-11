@@ -607,11 +607,7 @@ fn append_tool_result_detail_record(
         serde_json::Value::Number(serde_json::Number::from(model_output.chars().count() as u64)),
     );
     let message_index = runtime_state.conversation_state.records.len();
-    let record_id = build_session_record_message_id(
-        session_id,
-        now,
-        message_index,
-    );
+    let record_id = build_session_record_message_id(session_id, now, message_index);
     append_record(
         &mut runtime_state.conversation_state,
         SessionConversationRecord {
@@ -718,7 +714,10 @@ fn vulcan_file_list_display_payload(
 
 /// Merges known `vulcan_file_list` header counters into one display object.
 /// 将已知的 `vulcan_file_list` 头部计数字段合并到展示对象。
-fn merge_file_list_header_fields(object: &mut serde_json::Map<String, serde_json::Value>, line: &str) {
+fn merge_file_list_header_fields(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    line: &str,
+) {
     let header = line.trim().trim_start_matches('[').trim_end_matches(']');
     if let Some((label, rest)) = header.split_once(':') {
         object.insert(
@@ -895,11 +894,7 @@ fn complete_open_tool_records(
             detail_ref.as_ref(),
             true,
         );
-        attach_tool_result_to_record(
-            &mut runtime_state.conversation_state,
-            &record_id,
-            metadata,
-        );
+        attach_tool_result_to_record(&mut runtime_state.conversation_state, &record_id, metadata);
     }
 }
 

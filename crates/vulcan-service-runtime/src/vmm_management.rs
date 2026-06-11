@@ -17,7 +17,7 @@ use vulcan_vmm::{
 /// 一种由用户触发的 VMM 管理动作。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
-pub(crate) enum VmmManagementAction {
+pub enum VmmManagementAction {
     /// Check the configured VMM gRPC endpoint.
     /// 检查已配置的 VMM gRPC 端点。
     Healthz,
@@ -38,7 +38,7 @@ pub(crate) enum VmmManagementAction {
 /// Dedicated VMM management action used by the main memory workbench.
 /// 主记忆工作台使用的专用 VMM 管理动作。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum VmmWorkbenchAction {
+pub enum VmmWorkbenchAction {
     /// Check the configured VMM gRPC endpoint.
     /// 检查已配置的 VMM gRPC 端点。
     Healthz,
@@ -157,7 +157,7 @@ pub(crate) enum VmmWorkbenchAction {
 /// 一次 VMM 管理动作返回的结构化结果。
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub(crate) enum VmmManagementOutcome {
+pub enum VmmManagementOutcome {
     /// Health check result.
     /// 健康检查结果。
     Healthz(String),
@@ -219,7 +219,7 @@ pub(crate) enum VmmManagementOutcome {
 impl VmmManagementOutcome {
     /// Builds one compact user-facing summary.
     /// 构建一条紧凑的用户可见摘要。
-    pub(crate) fn summary(&self) -> String {
+    pub fn summary(&self) -> String {
         match self {
             Self::Healthz(status) => format!("VMM 连接正常：{status}"),
             Self::UsersAndProjects { users, projects } => format!(
@@ -334,7 +334,7 @@ impl VmmManagementAction {
     /// Returns the visible action label.
     /// 返回可见动作标签。
     #[allow(dead_code)]
-    pub(crate) const fn label(self) -> &'static str {
+    pub const fn label(self) -> &'static str {
         match self {
             Self::Healthz => "测试连接",
             Self::ListUsersAndProjects => "列出用户/项目",
@@ -348,7 +348,7 @@ impl VmmManagementAction {
 /// Executes one VMM management action from a draft config layer.
 /// 基于草稿配置层执行一个 VMM 管理动作。
 #[allow(dead_code)]
-pub(crate) async fn run_vmm_management_action(
+pub async fn run_vmm_management_action(
     action: VmmManagementAction,
     layer: VmmConfigLayer,
     management_user_ref: String,
@@ -367,7 +367,7 @@ pub(crate) async fn run_vmm_management_action(
 /// Executes one VMM management action and returns structured data.
 /// 执行一次 VMM 管理动作并返回结构化数据。
 #[allow(dead_code)]
-pub(crate) async fn run_vmm_management_action_structured(
+pub async fn run_vmm_management_action_structured(
     action: VmmManagementAction,
     layer: VmmConfigLayer,
     management_user_ref: String,
@@ -403,7 +403,7 @@ pub(crate) async fn run_vmm_management_action_structured(
 
 /// Executes one dedicated VMM workbench management action.
 /// 执行一次专用 VMM 工作台管理动作。
-pub(crate) async fn run_vmm_workbench_action(
+pub async fn run_vmm_workbench_action(
     action: VmmWorkbenchAction,
     layer: VmmConfigLayer,
     management_user_ref: String,

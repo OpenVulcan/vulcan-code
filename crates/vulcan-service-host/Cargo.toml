@@ -1,0 +1,21 @@
+[package]
+name = "vulcan-service-host"
+description = "HTTP and WebSocket host for the Vulcan Core Service."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+axum = { version = "0.8.7", features = ["ws"] }
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net", "sync"] }
+tower-http = { version = "0.6.7", features = ["cors"] }
+vulcan-service-api.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
+tower = "0.5.3"

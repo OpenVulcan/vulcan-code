@@ -1,5 +1,5 @@
-//! Token budget runtime bridge used by the Tauri service.
-//! Tauri 服务使用的 Token 预算运行时桥接层。
+//! Token budget runtime bridge used by the Core Service runtime.
+//! Core Service 运行时使用的 Token 预算运行时桥接层。
 
 use std::{
     path::{Path, PathBuf},

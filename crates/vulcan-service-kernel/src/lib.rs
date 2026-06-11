@@ -1,33 +1,23 @@
-//! Local service bridge used by the Tauri WebUI.
-//! Tauri WebUI 使用的本地服务桥接层。
+//! Core service kernel used by Vulcan Code WebUI hosts.
+//! Vulcan Code WebUI 宿主使用的核心服务内核。
 
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque, hash_map::DefaultHasher},
-    fs::{self, File},
+    env, fs,
+    future::Future,
     hash::{Hash, Hasher},
-    io::{Read, Seek, SeekFrom},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::Command,
     sync::{Arc, Mutex, OnceLock},
 };
 
 use base64::Engine;
-use base64::engine::general_purpose::{
-    STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
-};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use futures_util::StreamExt;
-use http_range::HttpRange;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use tauri::http::{
-    Method, Response, StatusCode,
-    header::{
-        ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_EXPOSE_HEADERS, CACHE_CONTROL,
-        CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
-    },
-};
-use tauri::{Emitter, Manager};
 use time::OffsetDateTime;
+use tokio::sync::broadcast;
 use vldb_controller_client::ControllerSqliteValue;
 use vulcan_agent_runtime::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionPromptPurpose, ExecutionRunReport,
@@ -118,12 +108,21 @@ use vulcan_service_api::{
     MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
     PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
-    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, SettingSectionSummary,
-    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
-    SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
-    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
+    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
+    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
+    WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
     WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    webui_static_root_from_candidates,
+};
+use vulcan_service_host::{
+    SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
+    bind_webui_service_http_listener, serve_webui_service_http_listener,
+    write_webui_service_discovery_snapshot,
 };
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionLifecycleBeginRequest, SessionLifecycleFinishRequest,
@@ -169,9 +168,9 @@ use vulcan_workspace_store::{
     },
 };
 
-use crate::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
-use crate::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
-use crate::token_budget_bridge::TauriTokenBudgetRuntime;
+use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
+use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
+use vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime;
 
 /// Shared runtime handles used to execute real conversation turns.
 /// 用于执行真实会话轮次的共享运行时句柄集合。
@@ -447,14 +446,6 @@ const SUBAGENT_SURFACE_DETAIL_CACHE_LIMIT: usize = 128;
 /// 已加载但未使用的子代理转录界面允许被清理前的毫秒数。
 const SUBAGENT_SURFACE_DETAIL_CACHE_TTL_MS: i128 = 30 * 60 * 1000;
 
-/// Maximum media bytes returned for one range response.
-/// 单次范围响应返回的最大媒体字节数。
-const MEDIA_ASSET_RANGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
-
-/// Route prefix used by the generated media custom protocol.
-/// 生成媒体自定义协议使用的路由前缀。
-const MEDIA_ASSET_ROUTE_PREFIX: &str = "/asset/";
-
 /// Parent-turn binding captured when a detached WebUI subagent starts.
 /// WebUI 分离子代理启动时捕获的父回合绑定。
 #[derive(Debug, Clone)]
@@ -529,7 +520,10 @@ struct PreservedWorkspaceRunState {
 
 /// Shared service state exposed to Tauri commands.
 /// 暴露给 Tauri 命令的共享服务状态。
-struct ServiceBridgeState {
+pub struct ServiceBridgeState {
+    /// Host shell capabilities supplied by the concrete application shell.
+    /// 由具体应用壳提供的宿主 shell 能力。
+    shell_host: Arc<dyn ServiceShellHost>,
     /// Latest startup snapshot.
     /// 最近一次启动快照。
     startup: StartupSnapshot,
@@ -548,6 +542,9 @@ struct ServiceBridgeState {
     /// Tokio runtime that owns bootstrap-spawned background tasks such as shared MCP access.
     /// 持有引导期后台任务的 Tokio 运行时，例如共享 MCP 访问任务。
     service_runtime: Option<Arc<tokio::runtime::Runtime>>,
+    /// Browser service discovery snapshot shared by `/health` and the dev discovery file.
+    /// `/health` 与开发发现文件共享的浏览器服务发现快照。
+    webui_service_discovery: Option<SharedWebuiServiceDiscoverySnapshot>,
     /// Long-lived controller runtime handle.
     /// 长生命周期控制器运行时句柄。
     controller_runtime: Option<ControllerRuntimeHandle>,
@@ -595,7 +592,7 @@ struct ServiceBridgeState {
     parent_session_completed_wait_agent_selectors: BTreeMap<SessionId, BTreeSet<String>>,
     /// Active WebUI stream task handles keyed by session id.
     /// 按会话标识索引的 WebUI 活动流任务句柄。
-    active_stream_tasks: BTreeMap<SessionId, tauri::async_runtime::JoinHandle<()>>,
+    active_stream_tasks: BTreeMap<SessionId, ServiceTaskHandle<()>>,
     /// Session runtime kernels keyed by root WebUI session id.
     /// 按 WebUI 根会话标识索引的会话运行时内核。
     session_runtime_kernels: BTreeMap<SessionId, SessionRuntimeKernel>,
@@ -606,7 +603,71 @@ struct ServiceBridgeState {
 
 /// Thread-safe service state handle.
 /// 线程安全的服务状态句柄。
-type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+pub type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
+
+/// Host-provided shell capabilities required by the service kernel.
+/// 服务内核所需的宿主壳能力。
+pub trait ServiceShellHost: Send + Sync {
+    /// Opens a host file picker and returns selected local paths.
+    /// 打开宿主文件选择器并返回选中的本地路径。
+    fn pick_composer_attachment_paths(
+        &self,
+        filter_label: &str,
+        filter_extensions: &[&str],
+    ) -> Result<Vec<PathBuf>, String>;
+
+    /// Opens one local path with the host file manager.
+    /// 使用宿主文件管理器打开单个本地路径。
+    fn open_path(&self, path: &str) -> Result<(), String>;
+
+    /// Opens one URL with the host default browser.
+    /// 使用宿主默认浏览器打开单个 URL。
+    fn open_url(&self, url: &str) -> Result<(), String>;
+}
+
+/// Join handle type used by service-owned asynchronous tasks.
+/// 服务自有异步任务使用的 join 句柄类型。
+type ServiceTaskHandle<T> = tokio::task::JoinHandle<T>;
+
+/// Spawns one asynchronous service task through the active Tokio runtime.
+/// 通过当前 Tokio 运行时启动单个异步服务任务。
+///
+/// # Parameters
+/// 参数
+/// `future` is the asynchronous operation owned by the local service layer.
+/// `future` 是本地服务层拥有的异步操作。
+///
+/// # Returns
+/// 返回值
+/// A join handle that can be retained or aborted by service state.
+/// 返回可由服务状态保留或中止的 join 句柄。
+fn spawn_service_task<F>(future: F) -> ServiceTaskHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::task::spawn(future)
+}
+
+/// Spawns one blocking service operation through the active Tokio runtime.
+/// 通过当前 Tokio 运行时启动单个阻塞式服务操作。
+///
+/// # Parameters
+/// 参数
+/// `operation` is the blocking closure that must not run on an async worker.
+/// `operation` 是不能在异步 worker 上直接运行的阻塞闭包。
+///
+/// # Returns
+/// 返回值
+/// A join handle resolving to the blocking operation result.
+/// 返回解析为阻塞操作结果的 join 句柄。
+fn spawn_service_blocking_task<F, R>(operation: F) -> ServiceTaskHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+}
 
 /// WebUI request body for project-scoped attachment cleanup operations.
 /// WebUI 项目级附件清理操作的请求体。
@@ -1327,16 +1388,30 @@ fn enqueue_webui_subagent_mailbox_input(
     accepted
 }
 
-/// Runs the Tauri application and registers local service commands.
-/// 运行 Tauri 应用并注册本地服务命令。
-pub fn run() {
-    let state = Arc::new(Mutex::new(ServiceBridgeState {
+/// Creates the initial shared service state used by any host shell.
+/// 创建任意宿主壳使用的初始共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// A shared state handle initialized with pending startup and fallback workbench snapshots.
+/// 返回已初始化待启动快照和回退工作台快照的共享状态句柄。
+///
+/// # Parameters
+/// 参数
+/// `shell_host` provides host-specific file picker and open-url/path capabilities.
+/// `shell_host` 提供宿主特定的文件选择器与打开 URL/路径能力。
+pub fn create_service_bridge_state(
+    shell_host: Arc<dyn ServiceShellHost>,
+) -> SharedServiceBridgeState {
+    Arc::new(Mutex::new(ServiceBridgeState {
+        shell_host,
         startup: startup_snapshot_with_phase("pending", Vec::new(), &[]),
         workbench: fallback_workbench_snapshot(&[]),
         workbench_generation: 0,
         workspace_snapshot: None,
         agent_runtime: None,
         service_runtime: None,
+        webui_service_discovery: None,
         controller_runtime: None,
         luaskills_runtime: None,
         cached_luaskills_catalog: None,
@@ -1355,330 +1430,644 @@ pub fn run() {
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
-    }));
-
-    tauri::Builder::default()
-        .register_uri_scheme_protocol("vulcan-media", |_context, request| {
-            vulcan_media_protocol_response(request)
-        })
-        .manage(state)
-        .invoke_handler(tauri::generate_handler![
-            service_health,
-            service_startup_snapshot,
-            service_workbench_snapshot,
-            service_workspace_diff_snapshot,
-            service_refresh_luaskills_catalog,
-            service_install_luaskill,
-            service_update_luaskill,
-            service_set_luaskill_enabled,
-            service_uninstall_luaskill,
-            service_set_luaskill_tool_registration_state,
-            service_refresh_agent_skills_catalog,
-            service_install_system_agent_skills,
-            service_set_agent_skills_enabled,
-            service_set_agent_skill_enabled,
-            service_load_project_agent_skill_overrides,
-            service_set_agent_skill_project_state,
-            service_run_vmm_memory_action,
-            service_load_project_vmm_config,
-            service_save_vmm_memory_config,
-            service_preview_project_attachment_cleanup,
-            service_execute_project_attachment_cleanup,
-            service_session_messages,
-            service_session_tool_detail,
-            service_pick_composer_attachments,
-            service_stage_composer_attachment_paths,
-            service_stage_composer_attachment_bytes,
-            service_submit_conversation_prompt,
-            service_compact_selected_conversation_context,
-            service_stop_conversation_run,
-            service_reply_pending_question,
-            service_reject_pending_question,
-            service_open_subagent_panel,
-            service_close_subagent_panel,
-            service_stop_subagent_task,
-            service_insert_pending_prompt,
-            service_edit_pending_prompt,
-            service_remove_pending_prompt,
-            service_reorder_pending_prompts,
-            service_select_workbench_model,
-            service_select_workbench_reasoning_effort,
-            service_save_provider_configuration,
-            service_remove_provider_configuration,
-            service_save_provider_enabled_models,
-            service_save_provider_model_override,
-            service_save_ai_capability_vendor,
-            service_remove_ai_capability_vendor,
-            service_set_ai_capability_target_enabled,
-            service_save_ai_capability_targets,
-            service_save_mcp_server_configuration,
-            service_remove_mcp_server_configuration,
-            service_open_project_directory,
-            service_open_project_directory_path,
-            service_add_project_from_folder,
-            service_toggle_project_pinned,
-            service_reorder_projects,
-            service_rename_project,
-            service_set_project_icon,
-            service_reset_project_icon,
-            service_set_expanded_task_projects,
-            service_archive_project_conversations,
-            service_rename_conversation,
-            service_archive_conversation,
-            service_mark_conversation_read,
-            service_select_conversation,
-            service_open_external_url
-        ])
-        .setup(|app| {
-            emit_initial_service_events(app.handle());
-            spawn_service_bootstrap(app.handle().clone());
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("failed to run Vulcan Code Tauri shell");
-}
-
-/// Returns a simple service health marker for the WebUI.
-/// 为 WebUI 返回简单的服务健康标记。
-#[tauri::command]
-fn service_health() -> String {
-    "ready".to_string()
+    }))
 }
 
 /// Opens a trusted external URL with the system default browser.
 /// 使用系统默认浏览器打开可信外部链接。
-#[tauri::command]
-fn service_open_external_url(url: String) -> Result<String, String> {
+fn service_open_external_url(
+    state: SharedServiceBridgeState,
+    url: String,
+) -> Result<String, String> {
     if url != "https://github.com/OpenVulcan/vulcan-code" {
         return Err(String::from("不允许打开未授权的外部链接。"));
     }
-    open_url_in_system_browser(&url)?;
+    shell_host_from_state(&state)?.open_url(&url)?;
     Ok(String::from("已请求使用系统默认浏览器打开 GitHub。"))
 }
 
-/// Serves generated and local media files through a local custom protocol with HTTP range support.
-/// 通过带 HTTP Range 支持的本地自定义协议提供生成媒体文件和本地媒体文件。
-fn vulcan_media_protocol_response(request: tauri::http::Request<Vec<u8>>) -> Response<Vec<u8>> {
-    match build_vulcan_media_protocol_response(request) {
-        Ok(response) => response,
-        Err(error) => vulcan_media_error_response(StatusCode::INTERNAL_SERVER_ERROR, &error),
-    }
+/// Returns the host shell adapter from shared service state.
+/// 从共享服务状态中返回宿主 shell 适配器。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that owns the shell adapter.
+/// `state` 是持有 shell 适配器的共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// A cloned shell host adapter reference for use outside the state lock.
+/// 返回可在状态锁之外使用的 shell 宿主适配器引用。
+fn shell_host_from_state(
+    state: &SharedServiceBridgeState,
+) -> Result<Arc<dyn ServiceShellHost>, String> {
+    state
+        .lock()
+        .map(|guard| Arc::clone(&guard.shell_host))
+        .map_err(|error| format!("failed to lock service shell host: {error}"))
 }
 
-/// Builds one media protocol response for images, audio, video, and PDFs.
-/// 为图片、音频、视频和 PDF 构建单个媒体协议响应。
-fn build_vulcan_media_protocol_response(
-    request: tauri::http::Request<Vec<u8>>,
-) -> Result<Response<Vec<u8>>, String> {
-    let media_path = media_path_from_protocol_request(&request)?;
-    if !is_allowed_media_asset_path(&media_path) {
-        return Ok(vulcan_media_error_response(
-            StatusCode::FORBIDDEN,
-            "媒体路径不是允许的媒体资源类型。",
-        ));
-    }
-
-    let mut file = match File::open(&media_path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(vulcan_media_error_response(
-                StatusCode::NOT_FOUND,
-                "媒体文件不存在。",
-            ));
+/// Dispatches one normalized service RPC request to the concrete local service implementation.
+/// 将单个标准化服务 RPC 请求分发到具体本地服务实现。
+async fn dispatch_service_rpc(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    method: String,
+    params: Option<Value>,
+) -> Result<Value, String> {
+    let params = params.unwrap_or_else(|| json!({}));
+    match method.as_str() {
+        "startup.snapshot" | "service_startup_snapshot" => {
+            rpc_json_result(service_startup_snapshot(state))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            return Ok(vulcan_media_error_response(
-                StatusCode::FORBIDDEN,
-                "没有权限读取媒体文件。",
-            ));
+        "workbench.snapshot" | "service_workbench_snapshot" => {
+            rpc_json_result(service_workbench_snapshot(state))
         }
-        Err(error) => return Err(format!("无法打开媒体文件：{error}")),
-    };
-    let file_len = file
-        .metadata()
-        .map_err(|error| format!("无法读取媒体文件元数据：{error}"))?
-        .len();
-    let mime_type = infer_media_asset_mime_type(&media_path);
-    let response = Response::builder()
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(ACCESS_CONTROL_EXPOSE_HEADERS, "content-range")
-        .header(ACCEPT_RANGES, "bytes")
-        .header(CACHE_CONTROL, "no-store")
-        .header(CONTENT_TYPE, mime_type);
-
-    if request.method() == Method::HEAD {
-        return response
-            .header(CONTENT_LENGTH, file_len)
-            .body(Vec::new())
-            .map_err(|error| format!("无法构建媒体 HEAD 响应：{error}"));
-    }
-
-    if let Some(range_header) = request
-        .headers()
-        .get("range")
-        .and_then(|value| value.to_str().ok())
-    {
-        let range = single_media_http_range(range_header, file_len)?;
-        let range_start = range.start;
-        let range_end = range.start + range.length - 1;
-        let mut body = Vec::with_capacity(range.length as usize);
-        file.seek(SeekFrom::Start(range_start))
-            .map_err(|error| format!("无法定位媒体范围：{error}"))?;
-        file.take(range.length)
-            .read_to_end(&mut body)
-            .map_err(|error| format!("无法读取媒体范围：{error}"))?;
-        return response
-            .status(StatusCode::PARTIAL_CONTENT)
-            .header(
-                CONTENT_RANGE,
-                format!("bytes {range_start}-{range_end}/{file_len}"),
+        "workspace.diff.snapshot" | "service_workspace_diff_snapshot" => rpc_json_result(
+            service_workspace_diff_snapshot(
+                state,
+                rpc_optional_param(&params, "workspacePath")?,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_optional_param(&params, "request")?,
             )
-            .header(CONTENT_LENGTH, body.len())
-            .body(body)
-            .map_err(|error| format!("无法构建媒体范围响应：{error}"));
+            .await,
+        ),
+        "service_refresh_luaskills_catalog" => {
+            rpc_json_result(service_refresh_luaskills_catalog(state).await)
+        }
+        "service_install_luaskill" => rpc_json_result(
+            service_install_luaskill(
+                state,
+                rpc_optional_param(&params, "skillId")?,
+                rpc_required_param(&params, "source")?,
+                rpc_required_param(&params, "sourceType")?,
+            )
+            .await,
+        ),
+        "service_update_luaskill" => rpc_json_result(
+            service_update_luaskill(state, rpc_required_param(&params, "skillId")?).await,
+        ),
+        "service_set_luaskill_enabled" => rpc_json_result(
+            service_set_luaskill_enabled(
+                state,
+                rpc_required_param(&params, "skillId")?,
+                rpc_required_param(&params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_uninstall_luaskill" => rpc_json_result(
+            service_uninstall_luaskill(state, rpc_required_param(&params, "skillId")?).await,
+        ),
+        "service_set_luaskill_tool_registration_state" => rpc_json_result(
+            service_set_luaskill_tool_registration_state(
+                state,
+                rpc_required_param(&params, "skillId")?,
+                rpc_required_param(&params, "localName")?,
+                rpc_required_param(&params, "registrationState")?,
+            )
+            .await,
+        ),
+        "service_refresh_agent_skills_catalog" => {
+            rpc_json_result(service_refresh_agent_skills_catalog(state).await)
+        }
+        "service_install_system_agent_skills" => {
+            rpc_json_result(service_install_system_agent_skills(state).await)
+        }
+        "service_set_agent_skills_enabled" => rpc_json_result(
+            service_set_agent_skills_enabled(state, rpc_required_param(&params, "enabled")?).await,
+        ),
+        "service_set_agent_skill_enabled" => rpc_json_result(
+            service_set_agent_skill_enabled(
+                state,
+                rpc_required_param(&params, "name")?,
+                rpc_required_param(&params, "enabled")?,
+            )
+            .await,
+        ),
+        "service_load_project_agent_skill_overrides" => {
+            rpc_json_result(service_load_project_agent_skill_overrides(
+                state,
+                rpc_required_param(&params, "projectId")?,
+            ))
+        }
+        "service_set_agent_skill_project_state" => {
+            rpc_json_result(service_set_agent_skill_project_state(
+                state,
+                rpc_required_param(&params, "projectId")?,
+                rpc_required_param(&params, "name")?,
+                rpc_required_param(&params, "stateKey")?,
+            ))
+        }
+        "service_run_vmm_memory_action" => rpc_json_result(
+            service_run_vmm_memory_action(state, rpc_required_param(&params, "request")?).await,
+        ),
+        "service_load_project_vmm_config" => rpc_json_result(service_load_project_vmm_config(
+            state,
+            rpc_required_param(&params, "projectId")?,
+        )),
+        "service_preview_project_attachment_cleanup" => rpc_json_result(
+            service_preview_project_attachment_cleanup(
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_execute_project_attachment_cleanup" => rpc_json_result(
+            service_execute_project_attachment_cleanup(
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_vmm_memory_config" => rpc_json_result(
+            service_save_vmm_memory_config(state, rpc_required_param(&params, "request")?).await,
+        ),
+        "service_session_messages" => rpc_json_result(
+            service_session_messages(state, rpc_required_param(&params, "sessionId")?).await,
+        ),
+        "service_session_tool_detail" => rpc_json_result(
+            service_session_tool_detail(
+                state,
+                rpc_required_param(&params, "sessionId")?,
+                rpc_optional_param(&params, "recordId")?,
+                rpc_optional_param(&params, "toolCallId")?,
+                rpc_optional_param(&params, "seq")?,
+                rpc_optional_param(&params, "messageIndex")?,
+            )
+            .await,
+        ),
+        "service_submit_conversation_prompt" => rpc_json_result(
+            service_submit_conversation_prompt(
+                app,
+                state,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_required_param(&params, "prompt")?,
+                rpc_optional_param(&params, "executionMode")?,
+                rpc_optional_param(&params, "reasoningEffort")?,
+                rpc_optional_param(&params, "attachments")?,
+                rpc_optional_param(&params, "disabledAiCapabilityKinds")?,
+                rpc_optional_param(&params, "disabledAiCapabilityTargetSelectors")?,
+                rpc_optional_param(&params, "aiCapabilityTargetOrderOverrides")?,
+            )
+            .await,
+        ),
+        "service_stop_conversation_run" => {
+            rpc_json_result(service_stop_conversation_run(app, state).await)
+        }
+        "service_compact_selected_conversation_context" => {
+            rpc_json_result(service_compact_selected_conversation_context(app, state).await)
+        }
+        "service_reply_pending_question" => rpc_json_result(service_reply_pending_question(
+            app,
+            state,
+            rpc_required_param(&params, "requestId")?,
+            rpc_required_param(&params, "answers")?,
+        )),
+        "service_reject_pending_question" => rpc_json_result(service_reject_pending_question(
+            app,
+            state,
+            rpc_required_param(&params, "requestId")?,
+        )),
+        "service_open_subagent_panel" => rpc_json_result(
+            service_open_subagent_panel(
+                app,
+                state,
+                rpc_required_param(&params, "parentConversationId")?,
+                rpc_required_param(&params, "taskId")?,
+            )
+            .await,
+        ),
+        "service_close_subagent_panel" => {
+            rpc_json_result(service_close_subagent_panel(app, state).await)
+        }
+        "service_stop_subagent_task" => rpc_json_result(
+            service_stop_subagent_task(
+                app,
+                state,
+                rpc_required_param(&params, "parentConversationId")?,
+                rpc_required_param(&params, "taskId")?,
+            )
+            .await,
+        ),
+        "service_edit_pending_prompt" => rpc_json_result(
+            service_edit_pending_prompt(app, state, rpc_required_param(&params, "entryId")?).await,
+        ),
+        "service_insert_pending_prompt" => rpc_json_result(
+            service_insert_pending_prompt(app, state, rpc_required_param(&params, "entryId")?)
+                .await,
+        ),
+        "service_remove_pending_prompt" => rpc_json_result(
+            service_remove_pending_prompt(app, state, rpc_required_param(&params, "entryId")?)
+                .await,
+        ),
+        "service_reorder_pending_prompts" => rpc_json_result(
+            service_reorder_pending_prompts(
+                app,
+                state,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_required_param(&params, "draggedEntryId")?,
+                rpc_optional_param(&params, "targetEntryId")?,
+            )
+            .await,
+        ),
+        "service_pick_composer_attachments" => rpc_json_result(
+            service_pick_composer_attachments(
+                state,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_optional_param(&params, "kind")?,
+            )
+            .await,
+        ),
+        "service_stage_composer_attachment_paths" => rpc_json_result(
+            service_stage_composer_attachment_paths(
+                state,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_required_param(&params, "paths")?,
+            )
+            .await,
+        ),
+        "service_stage_composer_attachment_bytes" => rpc_json_result(
+            service_stage_composer_attachment_bytes(
+                state,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_required_param(&params, "fileName")?,
+                rpc_required_param(&params, "mimeType")?,
+                rpc_required_param(&params, "dataBase64")?,
+            )
+            .await,
+        ),
+        "service_select_workbench_model" => rpc_json_result(
+            service_select_workbench_model(
+                app,
+                state,
+                rpc_required_param(&params, "providerId")?,
+                rpc_required_param(&params, "modelId")?,
+            )
+            .await,
+        ),
+        "service_select_workbench_reasoning_effort" => rpc_json_result(
+            service_select_workbench_reasoning_effort(
+                app,
+                state,
+                rpc_required_param(&params, "effort")?,
+            )
+            .await,
+        ),
+        "service_save_provider_configuration" => rpc_json_result(
+            service_save_provider_configuration(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_remove_provider_configuration" => rpc_json_result(
+            service_remove_provider_configuration(
+                app,
+                state,
+                rpc_required_param(&params, "providerId")?,
+            )
+            .await,
+        ),
+        "service_save_provider_enabled_models" => rpc_json_result(
+            service_save_provider_enabled_models(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_provider_model_override" => rpc_json_result(
+            service_save_provider_model_override(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_ai_capability_vendor" => rpc_json_result(
+            service_save_ai_capability_vendor(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
+        "service_remove_ai_capability_vendor" => rpc_json_result(
+            service_remove_ai_capability_vendor(
+                app,
+                state,
+                rpc_required_param(&params, "vendorId")?,
+            )
+            .await,
+        ),
+        "service_set_ai_capability_target_enabled" => rpc_json_result(
+            service_set_ai_capability_target_enabled(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_save_ai_capability_targets" => rpc_json_result(
+            service_save_ai_capability_targets(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
+        "service_save_mcp_server_configuration" => rpc_json_result(
+            service_save_mcp_server_configuration(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
+        "service_remove_mcp_server_configuration" => rpc_json_result(
+            service_remove_mcp_server_configuration(
+                app,
+                state,
+                rpc_required_param(&params, "serverId")?,
+            )
+            .await,
+        ),
+        "service_open_project_directory_path" => rpc_json_result(
+            service_open_project_directory_path(state, rpc_required_param(&params, "path")?),
+        ),
+        "service_open_project_directory" => rpc_json_result(service_open_project_directory(
+            state,
+            rpc_required_param(&params, "projectId")?,
+        )),
+        "service_toggle_project_pinned" => rpc_json_result(
+            service_toggle_project_pinned(state, rpc_required_param(&params, "projectId")?).await,
+        ),
+        "service_reorder_projects" => rpc_json_result(
+            service_reorder_projects(state, rpc_required_param(&params, "projectIds")?).await,
+        ),
+        "service_rename_project" => rpc_json_result(
+            service_rename_project(
+                state,
+                rpc_required_param(&params, "projectId")?,
+                rpc_required_param(&params, "name")?,
+            )
+            .await,
+        ),
+        "service_set_project_icon" => rpc_json_result(
+            service_set_project_icon(
+                state,
+                rpc_required_param(&params, "projectId")?,
+                rpc_required_param(&params, "iconPack")?,
+                rpc_required_param(&params, "iconKey")?,
+            )
+            .await,
+        ),
+        "service_reset_project_icon" => rpc_json_result(
+            service_reset_project_icon(state, rpc_required_param(&params, "projectId")?).await,
+        ),
+        "service_set_expanded_task_projects" => rpc_json_result(
+            service_set_expanded_task_projects(state, rpc_required_param(&params, "projectIds")?)
+                .await,
+        ),
+        "service_archive_project_conversations" => rpc_json_result(
+            service_archive_project_conversations(state, rpc_required_param(&params, "projectId")?)
+                .await,
+        ),
+        "service_rename_conversation" => rpc_json_result(
+            service_rename_conversation(
+                state,
+                rpc_required_param(&params, "conversationId")?,
+                rpc_required_param(&params, "name")?,
+            )
+            .await,
+        ),
+        "service_archive_conversation" => rpc_json_result(
+            service_archive_conversation(state, rpc_required_param(&params, "conversationId")?)
+                .await,
+        ),
+        "service_mark_conversation_read" => rpc_json_result(
+            service_mark_conversation_read(state, rpc_required_param(&params, "conversationId")?)
+                .await,
+        ),
+        "service_select_conversation" => rpc_json_result(
+            service_select_conversation(state, rpc_required_param(&params, "conversationId")?)
+                .await,
+        ),
+        "service_open_external_url" => rpc_json_result(service_open_external_url(
+            state,
+            rpc_required_param(&params, "url")?,
+        )),
+        _ => Err(format!("unknown service RPC method: {method}")),
     }
-
-    let mut body = Vec::with_capacity(file_len.min(MEDIA_ASSET_RANGE_MAX_BYTES) as usize);
-    file.read_to_end(&mut body)
-        .map_err(|error| format!("无法读取媒体文件：{error}"))?;
-    response
-        .header(CONTENT_LENGTH, file_len)
-        .body(body)
-        .map_err(|error| format!("无法构建媒体响应：{error}"))
 }
 
-/// Extracts the local media path encoded inside a custom protocol request.
-/// 提取自定义协议请求中编码的本地媒体路径。
-fn media_path_from_protocol_request(
-    request: &tauri::http::Request<Vec<u8>>,
-) -> Result<PathBuf, String> {
-    let request_path = request.uri().path();
-    let encoded_path = request_path
-        .strip_prefix(MEDIA_ASSET_ROUTE_PREFIX)
-        .ok_or_else(|| String::from("媒体路由格式无效。"))?;
-    let path_bytes = BASE64_URL_SAFE_NO_PAD
-        .decode(encoded_path)
-        .map_err(|error| format!("媒体路径解码失败：{error}"))?;
-    let path_text = String::from_utf8(path_bytes)
-        .map_err(|error| format!("媒体路径不是有效 UTF-8：{error}"))?;
-    Ok(PathBuf::from(path_text))
+/// Serializes a service handler result into a JSON RPC payload.
+/// 将服务处理器结果序列化为 JSON RPC 载荷。
+fn rpc_json_result<T>(result: Result<T, String>) -> Result<Value, String>
+where
+    T: Serialize,
+{
+    result.and_then(|value| {
+        serde_json::to_value(value)
+            .map_err(|error| format!("failed to serialize service RPC response: {error}"))
+    })
 }
 
-/// Returns whether a media path belongs to the generated attachment storage tree.
-/// 返回媒体路径是否属于生成附件存储树。
-fn is_allowed_generated_media_path(path: &Path) -> bool {
-    let normalized_components = path
-        .components()
-        .filter_map(|component| match component {
-            Component::Normal(value) => value.to_str().map(|text| text.to_ascii_lowercase()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    normalized_components
-        .windows(3)
-        .any(|window| window == [".vulcan", "code", "attachments"])
+/// Reads a required typed value from one RPC parameter object.
+/// 从单个 RPC 参数对象读取必填类型值。
+fn rpc_required_param<T>(params: &Value, key: &str) -> Result<T, String>
+where
+    T: DeserializeOwned,
+{
+    let object = params
+        .as_object()
+        .ok_or_else(|| String::from("service RPC params must be a JSON object"))?;
+    let value = object
+        .get(key)
+        .ok_or_else(|| format!("missing service RPC parameter: {key}"))?;
+    serde_json::from_value(value.clone())
+        .map_err(|error| format!("invalid service RPC parameter `{key}`: {error}"))
 }
 
-/// Returns whether a media path can be served by the local media protocol.
-/// 返回媒体路径是否允许通过本地媒体协议提供。
-fn is_allowed_media_asset_path(path: &Path) -> bool {
-    if is_allowed_generated_media_path(path) {
-        return true;
-    }
-    has_supported_media_asset_extension(path)
-}
-
-/// Returns whether a local path extension is supported by the media protocol.
-/// 返回本地路径扩展名是否受媒体协议支持。
-fn has_supported_media_asset_extension(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("png")
-            | Some("jpg")
-            | Some("jpeg")
-            | Some("webp")
-            | Some("gif")
-            | Some("bmp")
-            | Some("svg")
-            | Some("mp4")
-            | Some("webm")
-            | Some("mov")
-            | Some("mkv")
-            | Some("mp3")
-            | Some("wav")
-            | Some("m4a")
-            | Some("aac")
-            | Some("flac")
-            | Some("ogg")
-            | Some("pdf")
-    )
-}
-
-/// Parses one bounded HTTP range for media playback.
-/// 解析一个有上限的媒体播放 HTTP 范围。
-fn single_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
-    let mut ranges = HttpRange::parse(range_header, file_len)
-        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
-    let Some(mut range) = ranges.drain(..).next() else {
-        return Err(String::from("媒体 Range 请求为空。"));
+/// Reads an optional typed value from one RPC parameter object.
+/// 从单个 RPC 参数对象读取可选类型值。
+fn rpc_optional_param<T>(params: &Value, key: &str) -> Result<Option<T>, String>
+where
+    T: DeserializeOwned,
+{
+    let Some(object) = params.as_object() else {
+        return Err(String::from("service RPC params must be a JSON object"));
     };
-    if range.start >= file_len || range.length == 0 {
-        return Err(String::from("媒体 Range 请求越界。"));
+    let Some(value) = object.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
     }
-    range.length = range.length.min(MEDIA_ASSET_RANGE_MAX_BYTES);
-    Ok(range)
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .map_err(|error| format!("invalid service RPC parameter `{key}`: {error}"))
 }
 
-/// Builds one plain text error response for the generated media protocol.
-/// 为生成媒体协议构建一个纯文本错误响应。
-fn vulcan_media_error_response(status: StatusCode, message: &str) -> Response<Vec<u8>> {
-    Response::builder()
-        .status(status)
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(CONTENT_TYPE, "text/plain; charset=utf-8")
-        .body(message.as_bytes().to_vec())
-        .unwrap_or_else(|_| Response::new(Vec::new()))
+/// Spawns the browser-facing local service bridge on the first available loopback port.
+/// 在首个可用回环端口启动面向浏览器的本地服务桥接层。
+pub fn spawn_webui_service_http_bridge(
+    event_emitter: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    event_bus: broadcast::Sender<ServiceEvent>,
+) {
+    std::thread::Builder::new()
+        .name(String::from("vulcan-webui-http-bridge"))
+        .spawn(move || {
+            let runtime = match tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    eprintln!(
+                        "[webui-service] browser service bridge runtime creation failed: {error}"
+                    );
+                    return;
+                }
+            };
+            runtime.block_on(run_webui_service_http_bridge(
+                event_emitter,
+                state,
+                event_bus,
+            ));
+        })
+        .expect("failed to spawn Vulcan WebUI HTTP bridge thread");
 }
 
-/// Infers a conservative MIME type from a generated media path extension.
-/// 根据生成媒体路径扩展名推断保守 MIME 类型。
-fn infer_media_asset_mime_type(path: &Path) -> String {
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
+/// Runs the browser-facing local service bridge inside an owned Tokio runtime.
+/// 在自有 Tokio 运行时中运行面向浏览器的本地服务桥接层。
+///
+/// # Parameters
+/// 参数
+/// `event_emitter` forwards service events to all frontend sinks.
+/// `event_emitter` 将服务事件转发给所有前端接收器。
+/// `state` is the shared service state used by RPC dispatch.
+/// `state` 是 RPC 分发使用的共享服务状态。
+/// `event_bus` broadcasts service events to WebSocket clients.
+/// `event_bus` 将服务事件广播给 WebSocket 客户端。
+async fn run_webui_service_http_bridge(
+    event_emitter: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    event_bus: broadcast::Sender<ServiceEvent>,
+) {
+    let port_override = env::var(WEBUI_SERVICE_PORT_ENV).ok();
+    let (listener, address) = match bind_webui_service_http_listener(port_override.as_deref()).await
     {
-        Some("png") => String::from("image/png"),
-        Some("jpg") | Some("jpeg") => String::from("image/jpeg"),
-        Some("webp") => String::from("image/webp"),
-        Some("gif") => String::from("image/gif"),
-        Some("bmp") => String::from("image/bmp"),
-        Some("svg") => String::from("image/svg+xml"),
-        Some("mp4") => String::from("video/mp4"),
-        Some("webm") => String::from("video/webm"),
-        Some("mov") => String::from("video/quicktime"),
-        Some("mkv") => String::from("video/x-matroska"),
-        Some("mp3") => String::from("audio/mpeg"),
-        Some("wav") => String::from("audio/wav"),
-        Some("m4a") => String::from("audio/mp4"),
-        Some("aac") => String::from("audio/aac"),
-        Some("flac") => String::from("audio/flac"),
-        Some("ogg") => String::from("audio/ogg"),
-        Some("pdf") => String::from("application/pdf"),
-        _ => String::from("application/octet-stream"),
+        Ok(bound) => bound,
+        Err(error) => {
+            eprintln!("[webui-service] browser service bridge failed to bind: {error}");
+            return;
+        }
+    };
+    let port = address.port();
+    let service_token = SessionId::new_v4().to_string();
+    let discovery = webui_service_starting_discovery_snapshot(
+        port,
+        std::process::id(),
+        current_unix_millis_text(),
+        service_token.clone(),
+    );
+    let shared_discovery = Arc::new(Mutex::new(discovery.clone()));
+    if let Ok(mut guard) = state.lock() {
+        guard.webui_service_discovery = Some(Arc::clone(&shared_discovery));
     }
+    if let Err(error) =
+        write_webui_service_discovery_snapshot(&discovery, dirs::home_dir(), std::env::temp_dir())
+    {
+        eprintln!("[webui-service] browser service discovery write failed: {error}");
+    }
+    let rpc_event_emitter = event_emitter.clone();
+    let rpc_state = state.clone();
+    let rpc_dispatcher: WebuiServiceRpcDispatcher = Arc::new(move |method, params| {
+        let event_emitter = rpc_event_emitter.clone();
+        let state = rpc_state.clone();
+        Box::pin(async move { dispatch_service_rpc(event_emitter, state, method, params).await })
+    });
+    let service_config = WebuiServiceHttpConfig {
+        discovery: shared_discovery,
+        service_token,
+        event_bus,
+        static_root: webui_static_root(),
+        rpc_dispatcher,
+    };
+    eprintln!("[webui-service] browser service bridge listening on http://{address}");
+    if let Err(error) = serve_webui_service_http_listener(listener, service_config).await {
+        eprintln!("[webui-service] browser service bridge stopped: {error}");
+    }
+}
+
+/// Marks the browser-facing service discovery snapshot with a terminal bootstrap status.
+/// 使用终态引导状态标记浏览器侧服务发现快照。
+///
+/// # Parameters
+/// 参数
+/// `state` contains the shared discovery snapshot, and `status` is the new discovery status string.
+/// `state` 包含共享发现快照，`status` 是新的发现状态字符串。
+fn mark_webui_service_discovery_status(state: &SharedServiceBridgeState, status: &'static str) {
+    let shared_discovery = match state.lock() {
+        Ok(guard) => guard.webui_service_discovery.clone(),
+        Err(error) => error.into_inner().webui_service_discovery.clone(),
+    };
+    let Some(shared_discovery) = shared_discovery else {
+        return;
+    };
+    let ready_snapshot = {
+        let mut snapshot = match shared_discovery.lock() {
+            Ok(snapshot) => snapshot,
+            Err(error) => error.into_inner(),
+        };
+        let port = snapshot.port;
+        let pid = snapshot.pid;
+        let started_at = snapshot.started_at.clone();
+        let service_token = snapshot.service_token.clone();
+        *snapshot = webui_service_discovery_snapshot_with_status(
+            status,
+            port,
+            pid,
+            started_at,
+            service_token,
+        );
+        snapshot.clone()
+    };
+    if let Err(error) = write_webui_service_discovery_snapshot(
+        &ready_snapshot,
+        dirs::home_dir(),
+        std::env::temp_dir(),
+    ) {
+        eprintln!("[webui-service] browser service discovery ready write failed: {error}");
+    }
+}
+
+/// Marks the browser-facing service discovery snapshot as ready after bootstrap completes.
+/// 在引导完成后将浏览器侧服务发现快照标记为 ready。
+fn mark_webui_service_discovery_ready(state: &SharedServiceBridgeState) {
+    mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_READY);
+}
+
+/// Marks the browser-facing service discovery snapshot as failed after bootstrap fails.
+/// 在引导失败后将浏览器侧服务发现快照标记为 failed。
+fn mark_webui_service_discovery_failed(state: &SharedServiceBridgeState) {
+    mark_webui_service_discovery_status(state, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED);
+}
+
+/// Resolves the WebUI static root used by the browser-facing service.
+/// 解析面向浏览器服务使用的 WebUI 静态根目录。
+fn webui_static_root() -> Option<PathBuf> {
+    let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../vulcan-code-web/dist")
+        .components()
+        .collect::<PathBuf>();
+    let override_path = env::var(WEBUI_STATIC_DIR_ENV).ok();
+    webui_static_root_from_candidates(override_path.as_deref(), Some(manifest_path))
 }
 
 /// Returns the current startup snapshot.
 /// 返回当前启动快照。
-#[tauri::command]
-fn service_startup_snapshot(
-    state: tauri::State<'_, SharedServiceBridgeState>,
-) -> Result<StartupSnapshot, String> {
+fn service_startup_snapshot(state: SharedServiceBridgeState) -> Result<StartupSnapshot, String> {
     state
         .lock()
         .map(|guard| guard.startup.clone())
@@ -1687,9 +2076,8 @@ fn service_startup_snapshot(
 
 /// Returns the current workbench snapshot.
 /// 返回当前工作台快照。
-#[tauri::command]
 fn service_workbench_snapshot(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     state
         .lock()
@@ -1699,9 +2087,8 @@ fn service_workbench_snapshot(
 
 /// Loads a Git diff snapshot for one WebUI project workspace.
 /// 为单个 WebUI 项目工作区加载 Git diff 快照。
-#[tauri::command]
 async fn service_workspace_diff_snapshot(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     workspace_path: Option<String>,
     project_id: Option<String>,
     conversation_id: Option<String>,
@@ -1713,7 +2100,7 @@ async fn service_workspace_diff_snapshot(
         conversation_id.as_deref(),
         workspace_path.as_deref(),
     )?;
-    tauri::async_runtime::spawn_blocking(move || {
+    spawn_service_blocking_task(move || {
         load_webui_workspace_diff_snapshot(&resolved_workspace_path, request)
     })
     .await
@@ -1723,7 +2110,7 @@ async fn service_workspace_diff_snapshot(
 /// Resolves the workspace path for a WebUI diff request from backend-owned state first.
 /// 优先从后端持有的状态中解析 WebUI diff 请求对应的工作区路径。
 fn webui_diff_workspace_path_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
     fallback_path: Option<&str>,
@@ -1774,20 +2161,19 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    tauri::async_runtime::spawn_blocking(operation)
+    spawn_service_blocking_task(operation)
         .await
         .map_err(|error| format!("LuaSkills 管理操作 `{label}` 任务异常结束：{error}"))?
 }
 
 /// Refreshes the LuaSkills catalog used by the WebUI skill page.
 /// 刷新 WebUI 技能页面使用的 LuaSkills 目录。
-#[tauri::command]
 async fn service_refresh_luaskills_catalog(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let handle = service_luaskills_handle(&state)?;
     let catalog = run_luaskills_management_blocking("refresh catalog", move || {
-        crate::luaskills_bridge::refresh_luaskills_catalog(&handle)
+        vulcan_service_runtime::luaskills_bridge::refresh_luaskills_catalog(&handle)
     })
     .await?;
     store_luaskills_catalog(&state, catalog)?;
@@ -1796,16 +2182,20 @@ async fn service_refresh_luaskills_catalog(
 
 /// Installs one LuaSkill package into the USER layer and refreshes the WebUI snapshot.
 /// 将单个 LuaSkill 包安装到 USER 层并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_install_luaskill(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     skill_id: Option<String>,
     source: String,
     source_type: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("install skill", move || {
-        crate::luaskills_bridge::install_luaskill(&handle, skill_id, source, source_type)
+        vulcan_service_runtime::luaskills_bridge::install_luaskill(
+            &handle,
+            skill_id,
+            source,
+            source_type,
+        )
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
@@ -1814,14 +2204,13 @@ async fn service_install_luaskill(
 
 /// Updates one managed LuaSkill package and refreshes the WebUI snapshot.
 /// 更新单个受管 LuaSkill 包并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_update_luaskill(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     skill_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("update skill", move || {
-        crate::luaskills_bridge::update_luaskill(&handle, skill_id)
+        vulcan_service_runtime::luaskills_bridge::update_luaskill(&handle, skill_id)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
@@ -1830,15 +2219,14 @@ async fn service_update_luaskill(
 
 /// Enables or disables one LuaSkill package and refreshes the WebUI snapshot.
 /// 启用或停用单个 LuaSkill 包并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_set_luaskill_enabled(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     skill_id: String,
     enabled: bool,
 ) -> Result<WorkbenchSnapshot, String> {
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("set skill enabled", move || {
-        crate::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
+        vulcan_service_runtime::luaskills_bridge::set_luaskill_enabled(&handle, skill_id, enabled)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
@@ -1847,14 +2235,13 @@ async fn service_set_luaskill_enabled(
 
 /// Uninstalls one ordinary LuaSkill package and refreshes the WebUI snapshot.
 /// 卸载单个普通 LuaSkill 包并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_uninstall_luaskill(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     skill_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let handle = service_luaskills_handle(&state)?;
     let (message, catalog) = run_luaskills_management_blocking("uninstall skill", move || {
-        crate::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
+        vulcan_service_runtime::luaskills_bridge::uninstall_luaskill(&handle, skill_id)
     })
     .await?;
     store_luaskills_catalog_with_log(&state, catalog, message)?;
@@ -1863,9 +2250,8 @@ async fn service_uninstall_luaskill(
 
 /// Persists one LuaSkill tool registration state and refreshes the WebUI snapshot.
 /// 持久化单个 LuaSkill 工具注册状态并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_set_luaskill_tool_registration_state(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     skill_id: String,
     local_name: String,
     registration_state: String,
@@ -1882,18 +2268,16 @@ async fn service_set_luaskill_tool_registration_state(
 
 /// Refreshes Agent Skills by rebuilding the current WebUI workbench snapshot.
 /// 通过重建当前 WebUI 工作台快照刷新 Agent Skills。
-#[tauri::command]
 async fn service_refresh_agent_skills_catalog(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     refresh_workbench_snapshot(state).await
 }
 
 /// Installs embedded system Agent Skills and refreshes the WebUI snapshot.
 /// 安装内置系统 Agent Skills 并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_install_system_agent_skills(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let configuration = provider_configuration_from_state(&state)?;
     let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
@@ -1920,9 +2304,8 @@ async fn service_install_system_agent_skills(
 
 /// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
 /// 持久化 Agent Skills 全局开关并仅刷新 Agent Skills 目录。
-#[tauri::command]
 async fn service_set_agent_skills_enabled(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     enabled: bool,
 ) -> Result<AgentSkillsCatalogSummary, String> {
     mutate_provider_configuration(&state, |configuration| {
@@ -1934,9 +2317,8 @@ async fn service_set_agent_skills_enabled(
 
 /// Persists one global Agent Skill state and refreshes only the Agent Skills catalog.
 /// 持久化单个全局 Agent Skill 状态并仅刷新 Agent Skills 目录。
-#[tauri::command]
 async fn service_set_agent_skill_enabled(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     name: String,
     enabled: bool,
 ) -> Result<AgentSkillsCatalogSummary, String> {
@@ -1956,9 +2338,8 @@ async fn service_set_agent_skill_enabled(
 
 /// Loads project-level Agent Skill overrides for the WebUI project settings modal.
 /// 为 WebUI 项目设置弹窗加载项目级 Agent Skill 覆盖。
-#[tauri::command]
 fn service_load_project_agent_skill_overrides(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<BTreeMap<String, String>, String> {
     let project_path = vmm_project_scope_path(&state, Some(&project_id))?;
@@ -1980,9 +2361,8 @@ fn service_load_project_agent_skill_overrides(
 
 /// Persists one project-level Agent Skill tri-state override without rebuilding the full snapshot.
 /// 持久化单个项目级 Agent Skill 三态覆盖，但不重建完整快照。
-#[tauri::command]
 fn service_set_agent_skill_project_state(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
     name: String,
     state_key: String,
@@ -2016,16 +2396,15 @@ fn service_set_agent_skill_project_state(
 
 /// Runs one VMM memory management action and returns its structured result.
 /// 执行单个 VMM 记忆管理动作并返回结构化结果。
-#[tauri::command]
 async fn service_run_vmm_memory_action(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
     let (layer, management_user_ref, management_project_ref, session_id) =
         vmm_action_context(&state, &request)?;
     let action = parse_vmm_memory_action(&request, session_id)?;
     let request_preview = vmm_action_request_preview(&action)?;
-    let outcome = crate::vmm_management::run_vmm_workbench_action(
+    let outcome = vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
         action,
         layer,
         management_user_ref,
@@ -2037,9 +2416,8 @@ async fn service_run_vmm_memory_action(
 
 /// Saves one VMM memory configuration draft and refreshes the WebUI snapshot.
 /// 保存单个 VMM 记忆配置草稿并刷新 WebUI 快照。
-#[tauri::command]
 async fn service_save_vmm_memory_config(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     request: VmmConfigSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     save_vmm_memory_config(&state, request)?;
@@ -2048,9 +2426,8 @@ async fn service_save_vmm_memory_config(
 
 /// Loads one project-scoped VMM configuration draft for the WebUI project settings modal.
 /// 为 WebUI 项目设置弹窗加载单个项目级 VMM 配置草稿。
-#[tauri::command]
 fn service_load_project_vmm_config(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<VmmConfigDraftSummary, String> {
     load_project_vmm_config(&state, &project_id)
@@ -2058,15 +2435,14 @@ fn service_load_project_vmm_config(
 
 /// Builds a project-scoped managed attachment cleanup preview for the WebUI settings dialog.
 /// 为 WebUI 设置弹窗构建项目级托管附件清理预览。
-#[tauri::command]
 async fn service_preview_project_attachment_cleanup(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     request: WebuiProjectAttachmentCleanupRequest,
 ) -> Result<WebuiAttachmentCleanupPreviewSummary, String> {
     let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
     let cutoff_date = request.cutoff_date.trim().to_string();
     let selection = webui_attachment_cleanup_selection(request.selection);
-    tauri::async_runtime::spawn_blocking(move || {
+    spawn_service_blocking_task(move || {
         let preview = preview_attachment_cleanup(&project_path, &cutoff_date, selection)?;
         Ok(webui_attachment_cleanup_preview_summary(preview))
     })
@@ -2076,15 +2452,14 @@ async fn service_preview_project_attachment_cleanup(
 
 /// Executes a project-scoped managed attachment cleanup for the WebUI settings dialog.
 /// 为 WebUI 设置弹窗执行项目级托管附件清理。
-#[tauri::command]
 async fn service_execute_project_attachment_cleanup(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     request: WebuiProjectAttachmentCleanupRequest,
 ) -> Result<WebuiAttachmentCleanupReportSummary, String> {
     let project_path = vmm_project_scope_path(&state, Some(&request.project_id))?;
     let cutoff_date = request.cutoff_date.trim().to_string();
     let selection = webui_attachment_cleanup_selection(request.selection);
-    tauri::async_runtime::spawn_blocking(move || {
+    spawn_service_blocking_task(move || {
         let report = execute_attachment_cleanup(&project_path, &cutoff_date, selection)?;
         Ok(webui_attachment_cleanup_report_summary(report))
     })
@@ -2094,10 +2469,9 @@ async fn service_execute_project_attachment_cleanup(
 
 /// Submits answers for the oldest visible ask-tool request and resumes the blocked tool call.
 /// 提交当前可见 ask 工具请求的答案，并恢复被阻塞的工具调用。
-#[tauri::command]
 fn service_reply_pending_question(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request_id: String,
     answers: Vec<Vec<String>>,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -2118,15 +2492,14 @@ fn service_reply_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    store_and_emit_pending_question_workbench_snapshot(&app, state.inner())
+    store_and_emit_pending_question_workbench_snapshot(&app, &state)
 }
 
 /// Rejects the visible ask-tool request after explicit user confirmation.
 /// 在用户明确确认后拒绝当前可见 ask 工具请求。
-#[tauri::command]
 fn service_reject_pending_question(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let agent_runtime = {
@@ -2146,13 +2519,13 @@ fn service_reject_pending_question(
             "pending ask request `{request_id}` is no longer active"
         ));
     }
-    store_and_emit_pending_question_workbench_snapshot(&app, state.inner())
+    store_and_emit_pending_question_workbench_snapshot(&app, &state)
 }
 
 /// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.
 /// 仅重建保留工作台快照上的 ask 弹窗投影并发送事件。
 fn store_and_emit_pending_question_workbench_snapshot(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let workbench = {
@@ -2176,7 +2549,7 @@ fn store_and_emit_pending_question_workbench_snapshot(
 /// Installs the WebUI projection callback used by the ask-question runtime.
 /// 安装 ask 提问运行时使用的 WebUI 投影回调。
 fn install_webui_question_runtime_event_bridge(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     question_runtime: &Arc<QuestionRuntime>,
 ) -> Result<(), String> {
@@ -2204,9 +2577,8 @@ fn workbench_with_live_pending_question(guard: &ServiceBridgeState) -> Workbench
 
 /// Loads the recent transcript window for one conversation.
 /// 加载单个会话的最近转录窗口。
-#[tauri::command]
 async fn service_session_messages(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     session_id: String,
 ) -> Result<Vec<ConversationMessage>, String> {
     let parsed_session_id = session_id
@@ -2282,9 +2654,8 @@ async fn service_session_messages(
 
 /// Loads one hidden tool-detail payload by stable record id or tool-call id fallback.
 /// 按稳定记录标识加载隐藏工具详情载荷，并支持工具调用标识回退。
-#[tauri::command]
 async fn service_session_tool_detail(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     session_id: String,
     record_id: Option<String>,
     tool_call_id: Option<String>,
@@ -2480,9 +2851,8 @@ fn session_record_tool_call_id(record: &SessionConversationRecord) -> Option<&st
 
 /// Opens the native attachment picker and stages selected files for composer use.
 /// 打开原生附件选择器，并将选中文件暂存给输入区使用。
-#[tauri::command]
 async fn service_pick_composer_attachments(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: Option<String>,
     conversation_id: Option<String>,
     kind: Option<String>,
@@ -2493,22 +2863,24 @@ async fn service_pick_composer_attachments(
         conversation_id.as_deref(),
         kind.as_deref(),
     )?;
-    let mut dialog = rfd::FileDialog::new();
-    if let Some(kind_filter) = kind_filter.as_ref() {
-        dialog = dialog.add_filter(
-            composer_attachment_kind_label(kind_filter),
-            composer_attachment_kind_extensions(kind_filter),
-        );
-    } else {
-        dialog = dialog.add_filter(
-            "附件",
-            &[
-                "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp3", "wav", "m4a", "aac", "flac",
-                "ogg", "mp4", "mov", "mkv", "webm", "avi", "pdf",
-            ],
-        );
-    }
-    let Some(paths) = dialog.pick_files() else {
+    let (filter_label, filter_extensions): (&str, &[&str]) =
+        if let Some(kind_filter) = kind_filter.as_ref() {
+            (
+                composer_attachment_kind_label(kind_filter),
+                composer_attachment_kind_extensions(kind_filter),
+            )
+        } else {
+            (
+                "附件",
+                &[
+                    "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp3", "wav", "m4a", "aac", "flac",
+                    "ogg", "mp4", "mov", "mkv", "webm", "avi", "pdf",
+                ],
+            )
+        };
+    let paths = shell_host_from_state(&state)?
+        .pick_composer_attachment_paths(filter_label, filter_extensions)?;
+    if paths.is_empty() {
         return Ok(Vec::new());
     };
     stage_composer_attachment_paths_for_workspace(&workspace_path, paths)
@@ -2516,9 +2888,8 @@ async fn service_pick_composer_attachments(
 
 /// Stages existing local paths as composer attachments.
 /// 将已有本地路径暂存为输入区附件。
-#[tauri::command]
 async fn service_stage_composer_attachment_paths(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: Option<String>,
     conversation_id: Option<String>,
     paths: Vec<String>,
@@ -2534,9 +2905,8 @@ async fn service_stage_composer_attachment_paths(
 
 /// Stages one browser-provided in-memory file as a composer attachment.
 /// 将浏览器提供的一份内存文件暂存为输入区附件。
-#[tauri::command]
 async fn service_stage_composer_attachment_bytes(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: Option<String>,
     conversation_id: Option<String>,
     file_name: String,
@@ -2567,7 +2937,7 @@ async fn service_stage_composer_attachment_bytes(
 /// Resolves workspace path and optional attachment-kind filter for composer staging.
 /// 解析输入区附件暂存所需的工作区路径与可选附件类型过滤。
 fn composer_attachment_workspace_and_kind(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
     kind: Option<&str>,
@@ -2580,7 +2950,7 @@ fn composer_attachment_workspace_and_kind(
 /// Resolves the project workspace path used to stage one composer attachment.
 /// 解析暂存输入区附件时使用的项目工作区路径。
 fn composer_attachment_workspace_path(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: Option<&str>,
     conversation_id: Option<&str>,
 ) -> Result<String, String> {
@@ -2748,10 +3118,9 @@ fn in_memory_session_messages_from_workspace(
 
 /// Submits one user prompt through the shared agent runtime and returns the immediate workbench snapshot.
 /// 通过共享 Agent 运行时提交一条用户提示词，并返回即时工作台快照。
-#[tauri::command]
 async fn service_submit_conversation_prompt(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     project_id: Option<String>,
     conversation_id: Option<String>,
     prompt: String,
@@ -2964,16 +3333,16 @@ async fn service_submit_conversation_prompt(
                 workspace_snapshot,
                 &logs,
             )?;
-            let state_for_persist = state.inner().clone();
+            let state_for_persist = state.clone();
             let controller_runtime_for_persist = controller_runtime.clone();
-            tauri::async_runtime::spawn(async move {
+            spawn_service_task(async move {
                 let snapshot =
                     match current_workspace_snapshot_from_shared_state(&state_for_persist) {
                         Ok(Some(snapshot)) => snapshot,
                         Ok(None) => return,
                         Err(error) => {
                             eprintln!(
-                                "[tauri-service] queued submit persist snapshot failed: {error}"
+                                "[webui-service] queued submit persist snapshot failed: {error}"
                             );
                             return;
                         }
@@ -3200,14 +3569,14 @@ async fn service_submit_conversation_prompt(
             current_unix_millis_value().saturating_sub(store_emit_started_at)
         ),
     );
-    let state_for_persist = state.inner().clone();
+    let state_for_persist = state.clone();
     let controller_runtime_for_persist = controller_runtime.clone();
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => return,
             Err(error) => {
-                eprintln!("[tauri-service] submit begin persist snapshot failed: {error}");
+                eprintln!("[webui-service] submit begin persist snapshot failed: {error}");
                 return;
             }
         };
@@ -3219,7 +3588,7 @@ async fn service_submit_conversation_prompt(
             Some(String::from("submit_begin")),
         );
     });
-    let service_state = state.inner().clone();
+    let service_state = state.clone();
     let precheck_dispatch_started_at = current_unix_millis_value();
     if start_webui_precheck_or_continue(
         &app,
@@ -3243,10 +3612,9 @@ async fn service_submit_conversation_prompt(
 
 /// Starts prompt-based compaction for the selected WebUI conversation.
 /// 为当前选中的 WebUI 会话启动提示词式上下文压缩。
-#[tauri::command]
 async fn service_compact_selected_conversation_context(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
         controller_runtime,
@@ -3359,7 +3727,7 @@ async fn service_compact_selected_conversation_context(
 
     spawn_webui_context_compaction_task(
         app.clone(),
-        state.inner().clone(),
+        state.clone(),
         controller_runtime.clone(),
         agent_runtime,
         selected_session_id,
@@ -3373,10 +3741,9 @@ async fn service_compact_selected_conversation_context(
 
 /// Stops the selected WebUI conversation run and clears guided internal queue work.
 /// 停止当前选中的 WebUI 会话运行，并清理已引导的内部队列任务。
-#[tauri::command]
 async fn service_stop_conversation_run(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
         controller_runtime,
@@ -3406,7 +3773,7 @@ async fn service_stop_conversation_run(
     if let Some(active_task) = active_task {
         active_task.abort();
     }
-    let mut workspace_snapshot = with_workspace_mutation(&app, state.inner(), |workspace| {
+    let mut workspace_snapshot = with_workspace_mutation(&app, &state, |workspace| {
         mark_webui_session_stop_requested_in_workspace(workspace, selected_session_id);
     })?;
     let running_subagent_task_states = {
@@ -3473,15 +3840,15 @@ async fn service_stop_conversation_run(
         &logs,
     )?;
     if did_stop_work {
-        let state_for_persist = state.inner().clone();
+        let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_service_task(async move {
             let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(error) => {
                     eprintln!(
-                        "[tauri-service] stopped conversation persist snapshot failed: {error}"
+                        "[webui-service] stopped conversation persist snapshot failed: {error}"
                     );
                     return;
                 }
@@ -3501,7 +3868,7 @@ async fn service_stop_conversation_run(
             .await
             {
                 eprintln!(
-                    "[tauri-service] stopped conversation background persist failed: {error}"
+                    "[webui-service] stopped conversation background persist failed: {error}"
                 );
             }
         });
@@ -3511,10 +3878,9 @@ async fn service_stop_conversation_run(
 
 /// Opens one subagent transcript surface under the selected parent conversation.
 /// 打开当前父会话下的单个子代理转录界面。
-#[tauri::command]
 async fn service_open_subagent_panel(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     parent_conversation_id: String,
     task_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -3590,10 +3956,7 @@ async fn service_open_subagent_panel(
     );
     if let Some(workbench) = fast_path_workbench {
         let emit_started_at = current_unix_millis_value();
-        let _ = app.emit(
-            "vulcan://service-event",
-            ServiceEvent::Workbench(Box::new(workbench.clone())),
-        );
+        emit_workbench_event(&app, &workbench);
         webui_trace_if_slow(
             "open_subagent_panel_emit_slow",
             emit_started_at,
@@ -3656,8 +4019,7 @@ async fn service_open_subagent_panel(
         );
     }
     let emit_started_at = current_unix_millis_value();
-    let snapshot =
-        emit_subagent_display_route_workbench_snapshot(&app, state.inner(), workspace_snapshot);
+    let snapshot = emit_subagent_display_route_workbench_snapshot(&app, &state, workspace_snapshot);
     webui_trace_if_slow(
         "open_subagent_panel_emit_slow",
         emit_started_at,
@@ -3724,10 +4086,9 @@ fn open_webui_subagent_panel_from_cached_state(
 
 /// Closes the active subagent transcript surface and returns to the parent conversation.
 /// 关闭活动子代理转录界面并返回父会话。
-#[tauri::command]
 async fn service_close_subagent_panel(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let _ = runtime_parts_from_state(&state)?;
     let workspace_snapshot = {
@@ -3753,15 +4114,14 @@ async fn service_close_subagent_panel(
             String::from("service is still starting; workspace snapshot is not ready")
         })?
     };
-    emit_subagent_display_route_workbench_snapshot(&app, state.inner(), workspace_snapshot)
+    emit_subagent_display_route_workbench_snapshot(&app, &state, workspace_snapshot)
 }
 
 /// Stops one running subagent task through the shared task runtime.
 /// 通过共享任务运行时停止单个运行中的子代理任务。
-#[tauri::command]
 async fn service_stop_subagent_task(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     parent_conversation_id: String,
     task_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -3824,7 +4184,7 @@ async fn service_stop_subagent_task(
         .map(|(direct_parent_session_id, _, _)| *direct_parent_session_id)
         .collect::<BTreeSet<_>>();
     let workspace_snapshot = if !stopped_task_id_set.is_empty() {
-        with_workspace_mutation(&app, state.inner(), |workspace| {
+        with_workspace_mutation(&app, &state, |workspace| {
             for (direct_parent_session_id, task_id, task_state) in &task_states_to_mark {
                 if !stopped_task_id_set.contains(task_id) {
                     continue;
@@ -3870,20 +4230,20 @@ async fn service_stop_subagent_task(
     }
     let workbench = store_current_workbench_snapshot(
         &app,
-        state.inner(),
+        &state,
         &controller_runtime,
         &agent_runtime,
         workspace_snapshot,
     )?;
     if !stopped_parent_session_ids.is_empty() {
-        let state_for_persist = state.inner().clone();
+        let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_service_task(async move {
             let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(error) => {
-                    eprintln!("[tauri-service] stopped subagent persist snapshot failed: {error}");
+                    eprintln!("[webui-service] stopped subagent persist snapshot failed: {error}");
                     return;
                 }
             };
@@ -3904,7 +4264,7 @@ async fn service_stop_subagent_task(
                 .await
                 {
                     eprintln!(
-                        "[tauri-service] stopped subagent background persist failed: {error}"
+                        "[webui-service] stopped subagent background persist failed: {error}"
                     );
                 }
             }
@@ -3915,10 +4275,9 @@ async fn service_stop_subagent_task(
 
 /// Inserts one visible pending prompt into the shared internal prompt queue.
 /// 将单条可见待发送提示词插入共享内部提示词队列。
-#[tauri::command]
 async fn service_insert_pending_prompt(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
@@ -3962,7 +4321,7 @@ async fn service_insert_pending_prompt(
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
     spawn_workspace_session_persist_task(
-        state.inner().clone(),
+        state.clone(),
         controller_runtime.clone(),
         snapshot_for_persist,
         selected_session_id,
@@ -3989,10 +4348,9 @@ async fn service_insert_pending_prompt(
 
 /// Restores one visible pending prompt into the WebUI composer and removes it from the queue.
 /// 将单条可见待发送提示词恢复到 WebUI 输入区，并从队列中移除。
-#[tauri::command]
 async fn service_edit_pending_prompt(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<PendingPromptSummary, String> {
     let (
@@ -4038,7 +4396,7 @@ async fn service_edit_pending_prompt(
         String::from("service is still starting; workspace snapshot is not ready")
     })?;
     spawn_workspace_session_persist_task(
-        state.inner().clone(),
+        state.clone(),
         controller_runtime.clone(),
         snapshot_for_persist,
         selected_session_id,
@@ -4049,10 +4407,9 @@ async fn service_edit_pending_prompt(
 
 /// Removes one visible pending prompt from the selected conversation queue.
 /// 从当前选中会话队列中移除单条可见待发送提示词。
-#[tauri::command]
 async fn service_remove_pending_prompt(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     entry_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
@@ -4099,7 +4456,7 @@ async fn service_remove_pending_prompt(
                 String::from("service is still starting; workspace snapshot is not ready")
             })?;
         spawn_workspace_session_persist_task(
-            state.inner().clone(),
+            state.clone(),
             controller_runtime.clone(),
             snapshot_for_persist,
             selected_session_id,
@@ -4111,10 +4468,9 @@ async fn service_remove_pending_prompt(
 
 /// Reorders the visible pending prompt queue for the selected conversation.
 /// 重排当前选中会话的可见待发送提示词队列。
-#[tauri::command]
 async fn service_reorder_pending_prompts(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     conversation_id: Option<String>,
     dragged_entry_id: String,
     target_entry_id: Option<String>,
@@ -4176,7 +4532,7 @@ async fn service_reorder_pending_prompts(
                 String::from("service is still starting; workspace snapshot is not ready")
             })?;
         spawn_workspace_session_persist_task(
-            state.inner().clone(),
+            state.clone(),
             controller_runtime.clone(),
             snapshot_for_persist,
             selected_session_id,
@@ -4188,10 +4544,9 @@ async fn service_reorder_pending_prompts(
 
 /// Selects and persists the active workbench provider/model pair.
 /// 选择并持久化当前工作台使用的供应商与模型组合。
-#[tauri::command]
 async fn service_select_workbench_model(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     provider_id: String,
     model_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -4231,19 +4586,15 @@ async fn service_select_workbench_model(
         guard.workbench.clone()
     };
 
-    let _ = app.emit(
-        "vulcan://service-event",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
-    );
+    emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
 
 /// Persists the active workbench reasoning effort through the shared provider configuration.
 /// 通过共享 Provider 配置持久化当前工作台思考档位。
-#[tauri::command]
 async fn service_select_workbench_reasoning_effort(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     effort: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
@@ -4265,19 +4616,15 @@ async fn service_select_workbench_reasoning_effort(
         guard.workbench.clone()
     };
 
-    let _ = app.emit(
-        "vulcan://service-event",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
-    );
+    emit_workbench_event(&app, &workbench);
     Ok(workbench)
 }
 
 /// Saves one model provider configuration from the WebUI settings page.
 /// 从 WebUI 设置页保存单个模型供应商配置。
-#[tauri::command]
 async fn service_save_provider_configuration(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: ProviderConfigurationSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = request.provider_id.trim().to_ascii_lowercase();
@@ -4328,10 +4675,9 @@ async fn service_save_provider_configuration(
 
 /// Removes one model provider configuration from the WebUI settings page.
 /// 从 WebUI 设置页移除单个模型供应商配置。
-#[tauri::command]
 async fn service_remove_provider_configuration(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     provider_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = provider_id.trim().to_ascii_lowercase();
@@ -4365,10 +4711,9 @@ async fn service_remove_provider_configuration(
 
 /// Saves the enabled model list for one provider from the WebUI settings page.
 /// 从 WebUI 设置页保存单个供应商的启用模型列表。
-#[tauri::command]
 async fn service_save_provider_enabled_models(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: ProviderEnabledModelsSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = request.provider_id.trim().to_ascii_lowercase();
@@ -4409,10 +4754,9 @@ async fn service_save_provider_enabled_models(
 
 /// Saves one model capability override for a provider from the WebUI settings page.
 /// 从 WebUI 设置页保存单个供应商模型能力覆盖。
-#[tauri::command]
 async fn service_save_provider_model_override(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: ProviderModelOverrideSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let provider_id = request.provider_id.trim().to_ascii_lowercase();
@@ -4492,10 +4836,9 @@ fn normalize_model_override_text_list(values: Vec<String>) -> Vec<String> {
 
 /// Saves one shared AI capability vendor from the WebUI settings page.
 /// 从 WebUI 设置页保存单个共享 AI 能力供应商。
-#[tauri::command]
 async fn service_save_ai_capability_vendor(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: AiCapabilityVendorSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let vendor_id = request.vendor_id.trim().to_ascii_lowercase();
@@ -4524,7 +4867,10 @@ async fn service_save_ai_capability_vendor(
             .ok_or_else(|| format!("无法创建 AI 能力供应商 `{vendor_id}`。"))?;
         vendor.name = provider_config::ai_capability_vendor_display_name(&vendor_id);
         vendor.enabled = request.enabled;
-        vendor.api_key = request.api_key.trim().to_string();
+        let requested_api_key = request.api_key.trim();
+        if requested_api_key != WEBUI_REDACTED_SECRET_PLACEHOLDER {
+            vendor.api_key = requested_api_key.to_string();
+        }
         vendor.base_url = request.base_url.trim().to_string();
         vendor.region = request.region.trim().to_string();
         vendor.connection_mode =
@@ -4549,10 +4895,9 @@ async fn service_save_ai_capability_vendor(
 
 /// Removes one shared AI capability vendor from the WebUI settings page.
 /// 从 WebUI 设置页移除单个共享 AI 能力供应商。
-#[tauri::command]
 async fn service_remove_ai_capability_vendor(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     vendor_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let vendor_id = vendor_id.trim().to_ascii_lowercase();
@@ -4588,10 +4933,9 @@ async fn service_remove_ai_capability_vendor(
 
 /// Toggles one configured AI capability target from the WebUI settings page.
 /// 从 WebUI 设置页切换单个已配置 AI 能力目标。
-#[tauri::command]
 async fn service_set_ai_capability_target_enabled(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: AiCapabilityTargetEnabledRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let capability_kind = parse_ai_tool_kind(&request.capability_kind)?;
@@ -4638,10 +4982,9 @@ async fn service_set_ai_capability_target_enabled(
 
 /// Saves the full ordered target list for one AI capability from the WebUI settings page.
 /// 从 WebUI 设置页保存单个 AI 能力的完整有序目标列表。
-#[tauri::command]
 async fn service_save_ai_capability_targets(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: AiCapabilityTargetsSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let capability_kind = parse_ai_tool_kind(&request.capability_kind)?;
@@ -4754,10 +5097,9 @@ fn set_ai_capability_target_order_for_kind(
 
 /// Saves one MCP server configuration from the WebUI settings page.
 /// 从 WebUI 设置页保存单个 MCP 服务器配置。
-#[tauri::command]
 async fn service_save_mcp_server_configuration(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     request: McpServerSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let (server_id, entry) = mcp_server_entry_from_request(request)?;
@@ -4782,10 +5124,9 @@ async fn service_save_mcp_server_configuration(
 
 /// Removes one MCP server configuration from the WebUI settings page.
 /// 从 WebUI 设置页移除单个 MCP 服务器配置。
-#[tauri::command]
 async fn service_remove_mcp_server_configuration(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
     server_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let mut next_configuration = provider_configuration_from_state(&state)?;
@@ -4810,11 +5151,11 @@ async fn service_remove_mcp_server_configuration(
 
 /// Opens one project folder in the host system file manager.
 /// 在宿主系统文件管理器中打开单个项目文件夹。
-#[tauri::command]
 fn service_open_project_directory(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<String, String> {
+    let shell_host = shell_host_from_state(&state)?;
     let project = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
@@ -4824,35 +5165,63 @@ fn service_open_project_directory(
         .find(|project| project.id == project_id)
         .cloned()
         .ok_or_else(|| format!("project not found: {project_id}"))?;
-    open_path_in_system_file_manager(&project.path)?;
+    shell_host.open_path(&project.path)?;
     Ok(format!("已请求打开项目目录：{}。", project.name))
 }
 
 /// Opens one arbitrary project directory path in the host system file manager.
 /// 在宿主系统文件管理器中打开任意项目目录路径。
-#[tauri::command]
-fn service_open_project_directory_path(path: String) -> Result<String, String> {
-    open_path_in_system_file_manager(&path)?;
+fn service_open_project_directory_path(
+    state: SharedServiceBridgeState,
+    path: String,
+) -> Result<String, String> {
+    shell_host_from_state(&state)?.open_path(&path)?;
     Ok(format!("已请求打开目录：{path}。"))
 }
 
-/// Opens the host folder picker and adds or restores the selected project.
-/// 打开宿主文件夹选择器，并新增或恢复选中的项目。
-#[tauri::command]
-async fn service_add_project_from_folder(
-    state: tauri::State<'_, SharedServiceBridgeState>,
-) -> Result<Option<WorkbenchSnapshot>, String> {
-    let initial_directory = state
+/// Returns the best initial directory for the native project folder picker.
+/// 返回原生项目文件夹选择器使用的最佳初始目录。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state that owns the current workbench snapshot.
+/// `state` 是持有当前工作台快照的共享服务状态。
+///
+/// # Returns
+/// 返回值
+/// A normalized directory path string suitable for the host folder picker.
+/// 返回适合宿主文件夹选择器使用的标准化目录路径字符串。
+pub fn service_add_project_initial_directory(
+    state: &SharedServiceBridgeState,
+) -> Result<String, String> {
+    Ok(state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?
         .workbench
         .projects
         .first()
         .map(|project| project.path.clone())
-        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
-    let Some(selected_path) = pick_task_project_folder(&initial_directory)? else {
-        return Ok(None);
-    };
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())))
+}
+
+/// Adds or restores one project from a concrete local directory path.
+/// 根据一个具体本地目录路径新增或恢复项目。
+///
+/// # Parameters
+/// 参数
+/// `state` is the shared service state used to read runtime and workspace snapshots.
+/// `state` 是用于读取运行时与工作区快照的共享服务状态。
+/// `selected_path` is the local directory chosen by the shell or another trusted caller.
+/// `selected_path` 是桌面壳或其他可信调用方选择的本地目录。
+///
+/// # Returns
+/// 返回值
+/// The refreshed workbench snapshot when the selected path changed project state.
+/// 当所选路径改变项目状态时返回刷新后的工作台快照。
+pub async fn service_add_project_from_path(
+    state: SharedServiceBridgeState,
+    selected_path: PathBuf,
+) -> Result<Option<WorkbenchSnapshot>, String> {
     let normalized_path = normalize_task_project_path(&selected_path);
     let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -4932,9 +5301,8 @@ async fn service_add_project_from_folder(
 
 /// Toggles one project pinned state without rebuilding the full workbench snapshot.
 /// 切换单个项目置顶状态，但不重建完整工作台快照。
-#[tauri::command]
 async fn service_toggle_project_pinned(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<(), String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -4957,9 +5325,8 @@ async fn service_toggle_project_pinned(
 
 /// Reorders visible projects inside one pinned or regular section.
 /// 在同一个置顶或普通分区内重排可见项目。
-#[tauri::command]
 async fn service_reorder_projects(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_ids: Vec<String>,
 ) -> Result<WorkbenchSnapshot, String> {
     if project_ids.is_empty() {
@@ -5015,9 +5382,8 @@ async fn service_reorder_projects(
 
 /// Applies a project display name and returns the refreshed workbench snapshot.
 /// 应用项目显示名称并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_rename_project(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
     name: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -5029,9 +5395,8 @@ async fn service_rename_project(
 
 /// Applies a project icon override without rebuilding the full workbench snapshot.
 /// 应用项目图标覆盖，但不重建完整工作台快照。
-#[tauri::command]
 async fn service_set_project_icon(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
     icon_pack: String,
     icon_key: String,
@@ -5065,9 +5430,8 @@ async fn service_set_project_icon(
 
 /// Clears a project icon override without rebuilding the full workbench snapshot.
 /// 清除项目图标覆盖，但不重建完整工作台快照。
-#[tauri::command]
 async fn service_reset_project_icon(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<(), String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -5090,9 +5454,8 @@ async fn service_reset_project_icon(
 
 /// Persists the expanded project identifiers and returns the refreshed workbench snapshot.
 /// 持久化展开项目标识集合并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_set_expanded_task_projects(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_ids: Vec<String>,
 ) -> Result<WorkbenchSnapshot, String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -5117,9 +5480,8 @@ async fn service_set_expanded_task_projects(
 
 /// Archives all visible conversations under one project and returns the refreshed workbench snapshot.
 /// 归档单个项目下的全部可见对话并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_archive_project_conversations(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let controller_runtime = controller_runtime_from_state(&state)?;
@@ -5146,9 +5508,8 @@ async fn service_archive_project_conversations(
 
 /// Applies a conversation display name and returns the refreshed workbench snapshot.
 /// 应用会话显示名称并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_rename_conversation(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     conversation_id: String,
     name: String,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -5169,9 +5530,8 @@ async fn service_rename_conversation(
 
 /// Archives one visible conversation and returns the refreshed workbench snapshot.
 /// 归档单个可见会话并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_archive_conversation(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let session_id = conversation_id
@@ -5185,9 +5545,8 @@ async fn service_archive_conversation(
 
 /// Marks one conversation as read and returns the refreshed workbench snapshot.
 /// 将单个会话标记为已读并返回刷新后的工作台快照。
-#[tauri::command]
 async fn service_mark_conversation_read(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let session_id = conversation_id
@@ -5216,7 +5575,7 @@ async fn service_mark_conversation_read(
         return refresh_workbench_snapshot(state).await;
     }
     persist_webui_session_runtime_state_update(
-        state.inner(),
+        &state,
         controller_runtime,
         session_id,
         &workspace_snapshot,
@@ -5227,9 +5586,8 @@ async fn service_mark_conversation_read(
 
 /// Selects one conversation in the retained WebUI workspace state.
 /// 在 WebUI 保留的工作区状态中选中一个会话。
-#[tauri::command]
 async fn service_select_conversation(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
     conversation_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
     let session_id = conversation_id
@@ -5331,66 +5689,6 @@ async fn service_select_conversation(
     Ok(workbench)
 }
 
-/// Opens one filesystem directory with the host file manager.
-/// 使用宿主文件管理器打开单个文件系统目录。
-fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer");
-        command.arg(path);
-        command
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(path);
-        command
-    };
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(path);
-        command
-    };
-
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-/// Opens one URL with the host default browser.
-/// 使用宿主默认浏览器打开单个 URL。
-fn open_url_in_system_browser(url: &str) -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "start", "", url]);
-        command
-    };
-
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(url);
-        command
-    };
-
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-
-    command
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
 /// Normalizes and validates a user-provided display name.
 /// 规范化并校验用户提供的显示名称。
 fn normalize_non_empty_name(name: &str) -> Result<String, String> {
@@ -5404,7 +5702,7 @@ fn normalize_non_empty_name(name: &str) -> Result<String, String> {
 /// Reads the controller runtime handle from shared service state.
 /// 从共享服务状态中读取控制器运行时句柄。
 fn controller_runtime_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<ControllerRuntimeHandle, String> {
     state
         .lock()
@@ -5416,9 +5714,7 @@ fn controller_runtime_from_state(
 
 /// Reads the selected session identifier from the retained workspace state.
 /// 从保留的工作区状态中读取当前选中会话标识。
-fn selected_session_id_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
-) -> Result<SessionId, String> {
+fn selected_session_id_from_state(state: &SharedServiceBridgeState) -> Result<SessionId, String> {
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -5438,7 +5734,7 @@ fn selected_session_id_from_state(
 /// Clones the latest in-memory workspace snapshot retained by the service bridge.
 /// 克隆服务桥接层保留的最近内存工作区快照。
 fn current_workspace_snapshot_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<Option<WorkspaceSnapshot>, String> {
     state
         .lock()
@@ -5470,7 +5766,7 @@ fn current_workspace_snapshot_from_shared_state(
 /// The latest workbench snapshot already emitted by an in-memory mutation.
 /// 返回内存变更已经发出的最近工作台快照。
 fn current_workbench_snapshot_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     state
         .lock()
@@ -5481,7 +5777,7 @@ fn current_workbench_snapshot_from_state(
 /// Applies one pinned-state mutation to retained project snapshots.
 /// 将单个置顶状态变更应用到保留的项目快照。
 fn update_project_pinned_local_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: &str,
 ) -> Result<(), String> {
     let mut guard = state
@@ -5513,7 +5809,7 @@ fn update_project_pinned_local_state(
 /// Applies one icon mutation to retained project snapshots.
 /// 将单个图标变更应用到保留的项目快照。
 fn update_project_icon_local_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: &str,
     icon_pack: Option<String>,
     icon_key: Option<String>,
@@ -5549,7 +5845,7 @@ fn update_project_icon_local_state(
 /// Returns the retained LuaSkills handle for WebUI management commands.
 /// 返回 WebUI 管理命令使用的保留 LuaSkills 句柄。
 fn service_luaskills_handle(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<TauriLuaSkillsHandle, String> {
     let guard = state
         .lock()
@@ -5563,7 +5859,7 @@ fn service_luaskills_handle(
 /// Stores a refreshed LuaSkills catalog in the shared service state.
 /// 在共享服务状态中存储刷新后的 LuaSkills 目录。
 fn store_luaskills_catalog(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     catalog: TauriLuaSkillsCatalog,
 ) -> Result<(), String> {
     let mut guard = state
@@ -5577,7 +5873,7 @@ fn store_luaskills_catalog(
 /// Stores a refreshed LuaSkills catalog and appends a diagnostic log line.
 /// 存储刷新后的 LuaSkills 目录并追加诊断日志行。
 fn store_luaskills_catalog_with_log(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     catalog: TauriLuaSkillsCatalog,
     message: String,
 ) -> Result<(), String> {
@@ -5589,7 +5885,7 @@ fn store_luaskills_catalog_with_log(
     guard
         .startup
         .recent_logs
-        .push(format!("[tauri-service] luaskills: {message}"));
+        .push(format!("[webui-service] luaskills: {message}"));
     Ok(())
 }
 
@@ -5611,7 +5907,9 @@ fn sync_agent_luaskills_tool_cache(guard: &mut ServiceBridgeState) -> Result<(),
         let engine = tauri_handle.engine.lock().map_err(|_| {
             String::from("LuaSkills 引擎锁已损坏，无法同步 Agent Runtime 工具缓存。")
         })?;
-        engine.list_entries_for_authority(::luaskills::SkillManagementAuthority::System)
+        engine.list_entries_for_authority(
+            vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
+        )
     };
     let entry_count = entries.len();
     let mut tool_entries = runtime_handle.tool_entries.lock().map_err(|_| {
@@ -5619,7 +5917,7 @@ fn sync_agent_luaskills_tool_cache(guard: &mut ServiceBridgeState) -> Result<(),
     })?;
     *tool_entries = entries;
     guard.startup.recent_logs.push(format!(
-        "[tauri-service] luaskills: synced {entry_count} agent-runtime tool entries"
+        "[webui-service] luaskills: synced {entry_count} agent-runtime tool entries"
     ));
     Ok(())
 }
@@ -5627,7 +5925,7 @@ fn sync_agent_luaskills_tool_cache(guard: &mut ServiceBridgeState) -> Result<(),
 /// Returns the current provider configuration stored by the agent runtime bridge.
 /// 返回 Agent 运行时桥当前保存的 Provider 配置。
 fn provider_configuration_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<ProviderConfigurationFile, String> {
     let guard = state
         .lock()
@@ -5642,7 +5940,7 @@ fn provider_configuration_from_state(
 /// Mutates, persists, and stores provider configuration for WebUI skill commands.
 /// 为 WebUI 技能命令变更、持久化并存储 Provider 配置。
 fn mutate_provider_configuration<F>(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     mutate: F,
 ) -> Result<(), String>
 where
@@ -5662,7 +5960,7 @@ where
 
 /// Emits one workbench snapshot to the WebUI event stream.
 /// 向 WebUI 事件流发送单份工作台快照。
-fn emit_workbench_event(app: &tauri::AppHandle, workbench: &WorkbenchSnapshot) {
+fn emit_workbench_event(app: &ServiceEventEmitter, workbench: &WorkbenchSnapshot) {
     emit_service_event_with_trace(
         app,
         "workbench_snapshot_emit",
@@ -5672,14 +5970,14 @@ fn emit_workbench_event(app: &tauri::AppHandle, workbench: &WorkbenchSnapshot) {
 
 /// Emits one service event and traces the serialized payload size when diagnostics are enabled.
 /// 发送单条服务事件，并在诊断开启时记录序列化载荷大小。
-fn emit_service_event_with_trace(app: &tauri::AppHandle, stage: &str, event: ServiceEvent) {
+fn emit_service_event_with_trace(app: &ServiceEventEmitter, stage: &str, event: ServiceEvent) {
     if webui_trace_enabled() {
         let payload_bytes = serde_json::to_vec(&event)
             .map(|bytes| bytes.len())
             .unwrap_or(0);
         webui_trace(stage, format!("payload_bytes={payload_bytes}"));
     }
-    let _ = app.emit("vulcan://service-event", event);
+    app.emit(event);
 }
 
 /// Refreshes settings-related projections on the retained workbench snapshot.
@@ -5712,7 +6010,7 @@ fn refresh_settings_projection_locked(
 /// Stores provider and MCP runtime changes after a configuration mutation.
 /// 在配置变更后存储 Provider 与 MCP 运行时变化。
 fn store_provider_and_mcp_configuration_after_change(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     provider_configuration: ProviderConfigurationFile,
     next_mcp_runtime: Option<McpRuntimeAccess>,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -6014,7 +6312,7 @@ fn stable_identifier_from_label(label: &str) -> String {
 /// Reprojects Agent Skills after a focused prompt-skill configuration change.
 /// 在聚焦的提示词技能配置变更后重新投影 Agent Skills。
 fn refresh_agent_skills_local_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<AgentSkillsCatalogSummary, String> {
     let provider_configuration = provider_configuration_from_state(state)?;
     let summary = agent_skills_catalog_summary(&provider_configuration);
@@ -6055,7 +6353,7 @@ fn parse_luaskill_tool_registration_state(
 /// Builds the VMM action context for one WebUI management request.
 /// 为单个 WebUI 管理请求构建 VMM 动作上下文。
 fn vmm_action_context(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     request: &VmmMemoryActionRequest,
 ) -> Result<(vulcan_vmm::VmmConfigLayer, String, String, Option<String>), String> {
     let (provider_configuration, workspace_snapshot) = {
@@ -6152,21 +6450,21 @@ fn vmm_action_layer_from_effective(
 fn parse_vmm_memory_action(
     request: &VmmMemoryActionRequest,
     selected_session_id: Option<String>,
-) -> Result<crate::vmm_management::VmmWorkbenchAction, String> {
+) -> Result<vulcan_service_runtime::vmm_management::VmmWorkbenchAction, String> {
     let payload = &request.payload;
     match request.action.trim() {
-        "healthz" => Ok(crate::vmm_management::VmmWorkbenchAction::Healthz),
+        "healthz" => Ok(vulcan_service_runtime::vmm_management::VmmWorkbenchAction::Healthz),
         "load_users_projects" => {
-            Ok(crate::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects)
+            Ok(vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadUsersAndProjects)
         }
         "resolve_user_project" => {
-            Ok(crate::vmm_management::VmmWorkbenchAction::ResolveUserAndProject)
+            Ok(vulcan_service_runtime::vmm_management::VmmWorkbenchAction::ResolveUserAndProject)
         }
         "ensure_project_preview" => {
-            Ok(crate::vmm_management::VmmWorkbenchAction::EnsureProjectPreview)
+            Ok(vulcan_service_runtime::vmm_management::VmmWorkbenchAction::EnsureProjectPreview)
         }
         "load_profile_nodes" => Ok(
-            crate::vmm_management::VmmWorkbenchAction::LoadProfileNodes {
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadProfileNodes {
                 target: parse_vmm_profile_target(
                     vmm_payload_text(payload, "target")
                         .as_deref()
@@ -6174,9 +6472,11 @@ fn parse_vmm_memory_action(
                 )?,
             },
         ),
-        "load_profile_bundle" => Ok(crate::vmm_management::VmmWorkbenchAction::LoadProfileBundle),
+        "load_profile_bundle" => {
+            Ok(vulcan_service_runtime::vmm_management::VmmWorkbenchAction::LoadProfileBundle)
+        }
         "apply_profile_instruction" => Ok(
-            crate::vmm_management::VmmWorkbenchAction::ApplyProfileInstruction {
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::ApplyProfileInstruction {
                 target: parse_vmm_profile_target(
                     vmm_payload_text(payload, "target")
                         .as_deref()
@@ -6185,49 +6485,66 @@ fn parse_vmm_memory_action(
                 instruction: vmm_payload_text(payload, "instruction").unwrap_or_default(),
             },
         ),
-        "resolve_user" => Ok(crate::vmm_management::VmmWorkbenchAction::ResolveUser {
-            user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
-            confirm_create: vmm_payload_bool(payload, "confirmCreate"),
-        }),
-        "delete_user" => Ok(crate::vmm_management::VmmWorkbenchAction::DeleteUser {
-            user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
-            confirmation_code: vmm_payload_text(payload, "confirmationCode").unwrap_or_default(),
-        }),
-        "ensure_project" => Ok(crate::vmm_management::VmmWorkbenchAction::EnsureProject {
-            project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
-            confirm_create: vmm_payload_bool(payload, "confirmCreate"),
-        }),
-        "delete_project" => Ok(crate::vmm_management::VmmWorkbenchAction::DeleteProject {
-            project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
-            confirm_delete: vmm_payload_bool(payload, "confirmDelete"),
-        }),
-        "migrate_project" => Ok(crate::vmm_management::VmmWorkbenchAction::MigrateProject {
-            source_project_path: vmm_payload_text(payload, "sourceProjectPath").unwrap_or_default(),
-            target_project_path: vmm_payload_text(payload, "targetProjectPath").unwrap_or_default(),
-            confirm_migrate: vmm_payload_bool(payload, "confirmMigrate"),
-        }),
+        "resolve_user" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::ResolveUser {
+                user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
+                confirm_create: vmm_payload_bool(payload, "confirmCreate"),
+            },
+        ),
+        "delete_user" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::DeleteUser {
+                user_ref: vmm_payload_text(payload, "userRef").unwrap_or_default(),
+                confirmation_code: vmm_payload_text(payload, "confirmationCode")
+                    .unwrap_or_default(),
+            },
+        ),
+        "ensure_project" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::EnsureProject {
+                project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
+                confirm_create: vmm_payload_bool(payload, "confirmCreate"),
+            },
+        ),
+        "delete_project" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::DeleteProject {
+                project_path: vmm_payload_text(payload, "projectPath").unwrap_or_default(),
+                confirm_delete: vmm_payload_bool(payload, "confirmDelete"),
+            },
+        ),
+        "migrate_project" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::MigrateProject {
+                source_project_path: vmm_payload_text(payload, "sourceProjectPath")
+                    .unwrap_or_default(),
+                target_project_path: vmm_payload_text(payload, "targetProjectPath")
+                    .unwrap_or_default(),
+                confirm_migrate: vmm_payload_bool(payload, "confirmMigrate"),
+            },
+        ),
         "search_memory_events" => Ok(
-            crate::vmm_management::VmmWorkbenchAction::SearchMemoryEvents {
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::SearchMemoryEvents {
                 queries: vmm_payload_string_list(payload, "queries"),
                 top_k: vmm_payload_u32(payload, "topK").unwrap_or(5),
             },
         ),
-        "get_turn_details" => Ok(crate::vmm_management::VmmWorkbenchAction::GetTurnDetails {
-            turn_ids: vmm_payload_u64_list(payload, "turnIds")?,
-        }),
-        "write_memories" => Ok(crate::vmm_management::VmmWorkbenchAction::WriteMemories {
-            session_id: vmm_payload_text(payload, "sessionId")
-                .or(selected_session_id)
-                .unwrap_or_else(|| String::from("webui-vmm-memory")),
-            item: vulcan_vmm::WriteMemoryItem {
-                scope_level: vmm_payload_i32(payload, "scopeLevel").unwrap_or(2),
-                abstract_text: vmm_payload_text(payload, "abstractText").unwrap_or_default(),
-                details: vmm_payload_text(payload, "details").unwrap_or_default(),
-                category: vmm_payload_i32(payload, "category").unwrap_or(1),
-                priority: vmm_payload_i32(payload, "priority").unwrap_or(2),
-                memory_level: vmm_payload_i32(payload, "memoryLevel").unwrap_or(2),
+        "get_turn_details" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::GetTurnDetails {
+                turn_ids: vmm_payload_u64_list(payload, "turnIds")?,
             },
-        }),
+        ),
+        "write_memories" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::WriteMemories {
+                session_id: vmm_payload_text(payload, "sessionId")
+                    .or(selected_session_id)
+                    .unwrap_or_else(|| String::from("webui-vmm-memory")),
+                item: vulcan_vmm::WriteMemoryItem {
+                    scope_level: vmm_payload_i32(payload, "scopeLevel").unwrap_or(2),
+                    abstract_text: vmm_payload_text(payload, "abstractText").unwrap_or_default(),
+                    details: vmm_payload_text(payload, "details").unwrap_or_default(),
+                    category: vmm_payload_i32(payload, "category").unwrap_or(1),
+                    priority: vmm_payload_i32(payload, "priority").unwrap_or(2),
+                    memory_level: vmm_payload_i32(payload, "memoryLevel").unwrap_or(2),
+                },
+            },
+        ),
         other => Err(format!("不支持的 VMM 记忆动作：{other}")),
     }
 }
@@ -6235,7 +6552,7 @@ fn parse_vmm_memory_action(
 /// Builds a JSON request preview for one VMM action.
 /// 为单个 VMM 动作构建 JSON 请求预览。
 fn vmm_action_request_preview(
-    action: &crate::vmm_management::VmmWorkbenchAction,
+    action: &vulcan_service_runtime::vmm_management::VmmWorkbenchAction,
 ) -> Result<Value, String> {
     serde_json::to_value(format!("{action:?}"))
         .map(|debug| json!({ "action": debug }))
@@ -6247,61 +6564,69 @@ fn vmm_action_request_preview(
 fn vmm_memory_action_result(
     action: &str,
     request: Value,
-    outcome: crate::vmm_management::VmmManagementOutcome,
+    outcome: vulcan_service_runtime::vmm_management::VmmManagementOutcome,
 ) -> Result<VmmMemoryActionResult, String> {
     let summary = outcome.summary();
     let (kind, response) = match outcome {
-        crate::vmm_management::VmmManagementOutcome::Healthz(status) => {
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::Healthz(status) => {
             ("healthz", json!({ "status": status }))
         }
-        crate::vmm_management::VmmManagementOutcome::UsersAndProjects { users, projects } => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::UsersAndProjects {
+            users,
+            projects,
+        } => (
             "users_projects",
             json!({ "users": users.users, "projects": projects.projects }),
         ),
-        crate::vmm_management::VmmManagementOutcome::Resolved { user, project } => {
-            ("resolved", json!({ "user": user, "project": project }))
-        }
-        crate::vmm_management::VmmManagementOutcome::EnsureProject(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::Resolved {
+            user,
+            project,
+        } => ("resolved", json!({ "user": user, "project": project })),
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::EnsureProject(response) => (
             "ensure_project",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::DeleteUser(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteUser(response) => (
             "delete_user",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::DeleteProject(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteProject(response) => (
             "delete_project",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::MigrateProject(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::MigrateProject(response) => (
             "migrate_project",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::ProfileNodes(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileNodes(response) => (
             "profile_nodes",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::ProfileBundle(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileBundle(response) => (
             "profile_bundle",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::ProfileInstruction(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ProfileInstruction(
+            response,
+        ) => (
             "profile_instruction",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::ResolveUser(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::ResolveUser(response) => (
             "resolve_user",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::SearchMemoryEvents(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::SearchMemoryEvents(
+            response,
+        ) => (
             "search_memory_events",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::GetTurnDetails(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::GetTurnDetails(response) => (
             "get_turn_details",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
-        crate::vmm_management::VmmManagementOutcome::WriteMemories(response) => (
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::WriteMemories(response) => (
             "write_memories",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
@@ -6324,8 +6649,8 @@ fn vmm_json_error(error: serde_json::Error) -> String {
 /// Saves one VMM memory configuration draft.
 /// 保存单个 VMM 记忆配置草稿。
 fn save_vmm_memory_config(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
-    request: VmmConfigSaveRequest,
+    state: &SharedServiceBridgeState,
+    mut request: VmmConfigSaveRequest,
 ) -> Result<(), String> {
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
@@ -6348,6 +6673,9 @@ fn save_vmm_memory_config(
         return Ok(());
     }
     let mut configuration = provider_configuration_from_state(state)?;
+    if request.draft.grpc_api_key.trim() == WEBUI_REDACTED_SECRET_PLACEHOLDER {
+        request.draft.grpc_api_key = configuration.vmm.grpc_api_key.clone().unwrap_or_default();
+    }
     configuration.vmm = vmm_config_layer_from_draft(&request.draft, true)?;
     vulcan_provider_config::config::save_configuration_file(&configuration)?;
     let mut guard = state
@@ -6363,7 +6691,7 @@ fn save_vmm_memory_config(
 /// Loads one persisted project VMM layer and resolves its effective editable fallback.
 /// 加载单个已持久化的项目 VMM 层，并解析其可编辑回退值。
 fn load_project_vmm_config(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: &str,
 ) -> Result<VmmConfigDraftSummary, String> {
     let project_path = vmm_project_scope_path(state, Some(project_id))?;
@@ -6487,9 +6815,7 @@ fn webui_attachment_cleanup_kind_summary(per_kind_counts: &BTreeMap<String, usiz
 
 /// Refreshes the retained VMM hook snapshot from shared service state.
 /// 从共享服务状态刷新保留的 VMM hook 快照。
-fn refresh_service_vmm_hook_snapshot(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
-) -> Result<(), String> {
+fn refresh_service_vmm_hook_snapshot(state: &SharedServiceBridgeState) -> Result<(), String> {
     let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -6584,7 +6910,7 @@ fn vmm_config_layer_from_draft(
 /// Returns the selected project path for a VMM request scope.
 /// 返回 VMM 请求作用域选中的项目路径。
 fn vmm_project_scope_path(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     project_id: Option<&str>,
 ) -> Result<String, String> {
     let guard = state
@@ -6782,7 +7108,7 @@ fn vmm_parse_optional_usize(value: &str, label: &str) -> Result<Option<usize>, S
 /// Reads all long-lived runtime handles required by a WebUI prompt submission.
 /// 读取 WebUI 提示词提交所需的全部长生命周期运行时句柄。
 fn runtime_parts_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
 ) -> Result<
     (
         ControllerRuntimeHandle,
@@ -7952,7 +8278,7 @@ fn persist_webui_context_current_document(
             runtime_state,
         )
     {
-        eprintln!("[tauri-service] current context persist failed for `{session_title}`: {error}");
+        eprintln!("[webui-service] current context persist failed for `{session_title}`: {error}");
     }
 }
 
@@ -8422,11 +8748,11 @@ fn spawn_workspace_session_persist_task(
     let persist_version = match next_webui_session_persist_version(&state, session_id) {
         Ok(version) => version,
         Err(error) => {
-            eprintln!("[tauri-service] background persist version failed: {error}");
+            eprintln!("[webui-service] background persist version failed: {error}");
             return;
         }
     };
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
         if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
@@ -8440,7 +8766,7 @@ fn spawn_workspace_session_persist_task(
         .await
         {
             let reason = reason.unwrap_or_else(|| String::from("session_update"));
-            eprintln!("[tauri-service] background persist failed ({reason}): {error}");
+            eprintln!("[webui-service] background persist failed ({reason}): {error}");
         }
     });
 }
@@ -8473,11 +8799,11 @@ fn spawn_workspace_session_runtime_state_persist_task(
     let persist_version = match next_webui_session_persist_version(&state, session_id) {
         Ok(version) => version,
         Err(error) => {
-            eprintln!("[tauri-service] runtime-state persist version failed: {error}");
+            eprintln!("[webui-service] runtime-state persist version failed: {error}");
             return;
         }
     };
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
         if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
@@ -8506,7 +8832,7 @@ fn spawn_workspace_session_runtime_state_persist_task(
         {
             let reason_label = reason.as_deref().unwrap_or("runtime_state");
             eprintln!(
-                "[tauri-service] background runtime-state persist failed ({reason_label}): {error}"
+                "[webui-service] background runtime-state persist failed ({reason_label}): {error}"
             );
         }
     });
@@ -8765,8 +9091,8 @@ fn prompt_to_session_title(prompt: &str) -> String {
 /// Stores and emits one rebuilt workbench snapshot after a workspace mutation.
 /// 在工作区发生变更后存储并发出一份重建后的工作台快照。
 fn store_and_emit_workbench_snapshot(
-    app: &tauri::AppHandle,
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     luaskills_catalog: &TauriLuaSkillsCatalog,
     token_budget_runtime: &TauriTokenBudgetRuntime,
@@ -8778,7 +9104,7 @@ fn store_and_emit_workbench_snapshot(
 ) -> Result<WorkbenchSnapshot, String> {
     store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         app,
-        state.inner(),
+        &state,
         controller_runtime,
         luaskills_catalog,
         token_budget_runtime,
@@ -8794,8 +9120,8 @@ fn store_and_emit_workbench_snapshot(
 /// Stores and emits one rebuilt workbench snapshot while preserving current subagent navigation.
 /// 存储并发出一份重建后的工作台快照，同时保留当前子代理导航。
 fn store_and_emit_workbench_snapshot_preserving_subagent_navigation(
-    app: &tauri::AppHandle,
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     luaskills_catalog: &TauriLuaSkillsCatalog,
     token_budget_runtime: &TauriTokenBudgetRuntime,
@@ -8807,7 +9133,7 @@ fn store_and_emit_workbench_snapshot_preserving_subagent_navigation(
 ) -> Result<WorkbenchSnapshot, String> {
     store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         app,
-        state.inner(),
+        &state,
         controller_runtime,
         luaskills_catalog,
         token_budget_runtime,
@@ -8823,7 +9149,7 @@ fn store_and_emit_workbench_snapshot_preserving_subagent_navigation(
 /// Stores and emits one rebuilt workbench snapshot with an explicit subagent navigation refresh mode.
 /// 使用显式子代理导航刷新模式存储并发出一份重建后的工作台快照。
 fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     luaskills_catalog: &TauriLuaSkillsCatalog,
@@ -8931,10 +9257,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         ),
     );
     let trace_emit_started_at = current_unix_millis_value();
-    let _ = app.emit(
-        "vulcan://service-event",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
-    );
+    emit_workbench_event(&app, &workbench);
     webui_trace(
         "store_workbench_emitted",
         format!(
@@ -8969,7 +9292,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
 /// The execution request when the turn should continue, otherwise `None`.
 /// 需要继续执行时返回执行请求，否则返回 `None`。
 fn continue_webui_prompt_turn_after_precheck_from_state(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -9065,12 +9388,12 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         ),
     );
     if let Some(detail) = continuation.precheck_failure_detail.as_deref() {
-        eprintln!("[tauri-service] precheck hook failed but request will continue: {detail}");
+        eprintln!("[webui-service] precheck hook failed but request will continue: {detail}");
         if let Err(error) = push_webui_service_diagnostic(
             state,
             format!("warning · Precheck hook 执行失败：{detail}"),
         ) {
-            eprintln!("[tauri-service] record precheck warning failed: {error}");
+            eprintln!("[webui-service] record precheck warning failed: {error}");
         }
     }
     let mut request = continuation.request;
@@ -9174,12 +9497,12 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
     if runs_user_prompt_precheck {
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_service_task(async move {
             let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(error) => {
-                    eprintln!("[tauri-service] precheck continue persist snapshot failed: {error}");
+                    eprintln!("[webui-service] precheck continue persist snapshot failed: {error}");
                     return;
                 }
             };
@@ -9218,7 +9541,7 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
 /// `start` is the first-stage prompt turn.
 /// `start` 是第一阶段提示词回合。
 fn spawn_webui_precheck_continue_task(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
@@ -9226,7 +9549,7 @@ fn spawn_webui_precheck_continue_task(
 ) {
     let session_id = start.session_id;
     webui_trace("precheck_task_spawn", format!("session={session_id}"));
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let precheck_started_at = current_unix_millis_value();
         webui_trace("precheck_task_run_start", format!("session={session_id}"));
         let precheck_outcome = start.precheck_request.clone().run().await;
@@ -9266,7 +9589,7 @@ fn spawn_webui_precheck_continue_task(
                 );
             }
             Err(error) => {
-                eprintln!("[tauri-service] continue WebUI prompt after precheck failed: {error}");
+                eprintln!("[webui-service] continue WebUI prompt after precheck failed: {error}");
                 if let Err(cleanup_error) = mark_webui_precheck_continuation_failed(
                     &app,
                     &state,
@@ -9276,7 +9599,7 @@ fn spawn_webui_precheck_continue_task(
                     &error,
                 ) {
                     eprintln!(
-                        "[tauri-service] cleanup failed WebUI precheck continuation failed: {cleanup_error}"
+                        "[webui-service] cleanup failed WebUI precheck continuation failed: {cleanup_error}"
                     );
                 }
             }
@@ -9307,7 +9630,7 @@ fn spawn_webui_precheck_continue_task(
 /// Whether any continuation or precheck task was started.
 /// 是否已经启动 continuation 或 precheck 任务。
 fn start_webui_precheck_or_continue(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -9400,7 +9723,7 @@ fn start_webui_precheck_or_continue(
 /// `Ok(())` after the failed state is projected and persisted.
 /// 失败状态完成投影与持久化后返回 `Ok(())`。
 fn mark_webui_precheck_continuation_failed(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -9455,12 +9778,12 @@ fn mark_webui_precheck_continuation_failed(
     )?;
     let state_for_persist = state.clone();
     let controller_runtime_for_persist = controller_runtime.clone();
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => return,
             Err(error) => {
-                eprintln!("[tauri-service] precheck failed persist snapshot failed: {error}");
+                eprintln!("[webui-service] precheck failed persist snapshot failed: {error}");
                 return;
             }
         };
@@ -9478,7 +9801,7 @@ fn mark_webui_precheck_continuation_failed(
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
 /// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
 fn spawn_agent_stream_task(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
@@ -9491,7 +9814,7 @@ fn spawn_agent_stream_task(
         .ok()
         .and_then(|guard| webui_session_kernel_generation(&guard, session_id));
     let task_state = state.clone();
-    let handle = tauri::async_runtime::spawn(async move {
+    let handle = spawn_service_task(async move {
         let stream_task_started_at = current_unix_millis_value();
         webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
@@ -9575,7 +9898,7 @@ fn spawn_agent_stream_task(
                         &controller_runtime,
                         &preparation,
                     ) {
-                        eprintln!("[tauri-service] apply preparation failed: {error}");
+                        eprintln!("[webui-service] apply preparation failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
@@ -9587,7 +9910,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         &snapshot,
                     ) {
-                        eprintln!("[tauri-service] provider request checkpoint failed: {error}");
+                        eprintln!("[webui-service] provider request checkpoint failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ProviderLoweringRepair { session_id, event } => {
@@ -9596,7 +9919,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         event,
                     ) {
-                        eprintln!("[tauri-service] provider lowering repair failed: {error}");
+                        eprintln!("[webui-service] provider lowering repair failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::RequestReady { session_id } => {
@@ -9613,7 +9936,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         SessionRunPhase::Requesting,
                     ) {
-                        eprintln!("[tauri-service] apply request-ready phase failed: {error}");
+                        eprintln!("[webui-service] apply request-ready phase failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::WireRequestReady { session_id } => {
@@ -9635,7 +9958,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         SessionRunPhase::Requesting,
                     ) {
-                        eprintln!("[tauri-service] apply wire-request-ready phase failed: {error}");
+                        eprintln!("[webui-service] apply wire-request-ready phase failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::RequestStarted { session_id } => {
@@ -9649,7 +9972,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         SessionRunPhase::Requesting,
                     ) {
-                        eprintln!("[tauri-service] apply request-started failed: {error}");
+                        eprintln!("[webui-service] apply request-started failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ThinkingDelta { session_id, delta } => {
@@ -9693,14 +10016,14 @@ fn spawn_agent_stream_task(
                         &delta,
                         true,
                     ) {
-                        eprintln!("[tauri-service] append thinking delta failed: {error}");
+                        eprintln!("[webui-service] append thinking delta failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::ThinkingCompleted { session_id } => {
                     if let Err(error) =
                         collapse_streaming_thinking(&app, &task_state, session_id, &record_ids)
                     {
-                        eprintln!("[tauri-service] complete thinking failed: {error}");
+                        eprintln!("[webui-service] complete thinking failed: {error}");
                     }
                     if let Err(error) = apply_session_phase(
                         &app,
@@ -9708,7 +10031,7 @@ fn spawn_agent_stream_task(
                         session_id,
                         SessionRunPhase::Requesting,
                     ) {
-                        eprintln!("[tauri-service] restore request phase failed: {error}");
+                        eprintln!("[webui-service] restore request phase failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::OutputDelta { session_id, delta } => {
@@ -9752,7 +10075,7 @@ fn spawn_agent_stream_task(
                         &delta,
                         false,
                     ) {
-                        eprintln!("[tauri-service] append output delta failed: {error}");
+                        eprintln!("[webui-service] append output delta failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::RuntimeEvent { session_id, event } => {
@@ -9802,7 +10125,7 @@ fn spawn_agent_stream_task(
                             session_id,
                             SessionRunPhase::ToolRunning,
                         ) {
-                            eprintln!("[tauri-service] apply tool phase failed: {error}");
+                            eprintln!("[webui-service] apply tool phase failed: {error}");
                         }
                     }
                     if matches!(event.kind, RuntimeEventKind::ToolFinished) {
@@ -9813,7 +10136,7 @@ fn spawn_agent_stream_task(
                             SessionRunPhase::Requesting,
                         ) {
                             eprintln!(
-                                "[tauri-service] restore request phase after tool failed: {error}"
+                                "[webui-service] restore request phase after tool failed: {error}"
                             );
                         }
                     }
@@ -9839,7 +10162,7 @@ fn spawn_agent_stream_task(
                         &event,
                     ) {
                         eprintln!(
-                            "[tauri-service] start detached subagent listener failed: {error}"
+                            "[webui-service] start detached subagent listener failed: {error}"
                         );
                     }
                     let subagent_event_consumed = match ingest_webui_subagent_runtime_event(
@@ -9851,7 +10174,7 @@ fn spawn_agent_stream_task(
                     ) {
                         Ok(consumed) => consumed,
                         Err(error) => {
-                            eprintln!("[tauri-service] ingest subagent event failed: {error}");
+                            eprintln!("[webui-service] ingest subagent event failed: {error}");
                             false
                         }
                     };
@@ -9859,7 +10182,7 @@ fn spawn_agent_stream_task(
                         && let Err(error) =
                             append_runtime_event_projection(&app, &task_state, session_id, &event)
                     {
-                        eprintln!("[tauri-service] append runtime event failed: {error}");
+                        eprintln!("[webui-service] append runtime event failed: {error}");
                     }
                     acknowledge_runtime_event_projection_barrier(&event);
                     let pending_after_runtime_event_started_at = current_unix_millis_value();
@@ -9891,7 +10214,7 @@ fn spawn_agent_stream_task(
                         }
                         Err(error) => {
                             eprintln!(
-                                "[tauri-service] prepare pending prompt after runtime event failed: {error}"
+                                "[webui-service] prepare pending prompt after runtime event failed: {error}"
                             );
                         }
                     }
@@ -9911,7 +10234,7 @@ fn spawn_agent_stream_task(
                         last_successful_provider_usage,
                         provider_request_count,
                     ) {
-                        eprintln!("[tauri-service] apply checkpoint failed: {error}");
+                        eprintln!("[webui-service] apply checkpoint failed: {error}");
                     }
                 }
                 ExecutionStreamEvent::Finished(report) => {
@@ -9934,7 +10257,7 @@ fn spawn_agent_stream_task(
                         record_webui_provider_response_checkpoint(&controller_runtime, &report)
                     {
                         eprintln!(
-                            "[tauri-service] provider response checkpoint write failed: {error}"
+                            "[webui-service] provider response checkpoint write failed: {error}"
                         );
                     }
                     if let Ok(mut guard) = task_state.lock() {
@@ -9982,7 +10305,7 @@ fn spawn_agent_stream_task(
                     ) {
                         Ok(apply) => Some(apply),
                         Err(error) => {
-                            eprintln!("[tauri-service] apply final report failed: {error}");
+                            eprintln!("[webui-service] apply final report failed: {error}");
                             None
                         }
                     };
@@ -10004,7 +10327,7 @@ fn spawn_agent_stream_task(
                         )
                     {
                         let controller_runtime_for_lifecycle = controller_runtime.clone();
-                        tauri::async_runtime::spawn(async move {
+                        spawn_service_task(async move {
                             let lifecycle_started_at = current_unix_millis_value();
                             if let Err(error) = finish_session_external_turn_lifecycle(
                                 &controller_runtime_for_lifecycle,
@@ -10015,7 +10338,7 @@ fn spawn_agent_stream_task(
                                 terminal_boundary_event,
                             ) {
                                 eprintln!(
-                                    "[tauri-service] append session terminal boundary failed: {error}"
+                                    "[webui-service] append session terminal boundary failed: {error}"
                                 );
                             }
                             webui_trace_if_slow(
@@ -10040,7 +10363,7 @@ fn spawn_agent_stream_task(
                         Ok(started) => started,
                         Err(error) => {
                             eprintln!(
-                                "[tauri-service] prepare mailbox turn after stream failed: {error}"
+                                "[webui-service] prepare mailbox turn after stream failed: {error}"
                             );
                             false
                         }
@@ -10069,7 +10392,7 @@ fn spawn_agent_stream_task(
                             Ok(started) => started,
                             Err(error) => {
                                 eprintln!(
-                                    "[tauri-service] prepare next pending prompt failed: {error}"
+                                    "[webui-service] prepare next pending prompt failed: {error}"
                                 );
                                 false
                             }
@@ -10110,7 +10433,7 @@ fn spawn_agent_stream_task(
                         )
                         .await
                         {
-                            eprintln!("[tauri-service] persist final report failed: {error}");
+                            eprintln!("[webui-service] persist final report failed: {error}");
                         }
                         webui_trace_if_slow(
                             "stream_final_persist_slow",
@@ -10145,7 +10468,7 @@ fn spawn_agent_stream_task(
 /// Starts one detached child-task listener using the same task runtime stream as iced.
 /// 使用与 iced 相同的任务运行时流启动单个分离子任务监听器。
 fn maybe_start_webui_detached_subagent_task_listener(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
@@ -10191,7 +10514,7 @@ fn maybe_start_webui_detached_subagent_task_listener(
         "detached_listener_spawn",
         format!("parent={parent_session_id} task={task_id}"),
     );
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut stream = Box::pin(
             agent_runtime
@@ -10218,7 +10541,7 @@ fn maybe_start_webui_detached_subagent_task_listener(
             )
             .await
             {
-                eprintln!("[tauri-service] detached subagent event failed: {error}");
+                eprintln!("[webui-service] detached subagent event failed: {error}");
             }
         }
     });
@@ -10228,7 +10551,7 @@ fn maybe_start_webui_detached_subagent_task_listener(
 /// Applies one detached subagent runtime event to the shared WebUI transcript projection.
 /// 将单条分离子代理运行时事件应用到共享 WebUI 转录投影。
 async fn handle_webui_detached_subagent_task_event(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -10296,7 +10619,7 @@ async fn handle_webui_detached_subagent_task_event(
             ) {
                 Ok(consumed) => consumed,
                 Err(error) => {
-                    eprintln!("[tauri-service] ingest subagent parent event failed: {error}");
+                    eprintln!("[webui-service] ingest subagent parent event failed: {error}");
                     false
                 }
             };
@@ -10325,7 +10648,7 @@ async fn handle_webui_detached_subagent_task_event(
                     parent_is_regular_session,
                     parent_is_stopped,
                 ) {
-                    eprintln!("[tauri-service] enqueue session mailbox input failed: {error}");
+                    eprintln!("[webui-service] enqueue session mailbox input failed: {error}");
                 }
                 {
                     let mut guard = state
@@ -10383,7 +10706,7 @@ async fn handle_webui_detached_subagent_task_event(
                 );
                 let state_for_persist = state.clone();
                 let controller_runtime_for_persist = controller_runtime.clone();
-                tauri::async_runtime::spawn(async move {
+                spawn_service_task(async move {
                     let snapshot = match current_workspace_snapshot_from_shared_state(
                         &state_for_persist,
                     ) {
@@ -10391,7 +10714,7 @@ async fn handle_webui_detached_subagent_task_event(
                         Ok(None) => return,
                         Err(error) => {
                             eprintln!(
-                                "[tauri-service] detached subagent persist snapshot failed: {error}"
+                                "[webui-service] detached subagent persist snapshot failed: {error}"
                             );
                             return;
                         }
@@ -10565,7 +10888,7 @@ fn webui_session_mailbox_input_from_kernel(
 /// Starts one mailbox-triggered parent model turn directly from kernel mailbox input.
 /// 直接基于内核 mailbox 输入启动一个 mailbox 触发的父模型回合。
 async fn maybe_start_webui_mailbox_turn_if_ready(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -10768,7 +11091,7 @@ fn webui_detached_parent_event_should_persist_terminal_projection(
 /// Applies one child execution stream event using the same projection functions as root WebUI turns.
 /// 使用与根 WebUI 回合相同的投影函数应用单条子执行流事件。
 async fn handle_webui_detached_child_execution_event(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -10859,7 +11182,7 @@ async fn handle_webui_detached_child_execution_event(
 /// A callback consumed by the host-controlled runtime stream.
 /// 返回供宿主控制运行时流消费的回调。
 fn build_webui_prompt_intervention(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     provider_configuration: ProviderConfigurationFile,
     ai_tool_configuration: PersistedAiToolConfiguration,
@@ -10904,7 +11227,7 @@ fn build_webui_prompt_intervention(
                         Ok(None) => false,
                         Err(error) => {
                             eprintln!(
-                                "[tauri-service] mailbox intervention prompt failed: {error}"
+                                "[webui-service] mailbox intervention prompt failed: {error}"
                             );
                             false
                         }
@@ -10912,7 +11235,7 @@ fn build_webui_prompt_intervention(
                 pending_prompt_changed || mailbox_changed
             }
             Err(error) => {
-                eprintln!("[tauri-service] apply guided prompt intervention failed: {error}");
+                eprintln!("[webui-service] apply guided prompt intervention failed: {error}");
                 false
             }
         }
@@ -11333,7 +11656,7 @@ fn normalize_webui_interjected_prompt_for_provider(
 /// Guided prompt entries waiting in the internal queue, preserving queue order.
 /// 按队列顺序返回内部队列中等待的引导条目集合。
 fn take_webui_internal_guidance_prompts(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     provider_configuration: &ProviderConfigurationFile,
     session_id: SessionId,
@@ -11379,7 +11702,7 @@ fn take_webui_internal_guidance_prompts(
 /// Number of removed stale mailbox entries.
 /// 被移除的过时 mailbox 条目数量。
 fn clear_stale_webui_session_mailbox_pending_prompts(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> Result<usize, String> {
@@ -11405,7 +11728,7 @@ fn clear_stale_webui_session_mailbox_pending_prompts(
 /// `allow_from_stopped_phase` lets manual insert match iced while automatic continuation still respects stop.
 /// `allow_from_stopped_phase` 让手动插入对齐 iced，同时自动续跑仍尊重停止状态。
 async fn maybe_prepare_next_webui_pending_prompt(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -11643,12 +11966,12 @@ async fn maybe_prepare_next_webui_pending_prompt(
     if entry.source.runs_user_prompt_precheck() {
         let state_for_persist = state.clone();
         let controller_runtime_for_persist = controller_runtime.clone();
-        tauri::async_runtime::spawn(async move {
+        spawn_service_task(async move {
             let snapshot = match current_workspace_snapshot_from_shared_state(&state_for_persist) {
                 Ok(Some(snapshot)) => snapshot,
                 Ok(None) => return,
                 Err(error) => {
-                    eprintln!("[tauri-service] queued begin persist snapshot failed: {error}");
+                    eprintln!("[webui-service] queued begin persist snapshot failed: {error}");
                     return;
                 }
             };
@@ -11701,7 +12024,7 @@ fn take_next_webui_pending_prompt(
 /// Rebuilds and emits the retained workbench snapshot after a service-side queue mutation.
 /// 在 service 侧队列变更后重建并发出保留的工作台快照。
 fn store_current_workbench_snapshot(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     agent_runtime: &AgentRuntimeBridge,
@@ -11804,10 +12127,7 @@ fn store_current_workbench_snapshot(
     // Measures frontend event emission cost for rebuilt workbench snapshots.
     // 衡量重建工作台快照前端事件发出的耗时。
     let emit_started_at = current_unix_millis_value();
-    let _ = app.emit(
-        "vulcan://service-event",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
-    );
+    emit_workbench_event(app, &workbench);
     webui_trace_if_slow(
         "store_current_workbench_emit_slow",
         emit_started_at,
@@ -11836,7 +12156,7 @@ fn store_current_workbench_snapshot(
 /// Emits a display-only workbench snapshot after a subagent route change.
 /// 在子代理显示路由变更后发出仅显示用途的工作台快照。
 fn emit_subagent_display_route_workbench_snapshot(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     workspace_snapshot: WorkspaceSnapshot,
 ) -> Result<WorkbenchSnapshot, String> {
@@ -11849,10 +12169,7 @@ fn emit_subagent_display_route_workbench_snapshot(
         guard.workspace_snapshot = Some(workspace_snapshot);
         workbench
     };
-    let _ = app.emit(
-        "vulcan://service-event",
-        ServiceEvent::Workbench(Box::new(workbench.clone())),
-    );
+    emit_workbench_event(app, &workbench);
     Ok(workbench)
 }
 
@@ -11900,7 +12217,7 @@ fn build_subagent_display_route_workbench_snapshot_locked(
 /// Applies execution preparation identity fields to the target session runtime state.
 /// 将执行准备得到的身份字段应用到目标会话运行时状态。
 fn apply_execution_preparation(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     preparation: &ExecutionPreparation,
@@ -12024,7 +12341,7 @@ fn finish_session_external_turn_lifecycle(
 /// Updates one session phase in the retained workspace snapshot.
 /// 更新保留工作区快照中的单个会话阶段。
 fn apply_session_phase(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     phase: SessionRunPhase,
@@ -12368,7 +12685,7 @@ fn legacy_vmm_injection_cancelled_event(
 /// Appends or extends one streaming transcript record.
 /// 追加或扩展单条流式转录记录。
 fn append_stream_delta_record(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     record_id_slot: &mut Option<String>,
@@ -12547,7 +12864,7 @@ fn conversation_message_from_session_entry(
 /// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
 /// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
 fn spawn_webui_context_compaction_task(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
@@ -12582,7 +12899,7 @@ fn spawn_webui_context_compaction_task(
     });
     let task_state = state.clone();
     let task_app = app.clone();
-    let handle = tauri::async_runtime::spawn(async move {
+    let handle = spawn_service_task(async move {
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut output_message_id: Option<String> = None;
         let mut terminal_result = request.is_none().then(|| {
@@ -12607,7 +12924,7 @@ fn spawn_webui_context_compaction_task(
                             event,
                         ) {
                             eprintln!(
-                                "[tauri-service] context compaction stream projection failed: {error}"
+                                "[webui-service] context compaction stream projection failed: {error}"
                             );
                         }
                     }
@@ -12668,7 +12985,7 @@ fn spawn_webui_context_compaction_task(
                 Some(String::from("context_compaction")),
             ),
             Err(error) => {
-                eprintln!("[tauri-service] context compaction finish failed: {error}");
+                eprintln!("[webui-service] context compaction finish failed: {error}");
                 let _ = apply_session_phase(
                     &task_app,
                     &task_state,
@@ -12690,7 +13007,7 @@ fn spawn_webui_context_compaction_task(
 /// Applies one prompt-compaction stream event to the retained WebUI transcript.
 /// 将一条提示词压缩流事件应用到保留的 WebUI 转录状态。
 fn apply_webui_context_compaction_stream_event(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     section_id: &str,
@@ -12765,7 +13082,7 @@ fn current_session_title_from_state(
 /// Returns the current compact budget note for one compaction status row.
 /// 返回单条压缩状态行使用的当前预算摘要。
 fn context_compaction_budget_note_from_state(
-    state: &tauri::State<'_, SharedServiceBridgeState>,
+    state: &SharedServiceBridgeState,
     session_id: SessionId,
 ) -> String {
     state
@@ -12826,7 +13143,7 @@ fn append_webui_context_compaction_status_message_to_workspace(
 /// Appends model-produced summary output into the visible compaction body row.
 /// 将模型生成的总结输出追加到可见压缩正文行。
 fn append_webui_context_compaction_output_delta(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     section_id: &str,
@@ -12883,7 +13200,7 @@ fn append_webui_context_compaction_output_delta(
 /// Applies the terminal compaction result, writes its checkpoint, and closes the visible status section.
 /// 应用终态压缩结果、写入检查点，并关闭可见状态分段。
 fn finish_webui_context_compaction_execution(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
@@ -13092,7 +13409,7 @@ fn finish_webui_context_compaction_execution(
 /// Records a failed manual context-compaction attempt without moving the conversation anchor.
 /// 记录失败的手动上下文压缩尝试，并且不移动会话上下文锚点。
 fn fail_webui_context_compaction_execution(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     previous_phase: SessionRunPhase,
@@ -13333,7 +13650,7 @@ fn update_webui_context_compaction_body_state(
 /// Keeps the thinking row collapsed after its streaming phase completes.
 /// 在思考流阶段完成后保持思考行折叠。
 fn collapse_streaming_thinking(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     record_ids: &SessionStreamingRecordIds,
@@ -13355,7 +13672,7 @@ fn collapse_streaming_thinking(
 /// Projects runtime events that have user-facing transcript cards into the retained session state.
 /// 将具备用户可见转录卡片的运行时事件投影到保留的会话状态中。
 fn append_runtime_event_projection(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     session_id: SessionId,
     event: &RuntimeEvent,
@@ -13402,7 +13719,7 @@ fn acknowledge_runtime_event_projection_barrier(event: &RuntimeEvent) {
 /// Consumes one delegate runtime event into the WebUI subagent cache and child transcript state.
 /// 将一条委派运行时事件吸收到 WebUI 子代理缓存与子会话转录状态中。
 fn ingest_webui_subagent_runtime_event(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     _agent_runtime: &AgentRuntimeBridge,
     parent_session_id: SessionId,
@@ -14419,7 +14736,7 @@ fn refresh_webui_subagent_navigation_round_visibility(
 /// Applies one safe canonical conversation checkpoint and persists it off the stream path.
 /// 应用一份安全规范会话检查点，并在流式关键路径外持久化。
 fn apply_conversation_checkpoint(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     controller_runtime: &ControllerRuntimeHandle,
     session_id: SessionId,
@@ -14608,7 +14925,7 @@ fn apply_task_session_execution_report_to_memory_in_place(
 /// The updated workspace snapshot after the terminal report has been applied in memory.
 /// 返回终态报告已经应用到内存后的更新工作区快照。
 fn apply_execution_report_to_memory(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     agent_runtime: &AgentRuntimeBridge,
     report: ExecutionRunReport,
@@ -14804,18 +15121,18 @@ fn apply_execution_report_to_memory(
 /// `completion_request` is the prepared completed-turn hook dispatch request.
 /// `completion_request` 是已准备的完成回合 hook 调度请求。
 fn spawn_conversation_completion_hook_task(
-    app: tauri::AppHandle,
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     completion_request: ConversationCompletionRequest,
 ) {
-    tauri::async_runtime::spawn(async move {
+    spawn_service_task(async move {
         let outcome = completion_request.run().await;
         let session_id = outcome.session_id;
         if let Err(error) = outcome.report.as_ref() {
             eprintln!(
-                "[tauri-service] completed-turn hook failed for {}: {}",
+                "[webui-service] completed-turn hook failed for {}: {}",
                 outcome.turn_id, error
             );
         }
@@ -14841,7 +15158,7 @@ fn spawn_conversation_completion_hook_task(
         }) {
             Ok(workspace_snapshot) => workspace_snapshot,
             Err(error) => {
-                eprintln!("[tauri-service] apply completed-turn hook effects failed: {error}");
+                eprintln!("[webui-service] apply completed-turn hook effects failed: {error}");
                 return;
             }
         };
@@ -14853,7 +15170,7 @@ fn spawn_conversation_completion_hook_task(
         )
         .await
         {
-            eprintln!("[tauri-service] persist completed-turn hook effects failed: {error}");
+            eprintln!("[webui-service] persist completed-turn hook effects failed: {error}");
         }
     });
 }
@@ -14996,7 +15313,7 @@ enum SubagentNavigationRefreshMode {
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot.
 /// 修改保留的工作区快照并发出重建后的工作台快照。
 fn with_workspace_mutation<F>(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     mutate: F,
 ) -> Result<WorkspaceSnapshot, String>
@@ -15014,7 +15331,7 @@ where
 /// Mutates the retained workspace snapshot without rebuilding subagent task navigation.
 /// 修改保留的工作区快照但不重建子代理任务导航。
 fn with_workspace_mutation_preserving_subagent_navigation<F>(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     mutate: F,
 ) -> Result<WorkspaceSnapshot, String>
@@ -15032,7 +15349,7 @@ where
 /// Mutates the retained workspace snapshot and emits a rebuilt workbench snapshot using the requested navigation mode.
 /// 按指定导航模式修改保留的工作区快照并发出重建后的工作台快照。
 fn with_workspace_mutation_with_subagent_navigation_mode<F>(
-    app: &tauri::AppHandle,
+    app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
     subagent_navigation_refresh_mode: SubagentNavigationRefreshMode,
     mutate: F,
@@ -15797,7 +16114,7 @@ fn subagent_run_state_key(run_state: SubagentTaskRunState) -> &'static str {
 /// Refreshes the WebUI workbench after a focused workspace metadata update.
 /// 在一次聚焦的工作区元数据更新后刷新 WebUI 工作台。
 async fn refresh_workbench_snapshot(
-    state: tauri::State<'_, SharedServiceBridgeState>,
+    state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     let (
         controller_runtime,
@@ -16261,7 +16578,7 @@ fn webui_trace(stage: &str, detail: impl AsRef<str>) {
         return;
     }
     eprintln!(
-        "[tauri-service][webui-trace] timestamp={} unix_ms={} stage={} {}",
+        "[webui-service][webui-trace] timestamp={} unix_ms={} stage={} {}",
         current_webui_trace_timestamp(),
         current_unix_millis_text(),
         stage,
@@ -16413,22 +16730,26 @@ fn detached_task_event_label(event: &DetachedTaskRuntimeEvent) -> &'static str {
 
 /// Emits initial service events after the WebView is created.
 /// 在 WebView 创建后发出初始服务事件。
-fn emit_initial_service_events(app: &tauri::AppHandle) {
-    if let Some(state) = app.try_state::<SharedServiceBridgeState>()
-        && let Ok(guard) = state.lock()
-    {
-        emit_service_snapshots(app, &guard.startup, &guard.workbench);
+pub fn emit_initial_service_events(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+) {
+    if let Ok(guard) = state.lock() {
+        emit_service_snapshots(event_emitter, &guard.startup, &guard.workbench);
     }
 }
 
 /// Starts the real service bootstrap on a background thread.
 /// 在后台线程启动真实服务引导流程。
-fn spawn_service_bootstrap(app: tauri::AppHandle) {
+pub fn spawn_service_bootstrap(
+    state: SharedServiceBridgeState,
+    event_emitter: ServiceEventEmitter,
+) {
     std::thread::Builder::new()
-        .name(String::from("vulcan-tauri-service-bootstrap"))
+        .name(String::from("vulcan-webui-service-bootstrap"))
         .spawn(move || {
-            if let Err(error) = run_service_bootstrap(&app) {
-                update_service_failure(&app, error);
+            if let Err(error) = run_service_bootstrap(&state, &event_emitter) {
+                update_service_failure(&state, &event_emitter, error);
             }
         })
         .expect("failed to spawn Vulcan service bootstrap thread");
@@ -16488,35 +16809,35 @@ fn load_service_ai_tool_configuration(
                     )
                 {
                     logs.push(format!(
-                        "[tauri-service] ai capability configuration normalization save failed: {error}"
+                        "[webui-service] ai capability configuration normalization save failed: {error}"
                     ));
                 }
             }
             match loaded.source {
                 vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::DedicatedFile => logs.push(String::from(
-                    "[tauri-service] ai capability configuration loaded from ~/.vulcan/vulcan-ai-capabilities.json",
+                    "[webui-service] ai capability configuration loaded from ~/.vulcan/vulcan-ai-capabilities.json",
                 )),
                 vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::LegacyProviderFile => {
                     match vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
                         &loaded.configuration,
                     ) {
                         Ok(()) => logs.push(String::from(
-                            "[tauri-service] legacy embedded ai capability configuration migrated to ~/.vulcan/vulcan-ai-capabilities.json",
+                            "[webui-service] legacy embedded ai capability configuration migrated to ~/.vulcan/vulcan-ai-capabilities.json",
                         )),
                         Err(error) => logs.push(format!(
-                            "[tauri-service] legacy ai capability configuration migration failed: {error}"
+                            "[webui-service] legacy ai capability configuration migration failed: {error}"
                         )),
                     }
                 }
                 vulcan_agent_runtime::ai_tool_configuration::AiToolConfigurationLoadSource::Default => logs.push(String::from(
-                    "[tauri-service] ai capability configuration uses built-in defaults",
+                    "[webui-service] ai capability configuration uses built-in defaults",
                 )),
             }
             loaded.configuration
         }
         Err(error) => {
             logs.push(format!(
-                "[tauri-service] ai capability configuration load failed, falling back: {error}"
+                "[webui-service] ai capability configuration load failed, falling back: {error}"
             ));
             if provider_configuration.ai_tools.is_default() {
                 PersistedAiToolConfiguration::default()
@@ -16529,9 +16850,12 @@ fn load_service_ai_tool_configuration(
 
 /// Runs the real startup sequence shared with the legacy GUI.
 /// 运行与旧版 GUI 共享的真实启动顺序。
-fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapError> {
+fn run_service_bootstrap(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+) -> Result<(), ServiceBootstrapError> {
     let mut logs = vec![format!(
-        "[tauri-service] workspace root: {}",
+        "[webui-service] workspace root: {}",
         workspace_root().display()
     )];
     let controller_configuration =
@@ -16543,7 +16867,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
     let ai_tool_configuration =
         load_service_ai_tool_configuration(&provider_configuration, &mut logs);
 
-    update_startup(app, "bootstrapping-vldb", &logs, |now| {
+    update_startup(state, event_emitter, "bootstrapping-vldb", &logs, |now| {
         startup_steps_with_status(
             now,
             &[
@@ -16596,105 +16920,119 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         "VLDB",
     )?;
     logs.push(format!(
-        "[tauri-service] vldb ready: {}",
+        "[webui-service] vldb ready: {}",
         controller_report.handle.sqlite_path.display()
     ));
     let controller_runtime = controller_report.handle.clone();
 
-    update_startup(app, "bootstrapping-luaskills", &logs, |now| {
-        startup_steps_with_status(
-            now,
-            &[
-                (
-                    "service-process",
-                    StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
-                ),
-                (
-                    "vldb",
-                    StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
-                ),
-                (
-                    "luaskills",
-                    StartupStepStatus::Running,
-                    "正在初始化 LuaSkills 引擎与技能根",
-                ),
-                (
-                    "token-budget",
-                    StartupStepStatus::Pending,
-                    "等待 LuaSkills 就绪",
-                ),
-                ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                (
-                    "workspace",
-                    StartupStepStatus::Pending,
-                    "等待工作区数据库载入",
-                ),
-            ],
-        )
-    });
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-luaskills",
+        &logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Running,
+                        "正在初始化 LuaSkills 引擎与技能根",
+                    ),
+                    (
+                        "token-budget",
+                        StartupStepStatus::Pending,
+                        "等待 LuaSkills 就绪",
+                    ),
+                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待工作区数据库载入",
+                    ),
+                ],
+            )
+        },
+    );
 
     let luaskills_runtime = bootstrap_step(
-        crate::luaskills_bridge::bootstrap_luaskills(controller_configuration.clone(), |message| {
-            update_luaskills_bootstrap_progress(app, &logs, message)
-        }),
+        vulcan_service_runtime::luaskills_bridge::bootstrap_luaskills(
+            controller_configuration.clone(),
+            |message| update_luaskills_bootstrap_progress(state, event_emitter, &logs, message),
+        ),
         "luaskills",
         "LuaSkills",
     )?;
     let luaskills_catalog = bootstrap_step(
-        crate::luaskills_bridge::load_luaskills_catalog(&luaskills_runtime),
+        vulcan_service_runtime::luaskills_bridge::load_luaskills_catalog(&luaskills_runtime),
         "luaskills",
         "LuaSkills",
     )?;
     logs.push(format!(
-        "[tauri-service] luaskills ready: root={} skills={} entries={}",
+        "[webui-service] luaskills ready: root={} skills={} entries={}",
         luaskills_catalog.runtime_root.display(),
         luaskills_catalog.skills.len(),
         luaskills_catalog.entry_count
     ));
 
-    update_startup(app, "bootstrapping-token-budget", &logs, |now| {
-        startup_steps_with_status(
-            now,
-            &[
-                (
-                    "service-process",
-                    StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
-                ),
-                (
-                    "vldb",
-                    StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
-                ),
-                (
-                    "luaskills",
-                    StartupStepStatus::Ready,
-                    "LuaSkills 引擎与技能目录已就绪",
-                ),
-                (
-                    "token-budget",
-                    StartupStepStatus::Running,
-                    "正在初始化 Token 预算运行时",
-                ),
-                ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                (
-                    "workspace",
-                    StartupStepStatus::Pending,
-                    "等待工作区数据库载入",
-                ),
-            ],
-        )
-    });
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-token-budget",
+        &logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    (
+                        "luaskills",
+                        StartupStepStatus::Ready,
+                        "LuaSkills 引擎与技能目录已就绪",
+                    ),
+                    (
+                        "token-budget",
+                        StartupStepStatus::Running,
+                        "正在初始化 Token 预算运行时",
+                    ),
+                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待工作区数据库载入",
+                    ),
+                ],
+            )
+        },
+    );
 
-    let token_budget_runtime = crate::token_budget_bridge::TauriTokenBudgetRuntime::initialize();
+    let token_budget_runtime =
+        vulcan_service_runtime::token_budget_bridge::TauriTokenBudgetRuntime::initialize();
     logs.push(format!(
-        "[tauri-service] token budget: {}",
+        "[webui-service] token budget: {}",
         token_budget_runtime.status_row()
     ));
 
-    update_startup(app, "bootstrapping-mcp", &logs, |now| {
+    update_startup(state, event_emitter, "bootstrapping-mcp", &logs, |now| {
         startup_steps_with_status(
             now,
             &[
@@ -16729,7 +17067,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
     });
 
     let mcp_runtime = runtime
-        .block_on(crate::mcp_bridge::bootstrap_mcp_runtime(
+        .block_on(vulcan_service_runtime::mcp_bridge::bootstrap_mcp_runtime(
             provider_configuration.clone(),
         ))
         .map_err(|error| {
@@ -16741,7 +17079,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         })?;
     let mcp_catalog = mcp_runtime.catalog();
     logs.push(format!(
-        "[tauri-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
+        "[webui-service] mcp ready: servers={}/{} connected={} tools={} prompts={} resources={}",
         mcp_catalog.enabled_server_count,
         mcp_catalog.configured_server_count,
         mcp_catalog.connected_server_count,
@@ -16761,7 +17099,9 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
                 "LuaSkills 引擎锁已损坏，无法构建工具入口缓存。",
             )
         })?;
-        engine.list_entries_for_authority(::luaskills::SkillManagementAuthority::System)
+        engine.list_entries_for_authority(
+            vulcan_service_runtime::luaskills::SkillManagementAuthority::System,
+        )
     };
     let agent_luaskills_runtime = LuaSkillsRuntimeHandle {
         engine: Arc::clone(&luaskills_runtime.engine),
@@ -16814,19 +17154,9 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         vmm_hook_runtime,
     };
     vulcan_agent_runtime::agent_runtime::tool_runtime_bridge::set_runtime_event_projection_barriers_enabled(true);
-    let service_state = app
-        .try_state::<SharedServiceBridgeState>()
-        .map(|state| state.inner().clone())
-        .ok_or_else(|| {
-            ServiceBootstrapError::new(
-                "service-process",
-                "Core Service",
-                "Tauri 服务状态未注册，无法安装 ask 弹窗事件桥。",
-            )
-        })?;
     install_webui_question_runtime_event_bridge(
-        app,
-        &service_state,
+        event_emitter,
+        state,
         &agent_runtime.question_runtime,
     )
     .map_err(|error| {
@@ -16837,10 +17167,10 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         )
     })?;
     logs.push(String::from(
-        "[tauri-service] agent runtime bridge ready: provider/LuaSkills/MCP/token-budget handles are mounted",
+        "[webui-service] agent runtime bridge ready: provider/LuaSkills/MCP/token-budget handles are mounted",
     ));
 
-    update_startup(app, "loading-workspace", &logs, |now| {
+    update_startup(state, event_emitter, "loading-workspace", &logs, |now| {
         startup_steps_with_status(
             now,
             &[
@@ -16901,7 +17231,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         "Workspace",
     )?;
     logs.push(format!(
-        "[tauri-service] workspace loaded: projects={} sessions={} selected={}",
+        "[webui-service] workspace loaded: projects={} sessions={} selected={}",
         workspace_snapshot.task_projects.len(),
         workspace_snapshot.sessions.len(),
         selected_session_id
@@ -16960,9 +17290,7 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         &BTreeMap::new(),
     );
 
-    if let Some(state) = app.try_state::<SharedServiceBridgeState>()
-        && let Ok(mut guard) = state.lock()
-    {
+    if let Ok(mut guard) = state.lock() {
         guard.startup = startup.clone();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();
@@ -16976,72 +17304,92 @@ fn run_service_bootstrap(app: &tauri::AppHandle) -> Result<(), ServiceBootstrapE
         guard.mcp_runtime = Some(mcp_runtime);
         guard.cached_mcp_catalog = Some(mcp_catalog);
     }
-    emit_service_snapshots(app, &startup, &workbench);
+    mark_webui_service_discovery_ready(state);
+    emit_service_snapshots(event_emitter, &startup, &workbench);
     Ok(())
 }
 
 /// Updates startup state while a bootstrap step is running.
 /// 在引导步骤运行中更新启动状态。
-fn update_startup<F>(app: &tauri::AppHandle, phase: &str, logs: &[String], build_steps: F)
-where
+fn update_startup<F>(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+    phase: &str,
+    logs: &[String],
+    build_steps: F,
+) where
     F: FnOnce(OffsetDateTime) -> Vec<StartupStepSnapshot>,
 {
     let startup = startup_snapshot_with_phase(phase, build_steps(OffsetDateTime::now_utc()), logs);
-    if let Some(state) = app.try_state::<SharedServiceBridgeState>()
-        && let Ok(mut guard) = state.lock()
-    {
+    if let Ok(mut guard) = state.lock() {
         guard.startup = startup.clone();
     }
-    let _ = app.emit(
-        "vulcan://service-event",
+    emit_service_event_with_trace(
+        event_emitter,
+        "startup_snapshot_emit",
         ServiceEvent::Startup(Box::new(startup)),
     );
 }
 
 /// Emits a LuaSkills-specific startup progress snapshot.
 /// 发出 LuaSkills 专用启动进度快照。
-fn update_luaskills_bootstrap_progress(app: &tauri::AppHandle, logs: &[String], message: &str) {
-    update_startup(app, "bootstrapping-luaskills", logs, |now| {
-        startup_steps_with_status(
-            now,
-            &[
-                (
-                    "service-process",
-                    StartupStepStatus::Ready,
-                    "Tauri 本地服务桥接已启动",
-                ),
-                (
-                    "vldb",
-                    StartupStepStatus::Ready,
-                    "VLDB/controller 数据平面已就绪",
-                ),
-                ("luaskills", StartupStepStatus::Running, message),
-                (
-                    "token-budget",
-                    StartupStepStatus::Pending,
-                    "等待 LuaSkills 就绪",
-                ),
-                ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
-                (
-                    "workspace",
-                    StartupStepStatus::Pending,
-                    "等待工作区数据库载入",
-                ),
-            ],
-        )
-    });
+fn update_luaskills_bootstrap_progress(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+    logs: &[String],
+    message: &str,
+) {
+    update_startup(
+        state,
+        event_emitter,
+        "bootstrapping-luaskills",
+        logs,
+        |now| {
+            startup_steps_with_status(
+                now,
+                &[
+                    (
+                        "service-process",
+                        StartupStepStatus::Ready,
+                        "Tauri 本地服务桥接已启动",
+                    ),
+                    (
+                        "vldb",
+                        StartupStepStatus::Ready,
+                        "VLDB/controller 数据平面已就绪",
+                    ),
+                    ("luaskills", StartupStepStatus::Running, message),
+                    (
+                        "token-budget",
+                        StartupStepStatus::Pending,
+                        "等待 LuaSkills 就绪",
+                    ),
+                    ("mcp", StartupStepStatus::Pending, "等待 Token 预算运行时"),
+                    (
+                        "workspace",
+                        StartupStepStatus::Pending,
+                        "等待工作区数据库载入",
+                    ),
+                ],
+            )
+        },
+    );
 }
 
 /// Updates the shared service state after a startup failure.
 /// 在启动失败后更新共享服务状态。
-fn update_service_failure(app: &tauri::AppHandle, error: ServiceBootstrapError) {
+fn update_service_failure(
+    state: &SharedServiceBridgeState,
+    event_emitter: &ServiceEventEmitter,
+    error: ServiceBootstrapError,
+) {
     let logs = vec![
         format!(
-            "[tauri-service] startup failed at {}: {}",
+            "[webui-service] startup failed at {}: {}",
             error.step_label, error.message
         ),
         format!(
-            "[tauri-service] workspace root: {}",
+            "[webui-service] workspace root: {}",
             workspace_root().display()
         ),
     ];
@@ -17051,14 +17399,13 @@ fn update_service_failure(app: &tauri::AppHandle, error: ServiceBootstrapError) 
         &logs,
     );
     let workbench = fallback_workbench_snapshot(&logs);
-    if let Some(state) = app.try_state::<SharedServiceBridgeState>()
-        && let Ok(mut guard) = state.lock()
-    {
+    if let Ok(mut guard) = state.lock() {
         guard.startup = startup.clone();
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench.clone();
     }
-    emit_service_snapshots(app, &startup, &workbench);
+    mark_webui_service_discovery_failed(state);
+    emit_service_snapshots(event_emitter, &startup, &workbench);
 }
 
 /// Builds ordered startup steps for one scoped bootstrap failure.
@@ -17122,17 +17469,17 @@ fn startup_ready_message(step_id: &str) -> String {
 /// Emits startup and workbench snapshots to subscribed WebUI clients.
 /// 向已订阅的 WebUI 客户端发送启动与工作台快照。
 fn emit_service_snapshots(
-    app: &tauri::AppHandle,
+    event_emitter: &ServiceEventEmitter,
     startup: &StartupSnapshot,
     workbench: &WorkbenchSnapshot,
 ) {
     emit_service_event_with_trace(
-        app,
+        event_emitter,
         "startup_snapshot_emit",
         ServiceEvent::Startup(Box::new(startup.clone())),
     );
     emit_service_event_with_trace(
-        app,
+        event_emitter,
         "service_workbench_snapshot_emit",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
@@ -19532,17 +19879,6 @@ fn truncate_string_to_char_boundary(value: &str, max_bytes: usize) -> &str {
     &value[..boundary]
 }
 
-/// Opens one native folder-picker dialog and returns the selected path when confirmed.
-/// 打开一个原生文件夹选择器，并在确认后返回选中的路径。
-fn pick_task_project_folder(initial_directory: &str) -> Result<Option<PathBuf>, String> {
-    let mut dialog = rfd::FileDialog::new().set_title("选择要添加的项目文件夹");
-    let initial_path = Path::new(initial_directory);
-    if initial_path.exists() {
-        dialog = dialog.set_directory(initial_path);
-    }
-    Ok(dialog.pick_folder())
-}
-
 /// Normalizes one project path by resolving it when the host filesystem allows it.
 /// 在宿主文件系统允许时解析并规范化单个项目路径。
 fn normalize_task_project_path(path: &Path) -> PathBuf {
@@ -19682,6 +20018,89 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+
+    /// Ensures every frontend business RPC method has a kernel dispatcher arm.
+    /// 确保每个前端业务 RPC 方法都有服务内核分发分支。
+    #[test]
+    fn frontend_service_rpc_methods_are_dispatched_by_kernel() {
+        let frontend_source = include_str!("../../../apps/vulcan-code-web/src/main.tsx");
+        let kernel_source = include_str!("lib.rs");
+        let methods = frontend_service_rpc_methods(frontend_source);
+        assert!(
+            !methods.is_empty(),
+            "frontend service RPC method extraction should not be empty"
+        );
+        for method in methods {
+            let needle = format!("\"{method}\"");
+            assert!(
+                kernel_source.contains(&needle),
+                "frontend RPC method `{method}` is not present in kernel dispatcher"
+            );
+        }
+    }
+
+    /// Extracts literal serviceClient.request method names from frontend source.
+    /// 从前端源码中提取字面量 serviceClient.request 方法名。
+    fn frontend_service_rpc_methods(source: &str) -> BTreeSet<String> {
+        let mut methods = BTreeSet::new();
+        let mut remaining = source;
+        while let Some(index) = remaining.find("serviceClient.request") {
+            remaining = &remaining[index + "serviceClient.request".len()..];
+            if let Some(method) = first_double_quoted_literal(remaining) {
+                methods.insert(method);
+            }
+        }
+        methods
+    }
+
+    /// Returns the first double-quoted literal in one source fragment.
+    /// 返回单个源码片段中的第一个双引号字面量。
+    fn first_double_quoted_literal(source: &str) -> Option<String> {
+        let start = source.find('"')?;
+        let rest = &source[start + 1..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    }
+
+    /// Test shell host that rejects interactive shell operations.
+    /// 拒绝交互式 shell 操作的测试宿主壳。
+    struct TestServiceShellHost;
+
+    impl ServiceShellHost for TestServiceShellHost {
+        /// Rejects native file picker use in unit tests.
+        /// 在单元测试中拒绝使用原生文件选择器。
+        fn pick_composer_attachment_paths(
+            &self,
+            _filter_label: &str,
+            _filter_extensions: &[&str],
+        ) -> Result<Vec<PathBuf>, String> {
+            Err(String::from(
+                "test shell host does not support file picking",
+            ))
+        }
+
+        /// Rejects host file-manager use in unit tests.
+        /// 在单元测试中拒绝使用宿主文件管理器。
+        fn open_path(&self, _path: &str) -> Result<(), String> {
+            Err(String::from(
+                "test shell host does not support opening paths",
+            ))
+        }
+
+        /// Rejects host browser use in unit tests.
+        /// 在单元测试中拒绝使用宿主浏览器。
+        fn open_url(&self, _url: &str) -> Result<(), String> {
+            Err(String::from(
+                "test shell host does not support opening URLs",
+            ))
+        }
+    }
+
+    /// Builds a shared test shell host.
+    /// 构建共享测试宿主壳。
+    fn test_service_shell_host() -> Arc<dyn ServiceShellHost> {
+        Arc::new(TestServiceShellHost)
+    }
 
     /// Verifies WebUI only reports precheck progress when a concrete precheck turn is active.
     /// 验证 WebUI 只有在存在具体 precheck 回合时才报告 precheck 进度。
@@ -20222,12 +20641,14 @@ mod tests {
             hydrated_session_ids: BTreeSet::new(),
         };
         let state = Arc::new(Mutex::new(ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: Some(workspace_snapshot),
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -20302,12 +20723,14 @@ mod tests {
         let parent_session_id = SessionId::new_v4();
         let task_session_id = SessionId::new_v4();
         let mut guard = ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -20397,12 +20820,14 @@ mod tests {
         let first_task_session_id = SessionId::new_v4();
         let second_task_session_id = SessionId::new_v4();
         let mut guard = ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -20701,6 +21126,7 @@ mod tests {
     /// 构建只包含一个常规父会话的最小服务状态。
     fn test_service_state_with_parent_session(parent_session_id: SessionId) -> ServiceBridgeState {
         ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
@@ -20731,6 +21157,7 @@ mod tests {
             }),
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -20863,8 +21290,8 @@ mod tests {
 
     /// Verifies a stopped kernel suppresses stale legacy stream handles for active-run decisions.
     /// 验证已停止内核会在活动运行判断中抑制过期旧流任务句柄。
-    #[test]
-    fn webui_session_stopped_kernel_suppresses_stale_stream_handle() {
+    #[tokio::test]
+    async fn webui_session_stopped_kernel_suppresses_stale_stream_handle() {
         let session_id = SessionId::new_v4();
         let mut state = test_service_state_with_parent_session(session_id);
 
@@ -20872,7 +21299,7 @@ mod tests {
             .expect("kernel turn should start");
         state
             .active_stream_tasks
-            .insert(session_id, tauri::async_runtime::spawn(async {}));
+            .insert(session_id, spawn_service_task(async {}));
         stop_webui_session_kernel_generation(&mut state, session_id);
 
         assert!(state.active_stream_tasks.contains_key(&session_id));
@@ -20881,14 +21308,14 @@ mod tests {
 
     /// Verifies legacy stream handles alone cannot become the active-run fact source.
     /// 验证旧流任务句柄本身不能成为活动运行事实源。
-    #[test]
-    fn webui_session_active_run_ignores_stream_handle_without_kernel_turn() {
+    #[tokio::test]
+    async fn webui_session_active_run_ignores_stream_handle_without_kernel_turn() {
         let session_id = SessionId::new_v4();
         let mut state = test_service_state_with_parent_session(session_id);
 
         state
             .active_stream_tasks
-            .insert(session_id, tauri::async_runtime::spawn(async {}));
+            .insert(session_id, spawn_service_task(async {}));
 
         assert!(state.active_stream_tasks.contains_key(&session_id));
         assert!(!webui_session_has_active_run(&state, session_id));
@@ -21461,12 +21888,14 @@ mod tests {
         let parent_session_id = SessionId::new_v4();
         let task_session_id = SessionId::new_v4();
         let guard = ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -21541,12 +21970,14 @@ mod tests {
         let parent_session_id = SessionId::new_v4();
         let task_session_id = SessionId::new_v4();
         let mut guard = ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,
@@ -21626,12 +22057,14 @@ mod tests {
         let previous_session_id = SessionId::new_v4();
         let previous_task_id = SessionId::new_v4();
         let mut guard = ServiceBridgeState {
+            shell_host: test_service_shell_host(),
             startup: startup_snapshot_with_phase("ready", Vec::new(), &[]),
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
             agent_runtime: None,
             service_runtime: None,
+            webui_service_discovery: None,
             controller_runtime: None,
             luaskills_runtime: None,
             cached_luaskills_catalog: None,

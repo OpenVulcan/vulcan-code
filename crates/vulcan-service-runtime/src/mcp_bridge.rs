@@ -1,5 +1,5 @@
-//! Minimal MCP runtime bridge used by the Tauri service.
-//! Tauri 服务使用的最小 MCP 运行时桥接层。
+//! Minimal MCP runtime bridge used by the Core Service runtime.
+//! Core Service 运行时使用的最小 MCP 运行时桥接层。
 
 use std::{collections::BTreeMap, path::PathBuf, sync::Arc, time::Duration};
 
@@ -10,8 +10,8 @@ use vulcan_provider_config::config::{
     ProviderConfigurationFile,
 };
 
-/// Long-lived MCP runtime handle retained by the Tauri backend.
-/// 由 Tauri 后端保留的长生命周期 MCP 运行时句柄。
+/// Long-lived MCP runtime handle retained by the service runtime.
+/// 由服务运行时保留的长生命周期 MCP 运行时句柄。
 #[derive(Clone)]
 pub struct TauriMcpRuntimeHandle {
     /// Runtime server snapshots keyed by stable server id.

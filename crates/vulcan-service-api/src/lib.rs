@@ -1,8 +1,47 @@
 //! Shared service API types for Vulcan clients.
 //! Vulcan 客户端共享的服务 API 类型。
 
+use std::{
+    fs,
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    path::{Component, Path, PathBuf},
+    sync::Arc,
+};
+
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD;
+use http_range::HttpRange;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+
+/// Maximum bytes returned for one bounded media range response.
+/// 单个有界媒体 Range 响应返回的最大字节数。
+pub const SERVICE_MEDIA_RANGE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Redacted secret placeholder returned through browser-facing HTTP snapshots.
+/// 通过浏览器侧 HTTP 快照返回的敏感信息脱敏占位符。
+pub const WEBUI_REDACTED_SECRET_PLACEHOLDER: &str = "********";
+
+/// Default local port used by the browser-facing WebUI service.
+/// 浏览器侧 WebUI 服务使用的默认本地端口。
+pub const WEBUI_SERVICE_HTTP_PORT: u16 = 17891;
+
+/// Last local port tried by automatic browser-facing service discovery.
+/// 浏览器侧服务自动发现尝试的最后一个本地端口。
+pub const WEBUI_SERVICE_HTTP_PORT_END: u16 = 17920;
+
+/// Environment variable name used to override the browser-facing service port.
+/// 用于覆盖浏览器侧服务端口的环境变量名。
+pub const WEBUI_SERVICE_PORT_ENV: &str = "VULCAN_WEBUI_SERVICE_PORT";
+
+/// Loopback host used by the browser-facing WebUI service.
+/// 浏览器侧 WebUI 服务使用的回环主机。
+pub const WEBUI_SERVICE_LOOPBACK_HOST: &str = "127.0.0.1";
+
+/// Environment variable name used to override the browser-facing WebUI static directory.
+/// 用于覆盖浏览器侧 WebUI 静态目录的环境变量名。
+pub const WEBUI_STATIC_DIR_ENV: &str = "VULCAN_WEBUI_STATIC_DIR";
 
 /// Describes one startup step state exposed by the Core Service.
 /// 描述 Core Service 对外暴露的单个启动步骤状态。
@@ -1625,4 +1664,1341 @@ pub enum ServiceEvent {
     /// Partial workbench update event.
     /// 局部工作台更新事件。
     WorkbenchDelta(Box<WorkbenchDeltaEnvelope>),
+}
+
+/// Receives one service event emitted by the Core Service boundary.
+/// 接收 Core Service 边界发出的单个服务事件。
+pub trait ServiceEventSink: Send + Sync {
+    /// Delivers one service event to the concrete sink implementation.
+    /// 将单个服务事件投递给具体 sink 实现。
+    fn emit_service_event(&self, event: ServiceEvent);
+}
+
+/// Multiplexes service events to all registered client-facing sinks.
+/// 将服务事件复用分发到所有已注册的客户端 sink。
+#[derive(Clone)]
+pub struct ServiceEventEmitter {
+    /// Ordered event sinks used by the emitter.
+    /// 事件发送器使用的有序 sink 列表。
+    sinks: Arc<Vec<Arc<dyn ServiceEventSink>>>,
+}
+
+impl ServiceEventEmitter {
+    /// Builds an event emitter from an ordered sink list.
+    /// 使用有序 sink 列表构建事件发送器。
+    pub fn new(sinks: Vec<Arc<dyn ServiceEventSink>>) -> Self {
+        Self {
+            sinks: Arc::new(sinks),
+        }
+    }
+
+    /// Emits one event to every registered sink while minimizing event clones.
+    /// 向所有已注册 sink 发送单个事件，并尽量减少事件克隆。
+    pub fn emit(&self, event: ServiceEvent) {
+        let Some((last, leading)) = self.sinks.split_last() else {
+            return;
+        };
+        for sink in leading {
+            sink.emit_service_event(event.clone());
+        }
+        last.emit_service_event(event);
+    }
+}
+
+/// Browser-facing service discovery snapshot shared by health checks and clients.
+/// 健康检查与客户端共享的浏览器侧服务发现快照。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebuiServiceDiscoverySnapshot {
+    /// Human-readable service status.
+    /// 人类可读的服务状态。
+    pub status: String,
+    /// Browser-facing base URL.
+    /// 面向浏览器的基础 URL。
+    pub base_url: String,
+    /// Loopback host used by the service bridge.
+    /// 服务桥接层使用的回环主机。
+    pub host: String,
+    /// TCP port used by the service bridge.
+    /// 服务桥接层使用的 TCP 端口。
+    pub port: u16,
+    /// Owning process id.
+    /// 拥有该服务的进程标识。
+    pub pid: u32,
+    /// UTC startup timestamp in Unix milliseconds.
+    /// UTC 启动时间戳，单位为 Unix 毫秒。
+    pub started_at: String,
+    /// Instance access token for loopback browser clients.
+    /// 提供给回环浏览器客户端的实例访问令牌。
+    pub service_token: String,
+}
+
+/// Service discovery status used while the HTTP bridge is bound but startup is still running.
+/// HTTP 桥接已绑定但启动流程仍在运行时使用的服务发现状态。
+pub const WEBUI_SERVICE_DISCOVERY_STATUS_STARTING: &str = "starting";
+
+/// Service discovery status used after the full service bootstrap has completed.
+/// 完整服务引导完成后使用的服务发现状态。
+pub const WEBUI_SERVICE_DISCOVERY_STATUS_READY: &str = "ready";
+
+/// Service discovery status used after service bootstrap fails.
+/// 服务引导失败后使用的服务发现状态。
+pub const WEBUI_SERVICE_DISCOVERY_STATUS_FAILED: &str = "failed";
+
+/// Builds one browser-facing WebUI service discovery snapshot with an explicit status.
+/// 使用显式状态构建一个浏览器侧 WebUI 服务发现快照。
+///
+/// # Parameters
+/// 参数
+/// `status` is the service readiness marker, `port` is the bound loopback service port, `pid` is the owner process id, `started_at` is the startup timestamp, and `service_token` is the instance access token.
+/// `status` 是服务就绪标记，`port` 是已绑定的回环服务端口，`pid` 是拥有进程标识，`started_at` 是启动时间戳，`service_token` 是实例访问令牌。
+///
+/// # Returns
+/// 返回值
+/// A discovery snapshot suitable for health responses and discovery files.
+/// 返回适用于健康响应和发现文件的发现快照。
+pub fn webui_service_discovery_snapshot_with_status(
+    status: impl Into<String>,
+    port: u16,
+    pid: u32,
+    started_at: impl Into<String>,
+    service_token: impl Into<String>,
+) -> WebuiServiceDiscoverySnapshot {
+    let base_url = format!("http://{WEBUI_SERVICE_LOOPBACK_HOST}:{port}");
+    WebuiServiceDiscoverySnapshot {
+        status: status.into(),
+        base_url,
+        host: String::from(WEBUI_SERVICE_LOOPBACK_HOST),
+        port,
+        pid,
+        started_at: started_at.into(),
+        service_token: service_token.into(),
+    }
+}
+
+/// Builds one starting browser-facing WebUI service discovery snapshot.
+/// 构建一个 starting 状态的浏览器侧 WebUI 服务发现快照。
+///
+/// # Parameters
+/// 参数
+/// `port` is the bound loopback service port, `pid` is the owner process id, `started_at` is the startup timestamp, and `service_token` is the instance access token.
+/// `port` 是已绑定的回环服务端口，`pid` 是拥有进程标识，`started_at` 是启动时间戳，`service_token` 是实例访问令牌。
+///
+/// # Returns
+/// 返回值
+/// A discovery snapshot that advertises a reachable but not-yet-ready service.
+/// 返回表示服务可访问但尚未就绪的发现快照。
+pub fn webui_service_starting_discovery_snapshot(
+    port: u16,
+    pid: u32,
+    started_at: impl Into<String>,
+    service_token: impl Into<String>,
+) -> WebuiServiceDiscoverySnapshot {
+    webui_service_discovery_snapshot_with_status(
+        WEBUI_SERVICE_DISCOVERY_STATUS_STARTING,
+        port,
+        pid,
+        started_at,
+        service_token,
+    )
+}
+
+/// Builds one ready browser-facing WebUI service discovery snapshot.
+/// 构建一个 ready 状态的浏览器侧 WebUI 服务发现快照。
+///
+/// # Parameters
+/// 参数
+/// `port` is the bound loopback service port, `pid` is the owner process id, `started_at` is the startup timestamp, and `service_token` is the instance access token.
+/// `port` 是已绑定的回环服务端口，`pid` 是拥有进程标识，`started_at` 是启动时间戳，`service_token` 是实例访问令牌。
+///
+/// # Returns
+/// 返回值
+/// A discovery snapshot suitable for health responses and discovery files.
+/// 返回适用于健康响应和发现文件的发现快照。
+pub fn webui_service_ready_discovery_snapshot(
+    port: u16,
+    pid: u32,
+    started_at: impl Into<String>,
+    service_token: impl Into<String>,
+) -> WebuiServiceDiscoverySnapshot {
+    webui_service_discovery_snapshot_with_status(
+        WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+        port,
+        pid,
+        started_at,
+        service_token,
+    )
+}
+
+/// Browser-facing RPC request body shared by HTTP transports.
+/// HTTP 传输共享的浏览器侧 RPC 请求体。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebuiServiceRpcHttpRequest {
+    /// Logical service method name.
+    /// 逻辑服务方法名。
+    pub method: String,
+    /// Optional JSON parameter object.
+    /// 可选 JSON 参数对象。
+    pub params: Option<serde_json::Value>,
+}
+
+/// Browser-facing RPC response body shared by HTTP transports.
+/// HTTP 传输共享的浏览器侧 RPC 响应体。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebuiServiceRpcHttpResponse {
+    /// Whether the RPC call succeeded.
+    /// RPC 调用是否成功。
+    pub ok: bool,
+    /// Successful response payload.
+    /// 成功响应载荷。
+    pub result: Option<serde_json::Value>,
+    /// Normalized error payload.
+    /// 标准化错误载荷。
+    pub error: Option<WebuiServiceRpcHttpError>,
+}
+
+/// Browser-facing RPC error payload shared by HTTP transports.
+/// HTTP 传输共享的浏览器侧 RPC 错误载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WebuiServiceRpcHttpError {
+    /// Stable machine-readable error code.
+    /// 稳定的机器可读错误码。
+    pub code: String,
+    /// Human-readable error message.
+    /// 人类可读错误消息。
+    pub message: String,
+}
+
+/// Builds one successful browser-facing RPC envelope and redacts secrets in place.
+/// 构建单个成功的浏览器侧 RPC 信封，并原地脱敏敏感信息。
+///
+/// # Parameters
+/// 参数
+/// `result` is the JSON payload produced by the service method.
+/// `result` 是服务方法生成的 JSON 载荷。
+///
+/// # Returns
+/// 返回值
+/// A normalized successful RPC envelope safe to send to browser clients.
+/// 返回可安全发送给浏览器客户端的标准化成功 RPC 信封。
+pub fn webui_service_rpc_success_envelope(
+    mut result: serde_json::Value,
+) -> WebuiServiceRpcHttpResponse {
+    redact_webui_service_rpc_secrets(&mut result);
+    WebuiServiceRpcHttpResponse {
+        ok: true,
+        result: Some(result),
+        error: None,
+    }
+}
+
+/// Builds one failed browser-facing RPC envelope.
+/// 构建单个失败的浏览器侧 RPC 信封。
+///
+/// # Parameters
+/// 参数
+/// `code` is the stable machine-readable error code, and `message` is the human-readable error.
+/// `code` 是稳定的机器可读错误码，`message` 是人类可读错误消息。
+///
+/// # Returns
+/// 返回值
+/// A normalized failed RPC envelope.
+/// 返回标准化失败 RPC 信封。
+pub fn webui_service_rpc_error_envelope(
+    code: impl Into<String>,
+    message: impl Into<String>,
+) -> WebuiServiceRpcHttpResponse {
+    WebuiServiceRpcHttpResponse {
+        ok: false,
+        result: None,
+        error: Some(WebuiServiceRpcHttpError {
+            code: code.into(),
+            message: message.into(),
+        }),
+    }
+}
+
+/// Redacts sensitive fields before a value crosses the browser-facing HTTP boundary.
+/// 在值跨越浏览器侧 HTTP 边界前脱敏敏感字段。
+///
+/// # Parameters
+/// 参数
+/// `value` is the JSON RPC result payload to sanitize in place.
+/// `value` 是需要原地脱敏的 JSON RPC 结果载荷。
+pub fn redact_webui_service_rpc_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, nested) in map.iter_mut() {
+                if webui_service_rpc_secret_key_should_be_redacted(key) {
+                    if nested
+                        .as_str()
+                        .is_some_and(|secret| !secret.trim().is_empty())
+                    {
+                        *nested = serde_json::Value::String(String::from(
+                            WEBUI_REDACTED_SECRET_PLACEHOLDER,
+                        ));
+                    }
+                    continue;
+                }
+                redact_webui_service_rpc_secrets(nested);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_webui_service_rpc_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Returns whether one JSON key carries a browser-visible secret.
+/// 返回一个 JSON 字段名是否携带浏览器可见敏感信息。
+///
+/// # Parameters
+/// 参数
+/// `key` is the JSON object key being inspected.
+/// `key` 是正在检查的 JSON 对象字段名。
+///
+/// # Returns
+/// 返回值
+/// `true` when the key should be redacted for HTTP clients.
+/// 当该字段应对 HTTP 客户端脱敏时返回 `true`。
+pub fn webui_service_rpc_secret_key_should_be_redacted(key: &str) -> bool {
+    matches!(
+        key,
+        "apiKey"
+            | "api_key"
+            | "grpcApiKey"
+            | "grpc_api_key"
+            | "accessToken"
+            | "access_token"
+            | "refreshToken"
+            | "refresh_token"
+            | "clientSecret"
+            | "client_secret"
+            | "secret"
+    )
+}
+
+/// Converts a browser WebUI request path into a traversal-safe relative static path.
+/// 将浏览器 WebUI 请求路径转换为防穿越的相对静态路径。
+///
+/// # Parameters
+/// 参数
+/// `request_path` is the URL path received by the browser-facing static route.
+/// `request_path` 是浏览器侧静态路由收到的 URL 路径。
+///
+/// # Returns
+/// 返回值
+/// A relative path rooted under the WebUI static bundle directory.
+/// 返回位于 WebUI 静态包目录下的相对路径。
+pub fn webui_static_relative_path(request_path: &str) -> Result<PathBuf, String> {
+    let trimmed = request_path.trim_start_matches('/');
+    let normalized = if trimmed.is_empty() {
+        "index.html"
+    } else {
+        trimmed
+    };
+    let mut relative_path = PathBuf::new();
+    for segment in normalized.split('/') {
+        if segment.is_empty() {
+            continue;
+        }
+        if segment == "." || segment == ".." || segment.contains('\\') || segment.contains(':') {
+            return Err(String::from("invalid WebUI static path segment"));
+        }
+        relative_path.push(segment);
+    }
+    if relative_path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(String::from("invalid WebUI static path traversal"));
+    }
+    Ok(relative_path)
+}
+
+/// Infers a conservative MIME type for WebUI static assets.
+/// 为 WebUI 静态资源推断保守 MIME 类型。
+///
+/// # Parameters
+/// 参数
+/// `path` is the resolved static file path or relative static asset path.
+/// `path` 是已解析的静态文件路径或相对静态资源路径。
+///
+/// # Returns
+/// 返回值
+/// A static MIME type suitable for HTTP response headers.
+/// 返回适用于 HTTP 响应头的静态 MIME 类型。
+pub fn webui_static_mime_type(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") | Some("mjs") => "text/javascript; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("wasm") => "application/wasm",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("map") => "application/json; charset=utf-8",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Framework-neutral static file response returned by the WebUI static pipeline.
+/// WebUI 静态文件管线返回的框架无关静态响应。
+pub struct ServiceStaticResponse {
+    /// Numeric HTTP status code.
+    /// 数字 HTTP 状态码。
+    pub status: u16,
+    /// Response headers preserved in insertion order.
+    /// 按插入顺序保留的响应头。
+    pub headers: Vec<(String, String)>,
+    /// Response body bytes.
+    /// 响应体字节。
+    pub body: Vec<u8>,
+}
+
+/// Resolves the WebUI static root from an optional override and fallback directory.
+/// 根据可选覆盖目录和回退目录解析 WebUI 静态根目录。
+///
+/// # Parameters
+/// 参数
+/// `override_path` is the raw configured static directory and `fallback_path` is the bundled dist directory.
+/// `override_path` 是原始配置静态目录，`fallback_path` 是随包发布的 dist 目录。
+///
+/// # Returns
+/// 返回值
+/// The first existing directory, preferring the override path when valid.
+/// 返回第一个存在的目录，并在覆盖目录有效时优先使用覆盖目录。
+pub fn webui_static_root_from_candidates(
+    override_path: Option<&str>,
+    fallback_path: Option<PathBuf>,
+) -> Option<PathBuf> {
+    let override_path = override_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .filter(|path| path.is_dir());
+    if override_path.is_some() {
+        return override_path;
+    }
+    fallback_path.filter(|path| path.is_dir())
+}
+
+/// Builds one WebUI static response from a configured static root.
+/// 从已配置的静态根目录构建单个 WebUI 静态响应。
+///
+/// # Parameters
+/// 参数
+/// `static_root` is the optional WebUI bundle directory, `request_path` is the browser path, `cache_control` is the response cache policy, and `missing_message` is the 404 text.
+/// `static_root` 是可选 WebUI 包目录，`request_path` 是浏览器路径，`cache_control` 是响应缓存策略，`missing_message` 是 404 文本。
+///
+/// # Returns
+/// 返回值
+/// A framework-neutral static response ready for HTTP adapter conversion.
+/// 返回可供 HTTP 适配器转换的框架无关静态响应。
+pub fn build_webui_static_response(
+    static_root: Option<&Path>,
+    request_path: &str,
+    cache_control: &str,
+    missing_message: &str,
+) -> ServiceStaticResponse {
+    let Some(static_root) = static_root else {
+        return service_static_text_response(404, missing_message);
+    };
+    match webui_static_file_path_for_request(static_root, request_path) {
+        Ok(Some(path)) => build_webui_static_file_response(path, cache_control),
+        Ok(None) => service_static_text_response(404, missing_message),
+        Err(error) => service_static_text_response(400, &error),
+    }
+}
+
+/// Resolves one request path into a safe WebUI static file path.
+/// 将单个请求路径解析为安全的 WebUI 静态文件路径。
+///
+/// # Parameters
+/// 参数
+/// `static_root` is the WebUI bundle directory and `request_path` is the browser route path.
+/// `static_root` 是 WebUI 包目录，`request_path` 是浏览器路由路径。
+///
+/// # Returns
+/// 返回值
+/// `Some(path)` for an existing static file or SPA fallback, `None` when no file should be served.
+/// 对存在的静态文件或 SPA 回退返回 `Some(path)`，无可服务文件时返回 `None`。
+pub fn webui_static_file_path_for_request(
+    static_root: &Path,
+    request_path: &str,
+) -> Result<Option<PathBuf>, String> {
+    let relative_path = webui_static_relative_path(request_path)?;
+    let file_path = static_root.join(&relative_path);
+    if file_path.is_file() {
+        return Ok(Some(file_path));
+    }
+    if relative_path.extension().is_some() {
+        return Ok(None);
+    }
+    let index_path = static_root.join("index.html");
+    if index_path.is_file() {
+        return Ok(Some(index_path));
+    }
+    Ok(None)
+}
+
+/// Builds one static WebUI file response with a conservative content type.
+/// 使用保守的内容类型构建单个 WebUI 静态文件响应。
+fn build_webui_static_file_response(path: PathBuf, cache_control: &str) -> ServiceStaticResponse {
+    match fs::read(&path) {
+        Ok(bytes) => ServiceStaticResponse {
+            status: 200,
+            headers: vec![
+                (
+                    String::from("content-type"),
+                    String::from(webui_static_mime_type(&path)),
+                ),
+                (String::from("cache-control"), String::from(cache_control)),
+            ],
+            body: bytes,
+        },
+        Err(error) => {
+            service_static_text_response(500, &format!("failed to read WebUI static file: {error}"))
+        }
+    }
+}
+
+/// Builds one text response for browser-service static file failures.
+/// 为浏览器服务静态文件失败场景构建单个文本响应。
+fn service_static_text_response(status: u16, message: &str) -> ServiceStaticResponse {
+    ServiceStaticResponse {
+        status,
+        headers: vec![(
+            String::from("content-type"),
+            String::from("text/plain; charset=utf-8"),
+        )],
+        body: message.as_bytes().to_vec(),
+    }
+}
+
+/// Returns whether one browser Origin string may access the loopback WebUI service.
+/// 返回单个浏览器 Origin 字符串是否允许访问回环 WebUI 服务。
+///
+/// # Parameters
+/// 参数
+/// `origin` is the raw Origin header value.
+/// `origin` 是原始 Origin 请求头值。
+///
+/// # Returns
+/// 返回值
+/// `true` for trusted Tauri origins and loopback HTTP origins.
+/// 对受信任的 Tauri 来源和回环 HTTP 来源返回 `true`。
+pub fn webui_service_origin_text_is_allowed(origin: &str) -> bool {
+    let Some((scheme, remainder)) = origin.split_once("://") else {
+        return false;
+    };
+    let host_port = remainder.split('/').next().unwrap_or_default();
+    let host = if let Some(rest) = host_port.strip_prefix('[') {
+        rest.split(']').next().unwrap_or_default()
+    } else {
+        host_port.split(':').next().unwrap_or_default()
+    };
+    if scheme == "tauri" {
+        return host.eq_ignore_ascii_case("localhost");
+    }
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "localhost" | "127.0.0.1" | "::1"
+    )
+}
+
+/// Returns whether a required browser Origin value is present and allowed.
+/// 返回必需的浏览器 Origin 值是否存在且被允许。
+///
+/// # Parameters
+/// 参数
+/// `origin` is the optional raw Origin header value extracted by the transport adapter.
+/// `origin` 是传输适配层提取出的可选原始 Origin 请求头值。
+///
+/// # Returns
+/// 返回值
+/// `true` only when the Origin header exists and passes loopback origin validation.
+/// 仅当 Origin 请求头存在且通过回环来源校验时返回 `true`。
+pub fn webui_service_required_origin_text_is_allowed(origin: Option<&str>) -> bool {
+    origin.is_some_and(webui_service_origin_text_is_allowed)
+}
+
+/// Returns whether browser service token locations contain the current instance token.
+/// 返回浏览器服务令牌位置是否包含当前实例令牌。
+///
+/// # Parameters
+/// 参数
+/// `header_token` is the optional token header, `query` is the raw query string, and `expected_token` is the generated instance token.
+/// `header_token` 是可选令牌请求头，`query` 是原始查询字符串，`expected_token` 是生成的实例令牌。
+///
+/// # Returns
+/// 返回值
+/// `true` when either header or query token matches the expected token.
+/// 当 header 或 query 中的令牌与期望令牌匹配时返回 `true`。
+pub fn webui_service_request_token_values_are_valid(
+    header_token: Option<&str>,
+    query: Option<&str>,
+    expected_token: &str,
+) -> bool {
+    if expected_token.trim().is_empty() {
+        return false;
+    }
+    if header_token.is_some_and(|token| webui_service_token_matches(token, expected_token)) {
+        return true;
+    }
+    query
+        .and_then(webui_service_token_from_query)
+        .is_some_and(|token| webui_service_token_matches(&token, expected_token))
+}
+
+/// Extracts the service token value from a URL query string.
+/// 从 URL 查询字符串中提取服务令牌值。
+///
+/// # Parameters
+/// 参数
+/// `query` is the raw query string without the leading question mark.
+/// `query` 是不带问号前缀的原始查询字符串。
+///
+/// # Returns
+/// 返回值
+/// The first decoded `token` or `serviceToken` query parameter when present.
+/// 存在时返回首个解码后的 `token` 或 `serviceToken` 查询参数。
+pub fn webui_service_token_from_query(query: &str) -> Option<String> {
+    for pair in query.split('&') {
+        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+        if key != "token" && key != "serviceToken" {
+            continue;
+        }
+        return percent_decode_query_component(value);
+    }
+    None
+}
+
+/// Compares two browser service tokens.
+/// 比较两个浏览器服务令牌。
+///
+/// # Parameters
+/// 参数
+/// `actual` is the token supplied by the request, and `expected` is the generated token.
+/// `actual` 是请求提供的令牌，`expected` 是生成的令牌。
+///
+/// # Returns
+/// 返回值
+/// `true` when both token strings are exactly equal after trimming request whitespace.
+/// 当两个令牌字符串在裁剪请求空白后完全一致时返回 `true`。
+pub fn webui_service_token_matches(actual: &str, expected: &str) -> bool {
+    actual.trim() == expected
+}
+
+/// Resolves candidate browser-facing local service ports from an optional override value.
+/// 根据可选覆盖值解析浏览器侧本地服务候选端口。
+///
+/// # Parameters
+/// 参数
+/// `port_override` is the raw configured port value, usually read from `WEBUI_SERVICE_PORT_ENV`.
+/// `port_override` 是原始配置端口值，通常来自 `WEBUI_SERVICE_PORT_ENV`。
+///
+/// # Returns
+/// 返回值
+/// A single override port when valid, otherwise the default discovery range.
+/// 覆盖值有效时返回单个端口，否则返回默认发现端口范围。
+pub fn webui_service_http_bind_ports_from_override(port_override: Option<&str>) -> Vec<u16> {
+    if let Some(port) = port_override
+        .map(str::trim)
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+    {
+        return vec![port];
+    }
+    webui_service_http_default_bind_ports()
+}
+
+/// Returns the default browser-facing local service discovery port range.
+/// 返回浏览器侧本地服务默认发现端口范围。
+pub fn webui_service_http_default_bind_ports() -> Vec<u16> {
+    (WEBUI_SERVICE_HTTP_PORT..=WEBUI_SERVICE_HTTP_PORT_END).collect()
+}
+
+/// Resolves the shared browser service discovery file path.
+/// 解析共享浏览器服务发现文件路径。
+///
+/// # Parameters
+/// 参数
+/// `home_dir` is the optional user home directory and `temp_dir` is the fallback temporary directory.
+/// `home_dir` 是可选用户主目录，`temp_dir` 是回退临时目录。
+///
+/// # Returns
+/// 返回值
+/// The path where browser hosts can discover the current service endpoint.
+/// 返回浏览器宿主可发现当前服务端点的路径。
+pub fn webui_service_discovery_snapshot_path(
+    home_dir: Option<PathBuf>,
+    temp_dir: PathBuf,
+) -> PathBuf {
+    home_dir
+        .unwrap_or(temp_dir)
+        .join(".vulcan")
+        .join("code")
+        .join("webui-service.json")
+}
+
+/// Decodes one URL query component enough for opaque service tokens.
+/// 对单个 URL 查询组件进行足以支持不透明服务令牌的解码。
+fn percent_decode_query_component(value: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut index = 0usize;
+    let raw = value.as_bytes();
+    while index < raw.len() {
+        match raw[index] {
+            b'+' => {
+                bytes.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < raw.len() => {
+                let high = hex_digit_value(raw[index + 1])?;
+                let low = hex_digit_value(raw[index + 2])?;
+                bytes.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                bytes.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Converts one ASCII hex digit into its numeric value.
+/// 将单个 ASCII 十六进制字符转换为数值。
+fn hex_digit_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// Framework-neutral media response returned by the Core Service media pipeline.
+/// Core Service 媒体管线返回的框架无关媒体响应。
+pub struct ServiceMediaResponse {
+    /// Numeric HTTP status code.
+    /// 数字 HTTP 状态码。
+    pub status: u16,
+    /// Response headers preserved in insertion order.
+    /// 按插入顺序保留的响应头。
+    pub headers: Vec<(String, String)>,
+    /// Response body bytes.
+    /// 响应体字节。
+    pub body: Vec<u8>,
+}
+
+/// Decodes one URL-safe base64 media route segment into a local filesystem path.
+/// 将单个 URL 安全 base64 媒体路由片段解码为本地文件系统路径。
+pub fn service_media_path_from_encoded_route_segment(
+    encoded_path: &str,
+) -> Result<PathBuf, String> {
+    let path_bytes = BASE64_URL_SAFE_NO_PAD
+        .decode(encoded_path)
+        .map_err(|error| format!("媒体路径解码失败：{error}"))?;
+    let path_text = String::from_utf8(path_bytes)
+        .map_err(|error| format!("媒体路径不是有效 UTF-8：{error}"))?;
+    Ok(PathBuf::from(path_text))
+}
+
+/// Builds one shared media file response with optional HTTP range support.
+/// 构建单个带可选 HTTP Range 支持的共享媒体文件响应。
+pub fn build_service_media_file_response(
+    media_path: PathBuf,
+    is_head: bool,
+    range_header: Option<&str>,
+) -> Result<ServiceMediaResponse, String> {
+    if !is_allowed_service_media_asset_path(&media_path) {
+        return Ok(service_media_error_response(
+            403,
+            "媒体路径不是允许的媒体资源类型。",
+        ));
+    }
+
+    let mut file = match File::open(&media_path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(service_media_error_response(404, "媒体文件不存在。"));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return Ok(service_media_error_response(403, "没有权限读取媒体文件。"));
+        }
+        Err(error) => return Err(format!("无法打开媒体文件：{error}")),
+    };
+    let file_len = file
+        .metadata()
+        .map_err(|error| format!("无法读取媒体文件元数据：{error}"))?
+        .len();
+    let mime_type = infer_service_media_asset_mime_type(&media_path);
+    let mut headers = service_media_base_headers(mime_type);
+
+    if is_head {
+        headers.push((String::from("content-length"), file_len.to_string()));
+        return Ok(ServiceMediaResponse {
+            status: 200,
+            headers,
+            body: Vec::new(),
+        });
+    }
+
+    if let Some(range_header) = range_header {
+        let range = single_service_media_http_range(range_header, file_len)?;
+        let range_start = range.start;
+        let range_end = range.start + range.length - 1;
+        let mut body = Vec::with_capacity(range.length as usize);
+        file.seek(SeekFrom::Start(range_start))
+            .map_err(|error| format!("无法定位媒体范围：{error}"))?;
+        file.take(range.length)
+            .read_to_end(&mut body)
+            .map_err(|error| format!("无法读取媒体范围：{error}"))?;
+        headers.push((
+            String::from("content-range"),
+            format!("bytes {range_start}-{range_end}/{file_len}"),
+        ));
+        headers.push((String::from("content-length"), body.len().to_string()));
+        return Ok(ServiceMediaResponse {
+            status: 206,
+            headers,
+            body,
+        });
+    }
+
+    let mut body = Vec::with_capacity(file_len.min(SERVICE_MEDIA_RANGE_MAX_BYTES) as usize);
+    file.read_to_end(&mut body)
+        .map_err(|error| format!("无法读取媒体文件：{error}"))?;
+    headers.push((String::from("content-length"), file_len.to_string()));
+    Ok(ServiceMediaResponse {
+        status: 200,
+        headers,
+        body,
+    })
+}
+
+/// Returns whether a media path belongs to the generated attachment storage tree.
+/// 返回媒体路径是否属于生成附件存储树。
+fn is_allowed_generated_service_media_path(path: &Path) -> bool {
+    let normalized_components = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str().map(|text| text.to_ascii_lowercase()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    normalized_components
+        .windows(3)
+        .any(|window| window == [".vulcan", "code", "attachments"])
+}
+
+/// Returns whether a media path can be served by the local media route.
+/// 返回媒体路径是否允许通过本地媒体路由提供。
+fn is_allowed_service_media_asset_path(path: &Path) -> bool {
+    if is_allowed_generated_service_media_path(path) {
+        return true;
+    }
+    has_supported_service_media_asset_extension(path)
+}
+
+/// Returns whether a local path extension is supported by the media route.
+/// 返回本地路径扩展名是否受媒体路由支持。
+fn has_supported_service_media_asset_extension(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|extension| extension.to_str())
+            .map(|extension| extension.to_ascii_lowercase())
+            .as_deref(),
+        Some("png")
+            | Some("jpg")
+            | Some("jpeg")
+            | Some("webp")
+            | Some("gif")
+            | Some("bmp")
+            | Some("svg")
+            | Some("mp4")
+            | Some("webm")
+            | Some("mov")
+            | Some("mkv")
+            | Some("mp3")
+            | Some("wav")
+            | Some("m4a")
+            | Some("aac")
+            | Some("flac")
+            | Some("ogg")
+            | Some("pdf")
+    )
+}
+
+/// Parses one bounded HTTP range for media playback.
+/// 解析一个有上限的媒体播放 HTTP 范围。
+fn single_service_media_http_range(range_header: &str, file_len: u64) -> Result<HttpRange, String> {
+    let mut ranges = HttpRange::parse(range_header, file_len)
+        .map_err(|error| format!("媒体 Range 请求无效：{error:?}"))?;
+    let Some(mut range) = ranges.drain(..).next() else {
+        return Err(String::from("媒体 Range 请求为空。"));
+    };
+    if range.start >= file_len || range.length == 0 {
+        return Err(String::from("媒体 Range 请求越界。"));
+    }
+    range.length = range.length.min(SERVICE_MEDIA_RANGE_MAX_BYTES);
+    Ok(range)
+}
+
+/// Builds one plain text error response for the generated media route.
+/// 为生成媒体路由构建一个纯文本错误响应。
+pub fn service_media_error_response(status: u16, message: &str) -> ServiceMediaResponse {
+    ServiceMediaResponse {
+        status,
+        headers: vec![
+            (
+                String::from("access-control-allow-origin"),
+                String::from("*"),
+            ),
+            (
+                String::from("content-type"),
+                String::from("text/plain; charset=utf-8"),
+            ),
+        ],
+        body: message.as_bytes().to_vec(),
+    }
+}
+
+/// Builds common headers shared by media success responses.
+/// 构建媒体成功响应共享的公共响应头。
+fn service_media_base_headers(mime_type: String) -> Vec<(String, String)> {
+    vec![
+        (
+            String::from("access-control-allow-origin"),
+            String::from("*"),
+        ),
+        (
+            String::from("access-control-expose-headers"),
+            String::from("content-range"),
+        ),
+        (String::from("accept-ranges"), String::from("bytes")),
+        (String::from("cache-control"), String::from("no-store")),
+        (String::from("content-type"), mime_type),
+    ]
+}
+
+/// Infers a conservative MIME type from a generated media path extension.
+/// 根据生成媒体路径扩展名推断保守 MIME 类型。
+fn infer_service_media_asset_mime_type(path: &Path) -> String {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => String::from("image/png"),
+        Some("jpg") | Some("jpeg") => String::from("image/jpeg"),
+        Some("webp") => String::from("image/webp"),
+        Some("gif") => String::from("image/gif"),
+        Some("bmp") => String::from("image/bmp"),
+        Some("svg") => String::from("image/svg+xml"),
+        Some("mp4") => String::from("video/mp4"),
+        Some("webm") => String::from("video/webm"),
+        Some("mov") => String::from("video/quicktime"),
+        Some("mkv") => String::from("video/x-matroska"),
+        Some("mp3") => String::from("audio/mpeg"),
+        Some("wav") => String::from("audio/wav"),
+        Some("m4a") => String::from("audio/mp4"),
+        Some("aac") => String::from("audio/aac"),
+        Some("flac") => String::from("audio/flac"),
+        Some("ogg") => String::from("audio/ogg"),
+        Some("pdf") => String::from("application/pdf"),
+        _ => String::from("application/octet-stream"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_HTTP_PORT, WEBUI_SERVICE_HTTP_PORT_END,
+        WEBUI_SERVICE_LOOPBACK_HOST, WEBUI_STATIC_DIR_ENV, build_webui_static_response,
+        redact_webui_service_rpc_secrets, webui_service_discovery_snapshot_path,
+        webui_service_http_bind_ports_from_override, webui_service_http_default_bind_ports,
+        webui_service_origin_text_is_allowed, webui_service_ready_discovery_snapshot,
+        webui_service_request_token_values_are_valid,
+        webui_service_required_origin_text_is_allowed,
+        webui_service_rpc_secret_key_should_be_redacted, webui_service_token_from_query,
+        webui_static_file_path_for_request, webui_static_mime_type, webui_static_relative_path,
+        webui_static_root_from_candidates,
+    };
+    use serde_json::{Value, json};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    /// Verifies browser-facing RPC payloads redact nested secret fields.
+    /// 验证浏览器侧 RPC 载荷会递归脱敏嵌套敏感字段。
+    #[test]
+    fn browser_rpc_redacts_nested_secret_fields() {
+        let mut payload = json!({
+            "aiCapabilityVendors": [
+                {
+                    "vendorId": "minimax",
+                    "apiKey": "real-secret",
+                    "targetChoices": [
+                        {
+                            "label": "safe"
+                        }
+                    ]
+                }
+            ],
+            "vmm": {
+                "grpcApiKey": "grpc-secret",
+                "grpcTarget": "http://127.0.0.1"
+            },
+            "empty": {
+                "api_key": ""
+            }
+        });
+
+        redact_webui_service_rpc_secrets(&mut payload);
+
+        assert_eq!(
+            payload
+                .pointer("/aiCapabilityVendors/0/apiKey")
+                .and_then(Value::as_str),
+            Some(WEBUI_REDACTED_SECRET_PLACEHOLDER)
+        );
+        assert_eq!(
+            payload.pointer("/vmm/grpcApiKey").and_then(Value::as_str),
+            Some(WEBUI_REDACTED_SECRET_PLACEHOLDER)
+        );
+        assert_eq!(
+            payload.pointer("/empty/api_key").and_then(Value::as_str),
+            Some("")
+        );
+    }
+
+    /// Verifies the browser-facing secret key matcher covers current settings fields.
+    /// 验证浏览器侧敏感字段匹配器覆盖当前设置字段。
+    #[test]
+    fn browser_rpc_secret_key_matcher_covers_settings_fields() {
+        for key in ["apiKey", "api_key", "grpcApiKey", "grpc_api_key"] {
+            assert!(webui_service_rpc_secret_key_should_be_redacted(key));
+        }
+        assert!(!webui_service_rpc_secret_key_should_be_redacted("baseUrl"));
+        assert!(!webui_service_rpc_secret_key_should_be_redacted(
+            "targetChoices"
+        ));
+    }
+
+    /// Verifies WebUI static route paths cannot traverse outside the bundle directory.
+    /// 验证 WebUI 静态路由路径不能穿越到包目录外。
+    #[test]
+    fn webui_static_relative_path_rejects_traversal() {
+        assert!(webui_static_relative_path("/../secret.txt").is_err());
+        assert!(webui_static_relative_path("/assets/..\\secret.txt").is_err());
+        assert!(webui_static_relative_path("/C:/Windows/system.ini").is_err());
+    }
+
+    /// Verifies WebUI static route paths normalize common safe asset paths.
+    /// 验证 WebUI 静态路由路径会规范化常见安全资源路径。
+    #[test]
+    fn webui_static_relative_path_accepts_safe_assets() {
+        assert_eq!(
+            webui_static_relative_path("/").unwrap(),
+            PathBuf::from("index.html")
+        );
+        assert_eq!(
+            webui_static_relative_path("/assets/app.js").unwrap(),
+            PathBuf::from("assets").join("app.js")
+        );
+    }
+
+    /// Verifies WebUI static assets get browser-safe MIME types.
+    /// 验证 WebUI 静态资源会得到浏览器安全 MIME 类型。
+    #[test]
+    fn webui_static_mime_type_covers_vite_assets() {
+        assert_eq!(
+            webui_static_mime_type(Path::new("index.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            webui_static_mime_type(Path::new("assets/app.js")),
+            "text/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            webui_static_mime_type(Path::new("assets/app.css")),
+            "text/css; charset=utf-8"
+        );
+    }
+
+    /// Verifies WebUI static file resolution serves direct files and SPA fallback.
+    /// 验证 WebUI 静态文件解析会提供直接文件和 SPA 回退。
+    #[test]
+    fn webui_static_file_path_resolves_direct_files_and_spa_fallback() {
+        let root = temporary_service_api_test_directory("webui-static-path");
+        fs::create_dir_all(root.join("assets")).expect("create assets directory");
+        fs::write(root.join("index.html"), "<html></html>").expect("write index");
+        fs::write(root.join("assets").join("app.js"), "console.log(1);").expect("write js");
+
+        assert_eq!(
+            webui_static_file_path_for_request(&root, "/assets/app.js").unwrap(),
+            Some(root.join("assets").join("app.js"))
+        );
+        assert_eq!(
+            webui_static_file_path_for_request(&root, "/conversation/abc").unwrap(),
+            Some(root.join("index.html"))
+        );
+        assert_eq!(
+            webui_static_file_path_for_request(&root, "/assets/missing.js").unwrap(),
+            None
+        );
+
+        fs::remove_dir_all(root).expect("remove temp directory");
+    }
+
+    /// Verifies WebUI static response builder returns framework-neutral HTTP data.
+    /// 验证 WebUI 静态响应构建器会返回框架无关 HTTP 数据。
+    #[test]
+    fn webui_static_response_builder_returns_neutral_http_data() {
+        let root = temporary_service_api_test_directory("webui-static-response");
+        fs::create_dir_all(&root).expect("create static root");
+        fs::write(root.join("index.html"), "<html>ok</html>").expect("write index");
+
+        let response = build_webui_static_response(
+            Some(&root),
+            "/",
+            "no-cache",
+            "Vulcan WebUI static bundle is not available.",
+        );
+        assert_eq!(response.status, 200);
+        assert!(response.body.starts_with(b"<html>"));
+        assert!(
+            response
+                .headers
+                .iter()
+                .any(|(key, value)| key == "cache-control" && value == "no-cache")
+        );
+
+        let missing = build_webui_static_response(None, "/", "no-cache", "missing");
+        assert_eq!(missing.status, 404);
+        assert_eq!(String::from_utf8(missing.body).unwrap(), "missing");
+
+        fs::remove_dir_all(root).expect("remove temp directory");
+    }
+
+    /// Verifies WebUI static root resolution prefers a valid override directory.
+    /// 验证 WebUI 静态根目录解析会优先使用有效覆盖目录。
+    #[test]
+    fn webui_static_root_prefers_valid_override_directory() {
+        let override_root = temporary_service_api_test_directory("webui-static-override");
+        let fallback_root = temporary_service_api_test_directory("webui-static-fallback");
+        fs::create_dir_all(&override_root).expect("create override root");
+        fs::create_dir_all(&fallback_root).expect("create fallback root");
+
+        assert_eq!(
+            webui_static_root_from_candidates(override_root.to_str(), Some(fallback_root.clone())),
+            Some(override_root.clone())
+        );
+        assert_eq!(WEBUI_STATIC_DIR_ENV, "VULCAN_WEBUI_STATIC_DIR");
+
+        fs::remove_dir_all(override_root).expect("remove override root");
+        fs::remove_dir_all(fallback_root).expect("remove fallback root");
+    }
+
+    /// Verifies WebUI static root resolution falls back when override is missing.
+    /// 验证 WebUI 静态根目录解析会在覆盖目录缺失时回退。
+    #[test]
+    fn webui_static_root_falls_back_when_override_is_missing() {
+        let fallback_root = temporary_service_api_test_directory("webui-static-fallback-only");
+        fs::create_dir_all(&fallback_root).expect("create fallback root");
+
+        assert_eq!(
+            webui_static_root_from_candidates(Some("  "), Some(fallback_root.clone())),
+            Some(fallback_root.clone())
+        );
+        assert_eq!(
+            webui_static_root_from_candidates(Some("Z:/definitely/not/here"), None),
+            None
+        );
+
+        fs::remove_dir_all(fallback_root).expect("remove fallback root");
+    }
+
+    /// Verifies browser-facing CORS only allows loopback HTTP and trusted Tauri origins.
+    /// 验证浏览器侧 CORS 仅允许回环 HTTP 与受信任 Tauri 来源。
+    #[test]
+    fn webui_service_origin_allows_only_loopback_http_and_tauri_origins() {
+        for origin in [
+            "http://localhost:5173",
+            "https://localhost:443",
+            "http://127.0.0.1:5173",
+            "http://[::1]:5173",
+            "tauri://localhost",
+        ] {
+            assert!(webui_service_origin_text_is_allowed(origin));
+        }
+
+        for origin in [
+            "http://example.com",
+            "https://evil.localhost.example",
+            "file://localhost",
+            "tauri://example.com",
+        ] {
+            assert!(!webui_service_origin_text_is_allowed(origin));
+        }
+    }
+
+    /// Verifies browser WebSocket origins must be present before they are accepted.
+    /// 验证浏览器 WebSocket 来源必须存在才会被接受。
+    #[test]
+    fn webui_service_required_origin_rejects_missing_origin() {
+        assert!(webui_service_required_origin_text_is_allowed(Some(
+            "http://127.0.0.1:5173"
+        )));
+        assert!(!webui_service_required_origin_text_is_allowed(None));
+        assert!(!webui_service_required_origin_text_is_allowed(Some(
+            "http://example.com"
+        )));
+    }
+
+    /// Verifies browser service token validation accepts header and query tokens.
+    /// 验证浏览器服务令牌校验接受请求头与查询参数中的令牌。
+    #[test]
+    fn webui_service_token_validation_accepts_header_and_query() {
+        let expected = "abc 123";
+
+        assert!(webui_service_request_token_values_are_valid(
+            Some("abc 123"),
+            None,
+            expected
+        ));
+        assert!(webui_service_request_token_values_are_valid(
+            None,
+            Some("token=abc%20123"),
+            expected
+        ));
+        assert!(webui_service_request_token_values_are_valid(
+            None,
+            Some("serviceToken=abc+123"),
+            expected
+        ));
+        assert!(!webui_service_request_token_values_are_valid(
+            Some("wrong"),
+            Some("token=wrong"),
+            expected
+        ));
+    }
+
+    /// Verifies browser service token query parser decodes supported parameter names.
+    /// 验证浏览器服务令牌查询解析器会解码受支持的参数名。
+    #[test]
+    fn webui_service_token_query_parser_decodes_values() {
+        assert_eq!(
+            webui_service_token_from_query("token=abc%20123&x=1"),
+            Some(String::from("abc 123"))
+        );
+        assert_eq!(
+            webui_service_token_from_query("x=1&serviceToken=abc%2B123"),
+            Some(String::from("abc+123"))
+        );
+        assert_eq!(webui_service_token_from_query("x=1"), None);
+    }
+
+    /// Verifies default browser service port discovery keeps the documented range.
+    /// 验证默认浏览器服务端口发现保持文档约定范围。
+    #[test]
+    fn webui_service_default_bind_ports_cover_discovery_range() {
+        let ports = webui_service_http_default_bind_ports();
+
+        assert_eq!(ports.first(), Some(&WEBUI_SERVICE_HTTP_PORT));
+        assert_eq!(ports.last(), Some(&WEBUI_SERVICE_HTTP_PORT_END));
+        assert_eq!(
+            ports.len(),
+            usize::from(WEBUI_SERVICE_HTTP_PORT_END - WEBUI_SERVICE_HTTP_PORT + 1)
+        );
+    }
+
+    /// Verifies browser service port override accepts only valid nonzero ports.
+    /// 验证浏览器服务端口覆盖只接受有效的非零端口。
+    #[test]
+    fn webui_service_bind_ports_accept_valid_override_only() {
+        assert_eq!(
+            webui_service_http_bind_ports_from_override(Some(" 19000 ")),
+            vec![19000]
+        );
+        assert_eq!(
+            webui_service_http_bind_ports_from_override(Some("0")),
+            webui_service_http_default_bind_ports()
+        );
+        assert_eq!(
+            webui_service_http_bind_ports_from_override(Some("not-a-port")),
+            webui_service_http_default_bind_ports()
+        );
+    }
+
+    /// Verifies browser service discovery path prefers home and falls back to temp.
+    /// 验证浏览器服务发现路径优先使用主目录并在缺失时回退临时目录。
+    #[test]
+    fn webui_service_discovery_path_uses_home_or_temp_root() {
+        let home = PathBuf::from("C:/Users/example");
+        let temp = PathBuf::from("C:/Temp");
+
+        assert_eq!(
+            webui_service_discovery_snapshot_path(Some(home.clone()), temp.clone()),
+            home.join(".vulcan").join("code").join("webui-service.json")
+        );
+        assert_eq!(
+            webui_service_discovery_snapshot_path(None, temp.clone()),
+            temp.join(".vulcan").join("code").join("webui-service.json")
+        );
+    }
+
+    /// Verifies browser service discovery snapshots keep URL and host fields consistent.
+    /// 验证浏览器服务发现快照保持 URL 与主机字段一致。
+    #[test]
+    fn webui_service_ready_discovery_snapshot_builds_consistent_url() {
+        let snapshot =
+            webui_service_ready_discovery_snapshot(17891, 42, "123456789", "token-value");
+
+        assert_eq!(snapshot.status, "ready");
+        assert_eq!(snapshot.host, WEBUI_SERVICE_LOOPBACK_HOST);
+        assert_eq!(snapshot.base_url, "http://127.0.0.1:17891");
+        assert_eq!(snapshot.port, 17891);
+        assert_eq!(snapshot.pid, 42);
+        assert_eq!(snapshot.started_at, "123456789");
+        assert_eq!(snapshot.service_token, "token-value");
+    }
+
+    /// Creates a unique temporary directory path for service-api tests.
+    /// 为 service-api 测试创建唯一临时目录路径。
+    fn temporary_service_api_test_directory(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!("vulcan-service-api-{label}-{unique}"))
+    }
 }

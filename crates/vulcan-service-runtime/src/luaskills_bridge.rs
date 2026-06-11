@@ -1,5 +1,5 @@
-//! Minimal LuaSkills bootstrap used by the Tauri service bridge.
-//! Tauri 服务桥接层使用的最小 LuaSkills 引导模块。
+//! Minimal LuaSkills bootstrap used by the Core Service runtime.
+//! Core Service 运行时使用的最小 LuaSkills 引导模块。
 
 use std::{
     fs,
@@ -70,8 +70,8 @@ impl RootSkillBootstrapSourceType {
     }
 }
 
-/// Long-lived LuaSkills handle retained by the Tauri backend.
-/// 由 Tauri 后端保留的长生命周期 LuaSkills 句柄。
+/// Long-lived LuaSkills handle retained by the service runtime.
+/// 由服务运行时保留的长生命周期 LuaSkills 句柄。
 #[derive(Clone)]
 pub struct TauriLuaSkillsHandle {
     /// Shared LuaSkills engine kept alive for later plugin panels and hooks.

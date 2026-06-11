@@ -1,0 +1,22 @@
+[package]
+name = "vulcan-service-runtime"
+description = "Runtime adapters used by the Vulcan Core Service."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+luaskills.workspace = true
+serde.workspace = true
+serde_yaml = "0.9"
+tokio.workspace = true
+vulcan-mcp-runtime.workspace = true
+vulcan-provider-config.workspace = true
+vulcan-runtime-assets.workspace = true
+vulcan-token-counter.workspace = true
+vulcan-vmm.workspace = true
+vulcan-workspace-store.workspace = true

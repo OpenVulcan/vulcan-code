@@ -138,6 +138,15 @@ import type {
 import { DiffReviewPanel } from "@/diff/DiffReviewPanel";
 import { hasRenderableDiff, parseUnifiedDiff } from "@/diff/parseDiff";
 import type { DiffPanelSnapshot, DiffReviewSelection, WorkspaceDiffSnapshotResponse } from "@/diff/types";
+import {
+  BROWSER_SERVICE_CONNECTION_EVENT,
+  createBrowserServiceTransport,
+  createServiceClient,
+  isBrowserServiceRuntime,
+  type BrowserServiceConnectionDetail,
+} from "@/service";
+import { createShellClient } from "@/shell";
+import { localMediaSourceUrl } from "@/resources/localMedia";
 import { toast } from "sonner";
 import * as LucideIcons from "lucide-react";
 import {
@@ -580,8 +589,8 @@ function defaultAiCapabilityTargetOrder(capabilities: AiCapabilitySummary[]): Ma
   return order;
 }
 
-// serializeAiCapabilityTargetOrder converts local target order into the Tauri command payload shape.
-// serializeAiCapabilityTargetOrder 将本地目标顺序转换为 Tauri 命令载荷形态。
+// serializeAiCapabilityTargetOrder converts local target order into the service payload shape.
+// serializeAiCapabilityTargetOrder 将本地目标顺序转换为服务载荷形态。
 function serializeAiCapabilityTargetOrder(order: Map<AiCapabilityKind, string[]>): Record<string, string[]> {
   return Object.fromEntries(Array.from(order.entries()).map(([kind, selectors]) => [kind, selectors]));
 }
@@ -947,40 +956,35 @@ const conversationToolDetailPromiseCache = new Map<string, Promise<ToolDetailPay
 // conversationToolDetailMediaCache 在转录重新挂载之间稳定保存生成媒体卡片。
 const conversationToolDetailMediaCache = new Map<string, GeneratedMediaAttachment[]>();
 
-// TauriInvoke invokes a backend command when the app runs inside Tauri.
-// TauriInvoke 在应用运行于 Tauri 内部时调用后端命令。
-type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
+// serviceClient is the single business service facade used by the WebUI.
+// serviceClient 是 WebUI 使用的唯一业务服务门面。
+const serviceClient = createServiceClient(
+  createBrowserServiceTransport(),
+);
 
-// TauriListen subscribes to backend service events when running inside Tauri.
-// TauriListen 在 Tauri 内运行时订阅后端服务事件。
-type TauriListen = <T>(event: string, handler: (event: { payload: T }) => void) => Promise<() => void>;
+// BROWSER_SERVICE_CONNECTION_TOAST_ID keeps reconnect notifications collapsed into one toast.
+// BROWSER_SERVICE_CONNECTION_TOAST_ID 将重连通知折叠到同一个 toast。
+const BROWSER_SERVICE_CONNECTION_TOAST_ID = "browser-service-connection";
 
-// TauriWindowHandle exposes only the window APIs used by the custom title bar.
-// TauriWindowHandle 仅暴露自定义标题栏使用的窗口 API。
-interface TauriWindowHandle {
-  // Minimizes the current desktop window.
-  // 最小化当前桌面窗口。
-  minimize: () => Promise<void>;
-  // Toggles the current desktop window maximized state.
-  // 切换当前桌面窗口最大化状态。
-  toggleMaximize: () => Promise<void>;
-  // Returns whether the current desktop window is maximized.
-  // 返回当前桌面窗口是否处于最大化状态。
-  isMaximized: () => Promise<boolean>;
-  // Closes the current desktop window.
-  // 关闭当前桌面窗口。
-  close: () => Promise<void>;
-  // Subscribes to native window resize events.
-  // 订阅原生窗口尺寸变化事件。
-  onResized: (handler: () => void) => Promise<() => void>;
+// shellClient is the single client-host facade used by the WebUI.
+// shellClient 是 WebUI 使用的唯一客户端宿主门面。
+const shellClient = createShellClient();
+
+// hasServiceRuntime returns whether the page can use a backend service transport.
+// hasServiceRuntime 返回页面是否可以使用后端服务传输。
+function hasServiceRuntime(): boolean {
+  return isBrowserServiceRuntime();
 }
 
-// ServiceEvent describes the tagged event emitted by the Tauri service bridge.
-// ServiceEvent 描述 Tauri 服务桥接层发出的带标签事件。
-type ServiceEvent =
-  | { kind: "startup"; payload: StartupSnapshot }
-  | { kind: "workbench"; payload: WorkbenchSnapshot }
-  | { kind: "workbenchDelta"; payload: WorkbenchDeltaEnvelope };
+// serviceBootstrapErrorIsRetryable returns whether the initial service load should be retried.
+// serviceBootstrapErrorIsRetryable 判断初始服务加载失败是否应该自动重试。
+function serviceBootstrapErrorIsRetryable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("Browser service is unavailable")
+    || message.includes("Failed to fetch")
+    || message.includes("NetworkError")
+    || message.includes("Load failed");
+}
 
 // WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
 // WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
@@ -999,7 +1003,7 @@ const browserFallbackStartup: StartupSnapshot = {
   ready: true,
   phase: "browser-preview",
   steps: [
-    { id: "service-process", label: "Core Service", status: "warning", message: "浏览器预览模式：未连接 Tauri service bridge" },
+    { id: "service-process", label: "Core Service", status: "warning", message: "浏览器预览模式：未连接本地 Core Service" },
     { id: "luaskills", label: "LuaSkills", status: "pending", message: "等待桌面壳提供真实状态" },
     { id: "vldb", label: "VLDB", status: "pending", message: "等待桌面壳提供真实状态" },
     { id: "mcp", label: "MCP Runtime", status: "pending", message: "等待桌面壳提供真实状态" },
@@ -1383,63 +1387,22 @@ function luaSkillRegistrationLabel(registrationState: string): string {
   return "禁用";
 }
 
-// isTauriRuntime returns whether the WebUI is hosted by the desktop Tauri shell.
-// isTauriRuntime 返回 WebUI 是否运行在 Tauri 桌面壳中。
-function isTauriRuntime(): boolean {
-  return "__TAURI_INTERNALS__" in window;
-}
-
-// resolveInvoke loads the Tauri invoke function when available.
-// resolveInvoke 在可用时加载 Tauri invoke 函数。
-async function resolveInvoke(): Promise<TauriInvoke | null> {
-  if (!isTauriRuntime()) {
-    return null;
-  }
-
-  const api = await import("@tauri-apps/api/core");
-  return api.invoke as TauriInvoke;
-}
-
-// resolveListen loads the Tauri event listener when available.
-// resolveListen 在可用时加载 Tauri 事件监听器。
-async function resolveListen(): Promise<TauriListen | null> {
-  if (!isTauriRuntime()) {
-    return null;
-  }
-
-  const api = await import("@tauri-apps/api/event");
-  return api.listen as TauriListen;
-}
-
-// resolveCurrentWindow loads the Tauri window handle only inside the desktop shell.
-// resolveCurrentWindow 仅在桌面壳内加载 Tauri 当前窗口句柄。
-async function resolveCurrentWindow(): Promise<TauriWindowHandle | null> {
-  if (!isTauriRuntime()) {
-    return null;
-  }
-
-  const api = await import("@tauri-apps/api/window");
-  return api.getCurrentWindow() as TauriWindowHandle;
-}
-
-// loadStartupSnapshot loads startup state from Tauri or fallback data.
-// loadStartupSnapshot 从 Tauri 或回退数据加载启动状态。
+// loadStartupSnapshot loads startup state from the local service or fallback data.
+// loadStartupSnapshot 从本地服务或回退数据加载启动状态。
 async function loadStartupSnapshot(): Promise<StartupSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackStartup;
   }
-  return invoke<StartupSnapshot>("service_startup_snapshot");
+  return serviceClient.request<StartupSnapshot>("startup.snapshot");
 }
 
-// loadWorkbenchSnapshot loads workbench state from Tauri or fallback data.
-// loadWorkbenchSnapshot 从 Tauri 或回退数据加载工作台状态。
+// loadWorkbenchSnapshot loads workbench state from the local service or fallback data.
+// loadWorkbenchSnapshot 从本地服务或回退数据加载工作台状态。
 async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackSnapshot();
   }
-  return invoke<WorkbenchSnapshot>("service_workbench_snapshot");
+  return serviceClient.request<WorkbenchSnapshot>("workbench.snapshot");
 }
 
 // loadWorkspaceDiffSnapshot loads a fresh Git diff snapshot for one project path.
@@ -1450,8 +1413,7 @@ async function loadWorkspaceDiffSnapshot(
   conversationId: string | null,
   request: DiffReviewSelection,
 ): Promise<WorkspaceDiffSnapshotResponse> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return {
       repositoryRoot: workspacePath,
       unifiedDiff: "",
@@ -1461,7 +1423,7 @@ async function loadWorkspaceDiffSnapshot(
       notice: "浏览器预览模式没有连接本地 Git diff 服务。",
     };
   }
-  return invoke<WorkspaceDiffSnapshotResponse>("service_workspace_diff_snapshot", {
+  return serviceClient.request<WorkspaceDiffSnapshotResponse>("workspace.diff.snapshot", {
     workspacePath,
     projectId,
     conversationId,
@@ -1469,21 +1431,19 @@ async function loadWorkspaceDiffSnapshot(
   });
 }
 
-// refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the Tauri service.
-// refreshLuaSkillsCatalog 通过 Tauri 服务刷新 Lua Skills 目录。
+// refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the local service.
+// refreshLuaSkillsCatalog 通过本地服务刷新 Lua Skills 目录。
 async function refreshLuaSkillsCatalog(): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackSnapshot();
   }
-  return invoke<WorkbenchSnapshot>("service_refresh_luaskills_catalog");
+  return serviceClient.request<WorkbenchSnapshot>("service_refresh_luaskills_catalog");
 }
 
-// installLuaSkill installs one Lua Skill package through the Tauri service.
-// installLuaSkill 通过 Tauri 服务安装单个 Lua Skill 包。
+// installLuaSkill installs one Lua Skill package through the local service.
+// installLuaSkill 通过本地服务安装单个 Lua Skill 包。
 async function installLuaSkill(skillId: string, source: string, sourceType: string): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     const normalizedSkillId = skillId.trim() || source.split("/").filter(Boolean).pop() || "preview-skill";
     return updateBrowserFallbackWorkbench((snapshot) => {
       if (snapshot.luaSkills.skills.some((skill) => skill.skillId === normalizedSkillId)) {
@@ -1505,14 +1465,13 @@ async function installLuaSkill(skillId: string, source: string, sourceType: stri
       });
     });
   }
-  return invoke<WorkbenchSnapshot>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
+  return serviceClient.request<WorkbenchSnapshot>("service_install_luaskill", { skillId: skillId.trim() || null, source, sourceType });
 }
 
 // updateLuaSkill updates one managed Lua Skill package.
 // updateLuaSkill 更新单个受管 Lua Skill 包。
 async function updateLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       if (skill) {
@@ -1520,14 +1479,13 @@ async function updateLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
       }
     });
   }
-  return invoke<WorkbenchSnapshot>("service_update_luaskill", { skillId });
+  return serviceClient.request<WorkbenchSnapshot>("service_update_luaskill", { skillId });
 }
 
 // setLuaSkillEnabled toggles one Lua Skill package lifecycle state.
 // setLuaSkillEnabled 切换单个 Lua Skill 包生命周期状态。
 async function setLuaSkillEnabled(skillId: string, enabled: boolean): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       if (skill) {
@@ -1536,26 +1494,24 @@ async function setLuaSkillEnabled(skillId: string, enabled: boolean): Promise<Wo
       }
     });
   }
-  return invoke<WorkbenchSnapshot>("service_set_luaskill_enabled", { skillId, enabled });
+  return serviceClient.request<WorkbenchSnapshot>("service_set_luaskill_enabled", { skillId, enabled });
 }
 
 // uninstallLuaSkill removes one ordinary Lua Skill package.
 // uninstallLuaSkill 移除单个普通 Lua Skill 包。
 async function uninstallLuaSkill(skillId: string): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.luaSkills.skills = snapshot.luaSkills.skills.filter((skill) => skill.skillId !== skillId || skill.systemOwned);
     });
   }
-  return invoke<WorkbenchSnapshot>("service_uninstall_luaskill", { skillId });
+  return serviceClient.request<WorkbenchSnapshot>("service_uninstall_luaskill", { skillId });
 }
 
 // setLuaSkillToolRegistrationState persists one Lua Skill tool visibility state.
 // setLuaSkillToolRegistrationState 持久化单个 Lua Skill 工具可见性状态。
 async function setLuaSkillToolRegistrationState(skillId: string, localName: string, registrationState: string): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.luaSkills.skills.find((item) => item.skillId === skillId);
       const tool = skill?.tools.find((item) => item.localName === localName);
@@ -1565,48 +1521,44 @@ async function setLuaSkillToolRegistrationState(skillId: string, localName: stri
       }
     });
   }
-  return invoke<WorkbenchSnapshot>("service_set_luaskill_tool_registration_state", { skillId, localName, registrationState });
+  return serviceClient.request<WorkbenchSnapshot>("service_set_luaskill_tool_registration_state", { skillId, localName, registrationState });
 }
 
-// refreshAgentSkillsCatalog refreshes prompt-based Agent Skills through the Tauri service.
-// refreshAgentSkillsCatalog 通过 Tauri 服务刷新基于提示词的 Agent Skills。
+// refreshAgentSkillsCatalog refreshes prompt-based Agent Skills through the local service.
+// refreshAgentSkillsCatalog 通过本地服务刷新基于提示词的 Agent Skills。
 async function refreshAgentSkillsCatalog(): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackSnapshot();
   }
-  return invoke<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
+  return serviceClient.request<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
 }
 
 // installSystemAgentSkills syncs bundled system Agent Skills.
 // installSystemAgentSkills 同步内置系统 Agent Skills。
 async function installSystemAgentSkills(): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackSnapshot();
   }
-  return invoke<WorkbenchSnapshot>("service_install_system_agent_skills");
+  return serviceClient.request<WorkbenchSnapshot>("service_install_system_agent_skills");
 }
 
 // setAgentSkillsEnabled persists the global Agent Skills switch.
 // setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
 async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogSummary> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
       snapshot.agentSkills.globalEnabled = enabled;
       snapshot.agentSkills.skills = snapshot.agentSkills.skills.map((skill) => ({ ...skill, enabled }));
     });
     return snapshot.agentSkills;
   }
-  return invoke<AgentSkillsCatalogSummary>("service_set_agent_skills_enabled", { enabled });
+  return serviceClient.request<AgentSkillsCatalogSummary>("service_set_agent_skills_enabled", { enabled });
 }
 
 // setAgentSkillEnabled persists one global Agent Skill state.
 // setAgentSkillEnabled 持久化单个全局 Agent Skill 状态。
 async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<AgentSkillsCatalogSummary> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     const snapshot = updateBrowserFallbackWorkbench((snapshot) => {
       const skill = snapshot.agentSkills.skills.find((item) => item.name === name);
       if (skill) {
@@ -1615,34 +1567,31 @@ async function setAgentSkillEnabled(name: string, enabled: boolean): Promise<Age
     });
     return snapshot.agentSkills;
   }
-  return invoke<AgentSkillsCatalogSummary>("service_set_agent_skill_enabled", { name, enabled });
+  return serviceClient.request<AgentSkillsCatalogSummary>("service_set_agent_skill_enabled", { name, enabled });
 }
 
 // loadProjectAgentSkillOverrides loads project-local Agent Skill overrides.
 // loadProjectAgentSkillOverrides 加载项目本地 Agent Skill 覆盖。
 async function loadProjectAgentSkillOverrides(projectId: string): Promise<Record<string, string>> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return {};
   }
-  return invoke<Record<string, string>>("service_load_project_agent_skill_overrides", { projectId });
+  return serviceClient.request<Record<string, string>>("service_load_project_agent_skill_overrides", { projectId });
 }
 
 // setAgentSkillProjectState persists one project-level Agent Skill tri-state override.
 // setAgentSkillProjectState 持久化单个项目级 Agent Skill 三态覆盖。
 async function setAgentSkillProjectState(projectId: string, name: string, stateKey: ProjectAgentSkillState): Promise<void> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return;
   }
-  return invoke<void>("service_set_agent_skill_project_state", { projectId, name, stateKey });
+  return serviceClient.request<void>("service_set_agent_skill_project_state", { projectId, name, stateKey });
 }
 
 // runVmmMemoryAction executes one VMM memory workbench action.
 // runVmmMemoryAction 执行单个 VMM 记忆工作台动作。
 async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promise<VmmMemoryActionResult> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return {
       action: request.action,
       summary: `预览模式已执行 ${request.action}`,
@@ -1651,34 +1600,31 @@ async function runVmmMemoryAction(request: VmmMemoryActionRequest): Promise<VmmM
       response: previewVmmActionResponse(request.action),
     };
   }
-  return invoke<VmmMemoryActionResult>("service_run_vmm_memory_action", { request });
+  return serviceClient.request<VmmMemoryActionResult>("service_run_vmm_memory_action", { request });
 }
 
 // loadProjectVmmConfig loads the editable project-scoped VMM draft.
 // loadProjectVmmConfig 加载可编辑的项目级 VMM 草稿。
 async function loadProjectVmmConfig(projectId: string): Promise<VmmConfigDraftSummary> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackSnapshot().vmmMemory.projectDraft;
   }
-  return invoke<VmmConfigDraftSummary>("service_load_project_vmm_config", { projectId });
+  return serviceClient.request<VmmConfigDraftSummary>("service_load_project_vmm_config", { projectId });
 }
 
 // previewProjectAttachmentCleanup builds a project-scoped managed attachment cleanup preview.
 // previewProjectAttachmentCleanup 构建项目级托管附件清理预览。
 async function previewProjectAttachmentCleanup(request: ProjectAttachmentCleanupRequest): Promise<ProjectAttachmentCleanupPreviewSummary> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return projectAttachmentPreviewFallback(request);
   }
-  return invoke<ProjectAttachmentCleanupPreviewSummary>("service_preview_project_attachment_cleanup", { request });
+  return serviceClient.request<ProjectAttachmentCleanupPreviewSummary>("service_preview_project_attachment_cleanup", { request });
 }
 
 // executeProjectAttachmentCleanup runs one project-scoped managed attachment cleanup.
 // executeProjectAttachmentCleanup 执行单次项目级托管附件清理。
 async function executeProjectAttachmentCleanup(request: ProjectAttachmentCleanupRequest): Promise<ProjectAttachmentCleanupReportSummary> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return {
       cutoffDate: request.cutoffDate,
       purgedAssetCount: 0,
@@ -1690,14 +1636,13 @@ async function executeProjectAttachmentCleanup(request: ProjectAttachmentCleanup
       summary: "预览模式不会删除托管附件。",
     };
   }
-  return invoke<ProjectAttachmentCleanupReportSummary>("service_execute_project_attachment_cleanup", { request });
+  return serviceClient.request<ProjectAttachmentCleanupReportSummary>("service_execute_project_attachment_cleanup", { request });
 }
 
 // saveVmmMemoryConfig persists one VMM memory configuration draft.
 // saveVmmMemoryConfig 持久化单个 VMM 记忆配置草稿。
 async function saveVmmMemoryConfig(request: VmmConfigSaveRequest): Promise<WorkbenchSnapshot> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return updateBrowserFallbackWorkbench((snapshot) => {
       if (request.scope === "project") {
         snapshot.vmmMemory.projectDraft = { ...request.draft, hasOverride: request.draft.hasOverride };
@@ -1721,7 +1666,7 @@ async function saveVmmMemoryConfig(request: VmmConfigSaveRequest): Promise<Workb
       };
     });
   }
-  return invoke<WorkbenchSnapshot>("service_save_vmm_memory_config", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_vmm_memory_config", { request });
 }
 
 // previewVmmActionResponse returns a compact browser-preview result for one VMM action.
@@ -1750,24 +1695,22 @@ function previewVmmActionResponse(action: string): unknown {
   return { ok: true, preview: true };
 }
 
-// loadConversationMessages loads one conversation body from the Tauri service.
-// loadConversationMessages 从 Tauri 服务加载单个会话正文。
+// loadConversationMessages loads one conversation body from the local service.
+// loadConversationMessages 从本地服务加载单个会话正文。
 async function loadConversationMessages(sessionId: string): Promise<ConversationMessage[]> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return browserFallbackWorkbenchState.messages.filter((message) => message.conversationId === sessionId);
   }
-  return invoke<ConversationMessage[]>("service_session_messages", { sessionId });
+  return serviceClient.request<ConversationMessage[]>("service_session_messages", { sessionId });
 }
 
 // loadConversationToolDetail loads one hidden structured tool result detail on demand.
 // loadConversationToolDetail 按需加载单条隐藏结构化工具结果详情。
 async function loadConversationToolDetail(detailRef: ConversationDetailRef): Promise<ToolDetailPayload | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<ToolDetailPayload>("service_session_tool_detail", {
+  return serviceClient.request<ToolDetailPayload>("service_session_tool_detail", {
     sessionId: detailRef.sessionId,
     recordId: detailRef.recordId ?? null,
     toolCallId: detailRef.toolCallId ?? null,
@@ -1829,11 +1772,10 @@ async function submitConversationPrompt(
   disabledAiCapabilityTargetSelectors: string[],
   aiCapabilityTargetOrderOverrides: Record<string, string[]>,
 ): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_submit_conversation_prompt", {
+  return serviceClient.request<WorkbenchSnapshot>("service_submit_conversation_prompt", {
     projectId,
     conversationId,
     prompt,
@@ -1849,101 +1791,91 @@ async function submitConversationPrompt(
 // stopConversationRun stops the selected backend conversation run.
 // stopConversationRun 停止当前选中的后端会话运行。
 async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_stop_conversation_run");
+  return serviceClient.request<WorkbenchSnapshot>("service_stop_conversation_run");
 }
 
 // compactSelectedConversationContext starts backend context compaction for the selected conversation.
 // compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
 async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_compact_selected_conversation_context");
+  return serviceClient.request<WorkbenchSnapshot>("service_compact_selected_conversation_context");
 }
 
 // replyPendingQuestion submits ask-tool answers to the blocked backend runtime.
 // replyPendingQuestion 将 ask 工具答案提交给正在阻塞的后端运行时。
 async function replyPendingQuestion(requestId: string, answers: string[][]): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_reply_pending_question", { requestId, answers });
+  return serviceClient.request<WorkbenchSnapshot>("service_reply_pending_question", { requestId, answers });
 }
 
 // rejectPendingQuestion cancels one pending ask-tool request after explicit confirmation.
 // rejectPendingQuestion 在明确确认后取消一个待处理 ask 工具请求。
 async function rejectPendingQuestion(requestId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_reject_pending_question", { requestId });
+  return serviceClient.request<WorkbenchSnapshot>("service_reject_pending_question", { requestId });
 }
 
 // openSubagentPanel asks the backend to switch the active transcript surface to a child task.
 // openSubagentPanel 请求后端把活动转录界面切换到子任务。
 async function openSubagentPanel(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_open_subagent_panel", { parentConversationId, taskId });
+  return serviceClient.request<WorkbenchSnapshot>("service_open_subagent_panel", { parentConversationId, taskId });
 }
 
 // closeSubagentPanel asks the backend to return the active transcript surface to the parent conversation.
 // closeSubagentPanel 请求后端将活动转录界面返回父会话。
 async function closeSubagentPanel(): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_close_subagent_panel");
+  return serviceClient.request<WorkbenchSnapshot>("service_close_subagent_panel");
 }
 
 // stopSubagentTask asks the backend to stop one child task through the shared task runtime.
 // stopSubagentTask 请求后端通过共享任务运行时停止单个子任务。
 async function stopSubagentTask(parentConversationId: string, taskId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_stop_subagent_task", { parentConversationId, taskId });
+  return serviceClient.request<WorkbenchSnapshot>("service_stop_subagent_task", { parentConversationId, taskId });
 }
 
 // editPendingPrompt restores one queued prompt from the selected conversation queue.
 // editPendingPrompt 从当前选中会话队列恢复单条排队提示词。
 async function editPendingPrompt(entryId: string): Promise<PendingPromptSummary | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<PendingPromptSummary>("service_edit_pending_prompt", { entryId });
+  return serviceClient.request<PendingPromptSummary>("service_edit_pending_prompt", { entryId });
 }
 
 // insertPendingPrompt routes one visible queue item through the shared pending-prompt router.
 // insertPendingPrompt 通过共享待发送提示词路由器插入单条可见队列项。
 async function insertPendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_insert_pending_prompt", { entryId });
+  return serviceClient.request<WorkbenchSnapshot>("service_insert_pending_prompt", { entryId });
 }
 
 // removePendingPrompt removes one queued prompt from the selected conversation queue.
 // removePendingPrompt 从当前选中会话队列移除单条排队提示词。
 async function removePendingPrompt(entryId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_remove_pending_prompt", { entryId });
+  return serviceClient.request<WorkbenchSnapshot>("service_remove_pending_prompt", { entryId });
 }
 
 // reorderPendingPrompts persists one iced-compatible pending prompt drop target.
@@ -1953,29 +1885,10 @@ async function reorderPendingPrompts(
   draggedEntryId: string,
   targetEntryId: string | null,
 ): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_reorder_pending_prompts", { conversationId, draggedEntryId, targetEntryId });
-}
-
-// pickComposerAttachments opens the native picker and stages selected files through the service.
-// pickComposerAttachments 通过服务打开原生选择器并暂存选中的文件。
-async function pickComposerAttachments(
-  projectId: string | null,
-  conversationId: string | null,
-  kind: string | null,
-): Promise<ComposerAttachmentSummary[]> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    return [];
-  }
-  return invoke<ComposerAttachmentSummary[]>("service_pick_composer_attachments", {
-    projectId,
-    conversationId,
-    kind,
-  });
+  return serviceClient.request<WorkbenchSnapshot>("service_reorder_pending_prompts", { conversationId, draggedEntryId, targetEntryId });
 }
 
 // stageComposerAttachmentBytes stages one browser/drop/paste provided file through the service.
@@ -1985,12 +1898,11 @@ async function stageComposerAttachmentBytes(
   conversationId: string | null,
   file: File,
 ): Promise<ComposerAttachmentSummary | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    return browserComposerAttachmentFromFile(file);
+  if (!hasServiceRuntime()) {
+    throw new Error("浏览器服务不可用，无法暂存附件。");
   }
   const dataBase64 = await fileToBase64(file);
-  return invoke<ComposerAttachmentSummary>("service_stage_composer_attachment_bytes", {
+  return serviceClient.request<ComposerAttachmentSummary>("service_stage_composer_attachment_bytes", {
     projectId,
     conversationId,
     fileName: file.name || "clipboard-attachment",
@@ -2092,25 +2004,6 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-// browserComposerAttachmentFromFile creates a preview-only attachment for browser preview mode.
-// browserComposerAttachmentFromFile 为浏览器预览模式创建仅预览附件。
-function browserComposerAttachmentFromFile(file: File): ComposerAttachmentSummary | null {
-  const kind = inferComposerAttachmentKindFromFile(file);
-  if (!kind) {
-    return null;
-  }
-  return {
-    kind,
-    fileName: file.name || "attachment",
-    localPath: URL.createObjectURL(file),
-    sourcePath: null,
-    assetId: null,
-    byteLen: file.size,
-    previewLocalPath: null,
-    mimeType: file.type || "",
-  };
-}
-
 // inferComposerAttachmentKindFromFile maps MIME type and extension to a composer kind.
 // inferComposerAttachmentKindFromFile 将 MIME 类型与扩展名映射到输入区附件类型。
 function inferComposerAttachmentKindFromFile(file: File): string | null {
@@ -2152,11 +2045,10 @@ function composerAttachmentAccept(capabilities: ComposerAttachmentCapabilitySumm
 // selectWorkbenchModel persists the active provider/model pair through the desktop service.
 // selectWorkbenchModel 通过桌面服务持久化当前激活的 Provider/模型组合。
 async function selectWorkbenchModel(choice: ModelPickerChoice): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_select_workbench_model", {
+  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_model", {
     providerId: choice.providerId,
     modelId: choice.modelId,
   });
@@ -2165,41 +2057,37 @@ async function selectWorkbenchModel(choice: ModelPickerChoice): Promise<Workbenc
 // selectWorkbenchReasoningEffort persists one reasoning selection through the desktop service router.
 // selectWorkbenchReasoningEffort 通过桌面服务路由持久化单个思考档位选择。
 async function selectWorkbenchReasoningEffort(effort: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
+  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_reasoning_effort", { effort });
 }
 
 // saveProviderConfiguration persists one provider form through the desktop service.
 // saveProviderConfiguration 通过桌面服务持久化单个 Provider 表单。
 async function saveProviderConfiguration(request: { providerId: string; fields: Record<string, string> }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_provider_configuration", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_configuration", { request });
 }
 
 // removeProviderConfiguration removes one provider through the desktop service.
 // removeProviderConfiguration 通过桌面服务移除单个 Provider。
 async function removeProviderConfiguration(providerId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_remove_provider_configuration", { providerId });
+  return serviceClient.request<WorkbenchSnapshot>("service_remove_provider_configuration", { providerId });
 }
 
 // saveProviderEnabledModels persists one provider enabled-model list.
 // saveProviderEnabledModels 持久化单个 Provider 的启用模型列表。
 async function saveProviderEnabledModels(request: { providerId: string; enabledModelIds: string[] }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_provider_enabled_models", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_enabled_models", { request });
 }
 
 // saveProviderModelOverride persists one provider model capability override.
@@ -2216,11 +2104,10 @@ async function saveProviderModelOverride(request: {
   outputModalities: string[] | null;
   reasoningProfileJson: string | null;
 }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_provider_model_override", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_provider_model_override", { request });
 }
 
 // saveAiCapabilityVendor persists one shared AI capability vendor.
@@ -2234,31 +2121,28 @@ async function saveAiCapabilityVendor(request: {
   region: string;
   connectionMode?: string | null;
 }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_ai_capability_vendor", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_ai_capability_vendor", { request });
 }
 
 // removeAiCapabilityVendor removes one shared AI capability vendor.
 // removeAiCapabilityVendor 移除单个共享 AI 能力供应商。
 async function removeAiCapabilityVendor(vendorId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_remove_ai_capability_vendor", { vendorId });
+  return serviceClient.request<WorkbenchSnapshot>("service_remove_ai_capability_vendor", { vendorId });
 }
 
 // setAiCapabilityTargetEnabled persists one AI capability target enabled state.
 // setAiCapabilityTargetEnabled 持久化单个 AI 能力目标启用状态。
 async function setAiCapabilityTargetEnabled(request: { capabilityKind: string; vendorId: string; targetAlias: string; enabled: boolean }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_set_ai_capability_target_enabled", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_set_ai_capability_target_enabled", { request });
 }
 
 // saveAiCapabilityTargets persists one ordered AI capability target list.
@@ -2267,101 +2151,82 @@ async function saveAiCapabilityTargets(request: {
   capabilityKind: string;
   targets: Array<{ vendorId: string; targetAlias: string; modelId: string; enabled: boolean }>;
 }): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_ai_capability_targets", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_ai_capability_targets", { request });
 }
 
 // saveMcpServerConfiguration persists one MCP server through the desktop service.
 // saveMcpServerConfiguration 通过桌面服务持久化单个 MCP 服务器。
 async function saveMcpServerConfiguration(request: Record<string, unknown>): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_save_mcp_server_configuration", { request });
+  return serviceClient.request<WorkbenchSnapshot>("service_save_mcp_server_configuration", { request });
 }
 
 // removeMcpServerConfiguration removes one MCP server through the desktop service.
 // removeMcpServerConfiguration 通过桌面服务移除单个 MCP 服务器。
 async function removeMcpServerConfiguration(serverId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_remove_mcp_server_configuration", { serverId });
+  return serviceClient.request<WorkbenchSnapshot>("service_remove_mcp_server_configuration", { serverId });
 }
 
-// openProjectDirectoryPath asks the desktop shell to reveal one filesystem folder.
-// openProjectDirectoryPath 请求桌面壳打开单个文件系统文件夹。
+// openProjectDirectoryPath asks the service to reveal one filesystem folder.
+// openProjectDirectoryPath 请求服务打开单个文件系统文件夹。
 async function openProjectDirectoryPath(path: string): Promise<string | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    return "浏览器预览模式下无法直接打开资源管理器。";
-  }
-  return invoke<string>("service_open_project_directory_path", { path });
+  return serviceClient.request<string>("service_open_project_directory_path", { path });
 }
 
-// openProjectDirectory asks the desktop shell to reveal one project folder.
-// openProjectDirectory 请求桌面壳打开单个项目文件夹。
+// openProjectDirectory asks the service to reveal one project folder.
+// openProjectDirectory 请求服务打开单个项目文件夹。
 async function openProjectDirectory(projectId: string): Promise<string | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    return "浏览器预览模式下无法直接打开资源管理器。";
-  }
-  return invoke<string>("service_open_project_directory", { projectId });
+  return serviceClient.request<string>("service_open_project_directory", { projectId });
 }
 
 // addProjectFromFolder asks the desktop shell to pick a folder and register it as a project.
 // addProjectFromFolder 请求桌面壳选择一个文件夹并注册为项目。
 async function addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    throw new Error("浏览器预览模式下无法添加本地项目，请在桌面壳中使用此功能。");
-  }
-  return invoke<WorkbenchSnapshot | null>("service_add_project_from_folder");
+  return shellClient.addProjectFromFolder();
 }
 
 // toggleProjectPinned asks the desktop shell to toggle one project pinned state.
 // toggleProjectPinned 请求桌面壳切换单个项目的置顶状态。
 async function toggleProjectPinned(projectId: string): Promise<void> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return;
   }
-  await invoke<void>("service_toggle_project_pinned", { projectId });
+  await serviceClient.request<void>("service_toggle_project_pinned", { projectId });
 }
 
 // reorderProjects asks the desktop shell to persist one same-section project order.
 // reorderProjects 请求桌面壳持久化同一分区内的项目顺序。
 async function reorderProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_reorder_projects", { projectIds });
+  return serviceClient.request<WorkbenchSnapshot>("service_reorder_projects", { projectIds });
 }
 
 // renameProject asks the desktop shell to apply a new project display name.
 // renameProject 请求桌面壳应用新的项目显示名称。
 async function renameProject(projectId: string, name: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_rename_project", { projectId, name });
+  return serviceClient.request<WorkbenchSnapshot>("service_rename_project", { projectId, name });
 }
 
 // setProjectIcon asks the desktop shell to persist one project icon override.
 // setProjectIcon 请求桌面壳持久化单个项目图标覆盖。
 async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Promise<void> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return;
   }
-  await invoke<void>("service_set_project_icon", {
+  await serviceClient.request<void>("service_set_project_icon", {
     projectId,
     iconPack: icon.pack,
     iconKey: icon.key,
@@ -2371,82 +2236,70 @@ async function setProjectIcon(projectId: string, icon: ProjectIconSelection): Pr
 // resetProjectIcon asks the desktop shell to clear one project icon override.
 // resetProjectIcon 请求桌面壳清除单个项目图标覆盖。
 async function resetProjectIcon(projectId: string): Promise<void> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return;
   }
-  await invoke<void>("service_reset_project_icon", { projectId });
+  await serviceClient.request<void>("service_reset_project_icon", { projectId });
 }
 
 // setExpandedTaskProjects asks the desktop shell to persist expanded project rows.
 // setExpandedTaskProjects 请求桌面壳持久化已展开的项目行。
 async function setExpandedTaskProjects(projectIds: string[]): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
+  return serviceClient.request<WorkbenchSnapshot>("service_set_expanded_task_projects", { projectIds });
 }
 
 // archiveProjectConversations asks the desktop shell to archive all conversations under one project.
 // archiveProjectConversations 请求桌面壳归档单个项目下的全部会话。
 async function archiveProjectConversations(projectId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_archive_project_conversations", { projectId });
+  return serviceClient.request<WorkbenchSnapshot>("service_archive_project_conversations", { projectId });
 }
 
 // renameConversation asks the desktop shell to apply a new conversation display name.
 // renameConversation 请求桌面壳应用新的会话显示名称。
 async function renameConversation(conversationId: string, name: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_rename_conversation", { conversationId, name });
+  return serviceClient.request<WorkbenchSnapshot>("service_rename_conversation", { conversationId, name });
 }
 
 // archiveConversation asks the desktop shell to archive one conversation.
 // archiveConversation 请求桌面壳归档单个会话。
 async function archiveConversation(conversationId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
+  return serviceClient.request<WorkbenchSnapshot>("service_archive_conversation", { conversationId });
 }
 
 // markConversationRead asks the desktop shell to persist one conversation as read.
 // markConversationRead 请求桌面壳将单个会话持久化标记为已读。
 async function markConversationRead(conversationId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_mark_conversation_read", { conversationId });
+  return serviceClient.request<WorkbenchSnapshot>("service_mark_conversation_read", { conversationId });
 }
 
 // selectConversation asks the desktop shell to update its active conversation marker.
 // selectConversation 请求桌面壳同步当前活跃会话标记。
 async function selectConversation(conversationId: string): Promise<WorkbenchSnapshot | null> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
+  if (!hasServiceRuntime()) {
     return null;
   }
-  return invoke<WorkbenchSnapshot>("service_select_conversation", { conversationId });
+  return serviceClient.request<WorkbenchSnapshot>("service_select_conversation", { conversationId });
 }
 
-// openExternalUrl opens a trusted external URL in the system browser when hosted by Tauri.
-// openExternalUrl 在 Tauri 承载时使用系统默认浏览器打开可信外部链接。
+// openExternalUrl asks the service to open one trusted external URL.
+// openExternalUrl 请求服务打开单个可信外部链接。
 async function openExternalUrl(url: string): Promise<void> {
-  const invoke = await resolveInvoke();
-  if (!invoke) {
-    window.open(url, "_blank", "noopener,noreferrer");
-    return;
-  }
-  await invoke("service_open_external_url", { url });
+  await serviceClient.request<string>("service_open_external_url", { url });
 }
 
 // App renders the Vulcan Code WebUI workbench.
@@ -2470,26 +2323,92 @@ function App() {
   // error stores the latest loading error.
   // error 保存最近一次加载错误。
   const [error, setError] = React.useState<string | null>(null);
+  // serviceWasDisconnectedRef suppresses recovery toasts before the first real disconnect.
+  // serviceWasDisconnectedRef 在首次真实断开前抑制恢复提示。
+  const serviceWasDisconnectedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    // handleConnectionStatusChange maps transport-level connection changes to user-visible toasts.
+    // handleConnectionStatusChange 将传输层连接变化映射为用户可见的提示。
+    function handleConnectionStatusChange(event: Event) {
+      const detail = (event as CustomEvent<BrowserServiceConnectionDetail>).detail;
+      if (!detail) {
+        return;
+      }
+      if (detail.status === "connected") {
+        if (serviceWasDisconnectedRef.current) {
+          serviceWasDisconnectedRef.current = false;
+          toast.success("本地服务连接已恢复。", {
+            id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+            duration: 2200,
+          });
+        }
+        return;
+      }
+      serviceWasDisconnectedRef.current = true;
+      if (detail.status === "reconnecting") {
+        toast.loading("本地服务连接已断开，正在重连...", {
+          id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+        });
+        return;
+      }
+      toast.loading("本地服务连接已断开，正在检测恢复...", {
+        id: BROWSER_SERVICE_CONNECTION_TOAST_ID,
+        description: detail.message,
+      });
+    }
+
+    window.addEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
+    return () => {
+      window.removeEventListener(BROWSER_SERVICE_CONNECTION_EVENT, handleConnectionStatusChange);
+    };
+  }, []);
 
   React.useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
+    let retryTimer: number | null = null;
+    let retryDelayMs = 500;
+
+    // scheduleBootstrapRetry retries service discovery after transient startup races.
+    // scheduleBootstrapRetry 在瞬时启动竞态后重试服务发现。
+    function scheduleBootstrapRetry(error: unknown): boolean {
+      if (!hasServiceRuntime() || !serviceBootstrapErrorIsRetryable(error)) {
+        return false;
+      }
+      if (retryTimer !== null) {
+        return true;
+      }
+      const delay = retryDelayMs;
+      retryDelayMs = Math.min(retryDelayMs * 2, 5000);
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        void bootstrap();
+      }, delay);
+      return true;
+    }
 
     // bootstrap loads the first startup and workbench snapshots.
     // bootstrap 加载第一份启动和工作台快照。
     async function bootstrap() {
       try {
-        const listen = await resolveListen();
-        if (listen) {
-          unlisten = await listen<ServiceEvent>("vulcan://service-event", (event) => {
-            if (event.payload.kind === "startup") {
-              setStartup(event.payload.payload);
-            }
-            if (event.payload.kind === "workbench") {
-              setWorkbench(event.payload.payload);
-            }
-            if (event.payload.kind === "workbenchDelta") {
-              workbenchDeltaBufferRef.current.push(event.payload.payload);
+        if (hasServiceRuntime()) {
+          const subscriptions = await Promise.all([
+            serviceClient.subscribe<StartupSnapshot>("startup", (payload) => {
+              if (!cancelled) {
+                setStartup(payload);
+              }
+            }),
+            serviceClient.subscribe<WorkbenchSnapshot>("workbench", (payload) => {
+              if (!cancelled) {
+                setWorkbench(payload);
+              }
+            }),
+            serviceClient.subscribe<WorkbenchDeltaEnvelope>("workbench.delta", (payload) => {
+              if (cancelled) {
+                return;
+              }
+              workbenchDeltaBufferRef.current.push(payload);
               if (workbenchDeltaTimerRef.current === null) {
                 workbenchDeltaTimerRef.current = window.setTimeout(() => {
                   const envelopes = coalesceWorkbenchDeltaEnvelopes(workbenchDeltaBufferRef.current);
@@ -2503,18 +2422,31 @@ function App() {
                   }
                 }, STREAMING_DELTA_FLUSH_MS);
               }
-            }
-          });
+            }),
+          ]);
+          if (cancelled) {
+            subscriptions.forEach((unsubscribe) => unsubscribe());
+          } else {
+            unlisten = () => {
+              subscriptions.forEach((unsubscribe) => unsubscribe());
+            };
+          }
         }
         const [nextStartup, nextWorkbench] = await Promise.all([
           loadStartupSnapshot(),
           loadWorkbenchSnapshot(),
         ]);
         if (!cancelled) {
+          retryDelayMs = 500;
+          setError(null);
           setStartup(nextStartup);
           setWorkbench(nextWorkbench);
         }
       } catch (nextError) {
+        if (!cancelled && scheduleBootstrapRetry(nextError)) {
+          setError(null);
+          return;
+        }
         if (!cancelled) {
           setError(nextError instanceof Error ? nextError.message : String(nextError));
         }
@@ -2527,6 +2459,10 @@ function App() {
       if (workbenchDeltaTimerRef.current !== null) {
         window.clearTimeout(workbenchDeltaTimerRef.current);
         workbenchDeltaTimerRef.current = null;
+      }
+      if (retryTimer !== null) {
+        window.clearTimeout(retryTimer);
+        retryTimer = null;
       }
       unlisten?.();
     };
@@ -2842,27 +2778,19 @@ function WorkbenchLayout(props: {
   const showConsoleSidebar = activeArea === "chat";
   // showWindowControls enables the custom titlebar only inside the Tauri desktop shell.
   // showWindowControls 仅在 Tauri 桌面壳内启用自定义标题栏。
-  const showWindowControls = isTauriRuntime();
+  const showWindowControls = shellClient.supportsWindowControls();
   // isWindowMaximized tracks the current Tauri window maximize state for the titlebar button.
   // isWindowMaximized 跟踪当前 Tauri 窗口最大化状态，用于标题栏按钮。
   const [isWindowMaximized, setIsWindowMaximized] = React.useState(false);
   // refreshWindowMaximizedState synchronizes the local titlebar state with Tauri.
   // refreshWindowMaximizedState 将本地标题栏状态与 Tauri 同步。
   const refreshWindowMaximizedState = React.useCallback(async () => {
-    const windowHandle = await resolveCurrentWindow();
-    if (!windowHandle) {
-      return;
-    }
-    setIsWindowMaximized(await windowHandle.isMaximized());
+    setIsWindowMaximized(await shellClient.isWindowMaximized());
   }, []);
   // toggleWindowMaximize toggles native maximize state and refreshes the icon.
   // toggleWindowMaximize 切换原生最大化状态并刷新图标。
   const toggleWindowMaximize = React.useCallback(async () => {
-    const windowHandle = await resolveCurrentWindow();
-    if (!windowHandle) {
-      return;
-    }
-    await windowHandle.toggleMaximize();
+    await shellClient.toggleWindowMaximize();
     window.setTimeout(() => void refreshWindowMaximizedState(), 40);
   }, [refreshWindowMaximizedState]);
   React.useEffect(() => {
@@ -2883,11 +2811,10 @@ function WorkbenchLayout(props: {
     // subscribeWindowResize keeps the restore icon aligned when native drag-region double click changes state.
     // subscribeWindowResize 在原生拖动区域双击改变窗口状态后同步还原图标。
     async function subscribeWindowResize() {
-      const windowHandle = await resolveCurrentWindow();
-      if (!windowHandle || cancelled) {
+      if (cancelled) {
         return;
       }
-      unlisten = await windowHandle.onResized(() => {
+      unlisten = await shellClient.subscribeWindowResize(() => {
         void refreshWindowMaximizedState();
       });
     }
@@ -4391,12 +4318,12 @@ function WindowControls(props: {
   // runWindowAction invokes one native window command and reports failures as toasts.
   // runWindowAction 调用单个原生窗口命令，并用 toast 报告失败。
   const runWindowAction = React.useCallback(async (action: "minimize" | "close") => {
-    const windowHandle = await resolveCurrentWindow();
-    if (!windowHandle) {
-      return;
-    }
     try {
-      await windowHandle[action]();
+      if (action === "minimize") {
+        await shellClient.minimizeWindow();
+      } else {
+        await shellClient.closeWindow();
+      }
       await props.onMaximizeStateRefresh();
     } catch (error) {
       toast.error(`窗口操作失败：${error instanceof Error ? error.message : String(error)}`);
@@ -5704,17 +5631,9 @@ const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
 
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.
 // webuiClickTrace 为用户触发的 WebUI 操作输出轻量浏览器控制台诊断日志。
-function webuiClickTrace(action: string, detail: Record<string, unknown> = {}): void {
-  try {
-    console.debug("[webui][click]", {
-      timestamp: new Date().toISOString(),
-      action,
-      ...detail,
-    });
-  } catch {
-    // Ignore console failures from restricted WebView contexts.
-    // 忽略受限 WebView 环境中的控制台失败。
-  }
+function webuiClickTrace(_action: string, _detail: Record<string, unknown> = {}): void {
+  // Kept as a no-op compatibility hook so existing click paths stay unchanged without emitting dev logs.
+  // 保留为空实现兼容钩子，避免改变现有点击路径，同时不再输出开发日志。
 }
 
 // ProjectSettingsDialogTarget stores the project currently shown in the settings dialog.
@@ -7204,14 +7123,7 @@ function stringValue(value: unknown): string | null {
 // mediaSourceUrl converts local media paths into URLs usable by either Tauri or browser preview mode.
 // mediaSourceUrl 将本地媒体路径转换为 Tauri 或浏览器预览模式可用的 URL。
 function mediaSourceUrl(path: string): string {
-  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(path)) {
-    return path;
-  }
-  if (isTauriRuntime()) {
-    return `http://vulcan-media.localhost/asset/${base64UrlEncodeUtf8(path)}`;
-  }
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.startsWith("/") ? `file://${normalized}` : `file:///${normalized}`;
+  return localMediaSourceUrl(path);
 }
 
 // normalizeMarkdownImageSource converts generated local image paths into renderable media URLs.
@@ -7222,8 +7134,14 @@ function normalizeMarkdownImageSource(src: string | undefined, workspacePath?: s
     return src;
   }
   const unwrapped = value.startsWith("<") && value.endsWith(">") ? value.slice(1, -1).trim() : value;
-  if (/^(https?:|data:|blob:|asset:|file:|vulcan-media:)/i.test(unwrapped)) {
+  if (/^vulcan-media:/i.test(unwrapped) || /^https?:\/\/vulcan-media\.localhost(?:\/|$)/i.test(unwrapped)) {
+    return mediaSourceUrl(unwrapped);
+  }
+  if (/^(https?:|data:|blob:|asset:)/i.test(unwrapped)) {
     return unwrapped;
+  }
+  if (/^file:/i.test(unwrapped)) {
+    return mediaSourceUrl(unwrapped);
   }
   if (looksLikeLocalFilesystemPath(unwrapped)) {
     return mediaSourceUrl(unwrapped);
@@ -7516,17 +7434,6 @@ function joinWorkspaceRelativePath(workspaceRoot: string, relativePath: string):
   const separator = workspaceRoot.includes("\\") ? "\\" : "/";
   const cleanRoot = workspaceRoot.replace(/[\\/]+$/u, "");
   return `${cleanRoot}${separator}${relativePath.replace(/[\\/]+/gu, separator)}`;
-}
-
-// base64UrlEncodeUtf8 encodes a local media path into a URL-safe route segment.
-// base64UrlEncodeUtf8 将本地媒体路径编码为 URL 安全的路由片段。
-function base64UrlEncodeUtf8(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
-  }
-  return window.btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/u, "");
 }
 
 // useGeneratedMediaSource resolves a generated local media path into a WebUI-renderable source URL.
@@ -8078,8 +7985,8 @@ function WorkspaceContextPanel(props: {
       : null;
   const activeReviewSnapshot = activeWorkspaceReviewSnapshot ?? reviewSnapshot;
 
-  // handleRefreshWorkspaceDiff refreshes the current project Git diff through Tauri.
-  // handleRefreshWorkspaceDiff 通过 Tauri 刷新当前项目 Git diff。
+  // handleRefreshWorkspaceDiff refreshes the current project Git diff through the local service.
+  // handleRefreshWorkspaceDiff 通过本地服务刷新当前项目 Git diff。
   const handleRefreshWorkspaceDiff = React.useCallback(async (selectionOverride?: DiffReviewSelection) => {
     if (!workspacePath) {
       setWorkspaceReviewError("当前会话没有关联项目路径，无法刷新 Git diff。");
