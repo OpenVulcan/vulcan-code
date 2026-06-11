@@ -108,10 +108,9 @@ use vulcan_provider_config::config::{
     PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions, ProviderFieldKey,
 };
 use vulcan_service_api::{
-    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary,
-    AiCapabilitySummary, AiCapabilityTargetSummary, AiCapabilityVendorCatalogSummary,
-    AiCapabilityVendorSummary, AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta,
-    CommandSessionSummary,
+    AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
+    AiCapabilityTargetSummary, AiCapabilityVendorCatalogSummary, AiCapabilityVendorSummary,
+    AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
     ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary,
@@ -700,6 +699,125 @@ struct WebuiAttachmentCleanupReportSummary {
     summary: String,
 }
 
+/// WebUI workspace Git diff snapshot returned by the service bridge.
+/// 服务桥接层返回给 WebUI 的工作区 Git diff 快照。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffSnapshot {
+    /// Repository root used for the Git command.
+    /// Git 命令使用的仓库根目录。
+    repository_root: String,
+    /// Combined unified diff for tracked and lightweight untracked changes.
+    /// 已跟踪变更与轻量未跟踪变更组合后的 unified diff。
+    unified_diff: String,
+    /// Number of files represented by the combined diff.
+    /// 组合 diff 中包含的文件数量。
+    changed_files: usize,
+    /// Number of added lines estimated from the combined diff.
+    /// 从组合 diff 中估算出的新增行数。
+    additions: usize,
+    /// Number of deleted lines estimated from the combined diff.
+    /// 从组合 diff 中估算出的删除行数。
+    deletions: usize,
+    /// Optional user-facing note for empty, partial, or truncated snapshots.
+    /// 空快照、局部快照或截断快照使用的可选用户提示。
+    notice: Option<String>,
+    /// Current Git branch name when available.
+    /// 可用时的当前 Git 分支名称。
+    current_branch: Option<String>,
+    /// Default mainline branch resolved by the backend.
+    /// 后端解析出的默认主线分支。
+    default_branch: Option<String>,
+    /// Branch selected as the comparison base.
+    /// 当前作为对比基准的分支。
+    selected_base_branch: Option<String>,
+    /// Branch selected as the comparison target.
+    /// 当前作为对比目标的分支。
+    selected_compare_branch: Option<String>,
+    /// Commit selected for commit review mode.
+    /// 提交审核模式当前选择的提交。
+    selected_commit_hash: Option<String>,
+    /// Branches available for branch comparison.
+    /// 可用于分支对比的分支列表。
+    branches: Vec<WebuiGitBranchSummary>,
+    /// Recent commits available for commit review mode.
+    /// 可用于提交审核模式的最近提交列表。
+    recent_commits: Vec<WebuiGitCommitSummary>,
+}
+
+/// WebUI Git diff request options.
+/// WebUI Git diff 请求选项。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffRequest {
+    /// Selected review mode.
+    /// 当前选择的审核模式。
+    mode: WebuiWorkspaceDiffMode,
+    /// Optional base branch for branch comparisons.
+    /// 分支对比使用的可选基准分支。
+    base_branch: Option<String>,
+    /// Optional compare branch for branch comparisons.
+    /// 分支对比使用的可选目标分支。
+    compare_branch: Option<String>,
+    /// Optional commit hash for commit review mode.
+    /// 提交审核模式使用的可选提交哈希。
+    commit_hash: Option<String>,
+}
+
+/// WebUI Git diff source mode.
+/// WebUI Git diff 来源模式。
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum WebuiWorkspaceDiffMode {
+    /// Unstaged working tree changes.
+    /// 未暂存的工作区变更。
+    Unstaged,
+    /// Staged index changes.
+    /// 已暂存的索引变更。
+    Staged,
+    /// Single commit patch.
+    /// 单次提交 patch。
+    Commit,
+    /// Branch-to-branch comparison.
+    /// 分支到分支对比。
+    Branch,
+}
+
+/// WebUI Git branch summary.
+/// WebUI Git 分支摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiGitBranchSummary {
+    /// Displayable branch name.
+    /// 可展示的分支名称。
+    name: String,
+    /// Whether this is the current branch.
+    /// 是否为当前分支。
+    current: bool,
+    /// Whether this branch is remote-tracking.
+    /// 是否为远端跟踪分支。
+    remote: bool,
+}
+
+/// WebUI Git commit summary.
+/// WebUI Git 提交摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiGitCommitSummary {
+    /// Full commit hash.
+    /// 完整提交哈希。
+    hash: String,
+    /// Short commit hash.
+    /// 短提交哈希。
+    short_hash: String,
+    /// Commit subject.
+    /// 提交标题。
+    subject: String,
+    /// Relative commit time.
+    /// 相对提交时间。
+    relative_time: String,
+}
+
 /// Shared process-wide gate for WebUI workspace persistence.
 /// WebUI 工作区持久化使用的进程级共享闸门。
 static WEBUI_WORKSPACE_PERSIST_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
@@ -1248,6 +1366,7 @@ pub fn run() {
             service_health,
             service_startup_snapshot,
             service_workbench_snapshot,
+            service_workspace_diff_snapshot,
             service_refresh_luaskills_catalog,
             service_install_luaskill,
             service_update_luaskill,
@@ -1576,6 +1695,73 @@ fn service_workbench_snapshot(
         .lock()
         .map(|guard| workbench_with_live_pending_question(&guard))
         .map_err(|error| format!("failed to lock service workbench state: {error}"))
+}
+
+/// Loads a Git diff snapshot for one WebUI project workspace.
+/// 为单个 WebUI 项目工作区加载 Git diff 快照。
+#[tauri::command]
+async fn service_workspace_diff_snapshot(
+    state: tauri::State<'_, SharedServiceBridgeState>,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: Option<WebuiWorkspaceDiffRequest>,
+) -> Result<WebuiWorkspaceDiffSnapshot, String> {
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    tauri::async_runtime::spawn_blocking(move || {
+        load_webui_workspace_diff_snapshot(&resolved_workspace_path, request)
+    })
+    .await
+    .map_err(|error| format!("workspace diff task failed: {error}"))?
+}
+
+/// Resolves the workspace path for a WebUI diff request from backend-owned state first.
+/// 优先从后端持有的状态中解析 WebUI diff 请求对应的工作区路径。
+fn webui_diff_workspace_path_from_state(
+    state: &tauri::State<'_, SharedServiceBridgeState>,
+    project_id: Option<&str>,
+    conversation_id: Option<&str>,
+    fallback_path: Option<&str>,
+) -> Result<String, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+        return Ok(fallback_path
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| workspace_root().display().to_string()));
+    };
+    let resolved_project_id = project_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            conversation_id
+                .and_then(parse_session_id)
+                .and_then(|session_id| {
+                    owning_project_id_for_session(workspace_snapshot, session_id)
+                })
+        });
+    if let Some(resolved_project_id) = resolved_project_id
+        && let Some(project) = workspace_snapshot
+            .task_projects
+            .iter()
+            .find(|project| project.id == resolved_project_id)
+    {
+        return Ok(project.path.clone());
+    }
+    Ok(fallback_path
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| workspace_root().display().to_string()))
 }
 
 /// Runs a LuaSkills management operation on a blocking worker and returns its result.
@@ -2149,17 +2335,17 @@ async fn service_session_tool_detail(
         tool_call_id.as_deref(),
         message_index,
     )
-        .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
-        .ok_or_else(|| {
-            record_id
-                .map(|record_id| format!("tool detail record not found: {record_id}"))
-                .unwrap_or_else(|| {
-                    format!(
-                        "tool detail record not found for tool call: {}",
-                        tool_call_id.unwrap_or_else(|| String::from("<missing>"))
-                    )
-                })
-        })
+    .map(|message| tool_detail_payload_from_session_message(message, seq, message_index))
+    .ok_or_else(|| {
+        record_id
+            .map(|record_id| format!("tool detail record not found: {record_id}"))
+            .unwrap_or_else(|| {
+                format!(
+                    "tool detail record not found for tool call: {}",
+                    tool_call_id.unwrap_or_else(|| String::from("<missing>"))
+                )
+            })
+    })
 }
 
 /// Finds a hidden tool-detail message by precise record id first, then by tool-call id.
@@ -2178,7 +2364,11 @@ fn find_tool_detail_message<'a>(
         {
             return Some(message);
         }
-        if let Some(message) = messages.iter().copied().find(|message| message.id == record_id) {
+        if let Some(message) = messages
+            .iter()
+            .copied()
+            .find(|message| message.id == record_id)
+        {
             return Some(message);
         }
     }
@@ -2210,7 +2400,11 @@ fn find_tool_detail_record<'a>(
         {
             return Some(record);
         }
-        if let Some(record) = records.iter().copied().find(|record| record.id == record_id) {
+        if let Some(record) = records
+            .iter()
+            .copied()
+            .find(|record| record.id == record_id)
+        {
             return Some(record);
         }
     }
@@ -2262,7 +2456,11 @@ fn session_message_tool_call_id(message: &SessionMessageEntry) -> Option<&str> {
     message
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.get("tool_call_id").or_else(|| metadata.get("toolCallId")))
+        .and_then(|metadata| {
+            metadata
+                .get("tool_call_id")
+                .or_else(|| metadata.get("toolCallId"))
+        })
         .and_then(Value::as_str)
 }
 
@@ -2272,7 +2470,11 @@ fn session_record_tool_call_id(record: &SessionConversationRecord) -> Option<&st
     record
         .metadata
         .as_ref()
-        .and_then(|metadata| metadata.get("tool_call_id").or_else(|| metadata.get("toolCallId")))
+        .and_then(|metadata| {
+            metadata
+                .get("tool_call_id")
+                .or_else(|| metadata.get("toolCallId"))
+        })
         .and_then(Value::as_str)
 }
 
@@ -5472,7 +5674,9 @@ fn emit_workbench_event(app: &tauri::AppHandle, workbench: &WorkbenchSnapshot) {
 /// 发送单条服务事件，并在诊断开启时记录序列化载荷大小。
 fn emit_service_event_with_trace(app: &tauri::AppHandle, stage: &str, event: ServiceEvent) {
     if webui_trace_enabled() {
-        let payload_bytes = serde_json::to_vec(&event).map(|bytes| bytes.len()).unwrap_or(0);
+        let payload_bytes = serde_json::to_vec(&event)
+            .map(|bytes| bytes.len())
+            .unwrap_or(0);
         webui_trace(stage, format!("payload_bytes={payload_bytes}"));
     }
     let _ = app.emit("vulcan://service-event", event);
@@ -12191,14 +12395,13 @@ fn append_stream_delta_record(
             _ => SessionRunPhase::Requesting,
         };
         let projected_entry = {
-            let runtime_state =
-                workspace
-                    .session_runtime_state
-                    .entry(session_id)
-                    .or_insert_with(|| SessionRuntimeStateEntry {
-                        updated_at: now.clone(),
-                        ..SessionRuntimeStateEntry::default()
-                    });
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: now.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
             append_stream_delta_record_to_state(
                 runtime_state,
                 session_id,
@@ -12286,7 +12489,10 @@ fn append_stream_delta_record(
 
 /// Returns whether the retained workbench currently displays one conversation surface.
 /// 返回保留工作台当前是否正在展示指定会话界面。
-fn workbench_surface_matches_conversation(workbench: &WorkbenchSnapshot, conversation_id: &str) -> bool {
+fn workbench_surface_matches_conversation(
+    workbench: &WorkbenchSnapshot,
+    conversation_id: &str,
+) -> bool {
     workbench.selected_conversation_id.as_deref() == Some(conversation_id)
         || workbench
             .subagent_navigation
@@ -18725,6 +18931,605 @@ fn log_entry(id: &str, level: &str, source: &str, message: &str) -> LogEntrySumm
 /// 返回本地服务桥接层使用的仓库根目录。
 fn workspace_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Maximum bytes retained in one WebUI diff snapshot.
+/// 单个 WebUI diff 快照保留的最大字节数。
+const WEBUI_DIFF_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+/// Maximum bytes read from one untracked text file for the diff preview.
+/// 单个未跟踪文本文件用于 diff 预览的最大读取字节数。
+const WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES: u64 = 256 * 1024;
+
+/// Loads a safe, bounded Git diff snapshot for the requested workspace path.
+/// 为请求的工作区路径加载安全且有界的 Git diff 快照。
+fn load_webui_workspace_diff_snapshot(
+    workspace_path: &str,
+    request: Option<WebuiWorkspaceDiffRequest>,
+) -> Result<WebuiWorkspaceDiffSnapshot, String> {
+    let requested_path = PathBuf::from(workspace_path.trim());
+    let workspace_path = if requested_path.as_os_str().is_empty() {
+        workspace_root()
+    } else {
+        requested_path
+    };
+    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
+        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
+    })?;
+    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
+        return Ok(empty_webui_diff_snapshot(
+            normalized_workspace_path_text_from_path(&workspace_path),
+            String::from("当前工作区不是 Git 仓库，无法生成代码审查 diff。"),
+        ));
+    };
+
+    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
+    let current_branch = load_webui_current_git_branch(&repository_root)?;
+    let default_branch = load_webui_default_git_branch(&repository_root)?;
+    let branches = load_webui_git_branches(&repository_root, current_branch.as_deref())?;
+    let recent_commits = load_webui_recent_commits(&repository_root)?;
+    let selected_base_branch = request
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| current_branch.clone());
+    let selected_compare_branch = request
+        .compare_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| default_branch.clone());
+    let selected_commit_hash = request
+        .commit_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| recent_commits.first().map(|commit| commit.hash.clone()));
+    let mut notices = Vec::new();
+    let mut sections = Vec::new();
+    match request.mode {
+        WebuiWorkspaceDiffMode::Unstaged => {
+            let unstaged_diff = load_webui_unstaged_git_diff(&repository_root)?;
+            if !unstaged_diff.trim().is_empty() {
+                sections.push(unstaged_diff);
+            }
+            let untracked_diff = load_webui_untracked_git_diff(&repository_root, &mut notices)?;
+            if !untracked_diff.trim().is_empty() {
+                sections.push(untracked_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Staged => {
+            let staged_diff = load_webui_staged_git_diff(&repository_root)?;
+            if !staged_diff.trim().is_empty() {
+                sections.push(staged_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Commit => {
+            if let Some(commit_hash) = selected_commit_hash.as_deref() {
+                let commit_diff = load_webui_commit_git_diff(&repository_root, commit_hash)?;
+                if !commit_diff.trim().is_empty() {
+                    sections.push(commit_diff);
+                }
+            } else {
+                notices.push(String::from("当前仓库没有可展示的提交记录。"));
+            }
+        }
+        WebuiWorkspaceDiffMode::Branch => {
+            match (
+                selected_base_branch.as_deref(),
+                selected_compare_branch.as_deref(),
+            ) {
+                (Some(base_branch), Some(compare_branch)) => {
+                    let branch_diff =
+                        load_webui_branch_git_diff(&repository_root, compare_branch, base_branch)?;
+                    if !branch_diff.trim().is_empty() {
+                        sections.push(branch_diff);
+                    }
+                }
+                _ => notices.push(String::from("当前仓库无法解析用于分支对比的分支。")),
+            }
+        }
+    }
+
+    let mut unified_diff = sections.join("\n");
+    if unified_diff.len() > WEBUI_DIFF_MAX_BYTES {
+        unified_diff =
+            truncate_string_to_char_boundary(&unified_diff, WEBUI_DIFF_MAX_BYTES).to_string();
+        notices.push(String::from("Diff 内容过大，已截断到 WebUI 预览上限。"));
+    }
+    let (changed_files, additions, deletions) = webui_unified_diff_stats(&unified_diff);
+    let notice = if changed_files == 0 {
+        Some(String::from("当前工作区没有可展示的 Git 变更。"))
+    } else if notices.is_empty() {
+        None
+    } else {
+        Some(notices.join(" "))
+    };
+
+    Ok(WebuiWorkspaceDiffSnapshot {
+        repository_root: normalized_workspace_path_text_from_path(&repository_root),
+        unified_diff,
+        changed_files,
+        additions,
+        deletions,
+        notice,
+        current_branch,
+        default_branch,
+        selected_base_branch,
+        selected_compare_branch,
+        selected_commit_hash,
+        branches,
+        recent_commits,
+    })
+}
+
+/// Builds an empty WebUI diff snapshot with one user-facing notice.
+/// 构建带有单条用户提示的空 WebUI diff 快照。
+fn empty_webui_diff_snapshot(
+    repository_root: String,
+    notice: String,
+) -> WebuiWorkspaceDiffSnapshot {
+    WebuiWorkspaceDiffSnapshot {
+        repository_root,
+        unified_diff: String::new(),
+        changed_files: 0,
+        additions: 0,
+        deletions: 0,
+        notice: Some(notice),
+        current_branch: None,
+        default_branch: None,
+        selected_base_branch: None,
+        selected_compare_branch: None,
+        selected_commit_hash: None,
+        branches: Vec::new(),
+        recent_commits: Vec::new(),
+    }
+}
+
+/// Builds the default WebUI diff request.
+/// 构建默认 WebUI diff 请求。
+fn default_webui_workspace_diff_request() -> WebuiWorkspaceDiffRequest {
+    WebuiWorkspaceDiffRequest {
+        mode: WebuiWorkspaceDiffMode::Unstaged,
+        base_branch: None,
+        compare_branch: None,
+        commit_hash: None,
+    }
+}
+
+/// Resolves the Git repository root for one workspace path.
+/// 解析单个工作区路径对应的 Git 仓库根目录。
+fn resolve_webui_git_repository_root(workspace_path: &Path) -> Result<Option<PathBuf>, String> {
+    let output = run_webui_git_command(workspace_path, &["rev-parse", "--show-toplevel"])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if root.is_empty() {
+        return Ok(None);
+    }
+    fs::canonicalize(&root)
+        .map(Some)
+        .map_err(|error| format!("failed to resolve git repository root `{root}`: {error}"))
+}
+
+/// Loads unstaged tracked changes as one unified diff.
+/// 以 unified diff 形式加载未暂存的已跟踪变更。
+fn load_webui_unstaged_git_diff(repository_root: &Path) -> Result<String, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            "--",
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git diff", &output))
+}
+
+/// Loads staged changes as one unified diff.
+/// 以 unified diff 形式加载已暂存变更。
+fn load_webui_staged_git_diff(repository_root: &Path) -> Result<String, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            "--cached",
+            "--",
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git diff --cached", &output))
+}
+
+/// Loads one selected commit patch.
+/// 加载单个选中提交的 patch。
+fn load_webui_commit_git_diff(repository_root: &Path, commit_hash: &str) -> Result<String, String> {
+    ensure_webui_git_ref_text(commit_hash)?;
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            "--patch",
+            commit_hash,
+            "--",
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git show", &output))
+}
+
+/// Loads a branch-to-branch merge-base diff.
+/// 加载两个分支之间基于合并基点的 diff。
+fn load_webui_branch_git_diff(
+    repository_root: &Path,
+    base_branch: &str,
+    compare_branch: &str,
+) -> Result<String, String> {
+    ensure_webui_git_ref_text(base_branch)?;
+    ensure_webui_git_ref_text(compare_branch)?;
+    let range = format!("{base_branch}...{compare_branch}");
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            &range,
+            "--",
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git diff branch range", &output))
+}
+
+/// Loads the current branch name when the repository is not detached.
+/// 在仓库不是游离 HEAD 时加载当前分支名称。
+fn load_webui_current_git_branch(repository_root: &Path) -> Result<Option<String>, String> {
+    let output = run_webui_git_command(repository_root, &["branch", "--show-current"])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok((!branch.is_empty()).then_some(branch))
+}
+
+/// Loads the default mainline branch used as the branch comparison target.
+/// 加载作为分支对比目标的默认主线分支。
+fn load_webui_default_git_branch(repository_root: &Path) -> Result<Option<String>, String> {
+    let origin_head = run_webui_git_command(
+        repository_root,
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
+    )?;
+    if origin_head.status.success() {
+        let branch = String::from_utf8_lossy(&origin_head.stdout)
+            .trim()
+            .to_string();
+        if !branch.is_empty() {
+            return Ok(Some(branch));
+        }
+    }
+    for candidate in ["origin/main", "origin/master", "main", "master"] {
+        if webui_git_ref_exists(repository_root, candidate)? {
+            return Ok(Some(candidate.to_string()));
+        }
+    }
+    Ok(None)
+}
+
+/// Loads selectable local and remote branch names.
+/// 加载可选择的本地与远端分支名称。
+fn load_webui_git_branches(
+    repository_root: &Path,
+    current_branch: Option<&str>,
+) -> Result<Vec<WebuiGitBranchSummary>, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:short)",
+            "refs/heads",
+            "refs/remotes",
+        ],
+    )?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let mut seen = BTreeSet::new();
+    let mut branches = Vec::new();
+    for raw_line in String::from_utf8_lossy(&output.stdout).lines() {
+        let branch = raw_line.trim();
+        if branch.is_empty() || branch.ends_with("/HEAD") || !seen.insert(branch.to_string()) {
+            continue;
+        }
+        branches.push(WebuiGitBranchSummary {
+            name: branch.to_string(),
+            current: current_branch == Some(branch),
+            remote: branch.contains('/'),
+        });
+    }
+    Ok(branches)
+}
+
+/// Loads the latest commits used by commit review mode.
+/// 加载提交审核模式使用的最近提交。
+fn load_webui_recent_commits(repository_root: &Path) -> Result<Vec<WebuiGitCommitSummary>, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "log",
+            "-n",
+            "20",
+            "--pretty=format:%H%x1f%h%x1f%s%x1f%cr%x1e",
+        ],
+    )?;
+    if !output.status.success() {
+        return Ok(Vec::new());
+    }
+    let mut commits = Vec::new();
+    for raw_record in String::from_utf8_lossy(&output.stdout).split('\x1e') {
+        let fields = raw_record
+            .trim_matches('\n')
+            .split('\x1f')
+            .collect::<Vec<_>>();
+        if fields.len() < 4 || fields[0].trim().is_empty() {
+            continue;
+        }
+        commits.push(WebuiGitCommitSummary {
+            hash: fields[0].trim().to_string(),
+            short_hash: fields[1].trim().to_string(),
+            subject: fields[2].trim().to_string(),
+            relative_time: fields[3].trim().to_string(),
+        });
+    }
+    Ok(commits)
+}
+
+/// Checks whether one Git ref exists.
+/// 检查单个 Git 引用是否存在。
+fn webui_git_ref_exists(repository_root: &Path, git_ref: &str) -> Result<bool, String> {
+    ensure_webui_git_ref_text(git_ref)?;
+    let output = run_webui_git_command(
+        repository_root,
+        &["rev-parse", "--verify", "--quiet", git_ref],
+    )?;
+    Ok(output.status.success())
+}
+
+/// Rejects ref text that could be interpreted as an option or shell-like payload.
+/// 拒绝可能被解释为选项或类 shell 载荷的引用文本。
+fn ensure_webui_git_ref_text(git_ref: &str) -> Result<(), String> {
+    let value = git_ref.trim();
+    if value.is_empty()
+        || value.starts_with('-')
+        || value.contains('\0')
+        || value.contains('\n')
+        || value.contains('\r')
+    {
+        return Err(String::from("invalid Git reference for WebUI diff request"));
+    }
+    Ok(())
+}
+
+/// Loads lightweight untracked text files as synthesized new-file hunks.
+/// 将轻量未跟踪文本文件加载为合成的新文件 hunk。
+fn load_webui_untracked_git_diff(
+    repository_root: &Path,
+    notices: &mut Vec<String>,
+) -> Result<String, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+    if !output.status.success() {
+        return Err(format_webui_git_error("git ls-files", &output));
+    }
+
+    let mut sections = Vec::new();
+    let mut skipped_large = 0usize;
+    let mut skipped_binary = 0usize;
+    for raw_path in output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|part| !part.is_empty())
+    {
+        let relative_path = String::from_utf8_lossy(raw_path).replace('\\', "/");
+        let file_path = repository_root.join(&relative_path);
+        if !is_path_within_root(repository_root, &file_path) || !file_path.is_file() {
+            continue;
+        }
+        let metadata = fs::metadata(&file_path).map_err(|error| {
+            format!("failed to inspect untracked file `{relative_path}`: {error}")
+        })?;
+        if metadata.len() > WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES {
+            skipped_large += 1;
+            continue;
+        }
+        let bytes = fs::read(&file_path)
+            .map_err(|error| format!("failed to read untracked file `{relative_path}`: {error}"))?;
+        if bytes.contains(&0) {
+            skipped_binary += 1;
+            sections.push(synthesize_webui_binary_new_file_diff(&relative_path));
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            skipped_binary += 1;
+            sections.push(synthesize_webui_binary_new_file_diff(&relative_path));
+            continue;
+        };
+        sections.push(synthesize_webui_text_new_file_diff(&relative_path, &text));
+    }
+
+    if skipped_large > 0 {
+        notices.push(format!("已跳过 {skipped_large} 个过大的未跟踪文件。"));
+    }
+    if skipped_binary > 0 {
+        notices.push(format!(
+            "已将 {skipped_binary} 个未跟踪二进制文件按二进制变更展示。"
+        ));
+    }
+
+    Ok(sections.join("\n"))
+}
+
+/// Runs one bounded Git command with filters and pagers disabled.
+/// 在禁用过滤器与分页器的情况下运行单个有界 Git 命令。
+fn run_webui_git_command(
+    working_directory: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let hooks_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut command = Command::new("git");
+    command
+        .current_dir(working_directory)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_PAGER", "")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("diff.external=")
+        .arg("-c")
+        .arg(format!("core.hooksPath={hooks_path}"));
+    command.args(args);
+    command
+        .output()
+        .map_err(|error| format!("failed to run git command `{}`: {error}", args.join(" ")))
+}
+
+/// Formats a Git command failure with stderr preserved for diagnostics.
+/// 格式化 Git 命令失败信息，并保留 stderr 方便诊断。
+fn format_webui_git_error(label: &str, output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if stderr.is_empty() {
+        format!("{label} failed with status {}", output.status)
+    } else {
+        format!("{label} failed with status {}: {stderr}", output.status)
+    }
+}
+
+/// Returns whether one candidate path stays inside the repository root.
+/// 返回候选路径是否仍位于仓库根目录内。
+fn is_path_within_root(repository_root: &Path, candidate: &Path) -> bool {
+    let Ok(repository_root) = fs::canonicalize(repository_root) else {
+        return false;
+    };
+    let Ok(candidate) = fs::canonicalize(candidate) else {
+        return false;
+    };
+    candidate.starts_with(repository_root)
+}
+
+/// Synthesizes a unified diff section for one untracked text file.
+/// 为单个未跟踪文本文件合成 unified diff 片段。
+fn synthesize_webui_text_new_file_diff(relative_path: &str, text: &str) -> String {
+    let old_path = git_diff_path(&format!("a/{relative_path}"));
+    let new_path = git_diff_path(&format!("b/{relative_path}"));
+    let line_count = text.lines().count();
+    let mut section = format!(
+        "diff --git {old_path} {new_path}\nnew file mode 100644\n--- /dev/null\n+++ {new_path}\n@@ -0,0 +1,{line_count} @@\n"
+    );
+    for line in text.lines() {
+        section.push('+');
+        section.push_str(line);
+        section.push('\n');
+    }
+    if !text.ends_with('\n') {
+        section.push_str("\\ No newline at end of file\n");
+    }
+    section
+}
+
+/// Synthesizes a binary diff marker for one untracked binary file.
+/// 为单个未跟踪二进制文件合成二进制 diff 标记。
+fn synthesize_webui_binary_new_file_diff(relative_path: &str) -> String {
+    let old_path = git_diff_path(&format!("a/{relative_path}"));
+    let new_path = git_diff_path(&format!("b/{relative_path}"));
+    format!(
+        "diff --git {old_path} {new_path}\nnew file mode 100644\nBinary files /dev/null and {new_path} differ\n"
+    )
+}
+
+/// Quotes one Git diff path when whitespace or escapes require it.
+/// 当路径包含空白或转义字符时为 Git diff 路径加引号。
+fn git_diff_path(path: &str) -> String {
+    let normalized = path.replace('\\', "/");
+    if normalized
+        .chars()
+        .any(|character| character.is_whitespace() || character == '"' || character == '\\')
+    {
+        format!(
+            "\"{}\"",
+            normalized.replace('\\', "\\\\").replace('"', "\\\"")
+        )
+    } else {
+        normalized
+    }
+}
+
+/// Computes lightweight counters directly from one unified diff string.
+/// 直接从 unified diff 字符串计算轻量计数。
+fn webui_unified_diff_stats(unified_diff: &str) -> (usize, usize, usize) {
+    let mut files = 0usize;
+    let mut additions = 0usize;
+    let mut deletions = 0usize;
+    for line in unified_diff.lines() {
+        if line.starts_with("diff --git ") {
+            files += 1;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            additions += 1;
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            deletions += 1;
+        }
+    }
+    (files, additions, deletions)
+}
+
+/// Truncates a string slice without cutting through a UTF-8 code point.
+/// 在不截断 UTF-8 字符边界的情况下截断字符串切片。
+fn truncate_string_to_char_boundary(value: &str, max_bytes: usize) -> &str {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut boundary = 0usize;
+    for (index, _) in value.char_indices() {
+        if index > max_bytes {
+            break;
+        }
+        boundary = index;
+    }
+    &value[..boundary]
 }
 
 /// Opens one native folder-picker dialog and returns the selected path when confirmed.

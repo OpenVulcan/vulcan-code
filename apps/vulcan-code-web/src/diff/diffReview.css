@@ -1,0 +1,466 @@
+.diff-review-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  color: var(--foreground);
+}
+
+.diff-review-panel.empty {
+  min-height: 180px;
+  justify-content: center;
+}
+
+.diff-empty-state {
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.diff-empty-state strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.diff-empty-state span {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.diff-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid var(--border);
+}
+
+.diff-panel-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.diff-panel-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.diff-panel-title-text {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-panel-actions,
+.diff-file-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.diff-stat {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.diff-stat.added {
+  color: #238636;
+}
+
+.diff-stat.removed {
+  color: #da3633;
+}
+
+.diff-mode-trigger,
+.diff-branch-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.diff-mode-trigger {
+  padding: 0 8px;
+}
+
+.diff-branch-trigger {
+  max-width: 180px;
+  padding: 0 2px;
+  border-color: transparent;
+  color: var(--muted-foreground);
+}
+
+.diff-branch-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-mode-menu {
+  min-width: 150px;
+  width: 150px;
+}
+
+.diff-mode-menu [data-slot="dropdown-menu-item"],
+.diff-mode-sub-trigger {
+  display: flex;
+  justify-content: space-between;
+  min-height: 30px;
+  font-size: 13px;
+}
+
+.diff-commit-menu {
+  width: 460px;
+  max-width: min(460px, calc(100vw - 40px));
+}
+
+.diff-commit-menu-item {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  min-height: 30px;
+}
+
+.diff-commit-menu-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-commit-menu-item small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.diff-branch-compare-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 2px;
+}
+
+.diff-branch-arrow {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diff-branch-menu {
+  width: 300px;
+  max-width: min(300px, calc(100vw - 40px));
+}
+
+.diff-branch-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+}
+
+.diff-branch-search input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.diff-branch-menu-label {
+  padding: 7px 8px 5px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.diff-branch-menu-item {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.diff-branch-menu-item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-action-button,
+.diff-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+.diff-action-button {
+  padding: 0 10px;
+}
+
+.diff-icon-button {
+  width: 28px;
+  padding: 0;
+}
+
+.diff-file-list {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  padding: 0;
+  overflow: auto;
+}
+
+.diff-empty-state.in-list {
+  min-height: 180px;
+  margin: auto;
+}
+
+.diff-file-card {
+  border: 0;
+  border-radius: 0;
+  overflow: visible;
+  background: var(--background);
+}
+
+.diff-file-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  border: 0;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 7px 12px;
+  border-radius: 0;
+  text-align: left;
+}
+
+.diff-file-header:hover {
+  background: var(--muted);
+}
+
+.diff-file-paths {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.diff-file-paths strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.diff-file-paths strong,
+.diff-file-paths span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-file-paths strong {
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.diff-file-paths span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.diff-file-status-dot {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #0969da;
+}
+
+.diff-file-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  border-radius: 0 0 7px 7px;
+}
+
+.diff-hunk {
+  border-top: 1px solid var(--border);
+}
+
+.diff-hunk:first-child {
+  border-top: 0;
+}
+
+.diff-hunk-header {
+  padding: 6px 12px;
+  min-height: 29px;
+  background: color-mix(in oklab, var(--muted) 65%, var(--background));
+  color: var(--muted-foreground);
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 17px;
+  white-space: pre;
+}
+
+.diff-lines {
+  display: grid;
+  overflow-x: auto;
+}
+
+.diff-virtual-lines {
+  display: grid;
+  overflow-x: auto;
+  contain: content;
+}
+
+.diff-virtual-spacer {
+  min-width: 1px;
+  contain: strict;
+  pointer-events: none;
+}
+
+.diff-hunk-header.virtual {
+  border-top: 1px solid var(--border);
+}
+
+.diff-line-row {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  height: 22px;
+  min-height: 22px;
+  min-width: 100%;
+  border-left: 3px solid transparent;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.diff-line-row.added {
+  border-left-color: #1f883d;
+  background: color-mix(in oklab, #2ea043 13%, var(--background));
+}
+
+.diff-line-row.removed {
+  border-left-color: #cf222e;
+  background: color-mix(in oklab, #f85149 13%, var(--background));
+}
+
+.diff-line-row.metadata {
+  color: var(--muted-foreground);
+}
+
+.diff-line-number {
+  user-select: none;
+  color: var(--muted-foreground);
+  text-align: right;
+  padding: 0 8px;
+}
+
+.diff-line-row.added .diff-line-number {
+  color: #1f883d;
+}
+
+.diff-line-row.removed .diff-line-number {
+  color: #cf222e;
+}
+
+.diff-line-row code {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  padding: 0 12px 0 8px;
+  white-space: pre;
+}
+
+.diff-line-row code .hljs-keyword,
+.diff-line-row code .hljs-selector-tag,
+.diff-line-row code .hljs-title.function_,
+.diff-line-row code .hljs-built_in {
+  color: #8250df;
+}
+
+.diff-line-row code .hljs-string,
+.diff-line-row code .hljs-regexp,
+.diff-line-row code .hljs-template-variable {
+  color: #0a3069;
+}
+
+.diff-line-row code .hljs-number,
+.diff-line-row code .hljs-literal {
+  color: #0550ae;
+}
+
+.diff-line-row code .hljs-comment,
+.diff-line-row code .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+
+.diff-line-row code .hljs-attr,
+.diff-line-row code .hljs-attribute,
+.diff-line-row code .hljs-property,
+.diff-line-row code .hljs-variable,
+.diff-line-row code .hljs-params {
+  color: #953800;
+}
+
+.diff-line-row code .hljs-title,
+.diff-line-row code .hljs-section,
+.diff-line-row code .hljs-name {
+  color: #116329;
+}
+
+.diff-line-row code .hljs-meta,
+.diff-line-row code .hljs-symbol,
+.diff-line-row code .hljs-bullet {
+  color: #57606a;
+}
+
+.diff-binary-note {
+  margin: 8px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}

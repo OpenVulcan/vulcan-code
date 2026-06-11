@@ -135,6 +135,9 @@ import type {
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
+import { DiffReviewPanel } from "@/diff/DiffReviewPanel";
+import { hasRenderableDiff, parseUnifiedDiff } from "@/diff/parseDiff";
+import type { DiffPanelSnapshot, DiffReviewSelection, WorkspaceDiffSnapshotResponse } from "@/diff/types";
 import { toast } from "sonner";
 import * as LucideIcons from "lucide-react";
 import {
@@ -148,6 +151,8 @@ import {
   ChevronLeft,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
+  Check,
   CheckCircle2,
   CircleAlert,
   Calendar,
@@ -1435,6 +1440,33 @@ async function loadWorkbenchSnapshot(): Promise<WorkbenchSnapshot> {
     return browserFallbackSnapshot();
   }
   return invoke<WorkbenchSnapshot>("service_workbench_snapshot");
+}
+
+// loadWorkspaceDiffSnapshot loads a fresh Git diff snapshot for one project path.
+// loadWorkspaceDiffSnapshot 为单个项目路径加载最新 Git diff 快照。
+async function loadWorkspaceDiffSnapshot(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  request: DiffReviewSelection,
+): Promise<WorkspaceDiffSnapshotResponse> {
+  const invoke = await resolveInvoke();
+  if (!invoke) {
+    return {
+      repositoryRoot: workspacePath,
+      unifiedDiff: "",
+      changedFiles: 0,
+      additions: 0,
+      deletions: 0,
+      notice: "浏览器预览模式没有连接本地 Git diff 服务。",
+    };
+  }
+  return invoke<WorkspaceDiffSnapshotResponse>("service_workspace_diff_snapshot", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request,
+  });
 }
 
 // refreshLuaSkillsCatalog refreshes the Lua Skills catalog through the Tauri service.
@@ -5662,6 +5694,10 @@ const CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX = 220;
 // CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX 是测量前处理过程分组使用的兜底高度。
 const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
 
+// USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
+// USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
+const USER_PROMPT_COLLAPSE_LINE_LIMIT = 20;
+
 // STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT limits tail-follow signatures to messages that can affect the viewport tail.
 // STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT 将尾部追随签名限制在会影响视口尾部的消息范围。
 const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
@@ -5840,6 +5876,10 @@ function contextCompactionRoleOrder(role?: string): number {
 // conversationProcessCollapseMemory keeps manual process fold state for this WebUI session only.
 // conversationProcessCollapseMemory 仅在当前 WebUI 会话内保留手动处理过程折叠状态。
 const conversationProcessCollapseMemory = new Map<string, boolean>();
+
+// conversationUserPromptExpansionMemory keeps manual user prompt expansion state for this WebUI session only.
+// conversationUserPromptExpansionMemory 仅在当前 WebUI 会话内保留手动用户提示词展开状态。
+const conversationUserPromptExpansionMemory = new Set<string>();
 
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
 // projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
@@ -6039,6 +6079,18 @@ function conversationMessageUnixMillis(message?: ConversationMessage): number | 
   }
   const parsed = Number.parseInt(raw, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+// formatFullConversationTimestamp renders a complete local timestamp for transcript metadata.
+// formatFullConversationTimestamp 为转录元信息渲染完整本地时间戳。
+function formatFullConversationTimestamp(message?: ConversationMessage): string | null {
+  const timestamp = conversationMessageUnixMillis(message);
+  if (!timestamp) {
+    return null;
+  }
+  const date = new Date(timestamp);
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${date.getFullYear()}年${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
 
 // turnStatsDurationMs reads the total turn duration from structured turn statistics.
@@ -7842,23 +7894,89 @@ function WorkspaceResizableBody(props: {
               id="workspaceContext"
               minSize="320px"
             >
-              <WorkspaceContextPanel workbench={props.workbench} onClose={props.onToggleRightPanel} />
+              <WorkspaceContextPanel
+                selectedConversationId={props.selectedConversationId}
+                workbench={props.workbench}
+                onClose={props.onToggleRightPanel}
+              />
             </ResizablePanel>
           </>
         ) : null}
       </ResizablePanelGroup>
       {props.rightPanelOpen && props.rightPanelFloating ? (
         <div className="workspace-context-floating-panel">
-          <WorkspaceContextPanel floating workbench={props.workbench} onClose={props.onToggleRightPanel} />
+          <WorkspaceContextPanel
+            floating
+            selectedConversationId={props.selectedConversationId}
+            workbench={props.workbench}
+            onClose={props.onToggleRightPanel}
+          />
         </div>
       ) : null}
     </div>
   );
 }
 
+// WorkspaceReviewPanelCacheEntry stores one mounted review panel state across close and reopen cycles.
+// WorkspaceReviewPanelCacheEntry 保存一次右侧审核面板在关闭与重开之间需要复用的状态。
+interface WorkspaceReviewPanelCacheEntry {
+  // Latest workspace diff snapshot rendered by the review panel.
+  // 审核面板最近渲染的工作区 diff 快照。
+  snapshot: DiffPanelSnapshot | null;
+  // Git review source selection used by the cached snapshot.
+  // 缓存快照对应的 Git 审核来源选择。
+  selection: DiffReviewSelection;
+  // Conversation or subagent surface that produced the cached snapshot.
+  // 生成缓存快照的会话或子代理界面标识。
+  surfaceId: string | null;
+  // Workspace path that produced the cached snapshot.
+  // 生成缓存快照的工作区路径。
+  workspacePath: string | null;
+  // Stable Git review source key that produced the cached snapshot.
+  // 生成缓存快照的稳定 Git 审核来源键。
+  reviewKey: string | null;
+  // Last refresh error shown by the panel.
+  // 面板最近展示的刷新错误。
+  error: string | null;
+}
+
+// workspaceReviewPanelCache preserves review content while the right rail is temporarily collapsed.
+// workspaceReviewPanelCache 在右侧栏临时折叠时保留审核内容。
+const workspaceReviewPanelCache = new Map<string, WorkspaceReviewPanelCacheEntry>();
+
+// lastWorkspaceReviewVisibleSurfaceId tracks the latest conversation surface that the review panel represented.
+// lastWorkspaceReviewVisibleSurfaceId 跟踪审核面板最近代表的会话界面。
+let lastWorkspaceReviewVisibleSurfaceId: string | null = null;
+
+// workspaceReviewPanelCacheLimit caps cached review states to avoid retaining old diff trees forever.
+// workspaceReviewPanelCacheLimit 限制缓存的审核状态数量，避免长期保留旧 diff 树。
+const workspaceReviewPanelCacheLimit = 12;
+
+// workspaceReviewPanelCacheKey builds a per-surface cache key for right-panel review state.
+// workspaceReviewPanelCacheKey 为右侧审核状态构建按界面隔离的缓存键。
+function workspaceReviewPanelCacheKey(surfaceId: string | null, workspacePath: string | null): string {
+  return [surfaceId ?? "no-surface", workspacePath ?? "no-workspace"].join("\u001f");
+}
+
+// rememberWorkspaceReviewPanelCache writes one cache entry and trims the oldest entries.
+// rememberWorkspaceReviewPanelCache 写入单个缓存条目并裁剪最旧条目。
+function rememberWorkspaceReviewPanelCache(key: string, entry: WorkspaceReviewPanelCacheEntry): void {
+  workspaceReviewPanelCache.set(key, entry);
+  while (workspaceReviewPanelCache.size > workspaceReviewPanelCacheLimit) {
+    const oldestKey = workspaceReviewPanelCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    workspaceReviewPanelCache.delete(oldestKey);
+  }
+}
+
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
 // WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
 function WorkspaceContextPanel(props: {
+  // Current selected conversation id from the local workbench route.
+  // 来自本地工作台路由的当前选中会话标识。
+  selectedConversationId: string | null;
   // Workbench snapshot carrying selected-session side-panel projections.
   // 携带当前选中会话侧面板投影的工作台快照。
   workbench: WorkbenchSnapshot;
@@ -7872,6 +7990,236 @@ function WorkspaceContextPanel(props: {
   // t translates the right context panel shell labels.
   // t 翻译右侧上下文面板外壳标签。
   const { t } = useI18n();
+  // reviewSnapshot stores the newest renderable diff for the selected conversation.
+  // reviewSnapshot 保存当前选中会话中最新的可渲染 diff。
+  const reviewSnapshot = React.useMemo(
+    () => latestConversationDiffSnapshot(props.workbench, props.selectedConversationId),
+    [props.selectedConversationId, props.workbench],
+  );
+  // activeSurfaceId stores the conversation or subagent surface currently represented by the panel.
+  // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
+  const activeSurfaceId = activeWorkbenchSurfaceId(props.workbench, props.selectedConversationId);
+  // workspaceProjectId stores the backend project id used to resolve the Git diff path.
+  // workspaceProjectId 保存用于解析 Git diff 路径的后端项目标识。
+  const workspaceProjectId = React.useMemo(
+    () => selectedConversationProjectId(props.workbench, props.selectedConversationId),
+    [props.selectedConversationId, props.workbench],
+  );
+  // workspacePath stores the selected conversation owner project path for live diff refresh.
+  // workspacePath 保存当前选中会话所属项目路径，用于刷新实时 diff。
+  const workspacePath = React.useMemo(
+    () => selectedConversationWorkspacePath(props.workbench, props.selectedConversationId),
+    [props.selectedConversationId, props.workbench],
+  );
+  // reviewPanelCacheKey stores the cache bucket for this visible conversation surface.
+  // reviewPanelCacheKey 保存当前可见会话界面的审核缓存桶。
+  const reviewPanelCacheKey = React.useMemo(
+    () => workspaceReviewPanelCacheKey(activeSurfaceId, workspacePath),
+    [activeSurfaceId, workspacePath],
+  );
+  // initialReviewPanelCache restores a prior collapsed-panel state for this surface.
+  // initialReviewPanelCache 恢复该界面先前折叠面板时保留的状态。
+  const initialReviewPanelCache = React.useMemo(
+    () => workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null,
+    [reviewPanelCacheKey],
+  );
+  // workspaceReviewSnapshot stores the latest user-refreshed workspace Git diff.
+  // workspaceReviewSnapshot 保存最近一次用户刷新得到的工作区 Git diff。
+  const [workspaceReviewSnapshot, setWorkspaceReviewSnapshot] = React.useState<DiffPanelSnapshot | null>(
+    () => initialReviewPanelCache?.snapshot ?? null,
+  );
+  // diffReviewSelection stores the current Git review source selection.
+  // diffReviewSelection 保存当前 Git 审核来源选择。
+  const [diffReviewSelection, setDiffReviewSelection] = React.useState<DiffReviewSelection>(
+    () => initialReviewPanelCache?.selection ?? { mode: "branch" },
+  );
+  // diffReviewSelectionKey stores a stable key for the current Git review source.
+  // diffReviewSelectionKey 保存当前 Git 审核来源的稳定键。
+  const diffReviewSelectionKey = React.useMemo(
+    () => diffReviewSelectionStableKey(diffReviewSelection),
+    [diffReviewSelection],
+  );
+  // workspaceReviewSurfaceId stores the surface that produced the current workspace diff snapshot.
+  // workspaceReviewSurfaceId 保存生成当前工作区 diff 快照的界面标识。
+  const [workspaceReviewSurfaceId, setWorkspaceReviewSurfaceId] = React.useState<string | null>(
+    () => initialReviewPanelCache?.surfaceId ?? null,
+  );
+  // workspaceReviewPath stores the project path that produced the current workspace diff snapshot.
+  // workspaceReviewPath 保存生成当前工作区 diff 快照的项目路径。
+  const [workspaceReviewPath, setWorkspaceReviewPath] = React.useState<string | null>(
+    () => initialReviewPanelCache?.workspacePath ?? null,
+  );
+  // workspaceReviewKey stores the Git review source that produced the current snapshot.
+  // workspaceReviewKey 保存生成当前快照的 Git 审核来源。
+  const [workspaceReviewKey, setWorkspaceReviewKey] = React.useState<string | null>(
+    () => initialReviewPanelCache?.reviewKey ?? null,
+  );
+  // workspaceReviewLoading tracks the live diff refresh request.
+  // workspaceReviewLoading 跟踪实时 diff 刷新请求状态。
+  const [workspaceReviewLoading, setWorkspaceReviewLoading] = React.useState(false);
+  // workspaceReviewError stores the latest live diff refresh error.
+  // workspaceReviewError 保存最近一次实时 diff 刷新错误。
+  const [workspaceReviewError, setWorkspaceReviewError] = React.useState<string | null>(
+    () => initialReviewPanelCache?.error ?? null,
+  );
+  // workspaceReviewRequestSeqRef prevents stale async refresh results from replacing the current project diff.
+  // workspaceReviewRequestSeqRef 防止过期异步刷新结果覆盖当前项目 diff。
+  const workspaceReviewRequestSeqRef = React.useRef(0);
+  // hydratedReviewPanelCacheKeyRef prevents stale state from being saved under a newly selected surface.
+  // hydratedReviewPanelCacheKeyRef 防止旧状态被写入新选中界面的缓存桶。
+  const hydratedReviewPanelCacheKeyRef = React.useRef(reviewPanelCacheKey);
+  // forceWorkspaceReviewRefreshRef marks real conversation switches while ignoring simple collapse/reopen cycles.
+  // forceWorkspaceReviewRefreshRef 标记真实会话切换，同时忽略单纯折叠再展开。
+  const forceWorkspaceReviewRefreshRef = React.useRef(false);
+  const activeWorkspaceReviewSnapshot = workspaceReviewSurfaceId === activeSurfaceId
+    && workspaceReviewPath === workspacePath
+    && workspaceReviewKey === diffReviewSelectionKey
+      ? workspaceReviewSnapshot
+      : null;
+  const activeReviewSnapshot = activeWorkspaceReviewSnapshot ?? reviewSnapshot;
+
+  // handleRefreshWorkspaceDiff refreshes the current project Git diff through Tauri.
+  // handleRefreshWorkspaceDiff 通过 Tauri 刷新当前项目 Git diff。
+  const handleRefreshWorkspaceDiff = React.useCallback(async (selectionOverride?: DiffReviewSelection) => {
+    if (!workspacePath) {
+      setWorkspaceReviewError("当前会话没有关联项目路径，无法刷新 Git diff。");
+      return;
+    }
+    const requestSelection = selectionOverride ?? diffReviewSelection;
+    const requestKey = diffReviewSelectionStableKey(requestSelection);
+    const requestSeq = workspaceReviewRequestSeqRef.current + 1;
+    workspaceReviewRequestSeqRef.current = requestSeq;
+    setWorkspaceReviewLoading(true);
+    setWorkspaceReviewError(null);
+    try {
+      const response = await loadWorkspaceDiffSnapshot(workspacePath, workspaceProjectId, activeSurfaceId, requestSelection);
+      if (workspaceReviewRequestSeqRef.current !== requestSeq) {
+        return;
+      }
+      setWorkspaceReviewSnapshot(diffSnapshotFromWorkspaceResponse(response));
+      setWorkspaceReviewSurfaceId(activeSurfaceId);
+      setWorkspaceReviewPath(workspacePath);
+      setWorkspaceReviewKey(requestKey);
+    } catch (error) {
+      if (workspaceReviewRequestSeqRef.current !== requestSeq) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setWorkspaceReviewError(message);
+      toast.error(`刷新 Git diff 失败：${message}`);
+    } finally {
+      if (workspaceReviewRequestSeqRef.current === requestSeq) {
+        setWorkspaceReviewLoading(false);
+      }
+    }
+  }, [activeSurfaceId, diffReviewSelection, workspacePath, workspaceProjectId]);
+
+  // handleDiffReviewSelectionChange applies a new Git review source and refreshes it.
+  // handleDiffReviewSelectionChange 应用新的 Git 审核来源并刷新。
+  const handleDiffReviewSelectionChange = React.useCallback((selection: DiffReviewSelection) => {
+    setDiffReviewSelection(selection);
+    setWorkspaceReviewSnapshot(null);
+    setWorkspaceReviewSurfaceId(activeSurfaceId);
+    setWorkspaceReviewPath(workspacePath);
+    setWorkspaceReviewKey(null);
+    void handleRefreshWorkspaceDiff(selection);
+  }, [activeSurfaceId, handleRefreshWorkspaceDiff, workspacePath]);
+
+  // Tracks real surface changes so cached content is reused only for panel collapse, not conversation switching.
+  // 跟踪真实界面变化，使缓存只服务于面板折叠，而不会吞掉会话切换刷新。
+  React.useEffect(() => {
+    if (lastWorkspaceReviewVisibleSurfaceId !== activeSurfaceId) {
+      forceWorkspaceReviewRefreshRef.current = true;
+      lastWorkspaceReviewVisibleSurfaceId = activeSurfaceId;
+    }
+  }, [activeSurfaceId]);
+
+  // Rehydrates cached review state when the panel remounts for a different visible surface.
+  // 当面板为不同可见界面重新挂载时恢复缓存的审核状态。
+  React.useEffect(() => {
+    if (hydratedReviewPanelCacheKeyRef.current === reviewPanelCacheKey) {
+      return;
+    }
+    hydratedReviewPanelCacheKeyRef.current = reviewPanelCacheKey;
+    workspaceReviewRequestSeqRef.current += 1;
+    const cachedEntry = workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null;
+    setDiffReviewSelection(cachedEntry?.selection ?? { mode: "branch" });
+    setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
+    setWorkspaceReviewSurfaceId(cachedEntry?.surfaceId ?? activeSurfaceId);
+    setWorkspaceReviewPath(cachedEntry?.workspacePath ?? workspacePath);
+    setWorkspaceReviewKey(cachedEntry?.reviewKey ?? null);
+    setWorkspaceReviewError(cachedEntry?.error ?? null);
+    setWorkspaceReviewLoading(false);
+  }, [activeSurfaceId, reviewPanelCacheKey, workspacePath]);
+
+  // Persists the current review state so collapsing the panel does not force a fresh diff render.
+  // 持久化当前审核状态，使折叠面板不会强制重新生成 diff。
+  React.useEffect(() => {
+    if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
+      return;
+    }
+    rememberWorkspaceReviewPanelCache(reviewPanelCacheKey, {
+      snapshot: workspaceReviewSnapshot,
+      selection: diffReviewSelection,
+      surfaceId: workspaceReviewSurfaceId,
+      workspacePath: workspaceReviewPath,
+      reviewKey: workspaceReviewKey,
+      error: workspaceReviewError,
+    });
+  }, [
+    diffReviewSelection,
+    reviewPanelCacheKey,
+    workspaceReviewError,
+    workspaceReviewKey,
+    workspaceReviewPath,
+    workspaceReviewSnapshot,
+    workspaceReviewSurfaceId,
+  ]);
+
+  // Auto-refreshes when the visible conversation moves to a different project.
+  // 当可见会话切换到不同项目时自动刷新。
+  React.useEffect(() => {
+    if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
+      return;
+    }
+    const forceRefreshForSurface = forceWorkspaceReviewRefreshRef.current;
+    if (!workspacePath) {
+      forceWorkspaceReviewRefreshRef.current = false;
+      setWorkspaceReviewSnapshot(null);
+      setWorkspaceReviewSurfaceId(activeSurfaceId);
+      setWorkspaceReviewPath(null);
+      setWorkspaceReviewKey(null);
+      setWorkspaceReviewError(null);
+      setWorkspaceReviewLoading(false);
+      return;
+    }
+    if (
+      workspaceReviewSurfaceId === activeSurfaceId
+      && workspaceReviewPath === workspacePath
+      && workspaceReviewKey === diffReviewSelectionKey
+      && workspaceReviewSnapshot
+      && !forceRefreshForSurface
+    ) {
+      setWorkspaceReviewError(null);
+      return;
+    }
+    forceWorkspaceReviewRefreshRef.current = false;
+    setWorkspaceReviewSnapshot(null);
+    setWorkspaceReviewSurfaceId(activeSurfaceId);
+    setWorkspaceReviewPath(workspacePath);
+    setWorkspaceReviewKey(diffReviewSelectionKey);
+    void handleRefreshWorkspaceDiff();
+  }, [
+    activeSurfaceId,
+    diffReviewSelectionKey,
+    handleRefreshWorkspaceDiff,
+    reviewPanelCacheKey,
+    workspacePath,
+    workspaceReviewKey,
+    workspaceReviewPath,
+    workspaceReviewSnapshot,
+    workspaceReviewSurfaceId,
+  ]);
 
   return (
     <aside className={cn("context-panel-shell", props.floating && "floating")}>
@@ -7894,12 +8242,17 @@ function WorkspaceContextPanel(props: {
             </Button>
           ) : null}
         </div>
-        <TabsContent className="context-tab-content" value="review">
-          <div className="context-empty-state">
-            <GitBranch size={20} />
-            <strong>{t("contextPanel.review")}</strong>
-            <span>{t("contextPanel.reviewEmpty")}</span>
-          </div>
+        <TabsContent className="context-tab-content review-tab-content" value="review">
+          <DiffReviewPanel
+            emptyBody={workspaceReviewError ?? t("contextPanel.reviewEmpty")}
+            emptyTitle={t("contextPanel.review")}
+            loading={workspaceReviewLoading}
+            selection={diffReviewSelection}
+            snapshot={activeReviewSnapshot}
+            onCopyRaw={(rawDiff) => void copyText(rawDiff)}
+            onRefresh={handleRefreshWorkspaceDiff}
+            onSelectionChange={handleDiffReviewSelectionChange}
+          />
         </TabsContent>
         <TabsContent className="context-tab-content" value="memory">
           <ContextInjectionTabs snapshot={props.workbench.contextInjection ?? null} />
@@ -7907,6 +8260,108 @@ function WorkspaceContextPanel(props: {
       </Tabs>
     </aside>
   );
+}
+
+// activeWorkbenchSurfaceId returns the currently visible parent or subagent conversation id.
+// activeWorkbenchSurfaceId 返回当前可见的父会话或子代理会话标识。
+function activeWorkbenchSurfaceId(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
+  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  if (workbench.subagentNavigation?.parentConversationId === parentConversationId) {
+    return workbench.subagentNavigation.activeConversationId ?? parentConversationId;
+  }
+  return parentConversationId;
+}
+
+// selectedConversationProjectId returns the project id for the currently visible conversation.
+// selectedConversationProjectId 返回当前可见会话所属的项目标识。
+function selectedConversationProjectId(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
+  const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
+  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  const conversation = activeSurfaceId
+    ? workbench.conversations.find((item) => item.id === activeSurfaceId)
+      ?? workbench.conversations.find((item) => item.id === parentConversationId)
+      : null;
+  if (conversation?.projectId) {
+    return conversation.projectId;
+  }
+  return conversation ? projectForConversation(workbench, conversation)?.id ?? null : workbench.projects[0]?.id ?? null;
+}
+
+// selectedConversationWorkspacePath returns the project path for the currently visible conversation.
+// selectedConversationWorkspacePath 返回当前可见会话所属的项目路径。
+function selectedConversationWorkspacePath(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
+  const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
+  const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
+  if (!activeSurfaceId) {
+    return workbench.projects[0]?.path ?? null;
+  }
+  const conversation = workbench.conversations.find((item) => item.id === activeSurfaceId)
+    ?? workbench.conversations.find((item) => item.id === parentConversationId);
+  if (!conversation) {
+    return workbench.projects[0]?.path ?? null;
+  }
+  return projectForConversation(workbench, conversation)?.path ?? null;
+}
+
+// diffSnapshotFromWorkspaceResponse converts the backend Git response into renderer-ready state.
+// diffSnapshotFromWorkspaceResponse 将后端 Git 响应转换为可渲染状态。
+function diffSnapshotFromWorkspaceResponse(response: WorkspaceDiffSnapshotResponse): DiffPanelSnapshot {
+  const snapshot = parseUnifiedDiff(response.unifiedDiff, "workspace", response.repositoryRoot);
+  return {
+    ...snapshot,
+    notice: response.notice ?? snapshot.notice,
+    stats: {
+      files: response.changedFiles || snapshot.stats.files,
+      additions: response.additions || snapshot.stats.additions,
+      deletions: response.deletions || snapshot.stats.deletions,
+    },
+    currentBranch: response.currentBranch ?? null,
+    defaultBranch: response.defaultBranch ?? null,
+    selectedBaseBranch: response.selectedBaseBranch ?? null,
+    selectedCompareBranch: response.selectedCompareBranch ?? null,
+    selectedCommitHash: response.selectedCommitHash ?? null,
+    branches: response.branches ?? [],
+    recentCommits: response.recentCommits ?? [],
+  };
+}
+
+// diffReviewSelectionStableKey builds a compact stable key for one Git review selection.
+// diffReviewSelectionStableKey 为单个 Git 审核选择构建紧凑稳定键。
+function diffReviewSelectionStableKey(selection: DiffReviewSelection): string {
+  return [
+    selection.mode,
+    selection.baseBranch?.trim() ?? "",
+    selection.compareBranch?.trim() ?? "",
+    selection.commitHash?.trim() ?? "",
+  ].join("\u001f");
+}
+
+// latestConversationDiffSnapshot resolves the newest structured diff from the selected conversation cache.
+// latestConversationDiffSnapshot 从当前选中会话缓存中解析最新的结构化 diff。
+function latestConversationDiffSnapshot(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): DiffPanelSnapshot | null {
+  const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
+  if (!activeSurfaceId) {
+    return null;
+  }
+  const messages = workbench.messages.filter((message) => message.conversationId === activeSurfaceId);
+  for (const message of [...messages].reverse()) {
+    const blocks = parseConversationBlocks(message);
+    const diffBlock = [...blocks].reverse().find((block) => block.kind === "diff" && hasRenderableDiff(block.body));
+    if (diffBlock) {
+      return parseUnifiedDiff(diffBlock.body, diffPanelSourceForMessage(message), "");
+    }
+  }
+  return null;
+}
+
+// diffPanelSourceForMessage derives a display source from structured message metadata.
+// diffPanelSourceForMessage 从结构化消息元数据中推导展示来源。
+function diffPanelSourceForMessage(message: ConversationMessage): DiffPanelSnapshot["source"] {
+  const hostKind = metadataString(message.metadata, ["kind", "host_result.kind", "hostResult.kind"]);
+  if (hostKind === "change_set") {
+    return "change_set";
+  }
+  return "message";
 }
 
 // ContextInjectionTabs renders iced-aligned dynamic and static injection lists.
@@ -11017,6 +11472,11 @@ function ConversationWorkspace(props: {
   const [processCollapseOverrides, setProcessCollapseOverrides] = React.useState<Map<string, boolean>>(
     () => new Map(conversationProcessCollapseMemory),
   );
+  // userPromptExpansionOverrides mirrors WebUI-session-only user prompt expansion memory for virtualized rows.
+  // userPromptExpansionOverrides 镜像仅当前 WebUI 会话有效的用户提示词展开记忆，供虚拟行复挂载使用。
+  const [userPromptExpansionOverrides, setUserPromptExpansionOverrides] = React.useState<Set<string>>(
+    () => new Set(conversationUserPromptExpansionMemory),
+  );
   const sessionRunning = conversationIsRunning(props.conversation);
   const timelineItems = React.useMemo(
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs),
@@ -11051,6 +11511,14 @@ function ConversationWorkspace(props: {
       return next;
     });
   }, [processCollapseKey]);
+  const handleUserPromptExpandedChange = React.useCallback((messageKey: string, expanded: boolean) => {
+    if (expanded) {
+      conversationUserPromptExpansionMemory.add(messageKey);
+    } else {
+      conversationUserPromptExpansionMemory.delete(messageKey);
+    }
+    setUserPromptExpansionOverrides(new Set(conversationUserPromptExpansionMemory));
+  }, []);
 
   React.useEffect(() => {
     if (!sessionRunning) {
@@ -11072,9 +11540,11 @@ function ConversationWorkspace(props: {
       hiddenThinkingBlockId={null}
       parentConversationId={props.parentConversationId}
       sessionRunning={sessionRunning}
+      expandedUserPromptIds={userPromptExpansionOverrides}
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
+      onUserPromptExpandedChange={handleUserPromptExpandedChange}
     />
   ) : (
     <ConversationProcessGroup
@@ -11085,10 +11555,12 @@ function ConversationWorkspace(props: {
       parentConversationId={props.parentConversationId}
       process={timelineItem.process}
       sessionRunning={sessionRunning}
+      expandedUserPromptIds={userPromptExpansionOverrides}
       onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
+      onUserPromptExpandedChange={handleUserPromptExpandedChange}
     />
   );
 
@@ -11194,6 +11666,9 @@ function ConversationProcessGroup(props: {
   // Whether the owning session is currently running.
   // 所属会话是否正在运行。
   sessionRunning: boolean;
+  // WebUI-session expansion memory for long user prompt bubbles.
+  // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
+  expandedUserPromptIds: Set<string>;
   // Records one user-triggered collapsed state change.
   // 记录一次用户触发的折叠状态变化。
   onCollapsedChange: (collapsed: boolean) => void;
@@ -11206,6 +11681,9 @@ function ConversationProcessGroup(props: {
   // Subagent panel opener.
   // 子代理面板打开器。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Records one user prompt expansion state change.
+  // 记录一次用户提示词展开状态变化。
+  onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
 }) {
   const fallbackStartedAtMsRef = React.useRef(Date.now());
   React.useEffect(() => {
@@ -11250,9 +11728,11 @@ function ConversationProcessGroup(props: {
             key={item.id}
             parentConversationId={props.parentConversationId}
             sessionRunning={props.sessionRunning}
+            expandedUserPromptIds={props.expandedUserPromptIds}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             forceEagerMarkdown
           />
         ))}
@@ -11267,9 +11747,11 @@ function ConversationProcessGroup(props: {
             key={item.id}
             parentConversationId={props.parentConversationId}
             sessionRunning={props.sessionRunning}
+            expandedUserPromptIds={props.expandedUserPromptIds}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             forceEagerMarkdown
           />
         ))}
@@ -11295,14 +11777,64 @@ function ConversationRenderItemView(props: {
   forceEagerMarkdown?: boolean;
   parentConversationId: string | null;
   sessionRunning: boolean;
+  // WebUI-session expansion memory for long user prompt bubbles.
+  // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
+  expandedUserPromptIds: Set<string>;
   onOpenDetail: (detail: ConversationDetail) => void;
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Records one user prompt expansion state change.
+  // 记录一次用户提示词展开状态变化。
+  onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
 }) {
   const userBody = React.useMemo(
     () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
     [props.item.userMessage?.body],
   );
+  const userPromptTextRef = React.useRef<HTMLParagraphElement | null>(null);
+  const [userPromptOverflowing, setUserPromptOverflowing] = React.useState(false);
+  const [userPromptCopied, setUserPromptCopied] = React.useState(false);
+  const userPromptKey = React.useMemo(() => {
+    const message = props.item.userMessage;
+    const messageId = message?.id ?? props.item.id;
+    const surfaceId = props.parentConversationId ?? message?.conversationId ?? "conversation";
+    return `${surfaceId}:${messageId}`;
+  }, [props.item.id, props.item.userMessage, props.parentConversationId]);
+  const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey);
+  const userTimestampMs = conversationMessageUnixMillis(props.item.userMessage);
+  const userTimestamp = formatFullConversationTimestamp(props.item.userMessage);
+  const handleCopyUserPrompt = React.useCallback(async () => {
+    if (!userBody) {
+      return;
+    }
+    await copyText(userBody);
+    setUserPromptCopied(true);
+  }, [userBody]);
+  React.useLayoutEffect(() => {
+    if (props.item.role !== "user" || !userBody) {
+      setUserPromptOverflowing(false);
+      return;
+    }
+    const element = userPromptTextRef.current;
+    if (!element) {
+      return;
+    }
+    const measureOverflow = () => {
+      const computedStyle = window.getComputedStyle(element);
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+      const effectiveLineHeight = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
+      const collapsedHeight = effectiveLineHeight * USER_PROMPT_COLLAPSE_LINE_LIMIT;
+      setUserPromptOverflowing(element.scrollHeight > collapsedHeight + 1);
+    };
+    measureOverflow();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measureOverflow);
+      return () => window.removeEventListener("resize", measureOverflow);
+    }
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.item.role, userBody, userPromptExpanded]);
   if (props.item.role === "user") {
     const attachments = props.item.userMessage?.attachments ?? [];
     return (
@@ -11319,7 +11851,42 @@ function ConversationRenderItemView(props: {
           />
         ) : null}
         <div className="user-bubble">
-          {userBody ? <p>{userBody}</p> : null}
+          {userBody ? (
+            <p
+              className={cn("user-prompt-text", userPromptOverflowing && !userPromptExpanded && "collapsed")}
+              ref={userPromptTextRef}
+            >
+              {userBody}
+            </p>
+          ) : null}
+          {userPromptOverflowing ? (
+            <button
+              aria-expanded={userPromptExpanded}
+              className="user-prompt-expand-toggle"
+              onClick={() => props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded)}
+              type="button"
+            >
+              <span>{userPromptExpanded ? "收起" : "显示更多"}</span>
+              {userPromptExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          ) : null}
+        </div>
+        <div className="user-message-meta">
+          {userTimestamp && userTimestampMs ? (
+            <time dateTime={new Date(userTimestampMs).toISOString()}>{userTimestamp}</time>
+          ) : null}
+          {userBody ? (
+            <button
+              aria-label="复制用户提示词"
+              className="user-message-copy"
+              onClick={() => void handleCopyUserPrompt()}
+              onMouseLeave={() => setUserPromptCopied(false)}
+              title="复制用户提示词"
+              type="button"
+            >
+              {userPromptCopied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          ) : null}
         </div>
       </article>
     );
@@ -12527,6 +13094,23 @@ function ConversationDetailModal(props: {
     : detailLoadError
       ? `${props.detail.body}\n\n---\n\nDetail load failed: ${detailLoadError}`
       : props.detail.body;
+  // diffSnapshot stores the structured view of the current diff detail body.
+  // diffSnapshot 保存当前 diff 详情正文对应的结构化视图。
+  const diffBody = props.detail.body;
+  const diffSnapshot = React.useMemo(
+    () => props.detail.kind === "diff" && hasRenderableDiff(diffBody)
+      ? parseUnifiedDiff(diffBody, "message", "")
+      : null,
+    [diffBody, props.detail.kind],
+  );
+  const diffDetailSnapshot = diffSnapshot ?? {
+    source: "message",
+    repositoryRoot: "",
+    files: [],
+    stats: { files: 0, additions: 0, deletions: 0 },
+    notice: "当前 diff 内容无法结构化解析，已保留原始文本供复制。",
+    rawDiff: fullBody,
+  } satisfies DiffPanelSnapshot;
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
       <DialogContent className={cn("detail-modal sm:max-w-[min(1080px,96vw)]", props.detail.kind === "thinking" && "thinking-detail-modal")} showCloseButton={false}>
@@ -12558,7 +13142,12 @@ function ConversationDetailModal(props: {
             />
           ) : null}
           {props.detail.kind === "diff" ? (
-            <pre className="diff-detail"><code>{fullBody}</code></pre>
+            <DiffReviewPanel
+              emptyBody="当前 diff 内容无法结构化解析，已保留原始文本供复制。"
+              emptyTitle="Git Diff"
+              snapshot={diffDetailSnapshot}
+              onCopyRaw={(rawDiff) => void copyText(rawDiff)}
+            />
           ) : (
             <MarkdownMessage content={fullBody} eager onOpenMedia={props.onOpenMedia} />
           )}

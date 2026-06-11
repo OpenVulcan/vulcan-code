@@ -1513,6 +1513,12 @@ button {
   overflow: auto;
 }
 
+.context-tab-content.review-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
 .context-empty-state {
   min-height: 180px;
   display: grid;
@@ -5015,6 +5021,67 @@ button {
   line-height: 1.55;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.user-prompt-text.collapsed {
+  max-height: calc(1.55em * 20);
+  overflow: hidden;
+}
+
+.user-prompt-expand-toggle {
+  width: fit-content;
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 2px 0 0 -2px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: color-mix(in oklch, var(--primary-foreground) 82%, transparent);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.user-prompt-expand-toggle:hover,
+.user-prompt-expand-toggle:focus-visible {
+  background: color-mix(in oklch, var(--primary-foreground) 14%, transparent);
+  color: var(--primary-foreground);
+  outline: none;
+}
+
+.user-message-meta {
+  max-width: min(72%, 760px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-right: 2px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.user-message-copy {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.user-message-copy:hover,
+.user-message-copy:focus-visible {
+  background: var(--muted);
+  color: var(--foreground);
+  outline: none;
 }
 
 .assistant-flow {
