@@ -146,6 +146,14 @@ pub struct WorkbenchSnapshot {
     /// Conversation summaries shown in the sidebar.
     /// 侧栏展示的会话摘要。
     pub conversations: Vec<ConversationSummary>,
+    /// Archived project summaries available for restore surfaces.
+    /// 可用于恢复界面的归档项目摘要。
+    #[serde(default)]
+    pub archived_projects: Vec<ProjectSummary>,
+    /// Archived conversation summaries available for restore surfaces.
+    /// 可用于恢复界面的归档会话摘要。
+    #[serde(default)]
+    pub archived_conversations: Vec<ConversationSummary>,
     /// Currently selected conversation identifier.
     /// 当前选中的会话标识。
     pub selected_conversation_id: Option<String>,

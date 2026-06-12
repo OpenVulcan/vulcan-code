@@ -27,7 +27,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 8;
+pub const APP_SCHEMA_VERSION: i64 = 9;
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -277,6 +277,33 @@ async fn ensure_application_schema_migrations(
         "ALTER TABLE projects ADD COLUMN icon_key TEXT;",
     )
     .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE TABLE IF NOT EXISTS workspace_session_index (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    project_tag TEXT NOT NULL,
+    title TEXT,
+    title_source TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"#,
+    )
+    .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE INDEX IF NOT EXISTS idx_workspace_session_index_project
+ON workspace_session_index(project_id, archived, sort_order ASC, updated_at DESC);
+"#,
+    )
+    .await?;
     Ok(())
 }
 
@@ -293,6 +320,16 @@ async fn ensure_optional_project_column(
 /// Applies one idempotent optional column migration and ignores duplicate-column failures.
 /// 执行一条幂等可选列迁移，并忽略重复列失败。
 async fn ensure_optional_schema_column(
+    client: &ControllerClient,
+    sqlite_binding_id: &str,
+    statement: &str,
+) -> Result<(), String> {
+    ensure_optional_schema_statement(client, sqlite_binding_id, statement).await
+}
+
+/// Applies one idempotent optional schema statement and ignores already-applied failures.
+/// 执行一条幂等可选结构语句，并忽略已经应用过的失败。
+async fn ensure_optional_schema_statement(
     client: &ControllerClient,
     sqlite_binding_id: &str,
     statement: &str,
@@ -390,6 +427,21 @@ CREATE TABLE IF NOT EXISTS projects (
 
 CREATE INDEX IF NOT EXISTS idx_projects_sort
 ON projects(pinned DESC, sort_order ASC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_session_index (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    project_tag TEXT NOT NULL,
+    title TEXT,
+    title_source TEXT,
+    archived INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_session_index_project
+ON workspace_session_index(project_id, archived, sort_order ASC, updated_at DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
     )
@@ -421,16 +473,24 @@ mod tests {
         assert!(!schema.contains("idx_workspace_history_search_docs_session"));
     }
 
-    /// Verifies that session routing and compaction indexes are not duplicated in SQLite.
-    /// 验证会话路由与压缩索引不再重复写入 SQLite。
+    /// Verifies that heavyweight session body tables are not duplicated in SQLite.
+    /// 验证重量级会话正文表不再重复写入 SQLite。
     #[test]
-    fn base_schema_excludes_session_index_tables() {
+    fn base_schema_excludes_heavy_session_body_tables() {
         let schema = build_application_schema_script();
 
-        assert!(!schema.contains("CREATE TABLE IF NOT EXISTS sessions"));
         assert!(!schema.contains("CREATE TABLE IF NOT EXISTS session_compactions"));
-        assert!(!schema.contains("idx_sessions_project_sort"));
         assert!(!schema.contains("idx_session_compactions_session"));
+    }
+
+    /// Verifies that the base schema includes the lightweight deterministic session locator index.
+    /// 验证基础结构包含轻量确定性会话定位索引。
+    #[test]
+    fn base_schema_includes_lightweight_session_locator_index() {
+        let schema = build_application_schema_script();
+
+        assert!(schema.contains("CREATE TABLE IF NOT EXISTS workspace_session_index"));
+        assert!(schema.contains("idx_workspace_session_index_project"));
     }
 
     /// Verifies that runtime checkpoints are no longer duplicated into the application SQLite schema.

@@ -1214,7 +1214,7 @@ function SettingsFeatureContent(props: {
     return <AboutLicensesSettingsArea appVersion={props.workbench.appVersion} />
   }
   if (props.activeSettingsSubArea === "archived-restore") {
-    return <ArchivedRestoreSettingsArea conversations={props.workbench.conversations} projects={props.workbench.projects} />
+    return <ArchivedRestoreSettingsArea conversations={props.workbench.archivedConversations ?? []} projects={props.workbench.projects} />
   }
   return (
     <ProvidersArea
@@ -3742,25 +3742,25 @@ function AboutLicensesSettingsArea(props: {
   )
 }
 
-// ArchivedRestoreSettingsArea renders archived restore entry state from visible snapshots.
-// ArchivedRestoreSettingsArea 根据可见快照渲染归档恢复入口状态。
+// ArchivedRestoreSettingsArea renders restorable archived conversations from service snapshots.
+// ArchivedRestoreSettingsArea 根据服务快照渲染可恢复的归档会话。
 function ArchivedRestoreSettingsArea(props: {
-  // Conversation summaries.
-  // 会话摘要。
+  // Archived conversation summaries.
+  // 归档会话摘要。
   conversations: ConversationSummary[]
-  // Project summaries.
-  // 项目摘要。
+  // Active project summaries.
+  // 活动项目摘要。
   projects: ProjectSummary[]
 }) {
   const { locale } = useI18n()
   const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
-  const archivedConversations = props.conversations.filter((conversation) => conversation.status.toLowerCase().includes("archive") || conversation.status.includes("归档"))
+  const archivedConversations = props.conversations
   return (
     <section className="panel full-height settings-detail-panel">
       <PanelTitle icon={<Archive size={17} />} title={text("归档恢复", "Archived restore")} />
       <div className="settings-summary-strip">
         <StatusPill status={archivedConversations.length > 0 ? "warning" : "ready"} label={`${archivedConversations.length}`} />
-        <span>{text(`当前 WebUI snapshot 暴露 ${props.projects.length} 个项目与 ${props.conversations.length} 个会话。`, `The current WebUI snapshot exposes ${props.projects.length} projects and ${props.conversations.length} conversations.`)}</span>
+        <span>{text(`当前 WebUI snapshot 暴露 ${props.projects.length} 个活动项目与 ${archivedConversations.length} 个可恢复归档会话。`, `The current WebUI snapshot exposes ${props.projects.length} active projects and ${archivedConversations.length} restorable archived conversations.`)}</span>
       </div>
       <div className="settings-target-list">
         {archivedConversations.length === 0 ? (

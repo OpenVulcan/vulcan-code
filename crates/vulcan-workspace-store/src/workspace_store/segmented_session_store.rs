@@ -2495,6 +2495,30 @@ pub(super) fn archive_segmented_session_by_id(
     Ok(Some(archived_dir))
 }
 
+/// Moves one active segmented session directory into the archived tree by its exact storage date.
+/// 根据精确存储日期将一个活动分段会话目录移动到归档树。
+pub(super) fn archive_segmented_session_by_created_date(
+    data_root: &Path,
+    project_tag: &str,
+    created_date: &str,
+    session_id: &str,
+    archived_at: &str,
+) -> Result<Option<PathBuf>, String> {
+    let active_dir =
+        segmented_session_directory(data_root, false, project_tag, created_date, session_id);
+    if !active_dir.exists() {
+        return Ok(None);
+    }
+    archive_segmented_session(
+        data_root,
+        project_tag,
+        created_date,
+        session_id,
+        archived_at,
+    )
+    .map(Some)
+}
+
 /// Moves one archived session directory back into the active tree and clears archived metadata.
 /// 将一个归档会话目录移回活动树，并清除元数据中的归档标记。
 pub(super) fn restore_segmented_session(
@@ -2562,6 +2586,30 @@ pub(super) fn restore_segmented_session_by_id(
     Ok(Some(active_dir))
 }
 
+/// Moves one archived segmented session directory back by its exact storage date.
+/// 根据精确存储日期将一个归档分段会话目录移回活动树。
+pub(super) fn restore_segmented_session_by_created_date(
+    data_root: &Path,
+    project_tag: &str,
+    created_date: &str,
+    session_id: &str,
+    restored_at: &str,
+) -> Result<Option<PathBuf>, String> {
+    let archived_dir =
+        segmented_session_directory(data_root, true, project_tag, created_date, session_id);
+    if !archived_dir.exists() {
+        return Ok(None);
+    }
+    restore_segmented_session(
+        data_root,
+        project_tag,
+        created_date,
+        session_id,
+        restored_at,
+    )
+    .map(Some)
+}
+
 /// Deletes one active or archived segmented session directory by session identifier.
 /// 按会话标识删除一个活动或归档分段会话目录。
 pub(super) fn delete_segmented_session_by_id(
@@ -2575,6 +2623,24 @@ pub(super) fn delete_segmented_session_by_id(
     else {
         return Ok(false);
     };
+    fs::remove_dir_all(&session_dir).map_err(to_store_error)?;
+    Ok(true)
+}
+
+/// Deletes one segmented session directory by its exact storage date.
+/// 根据精确存储日期删除一个分段会话目录。
+pub(super) fn delete_segmented_session_by_created_date(
+    data_root: &Path,
+    archived: bool,
+    project_tag: &str,
+    created_date: &str,
+    session_id: &str,
+) -> Result<bool, String> {
+    let session_dir =
+        segmented_session_directory(data_root, archived, project_tag, created_date, session_id);
+    if !session_dir.exists() {
+        return Ok(false);
+    }
     fs::remove_dir_all(&session_dir).map_err(to_store_error)?;
     Ok(true)
 }

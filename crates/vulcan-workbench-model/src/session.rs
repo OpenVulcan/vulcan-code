@@ -65,6 +65,9 @@ pub struct SessionSummary {
     /// Session title origin used to avoid overwriting manual titles blindly.
     /// 用于避免盲目覆盖人工标题的会话标题来源。
     pub title_source: SessionTitleSource,
+    /// Raw creation timestamp as Unix milliseconds text for deterministic storage lookup.
+    /// 以 Unix 毫秒文本保存的原始创建时间，用于确定性定位存储目录。
+    pub created_at: String,
     /// Short current focus summary.
     /// 当前聚焦点的简要说明。
     pub focus: String,
@@ -103,6 +106,7 @@ impl SessionSummary {
             project_id,
             title: title.into(),
             title_source: SessionTitleSource::Generated,
+            created_at: String::new(),
             focus: focus.into(),
             status,
             changed_files,
@@ -116,6 +120,13 @@ impl SessionSummary {
     /// 覆盖附着在会话摘要上的标题来源。
     pub fn with_title_source(mut self, title_source: SessionTitleSource) -> Self {
         self.title_source = title_source;
+        self
+    }
+
+    /// Overrides the raw creation timestamp used for deterministic storage lookup.
+    /// 覆盖用于确定性定位存储目录的原始创建时间。
+    pub fn with_created_at(mut self, created_at: impl Into<String>) -> Self {
+        self.created_at = created_at.into();
         self
     }
 

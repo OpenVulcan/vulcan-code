@@ -152,7 +152,20 @@ export function ProjectFolderPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => !submitting && onOpenChange(nextOpen)}>
-      <DialogContent className="project-folder-picker-dialog">
+      <DialogContent
+        className="project-folder-picker-dialog"
+        onEscapeKeyDown={(event) => {
+          if (submitting) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (submitting) {
+            event.preventDefault();
+          }
+        }}
+        showCloseButton={!submitting}
+      >
         <DialogHeader>
           <DialogTitle>选择项目目录</DialogTitle>
         </DialogHeader>
@@ -240,7 +253,7 @@ export function ProjectFolderPickerDialog({
           </Button>
           <Button disabled={!listing?.canSelect || submitting || loading} onClick={handleConfirm} type="button">
             {submitting ? <Spinner className="size-4" /> : <Check size={16} />}
-            添加
+            {submitting ? "添加中" : "添加"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -5,11 +5,12 @@
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, append_segmented_session_message_update,
-    archive_segmented_session_by_id, create_segmented_session_in_location,
+    archive_segmented_session_by_created_date, archive_segmented_session_by_id,
+    create_segmented_session_in_location, delete_segmented_session_by_created_date,
     delete_segmented_session_by_id, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, list_segmented_session_catalog,
-    restore_segmented_session_by_id, state_document_from_runtime_state,
-    sync_runtime_log_from_conversation_state, write_state,
+    find_segmented_session_directory_by_id, patch_segmented_session_metadata,
+    restore_segmented_session_by_created_date, segmented_session_directory,
+    state_document_from_runtime_state, sync_runtime_log_from_conversation_state, write_state,
 };
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
@@ -41,6 +42,7 @@ pub async fn persist_workspace_snapshot(
         )
         .collect::<Vec<_>>();
     upsert_projects(&controller, &all_projects).await?;
+    persist_session_index_snapshot(&controller, snapshot).await?;
     persist_segmented_snapshot_session_stores(
         &controller,
         &snapshot.sessions,
@@ -61,6 +63,33 @@ pub async fn persist_workspace_snapshot(
     .await?;
 
     Ok(WorkspaceSnapshotPersistOutcome { warnings })
+}
+
+/// Persists the lightweight deterministic session locator index for one workspace snapshot.
+/// 为一个工作台快照持久化轻量确定性会话定位索引。
+async fn persist_session_index_snapshot(
+    controller: &ControllerRuntimeHandle,
+    snapshot: &WorkspaceSnapshot,
+) -> Result<(), String> {
+    let active_owner_map = session_owner_map_from_projects(&snapshot.task_projects);
+    let archived_owner_map = session_owner_map_from_projects(&snapshot.archived_task_projects);
+    for session in &snapshot.sessions {
+        let (project_id, sort_order) = active_owner_map
+            .get(&session.id)
+            .cloned()
+            .or_else(|| session.project_id.clone().map(|project_id| (project_id, 0)))
+            .unwrap_or_else(|| (String::from("untagged"), 0));
+        upsert_session_index_row(controller, session, &project_id, false, sort_order, None).await?;
+    }
+    for session in &snapshot.archived_sessions {
+        let (project_id, sort_order) = archived_owner_map
+            .get(&session.id)
+            .cloned()
+            .or_else(|| session.project_id.clone().map(|project_id| (project_id, 0)))
+            .unwrap_or_else(|| (String::from("untagged"), 0));
+        upsert_session_index_row(controller, session, &project_id, true, sort_order, None).await?;
+    }
+    Ok(())
 }
 
 /// Mirrors all loaded snapshot sessions into segmented append-only directories.
@@ -196,6 +225,15 @@ pub async fn persist_single_session_update(
         messages
     };
     let _ = (sessions, archived_sessions, compactions);
+    upsert_session_index_row(
+        &controller,
+        session,
+        project_id,
+        archived,
+        0,
+        runtime_state.map(|state| state.updated_at.as_str()),
+    )
+    .await?;
 
     if let Err(error) = persist_segmented_session_tail_update(
         &controller,
@@ -230,6 +268,53 @@ pub async fn persist_single_session_runtime_state_update(
     Ok(())
 }
 
+/// Renames one visible session by exact locator metadata without scanning segmented directories.
+/// 通过精确定位元数据重命名一个可见会话，不扫描分段目录。
+pub async fn rename_single_session_metadata(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session: &SessionSummary,
+    title: &str,
+    updated_at: &str,
+) -> Result<(), String> {
+    let mut renamed_session = session.clone();
+    renamed_session.title = title.to_string();
+    renamed_session.title_source = SessionTitleSource::Manual;
+    renamed_session.updated_at = updated_at.to_string();
+    let created_at = normalized_session_created_at(&renamed_session);
+    let created_date = segmented_session_date_from_unix_millis_text(&created_at);
+    let session_dir = segmented_session_directory(
+        &controller.data_root,
+        false,
+        project_id,
+        &created_date,
+        &renamed_session.id.to_string(),
+    );
+    if session_dir.exists() {
+        patch_segmented_session_metadata(
+            &session_dir,
+            SegmentedSessionMetadataPatch {
+                updated_at: Some(updated_at.to_string()),
+                title: Some(Some(title.to_string())),
+                title_source: Some(Some(
+                    SessionTitleSource::Manual.as_persisted_key().to_string(),
+                )),
+                ..Default::default()
+            },
+        )?;
+    }
+    upsert_session_index_row(
+        &controller,
+        &renamed_session,
+        project_id,
+        false,
+        0,
+        Some(updated_at),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Marks one visible session as archived without rewriting transcript or runtime-state documents.
 /// 将单个可见会话标记为已归档，不重写转录或运行时状态文档。
 pub async fn archive_single_session(
@@ -240,6 +325,30 @@ pub async fn archive_single_session(
     Ok(())
 }
 
+/// Archives one visible session when its owning project is already known.
+/// 在已知所属项目时归档单个可见会话。
+pub async fn archive_single_session_for_project(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session: &SessionSummary,
+) -> Result<(), String> {
+    let archived_at = archive_segmented_session_directory_for_project_and_summary_if_present(
+        &controller,
+        project_id,
+        session,
+    )?;
+    upsert_session_index_row(
+        &controller,
+        session,
+        project_id,
+        true,
+        0,
+        Some(&archived_at),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Restores one archived session summary into the visible project binding.
 /// 将单个已归档会话摘要恢复到可见项目绑定中。
 pub async fn restore_single_session(
@@ -247,19 +356,63 @@ pub async fn restore_single_session(
     task_projects: &[TaskProjectSummary],
     session: &SessionSummary,
 ) -> Result<(), String> {
-    restore_segmented_session_directory_if_present(
-        &controller,
-        session.id,
-        session.project_id.as_deref(),
-    )
-    .await?;
+    let project_id = session
+        .project_id
+        .as_deref()
+        .or_else(|| {
+            task_projects
+                .iter()
+                .find(|project| project.session_ids.contains(&session.id))
+                .map(|project| project.id.as_str())
+        })
+        .unwrap_or("untagged");
+    restore_segmented_session_directory_for_project_if_present(&controller, project_id, session)?;
+    upsert_session_index_row(&controller, session, project_id, false, 0, None).await?;
     let _ = task_projects;
+    Ok(())
+}
+
+/// Archives all visible sessions under one project while keeping the project active.
+/// 归档单个项目下的全部可见会话，同时保留项目为活动状态。
+pub async fn archive_project_sessions(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    sessions: &[SessionSummary],
+) -> Result<(), String> {
+    for (index, session) in sessions.iter().enumerate() {
+        let archived_at = archive_segmented_session_directory_for_project_and_summary_if_present(
+            &controller,
+            project_id,
+            session,
+        )?;
+        upsert_session_index_row(
+            &controller,
+            session,
+            project_id,
+            true,
+            index,
+            Some(&archived_at),
+        )
+        .await?;
+    }
     Ok(())
 }
 
 /// Marks one visible project and all of its child sessions as archived.
 /// 将单个可见项目及其全部子会话标记为已归档。
 pub async fn archive_project_with_sessions(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session_ids: &[SessionId],
+) -> Result<(), String> {
+    archive_project_session_ids(controller.clone(), project_id, session_ids).await?;
+    update_project_archive_flag(&controller, project_id, true).await?;
+    Ok(())
+}
+
+/// Archives visible project sessions by id for legacy callers that do not retain creation timestamps.
+/// 为尚未保留创建时间的旧调用方按标识归档可见项目会话。
+async fn archive_project_session_ids(
     controller: ControllerRuntimeHandle,
     project_id: &str,
     session_ids: &[SessionId],
@@ -271,7 +424,20 @@ pub async fn archive_project_with_sessions(
             *session_id,
         )?;
     }
-    update_project_archive_flag(&controller, project_id, true).await?;
+    Ok(())
+}
+
+/// Archives project sessions and removes the active project row without deleting archived data.
+/// 归档项目会话并移除活动项目记录，但不删除归档数据。
+pub async fn remove_project_after_archiving_sessions(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    sessions: &[SessionSummary],
+) -> Result<(), String> {
+    if !sessions.is_empty() {
+        archive_project_sessions(controller.clone(), project_id, sessions).await?;
+    }
+    delete_active_project_row(&controller, project_id).await?;
     Ok(())
 }
 
@@ -283,12 +449,13 @@ pub async fn restore_project_with_sessions(
     project: &TaskProjectSummary,
     sessions: &[SessionSummary],
 ) -> Result<(), String> {
-    for session in sessions {
+    for (index, session) in sessions.iter().enumerate() {
         restore_segmented_session_directory_for_project_if_present(
             &controller,
             &project.id,
-            session.id,
+            session,
         )?;
+        upsert_session_index_row(&controller, session, &project.id, false, index, None).await?;
     }
     upsert_projects(&controller, &[(project.clone(), false)]).await?;
     let _ = task_projects;
@@ -301,18 +468,24 @@ async fn archive_segmented_session_directory_if_present(
     controller: &ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<(), String> {
-    let session_id_text = session_id.to_string();
-    let Some(entry) = list_segmented_session_catalog(&controller.data_root)?
-        .into_iter()
-        .find(|entry| !entry.archived && entry.metadata.session_id == session_id_text)
-    else {
+    let Some(locator) = query_session_index_locator(controller, session_id, false).await? else {
         return Ok(());
     };
-    archive_segmented_session_directory_for_project_if_present(
-        controller,
-        &entry.metadata.project_tag,
-        session_id,
-    )
+    let archived_at = current_unix_millis_text();
+    let project_tag = if locator.project_tag.trim().is_empty() {
+        locator.project_id.as_str()
+    } else {
+        locator.project_tag.as_str()
+    };
+    let created_date = segmented_session_date_from_unix_millis_text(&locator.created_at);
+    let _ = archive_segmented_session_by_created_date(
+        &controller.data_root,
+        project_tag,
+        &created_date,
+        &session_id.to_string(),
+        &archived_at,
+    )?;
+    update_session_index_archive_state(controller, session_id, true, &archived_at).await
 }
 
 /// Archives a segmented session directory for a known project id when present.
@@ -332,24 +505,30 @@ fn archive_segmented_session_directory_for_project_if_present(
     Ok(())
 }
 
-/// Restores a segmented session directory using the persisted locator or the provided project id.
-/// 使用持久化定位信息或给定项目标识恢复对应分段会话目录。
-async fn restore_segmented_session_directory_if_present(
+/// Archives a known project session by deterministic metadata instead of scanning directories.
+/// 通过确定性元数据归档已知项目会话，而不是扫描目录。
+fn archive_segmented_session_directory_for_project_and_summary_if_present(
     controller: &ControllerRuntimeHandle,
-    session_id: SessionId,
-    fallback_project_id: Option<&str>,
-) -> Result<(), String> {
-    let session_id_text = session_id.to_string();
-    let project_id = list_segmented_session_catalog(&controller.data_root)?
-        .into_iter()
-        .find(|entry| entry.archived && entry.metadata.session_id == session_id_text)
-        .map(|entry| entry.metadata.project_tag)
-        .or_else(|| fallback_project_id.map(ToOwned::to_owned))
-        .unwrap_or_default();
-    if project_id.trim().is_empty() {
-        return Ok(());
+    project_id: &str,
+    session: &SessionSummary,
+) -> Result<String, String> {
+    let created_at = session.created_at.trim();
+    if created_at.is_empty() {
+        return Err(format!(
+            "会话缺少创建时间，无法无扫描定位目录：{}",
+            session.id
+        ));
     }
-    restore_segmented_session_directory_for_project_if_present(controller, &project_id, session_id)
+    let archived_at = current_unix_millis_text();
+    let created_date = segmented_session_date_from_unix_millis_text(created_at);
+    let _ = archive_segmented_session_by_created_date(
+        &controller.data_root,
+        project_id,
+        &created_date,
+        &session.id.to_string(),
+        &archived_at,
+    )?;
+    Ok(archived_at)
 }
 
 /// Restores a segmented session directory for a known project id when present.
@@ -357,13 +536,16 @@ async fn restore_segmented_session_directory_if_present(
 fn restore_segmented_session_directory_for_project_if_present(
     controller: &ControllerRuntimeHandle,
     project_id: &str,
-    session_id: SessionId,
+    session: &SessionSummary,
 ) -> Result<(), String> {
     let restored_at = current_unix_millis_text();
-    let _ = restore_segmented_session_by_id(
+    let created_at = normalized_session_created_at(session);
+    let created_date = segmented_session_date_from_unix_millis_text(&created_at);
+    let _ = restore_segmented_session_by_created_date(
         &controller.data_root,
         project_id,
-        &session_id.to_string(),
+        &created_date,
+        &session.id.to_string(),
         &restored_at,
     )?;
     Ok(())
@@ -381,6 +563,29 @@ fn delete_segmented_session_directories_for_project_if_present(
         delete_segmented_session_by_id(&controller.data_root, true, project_id, &session_id_text)?;
     let _ =
         delete_segmented_session_by_id(&controller.data_root, false, project_id, &session_id_text)?;
+    Ok(())
+}
+
+/// Deletes one segmented session directory from a persisted locator.
+/// 按持久化定位信息删除一个分段会话目录。
+fn delete_segmented_session_directory_for_locator_if_present(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    locator: &PersistedSessionIndexLocator,
+) -> Result<(), String> {
+    let project_tag = if locator.project_tag.trim().is_empty() {
+        locator.project_id.as_str()
+    } else {
+        locator.project_tag.as_str()
+    };
+    let created_date = segmented_session_date_from_unix_millis_text(&locator.created_at);
+    let _ = delete_segmented_session_by_created_date(
+        &controller.data_root,
+        locator.archived,
+        project_tag,
+        &created_date,
+        &session_id.to_string(),
+    )?;
     Ok(())
 }
 
@@ -414,6 +619,26 @@ async fn update_project_archive_flag(
         )
         .await
         .map_err(|error| format!("更新项目归档状态失败：{error}"))?;
+
+    Ok(())
+}
+
+/// Deletes one active project row while preserving archived session directories.
+/// 删除单个活动项目记录，同时保留归档会话目录。
+async fn delete_active_project_row(
+    controller: &ControllerRuntimeHandle,
+    project_id: &str,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "DELETE FROM projects WHERE id = ?1 AND archived = 0;",
+            vec![vec![ControllerSqliteValue::String(project_id.to_string())]],
+        )
+        .await
+        .map_err(|error| format!("移除项目记录失败：{error}"))?;
 
     Ok(())
 }
@@ -810,6 +1035,193 @@ ON CONFLICT(id) DO UPDATE SET
     Ok(())
 }
 
+/// Upserts one lightweight session locator row without storing transcript or runtime payload.
+/// 写入或更新一条轻量会话定位行，不存储转录或运行态载荷。
+async fn upsert_session_index_row(
+    controller: &ControllerRuntimeHandle,
+    session: &SessionSummary,
+    project_id: &str,
+    archived: bool,
+    sort_order: usize,
+    updated_at_override: Option<&str>,
+) -> Result<(), String> {
+    let created_at = normalized_session_created_at(session);
+    let updated_at = updated_at_override
+        .map(str::to_string)
+        .or_else(|| {
+            let trimmed = session.updated_at.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+        .unwrap_or_else(|| created_at.clone());
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+INSERT INTO workspace_session_index (
+    id,
+    project_id,
+    project_tag,
+    title,
+    title_source,
+    archived,
+    sort_order,
+    created_at,
+    updated_at
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+ON CONFLICT(id) DO UPDATE SET
+    project_id = excluded.project_id,
+    project_tag = excluded.project_tag,
+    title = excluded.title,
+    title_source = excluded.title_source,
+    archived = excluded.archived,
+    sort_order = excluded.sort_order,
+    updated_at = excluded.updated_at;
+"#,
+            vec![vec![
+                ControllerSqliteValue::String(session.id.to_string()),
+                ControllerSqliteValue::String(project_id.to_string()),
+                ControllerSqliteValue::String(project_id.to_string()),
+                ControllerSqliteValue::String(session.title.clone()),
+                ControllerSqliteValue::String(session.title_source.as_persisted_key().to_string()),
+                ControllerSqliteValue::Int64(i64::from(archived)),
+                ControllerSqliteValue::Int64(sort_order as i64),
+                ControllerSqliteValue::String(created_at),
+                ControllerSqliteValue::String(updated_at),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("写入会话定位索引失败：{error}"))?;
+    Ok(())
+}
+
+/// Deletes one lightweight session locator row after the backing session is permanently removed.
+/// 在底层会话被永久删除后删除一条轻量会话定位行。
+async fn delete_session_index_row(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "DELETE FROM workspace_session_index WHERE id = ?1;",
+            vec![vec![ControllerSqliteValue::String(session_id.to_string())]],
+        )
+        .await
+        .map_err(|error| format!("删除会话定位索引失败：{error}"))?;
+    Ok(())
+}
+
+/// Updates one lightweight session locator archive state without touching body files.
+/// 只更新一条轻量会话定位行的归档状态，不触碰正文文件。
+async fn update_session_index_archive_state(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    archived: bool,
+    updated_at: &str,
+) -> Result<(), String> {
+    controller
+        .client
+        .execute_sqlite_batch_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            "UPDATE workspace_session_index SET archived = ?1, updated_at = ?2 WHERE id = ?3;",
+            vec![vec![
+                ControllerSqliteValue::Int64(i64::from(archived)),
+                ControllerSqliteValue::String(updated_at.to_string()),
+                ControllerSqliteValue::String(session_id.to_string()),
+            ]],
+        )
+        .await
+        .map_err(|error| format!("更新会话定位索引归档状态失败：{error}"))?;
+    Ok(())
+}
+
+/// Queries one persisted session locator row by session id and expected archive state.
+/// 按会话标识和期望归档状态查询一条持久化会话定位行。
+async fn query_session_index_locator(
+    controller: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    archived: bool,
+) -> Result<Option<PersistedSessionIndexLocator>, String> {
+    /// Raw session locator row decoded for deterministic filesystem operations.
+    /// 为确定性文件系统操作解码的原始会话定位行。
+    #[derive(Debug, Clone, Deserialize)]
+    struct SessionLocatorRow {
+        /// Owning project identifier.
+        /// 所属项目标识。
+        project_id: String,
+        /// Directory project tag.
+        /// 目录项目标签。
+        project_tag: String,
+        /// Session creation timestamp.
+        /// 会话创建时间戳。
+        created_at: String,
+    }
+
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT project_id, project_tag, created_at
+FROM workspace_session_index
+WHERE id = ?1 AND archived = ?2
+LIMIT 1;
+"#,
+            vec![
+                ControllerSqliteValue::String(session_id.to_string()),
+                ControllerSqliteValue::Int64(i64::from(archived)),
+            ],
+        )
+        .await
+        .map_err(|error| format!("查询会话定位索引失败：{error}"))?;
+    Ok(decode_query_rows::<SessionLocatorRow>(&result.json_data)?
+        .into_iter()
+        .next()
+        .map(|row| PersistedSessionIndexLocator {
+            project_id: row.project_id,
+            project_tag: row.project_tag,
+            created_at: row.created_at,
+            archived,
+        }))
+}
+
+/// Lightweight persisted session locator used for exact filesystem operations.
+/// 用于精确文件系统操作的轻量持久化会话定位信息。
+struct PersistedSessionIndexLocator {
+    /// Owning project identifier.
+    /// 所属项目标识。
+    project_id: String,
+    /// Directory project tag.
+    /// 目录项目标签。
+    project_tag: String,
+    /// Session creation timestamp.
+    /// 会话创建时间戳。
+    created_at: String,
+    /// Whether the locator points to the archived tree.
+    /// 该定位信息是否指向归档树。
+    archived: bool,
+}
+
+/// Returns a stable creation timestamp for a session locator row.
+/// 返回会话定位行使用的稳定创建时间戳。
+fn normalized_session_created_at(session: &SessionSummary) -> String {
+    let created_at = session.created_at.trim();
+    if !created_at.is_empty() {
+        return created_at.to_string();
+    }
+    let updated_at = session.updated_at.trim();
+    if !updated_at.is_empty() {
+        return updated_at.to_string();
+    }
+    current_unix_millis_text()
+}
+
 /// Soft-archives active projects missing from the current visible snapshot.
 /// 将当前可见快照中缺失的激活项目软归档。
 async fn archive_missing_projects(
@@ -916,19 +1328,14 @@ pub async fn permanently_delete_archived_session(
     controller: ControllerRuntimeHandle,
     session_id: SessionId,
 ) -> Result<(), String> {
-    let session_id_text = session_id.to_string();
-    let project_id = list_segmented_session_catalog(&controller.data_root)?
-        .into_iter()
-        .find(|entry| entry.archived && entry.metadata.session_id == session_id_text)
-        .map(|entry| entry.metadata.project_tag);
-
-    if let Some(project_id) = project_id {
-        delete_segmented_session_directories_for_project_if_present(
+    if let Some(locator) = query_session_index_locator(&controller, session_id, true).await? {
+        delete_segmented_session_directory_for_locator_if_present(
             &controller,
-            &project_id,
             session_id,
+            &locator,
         )?;
     }
+    delete_session_index_row(&controller, session_id).await?;
     Ok(())
 }
 
@@ -940,11 +1347,14 @@ pub async fn permanently_delete_archived_project(
     session_ids: Vec<SessionId>,
 ) -> Result<(), String> {
     for session_id in &session_ids {
-        delete_segmented_session_directories_for_project_if_present(
-            &controller,
-            &project_id,
-            *session_id,
-        )?;
+        if let Some(locator) = query_session_index_locator(&controller, *session_id, true).await? {
+            delete_segmented_session_directory_for_locator_if_present(
+                &controller,
+                *session_id,
+                &locator,
+            )?;
+        }
+        delete_session_index_row(&controller, *session_id).await?;
     }
 
     controller

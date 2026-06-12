@@ -1834,6 +1834,9 @@ async fn dispatch_service_rpc(
             service_archive_project_conversations(state, rpc_required_param(&params, "projectId")?)
                 .await,
         ),
+        "service_remove_project" => rpc_json_result(
+            service_remove_project(state, rpc_required_param(&params, "projectId")?).await,
+        ),
         "service_rename_conversation" => rpc_json_result(
             service_rename_conversation(
                 state,
@@ -5643,58 +5646,310 @@ async fn service_reset_project_icon(
     Ok(())
 }
 
-/// Persists the expanded project identifiers and returns the refreshed workbench snapshot.
-/// 持久化展开项目标识集合并返回刷新后的工作台快照。
+/// Persists the expanded project identifiers and returns the retained workbench snapshot.
+/// 持久化展开项目标识集合并返回保留的工作台快照。
 async fn service_set_expanded_task_projects(
     state: SharedServiceBridgeState,
     project_ids: Vec<String>,
 ) -> Result<WorkbenchSnapshot, String> {
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    let workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
-        controller_runtime.clone(),
-    )
-    .await?;
-    let expanded_project_ids = project_ids.into_iter().collect::<BTreeSet<_>>();
-    let collapsed_project_ids = workspace_snapshot
-        .task_projects
-        .iter()
-        .filter(|project| !expanded_project_ids.contains(&project.id))
-        .map(|project| project.id.clone())
-        .collect::<Vec<_>>();
+    let (controller_runtime, collapsed_project_ids, expanded_project_ids) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let visible_project_ids = guard
+            .workbench
+            .projects
+            .iter()
+            .map(|project| project.id.clone())
+            .collect::<BTreeSet<_>>();
+        let expanded_project_ids = project_ids
+            .into_iter()
+            .filter(|project_id| visible_project_ids.contains(project_id))
+            .collect::<BTreeSet<_>>();
+        let collapsed_project_ids = visible_project_ids
+            .iter()
+            .filter(|project_id| !expanded_project_ids.contains(*project_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        (
+            controller_runtime,
+            collapsed_project_ids,
+            expanded_project_ids,
+        )
+    };
     vulcan_workspace_store::workspace_store::persist_collapsed_task_project_ids(
         controller_runtime,
         &collapsed_project_ids,
     )
     .await?;
-    refresh_workbench_snapshot(state).await
+
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        workspace_snapshot.expanded_task_projects = expanded_project_ids.clone();
+    }
+    guard.workbench.expanded_project_ids = guard
+        .workbench
+        .projects
+        .iter()
+        .filter(|project| expanded_project_ids.contains(&project.id))
+        .map(|project| project.id.clone())
+        .collect::<Vec<_>>();
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    Ok(guard.workbench.clone())
 }
 
-/// Archives all visible conversations under one project and returns the refreshed workbench snapshot.
-/// 归档单个项目下的全部可见对话并返回刷新后的工作台快照。
+/// Archives all visible conversations under one project and keeps the project active.
+/// 归档单个项目下的全部可见对话，并保留项目本身。
 async fn service_archive_project_conversations(
     state: SharedServiceBridgeState,
     project_id: String,
 ) -> Result<WorkbenchSnapshot, String> {
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    let workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
-        controller_runtime.clone(),
+    let (controller_runtime, project, project_sessions) =
+        controller_runtime_and_active_project_from_state(&state, &project_id, "归档")?;
+
+    if project.session_ids.is_empty() {
+        return retained_workbench_snapshot_from_state(&state);
+    }
+
+    vulcan_workspace_store::workspace_store::archive_project_sessions(
+        controller_runtime,
+        &project_id,
+        &project_sessions,
     )
     .await?;
-    let Some(project) = workspace_snapshot
+    archive_project_sessions_in_retained_state(&state, &project_id, &project_sessions, false)
+}
+
+/// Archives all project conversations, removes the active project row, and refreshes the snapshot.
+/// 归档项目全部对话、移除活动项目记录，并刷新工作台快照。
+async fn service_remove_project(
+    state: SharedServiceBridgeState,
+    project_id: String,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, project, project_sessions) =
+        controller_runtime_and_active_project_from_state(&state, &project_id, "移除")?;
+
+    vulcan_workspace_store::workspace_store::remove_project_after_archiving_sessions(
+        controller_runtime,
+        &project_id,
+        &project_sessions,
+    )
+    .await?;
+    if project.session_ids.is_empty() {
+        return remove_empty_project_from_retained_state(&state, &project_id);
+    }
+    archive_project_sessions_in_retained_state(&state, &project_id, &project_sessions, true)
+}
+
+/// Returns the controller runtime and one retained active project without reloading the workspace.
+/// 返回控制器运行时与一个保留的活动项目，不重新加载工作区。
+fn controller_runtime_and_active_project_from_state(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+    action_label: &str,
+) -> Result<
+    (
+        ControllerRuntimeHandle,
+        TaskProjectSummary,
+        Vec<SessionSummary>,
+    ),
+    String,
+> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+        String::from("service is still starting; controller runtime is not ready")
+    })?;
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区快照尚未加载，无法处理项目。"))?;
+    let project = workspace_snapshot
         .task_projects
         .iter()
         .find(|project| project.id == project_id)
-    else {
-        return Err(format!("未找到要归档的项目：{project_id}"));
-    };
+        .cloned()
+        .ok_or_else(|| format!("未找到要{action_label}的项目：{project_id}"))?;
+    let project_sessions = project
+        .session_ids
+        .iter()
+        .filter_map(|session_id| {
+            workspace_snapshot
+                .sessions
+                .iter()
+                .find(|session| session.id == *session_id)
+                .cloned()
+        })
+        .collect::<Vec<_>>();
+    Ok((controller_runtime, project, project_sessions))
+}
 
-    vulcan_workspace_store::workspace_store::archive_project_with_sessions(
-        controller_runtime,
-        &project_id,
-        &project.session_ids,
-    )
-    .await?;
-    refresh_workbench_snapshot(state).await
+/// Returns the retained workbench snapshot after a no-op project archive command.
+/// 在项目归档命令无需改动时返回保留的工作台快照。
+fn retained_workbench_snapshot_from_state(
+    state: &SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    Ok(guard.workbench.clone())
+}
+
+/// Removes an empty active project from retained workspace and workbench state.
+/// 从保留的工作区与工作台状态中移除一个空活动项目。
+fn remove_empty_project_from_retained_state(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        workspace_snapshot
+            .task_projects
+            .retain(|project| project.id != project_id);
+        workspace_snapshot.expanded_task_projects.remove(project_id);
+    }
+    guard
+        .workbench
+        .projects
+        .retain(|project| project.id != project_id);
+    guard
+        .workbench
+        .expanded_project_ids
+        .retain(|candidate| candidate != project_id);
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    Ok(guard.workbench.clone())
+}
+
+/// Moves project sessions between retained active and archived metadata without reloading catalogs.
+/// 在保留内存状态中迁移项目会话到归档元数据，不重新加载目录目录表。
+fn archive_project_sessions_in_retained_state(
+    state: &SharedServiceBridgeState,
+    project_id: &str,
+    sessions: &[SessionSummary],
+    remove_project: bool,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_ids = sessions
+        .iter()
+        .map(|session| session.id)
+        .collect::<BTreeSet<_>>();
+    let conversation_ids = session_ids
+        .iter()
+        .map(ToString::to_string)
+        .collect::<BTreeSet<_>>();
+    let mut archived_sessions = sessions
+        .iter()
+        .cloned()
+        .map(|mut session| {
+            if session.project_id.is_none() {
+                session.project_id = Some(project_id.to_string());
+            }
+            session
+        })
+        .collect::<Vec<_>>();
+    archived_sessions.sort_by_key(|session| -session.updated_at.parse::<i64>().unwrap_or_default());
+
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        workspace_snapshot
+            .sessions
+            .retain(|session| !session_ids.contains(&session.id));
+        workspace_snapshot
+            .archived_sessions
+            .retain(|session| !session_ids.contains(&session.id));
+        workspace_snapshot
+            .archived_sessions
+            .extend(archived_sessions.clone());
+        workspace_snapshot
+            .archived_sessions
+            .sort_by_key(|session| -session.updated_at.parse::<i64>().unwrap_or_default());
+        for project in &mut workspace_snapshot.task_projects {
+            project
+                .session_ids
+                .retain(|session_id| !session_ids.contains(session_id));
+        }
+        for session_id in &session_ids {
+            workspace_snapshot.session_messages.remove(session_id);
+            workspace_snapshot.session_compactions.remove(session_id);
+            workspace_snapshot.session_runtime_state.remove(session_id);
+            workspace_snapshot.session_run_phases.remove(session_id);
+            workspace_snapshot.hydrated_session_ids.remove(session_id);
+        }
+        if remove_project {
+            workspace_snapshot
+                .task_projects
+                .retain(|project| project.id != project_id);
+            workspace_snapshot.expanded_task_projects.remove(project_id);
+        }
+        if session_ids.contains(&workspace_snapshot.selected_session) {
+            workspace_snapshot.selected_session = workspace_snapshot
+                .sessions
+                .first()
+                .map(|session| session.id)
+                .unwrap_or_else(SessionId::nil);
+        }
+    }
+
+    guard
+        .workbench
+        .conversations
+        .retain(|conversation| !conversation_ids.contains(&conversation.id));
+    guard
+        .workbench
+        .messages
+        .retain(|message| !conversation_ids.contains(&message.conversation_id));
+    guard
+        .workbench
+        .archived_conversations
+        .retain(|conversation| !conversation_ids.contains(&conversation.id));
+    if remove_project {
+        guard
+            .workbench
+            .projects
+            .retain(|project| project.id != project_id);
+        guard
+            .workbench
+            .expanded_project_ids
+            .retain(|candidate| candidate != project_id);
+    } else {
+        guard.workbench.archived_conversations.extend(
+            archived_sessions
+                .iter()
+                .map(archived_conversation_summary_from_session),
+        );
+        guard
+            .workbench
+            .archived_conversations
+            .sort_by_key(|conversation| {
+                -conversation
+                    .last_updated_at
+                    .parse::<i64>()
+                    .unwrap_or_default()
+            });
+    }
+    if guard
+        .workbench
+        .selected_conversation_id
+        .as_ref()
+        .is_some_and(|selected| conversation_ids.contains(selected))
+    {
+        guard.workbench.selected_conversation_id = guard
+            .workbench
+            .conversations
+            .first()
+            .map(|conversation| conversation.id.clone());
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    Ok(guard.workbench.clone())
 }
 
 /// Applies a conversation display name and returns the refreshed workbench snapshot.
@@ -5708,15 +5963,56 @@ async fn service_rename_conversation(
     let parsed_session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    vulcan_workspace_store::workspace_store::rename_segmented_session_metadata(
-        &controller_runtime.data_root,
-        parsed_session_id,
+    let updated_at = current_unix_millis_text();
+    let (controller_runtime, project_id, session) =
+        controller_runtime_and_visible_session_project_from_state(&state, parsed_session_id)?;
+    vulcan_workspace_store::workspace_store::rename_single_session_metadata(
+        controller_runtime,
+        &project_id,
+        &session,
         &normalized_name,
-        &current_unix_millis_text(),
+        &updated_at,
     )
+    .await
     .map_err(|error| format!("重命名会话失败：{error}"))?;
-    refresh_workbench_snapshot(state).await
+    rename_conversation_in_retained_state(&state, parsed_session_id, &normalized_name, &updated_at)
+}
+
+/// Renames one retained visible conversation without reloading the workspace snapshot.
+/// 不重新加载工作区快照，重命名一个保留的可见会话。
+fn rename_conversation_in_retained_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    title: &str,
+    updated_at: &str,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut()
+        && let Some(session) = workspace_snapshot
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+    {
+        session.title = title.to_string();
+        session.title_source = SessionTitleSource::Manual;
+        session.updated_at = updated_at.to_string();
+        session.last_updated_label = String::from("刚刚");
+    }
+    let conversation_id = session_id.to_string();
+    if let Some(conversation) = guard
+        .workbench
+        .conversations
+        .iter_mut()
+        .find(|conversation| conversation.id == conversation_id)
+    {
+        conversation.title = title.to_string();
+        conversation.last_updated_at = updated_at.to_string();
+        conversation.last_updated_label = String::from("刚刚");
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    Ok(guard.workbench.clone())
 }
 
 /// Archives one visible conversation and returns the refreshed workbench snapshot.
@@ -5728,14 +6024,157 @@ async fn service_archive_conversation(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    vulcan_workspace_store::workspace_store::archive_single_session(controller_runtime, session_id)
-        .await?;
-    refresh_workbench_snapshot(state).await
+    let (controller_runtime, project_id, session) =
+        controller_runtime_and_visible_session_project_from_state(&state, session_id)?;
+    vulcan_workspace_store::workspace_store::archive_single_session_for_project(
+        controller_runtime,
+        &project_id,
+        &session,
+    )
+    .await?;
+    archive_conversation_in_retained_state(&state, session_id, &project_id)
 }
 
-/// Marks one conversation as read and returns the refreshed workbench snapshot.
-/// 将单个会话标记为已读并返回刷新后的工作台快照。
+/// Returns the controller runtime and owning project id for one retained visible session.
+/// 返回单个保留可见会话的控制器运行时与所属项目标识。
+fn controller_runtime_and_visible_session_project_from_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(ControllerRuntimeHandle, String, SessionSummary), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+        String::from("service is still starting; controller runtime is not ready")
+    })?;
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区快照尚未加载，无法归档会话。"))?;
+    let session = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|candidate| candidate.id == session_id)
+        .cloned()
+        .ok_or_else(|| format!("未找到要归档的会话：{session_id}"))?;
+    let project_id = session
+        .project_id
+        .clone()
+        .or_else(|| owning_project_id_for_session(workspace_snapshot, session_id))
+        .ok_or_else(|| format!("会话缺少所属项目，无法归档：{session_id}"))?;
+    Ok((controller_runtime, project_id, session))
+}
+
+/// Moves one archived conversation from retained active state into archived metadata state.
+/// 将一个已归档会话从保留的活动状态移动到归档元数据状态。
+fn archive_conversation_in_retained_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    project_id: &str,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let mut archived_session = {
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("工作区快照尚未加载，无法更新归档状态。"))?;
+        let session_index = workspace_snapshot
+            .sessions
+            .iter()
+            .position(|candidate| candidate.id == session_id)
+            .ok_or_else(|| format!("未找到要归档的会话：{session_id}"))?;
+        let mut archived_session = workspace_snapshot.sessions.remove(session_index);
+        if archived_session.project_id.is_none() {
+            archived_session.project_id = Some(project_id.to_string());
+        }
+        for project in &mut workspace_snapshot.task_projects {
+            project
+                .session_ids
+                .retain(|candidate| *candidate != session_id);
+        }
+        workspace_snapshot.session_messages.remove(&session_id);
+        workspace_snapshot.session_compactions.remove(&session_id);
+        workspace_snapshot.session_runtime_state.remove(&session_id);
+        workspace_snapshot.session_run_phases.remove(&session_id);
+        workspace_snapshot.hydrated_session_ids.remove(&session_id);
+        workspace_snapshot
+            .archived_sessions
+            .retain(|candidate| candidate.id != session_id);
+        workspace_snapshot
+            .archived_sessions
+            .push(archived_session.clone());
+        workspace_snapshot
+            .archived_sessions
+            .sort_by_key(|session| -session.updated_at.parse::<i64>().unwrap_or_default());
+        if workspace_snapshot.selected_session == session_id {
+            workspace_snapshot.selected_session = workspace_snapshot
+                .sessions
+                .first()
+                .map(|session| session.id)
+                .unwrap_or_else(SessionId::nil);
+        }
+        archived_session
+    };
+    if archived_session.project_id.is_none() {
+        archived_session.project_id = Some(project_id.to_string());
+    }
+    let archived_conversation = archived_conversation_summary_from_session(&archived_session);
+    let archived_conversation_id = session_id.to_string();
+    guard
+        .workbench
+        .conversations
+        .retain(|conversation| conversation.id != archived_conversation_id);
+    guard
+        .workbench
+        .messages
+        .retain(|message| message.conversation_id != archived_conversation_id);
+    guard
+        .workbench
+        .archived_conversations
+        .retain(|conversation| conversation.id != archived_conversation_id);
+    guard
+        .workbench
+        .archived_conversations
+        .push(archived_conversation);
+    guard
+        .workbench
+        .archived_conversations
+        .sort_by_key(|conversation| {
+            -conversation
+                .last_updated_at
+                .parse::<i64>()
+                .unwrap_or_default()
+        });
+    if guard.workbench.selected_conversation_id.as_deref() == Some(&archived_conversation_id) {
+        guard.workbench.selected_conversation_id = guard
+            .workbench
+            .conversations
+            .first()
+            .map(|conversation| conversation.id.clone());
+    }
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    Ok(guard.workbench.clone())
+}
+
+/// Builds a WebUI archived-conversation summary from persisted session metadata.
+/// 根据持久化会话元数据构建 WebUI 归档会话摘要。
+fn archived_conversation_summary_from_session(session: &SessionSummary) -> ConversationSummary {
+    ConversationSummary {
+        id: session.id.to_string(),
+        title: session.title.clone(),
+        status: String::from("Archived"),
+        run_phase: SessionRunPhase::Idle.to_string(),
+        last_updated_label: session.last_updated_label.clone(),
+        last_updated_at: session.updated_at.clone(),
+        unread: false,
+        project_id: session.project_id.clone(),
+    }
+}
+
+/// Marks one conversation as read and returns the retained workbench snapshot.
+/// 将单个会话标记为已读并返回保留的工作台快照。
 async fn service_mark_conversation_read(
     state: SharedServiceBridgeState,
     conversation_id: String,
@@ -5743,36 +6182,53 @@ async fn service_mark_conversation_read(
     let session_id = conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{conversation_id}': {error}"))?;
-    let controller_runtime = controller_runtime_from_state(&state)?;
-    let mut workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
-        controller_runtime.clone(),
-    )
-    .await?;
-    let marked_read = if let Some(runtime_state) = workspace_snapshot
-        .session_runtime_state
-        .get_mut(&session_id)
-    {
-        if runtime_state.ui_state.unread {
+    let (controller_runtime, runtime_state_update, workbench) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let mut runtime_state_update = None;
+        if let Some(runtime_state) =
+            guard
+                .workspace_snapshot
+                .as_mut()
+                .and_then(|workspace_snapshot| {
+                    workspace_snapshot
+                        .session_runtime_state
+                        .get_mut(&session_id)
+                })
+        {
             runtime_state.ui_state.unread = false;
             runtime_state.updated_at = current_unix_millis_text();
-            true
-        } else {
-            false
+            runtime_state_update = Some(runtime_state.clone());
         }
-    } else {
-        false
+        for conversation in guard
+            .workbench
+            .conversations
+            .iter_mut()
+            .filter(|conversation| conversation.id == conversation_id)
+        {
+            conversation.unread = false;
+        }
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        (
+            controller_runtime,
+            runtime_state_update,
+            guard.workbench.clone(),
+        )
     };
-    if !marked_read {
-        return refresh_workbench_snapshot(state).await;
+
+    if let Some(runtime_state_update) = runtime_state_update {
+        vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+            controller_runtime,
+            session_id,
+            &runtime_state_update,
+        )
+        .await?;
     }
-    persist_webui_session_runtime_state_update(
-        &state,
-        controller_runtime,
-        session_id,
-        &workspace_snapshot,
-    )
-    .await?;
-    refresh_workbench_snapshot(state).await
+    Ok(workbench)
 }
 
 /// Selects one conversation in the retained WebUI workspace state.
@@ -8511,6 +8967,7 @@ fn materialize_prompt_session(
         .find(|candidate| candidate.id == project_id)
         .ok_or_else(|| format!("未找到项目：{project_id}"))?;
     let session_id = SessionId::new_v4();
+    let now = current_unix_millis_text();
     let session_title = prompt_to_session_title(prompt);
     let session = SessionSummary::new(
         session_id,
@@ -8522,7 +8979,9 @@ fn materialize_prompt_session(
         0,
         "刚刚",
     )
-    .with_title_source(SessionTitleSource::Generated);
+    .with_title_source(SessionTitleSource::Generated)
+    .with_created_at(now.clone())
+    .with_updated_at(now);
 
     project
         .session_ids
@@ -9105,37 +9564,6 @@ fn invalidate_webui_session_persist_version(
 ) -> Result<(), String> {
     let _ = next_webui_session_persist_version(state, session_id)?;
     Ok(())
-}
-
-/// Persists one WebUI session runtime-state mutation through the full session snapshot path.
-/// 通过完整会话快照路径持久化一个 WebUI 会话运行态变更。
-///
-/// # Parameters
-/// 参数
-/// `controller_runtime` owns the workspace store runtime bridge.
-/// `controller_runtime` 持有工作区存储运行时桥。
-/// `session_id` selects the runtime-state document to update.
-/// `session_id` 选择要更新的运行态文档。
-/// `workspace_snapshot` carries the current complete session snapshot.
-/// `workspace_snapshot` 携带当前完整会话快照。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` after the store write finishes.
-/// 存储写入完成后返回 `Ok(())`。
-async fn persist_webui_session_runtime_state_update(
-    state: &SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    session_id: SessionId,
-    workspace_snapshot: &WorkspaceSnapshot,
-) -> Result<(), String> {
-    persist_workspace_session_update(
-        Some(state),
-        controller_runtime,
-        workspace_snapshot,
-        session_id,
-    )
-    .await
 }
 
 /// Builds an empty LuaSkills catalog for degraded snapshot rendering.
@@ -17775,6 +18203,12 @@ fn workbench_from_runtime(
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    let restorable_project_ids = workspace
+        .task_projects
+        .iter()
+        .chain(workspace.archived_task_projects.iter())
+        .map(|project| project.id.as_str())
+        .collect::<BTreeSet<_>>();
     WorkbenchSnapshot {
         app_version: env!("CARGO_PKG_VERSION").to_string(),
         modules: runtime_modules(
@@ -17827,6 +18261,39 @@ fn workbench_from_runtime(
                         .is_some_and(|runtime_state| runtime_state.ui_state.unread),
                     project_id: session.project_id.clone(),
                 }
+            })
+            .collect(),
+        archived_projects: workspace
+            .archived_task_projects
+            .iter()
+            .map(|project| ProjectSummary {
+                id: project.id.clone(),
+                name: project.title.clone(),
+                path: project.path.clone(),
+                pinned: project.pinned,
+                icon_pack: project.icon_pack.clone(),
+                icon_key: project.icon_key.clone(),
+            })
+            .collect(),
+        archived_conversations: workspace
+            .archived_sessions
+            .iter()
+            .filter(|session| {
+                session
+                    .project_id
+                    .as_deref()
+                    .is_some_and(|project_id| restorable_project_ids.contains(project_id))
+            })
+            .filter(|session| session_segmented_metadata_exists(session))
+            .map(|session| ConversationSummary {
+                id: session.id.to_string(),
+                title: session.title.clone(),
+                status: String::from("Archived"),
+                run_phase: SessionRunPhase::Idle.to_string(),
+                last_updated_label: session.last_updated_label.clone(),
+                last_updated_at: session.updated_at.clone(),
+                unread: false,
+                project_id: session.project_id.clone(),
             })
             .collect(),
         selected_conversation_id,
@@ -18332,6 +18799,8 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         }],
         expanded_project_ids: vec![String::from("current-workspace")],
         conversations: Vec::new(),
+        archived_projects: Vec::new(),
+        archived_conversations: Vec::new(),
         selected_conversation_id: None,
         messages: Vec::new(),
         subagent_navigation: None,

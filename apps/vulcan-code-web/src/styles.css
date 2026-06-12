@@ -744,9 +744,13 @@ button {
 .project-folder-button {
   --project-folder-active-bg: color-mix(in oklch, var(--sidebar-accent) 54%, var(--foreground) 3%);
   position: relative;
-  min-height: 34px;
+  height: 30px;
+  max-height: 30px;
+  min-height: 30px;
   font-weight: 400;
+  padding-top: 0;
   padding-right: 58px;
+  padding-bottom: 0;
 }
 
 .project-folder-button.project-folder-active {

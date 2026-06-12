@@ -1229,6 +1229,12 @@ export interface WorkbenchSnapshot {
   // Conversation summaries.
   // 会话摘要。
   conversations: ConversationSummary[];
+  // Archived project summaries available for restore surfaces.
+  // 可用于恢复界面的归档项目摘要。
+  archivedProjects?: ProjectSummary[];
+  // Archived conversation summaries available for restore surfaces.
+  // 可用于恢复界面的归档会话摘要。
+  archivedConversations?: ConversationSummary[];
   // Currently selected conversation id.
   // 当前选中的会话标识。
   selectedConversationId?: string | null;

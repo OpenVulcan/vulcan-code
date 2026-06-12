@@ -40,18 +40,21 @@ use self::segmented_session_store::{
     append_segmented_session_events, backup_runtime_log_before_compaction,
     clear_all_segmented_session_roots, create_segmented_session_in_location,
     find_segmented_session_directory, find_segmented_session_directory_by_id,
-    list_segmented_session_catalog, load_session_boundary_state, patch_segmented_session_metadata,
-    read_runtime_log_lines, read_segmented_session_event_window, read_state,
-    record_runtime_audit_event, record_runtime_injection_applied, replace_session_boundary_state,
-    replay_segmented_session_context, state_document_from_runtime_state, write_state,
+    load_session_boundary_state, patch_segmented_session_metadata, read_runtime_log_lines,
+    read_segmented_session_event_window, read_state, record_runtime_audit_event,
+    record_runtime_injection_applied, replace_session_boundary_state,
+    replay_segmented_session_context, segmented_session_directory,
+    state_document_from_runtime_state, write_state,
 };
 pub use persistence::{
-    archive_project_with_sessions, archive_single_session, permanently_delete_archived_project,
+    archive_project_sessions, archive_project_with_sessions, archive_single_session,
+    archive_single_session_for_project, permanently_delete_archived_project,
     permanently_delete_archived_session, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_order_update, persist_project_pinned_and_order_update,
     persist_single_session_runtime_state_update, persist_single_session_update,
-    persist_workspace_snapshot, rename_project, restore_project_with_sessions,
-    restore_single_session, toggle_project_pinned,
+    persist_workspace_snapshot, remove_project_after_archiving_sessions, rename_project,
+    rename_single_session_metadata, restore_project_with_sessions, restore_single_session,
+    toggle_project_pinned,
 };
 pub use session_load::{
     load_session_history_page, load_session_hydration_snapshot,
@@ -268,6 +271,39 @@ struct StoredProjectRow {
     archived: i64,
 }
 
+/// Raw lightweight session locator row decoded from the controller SQLite query payload.
+/// 从控制器 SQLite 查询载荷中解码出的轻量会话定位行。
+#[derive(Debug, Clone, Deserialize)]
+struct StoredSessionIndexRow {
+    /// Stable session identifier persisted in SQLite.
+    /// 持久化到 SQLite 的稳定会话标识。
+    id: String,
+    /// Owning project identifier persisted in SQLite.
+    /// 持久化到 SQLite 的所属项目标识。
+    project_id: String,
+    /// Project tag used by the deterministic segmented directory layout.
+    /// 确定性分段目录布局使用的项目标签。
+    project_tag: String,
+    /// Optional session display title.
+    /// 可选的会话展示标题。
+    title: Option<String>,
+    /// Optional persisted title-source key.
+    /// 可选的持久化标题来源键。
+    title_source: Option<String>,
+    /// SQLite numeric archived flag.
+    /// SQLite 数值型归档标记。
+    archived: i64,
+    /// Project-local stable sort order.
+    /// 项目内稳定排序值。
+    sort_order: i64,
+    /// Raw creation timestamp as Unix milliseconds text.
+    /// Unix 毫秒文本格式的原始创建时间。
+    created_at: String,
+    /// Raw update timestamp as Unix milliseconds text.
+    /// Unix 毫秒文本格式的原始更新时间。
+    updated_at: String,
+}
+
 /// Raw application metadata row decoded from the controller SQLite query payload.
 /// 从控制器 SQLite 查询载荷中解码出的原始应用元数据行。
 #[derive(Debug, Clone, Deserialize)]
@@ -358,7 +394,7 @@ pub async fn load_workspace_snapshot(
     controller: ControllerRuntimeHandle,
 ) -> Result<WorkspaceSnapshot, String> {
     let project_rows = query_project_rows(&controller).await?;
-    let session_entries = list_segmented_session_catalog(&controller.data_root)?;
+    let session_rows = query_session_index_rows(&controller).await?;
 
     let mut task_projects = Vec::new();
     let mut archived_task_projects = Vec::new();
@@ -387,34 +423,49 @@ pub async fn load_workspace_snapshot(
     let archived_compaction_map: BTreeMap<SessionId, Vec<SessionCompactionEntry>> = BTreeMap::new();
 
     let mut runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
-    let mut archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> =
-        BTreeMap::new();
+    let archived_runtime_state_map: BTreeMap<SessionId, SessionRuntimeStateEntry> = BTreeMap::new();
     let mut visible_sessions = Vec::new();
     let mut archived_sessions = Vec::new();
     let mut session_updated_at = BTreeMap::new();
-    for entry in &session_entries {
-        let session_id = parse_session_id(&entry.metadata.session_id)?;
-        let project_id = entry
-            .metadata
+    for row in &session_rows {
+        let session_id = parse_session_id(&row.id)?;
+        let project_id = row
             .project_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&entry.metadata.project_tag)
-            .to_string();
+            .trim()
+            .is_empty()
+            .then(|| row.project_tag.clone())
+            .unwrap_or_else(|| row.project_id.clone());
+        let project_tag = row
+            .project_tag
+            .trim()
+            .is_empty()
+            .then(|| project_id.clone())
+            .unwrap_or_else(|| row.project_tag.clone());
+        let archived = row.archived != 0;
+        let session_dir = segmented_session_directory(
+            &controller.data_root,
+            archived,
+            &project_tag,
+            &segmented_session_date_from_unix_millis_text(&row.created_at),
+            &row.id,
+        );
+        if !session_dir.exists() {
+            continue;
+        }
         let project_name = project_rows
             .iter()
             .find(|row| row.id == project_id)
             .map(|row| row.name.clone())
             .unwrap_or_else(|| project_id.clone());
-        if entry.archived {
+        let project_row_exists = project_rows.iter().any(|row| row.id == project_id);
+        if archived && project_row_exists {
             ensure_project_summary_for_session(
                 &mut archived_task_projects,
                 &project_id,
                 &project_name,
                 session_id,
             );
-        } else {
+        } else if !archived {
             ensure_project_summary_for_session(
                 &mut task_projects,
                 &project_id,
@@ -422,16 +473,13 @@ pub async fn load_workspace_snapshot(
                 session_id,
             );
         }
-        if let Some(state_document) = read_state(&entry.session_dir)? {
+        if !archived && let Some(state_document) = read_state(&session_dir)? {
             if !state_document.runtime_state.is_null() {
                 let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
                     state_document.runtime_state,
                 )
                 .map_err(|error| {
-                    format!(
-                        "解析分段会话 `{}` 的 state.json 失败：{error}",
-                        entry.metadata.session_id
-                    )
+                    format!("解析分段会话 `{}` 的 state.json 失败：{error}", row.id)
                 })?;
                 if runtime_state.updated_at.trim().is_empty()
                     && !state_document.updated_at.trim().is_empty()
@@ -440,20 +488,15 @@ pub async fn load_workspace_snapshot(
                 }
                 hydrate_runtime_state_from_segmented_replay_if_missing(
                     session_id,
-                    &entry.session_dir,
+                    &session_dir,
                     &mut runtime_state,
                 )?;
                 let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
-                if entry.archived {
-                    archived_runtime_state_map.insert(session_id, runtime_state);
-                } else {
-                    runtime_state_map.insert(session_id, runtime_state);
-                }
+                runtime_state_map.insert(session_id, runtime_state);
             }
         }
         let focus = session_focus_preview(&[]);
-        let title = entry
-            .metadata
+        let title = row
             .title
             .clone()
             .unwrap_or_else(|| String::from("Untitled"));
@@ -465,18 +508,19 @@ pub async fn load_workspace_snapshot(
             SessionState::Draft,
             0,
             0,
-            relative_time_label_from_unix_millis_text(&entry.metadata.updated_at),
+            relative_time_label_from_unix_millis_text(&row.updated_at),
         )
         .with_title_source(SessionTitleSource::from_persisted_key(
-            entry.metadata.title_source.as_deref().unwrap_or("manual"),
+            row.title_source.as_deref().unwrap_or("manual"),
         ))
-        .with_updated_at(entry.metadata.updated_at.clone());
+        .with_created_at(row.created_at.clone())
+        .with_updated_at(row.updated_at.clone());
         session_updated_at.insert(
             session_id,
-            entry.metadata.updated_at.parse::<i64>().unwrap_or_default(),
+            row.updated_at.parse::<i64>().unwrap_or_default(),
         );
 
-        if entry.archived {
+        if archived {
             archived_sessions.push(session_summary);
         } else {
             visible_sessions.push(session_summary);
@@ -666,6 +710,7 @@ async fn clear_workspace_storage(controller: &ControllerRuntimeHandle) -> Result
             app_sqlite_binding_id(controller),
             r#"
 DELETE FROM projects;
+DELETE FROM workspace_session_index;
 DELETE FROM app_metadata WHERE key = 'workspace.collapsed_task_projects';
 "#,
             Vec::<ControllerSqliteValue>::new(),
@@ -1429,6 +1474,38 @@ ORDER BY pinned DESC, sort_order ASC, updated_at DESC;
         .map_err(|error| format!("查询工作台项目列表失败：{error}"))?;
 
     decode_query_rows::<StoredProjectRow>(&result.json_data)
+}
+
+/// Queries lightweight session locator rows ordered without scanning segmented directories.
+/// 查询轻量会话定位行，不扫描分段目录。
+async fn query_session_index_rows(
+    controller: &ControllerRuntimeHandle,
+) -> Result<Vec<StoredSessionIndexRow>, String> {
+    let result = controller
+        .client
+        .query_sqlite_json_typed(
+            APP_SPACE_ID,
+            app_sqlite_binding_id(controller),
+            r#"
+SELECT
+    id,
+    project_id,
+    project_tag,
+    title,
+    title_source,
+    archived,
+    sort_order,
+    created_at,
+    updated_at
+FROM workspace_session_index
+ORDER BY archived ASC, project_id ASC, sort_order ASC, updated_at DESC;
+"#,
+            Vec::new(),
+        )
+        .await
+        .map_err(|error| format!("查询工作台会话定位索引失败：{error}"))?;
+
+    decode_query_rows::<StoredSessionIndexRow>(&result.json_data)
 }
 
 /// Queries the persisted collapsed project identifiers, if a workspace UI state row exists.

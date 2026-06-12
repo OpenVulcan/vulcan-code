@@ -1078,6 +1078,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     { id: "luaskills-rust", title: "分析 Rust 插件机制", status: "Completed", lastUpdatedLabel: "2 天", projectId: "luaskills-packages" },
     { id: "workmem-plan", title: "VMM 置顶项目对接方案", status: "Completed", lastUpdatedLabel: "5 小时", projectId: "vulcan-workmem" },
   ],
+  archivedProjects: [],
+  archivedConversations: [],
   selectedConversationId: "preview",
   messages: [
     { id: "preview-user", conversationId: "preview", role: "user", body: "新 WebUI 需要完整承接当前界面显示。" },
@@ -2274,6 +2276,15 @@ async function archiveProjectConversations(projectId: string): Promise<Workbench
   return serviceClient.request<WorkbenchSnapshot>("service_archive_project_conversations", { projectId });
 }
 
+// removeProject archives conversations and removes one project row from the active sidebar.
+// removeProject 归档会话并从活动侧栏移除单个项目记录。
+async function removeProject(projectId: string): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_remove_project", { projectId });
+}
+
 // renameConversation asks the desktop shell to apply a new conversation display name.
 // renameConversation 请求桌面壳应用新的会话显示名称。
 async function renameConversation(conversationId: string, name: string): Promise<WorkbenchSnapshot | null> {
@@ -2671,6 +2682,9 @@ function WorkbenchLayout(props: {
   // workbenchStateRef 向路由点击回调暴露最新工作台状态，避免闭包过期。
   const workbenchStateRef = React.useRef<WorkbenchSnapshot>(workbenchState);
   workbenchStateRef.current = workbenchState;
+  // expandedProjectIdsLocallyEditedRef records whether the user has touched project expansion in this session.
+  // expandedProjectIdsLocallyEditedRef 记录本轮会话中用户是否已经手动修改过项目展开状态。
+  const expandedProjectIdsLocallyEditedRef = React.useRef(false);
   // mergeWorkbenchWithLocalCaches centralizes service snapshot merges that must preserve loaded child surfaces.
   // mergeWorkbenchWithLocalCaches 集中处理必须保留已载入子代理界面的服务快照合并。
   const mergeWorkbenchWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
@@ -2723,6 +2737,15 @@ function WorkbenchLayout(props: {
   // archiveProjectTarget stores the project waiting for archive confirmation.
   // archiveProjectTarget 保存正在等待归档确认的项目。
   const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
+  // archiveProjectSubmitting tracks a bulk archive request in the confirmation dialog.
+  // archiveProjectSubmitting 跟踪批量归档确认弹窗中的请求状态。
+  const [archiveProjectSubmitting, setArchiveProjectSubmitting] = React.useState(false);
+  // removeProjectTarget stores the project waiting for removal confirmation.
+  // removeProjectTarget 保存正在等待移除确认的项目。
+  const [removeProjectTarget, setRemoveProjectTarget] = React.useState<ProjectSummary | null>(null);
+  // removeProjectSubmitting tracks an archive-then-remove project request.
+  // removeProjectSubmitting 跟踪先归档再移除项目的请求状态。
+  const [removeProjectSubmitting, setRemoveProjectSubmitting] = React.useState(false);
   // pinnedConversationIds stores the locally pinned conversations until persistence is added.
   // pinnedConversationIds 保存本地置顶的会话，直到后续接入持久化。
   const [pinnedConversationIds, setPinnedConversationIds] = React.useState<Set<string>>(() => new Set());
@@ -2884,6 +2907,11 @@ function WorkbenchLayout(props: {
         return;
       }
 
+      if (action === "remove-project") {
+        setRemoveProjectTarget(project);
+        return;
+      }
+
       if (action === "settings") {
         setProjectSettingsTarget({ project });
         return;
@@ -3028,18 +3056,14 @@ function WorkbenchLayout(props: {
     }
   }, [applyProjectActionSnapshot]);
 
-  // handleExpandedProjectIdsChange silently persists project folder expansion state.
-  // handleExpandedProjectIdsChange 静默持久化项目文件夹展开状态。
-  const handleExpandedProjectIdsChange = React.useCallback(async (projectIds: string[]) => {
+  // handleExpandedProjectIdsChange persists project folder expansion without reapplying stale snapshots.
+  // handleExpandedProjectIdsChange 持久化项目文件夹展开状态，但不重新套用可能过期的快照。
+  const handleExpandedProjectIdsChange = React.useCallback((projectIds: string[]) => {
+    expandedProjectIdsLocallyEditedRef.current = true;
     setWorkbenchState((current) => ({ ...current, expandedProjectIds: projectIds }));
-    try {
-      const snapshot = await setExpandedTaskProjects(projectIds);
-      if (snapshot) {
-        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
-      }
-    } catch (nextError) {
+    void setExpandedTaskProjects(projectIds).catch((nextError) => {
       console.warn("persist expanded projects failed", nextError);
-    }
+    });
   }, []);
 
   // handleSubmitConversationPrompt sends the composer text through the shared backend runtime.
@@ -3475,9 +3499,10 @@ function WorkbenchLayout(props: {
   // handleArchiveProjectConfirm archives all conversations under the selected project.
   // handleArchiveProjectConfirm 归档选定项目下的全部对话。
   const handleArchiveProjectConfirm = React.useCallback(async () => {
-    if (!archiveProjectTarget) {
+    if (!archiveProjectTarget || archiveProjectSubmitting) {
       return;
     }
+    setArchiveProjectSubmitting(true);
     try {
       const snapshot = await archiveProjectConversations(archiveProjectTarget.id);
       if (snapshot) {
@@ -3489,8 +3514,33 @@ function WorkbenchLayout(props: {
       setArchiveProjectTarget(null);
     } catch (nextError) {
       toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setArchiveProjectSubmitting(false);
     }
-  }, [applyProjectActionSnapshot, archiveProjectTarget, workbenchState]);
+  }, [applyProjectActionSnapshot, archiveProjectSubmitting, archiveProjectTarget, workbenchState]);
+
+  // handleRemoveProjectConfirm archives conversations and removes the selected project.
+  // handleRemoveProjectConfirm 归档对话并移除选中的项目。
+  const handleRemoveProjectConfirm = React.useCallback(async () => {
+    if (!removeProjectTarget || removeProjectSubmitting) {
+      return;
+    }
+    setRemoveProjectSubmitting(true);
+    try {
+      const snapshot = await removeProject(removeProjectTarget.id);
+      if (snapshot) {
+        applyProjectActionSnapshot(snapshot);
+      } else {
+        applyProjectActionSnapshot(applyPreviewProjectAction(workbenchState, removeProjectTarget.id, "remove-project").snapshot);
+      }
+      toast.success(`已归档并移除项目：${removeProjectTarget.name}`);
+      setRemoveProjectTarget(null);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setRemoveProjectSubmitting(false);
+    }
+  }, [applyProjectActionSnapshot, removeProjectSubmitting, removeProjectTarget, workbenchState]);
 
   // handlePendingQuestionSubmit resumes a blocked ask tool call with validated modal answers.
   // handlePendingQuestionSubmit 使用弹窗校验后的答案恢复被阻塞的 ask 工具调用。
@@ -3536,6 +3586,7 @@ function WorkbenchLayout(props: {
         current,
         props.workbench,
         subagentSurfaceMessageCacheRef.current,
+        { preserveExpandedProjectIds: expandedProjectIdsLocallyEditedRef.current },
       ),
       subagentRoutePreferenceRef.current,
     ));
@@ -3777,10 +3828,28 @@ function WorkbenchLayout(props: {
         onSetAgentSkillState={handleProjectSettingsAgentSkillSave}
       />
       <ArchiveProjectDialog
+        busy={archiveProjectSubmitting}
         conversationCount={archiveProjectTarget ? projectConversationCount(workbenchState, archiveProjectTarget.id) : 0}
+        mode="archive"
         project={archiveProjectTarget}
-        onCancel={() => setArchiveProjectTarget(null)}
+        onCancel={() => {
+          if (!archiveProjectSubmitting) {
+            setArchiveProjectTarget(null);
+          }
+        }}
         onConfirm={handleArchiveProjectConfirm}
+      />
+      <ArchiveProjectDialog
+        busy={removeProjectSubmitting}
+        conversationCount={removeProjectTarget ? projectConversationCount(workbenchState, removeProjectTarget.id) : 0}
+        mode="remove"
+        project={removeProjectTarget}
+        onCancel={() => {
+          if (!removeProjectSubmitting) {
+            setRemoveProjectTarget(null);
+          }
+        }}
+        onConfirm={handleRemoveProjectConfirm}
       />
       <AskQuestionDialog
         request={workbenchState.pendingQuestion ?? null}
@@ -4492,14 +4561,32 @@ function conversationScrollToDistanceFromBottom(element: HTMLElement, distanceFr
   element.scrollTop = Math.max(0, Math.min(maxScrollTop, element.scrollHeight - element.clientHeight - distanceFromBottom));
 }
 
+// WorkbenchMergeOptions tunes snapshot merge behavior for local interaction state.
+// WorkbenchMergeOptions 调整快照合并时本地交互状态的处理方式。
+interface WorkbenchMergeOptions {
+  // Whether local project expansion should win over incoming snapshots.
+  // 本地项目展开状态是否优先于传入快照。
+  preserveExpandedProjectIds?: boolean;
+}
+
 // mergeWorkbenchSnapshot merges backend workbench updates without discarding lazily loaded messages.
 // mergeWorkbenchSnapshot 合并后端工作台更新且不丢弃已懒加载的会话正文。
-function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchSnapshot): WorkbenchSnapshot {
+function mergeWorkbenchSnapshot(
+  current: WorkbenchSnapshot,
+  incoming: WorkbenchSnapshot,
+  options: WorkbenchMergeOptions = {},
+): WorkbenchSnapshot {
   const incomingConversationIds = new Set(incoming.messages.map((message) => message.conversationId));
   const currentMessagesByConversation = groupMessagesByConversation(current.messages);
   const incomingMessagesByConversation = groupMessagesByConversation(incoming.messages);
   const incomingConversationsById = new Map(incoming.conversations.map((conversation) => [conversation.id, conversation]));
   const currentConversationsById = new Map(current.conversations.map((conversation) => [conversation.id, conversation]));
+  const incomingProjectIds = new Set(incoming.projects.map((project) => project.id));
+  const expandedProjectSource = options.preserveExpandedProjectIds === false
+    ? incoming.expandedProjectIds ?? current.expandedProjectIds
+    : current.expandedProjectIds ?? incoming.expandedProjectIds;
+  const expandedProjectIds = (expandedProjectSource ?? [])
+    .filter((projectId) => incomingProjectIds.has(projectId));
   const mergedIncomingMessages = [...incomingMessagesByConversation.entries()].flatMap(([conversationId, messages]) => (
     mergeIncomingConversationMessages(
       currentMessagesByConversation.get(conversationId) ?? [],
@@ -4516,6 +4603,7 @@ function mergeWorkbenchSnapshot(current: WorkbenchSnapshot, incoming: WorkbenchS
   return {
     ...incoming,
     selectedConversationId,
+    expandedProjectIds,
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...mergedIncomingMessages],
   };
@@ -4995,9 +5083,10 @@ function mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(
   current: WorkbenchSnapshot,
   incoming: WorkbenchSnapshot,
   cache: SubagentSurfaceMessageCache,
+  options?: WorkbenchMergeOptions,
 ): WorkbenchSnapshot {
   rememberSubagentSurfaceMessages(cache, incoming);
-  return injectCachedSubagentSurfaceMessages(mergeWorkbenchSnapshot(current, incoming), cache);
+  return injectCachedSubagentSurfaceMessages(mergeWorkbenchSnapshot(current, incoming, options), cache);
 }
 
 // mergeConversationMessagesWithSubagentSurfaceMessageCache replaces one message window and updates child-surface cache when applicable.
@@ -5150,8 +5239,9 @@ function mergeConversationSummaries(
     if (!currentConversation) {
       return conversation;
     }
-    const keepUnread = conversation.id !== selectedConversationId
-      && (conversation.unread || currentConversation.unread);
+    const keepUnread = conversation.id === selectedConversationId
+      ? false
+      : conversation.unread;
     return {
       ...conversation,
       unread: keepUnread,
@@ -5210,11 +5300,12 @@ function mergeConversationMessages(
   };
 }
 
-// markConversationLocallyRead clears the unread dot optimistically in the sidebar.
-// markConversationLocallyRead 在侧栏中乐观清除未读圆点。
+// markConversationLocallyRead clears the unread dot and records the selected conversation locally.
+// markConversationLocallyRead 清除未读圆点，并在本地记录当前选中的会话。
 function markConversationLocallyRead(workbench: WorkbenchSnapshot, conversationId: string): WorkbenchSnapshot {
   return {
     ...workbench,
+    selectedConversationId: conversationId,
     conversations: workbench.conversations.map((conversation) => (
       conversation.id === conversationId ? { ...conversation, unread: false } : conversation
     )),
@@ -5223,7 +5314,7 @@ function markConversationLocallyRead(workbench: WorkbenchSnapshot, conversationI
 
 // ProjectMenuAction names project-tree context menu commands.
 // ProjectMenuAction 命名项目树右键菜单命令。
-type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "set-icon" | "archive-conversations" | "settings";
+type ProjectMenuAction = "toggle-pin" | "open-directory" | "rename" | "set-icon" | "archive-conversations" | "remove-project" | "settings";
 
 // ProjectIconDialogTarget stores the project currently editing its icon.
 // ProjectIconDialogTarget 保存当前正在编辑图标的项目。
@@ -5289,15 +5380,25 @@ function applyPreviewProjectAction(
   const selectedConversationId = archivedConversationIds.has(workbench.selectedConversationId ?? "")
     ? conversations[0]?.id ?? null
     : workbench.selectedConversationId;
+  const projects = action === "remove-project"
+    ? workbench.projects.filter((candidate) => candidate.id !== projectId)
+    : workbench.projects;
+  const expandedProjectIds = action === "remove-project"
+    ? (workbench.expandedProjectIds ?? []).filter((candidate) => candidate !== projectId)
+    : workbench.expandedProjectIds;
 
   return {
     snapshot: {
       ...workbench,
+      projects,
+      expandedProjectIds,
       conversations,
       selectedConversationId,
       messages: workbench.messages.filter((message) => !archivedConversationIds.has(message.conversationId)),
     },
-    message: `已归档项目 ${project.name} 下的对话。`,
+    message: action === "remove-project"
+      ? `已归档并移除项目 ${project.name}。`
+      : `已归档项目 ${project.name} 下的对话。`,
   };
 }
 
@@ -7823,6 +7924,7 @@ function WorkspaceResizableBody(props: {
               minSize="320px"
             >
               <WorkspaceContextPanel
+                selectedDraftConversation={props.selectedDraftConversation}
                 selectedConversationId={props.selectedConversationId}
                 workbench={props.workbench}
                 onClose={props.onToggleRightPanel}
@@ -7835,6 +7937,7 @@ function WorkspaceResizableBody(props: {
         <div className="workspace-context-floating-panel">
           <WorkspaceContextPanel
             floating
+            selectedDraftConversation={props.selectedDraftConversation}
             selectedConversationId={props.selectedConversationId}
             workbench={props.workbench}
             onClose={props.onToggleRightPanel}
@@ -7902,6 +8005,9 @@ function rememberWorkspaceReviewPanelCache(key: string, entry: WorkspaceReviewPa
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
 // WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
 function WorkspaceContextPanel(props: {
+  // Current draft conversation selection when the selected route is not persisted yet.
+  // 当前路由尚未持久化时对应的草稿会话选择。
+  selectedDraftConversation: DraftConversationSelection | null;
   // Current selected conversation id from the local workbench route.
   // 来自本地工作台路由的当前选中会话标识。
   selectedConversationId: string | null;
@@ -7930,14 +8036,14 @@ function WorkspaceContextPanel(props: {
   // workspaceProjectId stores the backend project id used to resolve the Git diff path.
   // workspaceProjectId 保存用于解析 Git diff 路径的后端项目标识。
   const workspaceProjectId = React.useMemo(
-    () => selectedConversationProjectId(props.workbench, props.selectedConversationId),
-    [props.selectedConversationId, props.workbench],
+    () => selectedConversationProjectId(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
+    [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
   );
   // workspacePath stores the selected conversation owner project path for live diff refresh.
   // workspacePath 保存当前选中会话所属项目路径，用于刷新实时 diff。
   const workspacePath = React.useMemo(
-    () => selectedConversationWorkspacePath(props.workbench, props.selectedConversationId),
-    [props.selectedConversationId, props.workbench],
+    () => selectedConversationWorkspacePath(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
+    [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
   );
   // reviewPanelCacheKey stores the cache bucket for this visible conversation surface.
   // reviewPanelCacheKey 保存当前可见会话界面的审核缓存桶。
@@ -8200,9 +8306,16 @@ function activeWorkbenchSurfaceId(workbench: WorkbenchSnapshot, selectedConversa
   return parentConversationId;
 }
 
-// selectedConversationProjectId returns the project id for the currently visible conversation.
-// selectedConversationProjectId 返回当前可见会话所属的项目标识。
-function selectedConversationProjectId(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
+// selectedConversationProjectId returns the project id for the currently visible conversation or draft.
+// selectedConversationProjectId 返回当前可见会话或草稿所属的项目标识。
+function selectedConversationProjectId(
+  workbench: WorkbenchSnapshot,
+  selectedConversationId: string | null | undefined,
+  draftConversation?: DraftConversationSelection | null,
+): string | null {
+  if (draftConversation && selectedConversationId === draftConversation.id) {
+    return draftConversation.projectId;
+  }
   const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
   const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
   const conversation = activeSurfaceId
@@ -8215,9 +8328,16 @@ function selectedConversationProjectId(workbench: WorkbenchSnapshot, selectedCon
   return conversation ? projectForConversation(workbench, conversation)?.id ?? null : workbench.projects[0]?.id ?? null;
 }
 
-// selectedConversationWorkspacePath returns the project path for the currently visible conversation.
-// selectedConversationWorkspacePath 返回当前可见会话所属的项目路径。
-function selectedConversationWorkspacePath(workbench: WorkbenchSnapshot, selectedConversationId: string | null | undefined): string | null {
+// selectedConversationWorkspacePath returns the project path for the currently visible conversation or draft.
+// selectedConversationWorkspacePath 返回当前可见会话或草稿所属的项目路径。
+function selectedConversationWorkspacePath(
+  workbench: WorkbenchSnapshot,
+  selectedConversationId: string | null | undefined,
+  draftConversation?: DraftConversationSelection | null,
+): string | null {
+  if (draftConversation && selectedConversationId === draftConversation.id) {
+    return workbench.projects.find((project) => project.id === draftConversation.projectId)?.path ?? null;
+  }
   const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
   const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
   if (!activeSurfaceId) {
@@ -9288,9 +9408,9 @@ function ProjectContextMenu(props: {
           <span>归档对话</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
-        <ContextMenuItem disabled variant="destructive">
-          <Minus size={15} />
-          <span>移除</span>
+        <ContextMenuItem onSelect={() => props.onAction("remove-project", props.project)} variant="destructive">
+          <Trash2 size={15} />
+          <span>移除项目</span>
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => props.onAction("settings", props.project)}>
@@ -10382,23 +10502,50 @@ function projectAttachmentSelectedKindLabels(kinds: ProjectAttachmentCleanupKind
 // ArchiveProjectDialog confirms bulk conversation archiving for one project.
 // ArchiveProjectDialog 确认单个项目下的对话批量归档。
 function ArchiveProjectDialog(props: {
+  busy: boolean;
+  mode: "archive" | "remove";
   project: ProjectSummary | null;
   conversationCount: number;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const title = props.mode === "remove"
+    ? `归档并移除项目？`
+    : `归档 ${props.conversationCount} 个对话？`;
+  const description = props.mode === "remove"
+    ? `这会先归档 ${props.project?.name ?? "当前项目"} 中的 ${props.conversationCount} 个对话，然后从项目列表移除该项目。重新添加这个项目后，已归档对话才会出现在归档恢复中。`
+    : `这会将 ${props.project?.name ?? "当前项目"} 中的对话归档，项目本身会保留在左侧项目列表中。`;
+  const confirmLabel = props.mode === "remove" ? "归档并移除" : "全部归档";
+  const busyLabel = props.mode === "remove" ? "移除中" : "归档中";
+
   return (
-    <Dialog open={Boolean(props.project)} onOpenChange={(open) => !open && props.onCancel()}>
-      <DialogContent className="archive-dialog">
+    <Dialog open={Boolean(props.project)} onOpenChange={(open) => !props.busy && !open && props.onCancel()}>
+      <DialogContent
+        className="archive-dialog"
+        onEscapeKeyDown={(event) => {
+          if (props.busy) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (props.busy) {
+            event.preventDefault();
+          }
+        }}
+        showCloseButton={!props.busy}
+      >
         <DialogHeader>
-          <DialogTitle>归档 {props.conversationCount} 个对话？</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            这会将 {props.project?.name ?? "当前项目"} 中的对话归档。之后你可以在已归档对话中找到它们。
+            {description}
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
-          <Button type="button" variant="destructive" onClick={props.onConfirm}>全部归档</Button>
+          <Button disabled={props.busy} type="button" variant="ghost" onClick={props.onCancel}>取消</Button>
+          <Button disabled={props.busy} type="button" variant="destructive" onClick={props.onConfirm}>
+            {props.busy ? <Spinner className="size-4" /> : null}
+            {props.busy ? busyLabel : confirmLabel}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
