@@ -219,6 +219,54 @@ export interface ProjectSummary {
   iconKey?: string | null;
 }
 
+// ProjectDirectoryEntrySummary describes one child directory returned by the service.
+// ProjectDirectoryEntrySummary 描述服务返回的单个子目录。
+export interface ProjectDirectoryEntrySummary {
+  // Directory display name.
+  // 目录显示名称。
+  name: string;
+  // Absolute path on the service host.
+  // 服务宿主上的绝对路径。
+  path: string;
+  // Whether the directory is hidden by name convention.
+  // 目录是否符合隐藏命名约定。
+  hidden: boolean;
+}
+
+// ProjectDirectoryRootSummary describes one filesystem root returned by the service.
+// ProjectDirectoryRootSummary 描述服务返回的单个文件系统根。
+export interface ProjectDirectoryRootSummary {
+  // Root display label.
+  // 根目录显示标签。
+  label: string;
+  // Absolute root path on the service host.
+  // 服务宿主上的绝对根路径。
+  path: string;
+}
+
+// ProjectDirectoryListing describes one browsed service-host directory.
+// ProjectDirectoryListing 描述一个已浏览的服务宿主目录。
+export interface ProjectDirectoryListing {
+  // Selectable filesystem roots.
+  // 可选择的文件系统根。
+  roots?: ProjectDirectoryRootSummary[];
+  // Current absolute directory path.
+  // 当前绝对目录路径。
+  path: string;
+  // Optional parent directory path.
+  // 可选父目录路径。
+  parentPath?: string | null;
+  // Whether the current directory can be selected.
+  // 当前目录是否可以选择。
+  canSelect: boolean;
+  // Child directory rows.
+  // 子目录行。
+  entries: ProjectDirectoryEntrySummary[];
+  // Optional listing notice.
+  // 可选列表提示。
+  notice?: string | null;
+}
+
 // ConversationSummary describes one conversation shown in the sidebar.
 // ConversationSummary 描述侧栏中展示的单个会话。
 export interface ConversationSummary {

@@ -1,5 +1,4 @@
 import type { ShellClient } from "@/shell/protocol";
-import type { WorkbenchSnapshot } from "@/types";
 
 // BrowserShellClient implements host actions for ordinary browser clients.
 // BrowserShellClient 为普通浏览器客户端实现宿主动作。
@@ -32,12 +31,6 @@ export class BrowserShellClient implements ShellClient {
   // subscribeWindowResize 在浏览器宿主中返回空取消订阅函数。
   async subscribeWindowResize(_handler: () => void): Promise<() => void> {
     return () => {};
-  }
-
-  // addProjectFromFolder reports that local folder picking requires a desktop shell.
-  // addProjectFromFolder 提示本地文件夹选择需要桌面壳。
-  async addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
-    throw new Error("浏览器预览模式下无法添加本地项目，请在桌面壳中使用此功能。");
   }
 }
 

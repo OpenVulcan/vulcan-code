@@ -34,6 +34,7 @@ import {
   modelPickerChoicesFromProviders,
   type ModelPickerChoice,
 } from "@/components/composer/model-picker-control";
+import { ProjectFolderPickerDialog } from "@/components/project/folder-picker-dialog";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -122,6 +123,7 @@ import type {
   PendingQuestionPromptSummary,
   PendingQuestionSnapshot,
   PendingPromptSummary,
+  ProjectDirectoryListing,
   ProjectSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
@@ -2187,10 +2189,22 @@ async function openProjectDirectory(projectId: string): Promise<string | null> {
   return serviceClient.request<string>("service_open_project_directory", { projectId });
 }
 
-// addProjectFromFolder asks the desktop shell to pick a folder and register it as a project.
-// addProjectFromFolder 请求桌面壳选择一个文件夹并注册为项目。
-async function addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
-  return shellClient.addProjectFromFolder();
+// browseProjectDirectories loads one service-host directory for the WebUI picker.
+// browseProjectDirectories 为 WebUI 选择器加载单个服务宿主目录。
+async function browseProjectDirectories(path: string | null): Promise<ProjectDirectoryListing> {
+  if (!hasServiceRuntime()) {
+    throw new Error("浏览器服务不可用，无法浏览项目目录。");
+  }
+  return serviceClient.request<ProjectDirectoryListing>("service_browse_project_directories", { path });
+}
+
+// addProjectFromPath registers one service-host directory as a project.
+// addProjectFromPath 将单个服务宿主目录注册为项目。
+async function addProjectFromPath(path: string): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    throw new Error("浏览器服务不可用，无法添加项目。");
+  }
+  return serviceClient.request<WorkbenchSnapshot | null>("service_add_project_from_path", { path });
 }
 
 // toggleProjectPinned asks the desktop shell to toggle one project pinned state.
@@ -2703,6 +2717,9 @@ function WorkbenchLayout(props: {
   // projectSettingsTarget stores the project currently shown in the settings dialog.
   // projectSettingsTarget 保存当前显示设置弹窗的项目。
   const [projectSettingsTarget, setProjectSettingsTarget] = React.useState<ProjectSettingsDialogTarget | null>(null);
+  // projectFolderPickerOpen stores whether the service-backed folder picker is open.
+  // projectFolderPickerOpen 保存服务驱动的文件夹选择器是否打开。
+  const [projectFolderPickerOpen, setProjectFolderPickerOpen] = React.useState(false);
   // archiveProjectTarget stores the project waiting for archive confirmation.
   // archiveProjectTarget 保存正在等待归档确认的项目。
   const [archiveProjectTarget, setArchiveProjectTarget] = React.useState<ProjectSummary | null>(null);
@@ -2976,20 +2993,18 @@ function WorkbenchLayout(props: {
     setLoadingConversationId(null);
   }, []);
 
-  // handleCreateProject opens the native folder picker and merges the registered project snapshot.
-  // handleCreateProject 打开原生文件夹选择器，并合并注册项目后的工作台快照。
-  const handleCreateProject = React.useCallback(async () => {
-    try {
-      const snapshot = await addProjectFromFolder();
-      if (!snapshot) {
-        toast.info("已取消添加项目。");
-        return;
-      }
-      applyProjectActionSnapshot(snapshot);
-      toast.success("项目列表已更新。");
-    } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
-    }
+  // handleCreateProject opens the service-backed project folder picker.
+  // handleCreateProject 打开服务驱动的项目文件夹选择器。
+  const handleCreateProject = React.useCallback(() => {
+    setProjectFolderPickerOpen(true);
+  }, []);
+
+  // handleConfirmProjectFolder adds the selected service-host directory as a project.
+  // handleConfirmProjectFolder 将选中的服务宿主目录添加为项目。
+  const handleConfirmProjectFolder = React.useCallback(async (path: string) => {
+    const snapshot = await addProjectFromPath(path) ?? await loadWorkbenchSnapshot();
+    applyProjectActionSnapshot(snapshot);
+    toast.success("项目列表已更新。");
   }, [applyProjectActionSnapshot]);
 
   // handleReorderProjects persists a same-section project order using the existing order model.
@@ -3735,6 +3750,12 @@ function WorkbenchLayout(props: {
         <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
         <RepositoryLink />
       </footer>
+      <ProjectFolderPickerDialog
+        open={projectFolderPickerOpen}
+        onBrowse={browseProjectDirectories}
+        onConfirm={handleConfirmProjectFolder}
+        onOpenChange={setProjectFolderPickerOpen}
+      />
       <RenameDialog
         target={renameTarget}
         onCancel={() => setRenameTarget(null)}

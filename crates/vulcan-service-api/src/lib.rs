@@ -836,6 +836,61 @@ pub struct ProjectSummary {
     pub icon_key: Option<String>,
 }
 
+/// Summarizes one filesystem directory row returned to WebUI folder pickers.
+/// 汇总一条返回给 WebUI 文件夹选择器的文件系统目录行。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDirectoryEntrySummary {
+    /// Directory display name.
+    /// 目录显示名称。
+    pub name: String,
+    /// Absolute directory path on the service host.
+    /// 服务宿主上的绝对目录路径。
+    pub path: String,
+    /// Whether the directory name looks hidden to the current platform.
+    /// 当前目录名称在平台语义下是否看起来为隐藏目录。
+    pub hidden: bool,
+}
+
+/// Summarizes one selectable filesystem root returned to WebUI folder pickers.
+/// 汇总一条返回给 WebUI 文件夹选择器的可选文件系统根。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDirectoryRootSummary {
+    /// User-facing root label such as C: or /.
+    /// 面向用户显示的根标签，例如 C: 或 /。
+    pub label: String,
+    /// Absolute root path on the service host.
+    /// 服务宿主上的绝对根路径。
+    pub path: String,
+}
+
+/// Describes one browsed filesystem directory for WebUI project selection.
+/// 描述一次 WebUI 项目选择浏览到的文件系统目录。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDirectoryListing {
+    /// Selectable filesystem roots available on the service host.
+    /// 服务宿主上可选择的文件系统根列表。
+    #[serde(default)]
+    pub roots: Vec<ProjectDirectoryRootSummary>,
+    /// Absolute current directory path on the service host.
+    /// 服务宿主上的当前绝对目录路径。
+    pub path: String,
+    /// Optional parent directory path.
+    /// 可选父目录路径。
+    pub parent_path: Option<String>,
+    /// Whether the current directory may be selected as a project.
+    /// 当前目录是否可以作为项目选择。
+    pub can_select: bool,
+    /// Child directory rows sorted for display.
+    /// 已按显示顺序排序的子目录行。
+    pub entries: Vec<ProjectDirectoryEntrySummary>,
+    /// Optional human-readable notice for partial listing failures.
+    /// 局部读取失败时使用的可选人类可读提示。
+    pub notice: Option<String>,
+}
+
 /// Summarizes one conversation in the WebUI sidebar.
 /// 汇总 WebUI 侧栏中的单个会话。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

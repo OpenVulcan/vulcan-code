@@ -1,9 +1,4 @@
 import type { ShellClient } from "@/shell/protocol";
-import type { WorkbenchSnapshot } from "@/types";
-
-// TauriInvoke invokes a backend command when the app runs inside Tauri.
-// TauriInvoke 在应用运行于 Tauri 内部时调用后端命令。
-type TauriInvoke = <T>(command: string, args?: Record<string, unknown>) => Promise<T>;
 
 // TauriWindowHandle exposes only the window APIs used by the custom title bar.
 // TauriWindowHandle 仅暴露自定义标题栏使用的窗口 API。
@@ -28,10 +23,6 @@ interface TauriWindowHandle {
 // TauriShellClient implements client-host actions through Tauri APIs.
 // TauriShellClient 通过 Tauri API 实现客户端宿主动作。
 export class TauriShellClient implements ShellClient {
-  // invokePromise caches the dynamic Tauri invoke import.
-  // invokePromise 缓存动态 Tauri invoke 导入。
-  private invokePromise: Promise<TauriInvoke> | null = null;
-
   // windowPromise caches the dynamic current-window handle import.
   // windowPromise 缓存动态当前窗口句柄导入。
   private windowPromise: Promise<TauriWindowHandle> | null = null;
@@ -70,21 +61,6 @@ export class TauriShellClient implements ShellClient {
   // subscribeWindowResize 监听原生窗口尺寸变化事件。
   async subscribeWindowResize(handler: () => void): Promise<() => void> {
     return (await this.currentWindow()).onResized(handler);
-  }
-
-  // addProjectFromFolder opens the native folder picker and registers the selected project.
-  // addProjectFromFolder 打开原生文件夹选择器并注册选中的项目。
-  async addProjectFromFolder(): Promise<WorkbenchSnapshot | null> {
-    return (await this.invoke())<WorkbenchSnapshot | null>("service_add_project_from_folder");
-  }
-
-  // invoke loads and returns the Tauri invoke function.
-  // invoke 加载并返回 Tauri invoke 函数。
-  private async invoke(): Promise<TauriInvoke> {
-    if (!this.invokePromise) {
-      this.invokePromise = import("@tauri-apps/api/core").then((api) => api.invoke as TauriInvoke);
-    }
-    return this.invokePromise;
   }
 
   // currentWindow loads and returns the current Tauri window handle.

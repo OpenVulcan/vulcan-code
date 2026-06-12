@@ -10,7 +10,6 @@ license.workspace = true
 tauri-build = { version = "=2.6.2", features = [] }
 
 [dependencies]
-rfd = "0.15.4"
 tauri = { version = "=2.11.2", features = [] }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 vulcan-service-api.workspace = true

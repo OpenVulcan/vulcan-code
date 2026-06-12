@@ -1,5 +1,3 @@
-import type { WorkbenchSnapshot } from "@/types";
-
 // ShellClient describes client-host capabilities that are not Core business RPC.
 // ShellClient 描述不属于 Core 业务 RPC 的客户端宿主能力。
 export interface ShellClient {
@@ -26,8 +24,4 @@ export interface ShellClient {
   // Subscribes to native window resize events.
   // 订阅原生窗口尺寸变化事件。
   subscribeWindowResize(handler: () => void): Promise<() => void>;
-
-  // Opens a client-local folder picker and registers the selected folder as a project.
-  // 打开客户端本地文件夹选择器，并将选中的文件夹注册为项目。
-  addProjectFromFolder(): Promise<WorkbenchSnapshot | null>;
 }

@@ -106,12 +106,13 @@ use vulcan_service_api::{
     ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary,
     LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary,
     MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
-    PendingQuestionSnapshot, PluginSummary, ProjectSummary, ProviderFieldSummary,
-    ProviderModelSummary, ProviderSummary, ReasoningSelectionOptionSummary,
-    ReasoningSelectionSummary, RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter,
-    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
-    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
+    ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
+    RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SettingSectionSummary,
+    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
+    SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
+    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
     WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
@@ -608,14 +609,6 @@ pub type SharedServiceBridgeState = Arc<Mutex<ServiceBridgeState>>;
 /// Host-provided shell capabilities required by the service kernel.
 /// 服务内核所需的宿主壳能力。
 pub trait ServiceShellHost: Send + Sync {
-    /// Opens a host file picker and returns selected local paths.
-    /// 打开宿主文件选择器并返回选中的本地路径。
-    fn pick_composer_attachment_paths(
-        &self,
-        filter_label: &str,
-        filter_extensions: &[&str],
-    ) -> Result<Vec<PathBuf>, String>;
-
     /// Opens one local path with the host file manager.
     /// 使用宿主文件管理器打开单个本地路径。
     fn open_path(&self, path: &str) -> Result<(), String>;
@@ -1797,6 +1790,16 @@ async fn dispatch_service_rpc(
             state,
             rpc_required_param(&params, "projectId")?,
         )),
+        "service_browse_project_directories" => rpc_json_result(
+            service_browse_project_directories(state, rpc_optional_param(&params, "path")?),
+        ),
+        "service_add_project_from_path" => rpc_json_result(
+            service_add_project_from_path(
+                state,
+                PathBuf::from(rpc_required_param::<String>(&params, "path")?),
+            )
+            .await,
+        ),
         "service_toggle_project_pinned" => rpc_json_result(
             service_toggle_project_pinned(state, rpc_required_param(&params, "projectId")?).await,
         ),
@@ -2849,41 +2852,17 @@ fn session_record_tool_call_id(record: &SessionConversationRecord) -> Option<&st
         .and_then(Value::as_str)
 }
 
-/// Opens the native attachment picker and stages selected files for composer use.
-/// 打开原生附件选择器，并将选中文件暂存给输入区使用。
+/// Rejects the retired native attachment picker RPC.
+/// 拒绝已退役的原生附件选择器 RPC。
 async fn service_pick_composer_attachments(
-    state: SharedServiceBridgeState,
-    project_id: Option<String>,
-    conversation_id: Option<String>,
-    kind: Option<String>,
+    _state: SharedServiceBridgeState,
+    _project_id: Option<String>,
+    _conversation_id: Option<String>,
+    _kind: Option<String>,
 ) -> Result<Vec<ComposerAttachmentSummary>, String> {
-    let (workspace_path, kind_filter) = composer_attachment_workspace_and_kind(
-        &state,
-        project_id.as_deref(),
-        conversation_id.as_deref(),
-        kind.as_deref(),
-    )?;
-    let (filter_label, filter_extensions): (&str, &[&str]) =
-        if let Some(kind_filter) = kind_filter.as_ref() {
-            (
-                composer_attachment_kind_label(kind_filter),
-                composer_attachment_kind_extensions(kind_filter),
-            )
-        } else {
-            (
-                "附件",
-                &[
-                    "png", "jpg", "jpeg", "webp", "gif", "bmp", "mp3", "wav", "m4a", "aac", "flac",
-                    "ogg", "mp4", "mov", "mkv", "webm", "avi", "pdf",
-                ],
-            )
-        };
-    let paths = shell_host_from_state(&state)?
-        .pick_composer_attachment_paths(filter_label, filter_extensions)?;
-    if paths.is_empty() {
-        return Ok(Vec::new());
-    };
-    stage_composer_attachment_paths_for_workspace(&workspace_path, paths)
+    Err(String::from(
+        "原生附件选择器已从服务壳层移除，请使用 WebUI 文件上传或路径暂存接口。",
+    ))
 }
 
 /// Stages existing local paths as composer attachments.
@@ -2932,19 +2911,6 @@ async fn service_stage_composer_attachment_bytes(
         bytes.as_slice(),
     )?;
     Ok(composer_attachment_summary_from_core(&attachment))
-}
-
-/// Resolves workspace path and optional attachment-kind filter for composer staging.
-/// 解析输入区附件暂存所需的工作区路径与可选附件类型过滤。
-fn composer_attachment_workspace_and_kind(
-    state: &SharedServiceBridgeState,
-    project_id: Option<&str>,
-    conversation_id: Option<&str>,
-    kind: Option<&str>,
-) -> Result<(String, Option<ConversationAttachmentKind>), String> {
-    let workspace_path = composer_attachment_workspace_path(state, project_id, conversation_id)?;
-    let kind = kind.map(parse_composer_attachment_kind).transpose()?;
-    Ok((workspace_path, kind))
 }
 
 /// Resolves the project workspace path used to stage one composer attachment.
@@ -3058,19 +3024,6 @@ fn composer_attachment_kind_label(kind: &ConversationAttachmentKind) -> &'static
         ConversationAttachmentKind::Audio => "音频",
         ConversationAttachmentKind::Video => "视频",
         ConversationAttachmentKind::Pdf => "PDF",
-    }
-}
-
-/// Returns file extensions accepted by the native picker for one attachment kind.
-/// 返回单种附件类型在原生选择器中接受的扩展名。
-fn composer_attachment_kind_extensions(
-    kind: &ConversationAttachmentKind,
-) -> &'static [&'static str] {
-    match kind {
-        ConversationAttachmentKind::Image => &["png", "jpg", "jpeg", "webp", "gif", "bmp"],
-        ConversationAttachmentKind::Audio => &["mp3", "wav", "m4a", "aac", "flac", "ogg"],
-        ConversationAttachmentKind::Video => &["mp4", "mov", "mkv", "webm", "avi"],
-        ConversationAttachmentKind::Pdf => &["pdf"],
     }
 }
 
@@ -5204,6 +5157,232 @@ pub fn service_add_project_initial_directory(
         .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())))
 }
 
+/// Browses one host directory for the WebUI project folder picker.
+/// 为 WebUI 项目文件夹选择器浏览一个宿主目录。
+///
+/// # Parameters
+/// 参数
+/// `state` provides the default initial project directory when `path` is omitted.
+/// `state` 在省略 `path` 时提供默认初始项目目录。
+/// `path` is the optional directory path requested by the WebUI.
+/// `path` 是 WebUI 请求浏览的可选目录路径。
+///
+/// # Returns
+/// 返回值
+/// A directory listing containing child directories and the optional parent path.
+/// 返回包含子目录与可选父目录路径的目录列表。
+fn service_browse_project_directories(
+    state: SharedServiceBridgeState,
+    path: Option<String>,
+) -> Result<ProjectDirectoryListing, String> {
+    let requested_path = match path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => PathBuf::from(value),
+        None => PathBuf::from(service_add_project_initial_directory(&state)?),
+    };
+    let directory_path = normalize_task_project_path(&requested_path);
+    if !directory_path.exists() {
+        return Err(format!(
+            "目录不存在：{}",
+            normalized_workspace_path_text_from_path(&directory_path)
+        ));
+    }
+    if !directory_path.is_dir() {
+        return Err(format!(
+            "路径不是目录：{}",
+            normalized_workspace_path_text_from_path(&directory_path)
+        ));
+    }
+
+    let mut entries = fs::read_dir(&directory_path)
+        .map_err(|error| {
+            format!(
+                "读取目录失败 `{}`：{error}",
+                normalized_workspace_path_text_from_path(&directory_path)
+            )
+        })?
+        .filter_map(|entry| project_directory_entry_from_read_dir_entry(entry.ok()?))
+        .collect::<Vec<_>>();
+    entries.sort_by(|left, right| {
+        left.hidden
+            .cmp(&right.hidden)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    Ok(ProjectDirectoryListing {
+        roots: service_project_directory_roots(&directory_path),
+        path: normalized_workspace_path_text_from_path(&directory_path),
+        parent_path: directory_path
+            .parent()
+            .map(normalized_workspace_path_text_from_path),
+        can_select: true,
+        entries,
+        notice: None,
+    })
+}
+
+/// Returns filesystem roots that the WebUI project picker can display.
+/// 返回 WebUI 项目选择器可展示的文件系统根。
+///
+/// # Parameters
+/// 参数
+/// `current_path` is the currently browsed directory used as a fallback root source.
+/// `current_path` 是当前浏览目录，用作兜底根目录来源。
+///
+/// # Returns
+/// 返回值
+/// A sorted list of service-host filesystem roots.
+/// 已排序的服务宿主文件系统根列表。
+fn service_project_directory_roots(current_path: &Path) -> Vec<ProjectDirectoryRootSummary> {
+    let mut roots = platform_project_directory_roots();
+    if let Some(current_root) = project_directory_root_from_path(current_path) {
+        let current_root_key = current_root.path.to_ascii_lowercase();
+        if !roots
+            .iter()
+            .any(|root| root.path.to_ascii_lowercase() == current_root_key)
+        {
+            roots.push(current_root);
+        }
+    }
+    roots.sort_by(|left, right| {
+        left.label
+            .to_ascii_lowercase()
+            .cmp(&right.label.to_ascii_lowercase())
+            .then_with(|| left.label.cmp(&right.label))
+    });
+    roots
+}
+
+/// Returns platform filesystem roots visible to the service host.
+/// 返回服务宿主当前平台可见的文件系统根。
+///
+/// # Returns
+/// 返回值
+/// A platform-specific list of root directories.
+/// 平台相关的根目录列表。
+#[cfg(windows)]
+fn platform_project_directory_roots() -> Vec<ProjectDirectoryRootSummary> {
+    (b'A'..=b'Z')
+        .filter_map(|letter| {
+            let drive = (letter as char).to_ascii_uppercase();
+            let label = format!("{drive}:");
+            let path = format!("{label}\\");
+            if Path::new(&path).is_dir() {
+                Some(ProjectDirectoryRootSummary {
+                    label,
+                    path: normalized_workspace_path_text_from_path(Path::new(&path)),
+                })
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Returns platform filesystem roots visible to the service host.
+/// 返回服务宿主当前平台可见的文件系统根。
+///
+/// # Returns
+/// 返回值
+/// A platform-specific list of root directories.
+/// 平台相关的根目录列表。
+#[cfg(not(windows))]
+fn platform_project_directory_roots() -> Vec<ProjectDirectoryRootSummary> {
+    vec![ProjectDirectoryRootSummary {
+        label: String::from("/"),
+        path: String::from("/"),
+    }]
+}
+
+/// Resolves the filesystem root that owns one path.
+/// 解析拥有指定路径的文件系统根。
+///
+/// # Parameters
+/// 参数
+/// `path` is the directory path whose root should be resolved.
+/// `path` 是需要解析根目录的目录路径。
+///
+/// # Returns
+/// 返回值
+/// The owning root when it can be represented by the picker.
+/// 当选择器可表示该根目录时返回所属根。
+#[cfg(windows)]
+fn project_directory_root_from_path(path: &Path) -> Option<ProjectDirectoryRootSummary> {
+    for component in path.components() {
+        let std::path::Component::Prefix(prefix_component) = component else {
+            continue;
+        };
+        let drive = match prefix_component.kind() {
+            std::path::Prefix::Disk(letter) | std::path::Prefix::VerbatimDisk(letter) => {
+                (letter as char).to_ascii_uppercase()
+            }
+            _ => return None,
+        };
+        let label = format!("{drive}:");
+        let root_path = format!("{label}\\");
+        return Some(ProjectDirectoryRootSummary {
+            label,
+            path: normalized_workspace_path_text_from_path(Path::new(&root_path)),
+        });
+    }
+    None
+}
+
+/// Resolves the filesystem root that owns one path.
+/// 解析拥有指定路径的文件系统根。
+///
+/// # Parameters
+/// 参数
+/// `path` is the directory path whose root should be resolved.
+/// `path` 是需要解析根目录的目录路径。
+///
+/// # Returns
+/// 返回值
+/// The owning root when it can be represented by the picker.
+/// 当选择器可表示该根目录时返回所属根。
+#[cfg(not(windows))]
+fn project_directory_root_from_path(path: &Path) -> Option<ProjectDirectoryRootSummary> {
+    if path.is_absolute() {
+        Some(ProjectDirectoryRootSummary {
+            label: String::from("/"),
+            path: String::from("/"),
+        })
+    } else {
+        None
+    }
+}
+
+/// Converts one filesystem directory entry into a WebUI directory row.
+/// 将单个文件系统目录项转换为 WebUI 目录行。
+///
+/// # Parameters
+/// 参数
+/// `entry` is the filesystem entry returned by `read_dir`.
+/// `entry` 是 `read_dir` 返回的文件系统目录项。
+///
+/// # Returns
+/// 返回值
+/// A directory row when the entry is a child directory.
+/// 当目录项为子目录时返回目录行。
+fn project_directory_entry_from_read_dir_entry(
+    entry: fs::DirEntry,
+) -> Option<ProjectDirectoryEntrySummary> {
+    let metadata = entry.metadata().ok()?;
+    if !metadata.is_dir() {
+        return None;
+    }
+    let path = normalize_task_project_path(&entry.path());
+    let name = entry.file_name().to_string_lossy().to_string();
+    Some(ProjectDirectoryEntrySummary {
+        hidden: name.starts_with('.'),
+        name,
+        path: normalized_workspace_path_text_from_path(&path),
+    })
+}
+
 /// Adds or restores one project from a concrete local directory path.
 /// 根据一个具体本地目录路径新增或恢复项目。
 ///
@@ -5223,6 +5402,18 @@ pub async fn service_add_project_from_path(
     selected_path: PathBuf,
 ) -> Result<Option<WorkbenchSnapshot>, String> {
     let normalized_path = normalize_task_project_path(&selected_path);
+    if !normalized_path.exists() {
+        return Err(format!(
+            "项目目录不存在：{}",
+            normalized_workspace_path_text_from_path(&normalized_path)
+        ));
+    }
+    if !normalized_path.is_dir() {
+        return Err(format!(
+            "项目路径不是目录：{}",
+            normalized_workspace_path_text_from_path(&normalized_path)
+        ));
+    }
     let normalized_path_text = normalized_workspace_path_text_from_path(&normalized_path);
     let controller_runtime = controller_runtime_from_state(&state)?;
     let workspace_snapshot = state
@@ -20067,18 +20258,6 @@ mod tests {
     struct TestServiceShellHost;
 
     impl ServiceShellHost for TestServiceShellHost {
-        /// Rejects native file picker use in unit tests.
-        /// 在单元测试中拒绝使用原生文件选择器。
-        fn pick_composer_attachment_paths(
-            &self,
-            _filter_label: &str,
-            _filter_extensions: &[&str],
-        ) -> Result<Vec<PathBuf>, String> {
-            Err(String::from(
-                "test shell host does not support file picking",
-            ))
-        }
-
         /// Rejects host file-manager use in unit tests.
         /// 在单元测试中拒绝使用宿主文件管理器。
         fn open_path(&self, _path: &str) -> Result<(), String> {
