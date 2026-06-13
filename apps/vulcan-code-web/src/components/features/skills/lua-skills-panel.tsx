@@ -1,0 +1,178 @@
+import * as React from "react";
+import { PackagePlus } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { StatusPill } from "@/components/shared/status";
+import {
+  LuaSkillCard,
+  LuaSkillDetailDialog,
+  LuaSkillToolsDialog,
+} from "@/components/features/skills/lua-skill-card";
+import { useI18n } from "@/i18n";
+import type { LuaSkillSummary } from "@/types";
+import type { SkillActionProps } from "./skill-area-types";
+
+// LuaSkillsPanel renders package lifecycle controls and runtime tool registration controls.
+// LuaSkillsPanel 渲染包生命周期控件与运行时工具注册控件。
+export function LuaSkillsPanel(props: {
+  // Service-backed skill page actions.
+  // 服务端支持的技能页面动作。
+  actions: SkillActionProps;
+  // Lua Skill rows.
+  // Lua Skill 行。
+  skills: LuaSkillSummary[];
+}) {
+  const { t } = useI18n();
+  const [busyAction, setBusyAction] = React.useState<string | null>(null);
+  // detailSkill stores the Lua Skill selected for the details dialog.
+  // detailSkill 保存当前打开详情弹窗的 Lua Skill。
+  const [detailSkill, setDetailSkill] = React.useState<LuaSkillSummary | null>(null);
+  // toolsSkill stores the Lua Skill selected for the tools dialog.
+  // toolsSkill 保存当前打开工具弹窗的 Lua Skill。
+  const [toolsSkill, setToolsSkill] = React.useState<LuaSkillSummary | null>(null);
+
+  const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
+    setBusyAction(label);
+    try {
+      await action();
+    } finally {
+      setBusyAction(null);
+    }
+  }, []);
+
+  return (
+    <div className="skill-page-body lua-skill-page-body">
+      <div className="skill-card-list">
+        {props.skills.length === 0 ? (
+          <article className="skill-empty-card">
+            <StatusPill status="pending" label="pending" />
+            <strong>{t("skills.lua.emptyTitle")}</strong>
+            <span>{t("skills.lua.emptyDetail")}</span>
+          </article>
+        ) : props.skills.map((skill) => (
+          <LuaSkillCard
+            actions={props.actions}
+            busy={busyAction !== null}
+            key={skill.skillId}
+            onOpenDetail={setDetailSkill}
+            onOpenTools={setToolsSkill}
+            onRunAction={runAction}
+            skill={skill}
+          />
+        ))}
+      </div>
+      <LuaSkillDetailDialog
+        open={detailSkill !== null}
+        skill={detailSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDetailSkill(null);
+          }
+        }}
+      />
+      <LuaSkillToolsDialog
+        actions={props.actions}
+        busy={busyAction !== null}
+        open={toolsSkill !== null}
+        skill={toolsSkill}
+        onOpenChange={(open) => {
+          if (!open) {
+            setToolsSkill(null);
+          }
+        }}
+      />
+    </div>
+  );
+}
+
+// LuaSkillInstallDialog renders the standalone LuaSkills install form.
+// LuaSkillInstallDialog 渲染独立的 LuaSkills 安装表单。
+export function LuaSkillInstallDialog(props: {
+  // Service-backed skill page actions.
+  // 服务端支持的技能页面动作。
+  actions: SkillActionProps;
+  // Whether the install dialog is open.
+  // 安装弹窗当前是否打开。
+  open: boolean;
+  // Updates the install dialog open state.
+  // 更新安装弹窗打开状态。
+  onOpenChange: (open: boolean) => void;
+}) {
+  const { t } = useI18n();
+  // sourceType stores the selected install source kind.
+  // sourceType 保存当前选择的安装来源类型。
+  const [sourceType, setSourceType] = React.useState<"github" | "url">("github");
+  // source stores the install source locator.
+  // source 保存安装来源定位值。
+  const [source, setSource] = React.useState("");
+  // installing tracks the active install request.
+  // installing 跟踪当前安装请求。
+  const [installing, setInstalling] = React.useState(false);
+
+  React.useEffect(() => {
+    if (props.open) {
+      setSourceType("github");
+      setSource("");
+      setInstalling(false);
+    }
+  }, [props.open]);
+
+  // submitInstall validates and runs one LuaSkills install request.
+  // submitInstall 校验并执行单次 LuaSkills 安装请求。
+  const submitInstall = React.useCallback(async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (source.trim().length === 0) {
+      return;
+    }
+    setInstalling(true);
+    try {
+      await props.actions.onInstallLuaSkill("", source, sourceType);
+      props.onOpenChange(false);
+    } finally {
+      setInstalling(false);
+    }
+  }, [props.actions, props.onOpenChange, source, sourceType]);
+
+  return (
+    <Dialog open={props.open} onOpenChange={(open) => !installing && props.onOpenChange(open)}>
+      <DialogContent className="lua-skill-install-dialog">
+        <DialogHeader>
+          <DialogTitle>{t("skills.lua.installTitle")}</DialogTitle>
+          <DialogDescription>{t("skills.lua.installDescription")}</DialogDescription>
+        </DialogHeader>
+        <form className="lua-skill-install-form" onSubmit={submitInstall}>
+          <label className="lua-skill-install-field">
+            <span>{t("skills.lua.sourceType")}</span>
+            <select disabled={installing} value={sourceType} onChange={(event) => setSourceType(event.target.value as "github" | "url")}>
+              <option value="github">GitHub</option>
+              <option value="url">URL</option>
+            </select>
+          </label>
+          <label className="lua-skill-install-field">
+            <span>{t("skills.lua.installSource")}</span>
+            <input
+              autoFocus
+              disabled={installing}
+              placeholder={sourceType === "github" ? t("skills.lua.placeholderGithub") : t("skills.lua.placeholderUrl")}
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+            />
+          </label>
+          <DialogFooter>
+            <button className="skill-action-button secondary" disabled={installing} onClick={() => props.onOpenChange(false)} type="button">{t("skills.action.cancel")}</button>
+            <button className="skill-action-button" disabled={installing || source.trim().length === 0} type="submit">
+              <PackagePlus size={15} />
+              <span>{installing ? t("skills.action.installing") : t("skills.action.install")}</span>
+            </button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}

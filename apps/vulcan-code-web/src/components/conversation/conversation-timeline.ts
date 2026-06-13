@@ -1,0 +1,301 @@
+import type { ConversationMessage, ConversationSummary } from "@/types";
+import type {
+  ConversationRenderItem,
+  ConversationTimelineItem,
+} from "@/components/conversation/conversation-model";
+
+// projectConversationTimelineItems groups each user turn into a visible processing shell.
+// projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
+export function projectConversationTimelineItems(
+  renderItems: ConversationRenderItem[],
+  conversation: ConversationSummary | undefined,
+  nowMs: number,
+  conversationRunning: boolean,
+): ConversationTimelineItem[] {
+  const timeline: ConversationTimelineItem[] = [];
+  const turnStartUserIds = conversationTurnStartUserIds(renderItems);
+  const turnStartIdsWithLaterTurn = new Set(turnStartUserIds.slice(0, -1));
+  let currentTurn: {
+    // User item that starts the current turn.
+    // 当前轮次的起始用户项。
+    userItem: ConversationRenderItem;
+    // Assistant or system process rows collected before the final answer.
+    // 最终回答之前收集到的助手或系统过程行。
+    bodyItems: ConversationRenderItem[];
+    // Guidance user prompts that belong to the already open turn.
+    // 属于已打开轮次的用户引导提示。
+    guidanceItems: ConversationRenderItem[];
+    // Optional terminal turn statistics row.
+    // 可选的终态轮次统计行。
+    statsItem: ConversationRenderItem | null;
+  } | null = null;
+
+  const flushTurn = (forceRunning: boolean) => {
+    if (!currentTurn) {
+      return;
+    }
+    timeline.push({ kind: "item", item: currentTurn.userItem });
+    const stats = currentTurn.statsItem?.blocks[0]?.rawMetadata;
+    const statsStatus = turnStatsStatus(stats);
+    const stopped = statsStatus === "stopped";
+    const terminal = Boolean(currentTurn.statsItem);
+    const running = forceRunning && !terminal;
+    const bodyItems = [...currentTurn.bodyItems];
+    const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
+    const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
+    const shouldDefaultCollapse = Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(currentTurn.userItem.id);
+    const startedAtMs = conversationMessageUnixMillis(currentTurn.userItem.sourceMessage ?? currentTurn.userItem.userMessage);
+    const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
+    const projectedDurationMs = startedAtMs && terminalMessageMs
+      ? Math.max(0, terminalMessageMs - startedAtMs)
+      : null;
+    const runningDurationMs = running
+      ? (startedAtMs ? Math.max(0, nowMs - startedAtMs) : null)
+      : null;
+    if (processItems.length > 0 || running || stopped || currentTurn.guidanceItems.length > 0) {
+      timeline.push({
+        kind: "process",
+        process: {
+          id: `process-${currentTurn.userItem.id}`,
+          items: processItems,
+          guidanceItems: currentTurn.guidanceItems,
+          collapsible: Boolean(finalItem) && !running && !stopped,
+          defaultCollapsed: shouldDefaultCollapse,
+          running,
+          stopped,
+          startedAtMs,
+          durationMs: turnStatsDurationMs(stats) ?? runningDurationMs ?? projectedDurationMs,
+        },
+      });
+    }
+    if (finalItem) {
+      timeline.push({ kind: "item", item: finalItem });
+    }
+    if (currentTurn.statsItem) {
+      timeline.push({ kind: "item", item: currentTurn.statsItem });
+    }
+    currentTurn = null;
+  };
+
+  for (const item of renderItems) {
+    if (item.role === "user") {
+      if (!currentTurn || currentTurn.statsItem) {
+        flushTurn(false);
+        currentTurn = { userItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
+        continue;
+      }
+      currentTurn.guidanceItems.push(item);
+      continue;
+    }
+    if (!currentTurn) {
+      timeline.push({ kind: "item", item });
+      continue;
+    }
+    if (isTurnStatsRenderItem(item)) {
+      currentTurn.statsItem = item;
+      flushTurn(false);
+      continue;
+    }
+    currentTurn.bodyItems.push(item);
+  }
+
+  flushTurn(conversationRunning || Boolean(conversation && conversation.status.trim().toLowerCase() === "running"));
+  return timeline;
+}
+
+// conversationMessageUnixMillis parses the optional Unix-millis timestamp carried by one message.
+// conversationMessageUnixMillis 解析单条消息携带的可选 Unix 毫秒时间戳。
+export function conversationMessageUnixMillis(message?: ConversationMessage): number | null {
+  const raw = message?.createdAt?.trim();
+  if (!raw) {
+    return null;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+// formatFullConversationTimestamp renders a complete local timestamp for transcript metadata.
+// formatFullConversationTimestamp 为转录元信息渲染完整本地时间戳。
+export function formatFullConversationTimestamp(message?: ConversationMessage): string | null {
+  const timestamp = conversationMessageUnixMillis(message);
+  if (!timestamp) {
+    return null;
+  }
+  const date = new Date(timestamp);
+  const pad = (value: number) => value.toString().padStart(2, "0");
+  return `${date.getFullYear()}年${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+// formatWorkProcessDuration formats elapsed duration for the process header.
+// formatWorkProcessDuration 格式化过程标题使用的处理耗时。
+export function formatWorkProcessDuration(durationMs: number | null): string {
+  if (durationMs === null || !Number.isFinite(durationMs)) {
+    return "";
+  }
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}小时${minutes}分钟${seconds}秒`;
+  }
+  if (minutes > 0) {
+    return `${minutes}分钟${seconds}秒`;
+  }
+  return `${seconds}秒`;
+}
+
+// latestThinkingBlockIdAfterLastUser returns the newest thinking block that belongs to the active user turn.
+// latestThinkingBlockIdAfterLastUser 返回属于当前用户 turn 的最新思考块。
+export function latestThinkingBlockIdAfterLastUser(items: ConversationRenderItem[]): string | null {
+  let latestThinkingBlockId: string | null = null;
+  for (const item of items) {
+    if (item.role === "user") {
+      latestThinkingBlockId = null;
+      continue;
+    }
+    for (const block of item.blocks) {
+      if (block.kind === "thinking") {
+        latestThinkingBlockId = block.id;
+      }
+    }
+  }
+  return latestThinkingBlockId;
+}
+
+// conversationTurnStartUserIds derives true user-turn starts, excluding guidance prompts inside a running turn.
+// conversationTurnStartUserIds 推导真实用户轮次起点，并排除运行中追加的引导输入。
+function conversationTurnStartUserIds(renderItems: ConversationRenderItem[]): string[] {
+  const turnStartIds: string[] = [];
+  let hasOpenTurn = false;
+  let currentTurnHasStats = false;
+  for (const item of renderItems) {
+    if (item.role === "user") {
+      if (!hasOpenTurn || currentTurnHasStats) {
+        turnStartIds.push(item.id);
+        hasOpenTurn = true;
+        currentTurnHasStats = false;
+      }
+      continue;
+    }
+    if (!hasOpenTurn) {
+      continue;
+    }
+    if (isTurnStatsRenderItem(item)) {
+      currentTurnHasStats = true;
+    }
+  }
+  return turnStartIds;
+}
+
+// isTurnStatsRenderItem returns whether one projected row is the terminal turn-statistics row.
+// isTurnStatsRenderItem 返回单条投影行是否为终态轮次统计行。
+function isTurnStatsRenderItem(item: ConversationRenderItem): boolean {
+  return item.blocks.some((block) => block.kind === "turn-stats");
+}
+
+// popFinalAssistantItem removes and returns the final assistant markdown row when present.
+// popFinalAssistantItem 在存在最终助手 Markdown 行时移除并返回它。
+function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRenderItem | null {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (item.role === "assistant" && item.blocks.length === 1 && item.blocks[0]?.kind === "markdown") {
+      items.splice(index, 1);
+      return item;
+    }
+  }
+  return null;
+}
+
+// dedupeProcessAssistantMarkdownItems hides repeated short assistant prose inside one turn process group.
+// dedupeProcessAssistantMarkdownItems 隐藏同一轮处理过程中的重复短助手正文。
+function dedupeProcessAssistantMarkdownItems(items: ConversationRenderItem[]): ConversationRenderItem[] {
+  const hiddenIndexes = new Set<number>();
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    const body = processAssistantMarkdownBody(item);
+    if (!body) {
+      continue;
+    }
+    for (let nextIndex = index + 1; nextIndex < items.length; nextIndex += 1) {
+      const nextBody = processAssistantMarkdownBody(items[nextIndex]);
+      if (!nextBody) {
+        continue;
+      }
+      if (assistantMarkdownProcessBodyCoveredByLater(body, nextBody)) {
+        hiddenIndexes.add(index);
+        break;
+      }
+    }
+  }
+  return items.filter((_, index) => !hiddenIndexes.has(index));
+}
+
+// processAssistantMarkdownBody returns the plain Markdown body for assistant prose rows only.
+// processAssistantMarkdownBody 仅返回助手正文行的 Markdown 正文。
+function processAssistantMarkdownBody(item: ConversationRenderItem | undefined): string | null {
+  const block = item?.blocks.length === 1 ? item.blocks[0] : undefined;
+  if (!block || item?.role !== "assistant" || block.kind !== "markdown") {
+    return null;
+  }
+  const body = block.body.trim();
+  return body ? body : null;
+}
+
+// assistantMarkdownProcessBodyCoveredByLater detects duplicate or superseded streamed process prose.
+// assistantMarkdownProcessBodyCoveredByLater 检测重复或已被后续流式正文覆盖的过程正文。
+function assistantMarkdownProcessBodyCoveredByLater(body: string, laterBody: string): boolean {
+  const normalizedBody = normalizeProcessAssistantText(body);
+  const normalizedLaterBody = normalizeProcessAssistantText(laterBody);
+  if (!normalizedBody || !normalizedLaterBody) {
+    return false;
+  }
+  if (normalizedBody === normalizedLaterBody) {
+    return true;
+  }
+  return normalizedBody.length <= 240 && normalizedLaterBody.includes(normalizedBody);
+}
+
+// normalizeProcessAssistantText normalizes prose for duplicate checks without changing display content.
+// normalizeProcessAssistantText 规范化正文以便去重检查，但不改变显示内容。
+function normalizeProcessAssistantText(source: string): string {
+  return source.replace(/\s+/g, " ").trim();
+}
+
+// turnStatsDurationMs reads the total turn duration from structured turn statistics.
+// turnStatsDurationMs 从结构化轮次统计中读取总轮次耗时。
+function turnStatsDurationMs(metadata: unknown): number | null {
+  const stats = turnStatsObject(metadata);
+  return numericMetadata(stats?.duration_ms ?? stats?.durationMs);
+}
+
+// turnStatsStatus reads the compact turn-stats terminal status.
+// turnStatsStatus 读取紧凑轮次统计终态。
+function turnStatsStatus(metadata: unknown): string | null {
+  const stats = turnStatsObject(metadata);
+  const status = stats?.status;
+  return typeof status === "string" && status.trim() ? status.trim() : null;
+}
+
+// turnStatsObject reads the structured turn-stats payload from transcript metadata.
+// turnStatsObject 从转录元数据中读取结构化轮次统计载荷。
+function turnStatsObject(metadata: unknown): Record<string, unknown> | null {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+  const value = (metadata as Record<string, unknown>).turn_stats ?? (metadata as Record<string, unknown>).turnStats;
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+// numericMetadata reads a number from unknown JSON values.
+// numericMetadata 从未知 JSON 值中读取数字。
+function numericMetadata(value: unknown): number | null {
+  if (typeof value === "number") {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}

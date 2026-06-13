@@ -1,0 +1,444 @@
+import type { ConversationMessage } from "@/types";
+import { blockTitle } from "@/components/conversation/conversation-classifiers";
+import { generatedMediaAttachmentsFromMetadata } from "@/components/conversation/conversation-generated-media";
+import { metadataString } from "@/components/conversation/conversation-metadata";
+import type {
+  ConversationBlock,
+  ConversationBlockKind,
+} from "@/components/conversation/conversation-model";
+import {
+  conversationBlockHasToolEvidence,
+  extractToolNameFromText,
+  extractToolResultIdFromText,
+  extractToolStatusFromText,
+  metadataToolFailureStatus,
+  normalizeToolDisplayState,
+  structuredKindLooksLikeToolBlock,
+  structuredMessageHasToolEvidence,
+  taskSessionIdFromToolMetadata,
+  toolMetadataContainsReturnPayload,
+  turnStatsStatus,
+  turnStatsSummary,
+} from "@/components/conversation/conversation-tool-metadata";
+
+// directiveKinds maps Vulcan directive names to WebUI conversation block kinds.
+// directiveKinds 将 Vulcan 指令名称映射为 WebUI 会话块类型。
+const directiveKinds: Record<string, ConversationBlockKind> = {
+  "tool-call": "tool-call",
+  "tool-result": "tool-result",
+  "turn-stats": "turn-stats",
+  thinking: "thinking",
+  diff: "diff",
+  notice: "notice",
+};
+
+// parseConversationBlocks converts legacy transcript text into renderable WebUI blocks.
+// parseConversationBlocks 将旧转录文本转换为可渲染的 WebUI 块。
+export function parseConversationBlocks(message: ConversationMessage): ConversationBlock[] {
+  if (message.role === "user") {
+    return [conversationMarkdownBlock(message.id, 0, message.body)];
+  }
+
+  const structuredKind = structuredMessageBlockKind(message);
+  if (structuredKind) {
+    const attributes = structuredMessageAttributes(message);
+    if (structuredKindLooksLikeToolBlock(structuredKind) && !structuredMessageHasToolEvidence(message, attributes)) {
+      return [conversationMarkdownBlock(message.id, 0, message.body)];
+    }
+    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, attributes, message.metadata)];
+  }
+
+  const source = message.body.replace(/\r\n/g, "\n");
+  const directiveBlocks = parseDirectiveConversationBlocks(message.id, source);
+  if (directiveBlocks.some((block) => block.kind !== "markdown")) {
+    return directiveBlocks;
+  }
+
+  return parseFallbackConversationBlocks(message.id, source);
+}
+
+// structuredMessageBlockKind maps service-provided record kinds to WebUI block kinds.
+// structuredMessageBlockKind 将服务提供的记录类型映射到 WebUI 块类型。
+function structuredMessageBlockKind(message: ConversationMessage): ConversationBlockKind | null {
+  if (message.recordKind === "tool-call-output") return "tool-call";
+  if (message.recordKind === "tool-result-output") {
+    const hostKind = metadataString(message.metadata, ["kind", "host_result.kind", "hostResult.kind"]);
+    if (hostKind === "command_session") return "command";
+    if (hostKind === "change_set") return "diff";
+    return "tool-result";
+  }
+  if (message.recordKind === "thinking-output") return "thinking";
+  if (message.recordKind === "turn-stats") return "turn-stats";
+  if (message.recordKind === "compaction-status") return "notice";
+  return null;
+}
+
+// structuredMessageAttributes extracts render metadata from the service payload.
+// structuredMessageAttributes 从服务载荷中提取渲染元数据。
+function structuredMessageAttributes(message: ConversationMessage): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const toolName = metadataString(message.metadata, [
+    "tool_name",
+    "toolName",
+    "host_result.tool_name",
+    "hostResult.toolName",
+    "host_result.payload.tool_name",
+    "hostResult.payload.toolName",
+    "payload.tool_name",
+    "payload.toolName",
+    "tool.name",
+    "payload.tool",
+    "host_result.payload.tool",
+    "hostResult.payload.tool",
+    "tool",
+    "name",
+  ]) ?? extractToolNameFromText(message.title ?? "");
+  const toolCallId = metadataString(message.metadata, [
+    "tool_call_id",
+    "toolCallId",
+    "host_result.tool_call_id",
+    "hostResult.toolCallId",
+    "host_result.payload.tool_call_id",
+    "hostResult.payload.toolCallId",
+    "payload.tool_call_id",
+    "payload.toolCallId",
+  ]);
+  const toolResultId = metadataString(message.metadata, [
+    "result.tool_result_id",
+    "result.toolResultId",
+    "tool_result_id",
+    "toolResultId",
+    "host_result.tool_result_id",
+    "hostResult.toolResultId",
+    "host_result.payload.tool_result_id",
+    "hostResult.payload.toolResultId",
+    "payload.tool_result_id",
+    "payload.toolResultId",
+  ]);
+  const commandSessionId = metadataString(message.metadata, [
+    "command_session_id",
+    "commandSessionId",
+    "host_result.command_session_id",
+    "hostResult.commandSessionId",
+    "host_result.payload.command_session_id",
+    "hostResult.payload.commandSessionId",
+    "payload.command_session_id",
+    "payload.commandSessionId",
+  ]);
+  const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
+  const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
+      "tool_display_state",
+      "toolDisplayState",
+      "display_state",
+      "displayState",
+      "payload.execution_status",
+      "payload.executionStatus",
+      "host_result.payload.execution_status",
+      "hostResult.payload.executionStatus",
+    ]) : null;
+  const explicitStatus = metadataString(message.metadata, [
+      "result.status",
+      "tool_display_state",
+      "toolDisplayState",
+      "display_state",
+      "displayState",
+      "payload.execution_status",
+      "payload.executionStatus",
+      "host_result.payload.execution_status",
+      "hostResult.payload.executionStatus",
+      "status",
+      "state",
+      "payload.status",
+      "host_result.status",
+      "hostResult.status",
+    ]);
+  const hasReturnedToolPayload = message.recordKind === "tool-result-output"
+    && toolMetadataContainsReturnPayload(message.metadata, message.body);
+  const fallbackStatus = hasReturnedToolPayload
+    ? "completed"
+    : explicitStatus
+      ?? metadataToolFailureStatus(message.metadata)
+      ?? turnStatsStatus(message.metadata);
+  const status = taskSessionStatus ?? fallbackStatus;
+  const summary = metadataString(message.metadata, [
+      "result.summary",
+      "preview",
+      "summary",
+    ]) ?? turnStatsSummary(message.metadata);
+  if (message.title) attributes.title = message.title;
+  if (message.recordKind) attributes.record_kind = message.recordKind;
+  if (toolName) attributes.tool_name = toolName;
+  if (toolCallId) attributes.tool_call_id = toolCallId;
+  if (toolResultId) attributes.tool_result_id = toolResultId;
+  if (commandSessionId) attributes.command_session_id = commandSessionId;
+  if (taskSessionId) attributes.task_session_id = taskSessionId;
+  if (status) attributes.status = status;
+  if (summary) attributes.summary = summary;
+  return attributes;
+}
+
+// parseDirectiveConversationBlocks parses Vulcan triple-colon transcript directives.
+// parseDirectiveConversationBlocks 解析 Vulcan 三冒号转录指令。
+function parseDirectiveConversationBlocks(messageId: string, source: string): ConversationBlock[] {
+  const blocks: ConversationBlock[] = [];
+  const pattern = /^:::(\S+)([^\n]*)\n([\s\S]*?)\n:::\s*$/gm;
+  let lastIndex = 0;
+  let blockIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source)) !== null) {
+    const before = source.slice(lastIndex, match.index);
+    if (before.trim()) {
+      blockIndex = pushFallbackSegments(blocks, messageId, blockIndex, before.trim());
+    }
+
+    const directiveName = match[1] ?? "notice";
+    const attributes = parseDirectiveAttributes(match[2] ?? "");
+    const body = match[3] ?? "";
+    const kind = directiveKinds[directiveName] ?? "notice";
+    blocks.push(conversationSpecialBlock(messageId, blockIndex, kind, body, attributes));
+    blockIndex += 1;
+    lastIndex = pattern.lastIndex;
+  }
+
+  const after = source.slice(lastIndex);
+  if (after.trim()) {
+    pushFallbackSegments(blocks, messageId, blockIndex, after.trim());
+  }
+
+  return blocks;
+}
+
+// pushFallbackSegments appends Markdown and diff segments while preserving block indexes.
+// pushFallbackSegments 追加 Markdown 与 diff 片段并保持块索引连续。
+function pushFallbackSegments(
+  blocks: ConversationBlock[],
+  messageId: string,
+  startIndex: number,
+  source: string,
+): number {
+  let nextIndex = startIndex;
+  for (const segment of splitFencedDiffSegments(source)) {
+    if (!segment.body.trim()) {
+      continue;
+    }
+    if (segment.kind === "diff") {
+      blocks.push(conversationSpecialBlock(messageId, nextIndex, "diff", segment.body, {}));
+    } else {
+      blocks.push(conversationMarkdownBlock(messageId, nextIndex, segment.body));
+    }
+    nextIndex += 1;
+  }
+  return nextIndex;
+}
+
+// parseDirectiveAttributes parses loose key=value attributes from one directive header.
+// parseDirectiveAttributes 从单条指令头中解析宽松的 key=value 属性。
+function parseDirectiveAttributes(source: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const tokens = source.trim().match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  for (const token of tokens) {
+    const [rawKey, ...rawValueParts] = token.split("=");
+    const key = rawKey.trim();
+    if (!key) {
+      continue;
+    }
+    const value = rawValueParts.join("=").trim().replace(/^["']|["']$/g, "");
+    attributes[key] = value || "true";
+  }
+  return attributes;
+}
+
+// parseFallbackConversationBlocks detects common legacy tool, command, and diff formats.
+// parseFallbackConversationBlocks 识别常见旧版工具、命令与 diff 格式。
+function parseFallbackConversationBlocks(messageId: string, source: string): ConversationBlock[] {
+  const segments = splitFencedDiffSegments(source);
+  if (segments.some((segment) => segment.kind === "diff")) {
+    return segments.map((segment, index) => {
+      if (segment.kind === "diff") {
+        return conversationSpecialBlock(messageId, index, "diff", segment.body, {});
+      }
+      return conversationMarkdownBlock(messageId, index, segment.body);
+    });
+  }
+
+  const toolKind = detectToolBlockKind(source);
+  if (toolKind) {
+    return [conversationSpecialBlock(messageId, 0, toolKind, source, detectToolAttributes(source))];
+  }
+
+  return [conversationMarkdownBlock(messageId, 0, source)];
+}
+
+// splitFencedDiffSegments separates Markdown around diff fences and raw git patches.
+// splitFencedDiffSegments 将 diff 围栏与原始 git patch 周围的 Markdown 分离。
+function splitFencedDiffSegments(source: string): Array<{ kind: "markdown" | "diff"; body: string }> {
+  const segments: Array<{ kind: "markdown" | "diff"; body: string }> = [];
+  const pattern = /```(?:diff|patch)\n([\s\S]*?)```|(^diff --git [\s\S]*?)(?=\n\n(?![+\- @\\])|\n#{1,6}\s|\n:::\S+|\s*$)/gm;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source)) !== null) {
+    const before = source.slice(lastIndex, match.index);
+    if (before.trim()) {
+      segments.push({ kind: "markdown", body: before.trim() });
+    }
+    segments.push({ kind: "diff", body: (match[1] ?? match[2] ?? "").trim() });
+    lastIndex = pattern.lastIndex;
+  }
+
+  const after = source.slice(lastIndex);
+  if (after.trim()) {
+    segments.push({ kind: "markdown", body: after.trim() });
+  }
+
+  return segments.length > 0 ? segments : [{ kind: "markdown", body: source }];
+}
+
+// detectToolBlockKind classifies legacy text-only tool and runtime blocks.
+// detectToolBlockKind 对旧版纯文本工具与运行时块进行分类。
+function detectToolBlockKind(source: string): ConversationBlockKind | null {
+  const normalized = source.toLowerCase();
+  if (normalized.includes("turn stats") || normalized.includes("provider 调用") || normalized.includes("总 tokens")) {
+    return "turn-stats";
+  }
+  if (hasLegacyToolCallBlockMarker(source)) {
+    return "tool-call";
+  }
+  if (hasLegacyToolResultBlockMarker(source)) {
+    return "tool-result";
+  }
+  if (hasLegacyCommandBlockMarker(source)) {
+    return "command";
+  }
+  if (hasLegacyThinkingBlockMarker(source)) {
+    return "thinking";
+  }
+  return null;
+}
+
+// hasLegacyToolCallBlockMarker detects explicit legacy tool-call transcript blocks.
+// hasLegacyToolCallBlockMarker 检测明确的旧版工具调用转录块。
+function hasLegacyToolCallBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*Tool Call\b/im.test(source)
+    || /(?:^|\n)\s*tool_call_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*工具调用\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*调用\s+[A-Za-z0-9_.:-]+\s+工具\s*(?:进行中|运行中|已完成|失败)?\s*$/im.test(source);
+}
+
+// hasLegacyToolResultBlockMarker detects explicit legacy tool-result transcript blocks.
+// hasLegacyToolResultBlockMarker 检测明确的旧版工具返回转录块。
+function hasLegacyToolResultBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*Tool Result\b/im.test(source)
+    || /^#{1,6}\s*Result ID\b/im.test(source)
+    || /(?:^|\n)\s*tool_result_id["'`:\s=]+[A-Za-z0-9_.:-]+/i.test(source)
+    || /(?:^|\n)\s*工具返回\s*[·:：]\s*[A-Za-z0-9_.:-]+/i.test(source);
+}
+
+// hasLegacyCommandBlockMarker detects explicit command-session transcript blocks without matching ordinary tool lists.
+// hasLegacyCommandBlockMarker 检测明确的命令会话转录块，避免误匹配普通工具清单。
+function hasLegacyCommandBlockMarker(source: string): boolean {
+  const normalized = source.toLowerCase();
+  return normalized.includes("command_session_id")
+    || /^#{1,6}\s*(command session|命令会话)\b/im.test(source)
+    || /^(command session|命令会话)\s*[:：]/im.test(source)
+    || /(?:类型|kind|type)\s*[:：=]\s*(?:command_session|command session|命令会话)/i.test(source);
+}
+
+// hasLegacyThinkingBlockMarker detects explicit thinking transcript blocks without matching normal prose.
+// hasLegacyThinkingBlockMarker 检测明确的思考转录块，避免误匹配普通正文。
+function hasLegacyThinkingBlockMarker(source: string): boolean {
+  return /^#{1,6}\s*(thinking|思考过程|思考)\b/im.test(source)
+    || /^(thinking|思考过程|思考)\s*[:：]/im.test(source)
+    || /(?:类型|kind|type)\s*[:：=]\s*(?:thinking|思考过程|思考)/i.test(source);
+}
+
+// detectToolAttributes extracts compact metadata from legacy tool text.
+// detectToolAttributes 从旧版工具文本中提取紧凑元数据。
+function detectToolAttributes(source: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const toolName = extractToolNameFromText(source);
+  const toolCallId = source.match(/tool_call_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
+  const toolResultId = extractToolResultIdFromText(source);
+  const commandSessionId = source.match(/command_session_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
+  const status = extractToolStatusFromText(source);
+  const hasToolMarker = hasLegacyToolCallBlockMarker(source) || hasLegacyToolResultBlockMarker(source);
+  if (toolName) attributes.tool_name = toolName;
+  if (toolCallId) attributes.tool_call_id = toolCallId;
+  if (toolResultId) attributes.tool_result_id = toolResultId;
+  if (commandSessionId) attributes.command_session_id = commandSessionId;
+  if (status) attributes.status = status;
+  if (hasToolMarker) attributes.tool_evidence = "true";
+  return attributes;
+}
+
+// conversationMarkdownBlock creates a standard Markdown block descriptor.
+// conversationMarkdownBlock 创建标准 Markdown 块描述。
+function conversationMarkdownBlock(messageId: string, index: number, body: string): ConversationBlock {
+  return {
+    id: `${messageId}-markdown-${index}`,
+    kind: "markdown",
+    title: "Markdown",
+    body,
+    summary: compactTextPreview(body),
+  };
+}
+
+// conversationSpecialBlock creates a semantic block with compact summary metadata.
+// conversationSpecialBlock 创建带紧凑摘要元数据的语义块。
+function conversationSpecialBlock(
+  messageId: string,
+  index: number,
+  kind: ConversationBlockKind,
+  body: string,
+  attributes: Record<string, string>,
+  rawMetadata?: unknown,
+): ConversationBlock {
+  const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "");
+  const title = attributes.title ?? blockTitle(kind, toolName);
+  const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
+  const toolEvidence = conversationBlockHasToolEvidence(kind, attributes, rawMetadata);
+  const compactionSectionId = metadataString(rawMetadata, ["context_compaction_section_id"]);
+  const compactionRole = metadataString(rawMetadata, ["context_compaction_role"]);
+  const compactionState = metadataString(rawMetadata, ["context_compaction_state"]);
+  const compactionTrigger = metadataString(rawMetadata, ["context_compaction_trigger"]);
+  const compactionBudgetNote = metadataString(rawMetadata, ["context_compaction_budget_note"]);
+  const status = mediaAttachments.length > 0
+    ? "completed"
+    : normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
+  return {
+    id: `${messageId}-${kind}-${index}`,
+    kind,
+    title,
+    body: body.trim(),
+    summary: attributes.summary ?? compactTextPreview(body),
+    status,
+    toolName,
+    toolEvidence,
+    toolCallId: attributes.tool_call_id,
+    toolResultId: attributes.tool_result_id,
+    commandSessionId: attributes.command_session_id,
+    taskSessionId: attributes.task_session_id,
+    rawMetadata,
+    mediaAttachments: mediaAttachments.length > 0 ? mediaAttachments : undefined,
+    compactionSectionId: compactionSectionId ?? undefined,
+    compactionRole: compactionRole ?? undefined,
+    compactionState: compactionState ?? undefined,
+    compactionTrigger: compactionTrigger ?? undefined,
+    compactionBudgetNote: compactionBudgetNote ?? undefined,
+  };
+}
+
+// compactTextPreview returns one short single-line preview for cards and modal headers.
+// compactTextPreview 返回用于卡片与弹窗标题区的单行短预览。
+function compactTextPreview(source: string): string {
+  const text = source
+    .replace(/```[\s\S]*?```/g, "代码块")
+    .replace(/[#>*_`|~-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) {
+    return "无正文内容";
+  }
+  return text.length > 140 ? `${text.slice(0, 140)}...` : text;
+}

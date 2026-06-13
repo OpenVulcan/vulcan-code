@@ -1,0 +1,407 @@
+import React from "react";
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
+  Clock3,
+  Copy,
+} from "lucide-react";
+
+import {
+  ComposerAttachmentStrip,
+  type ComposerAttachmentPreviewMedia,
+} from "@/components/composer/composer-controls";
+import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import {
+  type ConversationDetail,
+  type ConversationDetailRef,
+  type ToolDetailPayload,
+} from "@/components/conversation/conversation-detail";
+import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
+import {
+  conversationMessageUnixMillis,
+  formatFullConversationTimestamp,
+  formatWorkProcessDuration,
+} from "@/components/conversation/conversation-timeline";
+import type {
+  ConversationProcessRenderItem,
+  ConversationRenderItem,
+} from "@/components/conversation/conversation-model";
+import type { ComposerAttachmentSummary } from "@/types";
+import { cn } from "@/lib/utils";
+
+// USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
+// USER_PROMPT_COLLAPSE_LINE_LIMIT 限制用户手动展开前长用户气泡的显示行数。
+const USER_PROMPT_COLLAPSE_LINE_LIMIT = 20;
+
+// ConversationProcessGroup renders one per-turn process header and its foldable rows.
+// ConversationProcessGroup 渲染单个轮次过程标题及其可折叠处理行。
+export function ConversationProcessGroup(props: {
+  // autoExpandThinkingBlockId keeps parity with normal block rendering.
+  // autoExpandThinkingBlockId 保持与普通块渲染一致。
+  autoExpandThinkingBlockId: string | null;
+  // Optional user-controlled collapsed state remembered by the conversation surface.
+  // 会话界面记住的可选用户控制折叠状态。
+  collapsedOverride?: boolean;
+  // hiddenThinkingBlockId hides the block currently shown in the floating thinking overlay.
+  // hiddenThinkingBlockId 隐藏当前在浮动思考面板中展示的块。
+  hiddenThinkingBlockId: string | null;
+  // Current clock tick used for live duration projection.
+  // 用于实时耗时投影的当前时钟刻度。
+  nowMs: number;
+  // Parent conversation id used by subagent navigation.
+  // 子代理导航使用的父会话标识。
+  parentConversationId: string | null;
+  // Process group payload.
+  // 过程分组载荷。
+  process: ConversationProcessRenderItem;
+  // Whether the owning session is currently running.
+  // 所属会话是否正在运行。
+  sessionRunning: boolean;
+  // WebUI-session expansion memory for long user prompt bubbles.
+  // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
+  expandedUserPromptIds: Set<string>;
+  // Records one user-triggered collapsed state change.
+  // 记录一次用户触发的折叠状态变化。
+  onCollapsedChange: (collapsed: boolean) => void;
+  // Copies transcript text using the shell-provided clipboard path.
+  // 使用外壳提供的剪贴板路径复制转录文本。
+  onCopyText: (text: string) => Promise<void> | void;
+  // Detail modal opener.
+  // 详情弹窗打开器。
+  onOpenDetail: (detail: ConversationDetail) => void;
+  // Generated media opener.
+  // 生成媒体打开器。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Subagent panel opener.
+  // 子代理面板打开器。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Records one user prompt expansion state change.
+  // 记录一次用户提示词展开状态变化。
+  onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
+  // Resolves composer attachments into generated-media compatible payloads.
+  // 将输入区附件解析为兼容生成媒体的载荷。
+  resolveComposerAttachmentMedia: (attachment: ComposerAttachmentSummary) => GeneratedMediaAttachment | null;
+  // Resolves a local media file path into a renderable URL.
+  // 将本地媒体路径解析为可渲染 URL。
+  resolveMediaSourceUrl: (path: string) => string;
+  // Loads one hidden tool-detail record.
+  // 加载单条隐藏工具详情记录。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  // Extracts generated media attachments from hidden tool details.
+  // 从隐藏工具详情中提取生成媒体附件。
+  onExtractGeneratedMediaAttachments: (payload: ToolDetailPayload) => GeneratedMediaAttachment[];
+  // Optional trace callback for local diagnostics.
+  // 用于本地诊断的可选埋点回调。
+  onTrace?: (action: string, detail?: Record<string, unknown>) => void;
+}) {
+  const fallbackStartedAtMsRef = React.useRef(Date.now());
+  React.useEffect(() => {
+    fallbackStartedAtMsRef.current = Date.now();
+  }, [props.process.id]);
+  const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
+  const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
+  const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
+  const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
+  const liveDurationMs = props.process.running
+    ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
+    : null;
+  const displayedDurationMs = props.process.durationMs ?? liveDurationMs;
+  const durationLabel = formatWorkProcessDuration(displayedDurationMs);
+  const headerText = durationLabel ? `处理过程 ${durationLabel}` : "处理过程";
+  const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
+  const bodyVisible = !props.process.collapsible || !collapsed;
+  return (
+    <section
+      className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}
+      data-process-body-visible={bodyVisible ? "true" : "false"}
+      data-process-collapsed={collapsed ? "true" : "false"}
+    >
+      <button
+        aria-expanded={bodyVisible}
+        className="work-process-toggle"
+        disabled={!props.process.collapsible}
+        onClick={() => props.process.collapsible && props.onCollapsedChange(!collapsed)}
+        type="button"
+      >
+        <Clock3 className="work-process-icon" size={14} />
+        <span>{headerText}</span>
+        {props.process.collapsible ? (collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />) : null}
+      </button>
+      <div className="work-process-guidance">
+        {visibleGuidanceItems.map((item) => (
+          <ConversationRenderItemView
+            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={null}
+            item={item}
+            itemStreaming={false}
+            key={item.id}
+            parentConversationId={props.parentConversationId}
+            sessionRunning={props.sessionRunning}
+            expandedUserPromptIds={props.expandedUserPromptIds}
+            onCopyText={props.onCopyText}
+            onOpenDetail={props.onOpenDetail}
+            onOpenMedia={props.onOpenMedia}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
+            resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+            onLoadToolDetail={props.onLoadToolDetail}
+            onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+            onTrace={props.onTrace}
+            forceEagerMarkdown
+          />
+        ))}
+      </div>
+      <div aria-hidden={!bodyVisible} className="work-process-body" hidden={!bodyVisible}>
+        {visibleProcessItems.map((item) => (
+          <ConversationRenderItemView
+            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+            hiddenThinkingBlockId={null}
+            item={item}
+            itemStreaming={item.id === streamingProcessItemId}
+            key={item.id}
+            parentConversationId={props.parentConversationId}
+            sessionRunning={props.sessionRunning}
+            expandedUserPromptIds={props.expandedUserPromptIds}
+            onCopyText={props.onCopyText}
+            onOpenDetail={props.onOpenDetail}
+            onOpenMedia={props.onOpenMedia}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
+            resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+            onLoadToolDetail={props.onLoadToolDetail}
+            onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+            onTrace={props.onTrace}
+            forceEagerMarkdown
+          />
+        ))}
+        {props.process.stopped ? (
+          <div className="work-process-stopped-note">
+            {stoppedText}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+// ConversationRenderItemView renders one projected transcript item.
+// ConversationRenderItemView 渲染单条投影后的转录展示项。
+export function ConversationRenderItemView(props: {
+  // Projected transcript row.
+  // 投影后的转录行。
+  item: ConversationRenderItem;
+  // Thinking block that should auto expand while running.
+  // 运行中应自动展开的思考块。
+  autoExpandThinkingBlockId: string | null;
+  // Thinking block hidden by the overlay.
+  // 被浮层隐藏的思考块。
+  hiddenThinkingBlockId: string | null;
+  // Whether this row is the currently streaming process item.
+  // 该行是否为当前流式过程项。
+  itemStreaming?: boolean;
+  // Force Markdown blocks in externally hidden panels to stay mounted when visible.
+  // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
+  forceEagerMarkdown?: boolean;
+  // Parent conversation id used by subagent routing and local expansion memory.
+  // 子代理路由与本地展开记忆使用的父会话标识。
+  parentConversationId: string | null;
+  // Whether the owning session is currently running.
+  // 所属会话是否正在运行。
+  sessionRunning: boolean;
+  // WebUI-session expansion memory for long user prompt bubbles.
+  // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
+  expandedUserPromptIds: Set<string>;
+  // Copies transcript text using the shell-provided clipboard path.
+  // 使用外壳提供的剪贴板路径复制转录文本。
+  onCopyText: (text: string) => Promise<void> | void;
+  // Detail modal opener.
+  // 详情弹窗打开器。
+  onOpenDetail: (detail: ConversationDetail) => void;
+  // Generated media opener.
+  // 生成媒体打开器。
+  onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Subagent panel opener.
+  // 子代理面板打开器。
+  onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
+  // Records one user prompt expansion state change.
+  // 记录一次用户提示词展开状态变化。
+  onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
+  // Resolves composer attachments into generated-media compatible payloads.
+  // 将输入区附件解析为兼容生成媒体的载荷。
+  resolveComposerAttachmentMedia: (attachment: ComposerAttachmentSummary) => GeneratedMediaAttachment | null;
+  // Resolves a local media file path into a renderable URL.
+  // 将本地媒体路径解析为可渲染 URL。
+  resolveMediaSourceUrl: (path: string) => string;
+  // Loads one hidden tool-detail record.
+  // 加载单条隐藏工具详情记录。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+  // Extracts generated media attachments from hidden tool details.
+  // 从隐藏工具详情中提取生成媒体附件。
+  onExtractGeneratedMediaAttachments: (payload: ToolDetailPayload) => GeneratedMediaAttachment[];
+  // Optional trace callback for local diagnostics.
+  // 用于本地诊断的可选埋点回调。
+  onTrace?: (action: string, detail?: Record<string, unknown>) => void;
+}) {
+  const userBody = React.useMemo(
+    () => stripUserPromptHeading(props.item.userMessage?.body ?? ""),
+    [props.item.userMessage?.body],
+  );
+  const userPromptTextRef = React.useRef<HTMLParagraphElement | null>(null);
+  const [userPromptOverflowing, setUserPromptOverflowing] = React.useState(false);
+  const [userPromptCopied, setUserPromptCopied] = React.useState(false);
+  const userPromptKey = React.useMemo(() => {
+    const message = props.item.userMessage;
+    const messageId = message?.id ?? props.item.id;
+    const surfaceId = props.parentConversationId ?? message?.conversationId ?? "conversation";
+    return `${surfaceId}:${messageId}`;
+  }, [props.item.id, props.item.userMessage, props.parentConversationId]);
+  const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey);
+  const userTimestampMs = conversationMessageUnixMillis(props.item.userMessage);
+  const userTimestamp = formatFullConversationTimestamp(props.item.userMessage);
+  const handleCopyUserPrompt = React.useCallback(async () => {
+    if (!userBody) {
+      return;
+    }
+    await props.onCopyText(userBody);
+    setUserPromptCopied(true);
+  }, [props, userBody]);
+  React.useLayoutEffect(() => {
+    if (props.item.role !== "user" || !userBody) {
+      setUserPromptOverflowing(false);
+      return;
+    }
+    const element = userPromptTextRef.current;
+    if (!element) {
+      return;
+    }
+    const measureOverflow = () => {
+      const computedStyle = window.getComputedStyle(element);
+      const lineHeight = Number.parseFloat(computedStyle.lineHeight);
+      const effectiveLineHeight = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
+      const collapsedHeight = effectiveLineHeight * USER_PROMPT_COLLAPSE_LINE_LIMIT;
+      setUserPromptOverflowing(element.scrollHeight > collapsedHeight + 1);
+    };
+    measureOverflow();
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measureOverflow);
+      return () => window.removeEventListener("resize", measureOverflow);
+    }
+    const observer = new ResizeObserver(measureOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [props.item.role, userBody, userPromptExpanded]);
+  if (props.item.role === "user") {
+    const attachments = props.item.userMessage?.attachments ?? [];
+    return (
+      <article className="message-row user">
+        {attachments.length ? (
+          <ComposerAttachmentStrip
+            attachments={attachments}
+            resolvePreview={(attachment): ComposerAttachmentPreviewMedia | null => {
+              const media = props.resolveComposerAttachmentMedia(attachment);
+              if (!media) {
+                return null;
+              }
+              return {
+                kind: media.kind,
+                sourceUrl: media.kind === "image" ? props.resolveMediaSourceUrl(media.localPath) : undefined,
+              };
+            }}
+            onOpenMedia={(attachment) => {
+              const media = props.resolveComposerAttachmentMedia(attachment);
+              if (media) {
+                props.onOpenMedia(media);
+              }
+            }}
+          />
+        ) : null}
+        <div className="user-bubble">
+          {userBody ? (
+            <p
+              className={cn("user-prompt-text", userPromptOverflowing && !userPromptExpanded && "collapsed")}
+              ref={userPromptTextRef}
+            >
+              {userBody}
+            </p>
+          ) : null}
+          {userPromptOverflowing ? (
+            <button
+              aria-expanded={userPromptExpanded}
+              className="user-prompt-expand-toggle"
+              onClick={() => props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded)}
+              type="button"
+            >
+              <span>{userPromptExpanded ? "收起" : "显示更多"}</span>
+              {userPromptExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+          ) : null}
+        </div>
+        <div className="user-message-meta">
+          {userTimestamp && userTimestampMs ? (
+            <time dateTime={new Date(userTimestampMs).toISOString()}>{userTimestamp}</time>
+          ) : null}
+          {userBody ? (
+            <button
+              aria-label="复制用户提示词"
+              className="user-message-copy"
+              onClick={() => void handleCopyUserPrompt()}
+              onMouseLeave={() => setUserPromptCopied(false)}
+              title="复制用户提示词"
+              type="button"
+            >
+              {userPromptCopied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          ) : null}
+        </div>
+      </article>
+    );
+  }
+
+  const visibleBlocks = props.hiddenThinkingBlockId
+    ? props.item.blocks.filter((block) => block.id !== props.hiddenThinkingBlockId)
+    : props.item.blocks;
+  if (visibleBlocks.length === 0) {
+    return null;
+  }
+
+  return (
+    <article className={`message-row ${props.item.role}`}>
+      <div className="assistant-flow">
+        {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
+        <ConversationBlocksView
+          autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+          blocks={visibleBlocks}
+          conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
+          forceEagerMarkdown={props.forceEagerMarkdown}
+          itemStreaming={Boolean(props.itemStreaming)}
+          parentConversationId={props.parentConversationId}
+          sessionRunning={props.sessionRunning}
+          onOpenDetail={props.onOpenDetail}
+          onOpenMedia={props.onOpenMedia}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          onLoadToolDetail={props.onLoadToolDetail}
+          onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+          onTrace={props.onTrace}
+        />
+      </div>
+    </article>
+  );
+}
+
+// renderItemHiddenByThinkingOverlay hides the whole render row that is mirrored by the live thinking overlay.
+// renderItemHiddenByThinkingOverlay 隐藏被实时思考浮层镜像展示的整条渲染行。
+export function renderItemHiddenByThinkingOverlay(item: ConversationRenderItem, hiddenThinkingBlockId: string | null): boolean {
+  return Boolean(hiddenThinkingBlockId && item.blocks.some((block) => block.id === hiddenThinkingBlockId));
+}
+
+// stripUserPromptHeading removes legacy transcript headings from visible user bubbles.
+// stripUserPromptHeading 从可见用户气泡中移除旧版转录标题。
+function stripUserPromptHeading(body: string): string {
+  return body
+    .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:用户指令|User Prompt|USER)(?:\*\*)?\s*\n+/i, "")
+    .trim();
+}
