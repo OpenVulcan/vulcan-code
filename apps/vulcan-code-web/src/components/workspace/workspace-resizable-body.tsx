@@ -93,6 +93,12 @@ export function WorkspaceResizableBody(props: {
   // Loads one workspace diff snapshot for the right context panel.
   // 为右侧上下文面板载入单个工作区 diff 快照。
   loadWorkspaceDiffSnapshot: WorkspaceContextPanelProps["loadWorkspaceDiffSnapshot"];
+  // Loads one workspace diff file detail for the right context panel.
+  // 为右侧上下文面板载入单个工作区 diff 文件详情。
+  loadWorkspaceDiffFileDetail: WorkspaceContextPanelProps["loadWorkspaceDiffFileDetail"];
+  // Loads compact backend file-level search hits for the right context panel.
+  // 为右侧上下文面板载入紧凑的后端文件级搜索命中。
+  loadWorkspaceDiffSearch: WorkspaceContextPanelProps["loadWorkspaceDiffSearch"];
   // Emits WebUI click traces from nested console controls.
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
@@ -139,6 +145,8 @@ export function WorkspaceResizableBody(props: {
                 onClose={props.onToggleRightPanel}
                 onCopyRawDiff={props.onCopyRawDiff}
                 parseConversationBlocks={props.parseConversationBlocks}
+                loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
+                loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
                 loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               />
             </ResizablePanel>
@@ -155,6 +163,8 @@ export function WorkspaceResizableBody(props: {
             onClose={props.onToggleRightPanel}
             onCopyRawDiff={props.onCopyRawDiff}
             parseConversationBlocks={props.parseConversationBlocks}
+            loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
+            loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
             loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
           />
         </div>

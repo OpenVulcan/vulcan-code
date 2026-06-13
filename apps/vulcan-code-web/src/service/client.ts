@@ -1,6 +1,7 @@
 import type {
   ServiceEventHandler,
   ServiceParams,
+  ServiceRequestOptions,
   ServiceTransport,
   ServiceUnsubscribe,
 } from "@/service/protocol";
@@ -28,8 +29,8 @@ export class ServiceClient {
 
   // request sends one logical service method call.
   // request 发送一次逻辑服务方法调用。
-  request<T>(method: string, params?: ServiceParams): Promise<T> {
-    return this.transport.request<T>(method, params);
+  request<T>(method: string, params?: ServiceParams, options?: ServiceRequestOptions): Promise<T> {
+    return this.transport.request<T>(method, params, options);
   }
 
   // subscribe registers one event topic handler.

@@ -1,3 +1,4 @@
+import React from "react";
 import { PanelRightClose } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -6,15 +7,29 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import type { DiffReviewSelection, WorkspaceDiffSnapshotResponse } from "@/diff/types";
+import type {
+  DiffReviewSelection,
+  WorkspaceDiffFileDetailRequest,
+  WorkspaceDiffFileDetailResponse,
+  WorkspaceDiffSearchRequest,
+  WorkspaceDiffSearchResponse,
+  WorkspaceDiffSnapshotResponse,
+} from "@/diff/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
+import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
   WorkbenchSnapshot,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
-import { WorkspaceReviewPanelHost } from "@/components/workspace/WorkspaceReviewPanelHost";
+
+// LazyWorkspaceReviewPanelHost loads the heavy Git review surface only when the context rail renders it.
+// LazyWorkspaceReviewPanelHost 仅在上下文栏渲染审核页时加载较重的 Git 审核界面。
+const LazyWorkspaceReviewPanelHost = React.lazy(async () => {
+  const module = await import("@/components/workspace/WorkspaceReviewPanelHost");
+  return { default: module.WorkspaceReviewPanelHost };
+});
 
 // WorkspaceDraftConversationSelection carries a local draft conversation route.
 // WorkspaceDraftConversationSelection 承载本地草稿会话路由。
@@ -70,6 +85,25 @@ export interface WorkspaceContextPanelProps {
     conversationId: string | null,
     request: DiffReviewSelection,
   ) => Promise<WorkspaceDiffSnapshotResponse>;
+  // Loads one live workspace Git diff file detail.
+  // 加载一次实时工作区 Git diff 文件详情。
+  loadWorkspaceDiffFileDetail: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    request: DiffReviewSelection,
+    file: WorkspaceDiffFileDetailRequest,
+    options?: WorkspaceDiffFileDetailLoadOptions,
+  ) => Promise<WorkspaceDiffFileDetailResponse>;
+  // Loads compact backend file-level search hits for one workspace diff.
+  // 为单个工作区 diff 加载紧凑的后端文件级搜索命中。
+  loadWorkspaceDiffSearch: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    request: DiffReviewSelection,
+    search: WorkspaceDiffSearchRequest,
+  ) => Promise<WorkspaceDiffSearchResponse>;
 }
 
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
@@ -101,19 +135,33 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
           ) : null}
         </div>
         <TabsContent className="context-tab-content review-tab-content" value="review">
-          <WorkspaceReviewPanelHost
-            loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
-            parseConversationBlocks={props.parseConversationBlocks}
-            selectedConversationId={props.selectedConversationId}
-            selectedDraftConversation={props.selectedDraftConversation}
-            workbench={props.workbench}
-            onCopyRawDiff={props.onCopyRawDiff}
-          />
+          <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
+            <LazyWorkspaceReviewPanelHost
+              loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
+              loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
+              loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
+              parseConversationBlocks={props.parseConversationBlocks}
+              selectedConversationId={props.selectedConversationId}
+              selectedDraftConversation={props.selectedDraftConversation}
+              workbench={props.workbench}
+              onCopyRawDiff={props.onCopyRawDiff}
+            />
+          </React.Suspense>
         </TabsContent>
         <TabsContent className="context-tab-content" value="memory">
           <WorkspaceMemoryPanel snapshot={props.workbench.contextInjection ?? null} />
         </TabsContent>
       </Tabs>
     </aside>
+  );
+}
+
+// WorkspaceReviewPanelLoading renders while the review panel chunk is loading.
+// WorkspaceReviewPanelLoading 渲染审核面板 chunk 加载期间的轻量状态。
+function WorkspaceReviewPanelLoading() {
+  return (
+    <div className="context-panel-loading-state">
+      <span>正在加载审核面板。</span>
+    </div>
   );
 }

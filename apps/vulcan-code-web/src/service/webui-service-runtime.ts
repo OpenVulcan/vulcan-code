@@ -22,7 +22,7 @@ export const BROWSER_SERVICE_CONNECTION_TOAST_ID = "browser-service-connection";
 // hasServiceRuntime returns whether the page can use a backend service transport.
 // hasServiceRuntime 返回页面是否可以使用后端服务传输。
 export function hasServiceRuntime(): boolean {
-  return isBrowserServiceRuntime();
+  return isBrowserServiceRuntime() && !isBrowserPreviewForced();
 }
 
 // serviceBootstrapErrorIsRetryable returns whether the initial service load should be retried.
@@ -33,4 +33,15 @@ export function serviceBootstrapErrorIsRetryable(error: unknown): boolean {
     || message.includes("Failed to fetch")
     || message.includes("NetworkError")
     || message.includes("Load failed");
+}
+
+// isBrowserPreviewForced returns whether the current URL explicitly asks for fallback preview mode.
+// isBrowserPreviewForced 返回当前 URL 是否显式请求回退预览模式。
+function isBrowserPreviewForced(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const params = new URLSearchParams(window.location.search);
+  const value = params.get("vulcan_preview") ?? params.get("preview");
+  return value === "1" || value === "true" || value === "browser";
 }

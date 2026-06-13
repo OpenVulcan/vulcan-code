@@ -14,8 +14,6 @@ import {
   DialogContent,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { DiffReviewPanel } from "@/diff/DiffReviewPanel";
-import { hasRenderableDiff, parseUnifiedDiff } from "@/diff/parseDiff";
 import type { DiffPanelSnapshot } from "@/diff/types";
 import { cn } from "@/lib/utils";
 import {
@@ -23,6 +21,13 @@ import {
   type GeneratedMediaAttachment,
 } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+
+// LazyDiffReviewPanel loads the heavy diff review renderer only for diff detail modals.
+// LazyDiffReviewPanel 仅在 diff 详情弹窗中加载较重的 diff 审核渲染器。
+const LazyDiffReviewPanel = React.lazy(async () => {
+  const module = await import("@/diff/DiffReviewPanel");
+  return { default: module.DiffReviewPanel };
+});
 
 // ConversationDetail describes the modal payload opened from one special block.
 // ConversationDetail 描述从特殊块打开的弹窗载荷。
@@ -103,6 +108,18 @@ export function ConversationDetailModal(props: {
   // detailLoadError stores a short failure note for on-demand detail hydration.
   // detailLoadError 保存按需详情水合失败时的简短提示。
   const [detailLoadError, setDetailLoadError] = React.useState<string | null>(null);
+  // diffSnapshot stores the worker-parsed view of the current diff detail body.
+  // diffSnapshot 保存当前 diff 详情正文的 Worker 解析视图。
+  const [diffSnapshot, setDiffSnapshot] = React.useState<DiffPanelSnapshot | null>(null);
+  // diffParseLoading tracks worker parsing for diff detail bodies.
+  // diffParseLoading 跟踪 diff 详情正文的 Worker 解析状态。
+  const [diffParseLoading, setDiffParseLoading] = React.useState(false);
+  // diffParseError stores the latest diff detail parse error.
+  // diffParseError 保存最近一次 diff 详情解析错误。
+  const [diffParseError, setDiffParseError] = React.useState<string | null>(null);
+  // diffParseSeqRef rejects stale async parse results after detail changes.
+  // diffParseSeqRef 在详情变化后拒绝过期异步解析结果。
+  const diffParseSeqRef = React.useRef(0);
   React.useEffect(() => {
     setLoadedToolDetail(null);
     setDetailLoadError(null);
@@ -133,6 +150,42 @@ export function ConversationDetailModal(props: {
     props.detail.detailRef?.toolCallId,
     props.onLoadToolDetail,
   ]);
+  const diffBody = props.detail.body;
+  React.useEffect(() => {
+    const requestSeq = diffParseSeqRef.current + 1;
+    diffParseSeqRef.current = requestSeq;
+    if (props.detail.kind !== "diff") {
+      setDiffSnapshot(null);
+      setDiffParseLoading(false);
+      setDiffParseError(null);
+      return undefined;
+    }
+    let cancelled = false;
+    setDiffSnapshot(null);
+    setDiffParseLoading(true);
+    setDiffParseError(null);
+    void parseDiffDetailBodyAsync(diffBody)
+      .then((snapshot) => {
+        if (!cancelled && diffParseSeqRef.current === requestSeq) {
+          setDiffSnapshot(snapshot);
+          setDiffParseError(null);
+        }
+      })
+      .catch((error) => {
+        if (!cancelled && diffParseSeqRef.current === requestSeq) {
+          setDiffSnapshot(null);
+          setDiffParseError(error instanceof Error ? error.message : String(error));
+        }
+      })
+      .finally(() => {
+        if (!cancelled && diffParseSeqRef.current === requestSeq) {
+          setDiffParseLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [diffBody, props.detail.kind]);
   const DetailIcon = conversationDetailIcon(props.detail.kind);
   const detailType = conversationDetailTitle(props.detail.kind);
   const detailSubtitle = props.detail.metadata
@@ -143,21 +196,22 @@ export function ConversationDetailModal(props: {
     : detailLoadError
       ? `${props.detail.body}\n\n---\n\nDetail load failed: ${detailLoadError}`
       : props.detail.body;
-  // diffSnapshot stores the structured view of the current diff detail body.
-  // diffSnapshot 保存当前 diff 详情正文对应的结构化视图。
-  const diffBody = props.detail.body;
-  const diffSnapshot = React.useMemo(
-    () => props.detail.kind === "diff" && hasRenderableDiff(diffBody)
-      ? parseUnifiedDiff(diffBody, "message", "")
-      : null,
-    [diffBody, props.detail.kind],
-  );
   const diffDetailSnapshot = diffSnapshot ?? {
     source: "message",
     repositoryRoot: "",
     files: [],
-    stats: { files: 0, additions: 0, deletions: 0 },
-    notice: "当前 diff 内容无法结构化解析，已保留原始文本供复制。",
+    stats: {
+      files: 0,
+      additions: 0,
+      deletions: 0,
+      totalChangedLines: 0,
+      totalChangedBytes: 0,
+      isLarge: false,
+      largeReasons: [],
+    },
+    completeness: "complete",
+    isTruncated: false,
+    notice: diffDetailEmptyBody(diffParseLoading, diffParseError),
     rawDiff: fullBody,
   } satisfies DiffPanelSnapshot;
   return (
@@ -191,12 +245,15 @@ export function ConversationDetailModal(props: {
             />
           ) : null}
           {props.detail.kind === "diff" ? (
-            <DiffReviewPanel
-              emptyBody="当前 diff 内容无法结构化解析，已保留原始文本供复制。"
-              emptyTitle="Git Diff"
-              snapshot={diffDetailSnapshot}
-              onCopyRaw={(rawDiff) => void props.onCopyText(rawDiff)}
-            />
+            <React.Suspense fallback={<DiffDetailPanelLoading />}>
+              <LazyDiffReviewPanel
+                emptyBody={diffDetailEmptyBody(diffParseLoading, diffParseError)}
+                emptyTitle="Git Diff"
+                loading={diffParseLoading}
+                snapshot={diffDetailSnapshot}
+                onCopyRaw={(rawDiff) => void props.onCopyText(rawDiff)}
+              />
+            </React.Suspense>
           ) : (
             <MarkdownMessage content={fullBody} eager onOpenMedia={props.onOpenMedia} />
           )}
@@ -204,6 +261,41 @@ export function ConversationDetailModal(props: {
       </DialogContent>
     </Dialog>
   );
+}
+
+// parseDiffDetailBodyAsync loads diff parsing helpers only for diff detail modals.
+// parseDiffDetailBodyAsync 仅为 diff 详情弹窗按需加载 diff 解析辅助模块。
+async function parseDiffDetailBodyAsync(diffBody: string): Promise<DiffPanelSnapshot | null> {
+  const [{ hasRenderableDiff }, { parseUnifiedDiffAsync }] = await Promise.all([
+    import("@/diff/parseDiff"),
+    import("@/diff/diff-parse-worker-client"),
+  ]);
+  if (!hasRenderableDiff(diffBody)) {
+    return null;
+  }
+  return parseUnifiedDiffAsync(diffBody, "message", "");
+}
+
+// DiffDetailPanelLoading renders while the diff review panel chunk is loading.
+// DiffDetailPanelLoading 渲染 diff 审核面板 chunk 加载期间的轻量状态。
+function DiffDetailPanelLoading() {
+  return (
+    <div className="detail-empty-state">
+      <span>正在加载 Git Diff 审核面板。</span>
+    </div>
+  );
+}
+
+// diffDetailEmptyBody formats the detail modal empty-state message for async diff parsing.
+// diffDetailEmptyBody 格式化详情弹窗异步 diff 解析的空态文案。
+function diffDetailEmptyBody(loading: boolean, error: string | null): string {
+  if (loading) {
+    return "正在通过 Worker 解析 diff 内容。";
+  }
+  if (error) {
+    return `Diff 解析失败：${error}`;
+  }
+  return "当前 diff 内容无法结构化解析，已保留原始文本供复制。";
 }
 
 // conversationDetailIcon returns the icon component used by one detail modal kind.

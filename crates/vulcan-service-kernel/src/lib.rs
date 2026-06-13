@@ -767,12 +767,24 @@ struct WebuiWorkspaceDiffSnapshot {
     /// Number of files represented by the combined diff.
     /// 组合 diff 中包含的文件数量。
     changed_files: usize,
+    /// Complete file summaries computed before preview truncation.
+    /// 预览截断前计算出的完整文件摘要。
+    files: Vec<WebuiWorkspaceDiffFileSummary>,
     /// Number of added lines estimated from the combined diff.
     /// 从组合 diff 中估算出的新增行数。
     additions: usize,
     /// Number of deleted lines estimated from the combined diff.
     /// 从组合 diff 中估算出的删除行数。
     deletions: usize,
+    /// Number of changed lines estimated from the complete combined diff.
+    /// 从完整组合 diff 中估算出的变更行数。
+    total_changed_lines: usize,
+    /// Number of changed bytes estimated from the complete combined diff.
+    /// 从完整组合 diff 中估算出的变更字节数。
+    total_changed_bytes: usize,
+    /// Whether the returned unified diff text was truncated for preview.
+    /// 返回的 unified diff 文本是否已因预览上限被截断。
+    truncated: bool,
     /// Optional user-facing note for empty, partial, or truncated snapshots.
     /// 空快照、局部快照或截断快照使用的可选用户提示。
     notice: Option<String>,
@@ -797,6 +809,193 @@ struct WebuiWorkspaceDiffSnapshot {
     /// Recent commits available for commit review mode.
     /// 可用于提交审核模式的最近提交列表。
     recent_commits: Vec<WebuiGitCommitSummary>,
+}
+
+/// WebUI workspace Git diff file summary returned with the snapshot.
+/// 随快照返回给 WebUI 的工作区 Git diff 文件摘要。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffFileSummary {
+    /// Stable summary key used by the WebUI.
+    /// WebUI 使用的稳定摘要键。
+    key: String,
+    /// Previous file path.
+    /// 旧文件路径。
+    old_path: String,
+    /// Current file path.
+    /// 当前文件路径。
+    new_path: String,
+    /// File-level change status.
+    /// 文件级变更状态。
+    status: String,
+    /// Number of added lines in this file.
+    /// 该文件的新增行数。
+    additions: usize,
+    /// Number of deleted lines in this file.
+    /// 该文件的删除行数。
+    deletions: usize,
+    /// Whether this file is binary-only in the diff.
+    /// 该文件是否在 diff 中仅表现为二进制变更。
+    is_binary: bool,
+    /// Whether this file is a gitlink or submodule entry.
+    /// 该文件是否为 gitlink 或子模块条目。
+    is_gitlink: bool,
+    /// File mode parsed from diff metadata when available.
+    /// 从 diff 元数据解析出的可选文件模式。
+    file_mode: Option<String>,
+    /// Number of changed lines counted as additions plus deletions.
+    /// 以新增行加删除行计算的变更行数。
+    changed_lines: usize,
+    /// Estimated UTF-8 byte size of changed lines in this file.
+    /// 该文件变更行的估算 UTF-8 字节体积。
+    changed_bytes: usize,
+    /// Largest estimated UTF-8 byte size among changed lines.
+    /// 变更行中的最大估算 UTF-8 字节体积。
+    max_changed_line_bytes: usize,
+    /// Estimated visual row count including hunk headers.
+    /// 包含 hunk 头部的估算可视行数。
+    row_count: usize,
+    /// Number of parsed hunk headers in this file diff.
+    /// 该文件 diff 中解析到的 hunk 头部数量。
+    hunk_count: usize,
+}
+
+/// WebUI workspace Git diff file selector for lazy detail loading.
+/// WebUI 工作区 Git diff 懒加载详情使用的文件选择器。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffFileDetailRequest {
+    /// Stable file key from the summary snapshot.
+    /// 摘要快照中的稳定文件键。
+    key: String,
+    /// Previous file path.
+    /// 旧文件路径。
+    old_path: String,
+    /// Current file path.
+    /// 当前文件路径。
+    new_path: String,
+    /// Optional unified-diff context line count requested for hunk expansion.
+    /// hunk 展开请求使用的可选 unified-diff 上下文行数。
+    context_lines: Option<usize>,
+    /// Optional zero-based hunk index requested for targeted expansion.
+    /// 定向展开请求使用的可选零基 hunk 索引。
+    hunk_index: Option<usize>,
+    /// Optional hunk expansion direction requested by the WebUI.
+    /// WebUI 请求的可选 hunk 展开方向。
+    hunk_expansion_direction: Option<String>,
+}
+
+/// WebUI workspace Git diff detail returned for one file.
+/// 返回给 WebUI 的单文件工作区 Git diff 详情。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffFileDetail {
+    /// Repository root used for the Git command.
+    /// Git 命令使用的仓库根目录。
+    repository_root: String,
+    /// File summary computed from the single-file diff.
+    /// 从单文件 diff 计算出的文件摘要。
+    file: Option<WebuiWorkspaceDiffFileSummary>,
+    /// Unified diff for the requested file only.
+    /// 仅包含请求文件的 unified diff。
+    unified_diff: String,
+    /// Whether the returned unified diff text was truncated for preview.
+    /// 返回的 unified diff 文本是否已因预览上限被截断。
+    truncated: bool,
+    /// Optional user-facing note for empty, partial, or truncated details.
+    /// 空详情、局部详情或截断详情使用的可选用户提示。
+    notice: Option<String>,
+    /// Unified-diff context line count used to produce this detail payload.
+    /// 生成当前详情载荷时使用的 unified-diff 上下文行数。
+    context_lines: usize,
+    /// Optional zero-based hunk index echoed for targeted expansion.
+    /// 定向展开响应回传的可选零基 hunk 索引。
+    hunk_index: Option<usize>,
+    /// Optional normalized hunk expansion direction echoed to the WebUI.
+    /// 回传给 WebUI 的可选规范化 hunk 展开方向。
+    hunk_expansion_direction: Option<String>,
+}
+
+/// WebUI workspace Git diff search options.
+/// WebUI 工作区 Git diff 搜索选项。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffSearchRequest {
+    /// Search query matched against full backend diff text.
+    /// 与后端完整 diff 文本匹配的搜索词。
+    query: String,
+    /// Maximum number of matching files returned to the WebUI.
+    /// 返回给 WebUI 的最大命中文件数量。
+    #[serde(default = "default_webui_diff_search_limit")]
+    limit: usize,
+}
+
+/// WebUI workspace Git diff search response.
+/// WebUI 工作区 Git diff 搜索响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffSearchResponse {
+    /// Repository root used for the Git command.
+    /// Git 命令使用的仓库根目录。
+    repository_root: String,
+    /// Original query after backend trimming.
+    /// 后端裁剪空白后的原始搜索词。
+    query: String,
+    /// File-level matches ordered by diff appearance.
+    /// 按 diff 出现顺序排列的文件级命中。
+    matches: Vec<WebuiWorkspaceDiffSearchFileMatch>,
+    /// Whether additional matching files were omitted by the result limit.
+    /// 是否因结果数量限制省略了更多命中文件。
+    truncated: bool,
+    /// Number of files scanned in the complete backend diff.
+    /// 后端完整 diff 中已扫描的文件数量。
+    scanned_files: usize,
+    /// Number of diff lines scanned in the complete backend diff.
+    /// 后端完整 diff 中已扫描的 diff 行数量。
+    scanned_lines: usize,
+    /// Optional user-facing note for empty, partial, or skipped searches.
+    /// 空搜索、局部搜索或跳过搜索使用的可选用户提示。
+    notice: Option<String>,
+}
+
+/// WebUI workspace Git diff file-level search match.
+/// WebUI 工作区 Git diff 文件级搜索命中。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceDiffSearchFileMatch {
+    /// Stable summary key used by the WebUI.
+    /// WebUI 使用的稳定摘要键。
+    key: String,
+    /// Previous file path.
+    /// 旧文件路径。
+    old_path: String,
+    /// Current file path.
+    /// 当前文件路径。
+    new_path: String,
+    /// File-level change status.
+    /// 文件级变更状态。
+    status: String,
+    /// Number of matched diff lines in this file.
+    /// 该文件中命中的 diff 行数量。
+    match_count: usize,
+    /// First compact matching line preview.
+    /// 首条紧凑命中行预览。
+    first_preview: String,
+    /// Bounded compact matching line previews for summary-only display.
+    /// 用于摘要态展示的受限紧凑命中行预览。
+    previews: Vec<String>,
+    /// Hunk index for the first matching diff row when available.
+    /// 可用时首条命中 diff 行所在的 hunk 索引。
+    first_hunk_index: Option<usize>,
+    /// Old-file line number for the first matching diff row when available.
+    /// 可用时首条命中 diff 行对应的旧文件行号。
+    first_old_line: Option<usize>,
+    /// New-file line number for the first matching diff row when available.
+    /// 可用时首条命中 diff 行对应的新文件行号。
+    first_new_line: Option<usize>,
+    /// Diff row kind for the first matching diff row when available.
+    /// 可用时首条命中 diff 行对应的行类型。
+    first_line_kind: Option<String>,
 }
 
 /// WebUI Git diff request options.
@@ -1486,6 +1685,28 @@ async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "workspace.diff.fileDetail" | "service_workspace_diff_file_detail" => rpc_json_result(
+            service_workspace_diff_file_detail(
+                state,
+                rpc_optional_param(&params, "workspacePath")?,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_optional_param(&params, "request")?,
+                rpc_required_param(&params, "file")?,
+            )
+            .await,
+        ),
+        "workspace.diff.search" | "service_workspace_diff_search" => rpc_json_result(
+            service_workspace_diff_search(
+                state,
+                rpc_optional_param(&params, "workspacePath")?,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_optional_param(&params, "request")?,
+                rpc_required_param(&params, "search")?,
+            )
+            .await,
+        ),
         "service_refresh_luaskills_catalog" => {
             rpc_json_result(service_refresh_luaskills_catalog(state).await)
         }
@@ -2111,6 +2332,52 @@ async fn service_workspace_diff_snapshot(
     })
     .await
     .map_err(|error| format!("workspace diff task failed: {error}"))?
+}
+
+/// Loads a Git diff detail for one WebUI project file.
+/// 为单个 WebUI 项目文件加载 Git diff 详情。
+async fn service_workspace_diff_file_detail(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: Option<WebuiWorkspaceDiffRequest>,
+    file: WebuiWorkspaceDiffFileDetailRequest,
+) -> Result<WebuiWorkspaceDiffFileDetail, String> {
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    spawn_service_blocking_task(move || {
+        load_webui_workspace_diff_file_detail(&resolved_workspace_path, request, file)
+    })
+    .await
+    .map_err(|error| format!("workspace diff file detail task failed: {error}"))?
+}
+
+/// Searches the complete backend Git diff and returns compact file-level hits.
+/// 搜索后端完整 Git diff 并返回紧凑的文件级命中。
+async fn service_workspace_diff_search(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: Option<WebuiWorkspaceDiffRequest>,
+    search: WebuiWorkspaceDiffSearchRequest,
+) -> Result<WebuiWorkspaceDiffSearchResponse, String> {
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    spawn_service_blocking_task(move || {
+        load_webui_workspace_diff_search(&resolved_workspace_path, request, search)
+    })
+    .await
+    .map_err(|error| format!("workspace diff search task failed: {error}"))?
 }
 
 /// Resolves the workspace path for a WebUI diff request from backend-owned state first.
@@ -19944,9 +20211,162 @@ fn workspace_root() -> PathBuf {
 /// 单个 WebUI diff 快照保留的最大字节数。
 const WEBUI_DIFF_MAX_BYTES: usize = 2 * 1024 * 1024;
 
+/// Maximum bytes retained for one lazily loaded WebUI diff file.
+/// 单个 WebUI diff 文件懒加载详情保留的最大字节数。
+const WEBUI_DIFF_FILE_DETAIL_MAX_BYTES: usize = 3 * 1024 * 1024;
+
 /// Maximum bytes read from one untracked text file for the diff preview.
 /// 单个未跟踪文本文件用于 diff 预览的最大读取字节数。
 const WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES: u64 = 256 * 1024;
+
+/// Default unified-diff context lines used by Git when no expansion is requested.
+/// 未请求展开时 Git 默认使用的 unified-diff 上下文行数。
+const WEBUI_DIFF_DEFAULT_CONTEXT_LINES: usize = 3;
+
+/// Maximum unified-diff context lines accepted from WebUI hunk expansion.
+/// WebUI hunk 展开允许请求的最大 unified-diff 上下文行数。
+const WEBUI_DIFF_MAX_CONTEXT_LINES: usize = 100;
+
+/// Maximum file-level search hits returned for one WebUI diff search.
+/// 单次 WebUI diff 搜索返回的最大文件级命中数。
+const WEBUI_DIFF_SEARCH_MAX_RESULTS: usize = 200;
+
+/// Maximum bytes kept for one compact diff search preview line.
+/// 单条紧凑 diff 搜索预览行保留的最大字节数。
+const WEBUI_DIFF_SEARCH_PREVIEW_MAX_BYTES: usize = 180;
+
+/// Maximum compact matching previews returned for one file-level backend diff search hit.
+/// 单个后端 diff 文件级命中返回的紧凑预览最大数量。
+const WEBUI_DIFF_SEARCH_MATCH_PREVIEW_LIMIT: usize = 4;
+
+/// Character width used by the compact diff search n-gram inverted index.
+/// 紧凑 diff 搜索 n-gram 倒排索引使用的字符宽度。
+const WEBUI_DIFF_SEARCH_NGRAM_WIDTH: usize = 3;
+
+/// Time-to-live for compact WebUI diff search responses.
+/// 紧凑 WebUI diff 搜索响应的缓存存活时间。
+const WEBUI_DIFF_SEARCH_CACHE_TTL_MS: i128 = 2_500;
+
+/// Time-to-live for reusable WebUI diff search inputs.
+/// 可复用 WebUI diff 搜索输入的缓存存活时间。
+const WEBUI_DIFF_SEARCH_INPUT_CACHE_TTL_MS: i128 = 2_500;
+
+/// Maximum compact WebUI diff search responses retained in memory.
+/// 内存中保留的紧凑 WebUI diff 搜索响应最大数量。
+const WEBUI_DIFF_SEARCH_CACHE_LIMIT: usize = 24;
+
+/// Maximum reusable WebUI diff search inputs retained in memory.
+/// 内存中保留的可复用 WebUI diff 搜索输入最大数量。
+const WEBUI_DIFF_SEARCH_INPUT_CACHE_LIMIT: usize = 8;
+
+/// Process-local compact diff search response cache.
+/// 进程内紧凑 diff 搜索响应缓存。
+static WEBUI_DIFF_SEARCH_CACHE: OnceLock<Mutex<VecDeque<WebuiDiffSearchCacheEntry>>> =
+    OnceLock::new();
+
+/// Process-local reusable diff search input cache.
+/// 进程内可复用 diff 搜索输入缓存。
+static WEBUI_DIFF_SEARCH_INPUT_CACHE: OnceLock<Mutex<VecDeque<WebuiDiffSearchInputCacheEntry>>> =
+    OnceLock::new();
+
+/// One compact diff search response cache entry.
+/// 单条紧凑 diff 搜索响应缓存项。
+struct WebuiDiffSearchCacheEntry {
+    /// Stable search cache key.
+    /// 稳定搜索缓存键。
+    key: String,
+    /// Cache creation timestamp in milliseconds.
+    /// 缓存创建时间戳，单位毫秒。
+    created_at_ms: i128,
+    /// Cached compact search response.
+    /// 已缓存的紧凑搜索响应。
+    response: WebuiWorkspaceDiffSearchResponse,
+}
+
+/// Reusable complete diff input for backend summary search.
+/// 后端摘要搜索可复用的完整 diff 输入。
+#[derive(Clone)]
+struct WebuiDiffSearchInput {
+    /// Complete unified diff text used by the backend scanner.
+    /// 后端扫描器使用的完整 unified diff 文本。
+    unified_diff: String,
+    /// File-level candidate index precomputed from the complete diff text.
+    /// 从完整 diff 文本预先计算出的文件级候选索引。
+    indexed_files: Vec<WebuiDiffSearchIndexedFile>,
+    /// Number of raw diff lines in the complete diff text.
+    /// 完整 diff 文本中的原始 diff 行数。
+    raw_line_count: usize,
+    /// User-facing notices produced while loading the diff input.
+    /// 加载 diff 输入时产生的面向用户提示。
+    notices: Vec<String>,
+}
+
+/// Precomputed search candidates for one diff file.
+/// 单个 diff 文件的预计算搜索候选项。
+#[derive(Clone)]
+struct WebuiDiffSearchIndexedFile {
+    /// File summary already computed by the summary scanner.
+    /// 摘要扫描器已经计算出的文件摘要。
+    summary: WebuiWorkspaceDiffFileSummary,
+    /// Candidate previews matched by later query scans.
+    /// 后续 query 扫描使用的候选预览。
+    candidates: Vec<WebuiDiffSearchIndexedCandidate>,
+    /// Per-file n-gram inverted index from normalized text to candidate indexes.
+    /// 从归一化文本到候选下标的文件级 n-gram 倒排索引。
+    ngram_index: BTreeMap<String, Vec<usize>>,
+}
+
+/// Precomputed search candidate for one diff row or file path.
+/// 单条 diff 行或文件路径的预计算搜索候选项。
+#[derive(Clone)]
+struct WebuiDiffSearchIndexedCandidate {
+    /// Original compact preview sent back when this candidate is first matched.
+    /// 该候选首次命中时返回的原始紧凑预览。
+    preview: String,
+    /// Lowercase compact preview used for repeated case-insensitive matching.
+    /// 用于重复大小写不敏感匹配的小写紧凑预览。
+    normalized_preview: String,
+    /// Optional diff row position for the candidate.
+    /// 候选项可选的 diff 行位置。
+    position: Option<WebuiDiffSearchLinePosition>,
+}
+
+/// Mutable index builder used while scanning one file patch.
+/// 扫描单个文件 patch 时使用的可变索引构建器。
+struct WebuiDiffSearchIndexedFileBuilder {
+    /// File summary already computed by the summary scanner.
+    /// 摘要扫描器已经计算出的文件摘要。
+    summary: WebuiWorkspaceDiffFileSummary,
+    /// Candidate previews collected for this file.
+    /// 当前文件已收集的候选预览。
+    candidates: Vec<WebuiDiffSearchIndexedCandidate>,
+    /// Current hunk index while scanning the file.
+    /// 扫描文件时当前所在的 hunk 索引。
+    current_hunk_index: Option<usize>,
+    /// Current old-file line number while scanning a hunk.
+    /// 扫描 hunk 时当前旧文件行号。
+    current_old_line: usize,
+    /// Current new-file line number while scanning a hunk.
+    /// 扫描 hunk 时当前新文件行号。
+    current_new_line: usize,
+    /// Number of hunks already seen in this file.
+    /// 当前文件中已经遇到的 hunk 数量。
+    seen_hunk_count: usize,
+}
+
+/// One reusable diff search input cache entry.
+/// 单条可复用 diff 搜索输入缓存项。
+struct WebuiDiffSearchInputCacheEntry {
+    /// Stable input cache key.
+    /// 稳定输入缓存键。
+    key: String,
+    /// Cache creation timestamp in milliseconds.
+    /// 缓存创建时间戳，单位毫秒。
+    created_at_ms: i128,
+    /// Cached complete diff search input.
+    /// 已缓存的完整 diff 搜索输入。
+    input: WebuiDiffSearchInput,
+}
 
 /// Loads a safe, bounded Git diff snapshot for the requested workspace path.
 /// 为请求的工作区路径加载安全且有界的 Git diff 快照。
@@ -20043,13 +20463,15 @@ fn load_webui_workspace_diff_snapshot(
     }
 
     let mut unified_diff = sections.join("\n");
+    let stats = webui_unified_diff_stats(&unified_diff);
+    let file_summaries = webui_unified_diff_file_summaries(&unified_diff);
+    let truncated = unified_diff.len() > WEBUI_DIFF_MAX_BYTES;
     if unified_diff.len() > WEBUI_DIFF_MAX_BYTES {
         unified_diff =
             truncate_string_to_char_boundary(&unified_diff, WEBUI_DIFF_MAX_BYTES).to_string();
         notices.push(String::from("Diff 内容过大，已截断到 WebUI 预览上限。"));
     }
-    let (changed_files, additions, deletions) = webui_unified_diff_stats(&unified_diff);
-    let notice = if changed_files == 0 {
+    let notice = if stats.files == 0 {
         Some(String::from("当前工作区没有可展示的 Git 变更。"))
     } else if notices.is_empty() {
         None
@@ -20060,9 +20482,13 @@ fn load_webui_workspace_diff_snapshot(
     Ok(WebuiWorkspaceDiffSnapshot {
         repository_root: normalized_workspace_path_text_from_path(&repository_root),
         unified_diff,
-        changed_files,
-        additions,
-        deletions,
+        changed_files: stats.files,
+        files: file_summaries,
+        additions: stats.additions,
+        deletions: stats.deletions,
+        total_changed_lines: stats.total_changed_lines,
+        total_changed_bytes: stats.total_changed_bytes,
+        truncated,
         notice,
         current_branch,
         default_branch,
@@ -20071,6 +20497,544 @@ fn load_webui_workspace_diff_snapshot(
         selected_commit_hash,
         branches,
         recent_commits,
+    })
+}
+
+/// Loads a safe, bounded Git diff detail for one requested file.
+/// 为请求的单个文件加载安全且有界的 Git diff 详情。
+fn load_webui_workspace_diff_file_detail(
+    workspace_path: &str,
+    request: Option<WebuiWorkspaceDiffRequest>,
+    file: WebuiWorkspaceDiffFileDetailRequest,
+) -> Result<WebuiWorkspaceDiffFileDetail, String> {
+    let requested_path = PathBuf::from(workspace_path.trim());
+    let workspace_path = if requested_path.as_os_str().is_empty() {
+        workspace_root()
+    } else {
+        requested_path
+    };
+    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
+        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
+    })?;
+    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
+        return Ok(WebuiWorkspaceDiffFileDetail {
+            repository_root: normalized_workspace_path_text_from_path(&workspace_path),
+            file: None,
+            unified_diff: String::new(),
+            truncated: false,
+            notice: Some(String::from("当前工作区不是 Git 仓库，无法加载文件 diff。")),
+            context_lines: WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
+            hunk_index: file.hunk_index,
+            hunk_expansion_direction: normalized_webui_diff_hunk_expansion_direction(
+                file.hunk_expansion_direction.as_deref(),
+            ),
+        });
+    };
+
+    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
+    let pathspec = webui_diff_file_detail_pathspec(&file)?;
+    let context_lines = normalized_webui_diff_context_lines(file.context_lines);
+    let hunk_index = file.hunk_index;
+    let hunk_expansion_direction =
+        normalized_webui_diff_hunk_expansion_direction(file.hunk_expansion_direction.as_deref());
+    let current_branch = load_webui_current_git_branch(&repository_root)?;
+    let default_branch = load_webui_default_git_branch(&repository_root)?;
+    let recent_commits = load_webui_recent_commits(&repository_root)?;
+    let selected_base_branch = request
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| current_branch.clone());
+    let selected_compare_branch = request
+        .compare_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| default_branch.clone());
+    let selected_commit_hash = request
+        .commit_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| recent_commits.first().map(|commit| commit.hash.clone()));
+    let mut notices = Vec::new();
+    let mut unified_diff = load_webui_workspace_diff_file_detail_unified_diff(
+        &repository_root,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+        &pathspec,
+        context_lines,
+        &mut notices,
+    )?;
+    if let Some(scoped_diff) = webui_diff_detail_hunk_scoped_unified_diff(
+        &repository_root,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+        &pathspec,
+        context_lines,
+        hunk_index,
+        hunk_expansion_direction.as_deref(),
+        &unified_diff,
+    )? {
+        unified_diff = scoped_diff;
+    }
+    let mut truncated = false;
+    if unified_diff.len() > WEBUI_DIFF_FILE_DETAIL_MAX_BYTES {
+        unified_diff =
+            truncate_string_to_char_boundary(&unified_diff, WEBUI_DIFF_FILE_DETAIL_MAX_BYTES)
+                .to_string();
+        truncated = true;
+        notices.push(String::from(
+            "文件 Diff 内容过大，已截断到 WebUI 单文件详情上限。",
+        ));
+    }
+    let file_summary = webui_unified_diff_file_summaries(&unified_diff)
+        .into_iter()
+        .next();
+    let notice = if unified_diff.trim().is_empty() {
+        Some(String::from("该文件当前没有可加载的 Git diff 详情。"))
+    } else if notices.is_empty() {
+        None
+    } else {
+        Some(notices.join(" "))
+    };
+
+    Ok(WebuiWorkspaceDiffFileDetail {
+        repository_root: normalized_workspace_path_text_from_path(&repository_root),
+        file: file_summary,
+        unified_diff,
+        truncated,
+        notice,
+        context_lines,
+        hunk_index,
+        hunk_expansion_direction,
+    })
+}
+
+/// Loads one file-detail unified diff for a selected WebUI diff mode.
+/// 按选中的 WebUI diff 模式加载单文件详情 unified diff。
+fn load_webui_workspace_diff_file_detail_unified_diff(
+    repository_root: &Path,
+    mode: WebuiWorkspaceDiffMode,
+    selected_base_branch: Option<&str>,
+    selected_compare_branch: Option<&str>,
+    selected_commit_hash: Option<&str>,
+    pathspec: &str,
+    context_lines: usize,
+    notices: &mut Vec<String>,
+) -> Result<String, String> {
+    let mut sections = Vec::new();
+    match mode {
+        WebuiWorkspaceDiffMode::Unstaged => {
+            let unstaged_diff =
+                load_webui_unstaged_git_diff_for_path(repository_root, pathspec, context_lines)?;
+            if !unstaged_diff.trim().is_empty() {
+                sections.push(unstaged_diff);
+            }
+            let untracked_diff =
+                load_webui_untracked_git_diff_for_path(repository_root, pathspec, notices)?;
+            if !untracked_diff.trim().is_empty() {
+                sections.push(untracked_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Staged => {
+            let staged_diff =
+                load_webui_staged_git_diff_for_path(repository_root, pathspec, context_lines)?;
+            if !staged_diff.trim().is_empty() {
+                sections.push(staged_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Commit => {
+            if let Some(commit_hash) = selected_commit_hash {
+                let commit_diff = load_webui_commit_git_diff_for_path(
+                    repository_root,
+                    commit_hash,
+                    pathspec,
+                    context_lines,
+                )?;
+                if !commit_diff.trim().is_empty() {
+                    sections.push(commit_diff);
+                }
+            } else {
+                notices.push(String::from("当前仓库没有可展示的提交记录。"));
+            }
+        }
+        WebuiWorkspaceDiffMode::Branch => match (selected_base_branch, selected_compare_branch) {
+            (Some(base_branch), Some(compare_branch)) => {
+                let branch_diff = load_webui_branch_git_diff_for_path(
+                    repository_root,
+                    compare_branch,
+                    base_branch,
+                    pathspec,
+                    context_lines,
+                )?;
+                if !branch_diff.trim().is_empty() {
+                    sections.push(branch_diff);
+                }
+            }
+            _ => notices.push(String::from("当前仓库无法解析用于分支对比的分支。")),
+        },
+    }
+    Ok(sections.join("\n"))
+}
+
+/// Builds a hunk-scoped expanded diff payload for targeted WebUI hunk expansion.
+/// 为定向 WebUI hunk 展开构建仅包含目标 hunk 的扩展 diff 载荷。
+fn webui_diff_detail_hunk_scoped_unified_diff(
+    repository_root: &Path,
+    mode: WebuiWorkspaceDiffMode,
+    selected_base_branch: Option<&str>,
+    selected_compare_branch: Option<&str>,
+    selected_commit_hash: Option<&str>,
+    pathspec: &str,
+    context_lines: usize,
+    hunk_index: Option<usize>,
+    hunk_expansion_direction: Option<&str>,
+    expanded_unified_diff: &str,
+) -> Result<Option<String>, String> {
+    if hunk_index.is_none()
+        || hunk_expansion_direction.is_none()
+        || context_lines <= WEBUI_DIFF_DEFAULT_CONTEXT_LINES
+        || expanded_unified_diff.trim().is_empty()
+    {
+        return Ok(None);
+    }
+    let mut base_notices = Vec::new();
+    let base_unified_diff = load_webui_workspace_diff_file_detail_unified_diff(
+        repository_root,
+        mode,
+        selected_base_branch,
+        selected_compare_branch,
+        selected_commit_hash,
+        pathspec,
+        WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
+        &mut base_notices,
+    )?;
+    Ok(webui_diff_hunk_scoped_unified_diff(
+        &base_unified_diff,
+        expanded_unified_diff,
+        hunk_index.unwrap_or_default(),
+    ))
+}
+
+/// Selects the expanded hunk that contains the original target hunk range.
+/// 选择包含原始目标 hunk 范围的扩展 hunk。
+fn webui_diff_hunk_scoped_unified_diff(
+    base_unified_diff: &str,
+    expanded_unified_diff: &str,
+    hunk_index: usize,
+) -> Option<String> {
+    let expanded_lines: Vec<&str> = expanded_unified_diff.lines().collect();
+    let expanded_hunks = webui_diff_text_hunk_ranges(&expanded_lines);
+    if expanded_hunks.is_empty() {
+        return None;
+    }
+    let base_lines: Vec<&str> = base_unified_diff.lines().collect();
+    let base_hunks = webui_diff_text_hunk_ranges(&base_lines);
+    let target_hunk = base_hunks.get(hunk_index);
+    let expanded_hunk = target_hunk
+        .and_then(|target| {
+            expanded_hunks
+                .iter()
+                .find(|candidate| webui_diff_text_hunk_contains_range(candidate, target))
+        })
+        .or_else(|| expanded_hunks.get(hunk_index))?;
+    let header_end = expanded_hunks.first()?.start_line;
+    let mut scoped_lines = Vec::new();
+    scoped_lines.extend_from_slice(&expanded_lines[..header_end]);
+    scoped_lines
+        .extend_from_slice(&expanded_lines[expanded_hunk.start_line..expanded_hunk.end_line]);
+    let mut scoped_diff = scoped_lines.join("\n");
+    if expanded_unified_diff.ends_with('\n') {
+        scoped_diff.push('\n');
+    }
+    Some(scoped_diff)
+}
+
+/// Text range and parsed old/new line span for one unified diff hunk.
+/// 单个 unified diff hunk 的文本范围与解析出的新旧行跨度。
+struct WebuiDiffTextHunkRange {
+    /// Inclusive start line index in the diff text.
+    /// diff 文本中的起始行下标，包含该行。
+    start_line: usize,
+    /// Exclusive end line index in the diff text.
+    /// diff 文本中的结束行下标，不包含该行。
+    end_line: usize,
+    /// Old-side start line from the hunk header.
+    /// hunk 头部中的旧侧起始行号。
+    old_start: usize,
+    /// Old-side line count from the hunk header.
+    /// hunk 头部中的旧侧行数。
+    old_len: usize,
+    /// Old-side inclusive end line used for containment checks.
+    /// 用于包含性检查的旧侧结束行号，包含该行。
+    old_end: usize,
+    /// New-side start line from the hunk header.
+    /// hunk 头部中的新侧起始行号。
+    new_start: usize,
+    /// New-side line count from the hunk header.
+    /// hunk 头部中的新侧行数。
+    new_len: usize,
+    /// New-side inclusive end line used for containment checks.
+    /// 用于包含性检查的新侧结束行号，包含该行。
+    new_end: usize,
+}
+
+/// Extracts hunk text ranges from one unified diff line list.
+/// 从 unified diff 行列表中提取 hunk 文本范围。
+fn webui_diff_text_hunk_ranges(lines: &[&str]) -> Vec<WebuiDiffTextHunkRange> {
+    let mut hunks = Vec::new();
+    for (line_index, line) in lines.iter().enumerate() {
+        if !line.starts_with("@@ ") {
+            continue;
+        }
+        let Some((old_start, old_len, new_start, new_len)) =
+            parse_webui_diff_hunk_header_span(line)
+        else {
+            continue;
+        };
+        let end_line = lines[line_index + 1..]
+            .iter()
+            .position(|next_line| next_line.starts_with("@@ "))
+            .map(|offset| line_index + 1 + offset)
+            .unwrap_or(lines.len());
+        hunks.push(WebuiDiffTextHunkRange {
+            start_line: line_index,
+            end_line,
+            old_start,
+            old_len,
+            old_end: webui_diff_hunk_inclusive_end(old_start, old_len),
+            new_start,
+            new_len,
+            new_end: webui_diff_hunk_inclusive_end(new_start, new_len),
+        });
+    }
+    hunks
+}
+
+/// Parses start and length values from a unified diff hunk header.
+/// 从 unified diff hunk 头部解析起始行与长度。
+fn parse_webui_diff_hunk_header_span(header: &str) -> Option<(usize, usize, usize, usize)> {
+    let body = header.strip_prefix("@@ ")?;
+    let mut parts = body.split_whitespace();
+    let old_range = parts.next()?.strip_prefix('-')?;
+    let new_range = parts.next()?.strip_prefix('+')?;
+    let (old_start, old_len) = parse_webui_diff_hunk_range_span(old_range)?;
+    let (new_start, new_len) = parse_webui_diff_hunk_range_span(new_range)?;
+    Some((old_start, old_len, new_start, new_len))
+}
+
+/// Parses one hunk range in `start,count` or `start` form.
+/// 解析 `start,count` 或 `start` 形式的单个 hunk 范围。
+fn parse_webui_diff_hunk_range_span(range: &str) -> Option<(usize, usize)> {
+    let mut parts = range.split(',');
+    let start = parts.next()?.parse::<usize>().ok()?;
+    let len = parts
+        .next()
+        .map(|value| value.parse::<usize>().ok())
+        .unwrap_or(Some(1))?;
+    Some((start, len))
+}
+
+/// Converts a hunk start and length into an inclusive end for containment checks.
+/// 将 hunk 起始行与长度转换为用于包含性检查的包含式结束行。
+fn webui_diff_hunk_inclusive_end(start: usize, len: usize) -> usize {
+    start + len.saturating_sub(1)
+}
+
+/// Returns whether an expanded hunk contains the original target hunk range.
+/// 返回扩展 hunk 是否包含原始目标 hunk 范围。
+fn webui_diff_text_hunk_contains_range(
+    expanded: &WebuiDiffTextHunkRange,
+    target: &WebuiDiffTextHunkRange,
+) -> bool {
+    let old_side_contains = target.old_len == 0
+        || (expanded.old_start <= target.old_start && expanded.old_end >= target.old_end);
+    let new_side_contains = target.new_len == 0
+        || (expanded.new_start <= target.new_start && expanded.new_end >= target.new_end);
+    old_side_contains && new_side_contains
+}
+
+/// Searches a complete backend diff without sending the full text to the WebUI.
+/// 在不把完整文本发送给 WebUI 的情况下搜索完整后端 diff。
+fn load_webui_workspace_diff_search(
+    workspace_path: &str,
+    request: Option<WebuiWorkspaceDiffRequest>,
+    search: WebuiWorkspaceDiffSearchRequest,
+) -> Result<WebuiWorkspaceDiffSearchResponse, String> {
+    let requested_path = PathBuf::from(workspace_path.trim());
+    let workspace_path = if requested_path.as_os_str().is_empty() {
+        workspace_root()
+    } else {
+        requested_path
+    };
+    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
+        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
+    })?;
+    let repository_root_text = normalized_workspace_path_text_from_path(&workspace_path);
+    let query = search.query.trim().to_string();
+    if query.is_empty() {
+        return Ok(empty_webui_diff_search_response(
+            repository_root_text,
+            query,
+            String::from("搜索词为空，未执行 Git diff 搜索。"),
+        ));
+    }
+    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
+        return Ok(empty_webui_diff_search_response(
+            repository_root_text,
+            query,
+            String::from("当前工作区不是 Git 仓库，无法搜索代码审查 diff。"),
+        ));
+    };
+
+    let request = request.unwrap_or_else(default_webui_workspace_diff_request);
+    let limit = normalized_webui_diff_search_limit(search.limit);
+    let repository_root_text = normalized_workspace_path_text_from_path(&repository_root);
+    let cache_key = webui_diff_search_cache_key(&repository_root_text, &request, &query, limit);
+    let cache_now_ms = current_unix_millis_value();
+    if let Some(response) = cached_webui_diff_search_response(&cache_key, cache_now_ms) {
+        return Ok(response);
+    }
+    let current_branch = load_webui_current_git_branch(&repository_root)?;
+    let default_branch = load_webui_default_git_branch(&repository_root)?;
+    let recent_commits = load_webui_recent_commits(&repository_root)?;
+    let selected_base_branch = request
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| current_branch.clone());
+    let selected_compare_branch = request
+        .compare_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| default_branch.clone());
+    let selected_commit_hash = request
+        .commit_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| recent_commits.first().map(|commit| commit.hash.clone()));
+    let input_cache_key = webui_diff_search_input_cache_key(
+        &repository_root_text,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+    );
+    let input = if let Some(input) = cached_webui_diff_search_input(&input_cache_key, cache_now_ms)
+    {
+        input
+    } else {
+        let input = load_webui_workspace_diff_search_input(
+            &repository_root,
+            request.mode,
+            selected_base_branch.as_deref(),
+            selected_compare_branch.as_deref(),
+            selected_commit_hash.as_deref(),
+        )?;
+        store_webui_diff_search_input(input_cache_key, cache_now_ms, input.clone());
+        input
+    };
+    let result = webui_diff_search_index_file_matches(
+        &input.indexed_files,
+        &query,
+        limit,
+        input.raw_line_count,
+    );
+    let notice = if input.unified_diff.trim().is_empty() {
+        Some(String::from("当前工作区没有可搜索的 Git 变更。"))
+    } else if input.notices.is_empty() {
+        None
+    } else {
+        Some(input.notices.join(" "))
+    };
+
+    let response = WebuiWorkspaceDiffSearchResponse {
+        repository_root: repository_root_text,
+        query,
+        matches: result.matches,
+        truncated: result.truncated,
+        scanned_files: result.scanned_files,
+        scanned_lines: result.scanned_lines,
+        notice,
+    };
+    store_webui_diff_search_response(cache_key, cache_now_ms, response.clone());
+    Ok(response)
+}
+
+/// Loads the complete diff input used by backend summary search.
+/// 加载后端摘要搜索使用的完整 diff 输入。
+fn load_webui_workspace_diff_search_input(
+    repository_root: &Path,
+    mode: WebuiWorkspaceDiffMode,
+    selected_base_branch: Option<&str>,
+    selected_compare_branch: Option<&str>,
+    selected_commit_hash: Option<&str>,
+) -> Result<WebuiDiffSearchInput, String> {
+    let mut notices = Vec::new();
+    let mut sections = Vec::new();
+    match mode {
+        WebuiWorkspaceDiffMode::Unstaged => {
+            let unstaged_diff = load_webui_unstaged_git_diff(repository_root)?;
+            if !unstaged_diff.trim().is_empty() {
+                sections.push(unstaged_diff);
+            }
+            let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices)?;
+            if !untracked_diff.trim().is_empty() {
+                sections.push(untracked_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Staged => {
+            let staged_diff = load_webui_staged_git_diff(repository_root)?;
+            if !staged_diff.trim().is_empty() {
+                sections.push(staged_diff);
+            }
+        }
+        WebuiWorkspaceDiffMode::Commit => {
+            if let Some(commit_hash) = selected_commit_hash {
+                let commit_diff = load_webui_commit_git_diff(repository_root, commit_hash)?;
+                if !commit_diff.trim().is_empty() {
+                    sections.push(commit_diff);
+                }
+            } else {
+                notices.push(String::from("当前仓库没有可搜索的提交记录。"));
+            }
+        }
+        WebuiWorkspaceDiffMode::Branch => match (selected_base_branch, selected_compare_branch) {
+            (Some(base_branch), Some(compare_branch)) => {
+                let branch_diff =
+                    load_webui_branch_git_diff(repository_root, compare_branch, base_branch)?;
+                if !branch_diff.trim().is_empty() {
+                    sections.push(branch_diff);
+                }
+            }
+            _ => notices.push(String::from("当前仓库无法解析用于分支对比的分支。")),
+        },
+    }
+
+    let unified_diff = sections.join("\n");
+    let summaries = webui_unified_diff_file_summaries(&unified_diff);
+    let indexed_files = webui_unified_diff_search_index(&unified_diff, &summaries);
+    let raw_line_count = webui_unified_diff_line_count(&unified_diff);
+    Ok(WebuiDiffSearchInput {
+        unified_diff,
+        indexed_files,
+        raw_line_count,
+        notices,
     })
 }
 
@@ -20084,8 +21048,12 @@ fn empty_webui_diff_snapshot(
         repository_root,
         unified_diff: String::new(),
         changed_files: 0,
+        files: Vec::new(),
         additions: 0,
         deletions: 0,
+        total_changed_lines: 0,
+        total_changed_bytes: 0,
+        truncated: false,
         notice: Some(notice),
         current_branch: None,
         default_branch: None,
@@ -20094,6 +21062,24 @@ fn empty_webui_diff_snapshot(
         selected_commit_hash: None,
         branches: Vec::new(),
         recent_commits: Vec::new(),
+    }
+}
+
+/// Builds an empty WebUI diff search response with one user-facing notice.
+/// 构建带有单条用户提示的空 WebUI diff 搜索响应。
+fn empty_webui_diff_search_response(
+    repository_root: String,
+    query: String,
+    notice: String,
+) -> WebuiWorkspaceDiffSearchResponse {
+    WebuiWorkspaceDiffSearchResponse {
+        repository_root,
+        query,
+        matches: Vec::new(),
+        truncated: false,
+        scanned_files: 0,
+        scanned_lines: 0,
+        notice: Some(notice),
     }
 }
 
@@ -20106,6 +21092,202 @@ fn default_webui_workspace_diff_request() -> WebuiWorkspaceDiffRequest {
         compare_branch: None,
         commit_hash: None,
     }
+}
+
+/// Returns the default WebUI diff search result limit.
+/// 返回默认 WebUI diff 搜索结果上限。
+fn default_webui_diff_search_limit() -> usize {
+    WEBUI_DIFF_SEARCH_MAX_RESULTS
+}
+
+/// Returns the process-local compact diff search cache.
+/// 返回进程内紧凑 diff 搜索缓存。
+fn webui_diff_search_cache() -> &'static Mutex<VecDeque<WebuiDiffSearchCacheEntry>> {
+    WEBUI_DIFF_SEARCH_CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// Returns the process-local reusable diff search input cache.
+/// 返回进程内可复用 diff 搜索输入缓存。
+fn webui_diff_search_input_cache() -> &'static Mutex<VecDeque<WebuiDiffSearchInputCacheEntry>> {
+    WEBUI_DIFF_SEARCH_INPUT_CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+/// Builds a stable compact diff search cache key.
+/// 构建稳定的紧凑 diff 搜索缓存键。
+fn webui_diff_search_cache_key(
+    repository_root: &str,
+    request: &WebuiWorkspaceDiffRequest,
+    query: &str,
+    limit: usize,
+) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        repository_root,
+        webui_diff_mode_cache_key(request.mode),
+        request.base_branch.as_deref().unwrap_or_default(),
+        request.compare_branch.as_deref().unwrap_or_default(),
+        request.commit_hash.as_deref().unwrap_or_default(),
+        query,
+        limit,
+    )
+}
+
+/// Builds a stable reusable diff search input cache key.
+/// 构建稳定的可复用 diff 搜索输入缓存键。
+fn webui_diff_search_input_cache_key(
+    repository_root: &str,
+    mode: WebuiWorkspaceDiffMode,
+    selected_base_branch: Option<&str>,
+    selected_compare_branch: Option<&str>,
+    selected_commit_hash: Option<&str>,
+) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        repository_root,
+        webui_diff_mode_cache_key(mode),
+        selected_base_branch.unwrap_or_default(),
+        selected_compare_branch.unwrap_or_default(),
+        selected_commit_hash.unwrap_or_default(),
+    )
+}
+
+/// Returns a stable compact key for one WebUI diff mode.
+/// 返回单个 WebUI diff 模式的稳定紧凑键。
+fn webui_diff_mode_cache_key(mode: WebuiWorkspaceDiffMode) -> &'static str {
+    match mode {
+        WebuiWorkspaceDiffMode::Unstaged => "unstaged",
+        WebuiWorkspaceDiffMode::Staged => "staged",
+        WebuiWorkspaceDiffMode::Commit => "commit",
+        WebuiWorkspaceDiffMode::Branch => "branch",
+    }
+}
+
+/// Reads one cached compact diff search response when it is still fresh.
+/// 在仍然新鲜时读取一条已缓存的紧凑 diff 搜索响应。
+fn cached_webui_diff_search_response(
+    key: &str,
+    now_ms: i128,
+) -> Option<WebuiWorkspaceDiffSearchResponse> {
+    let Ok(mut cache) = webui_diff_search_cache().lock() else {
+        return None;
+    };
+    prune_webui_diff_search_cache(&mut cache, now_ms);
+    cache
+        .iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.response.clone())
+}
+
+/// Reads one cached reusable diff search input when it is still fresh.
+/// 在仍然新鲜时读取一条已缓存的可复用 diff 搜索输入。
+fn cached_webui_diff_search_input(key: &str, now_ms: i128) -> Option<WebuiDiffSearchInput> {
+    let Ok(mut cache) = webui_diff_search_input_cache().lock() else {
+        return None;
+    };
+    prune_webui_diff_search_input_cache(&mut cache, now_ms);
+    cache
+        .iter()
+        .find(|entry| entry.key == key)
+        .map(|entry| entry.input.clone())
+}
+
+/// Stores one compact diff search response in the short-lived cache.
+/// 将单条紧凑 diff 搜索响应写入短生命周期缓存。
+fn store_webui_diff_search_response(
+    key: String,
+    now_ms: i128,
+    response: WebuiWorkspaceDiffSearchResponse,
+) {
+    let Ok(mut cache) = webui_diff_search_cache().lock() else {
+        return;
+    };
+    prune_webui_diff_search_cache(&mut cache, now_ms);
+    cache.retain(|entry| entry.key != key);
+    cache.push_back(WebuiDiffSearchCacheEntry {
+        key,
+        created_at_ms: now_ms,
+        response,
+    });
+    while cache.len() > WEBUI_DIFF_SEARCH_CACHE_LIMIT {
+        cache.pop_front();
+    }
+}
+
+/// Stores one reusable diff search input in the short-lived cache.
+/// 将单条可复用 diff 搜索输入写入短生命周期缓存。
+fn store_webui_diff_search_input(key: String, now_ms: i128, input: WebuiDiffSearchInput) {
+    let Ok(mut cache) = webui_diff_search_input_cache().lock() else {
+        return;
+    };
+    prune_webui_diff_search_input_cache(&mut cache, now_ms);
+    cache.retain(|entry| entry.key != key);
+    cache.push_back(WebuiDiffSearchInputCacheEntry {
+        key,
+        created_at_ms: now_ms,
+        input,
+    });
+    while cache.len() > WEBUI_DIFF_SEARCH_INPUT_CACHE_LIMIT {
+        cache.pop_front();
+    }
+}
+
+/// Removes stale compact diff search cache entries.
+/// 移除过期的紧凑 diff 搜索缓存项。
+fn prune_webui_diff_search_cache(cache: &mut VecDeque<WebuiDiffSearchCacheEntry>, now_ms: i128) {
+    cache.retain(|entry| {
+        now_ms.saturating_sub(entry.created_at_ms) <= WEBUI_DIFF_SEARCH_CACHE_TTL_MS
+    });
+}
+
+/// Removes stale reusable diff search input cache entries.
+/// 移除过期的可复用 diff 搜索输入缓存项。
+fn prune_webui_diff_search_input_cache(
+    cache: &mut VecDeque<WebuiDiffSearchInputCacheEntry>,
+    now_ms: i128,
+) {
+    cache.retain(|entry| {
+        now_ms.saturating_sub(entry.created_at_ms) <= WEBUI_DIFF_SEARCH_INPUT_CACHE_TTL_MS
+    });
+}
+
+/// Normalizes one WebUI diff search limit into the supported range.
+/// 将单个 WebUI diff 搜索上限规范化到受支持范围内。
+fn normalized_webui_diff_search_limit(limit: usize) -> usize {
+    limit.clamp(1, WEBUI_DIFF_SEARCH_MAX_RESULTS)
+}
+
+/// Normalizes an optional WebUI diff context-line request into the supported range.
+/// 将可选 WebUI diff 上下文行请求规范化到受支持范围内。
+fn normalized_webui_diff_context_lines(context_lines: Option<usize>) -> usize {
+    context_lines
+        .unwrap_or(WEBUI_DIFF_DEFAULT_CONTEXT_LINES)
+        .clamp(
+            WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
+            WEBUI_DIFF_MAX_CONTEXT_LINES,
+        )
+}
+
+/// Normalizes an optional WebUI hunk expansion direction.
+/// 规范化可选的 WebUI hunk 展开方向。
+fn normalized_webui_diff_hunk_expansion_direction(direction: Option<&str>) -> Option<String> {
+    match direction.map(str::trim) {
+        Some("up") => Some(String::from("up")),
+        Some("down") => Some(String::from("down")),
+        Some("both") => Some(String::from("both")),
+        _ => None,
+    }
+}
+
+/// Builds the Git unified-context argument for one normalized context line count.
+/// 为规范化后的上下文行数构建 Git unified-context 参数。
+fn webui_diff_context_arg(context_lines: usize) -> String {
+    format!(
+        "--unified={}",
+        context_lines.clamp(
+            WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
+            WEBUI_DIFF_MAX_CONTEXT_LINES
+        )
+    )
 }
 
 /// Resolves the Git repository root for one workspace path.
@@ -20144,6 +21326,33 @@ fn load_webui_unstaged_git_diff(repository_root: &Path) -> Result<String, String
     Err(format_webui_git_error("git diff", &output))
 }
 
+/// Loads unstaged tracked changes for one file pathspec.
+/// 为单个文件路径规格加载未暂存的已跟踪变更。
+fn load_webui_unstaged_git_diff_for_path(
+    repository_root: &Path,
+    pathspec: &str,
+    context_lines: usize,
+) -> Result<String, String> {
+    let context_arg = webui_diff_context_arg(context_lines);
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            context_arg.as_str(),
+            "--",
+            pathspec,
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git diff file", &output))
+}
+
 /// Loads staged changes as one unified diff.
 /// 以 unified diff 形式加载已暂存变更。
 fn load_webui_staged_git_diff(repository_root: &Path) -> Result<String, String> {
@@ -20163,6 +21372,34 @@ fn load_webui_staged_git_diff(repository_root: &Path) -> Result<String, String> 
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
     Err(format_webui_git_error("git diff --cached", &output))
+}
+
+/// Loads staged changes for one file pathspec.
+/// 为单个文件路径规格加载已暂存变更。
+fn load_webui_staged_git_diff_for_path(
+    repository_root: &Path,
+    pathspec: &str,
+    context_lines: usize,
+) -> Result<String, String> {
+    let context_arg = webui_diff_context_arg(context_lines);
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            "--cached",
+            context_arg.as_str(),
+            "--",
+            pathspec,
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git diff --cached file", &output))
 }
 
 /// Loads one selected commit patch.
@@ -20187,6 +21424,38 @@ fn load_webui_commit_git_diff(repository_root: &Path, commit_hash: &str) -> Resu
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
     Err(format_webui_git_error("git show", &output))
+}
+
+/// Loads one selected commit patch for one file pathspec.
+/// 为单个文件路径规格加载选中提交的 patch。
+fn load_webui_commit_git_diff_for_path(
+    repository_root: &Path,
+    commit_hash: &str,
+    pathspec: &str,
+    context_lines: usize,
+) -> Result<String, String> {
+    ensure_webui_git_ref_text(commit_hash)?;
+    let context_arg = webui_diff_context_arg(context_lines);
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "show",
+            "--format=",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            "--patch",
+            context_arg.as_str(),
+            commit_hash,
+            "--",
+            pathspec,
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error("git show file", &output))
 }
 
 /// Loads a branch-to-branch merge-base diff.
@@ -20215,6 +21484,42 @@ fn load_webui_branch_git_diff(
         return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
     }
     Err(format_webui_git_error("git diff branch range", &output))
+}
+
+/// Loads a branch-to-branch merge-base diff for one file pathspec.
+/// 为单个文件路径规格加载两个分支之间基于合并基点的 diff。
+fn load_webui_branch_git_diff_for_path(
+    repository_root: &Path,
+    base_branch: &str,
+    compare_branch: &str,
+    pathspec: &str,
+    context_lines: usize,
+) -> Result<String, String> {
+    ensure_webui_git_ref_text(base_branch)?;
+    ensure_webui_git_ref_text(compare_branch)?;
+    let range = format!("{base_branch}...{compare_branch}");
+    let context_arg = webui_diff_context_arg(context_lines);
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--submodule=short",
+            context_arg.as_str(),
+            &range,
+            "--",
+            pathspec,
+        ],
+    )?;
+    if output.status.success() {
+        return Ok(String::from_utf8_lossy(&output.stdout).into_owned());
+    }
+    Err(format_webui_git_error(
+        "git diff branch range file",
+        &output,
+    ))
 }
 
 /// Loads the current branch name when the repository is not detached.
@@ -20411,6 +21716,110 @@ fn load_webui_untracked_git_diff(
     Ok(sections.join("\n"))
 }
 
+/// Loads one lightweight untracked text file as a synthesized new-file hunk.
+/// 将单个轻量未跟踪文本文件加载为合成的新文件 hunk。
+fn load_webui_untracked_git_diff_for_path(
+    repository_root: &Path,
+    pathspec: &str,
+    notices: &mut Vec<String>,
+) -> Result<String, String> {
+    let output = run_webui_git_command(
+        repository_root,
+        &[
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            pathspec,
+        ],
+    )?;
+    if !output.status.success() {
+        return Err(format_webui_git_error("git ls-files file", &output));
+    }
+    let Some(raw_path) = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .find(|part| !part.is_empty())
+    else {
+        return Ok(String::new());
+    };
+    let relative_path = String::from_utf8_lossy(raw_path).replace('\\', "/");
+    let file_path = repository_root.join(&relative_path);
+    if !is_path_within_root(repository_root, &file_path) || !file_path.is_file() {
+        return Ok(String::new());
+    }
+    let metadata = fs::metadata(&file_path)
+        .map_err(|error| format!("failed to inspect untracked file `{relative_path}`: {error}"))?;
+    if metadata.len() > WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES {
+        notices.push(String::from("该未跟踪文件过大，已跳过详情加载。"));
+        return Ok(String::new());
+    }
+    let bytes = fs::read(&file_path)
+        .map_err(|error| format!("failed to read untracked file `{relative_path}`: {error}"))?;
+    if bytes.contains(&0) {
+        notices.push(String::from("该未跟踪文件是二进制文件，按二进制变更展示。"));
+        return Ok(synthesize_webui_binary_new_file_diff(&relative_path));
+    }
+    let Ok(text) = String::from_utf8(bytes) else {
+        notices.push(String::from(
+            "该未跟踪文件不是 UTF-8 文本，按二进制变更展示。",
+        ));
+        return Ok(synthesize_webui_binary_new_file_diff(&relative_path));
+    };
+    Ok(synthesize_webui_text_new_file_diff(&relative_path, &text))
+}
+
+/// Returns the safe Git pathspec for one requested file detail.
+/// 返回单个文件详情请求对应的安全 Git 路径规格。
+fn webui_diff_file_detail_pathspec(
+    file: &WebuiWorkspaceDiffFileDetailRequest,
+) -> Result<String, String> {
+    if file.key.contains('\0') || file.key.contains('\n') || file.key.contains('\r') {
+        return Err(String::from("invalid WebUI diff file key"));
+    }
+    let candidate = if !file.new_path.trim().is_empty() && file.new_path != "/dev/null" {
+        file.new_path.trim()
+    } else {
+        file.old_path.trim()
+    };
+    ensure_webui_git_pathspec_text(candidate)?;
+    Ok(candidate.replace('\\', "/"))
+}
+
+/// Rejects file pathspec text that could escape the repository or break argument boundaries.
+/// 拒绝可能逃逸仓库或破坏参数边界的文件路径规格文本。
+fn ensure_webui_git_pathspec_text(pathspec: &str) -> Result<(), String> {
+    let value = pathspec.trim();
+    if value.is_empty()
+        || value == "/dev/null"
+        || value.contains('\0')
+        || value.contains('\n')
+        || value.contains('\r')
+        || value.starts_with('/')
+        || value.starts_with('\\')
+    {
+        return Err(String::from(
+            "invalid file path for WebUI diff detail request",
+        ));
+    }
+    let normalized = value.replace('\\', "/");
+    let path = Path::new(&normalized);
+    if path.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir
+                | std::path::Component::RootDir
+                | std::path::Component::Prefix(_)
+        )
+    }) {
+        return Err(String::from(
+            "invalid file path for WebUI diff detail request",
+        ));
+    }
+    Ok(())
+}
+
 /// Runs one bounded Git command with filters and pagers disabled.
 /// 在禁用过滤器与分页器的情况下运行单个有界 Git 命令。
 fn run_webui_git_command(
@@ -20505,22 +21914,716 @@ fn git_diff_path(path: &str) -> String {
     }
 }
 
+/// Mutable summary accumulator used while scanning one file patch.
+/// 扫描单个文件 patch 时使用的可变摘要累加器。
+struct WebuiWorkspaceDiffFileSummaryBuilder {
+    /// Previous file path.
+    /// 旧文件路径。
+    old_path: String,
+    /// Current file path.
+    /// 当前文件路径。
+    new_path: String,
+    /// File-level change status.
+    /// 文件级变更状态。
+    status: String,
+    /// Number of added lines in this file.
+    /// 该文件的新增行数。
+    additions: usize,
+    /// Number of deleted lines in this file.
+    /// 该文件的删除行数。
+    deletions: usize,
+    /// Whether this file is binary-only in the diff.
+    /// 该文件是否在 diff 中仅表现为二进制变更。
+    is_binary: bool,
+    /// Whether this file is a gitlink or submodule entry.
+    /// 该文件是否为 gitlink 或子模块条目。
+    is_gitlink: bool,
+    /// File mode parsed from diff metadata when available.
+    /// 从 diff 元数据解析出的可选文件模式。
+    file_mode: Option<String>,
+    /// Estimated UTF-8 byte size of changed lines in this file.
+    /// 该文件变更行的估算 UTF-8 字节体积。
+    changed_bytes: usize,
+    /// Largest estimated UTF-8 byte size among changed lines.
+    /// 变更行中的最大估算 UTF-8 字节体积。
+    max_changed_line_bytes: usize,
+    /// Estimated visual row count including hunk headers.
+    /// 包含 hunk 头部的估算可视行数。
+    row_count: usize,
+    /// Number of parsed hunk headers in this file diff.
+    /// 该文件 diff 中解析到的 hunk 头部数量。
+    hunk_count: usize,
+    /// Whether the current scan position is inside a hunk body.
+    /// 当前扫描位置是否位于 hunk 正文内。
+    in_hunk: bool,
+}
+
+/// Computes lightweight file summaries directly from one unified diff string.
+/// 直接从 unified diff 字符串计算轻量文件摘要。
+fn webui_unified_diff_file_summaries(unified_diff: &str) -> Vec<WebuiWorkspaceDiffFileSummary> {
+    let mut summaries = Vec::new();
+    let mut current: Option<WebuiWorkspaceDiffFileSummaryBuilder> = None;
+    for_each_webui_unified_diff_line(unified_diff, |line| {
+        if line.starts_with("diff --git ") {
+            flush_webui_diff_file_summary(&mut summaries, current.take());
+            let (old_path, new_path) = parse_webui_diff_git_header(line);
+            current = Some(WebuiWorkspaceDiffFileSummaryBuilder {
+                old_path,
+                new_path,
+                status: String::from("modified"),
+                additions: 0,
+                deletions: 0,
+                is_binary: false,
+                is_gitlink: false,
+                file_mode: None,
+                changed_bytes: 0,
+                max_changed_line_bytes: 0,
+                row_count: 0,
+                hunk_count: 0,
+                in_hunk: false,
+            });
+            return;
+        }
+        let Some(summary) = current.as_mut() else {
+            return;
+        };
+        if let Some(mode) = line.strip_prefix("new file mode ") {
+            summary.status = String::from("added");
+            apply_webui_diff_file_mode(summary, mode.trim());
+        } else if let Some(mode) = line.strip_prefix("deleted file mode ") {
+            summary.status = String::from("deleted");
+            apply_webui_diff_file_mode(summary, mode.trim());
+        } else if let Some(path) = line.strip_prefix("rename from ") {
+            summary.old_path = trim_webui_diff_path(path);
+            summary.status = String::from("renamed");
+        } else if let Some(path) = line.strip_prefix("rename to ") {
+            summary.new_path = trim_webui_diff_path(path);
+            summary.status = String::from("renamed");
+        } else if line.starts_with("Binary files ") || line.starts_with("GIT binary patch") {
+            summary.is_binary = true;
+            summary.status = String::from("binary");
+        } else if line.starts_with("old mode ") || line.starts_with("new mode ") {
+            if let Some(mode) = last_webui_ascii_whitespace_token(line) {
+                apply_webui_diff_file_mode(summary, mode);
+            }
+        } else if line.starts_with("index ") {
+            if let Some(mode) =
+                last_webui_ascii_whitespace_token(line).filter(|mode| mode.len() == 6)
+            {
+                apply_webui_diff_file_mode(summary, mode);
+            }
+        } else if line.starts_with("@@ ") {
+            summary.row_count += 1;
+            summary.hunk_count += 1;
+            summary.in_hunk = true;
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            if summary.in_hunk {
+                summary.row_count += 1;
+            }
+            summary.additions += 1;
+            apply_webui_diff_changed_line(summary, &line[1..]);
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            if summary.in_hunk {
+                summary.row_count += 1;
+            }
+            summary.deletions += 1;
+            apply_webui_diff_changed_line(summary, &line[1..]);
+        } else if summary.in_hunk {
+            summary.row_count += 1;
+        }
+    });
+    flush_webui_diff_file_summary(&mut summaries, current);
+    summaries
+}
+
+/// Appends one completed file summary to the output list.
+/// 将一个已完成文件摘要追加到输出列表。
+fn flush_webui_diff_file_summary(
+    summaries: &mut Vec<WebuiWorkspaceDiffFileSummary>,
+    summary: Option<WebuiWorkspaceDiffFileSummaryBuilder>,
+) {
+    let Some(summary) = summary else {
+        return;
+    };
+    let key = format!(
+        "{}->{}:{}",
+        summary.old_path,
+        summary.new_path,
+        summaries.len()
+    );
+    let status = final_webui_diff_file_summary_status(&summary);
+    let changed_lines = summary.additions + summary.deletions;
+    summaries.push(WebuiWorkspaceDiffFileSummary {
+        key,
+        old_path: summary.old_path,
+        new_path: summary.new_path,
+        status,
+        additions: summary.additions,
+        deletions: summary.deletions,
+        is_binary: summary.is_binary,
+        is_gitlink: summary.is_gitlink,
+        file_mode: summary.file_mode,
+        changed_lines,
+        changed_bytes: summary.changed_bytes,
+        max_changed_line_bytes: summary.max_changed_line_bytes,
+        row_count: summary.row_count,
+        hunk_count: summary.hunk_count,
+    });
+}
+
+/// Parses a standard `diff --git` header into old and new paths.
+/// 将标准 `diff --git` 头解析为旧路径和新路径。
+fn parse_webui_diff_git_header(header: &str) -> (String, String) {
+    let body = header.trim_start_matches("diff --git ").trim();
+    let tokens = tokenize_webui_diff_header_paths(body);
+    let old_path = trim_webui_diff_path(tokens.first().map(String::as_str).unwrap_or_default());
+    let new_path = trim_webui_diff_path(tokens.get(1).map(String::as_str).unwrap_or(&old_path));
+    (old_path, new_path)
+}
+
+/// Splits a diff header path list while preserving quoted spaces.
+/// 拆分 diff 头部路径列表，同时保留带引号路径中的空格。
+fn tokenize_webui_diff_header_paths(value: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in value.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' {
+            escaped = true;
+            continue;
+        }
+        if character == '"' {
+            quoted = !quoted;
+            continue;
+        }
+        if character.is_whitespace() && !quoted {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            continue;
+        }
+        current.push(character);
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Trims Git's a/ and b/ prefixes from one diff path.
+/// 从单个 diff 路径中移除 Git 的 a/ 与 b/ 前缀。
+fn trim_webui_diff_path(path: &str) -> String {
+    let normalized = path.trim().trim_matches('"').replace("\\\"", "\"");
+    normalized
+        .strip_prefix("a/")
+        .or_else(|| normalized.strip_prefix("b/"))
+        .unwrap_or(&normalized)
+        .to_string()
+}
+
+/// Stores one parsed file mode and detects gitlinks.
+/// 保存一个解析出的文件模式并识别 gitlink。
+fn apply_webui_diff_file_mode(summary: &mut WebuiWorkspaceDiffFileSummaryBuilder, mode: &str) {
+    if mode.is_empty() {
+        return;
+    }
+    summary.file_mode = Some(mode.to_string());
+    if mode == "160000" {
+        summary.is_gitlink = true;
+    }
+}
+
+/// Updates changed-line byte metrics for one file summary.
+/// 更新单个文件摘要的变更行字节指标。
+fn apply_webui_diff_changed_line(summary: &mut WebuiWorkspaceDiffFileSummaryBuilder, line: &str) {
+    let line_bytes = line.len();
+    summary.changed_bytes += line_bytes;
+    summary.max_changed_line_bytes = summary.max_changed_line_bytes.max(line_bytes);
+}
+
+/// Resolves the final summary status after all metadata and counters are known.
+/// 在所有元数据与计数已知后解析最终摘要状态。
+fn final_webui_diff_file_summary_status(summary: &WebuiWorkspaceDiffFileSummaryBuilder) -> String {
+    if summary.status != "modified" {
+        return summary.status.clone();
+    }
+    if summary.old_path == "/dev/null" {
+        return String::from("added");
+    }
+    if summary.new_path == "/dev/null" {
+        return String::from("deleted");
+    }
+    String::from("modified")
+}
+
+/// Compact result returned by the backend diff search scanner.
+/// 后端 diff 搜索扫描器返回的紧凑结果。
+struct WebuiWorkspaceDiffSearchScanResult {
+    /// File-level matches retained for the WebUI.
+    /// 保留给 WebUI 的文件级命中。
+    matches: Vec<WebuiWorkspaceDiffSearchFileMatch>,
+    /// Whether matching files exceeded the retained result limit.
+    /// 命中文件是否超过保留结果上限。
+    truncated: bool,
+    /// Number of files scanned from the complete diff.
+    /// 从完整 diff 扫描到的文件数量。
+    scanned_files: usize,
+    /// Number of diff lines scanned from the complete diff.
+    /// 从完整 diff 扫描到的行数量。
+    scanned_lines: usize,
+}
+
+/// Position metadata for one backend diff search candidate line.
+/// 单条后端 diff 搜索候选行的位置元数据。
+#[derive(Clone)]
+struct WebuiDiffSearchLinePosition {
+    /// Hunk index containing the candidate line.
+    /// 包含候选行的 hunk 索引。
+    hunk_index: usize,
+    /// Old-file line number when the candidate maps to the old side.
+    /// 候选行映射到旧侧时的旧文件行号。
+    old_line: Option<usize>,
+    /// New-file line number when the candidate maps to the new side.
+    /// 候选行映射到新侧时的新文件行号。
+    new_line: Option<usize>,
+    /// Candidate diff line kind.
+    /// 候选 diff 行类型。
+    line_kind: String,
+}
+
+/// Builds a reusable file-level search candidate index from one complete unified diff.
+/// 从完整 unified diff 构建可复用的文件级搜索候选索引。
+fn webui_unified_diff_search_index(
+    unified_diff: &str,
+    summaries: &[WebuiWorkspaceDiffFileSummary],
+) -> Vec<WebuiDiffSearchIndexedFile> {
+    let mut indexed_files = Vec::new();
+    let mut current: Option<WebuiDiffSearchIndexedFileBuilder> = None;
+    let mut file_index = 0usize;
+    for_each_webui_unified_diff_line(unified_diff, |line| {
+        if line.starts_with("diff --git ") {
+            flush_webui_diff_search_indexed_file(&mut indexed_files, current.take());
+            current = summaries.get(file_index).cloned().map(|summary| {
+                let path_preview =
+                    webui_diff_search_path_preview(&summary.old_path, &summary.new_path);
+                let mut builder = WebuiDiffSearchIndexedFileBuilder {
+                    summary,
+                    candidates: Vec::new(),
+                    current_hunk_index: None,
+                    current_old_line: 0,
+                    current_new_line: 0,
+                    seen_hunk_count: 0,
+                };
+                push_webui_diff_search_index_candidate(&mut builder, path_preview, None);
+                builder
+            });
+            file_index += 1;
+            return;
+        }
+        let Some(builder) = current.as_mut() else {
+            return;
+        };
+        if line.starts_with("@@ ") {
+            if let Some((old_start, new_start)) = parse_webui_diff_search_hunk_header(line) {
+                builder.current_hunk_index = Some(builder.seen_hunk_count);
+                builder.current_old_line = old_start;
+                builder.current_new_line = new_start;
+                builder.seen_hunk_count += 1;
+            }
+            let position =
+                builder
+                    .current_hunk_index
+                    .map(|hunk_index| WebuiDiffSearchLinePosition {
+                        hunk_index,
+                        old_line: None,
+                        new_line: None,
+                        line_kind: String::from("hunk"),
+                    });
+            push_webui_diff_search_index_candidate(
+                builder,
+                webui_diff_search_line_preview(line),
+                position,
+            );
+            return;
+        }
+        let position = webui_diff_search_index_line_position(builder, line);
+        push_webui_diff_search_index_candidate(
+            builder,
+            webui_diff_search_line_preview(line),
+            position,
+        );
+        advance_webui_diff_search_index_line_position(builder, line);
+    });
+    flush_webui_diff_search_indexed_file(&mut indexed_files, current);
+    indexed_files
+}
+
+/// Appends one completed indexed file into the reusable search index.
+/// 将一个已完成的索引文件追加到可复用搜索索引。
+fn flush_webui_diff_search_indexed_file(
+    indexed_files: &mut Vec<WebuiDiffSearchIndexedFile>,
+    builder: Option<WebuiDiffSearchIndexedFileBuilder>,
+) {
+    let Some(builder) = builder else {
+        return;
+    };
+    let ngram_index = webui_diff_search_candidate_ngram_index(&builder.candidates);
+    indexed_files.push(WebuiDiffSearchIndexedFile {
+        summary: builder.summary,
+        candidates: builder.candidates,
+        ngram_index,
+    });
+}
+
+/// Appends one pre-normalized candidate to the current indexed file.
+/// 将单条预归一化候选项追加到当前索引文件。
+fn push_webui_diff_search_index_candidate(
+    builder: &mut WebuiDiffSearchIndexedFileBuilder,
+    preview: String,
+    position: Option<WebuiDiffSearchLinePosition>,
+) {
+    builder.candidates.push(WebuiDiffSearchIndexedCandidate {
+        normalized_preview: preview.to_lowercase(),
+        preview,
+        position,
+    });
+}
+
+/// Builds a compact per-file n-gram inverted index for backend diff search candidates.
+/// 为后端 diff 搜索候选项构建紧凑的文件级 n-gram 倒排索引。
+fn webui_diff_search_candidate_ngram_index(
+    candidates: &[WebuiDiffSearchIndexedCandidate],
+) -> BTreeMap<String, Vec<usize>> {
+    let mut index = BTreeMap::new();
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        for ngram in webui_diff_search_unique_ngrams(&candidate.normalized_preview) {
+            index
+                .entry(ngram)
+                .or_insert_with(Vec::new)
+                .push(candidate_index);
+        }
+    }
+    index
+}
+
+/// Returns unique n-grams for one normalized search string.
+/// 返回单段归一化搜索文本中的唯一 n-gram。
+fn webui_diff_search_unique_ngrams(value: &str) -> BTreeSet<String> {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() < WEBUI_DIFF_SEARCH_NGRAM_WIDTH {
+        return BTreeSet::new();
+    }
+    let mut ngrams = BTreeSet::new();
+    for window in chars.windows(WEBUI_DIFF_SEARCH_NGRAM_WIDTH) {
+        ngrams.insert(window.iter().collect());
+    }
+    ngrams
+}
+
+/// Selects candidate indexes that may contain the normalized query.
+/// 选择可能包含归一化 query 的候选下标。
+fn webui_diff_search_candidate_indexes(
+    indexed_file: &WebuiDiffSearchIndexedFile,
+    normalized_query: &str,
+) -> Vec<usize> {
+    let query_ngrams = webui_diff_search_unique_ngrams(normalized_query);
+    if query_ngrams.is_empty() {
+        return (0..indexed_file.candidates.len()).collect();
+    }
+    let mut posting_lists = Vec::new();
+    for ngram in query_ngrams {
+        let Some(posting_list) = indexed_file.ngram_index.get(&ngram) else {
+            return Vec::new();
+        };
+        posting_lists.push(posting_list);
+    }
+    posting_lists.sort_by_key(|posting_list| posting_list.len());
+    let Some((first_posting_list, remaining_posting_lists)) = posting_lists.split_first() else {
+        return Vec::new();
+    };
+    let mut candidate_indexes = (*first_posting_list).clone();
+    for posting_list in remaining_posting_lists {
+        candidate_indexes
+            .retain(|candidate_index| posting_list.binary_search(candidate_index).is_ok());
+        if candidate_indexes.is_empty() {
+            break;
+        }
+    }
+    candidate_indexes
+}
+
+/// Computes compact file-level search hits from a reusable candidate index.
+/// 从可复用候选索引计算紧凑的文件级搜索命中。
+fn webui_diff_search_index_file_matches(
+    indexed_files: &[WebuiDiffSearchIndexedFile],
+    query: &str,
+    limit: usize,
+    raw_line_count: usize,
+) -> WebuiWorkspaceDiffSearchScanResult {
+    let normalized_query = query.to_lowercase();
+    let mut matches = Vec::new();
+    let mut truncated = false;
+    for indexed_file in indexed_files {
+        let mut match_count = 0usize;
+        let mut first_preview = None;
+        let mut first_position = None;
+        let mut previews = Vec::new();
+        for candidate_index in webui_diff_search_candidate_indexes(indexed_file, &normalized_query)
+        {
+            let Some(candidate) = indexed_file.candidates.get(candidate_index) else {
+                continue;
+            };
+            if candidate.normalized_preview.contains(&normalized_query) {
+                match_count += 1;
+                if first_preview.is_none() {
+                    first_preview = Some(candidate.preview.clone());
+                    first_position = candidate.position.clone();
+                }
+                push_webui_diff_search_match_preview(&mut previews, &candidate.preview);
+            }
+        }
+        if match_count == 0 {
+            continue;
+        }
+        if matches.len() >= limit {
+            truncated = true;
+            break;
+        }
+        let first_position = first_position;
+        matches.push(WebuiWorkspaceDiffSearchFileMatch {
+            key: indexed_file.summary.key.clone(),
+            old_path: indexed_file.summary.old_path.clone(),
+            new_path: indexed_file.summary.new_path.clone(),
+            status: indexed_file.summary.status.clone(),
+            match_count,
+            first_preview: first_preview.unwrap_or_default(),
+            previews,
+            first_hunk_index: first_position.as_ref().map(|position| position.hunk_index),
+            first_old_line: first_position
+                .as_ref()
+                .and_then(|position| position.old_line),
+            first_new_line: first_position
+                .as_ref()
+                .and_then(|position| position.new_line),
+            first_line_kind: first_position.map(|position| position.line_kind),
+        });
+    }
+    WebuiWorkspaceDiffSearchScanResult {
+        matches,
+        truncated,
+        scanned_files: indexed_files.len(),
+        scanned_lines: raw_line_count,
+    }
+}
+
+/// Appends one bounded unique preview for a file-level backend diff search hit.
+/// 为单个后端 diff 文件级命中追加一条受限去重预览。
+fn push_webui_diff_search_match_preview(previews: &mut Vec<String>, preview: &str) {
+    if previews.len() >= WEBUI_DIFF_SEARCH_MATCH_PREVIEW_LIMIT || preview.trim().is_empty() {
+        return;
+    }
+    if previews.iter().any(|item| item == preview) {
+        return;
+    }
+    previews.push(preview.to_string());
+}
+
+/// Parses hunk start line numbers from one unified diff hunk header.
+/// 从单个 unified diff hunk 头部解析起始行号。
+fn parse_webui_diff_search_hunk_header(header: &str) -> Option<(usize, usize)> {
+    let body = header.strip_prefix("@@ ")?;
+    let mut parts = body.split_whitespace();
+    let old_range = parts.next()?.strip_prefix('-')?;
+    let new_range = parts.next()?.strip_prefix('+')?;
+    let old_start = old_range.split(',').next()?.parse::<usize>().ok()?;
+    let new_start = new_range.split(',').next()?.parse::<usize>().ok()?;
+    Some((old_start, new_start))
+}
+
+/// Builds position metadata for one raw diff line using the current search cursor.
+/// 使用当前搜索游标为单条原始 diff 行构建位置元数据。
+fn webui_diff_search_index_line_position(
+    builder: &WebuiDiffSearchIndexedFileBuilder,
+    line: &str,
+) -> Option<WebuiDiffSearchLinePosition> {
+    let hunk_index = builder.current_hunk_index?;
+    if line.starts_with('+') && !line.starts_with("+++") {
+        return Some(WebuiDiffSearchLinePosition {
+            hunk_index,
+            old_line: None,
+            new_line: Some(builder.current_new_line),
+            line_kind: String::from("added"),
+        });
+    }
+    if line.starts_with('-') && !line.starts_with("---") {
+        return Some(WebuiDiffSearchLinePosition {
+            hunk_index,
+            old_line: Some(builder.current_old_line),
+            new_line: None,
+            line_kind: String::from("removed"),
+        });
+    }
+    if line.starts_with(' ') {
+        return Some(WebuiDiffSearchLinePosition {
+            hunk_index,
+            old_line: Some(builder.current_old_line),
+            new_line: Some(builder.current_new_line),
+            line_kind: String::from("context"),
+        });
+    }
+    Some(WebuiDiffSearchLinePosition {
+        hunk_index,
+        old_line: None,
+        new_line: None,
+        line_kind: String::from("metadata"),
+    })
+}
+
+/// Advances the backend diff search line cursor after scanning one raw diff line.
+/// 扫描单条原始 diff 行后推进后端 diff 搜索行游标。
+fn advance_webui_diff_search_index_line_position(
+    builder: &mut WebuiDiffSearchIndexedFileBuilder,
+    line: &str,
+) {
+    if builder.current_hunk_index.is_none() {
+        return;
+    }
+    if line.starts_with('+') && !line.starts_with("+++") {
+        builder.current_new_line += 1;
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        builder.current_old_line += 1;
+    } else if line.starts_with(' ') {
+        builder.current_old_line += 1;
+        builder.current_new_line += 1;
+    }
+}
+
+/// Builds a compact preview for one file path search candidate.
+/// 为单个文件路径搜索候选项构建紧凑预览。
+fn webui_diff_search_path_preview(old_path: &str, new_path: &str) -> String {
+    if old_path == new_path {
+        format!("path: {new_path}")
+    } else {
+        format!("path: {old_path} -> {new_path}")
+    }
+}
+
+/// Builds a compact preview for one raw diff line search candidate.
+/// 为单条原始 diff 行搜索候选项构建紧凑预览。
+fn webui_diff_search_line_preview(line: &str) -> String {
+    let body = if line.starts_with('+') && !line.starts_with("+++") {
+        &line[1..]
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        &line[1..]
+    } else if let Some(body) = line.strip_prefix(' ') {
+        body
+    } else {
+        line
+    };
+    truncate_string_to_char_boundary(body.trim(), WEBUI_DIFF_SEARCH_PREVIEW_MAX_BYTES).to_string()
+}
+
+/// Lightweight counters computed directly from one unified diff string.
+/// 直接从 unified diff 字符串计算出的轻量计数。
+struct WebuiUnifiedDiffStats {
+    /// Number of changed files in the diff.
+    /// diff 中的变更文件数量。
+    files: usize,
+    /// Number of added lines in the diff.
+    /// diff 中的新增行数。
+    additions: usize,
+    /// Number of deleted lines in the diff.
+    /// diff 中的删除行数。
+    deletions: usize,
+    /// Number of changed lines counted as additions plus deletions.
+    /// 以新增行加删除行计算的变更行数。
+    total_changed_lines: usize,
+    /// Estimated byte size of added and deleted line bodies.
+    /// 新增与删除行正文的估算字节体积。
+    total_changed_bytes: usize,
+}
+
 /// Computes lightweight counters directly from one unified diff string.
 /// 直接从 unified diff 字符串计算轻量计数。
-fn webui_unified_diff_stats(unified_diff: &str) -> (usize, usize, usize) {
+fn webui_unified_diff_stats(unified_diff: &str) -> WebuiUnifiedDiffStats {
     let mut files = 0usize;
     let mut additions = 0usize;
     let mut deletions = 0usize;
-    for line in unified_diff.lines() {
+    let mut total_changed_bytes = 0usize;
+    for_each_webui_unified_diff_line(unified_diff, |line| {
         if line.starts_with("diff --git ") {
             files += 1;
         } else if line.starts_with('+') && !line.starts_with("+++") {
             additions += 1;
+            total_changed_bytes += line[1..].len();
         } else if line.starts_with('-') && !line.starts_with("---") {
             deletions += 1;
+            total_changed_bytes += line[1..].len();
         }
+    });
+    WebuiUnifiedDiffStats {
+        files,
+        additions,
+        deletions,
+        total_changed_lines: additions + deletions,
+        total_changed_bytes,
     }
-    (files, additions, deletions)
+}
+
+/// Scans one unified diff line by line without allocating an intermediate line vector.
+/// 逐行扫描 unified diff，避免分配中间行数组。
+fn for_each_webui_unified_diff_line(unified_diff: &str, mut consume_line: impl FnMut(&str)) {
+    let bytes = unified_diff.as_bytes();
+    let mut line_start = 0usize;
+    for index in 0..bytes.len() {
+        if bytes[index] != b'\n' {
+            continue;
+        }
+        let line_end = if index > line_start && bytes[index - 1] == b'\r' {
+            index - 1
+        } else {
+            index
+        };
+        consume_line(&unified_diff[line_start..line_end]);
+        line_start = index + 1;
+    }
+    if line_start < unified_diff.len() {
+        consume_line(&unified_diff[line_start..]);
+    }
+}
+
+/// Counts unified diff lines using the same streaming scanner as the summary and search index.
+/// 使用与摘要和搜索索引一致的流式扫描器统计 unified diff 行数。
+fn webui_unified_diff_line_count(unified_diff: &str) -> usize {
+    let mut count = 0usize;
+    for_each_webui_unified_diff_line(unified_diff, |_| {
+        count += 1;
+    });
+    count
+}
+
+/// Returns the last token separated by ASCII whitespace without allocating token vectors.
+/// 返回按 ASCII 空白分隔的最后一个 token，避免分配 token 向量。
+fn last_webui_ascii_whitespace_token(value: &str) -> Option<&str> {
+    let bytes = value.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+        end -= 1;
+    }
+    if end == 0 {
+        return None;
+    }
+    let mut start = end;
+    while start > 0 && !bytes[start - 1].is_ascii_whitespace() {
+        start -= 1;
+    }
+    Some(&value[start..end])
 }
 
 /// Truncates a string slice without cutting through a UTF-8 code point.
@@ -20722,6 +22825,449 @@ mod tests {
         Some(rest[..end].to_string())
     }
 
+    /// Verifies reusable diff search input cache keys include the resolved source.
+    /// 验证可复用 diff 搜索输入缓存键包含解析后的来源信息。
+    #[test]
+    fn webui_diff_search_input_cache_key_distinguishes_resolved_sources() {
+        let branch_key = webui_diff_search_input_cache_key(
+            "repo-a",
+            WebuiWorkspaceDiffMode::Branch,
+            Some("main"),
+            Some("feature"),
+            None,
+        );
+        let other_branch_key = webui_diff_search_input_cache_key(
+            "repo-a",
+            WebuiWorkspaceDiffMode::Branch,
+            Some("release"),
+            Some("feature"),
+            None,
+        );
+        let commit_key = webui_diff_search_input_cache_key(
+            "repo-a",
+            WebuiWorkspaceDiffMode::Commit,
+            None,
+            None,
+            Some("abc123"),
+        );
+
+        assert_ne!(branch_key, other_branch_key);
+        assert_ne!(branch_key, commit_key);
+    }
+
+    /// Verifies reusable diff search input cache pruning removes stale entries.
+    /// 验证可复用 diff 搜索输入缓存清理会移除过期条目。
+    #[test]
+    fn webui_diff_search_input_cache_prunes_stale_entries() {
+        let mut cache = std::collections::VecDeque::new();
+        cache.push_back(WebuiDiffSearchInputCacheEntry {
+            key: String::from("old"),
+            created_at_ms: 0,
+            input: WebuiDiffSearchInput {
+                unified_diff: String::from("old diff"),
+                indexed_files: Vec::new(),
+                raw_line_count: 1,
+                notices: Vec::new(),
+            },
+        });
+        cache.push_back(WebuiDiffSearchInputCacheEntry {
+            key: String::from("fresh"),
+            created_at_ms: WEBUI_DIFF_SEARCH_INPUT_CACHE_TTL_MS,
+            input: WebuiDiffSearchInput {
+                unified_diff: String::from("fresh diff"),
+                indexed_files: Vec::new(),
+                raw_line_count: 1,
+                notices: Vec::new(),
+            },
+        });
+
+        prune_webui_diff_search_input_cache(&mut cache, WEBUI_DIFF_SEARCH_INPUT_CACHE_TTL_MS + 1);
+
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.front().map(|entry| entry.key.as_str()), Some("fresh"));
+    }
+
+    /// Verifies backend diff summary scanning handles CRLF and mode tokens without line arrays.
+    /// 验证后端 diff 摘要扫描无需行数组即可处理 CRLF 与 mode token。
+    #[test]
+    fn webui_diff_summary_scanner_handles_crlf_and_mode_tokens() {
+        let unified_diff = concat!(
+            "diff --git a/src/lib.rs b/src/lib.rs\r\n",
+            "old mode 100644\r\n",
+            "new mode 100755\r\n",
+            "index 1111111..2222222 100755\r\n",
+            "--- a/src/lib.rs\r\n",
+            "+++ b/src/lib.rs\r\n",
+            "@@ -1,2 +1,2 @@\r\n",
+            "-old value\r\n",
+            "+new value\r\n",
+            " context value\r\n",
+        );
+        let summaries = webui_unified_diff_file_summaries(unified_diff);
+        let stats = webui_unified_diff_stats(unified_diff);
+
+        assert_eq!(webui_unified_diff_line_count(unified_diff), 10);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].file_mode.as_deref(), Some("100755"));
+        assert_eq!(summaries[0].row_count, 4);
+        assert_eq!(summaries[0].hunk_count, 1);
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.additions, 1);
+        assert_eq!(stats.deletions, 1);
+    }
+
+    /// Verifies the backend WebUI diff service paths work against a real temporary Git repository.
+    /// 验证后端 WebUI diff 服务路径可在真实临时 Git 仓库中工作。
+    #[test]
+    fn webui_diff_service_paths_cover_real_git_modes() {
+        let repository = WebuiDiffTestRepository::new();
+        write_webui_diff_test_file(
+            repository.path(),
+            "src/lib.rs",
+            concat!(
+                "pub fn marker() -> &'static str {\n",
+                "    \"main\"\n",
+                "}\n",
+                "\n",
+                "pub const STABLE_CONTEXT_01: &str = \"one\";\n",
+                "pub const STABLE_CONTEXT_02: &str = \"two\";\n",
+                "pub const STABLE_CONTEXT_03: &str = \"three\";\n",
+                "pub const STABLE_CONTEXT_04: &str = \"four\";\n",
+                "pub const STABLE_CONTEXT_05: &str = \"five\";\n",
+                "pub const STABLE_CONTEXT_06: &str = \"six\";\n",
+                "pub const STABLE_CONTEXT_07: &str = \"seven\";\n",
+                "pub const STABLE_CONTEXT_08: &str = \"eight\";\n",
+                "pub const STABLE_CONTEXT_09: &str = \"nine\";\n",
+                "pub const STABLE_CONTEXT_10: &str = \"ten\";\n",
+                "pub const STABLE_CONTEXT_11: &str = \"eleven\";\n",
+                "pub const STABLE_CONTEXT_12: &str = \"twelve\";\n",
+                "pub const STABLE_CONTEXT_13: &str = \"thirteen\";\n",
+                "pub const STABLE_CONTEXT_14: &str = \"fourteen\";\n",
+                "pub const STABLE_CONTEXT_15: &str = \"fifteen\";\n",
+                "pub const STABLE_CONTEXT_16: &str = \"sixteen\";\n",
+                "pub const STABLE_CONTEXT_17: &str = \"seventeen\";\n",
+                "pub const STABLE_CONTEXT_18: &str = \"eighteen\";\n",
+                "pub const STABLE_CONTEXT_19: &str = \"nineteen\";\n",
+                "pub const STABLE_CONTEXT_20: &str = \"twenty\";\n",
+                "\n",
+                "pub fn distant() -> &'static str {\n",
+                "    \"stable\"\n",
+                "}\n"
+            ),
+        );
+        run_webui_diff_test_git(repository.path(), &["init"]);
+        run_webui_diff_test_git(
+            repository.path(),
+            &["config", "user.email", "webui@example.test"],
+        );
+        run_webui_diff_test_git(
+            repository.path(),
+            &["config", "user.name", "WebUI Diff Test"],
+        );
+        run_webui_diff_test_git(repository.path(), &["add", "src/lib.rs"]);
+        run_webui_diff_test_git(repository.path(), &["commit", "-m", "initial"]);
+        run_webui_diff_test_git(repository.path(), &["branch", "-M", "main"]);
+        run_webui_diff_test_git(repository.path(), &["checkout", "-b", "feature/webui-diff"]);
+        write_webui_diff_test_file(
+            repository.path(),
+            "src/lib.rs",
+            concat!(
+                "pub fn marker() -> &'static str {\n",
+                "    \"branch target\"\n",
+                "}\n",
+                "\n",
+                "pub const STABLE_CONTEXT_01: &str = \"one\";\n",
+                "pub const STABLE_CONTEXT_02: &str = \"two\";\n",
+                "pub const STABLE_CONTEXT_03: &str = \"three\";\n",
+                "pub const STABLE_CONTEXT_04: &str = \"four\";\n",
+                "pub const STABLE_CONTEXT_05: &str = \"five\";\n",
+                "pub const STABLE_CONTEXT_06: &str = \"six\";\n",
+                "pub const STABLE_CONTEXT_07: &str = \"seven\";\n",
+                "pub const STABLE_CONTEXT_08: &str = \"eight\";\n",
+                "pub const STABLE_CONTEXT_09: &str = \"nine\";\n",
+                "pub const STABLE_CONTEXT_10: &str = \"ten\";\n",
+                "pub const STABLE_CONTEXT_11: &str = \"eleven\";\n",
+                "pub const STABLE_CONTEXT_12: &str = \"twelve\";\n",
+                "pub const STABLE_CONTEXT_13: &str = \"thirteen\";\n",
+                "pub const STABLE_CONTEXT_14: &str = \"fourteen\";\n",
+                "pub const STABLE_CONTEXT_15: &str = \"fifteen\";\n",
+                "pub const STABLE_CONTEXT_16: &str = \"sixteen\";\n",
+                "pub const STABLE_CONTEXT_17: &str = \"seventeen\";\n",
+                "pub const STABLE_CONTEXT_18: &str = \"eighteen\";\n",
+                "pub const STABLE_CONTEXT_19: &str = \"nineteen\";\n",
+                "pub const STABLE_CONTEXT_20: &str = \"twenty\";\n",
+                "\n",
+                "pub fn distant() -> &'static str {\n",
+                "    \"stable\"\n",
+                "}\n"
+            ),
+        );
+        run_webui_diff_test_git(repository.path(), &["add", "src/lib.rs"]);
+        run_webui_diff_test_git(
+            repository.path(),
+            &["commit", "-m", "feature branch marker"],
+        );
+        let feature_commit = webui_diff_test_git_stdout(repository.path(), &["rev-parse", "HEAD"]);
+        write_webui_diff_test_file(
+            repository.path(),
+            "src/lib.rs",
+            concat!(
+                "pub fn marker() -> &'static str {\n",
+                "    \"unstaged top marker\"\n",
+                "}\n",
+                "\n",
+                "pub const STABLE_CONTEXT_01: &str = \"one\";\n",
+                "pub const STABLE_CONTEXT_02: &str = \"two\";\n",
+                "pub const STABLE_CONTEXT_03: &str = \"three\";\n",
+                "pub const STABLE_CONTEXT_04: &str = \"four\";\n",
+                "pub const STABLE_CONTEXT_05: &str = \"five\";\n",
+                "pub const STABLE_CONTEXT_06: &str = \"six\";\n",
+                "pub const STABLE_CONTEXT_07: &str = \"seven\";\n",
+                "pub const STABLE_CONTEXT_08: &str = \"eight\";\n",
+                "pub const STABLE_CONTEXT_09: &str = \"nine\";\n",
+                "pub const STABLE_CONTEXT_10: &str = \"ten\";\n",
+                "pub const STABLE_CONTEXT_11: &str = \"eleven\";\n",
+                "pub const STABLE_CONTEXT_12: &str = \"twelve\";\n",
+                "pub const STABLE_CONTEXT_13: &str = \"thirteen\";\n",
+                "pub const STABLE_CONTEXT_14: &str = \"fourteen\";\n",
+                "pub const STABLE_CONTEXT_15: &str = \"fifteen\";\n",
+                "pub const STABLE_CONTEXT_16: &str = \"sixteen\";\n",
+                "pub const STABLE_CONTEXT_17: &str = \"seventeen\";\n",
+                "pub const STABLE_CONTEXT_18: &str = \"eighteen\";\n",
+                "pub const STABLE_CONTEXT_19: &str = \"nineteen\";\n",
+                "pub const STABLE_CONTEXT_20: &str = \"twenty\";\n",
+                "\n",
+                "pub fn distant() -> &'static str {\n",
+                "    \"unstaged marker\"\n",
+                "}\n"
+            ),
+        );
+        write_webui_diff_test_file(
+            repository.path(),
+            "src/staged.rs",
+            "pub const STAGED_MARKER: &str = \"staged marker\";\n",
+        );
+        run_webui_diff_test_git(repository.path(), &["add", "src/staged.rs"]);
+
+        let repository_text = repository.path().to_string_lossy().to_string();
+        let unstaged = load_webui_workspace_diff_snapshot(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Unstaged,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: None,
+            }),
+        )
+        .expect("unstaged snapshot should load");
+        let staged = load_webui_workspace_diff_snapshot(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Staged,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: None,
+            }),
+        )
+        .expect("staged snapshot should load");
+        let commit = load_webui_workspace_diff_snapshot(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Commit,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: Some(feature_commit.clone()),
+            }),
+        )
+        .expect("commit snapshot should load");
+        let branch = load_webui_workspace_diff_snapshot(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Branch,
+                base_branch: Some(String::from("feature/webui-diff")),
+                compare_branch: Some(String::from("main")),
+                commit_hash: None,
+            }),
+        )
+        .expect("branch snapshot should load");
+
+        assert!(unstaged.unified_diff.contains("unstaged marker"));
+        assert!(unstaged.unified_diff.contains("unstaged top marker"));
+        assert!(staged.unified_diff.contains("staged marker"));
+        assert!(commit.unified_diff.contains("branch target"));
+        assert!(branch.unified_diff.contains("branch target"));
+        assert_eq!(staged.files.len(), 1);
+        assert_eq!(staged.files[0].new_path, "src/staged.rs");
+
+        let detail = load_webui_workspace_diff_file_detail(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Staged,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: None,
+            }),
+            WebuiWorkspaceDiffFileDetailRequest {
+                key: staged.files[0].key.clone(),
+                old_path: staged.files[0].old_path.clone(),
+                new_path: staged.files[0].new_path.clone(),
+                context_lines: Some(WEBUI_DIFF_DEFAULT_CONTEXT_LINES),
+                hunk_index: None,
+                hunk_expansion_direction: None,
+            },
+        )
+        .expect("staged file detail should load");
+        assert!(detail.unified_diff.contains("staged marker"));
+        assert_eq!(
+            detail.file.as_ref().map(|file| file.new_path.as_str()),
+            Some("src/staged.rs")
+        );
+
+        let expanded_hunk_detail = load_webui_workspace_diff_file_detail(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Unstaged,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: None,
+            }),
+            WebuiWorkspaceDiffFileDetailRequest {
+                key: unstaged.files[0].key.clone(),
+                old_path: unstaged.files[0].old_path.clone(),
+                new_path: unstaged.files[0].new_path.clone(),
+                context_lines: Some(8),
+                hunk_index: Some(0),
+                hunk_expansion_direction: Some(String::from("down")),
+            },
+        )
+        .expect("unstaged hunk-scoped file detail should load");
+        assert_eq!(expanded_hunk_detail.hunk_index, Some(0));
+        assert_eq!(
+            expanded_hunk_detail.hunk_expansion_direction.as_deref(),
+            Some("down")
+        );
+        assert_eq!(expanded_hunk_detail.context_lines, 8);
+        assert!(
+            expanded_hunk_detail
+                .unified_diff
+                .contains("unstaged top marker")
+        );
+        assert!(
+            !expanded_hunk_detail
+                .unified_diff
+                .contains("unstaged marker")
+        );
+        assert_eq!(
+            expanded_hunk_detail
+                .file
+                .as_ref()
+                .map(|file| file.hunk_count),
+            Some(1)
+        );
+
+        let search = load_webui_workspace_diff_search(
+            &repository_text,
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Branch,
+                base_branch: Some(String::from("feature/webui-diff")),
+                compare_branch: Some(String::from("main")),
+                commit_hash: None,
+            }),
+            WebuiWorkspaceDiffSearchRequest {
+                query: String::from("branch target"),
+                limit: 10,
+            },
+        )
+        .expect("branch search should load");
+        assert_eq!(search.matches.len(), 1);
+        assert_eq!(search.matches[0].new_path, "src/lib.rs");
+        assert!(search.matches[0].first_preview.contains("branch target"));
+    }
+
+    /// Verifies indexed diff search keeps first-match line metadata.
+    /// 验证索引式 diff 搜索会保留首条命中的行元数据。
+    #[test]
+    fn webui_diff_search_index_keeps_first_match_position() {
+        let unified_diff = concat!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/src/lib.rs\n",
+            "+++ b/src/lib.rs\n",
+            "@@ -1,2 +1,2 @@\n",
+            "-old value\n",
+            "+new value\n",
+            " context value\n"
+        );
+        let summaries = webui_unified_diff_file_summaries(unified_diff);
+        let index = webui_unified_diff_search_index(unified_diff, &summaries);
+        let result = webui_diff_search_index_file_matches(
+            &index,
+            "new value",
+            10,
+            webui_unified_diff_line_count(unified_diff),
+        );
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.scanned_files, 1);
+        assert_eq!(
+            result.scanned_lines,
+            webui_unified_diff_line_count(unified_diff)
+        );
+        assert_eq!(result.matches[0].first_new_line, Some(1));
+        assert_eq!(result.matches[0].first_line_kind.as_deref(), Some("added"));
+        assert_eq!(result.matches[0].previews.len(), 1);
+        assert!(
+            result.matches[0]
+                .previews
+                .contains(&String::from("new value"))
+        );
+    }
+
+    /// Verifies hunk-scoped detail keeps only the expanded target hunk.
+    /// 验证 hunk 级详情裁剪只保留目标扩展 hunk。
+    #[test]
+    fn webui_diff_hunk_scoped_unified_diff_keeps_only_target_hunk() {
+        let base_unified_diff = concat!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/src/lib.rs\n",
+            "+++ b/src/lib.rs\n",
+            "@@ -10,2 +10,2 @@\n",
+            " context\n",
+            "-old target\n",
+            "+new target\n",
+            "@@ -30,1 +30,1 @@\n",
+            "-old other\n",
+            "+new other\n",
+        );
+        let expanded_unified_diff = concat!(
+            "diff --git a/src/lib.rs b/src/lib.rs\n",
+            "index 1111111..2222222 100644\n",
+            "--- a/src/lib.rs\n",
+            "+++ b/src/lib.rs\n",
+            "@@ -5,12 +5,12 @@\n",
+            " pre context\n",
+            " context\n",
+            "-old target\n",
+            "+new target\n",
+            " post context\n",
+            "@@ -28,5 +28,5 @@\n",
+            " other pre\n",
+            "-old other\n",
+            "+new other\n",
+            " other post\n",
+        );
+
+        let scoped =
+            webui_diff_hunk_scoped_unified_diff(base_unified_diff, expanded_unified_diff, 0)
+                .expect("target hunk should be found");
+
+        assert!(scoped.contains("@@ -5,12 +5,12 @@"));
+        assert!(scoped.contains("new target"));
+        assert!(!scoped.contains("@@ -28,5 +28,5 @@"));
+        assert!(!scoped.contains("new other"));
+    }
+
     /// Test shell host that rejects interactive shell operations.
     /// 拒绝交互式 shell 操作的测试宿主壳。
     struct TestServiceShellHost;
@@ -20748,6 +23294,79 @@ mod tests {
     /// 构建共享测试宿主壳。
     fn test_service_shell_host() -> Arc<dyn ServiceShellHost> {
         Arc::new(TestServiceShellHost)
+    }
+
+    /// Temporary Git repository removed when a WebUI diff test finishes.
+    /// WebUI diff 测试结束后自动移除的临时 Git 仓库。
+    struct WebuiDiffTestRepository {
+        /// Absolute repository path under the system temporary directory.
+        /// 系统临时目录下的绝对仓库路径。
+        path: PathBuf,
+    }
+
+    impl WebuiDiffTestRepository {
+        /// Creates one empty temporary repository directory.
+        /// 创建一个空的临时仓库目录。
+        fn new() -> Self {
+            let path = env::temp_dir().join(format!(
+                "vulcan-webui-diff-test-{}-{}",
+                std::process::id(),
+                current_unix_millis_value()
+            ));
+            fs::create_dir_all(&path).expect("temporary WebUI diff repository should be created");
+            Self { path }
+        }
+
+        /// Returns the temporary repository path.
+        /// 返回临时仓库路径。
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    impl Drop for WebuiDiffTestRepository {
+        /// Removes the temporary repository directory.
+        /// 移除临时仓库目录。
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    /// Writes one file inside the temporary WebUI diff repository.
+    /// 在临时 WebUI diff 仓库中写入单个文件。
+    fn write_webui_diff_test_file(repository_root: &Path, relative_path: &str, body: &str) {
+        let path = repository_root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("test file parent should be created");
+        }
+        fs::write(path, body).expect("test file should be written");
+    }
+
+    /// Runs one Git command for a temporary WebUI diff repository and requires success.
+    /// 为临时 WebUI diff 仓库运行单个 Git 命令并要求成功。
+    fn run_webui_diff_test_git(repository_root: &Path, args: &[&str]) {
+        let output =
+            run_webui_git_command(repository_root, args).expect("test git command should run");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Runs one Git command for a temporary WebUI diff repository and returns stdout.
+    /// 为临时 WebUI diff 仓库运行单个 Git 命令并返回 stdout。
+    fn webui_diff_test_git_stdout(repository_root: &Path, args: &[&str]) -> String {
+        let output =
+            run_webui_git_command(repository_root, args).expect("test git command should run");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
     /// Verifies WebUI only reports precheck progress when a concrete precheck turn is active.

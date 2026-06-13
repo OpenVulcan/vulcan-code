@@ -141,6 +141,8 @@ import {
 import {
   loadConversationMessages,
   loadWorkbenchSnapshot,
+  loadWorkspaceDiffFileDetail,
+  loadWorkspaceDiffSearch,
   loadWorkspaceDiffSnapshot,
 } from "@/service/workbench-snapshot-service";
 import { shellClient } from "@/service/webui-service-runtime";
@@ -1366,6 +1368,8 @@ export function WorkbenchLayout(props: {
             onInsertPendingPrompt={handleInsertPendingPrompt}
             onRemovePendingPrompt={handleRemovePendingPrompt}
             onReorderPendingPrompts={handleReorderPendingPrompts}
+            onLoadWorkspaceDiffFileDetail={loadWorkspaceDiffFileDetail}
+            onLoadWorkspaceDiffSearch={loadWorkspaceDiffSearch}
             onLoadWorkspaceDiffSnapshot={loadWorkspaceDiffSnapshot}
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}

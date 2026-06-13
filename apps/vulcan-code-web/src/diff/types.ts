@@ -6,6 +6,10 @@ export type DiffPanelSource = "workspace" | "turn" | "change_set" | "message";
 // DiffReviewMode 标识审核面板当前选择的 Git 对比来源。
 export type DiffReviewMode = "unstaged" | "staged" | "commit" | "branch";
 
+// DiffViewMode identifies the visual layout used for rendered file hunks.
+// DiffViewMode 标识文件 hunk 渲染使用的视觉布局。
+export type DiffViewMode = "unified" | "split";
+
 // DiffBranchSummary describes one selectable Git branch reference.
 // DiffBranchSummary 描述一个可选择的 Git 分支引用。
 export interface DiffBranchSummary {
@@ -62,6 +66,51 @@ export type DiffFileStatus = "added" | "deleted" | "modified" | "renamed" | "bin
 // DiffLineKind 描述已解析 hunk 中的单个可视行。
 export type DiffLineKind = "added" | "removed" | "context" | "metadata";
 
+// DiffInlineChangeRange marks the changed character range inside one paired line.
+// DiffInlineChangeRange 标记配对行内部发生变化的字符范围。
+export interface DiffInlineChangeRange {
+  // Inclusive start offset in UTF-16 code units.
+  // UTF-16 code unit 中的包含式起始偏移。
+  start: number;
+  // Exclusive end offset in UTF-16 code units.
+  // UTF-16 code unit 中的排他式结束偏移。
+  end: number;
+}
+
+// DiffHunkExpansionDirection describes which side of a hunk context request should grow.
+// DiffHunkExpansionDirection 描述 hunk 上下文请求需要扩展的方向。
+export type DiffHunkExpansionDirection = "up" | "down" | "both";
+
+// DiffHunkExpansionRequest stores a targeted hunk context expansion request.
+// DiffHunkExpansionRequest 保存一次定向 hunk 上下文展开请求。
+export interface DiffHunkExpansionRequest {
+  // Zero-based hunk index in the currently rendered file.
+  // 当前渲染文件中的零基 hunk 索引。
+  hunkIndex: number;
+  // Side of the hunk whose surrounding context should expand.
+  // 需要扩展周边上下文的 hunk 方向。
+  direction: DiffHunkExpansionDirection;
+}
+
+// DiffCompletenessState describes whether the current diff payload is complete.
+// DiffCompletenessState 描述当前 diff 载荷是否完整。
+export type DiffCompletenessState = "complete" | "truncated" | "partial";
+
+// DiffFileLoadStatus describes lazy file-detail hydration state.
+// DiffFileLoadStatus 描述文件详情懒加载水合状态。
+export type DiffFileLoadStatus = "idle" | "loading" | "loaded" | "failed" | "timed-out";
+
+// DiffFileLoadState stores the current lazy detail status for one file.
+// DiffFileLoadState 保存单个文件当前的懒加载详情状态。
+export interface DiffFileLoadState {
+  // Lazy detail status for this file.
+  // 该文件的懒加载详情状态。
+  status: DiffFileLoadStatus;
+  // Optional user-facing status message.
+  // 可选的面向用户状态消息。
+  message?: string | null;
+}
+
 // DiffStats stores aggregate counters for one diff panel.
 // DiffStats 保存单个 diff 面板的聚合计数。
 export interface DiffStats {
@@ -74,6 +123,18 @@ export interface DiffStats {
   // Number of removed lines.
   // 删除行数量。
   deletions: number;
+  // Number of changed lines counted as additions plus deletions.
+  // 以新增行加删除行计算的变更行数量。
+  totalChangedLines: number;
+  // Estimated UTF-8 byte size of changed lines.
+  // 变更行的估算 UTF-8 字节体积。
+  totalChangedBytes: number;
+  // Whether aggregate stats cross target-compatible large-diff limits.
+  // 聚合统计是否超过目标兼容的大 diff 限制。
+  isLarge: boolean;
+  // Internal large-diff reason ids used for rendering policy and diagnostics.
+  // 用于渲染策略与诊断的内部大 diff 原因标识。
+  largeReasons: string[];
 }
 
 // DiffLine stores one parsed line with old and new file line numbers.
@@ -91,6 +152,12 @@ export interface DiffLine {
   // Optional new-file line number.
   // 可选新文件行号。
   newLine: number | null;
+  // Optional inline changed range used by the high-performance HTML renderer.
+  // 高性能 HTML 渲染器使用的可选行内变更范围。
+  inlineChangeRange?: DiffInlineChangeRange;
+  // Optional inline changed ranges used by token-level LCS diffing.
+  // token 级 LCS diff 使用的可选多段行内变更范围。
+  inlineChangeRanges?: DiffInlineChangeRange[];
 }
 
 // DiffHunk stores one parsed unified-diff hunk.
@@ -134,9 +201,225 @@ export interface DiffFile {
   // Whether this file is binary-only in the diff.
   // 该文件是否在 diff 中仅表现为二进制变更。
   isBinary: boolean;
+  // Whether this file is a gitlink or submodule entry.
+  // 该文件是否为 gitlink 或子模块条目。
+  isGitlink: boolean;
+  // File mode parsed from diff metadata when available.
+  // 从 diff 元数据解析出的可选文件模式。
+  fileMode?: string | null;
+  // Number of changed lines counted as additions plus deletions.
+  // 以新增行加删除行计算的变更行数量。
+  changedLines: number;
+  // Estimated UTF-8 byte size of changed lines in this file.
+  // 该文件变更行的估算 UTF-8 字节体积。
+  changedBytes: number;
+  // Largest estimated UTF-8 byte size among changed lines.
+  // 变更行中的最大估算 UTF-8 字节体积。
+  maxChangedLineBytes: number;
+  // Whether this file crosses target-compatible large-file limits.
+  // 该文件是否超过目标兼容的大文件限制。
+  isLarge: boolean;
+  // Internal large-file reason ids used for rendering policy and diagnostics.
+  // 用于渲染策略与诊断的内部大文件原因标识。
+  largeReasons: string[];
+  // Visual row count including hunk headers, computed during parsing when available.
+  // 可用时在解析阶段计算出的可视行数，包含 hunk 头部。
+  rowCount?: number;
+  // Estimated full visual row count from backend summaries before lazy detail loading.
+  // 懒加载详情前由后端摘要估算出的完整可视行数。
+  estimatedRowCount?: number;
+  // Estimated hunk header count from backend summaries before lazy detail loading.
+  // 懒加载详情前由后端摘要估算出的 hunk 头部数量。
+  estimatedHunkCount?: number;
+  // Whether only part of this file diff is available.
+  // 该文件 diff 是否只有局部内容可用。
+  isPartial?: boolean;
+  // Lazy file-detail hydration state.
+  // 文件详情懒加载水合状态。
+  fileDiffLoadState?: DiffFileLoadState;
+  // Unified-diff context lines used by the loaded file detail.
+  // 已加载文件详情使用的 unified-diff 上下文行数。
+  contextLineCount?: number;
+  // Raw unified diff section for this file when it has been loaded.
+  // 文件已加载时对应的原始 unified diff 片段。
+  rawDiff?: string;
   // Parsed hunks for textual changes.
   // 文本变更对应的已解析 hunk。
   hunks: DiffHunk[];
+}
+
+// WorkspaceDiffFileSummary mirrors one backend file summary computed before diff truncation.
+// WorkspaceDiffFileSummary 对应后端在 diff 截断前计算出的单文件摘要。
+export interface WorkspaceDiffFileSummary {
+  // Stable summary key used by the backend.
+  // 后端使用的稳定摘要键。
+  key: string;
+  // Previous file path.
+  // 旧文件路径。
+  oldPath: string;
+  // Current file path.
+  // 当前文件路径。
+  newPath: string;
+  // File-level change status.
+  // 文件级变更状态。
+  status: DiffFileStatus;
+  // Number of added lines in this file.
+  // 该文件新增行数量。
+  additions: number;
+  // Number of removed lines in this file.
+  // 该文件删除行数量。
+  deletions: number;
+  // Whether this file is binary-only in the diff.
+  // 该文件是否在 diff 中仅表现为二进制变更。
+  isBinary: boolean;
+  // Whether this file is a gitlink or submodule entry.
+  // 该文件是否为 gitlink 或子模块条目。
+  isGitlink: boolean;
+  // File mode parsed from diff metadata when available.
+  // 从 diff 元数据解析出的可选文件模式。
+  fileMode?: string | null;
+  // Number of changed lines counted as additions plus deletions.
+  // 以新增行加删除行计算的变更行数量。
+  changedLines: number;
+  // Estimated UTF-8 byte size of changed lines in this file.
+  // 该文件变更行的估算 UTF-8 字节体积。
+  changedBytes: number;
+  // Largest estimated UTF-8 byte size among changed lines.
+  // 变更行中的最大估算 UTF-8 字节体积。
+  maxChangedLineBytes: number;
+  // Estimated visual row count including hunk headers.
+  // 包含 hunk 头部的估算可视行数。
+  rowCount?: number;
+  // Estimated hunk header count in this file diff.
+  // 该文件 diff 中估算出的 hunk 头部数量。
+  hunkCount?: number;
+}
+
+// WorkspaceDiffFileDetailRequest identifies one file whose full diff should be loaded.
+// WorkspaceDiffFileDetailRequest 标识需要加载完整 diff 的单个文件。
+export interface WorkspaceDiffFileDetailRequest {
+  // Stable file key from the current summary snapshot.
+  // 当前摘要快照中的稳定文件键。
+  key: string;
+  // Previous file path from the summary snapshot.
+  // 摘要快照中的旧文件路径。
+  oldPath: string;
+  // Current file path from the summary snapshot.
+  // 摘要快照中的当前文件路径。
+  newPath: string;
+  // Optional unified-diff context lines requested for hunk expansion.
+  // hunk 展开请求使用的可选 unified-diff 上下文行数。
+  contextLines?: number;
+  // Optional target hunk index for directional expansion.
+  // 定向展开使用的可选目标 hunk 索引。
+  hunkIndex?: number;
+  // Optional target direction for hunk context expansion.
+  // hunk 上下文展开使用的可选目标方向。
+  hunkExpansionDirection?: DiffHunkExpansionDirection;
+}
+
+// WorkspaceDiffFileDetailResponse mirrors the backend payload for one file diff.
+// WorkspaceDiffFileDetailResponse 对应后端返回的单文件 diff 载荷。
+export interface WorkspaceDiffFileDetailResponse {
+  // Repository root used by the backend Git command.
+  // 后端 Git 命令使用的仓库根目录。
+  repositoryRoot: string;
+  // Backend summary for the requested file when available.
+  // 可用时请求文件对应的后端摘要。
+  file?: WorkspaceDiffFileSummary | null;
+  // Raw unified diff for only the requested file.
+  // 仅包含请求文件的原始 unified diff。
+  unifiedDiff: string;
+  // Whether the backend truncated the single-file diff payload.
+  // 后端是否截断了单文件 diff 载荷。
+  truncated?: boolean | null;
+  // Optional backend notice for empty, partial, or skipped details.
+  // 空详情、局部详情或跳过详情对应的后端提示。
+  notice?: string | null;
+  // Unified-diff context lines used by the backend response.
+  // 后端响应实际使用的 unified-diff 上下文行数。
+  contextLines?: number | null;
+  // Optional target hunk index echoed by the backend response.
+  // 后端响应回传的可选目标 hunk 索引。
+  hunkIndex?: number | null;
+  // Optional target hunk expansion direction echoed by the backend response.
+  // 后端响应回传的可选 hunk 展开方向。
+  hunkExpansionDirection?: DiffHunkExpansionDirection | null;
+}
+
+// WorkspaceDiffSearchRequest stores backend summary-search options.
+// WorkspaceDiffSearchRequest 保存后端摘要搜索选项。
+export interface WorkspaceDiffSearchRequest {
+  // Search query matched against the complete backend diff.
+  // 与后端完整 diff 匹配的搜索词。
+  query: string;
+  // Optional maximum number of matching files returned by the backend.
+  // 后端返回的可选最大命中文件数量。
+  limit?: number;
+}
+
+// WorkspaceDiffSearchFileMatch describes one backend file-level search hit.
+// WorkspaceDiffSearchFileMatch 描述一个后端文件级搜索命中。
+export interface WorkspaceDiffSearchFileMatch {
+  // Stable file key from the backend summary scanner.
+  // 后端摘要扫描器生成的稳定文件键。
+  key: string;
+  // Previous file path.
+  // 旧文件路径。
+  oldPath: string;
+  // Current file path.
+  // 当前文件路径。
+  newPath: string;
+  // File-level change status.
+  // 文件级变更状态。
+  status: DiffFileStatus;
+  // Number of matched diff lines in this file.
+  // 该文件中命中的 diff 行数量。
+  matchCount: number;
+  // First compact matching line preview.
+  // 首条紧凑命中行预览。
+  firstPreview: string;
+  // Bounded compact matching line previews for summary-only display.
+  // 用于摘要态展示的受限紧凑命中行预览。
+  previews?: string[];
+  // Hunk index for the first matching diff row when available.
+  // 可用时首条命中 diff 行所在的 hunk 索引。
+  firstHunkIndex?: number | null;
+  // Old-file line number for the first matching diff row when available.
+  // 可用时首条命中 diff 行对应的旧文件行号。
+  firstOldLine?: number | null;
+  // New-file line number for the first matching diff row when available.
+  // 可用时首条命中 diff 行对应的新文件行号。
+  firstNewLine?: number | null;
+  // Diff row kind for the first matching diff row when available.
+  // 可用时首条命中 diff 行对应的行类型。
+  firstLineKind?: DiffLineKind | "hunk" | null;
+}
+
+// WorkspaceDiffSearchResponse mirrors the backend compact diff search payload.
+// WorkspaceDiffSearchResponse 对应后端紧凑 diff 搜索载荷。
+export interface WorkspaceDiffSearchResponse {
+  // Repository root used by the backend Git command.
+  // 后端 Git 命令使用的仓库根目录。
+  repositoryRoot: string;
+  // Backend-trimmed query.
+  // 后端裁剪空白后的搜索词。
+  query: string;
+  // File-level matches ordered by diff appearance.
+  // 按 diff 出现顺序排列的文件级命中。
+  matches: WorkspaceDiffSearchFileMatch[];
+  // Whether additional matching files were omitted by the backend limit.
+  // 是否因后端上限省略了更多命中文件。
+  truncated: boolean;
+  // Number of files scanned in the complete backend diff.
+  // 后端完整 diff 中已扫描的文件数量。
+  scannedFiles: number;
+  // Number of diff lines scanned in the complete backend diff.
+  // 后端完整 diff 中已扫描的 diff 行数量。
+  scannedLines: number;
+  // Optional backend notice for empty, partial, or skipped searches.
+  // 空搜索、局部搜索或跳过搜索对应的后端提示。
+  notice?: string | null;
 }
 
 // DiffPanelSnapshot is the complete renderer-ready diff payload.
@@ -154,11 +437,17 @@ export interface DiffPanelSnapshot {
   // Aggregate diff counters.
   // 聚合 diff 计数。
   stats: DiffStats;
+  // Completeness state for the diff payload.
+  // diff 载荷的完整性状态。
+  completeness: DiffCompletenessState;
+  // Whether the payload was cut before the renderer received it.
+  // 载荷在渲染器收到前是否已被截断。
+  isTruncated: boolean;
   // Optional notice displayed when parsing is partial or empty.
   // 解析结果不完整或为空时显示的可选提示。
   notice?: string;
-  // Raw unified diff kept for copy and fallback.
-  // 为复制和回退保留的原始 unified diff。
+  // Raw unified diff kept for copy and loaded-detail reconstruction.
+  // 为复制和已加载详情重组保留的原始 unified diff。
   rawDiff: string;
   // Current Git branch name when available.
   // 可用时的当前 Git 分支名称。
@@ -195,12 +484,24 @@ export interface WorkspaceDiffSnapshotResponse {
   // Backend-counted changed file count.
   // 后端统计的变更文件数量。
   changedFiles: number;
+  // Backend file summaries computed before preview truncation.
+  // 后端在预览截断前计算出的文件摘要。
+  files?: WorkspaceDiffFileSummary[];
   // Backend-counted added lines.
   // 后端统计的新增行数。
   additions: number;
   // Backend-counted deleted lines.
   // 后端统计的删除行数。
   deletions: number;
+  // Optional backend-counted changed line total.
+  // 后端统计的可选变更行总数。
+  totalChangedLines?: number | null;
+  // Optional backend-counted changed byte total.
+  // 后端统计的可选变更字节总数。
+  totalChangedBytes?: number | null;
+  // Whether the backend truncated the unified diff payload.
+  // 后端是否截断了 unified diff 载荷。
+  truncated?: boolean | null;
   // Optional backend notice for empty or partial snapshots.
   // 空快照或局部快照对应的后端提示。
   notice?: string | null;

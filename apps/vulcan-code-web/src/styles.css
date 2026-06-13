@@ -1538,6 +1538,18 @@ button {
   font-size: 14px;
 }
 
+.context-panel-loading-state {
+  min-width: 0;
+  min-height: 160px;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
+}
+
 .context-empty-state span {
   max-width: 220px;
   font-size: 12px;
@@ -6057,6 +6069,16 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 16px;
+}
+
+.detail-empty-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
 }
 
 .tool-card {

@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, ChevronDown, Copy, GitBranch, RefreshCw, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Columns2, Copy, GitBranch, RefreshCw, Rows3, Search } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import type { DiffBranchSummary, DiffCommitSummary, DiffPanelSnapshot, DiffReviewMode, DiffReviewSelection } from "./types";
+import type { DiffBranchSummary, DiffCommitSummary, DiffPanelSnapshot, DiffReviewMode, DiffReviewSelection, DiffViewMode } from "./types";
 
 // DIFF_REVIEW_MODE_LABELS maps review modes to compact UI labels.
 // DIFF_REVIEW_MODE_LABELS 将审核模式映射为紧凑界面标签。
@@ -40,6 +40,36 @@ export function DiffPanelToolbar(props: {
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
   onCopyRaw?: (rawDiff: string) => void;
+  // Current diff search query.
+  // 当前 diff 搜索查询。
+  searchQuery?: string;
+  // Compact search result label.
+  // 紧凑搜索结果标签。
+  searchResultLabel?: string;
+  // Whether search results were truncated by the result cap.
+  // 搜索结果是否因结果上限被截断。
+  searchResultTruncated?: boolean;
+  // Whether previous search navigation is available.
+  // 是否可以导航到上一条搜索结果。
+  canSearchPrevious?: boolean;
+  // Whether next search navigation is available.
+  // 是否可以导航到下一条搜索结果。
+  canSearchNext?: boolean;
+  // Current visual diff layout mode.
+  // 当前 diff 视觉布局模式。
+  viewMode: DiffViewMode;
+  // Search query change handler.
+  // 搜索查询变更处理器。
+  onSearchQueryChange?: (query: string) => void;
+  // Previous search result handler.
+  // 上一条搜索结果处理器。
+  onSearchPrevious?: () => void;
+  // Next search result handler.
+  // 下一条搜索结果处理器。
+  onSearchNext?: () => void;
+  // Visual diff layout mode change handler.
+  // diff 视觉布局模式变更处理器。
+  onViewModeChange: (viewMode: DiffViewMode) => void;
   // Optional selection change handler.
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
@@ -82,6 +112,26 @@ export function DiffPanelToolbar(props: {
         ) : null}
       </div>
       <div className="diff-panel-actions">
+        <button
+          className="diff-icon-button"
+          onClick={() => props.onViewModeChange(props.viewMode === "split" ? "unified" : "split")}
+          title={props.viewMode === "split" ? "切换到统一视图" : "切换到分栏视图"}
+          type="button"
+        >
+          {props.viewMode === "split" ? <Rows3 size={14} /> : <Columns2 size={14} />}
+        </button>
+        {props.onSearchQueryChange ? (
+          <DiffSearchControl
+            canSearchNext={Boolean(props.canSearchNext)}
+            canSearchPrevious={Boolean(props.canSearchPrevious)}
+            query={props.searchQuery ?? ""}
+            resultLabel={props.searchResultLabel ?? ""}
+            resultTruncated={Boolean(props.searchResultTruncated)}
+            onNext={props.onSearchNext}
+            onPrevious={props.onSearchPrevious}
+            onQueryChange={props.onSearchQueryChange}
+          />
+        ) : null}
         {props.onCopyRaw ? (
           <button className="diff-icon-button" onClick={() => props.onCopyRaw?.(props.snapshot.rawDiff)} title="复制 raw diff" type="button">
             <Copy size={14} />
@@ -94,6 +144,70 @@ export function DiffPanelToolbar(props: {
         ) : null}
       </div>
     </header>
+  );
+}
+
+// DiffSearchControl renders compact in-panel diff search controls.
+// DiffSearchControl 渲染紧凑的面板内 diff 搜索控件。
+function DiffSearchControl(props: {
+  // Current search query.
+  // 当前搜索查询。
+  query: string;
+  // Compact result label.
+  // 紧凑结果标签。
+  resultLabel: string;
+  // Whether result count was capped.
+  // 结果数量是否被截断。
+  resultTruncated: boolean;
+  // Whether previous navigation is enabled.
+  // 是否启用上一条导航。
+  canSearchPrevious: boolean;
+  // Whether next navigation is enabled.
+  // 是否启用下一条导航。
+  canSearchNext: boolean;
+  // Query change handler.
+  // 查询变更处理器。
+  onQueryChange: (query: string) => void;
+  // Previous result handler.
+  // 上一条结果处理器。
+  onPrevious?: () => void;
+  // Next result handler.
+  // 下一条结果处理器。
+  onNext?: () => void;
+}) {
+  return (
+    <div className="diff-panel-search">
+      <Search size={13} />
+      <input
+        aria-label="搜索 diff"
+        onChange={(event) => props.onQueryChange(event.currentTarget.value)}
+        placeholder="搜索 diff"
+        value={props.query}
+      />
+      {props.query ? (
+        <span className="diff-search-count" title={props.resultTruncated ? "结果已截断" : undefined}>
+          {props.resultLabel}
+        </span>
+      ) : null}
+      <button
+        className="diff-search-step"
+        disabled={!props.canSearchPrevious}
+        onClick={() => props.onPrevious?.()}
+        title="上一条"
+        type="button"
+      >
+        <ChevronUp size={13} />
+      </button>
+      <button
+        className="diff-search-step"
+        disabled={!props.canSearchNext}
+        onClick={() => props.onNext?.()}
+        title="下一条"
+        type="button"
+      >
+        <ChevronDown size={13} />
+      </button>
+    </div>
   );
 }
 

@@ -22,7 +22,14 @@ import {
   WorkspaceResizableBody,
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
-import type { DiffReviewSelection, WorkspaceDiffSnapshotResponse } from "@/diff/types";
+import type {
+  DiffReviewSelection,
+  WorkspaceDiffFileDetailRequest,
+  WorkspaceDiffFileDetailResponse,
+  WorkspaceDiffSearchRequest,
+  WorkspaceDiffSearchResponse,
+  WorkspaceDiffSnapshotResponse,
+} from "@/diff/types";
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
@@ -32,6 +39,7 @@ import type {
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
+import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -125,6 +133,25 @@ interface WorkspaceShellProps {
     conversationId: string | null,
     selection: DiffReviewSelection,
   ) => Promise<WorkspaceDiffSnapshotResponse>;
+  // Loads a fresh workspace diff detail for one file.
+  // 加载单个文件的最新工作区 diff 详情。
+  onLoadWorkspaceDiffFileDetail: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    selection: DiffReviewSelection,
+    file: WorkspaceDiffFileDetailRequest,
+    options?: WorkspaceDiffFileDetailLoadOptions,
+  ) => Promise<WorkspaceDiffFileDetailResponse>;
+  // Loads compact file-level search hits for the current workspace diff.
+  // 加载当前工作区 diff 的紧凑文件级搜索命中。
+  onLoadWorkspaceDiffSearch: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    selection: DiffReviewSelection,
+    search: WorkspaceDiffSearchRequest,
+  ) => Promise<WorkspaceDiffSearchResponse>;
   // Stages one browser-provided attachment through the service.
   // 通过服务暂存一个浏览器提供的附件。
   onStageAttachmentBytes: (
@@ -279,6 +306,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onStopSubagentTask={props.onStopSubagentTask}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
           parseConversationBlocks={parseConversationBlocks}
+          loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
+          loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
           loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
           onTrace={props.onTrace}
         >

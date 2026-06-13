@@ -16,6 +16,14 @@ export interface ServiceRequest {
   params?: ServiceParams;
 }
 
+// ServiceRequestOptions carries optional transport controls for one request.
+// ServiceRequestOptions 承载单次请求的可选传输控制项。
+export interface ServiceRequestOptions {
+  // signal aborts the underlying request when the caller no longer needs it.
+  // signal 在调用方不再需要结果时中止底层请求。
+  signal?: AbortSignal;
+}
+
 // ServiceErrorPayload describes a normalized service error.
 // ServiceErrorPayload 描述标准化后的服务错误。
 export interface ServiceErrorPayload {
@@ -74,7 +82,7 @@ export type ServiceUnsubscribe = () => void;
 export interface ServiceTransport {
   // request sends one RPC call and resolves with the typed result payload.
   // request 发送一次 RPC 调用并解析为类型化结果载荷。
-  request<T>(method: string, params?: ServiceParams): Promise<T>;
+  request<T>(method: string, params?: ServiceParams, options?: ServiceRequestOptions): Promise<T>;
 
   // subscribe registers an event handler for one topic.
   // subscribe 为指定主题注册事件处理函数。

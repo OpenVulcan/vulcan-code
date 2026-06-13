@@ -1,240 +1,835 @@
 import * as React from "react";
-import hljs from "highlight.js/lib/core";
-import type { LanguageFn } from "highlight.js";
 
-import type { DiffFile } from "./types";
+import {
+  DIFF_SHIKI_THEME,
+  type DiffShikiTokenSpan,
+  diffLanguageForFile,
+  normalizeShikiLanguage,
+} from "./diff-shiki-shared";
+import type { DiffFile, DiffLine } from "./types";
+import type { DiffMountedVirtualRow } from "./diff-virtual-layout";
 
-// HighlightLanguageModule describes one dynamically imported highlight.js language module.
-// HighlightLanguageModule 描述一个动态导入的 highlight.js 语言模块。
-interface HighlightLanguageModule {
-  // Default export may contain the language factory in ESM builds.
-  // 默认导出在 ESM 构建中可能包含语言工厂。
-  default?: LanguageFn;
-  // Some dev transforms expose the language factory under a named export.
-  // 部分开发态转换会把语言工厂暴露在命名导出中。
-  [key: string]: unknown;
+export { diffLanguageForFile };
+
+// DIFF_HIGHLIGHT_CACHE_LIMIT caps highlighted row HTML entries retained in memory.
+// DIFF_HIGHLIGHT_CACHE_LIMIT 限制内存中保留的高亮行 HTML 条目数。
+const DIFF_HIGHLIGHT_CACHE_LIMIT = 8000;
+
+// DIFF_HIGHLIGHT_FAILED_CACHE_LIMIT caps failed highlight keys to avoid retry loops growing forever.
+// DIFF_HIGHLIGHT_FAILED_CACHE_LIMIT 限制失败高亮键数量，避免重试记录无限增长。
+const DIFF_HIGHLIGHT_FAILED_CACHE_LIMIT = 8000;
+
+// DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT bounds one worker message to keep result turnaround responsive.
+// DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT 限制单条 Worker 消息大小，保证结果回传响应性。
+const DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT = 96;
+
+// DIFF_HIGHLIGHT_BATCH_DISPATCH_DELAY_MS spaces syntax-highlight requests across animation frames.
+// DIFF_HIGHLIGHT_BATCH_DISPATCH_DELAY_MS 将语法高亮请求分散到多个动画帧中派发。
+const DIFF_HIGHLIGHT_BATCH_DISPATCH_DELAY_MS = 16;
+
+// DiffHighlightWorkerLine carries one line scheduled for background highlighting.
+// DiffHighlightWorkerLine 承载一条被调度到后台高亮的行。
+interface DiffHighlightWorkerLine {
+  // Stable cache key owned by the main thread.
+  // 主线程持有的稳定缓存键。
+  key: string;
+  // Raw code text without the diff prefix.
+  // 不包含 diff 前缀的原始代码文本。
+  content: string;
 }
 
-// ImportMetaWithGlob exposes Vite's glob import in projects without vite/client ambient types.
-// ImportMetaWithGlob 在未引入 vite/client 全局类型的项目中暴露 Vite 的 glob 导入。
-type ImportMetaWithGlob = ImportMeta & {
-  // glob builds a lazy loader map for matching modules.
-  // glob 为匹配模块构建懒加载器映射。
-  glob: <T>(pattern: string) => Record<string, () => Promise<T>>;
-};
-
-// DIFF_HIGHLIGHT_ROW_LIMIT disables syntax highlighting for large files before virtualization.
-// DIFF_HIGHLIGHT_ROW_LIMIT 在虚拟化前对大文件关闭语法高亮。
-export const DIFF_HIGHLIGHT_ROW_LIMIT = 2000;
-
-// highlightLanguageModules contains every highlight.js language chunk and loads each only when needed.
-// highlightLanguageModules 包含所有 highlight.js 语言分块，并且仅在需要时加载对应语言。
-const highlightLanguageModules = (import.meta as ImportMetaWithGlob).glob<HighlightLanguageModule>("/node_modules/highlight.js/es/languages/*.js");
-
-// pendingHighlightLanguageLoads de-duplicates concurrent language imports.
-// pendingHighlightLanguageLoads 去重并发的语言导入请求。
-const pendingHighlightLanguageLoads = new Map<string, Promise<void>>();
-
-// DIFF_HIGHLIGHT_EXTENSION_MAP maps common file extensions to highlight.js language ids.
-// DIFF_HIGHLIGHT_EXTENSION_MAP 将常见文件扩展名映射到 highlight.js 语言标识。
-const DIFF_HIGHLIGHT_EXTENSION_MAP: Record<string, string> = {
-  bash: "bash",
-  bat: "dos",
-  c: "c",
-  cc: "cpp",
-  clj: "clojure",
-  cmake: "cmake",
-  cmd: "dos",
-  cpp: "cpp",
-  cs: "csharp",
-  css: "css",
-  cts: "typescript",
-  cxx: "cpp",
-  dart: "dart",
-  diff: "diff",
-  dockerfile: "dockerfile",
-  ex: "elixir",
-  exs: "elixir",
-  fs: "fsharp",
-  go: "go",
-  graphql: "graphql",
-  h: "c",
-  hpp: "cpp",
-  hs: "haskell",
-  html: "xml",
-  htm: "xml",
-  ini: "ini",
-  java: "java",
-  js: "javascript",
-  json: "json",
-  jsonc: "json",
-  jsonl: "json",
-  jsx: "javascript",
-  kt: "kotlin",
-  kts: "kotlin",
-  less: "less",
-  lua: "lua",
-  m: "objectivec",
-  md: "markdown",
-  mdx: "markdown",
-  mjs: "javascript",
-  mm: "objectivec",
-  mts: "typescript",
-  php: "php",
-  pl: "perl",
-  ps1: "powershell",
-  psd1: "powershell",
-  psm1: "powershell",
-  py: "python",
-  rb: "ruby",
-  rs: "rust",
-  sass: "scss",
-  scala: "scala",
-  scss: "scss",
-  sh: "bash",
-  sql: "sql",
-  svelte: "xml",
-  swift: "swift",
-  toml: "ini",
-  ts: "typescript",
-  tsx: "typescript",
-  vue: "xml",
-  webmanifest: "json",
-  xml: "xml",
-  yaml: "yaml",
-  yml: "yaml",
-  zsh: "bash",
-};
-
-// DIFF_HIGHLIGHT_FILE_NAME_MAP maps extensionless special files to highlight.js language ids.
-// DIFF_HIGHLIGHT_FILE_NAME_MAP 将无扩展特殊文件名映射到 highlight.js 语言标识。
-const DIFF_HIGHLIGHT_FILE_NAME_MAP: Record<string, string> = {
-  ".bashrc": "bash",
-  ".env": "bash",
-  ".gitconfig": "ini",
-  ".gitignore": "bash",
-  ".npmrc": "ini",
-  "cargo.lock": "ini",
-  "cmakelists.txt": "cmake",
-  "dockerfile": "dockerfile",
-  "makefile": "makefile",
-  "package-lock.json": "json",
-  "package.json": "json",
-  "pnpm-lock.yaml": "yaml",
-  "tsconfig.json": "json",
-};
-
-// diffLanguageForFile infers a highlight.js language id from one diff file path.
-// diffLanguageForFile 从单个 diff 文件路径推断 highlight.js 语言标识。
-export function diffLanguageForFile(file: DiffFile): string | null {
-  const path = displayPath(file).replace(/\\/g, "/").toLowerCase();
-  const fileName = path.split("/").at(-1) ?? path;
-  const extension = fileName.includes(".") ? fileName.split(".").at(-1) ?? "" : "";
-  const specialName = DIFF_HIGHLIGHT_FILE_NAME_MAP[fileName];
-  if (specialName) {
-    return specialName;
-  }
-  const mappedExtension = DIFF_HIGHLIGHT_EXTENSION_MAP[extension];
-  if (mappedExtension) {
-    return mappedExtension;
-  }
-  return languageModuleExists(extension) ? extension : null;
+// DiffHighlightWorkerRequest asks the worker to highlight one language batch.
+// DiffHighlightWorkerRequest 请求 Worker 高亮一个语言批次。
+interface DiffHighlightWorkerRequest {
+  // Message kind used by the worker protocol.
+  // Worker 协议使用的消息类型。
+  kind: "highlight";
+  // Request id used to match worker responses.
+  // 用于匹配 Worker 响应的请求标识。
+  id: number;
+  // Canonical Shiki language id.
+  // 规范化后的 Shiki 语言标识。
+  language: string;
+  // Lines to highlight in this batch.
+  // 本批次需要高亮的行。
+  lines: DiffHighlightWorkerLine[];
 }
 
-// useHighlightLanguage registers one highlight.js language module on demand.
-// useHighlightLanguage 按需注册单个 highlight.js 语言模块。
+// DiffHighlightWorkerCancelRequest asks the worker to stop one obsolete in-flight batch.
+// DiffHighlightWorkerCancelRequest 请求 Worker 停止一个已过期的进行中批次。
+interface DiffHighlightWorkerCancelRequest {
+  // Message kind used by the worker protocol.
+  // Worker 协议使用的消息类型。
+  kind: "cancel";
+  // Request id that should be cancelled at the next worker slice boundary.
+  // 应在下一个 Worker 分片边界取消的请求标识。
+  id: number;
+}
+
+// DiffHighlightWorkerResult carries one highlighted line result.
+// DiffHighlightWorkerResult 承载单条高亮结果。
+interface DiffHighlightWorkerResult {
+  // Stable cache key echoed from the request.
+  // 从请求中回传的稳定缓存键。
+  key: string;
+  // Serializable token spans generated by the highlight worker.
+  // 由高亮 Worker 生成的可序列化 token span。
+  spans: DiffShikiTokenSpan[];
+}
+
+// DiffHighlightWorkerResponse returns highlighted line token spans to the main thread.
+// DiffHighlightWorkerResponse 将高亮后的行 token span 返回主线程。
+interface DiffHighlightWorkerResponse {
+  // Request id echoed from the request.
+  // 从请求中回传的请求标识。
+  id: number;
+  // Highlighted line results.
+  // 高亮后的行结果。
+  results: DiffHighlightWorkerResult[];
+  // Optional error message for diagnostics and no-token rendering.
+  // 用于诊断和无 token 渲染的可选错误信息。
+  error?: string;
+}
+
+// HighlightLineEntry stores one pending or in-flight highlight request.
+// HighlightLineEntry 保存一条待发送或进行中的高亮请求。
+interface HighlightLineEntry {
+  // Stable cache key for this line and language.
+  // 该行与语言对应的稳定缓存键。
+  key: string;
+  // Canonical Shiki language id.
+  // 规范化后的 Shiki 语言标识。
+  language: string;
+  // Raw code text without the diff prefix.
+  // 不包含 diff 前缀的原始代码文本。
+  line: string;
+  // React row refresh callbacks waiting for this result.
+  // 等待该结果的 React 行刷新回调。
+  subscribers: Set<() => void>;
+}
+
+// HighlightQueuedBatch stores one worker-bound highlight batch waiting for frame-paced dispatch.
+// HighlightQueuedBatch 保存一个等待按帧派发到 Worker 的高亮批次。
+interface HighlightQueuedBatch {
+  // Worker instance that should receive the highlight request.
+  // 应接收高亮请求的 Worker 实例。
+  worker: Worker;
+  // Canonical Shiki language id shared by every entry.
+  // 批次内所有条目共享的规范 Shiki 语言标识。
+  language: string;
+  // Highlight entries retained until the batch is posted or cancelled.
+  // 在批次发送或取消前保留的高亮条目。
+  entries: readonly HighlightLineEntry[];
+  // Inclusive start index inside entries for this queued batch.
+  // 当前排队批次在 entries 中的起始索引（包含）。
+  startIndex: number;
+  // Exclusive end index inside entries for this queued batch.
+  // 当前排队批次在 entries 中的结束索引（不包含）。
+  endIndex: number;
+}
+
+// highlightedLineCache stores rendered token spans for repeated diff lines and scroll remounts.
+// highlightedLineCache 缓存重复 diff 行与滚动重挂载时的 token span。
+const highlightedLineCache = new Map<string, DiffShikiTokenSpan[]>();
+
+// failedHighlightKeys stores keys that should not be retried in this page lifetime.
+// failedHighlightKeys 保存当前页面生命周期内不应重复尝试的失败高亮键。
+const failedHighlightKeys = new Set<string>();
+
+// diffLineHighlightCacheKeyCache stores theme/language cache keys for stable parsed diff lines.
+// diffLineHighlightCacheKeyCache 按稳定解析行缓存主题与语言对应的高亮键。
+const diffLineHighlightCacheKeyCache = new WeakMap<DiffLine, Map<string, string>>();
+
+// pendingHighlightEntries stores line work that will be flushed to the worker.
+// pendingHighlightEntries 保存即将发送到 Worker 的行任务。
+const pendingHighlightEntries = new Map<string, HighlightLineEntry>();
+
+// inflightHighlightEntries stores line work already sent to the worker.
+// inflightHighlightEntries 保存已经发送到 Worker 的行任务。
+const inflightHighlightEntries = new Map<string, HighlightLineEntry>();
+
+// inflightHighlightRequestIdsByKey maps each sent line key back to its worker request.
+// inflightHighlightRequestIdsByKey 将已发送行 key 映射回对应 Worker 请求。
+const inflightHighlightRequestIdsByKey = new Map<string, number>();
+
+// queuedHighlightEntries stores line work batched but not yet posted to the worker.
+// queuedHighlightEntries 保存已经成批排队但尚未发送到 Worker 的行任务。
+const queuedHighlightEntries = new Map<string, HighlightLineEntry>();
+
+// workerHighlightRequests maps request ids to the entries they contain.
+// workerHighlightRequests 将请求标识映射到其包含的行任务。
+const workerHighlightRequests = new Map<number, HighlightLineEntry[]>();
+
+// queuedHighlightBatches stores worker requests waiting for frame-paced dispatch.
+// queuedHighlightBatches 保存等待按帧派发的 Worker 请求。
+const queuedHighlightBatches: HighlightQueuedBatch[] = [];
+
+// queuedHighlightBatchCursor points at the next batch without shifting the queue array.
+// queuedHighlightBatchCursor 指向下一个批次，避免移动队列数组。
+let queuedHighlightBatchCursor = 0;
+
+// diffHighlightWorker stores the lazily created syntax-highlight worker.
+// diffHighlightWorker 保存懒创建的语法高亮 Worker。
+let diffHighlightWorker: Worker | null = null;
+
+// diffHighlightWorkerFailed disables worker retries after construction or runtime failure.
+// diffHighlightWorkerFailed 在 Worker 构造或运行失败后禁用重试。
+let diffHighlightWorkerFailed = false;
+
+// nextWorkerRequestId increments for each worker batch.
+// nextWorkerRequestId 为每个 Worker 批次递增。
+let nextWorkerRequestId = 0;
+
+// pendingFlushFrame stores the scheduled requestAnimationFrame id.
+// pendingFlushFrame 保存已调度的 requestAnimationFrame 标识。
+let pendingFlushFrame: number | null = null;
+
+// pendingBatchDispatchFrame stores the scheduled batch dispatch animation frame.
+// pendingBatchDispatchFrame 保存已调度的批次派发动画帧。
+let pendingBatchDispatchFrame: number | null = null;
+
+// pendingBatchDispatchTimeout stores the scheduled batch dispatch delay.
+// pendingBatchDispatchTimeout 保存已调度的批次派发延迟。
+let pendingBatchDispatchTimeout: number | null = null;
+
+// useHighlightLanguage reports whether the Shiki worker supports a language.
+// useHighlightLanguage 返回 Shiki Worker 是否支持某个语言。
 export function useHighlightLanguage(language: string | null): boolean {
-  const [, refresh] = React.useReducer((value: number) => value + 1, 0);
+  return !language || Boolean(normalizeShikiLanguage(language));
+}
+
+// useHighlightedDiffWindowRevision schedules one virtual row window as a single refresh unit.
+// useHighlightedDiffWindowRevision 将一个虚拟行窗口作为单个刷新单元调度高亮。
+export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtualRow[], language: string | null, enabled: boolean): number {
+  const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
+  const normalizedLanguage = normalizeShikiLanguage(language);
   React.useEffect(() => {
-    if (!language || hljs.getLanguage(language)) {
+    if (!enabled || !normalizedLanguage) {
+      return undefined;
+    }
+    // Lazily allocated unsubscribe callbacks for rows that actually need worker highlighting.
+    // 仅在确实需要 Worker 高亮的行出现时才懒分配取消订阅回调。
+    let unsubscribeList: Array<() => void> | undefined;
+    // Lazily allocated per-window duplicate guard for uncached highlight keys.
+    // 仅对未缓存的高亮 key 懒分配当前窗口内去重集合。
+    let scheduledKeys: Set<string> | undefined;
+    for (const row of rows) {
+      if (row.kind !== "line" || row.line.kind === "metadata") {
+        continue;
+      }
+      const cacheKey = highlightCacheKeyForDiffLine(row.line, normalizedLanguage);
+      if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
+        continue;
+      }
+      const content = diffLineHighlightContent(row.line);
+      scheduledKeys ??= new Set();
+      scheduledKeys.add(cacheKey);
+      unsubscribeList ??= [];
+      unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+    }
+    if (!unsubscribeList) {
+      return undefined;
+    }
+    return () => {
+      for (const unsubscribe of unsubscribeList) {
+        unsubscribe();
+      }
+    };
+  }, [enabled, normalizedLanguage, rows]);
+  return revision;
+}
+
+// useHighlightedDiffFileRevision schedules one complete small file as a single refresh unit.
+// useHighlightedDiffFileRevision 将一个完整小文件作为单个刷新单元调度高亮。
+export function useHighlightedDiffFileRevision(file: DiffFile, language: string | null, enabled: boolean): number {
+  const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
+  const normalizedLanguage = normalizeShikiLanguage(language);
+  React.useEffect(() => {
+    if (!enabled || !normalizedLanguage) {
+      return undefined;
+    }
+    // Lazily allocated unsubscribe callbacks for lines that actually need worker highlighting.
+    // 仅在确实需要 Worker 高亮的行出现时才懒分配取消订阅回调。
+    let unsubscribeList: Array<() => void> | undefined;
+    // Lazily allocated per-file duplicate guard for uncached highlight keys.
+    // 仅对未缓存的高亮 key 懒分配当前文件内去重集合。
+    let scheduledKeys: Set<string> | undefined;
+    for (const hunk of file.hunks) {
+      for (const line of hunk.lines) {
+        if (line.kind === "metadata") {
+          continue;
+        }
+        const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage);
+        if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
+          continue;
+        }
+        const content = diffLineHighlightContent(line);
+        scheduledKeys ??= new Set();
+        scheduledKeys.add(cacheKey);
+        unsubscribeList ??= [];
+        unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+      }
+    }
+    if (!unsubscribeList) {
+      return undefined;
+    }
+    return () => {
+      for (const unsubscribe of unsubscribeList) {
+        unsubscribe();
+      }
+    };
+  }, [enabled, file, normalizedLanguage]);
+  return revision;
+}
+
+// highlightedDiffLineSpans returns cached syntax-highlighted token spans when ready.
+// highlightedDiffLineSpans 在高亮完成后返回缓存的语法高亮 token span。
+export function highlightedDiffLineSpans(line: string, language: string): DiffShikiTokenSpan[] | null {
+  const normalizedLanguage = normalizeShikiLanguage(language);
+  if (!normalizedLanguage) {
+    return null;
+  }
+  return highlightedDiffLineSpansForLanguage(line, normalizedLanguage);
+}
+
+// highlightedDiffLineSpansForLanguage returns cached token spans for a canonical Shiki language.
+// highlightedDiffLineSpansForLanguage 使用规范化后的 Shiki 语言返回缓存 token span。
+export function highlightedDiffLineSpansForLanguage(line: string, normalizedLanguage: string): DiffShikiTokenSpan[] | null {
+  return highlightedLineCache.get(highlightCacheKey(line, normalizedLanguage)) ?? null;
+}
+
+// highlightedDiffLineSpansForDiffLine returns cached token spans for a parsed diff line.
+// highlightedDiffLineSpansForDiffLine 返回解析 diff 行对应的缓存 token span。
+export function highlightedDiffLineSpansForDiffLine(line: DiffLine, normalizedLanguage: string): DiffShikiTokenSpan[] | null {
+  return highlightedLineCache.get(highlightCacheKeyForDiffLine(line, normalizedLanguage)) ?? null;
+}
+
+// requestHighlightedLineByKey subscribes one row when the caller already computed the cache key.
+// requestHighlightedLineByKey 在调用方已计算缓存键时订阅单条高亮结果。
+function requestHighlightedLineByKey(key: string, line: string, language: string, onReady: () => void): () => void {
+  if (highlightedLineCache.has(key) || failedHighlightKeys.has(key)) {
+    return () => undefined;
+  }
+  let entry = pendingHighlightEntries.get(key) ?? queuedHighlightEntries.get(key) ?? inflightHighlightEntries.get(key);
+  if (!entry) {
+    entry = {
+      key,
+      language,
+      line,
+      subscribers: new Set(),
+    };
+    pendingHighlightEntries.set(key, entry);
+    scheduleHighlightFlush();
+  }
+  entry.subscribers.add(onReady);
+  return () => {
+    entry?.subscribers.delete(onReady);
+    if (entry?.subscribers.size === 0 && pendingHighlightEntries.get(key) === entry) {
+      pendingHighlightEntries.delete(key);
+    } else if (entry?.subscribers.size === 0 && inflightHighlightEntries.get(key) === entry) {
+      const requestId = inflightHighlightRequestIdsByKey.get(key);
+      if (requestId != null) {
+        cancelInFlightHighlightRequestIfUnobserved(requestId);
+      }
+    }
+  };
+}
+
+// scheduleHighlightFlush batches visible line work on the next animation frame.
+// scheduleHighlightFlush 在下一帧批量发送可见行任务。
+function scheduleHighlightFlush(): void {
+  if (pendingFlushFrame != null) {
+    return;
+  }
+  if (typeof window === "undefined") {
+    flushPendingHighlightEntries();
+    return;
+  }
+  pendingFlushFrame = window.requestAnimationFrame(() => {
+    pendingFlushFrame = null;
+    flushPendingHighlightEntries();
+  });
+}
+
+// flushPendingHighlightEntries groups pending line work by language and sends it to the worker.
+// flushPendingHighlightEntries 按语言聚合待处理行任务并发送到 Worker。
+function flushPendingHighlightEntries(): void {
+  const worker = currentDiffHighlightWorker();
+  const groupedEntries = groupPendingHighlightEntriesByLanguage();
+  if (!groupedEntries.size) {
+    return;
+  }
+  if (!worker) {
+    failGroupedHighlightEntries(groupedEntries);
+    return;
+  }
+  for (const [language, languageEntries] of groupedEntries) {
+    for (let index = 0; index < languageEntries.length; index += DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT) {
+      queueHighlightBatch(
+        worker,
+        language,
+        languageEntries,
+        index,
+        Math.min(languageEntries.length, index + DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT),
+      );
+    }
+  }
+}
+
+// groupPendingHighlightEntriesByLanguage groups live pending entries in a single pass.
+// groupPendingHighlightEntriesByLanguage 单次遍历按语言聚合仍有订阅者的待处理任务。
+function groupPendingHighlightEntriesByLanguage(): Map<string, HighlightLineEntry[]> {
+  const grouped = new Map<string, HighlightLineEntry[]>();
+  for (const entry of pendingHighlightEntries.values()) {
+    if (entry.subscribers.size <= 0) {
+      continue;
+    }
+    collectGroupedHighlightEntry(entry, grouped);
+  }
+  pendingHighlightEntries.clear();
+  return grouped;
+}
+
+// queueHighlightBatch keeps one batch until the next paced dispatch slot.
+// queueHighlightBatch 将一个批次保留到下一个节奏化派发时隙。
+function queueHighlightBatch(
+  worker: Worker,
+  language: string,
+  entries: readonly HighlightLineEntry[],
+  startIndex: number,
+  endIndex: number,
+): void {
+  trackQueuedHighlightEntryRange(entries, startIndex, endIndex);
+  queuedHighlightBatches.push({ worker, language, entries, startIndex, endIndex });
+  scheduleHighlightBatchDispatch();
+}
+
+// trackQueuedHighlightEntryRange indexes entries during the frame-paced queued phase.
+// trackQueuedHighlightEntryRange 在按帧排队阶段索引任务，避免重挂载时重复创建同 key 请求。
+function trackQueuedHighlightEntryRange(entries: readonly HighlightLineEntry[], startIndex: number, endIndex: number): void {
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const entry = entries[index];
+    queuedHighlightEntries.set(entry.key, entry);
+  }
+}
+
+// releaseQueuedHighlightEntryRange removes entries once they leave the queued phase.
+// releaseQueuedHighlightEntryRange 在任务离开排队阶段后移除索引。
+function releaseQueuedHighlightEntryRange(entries: readonly HighlightLineEntry[], startIndex: number, endIndex: number): void {
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const entry = entries[index];
+    if (queuedHighlightEntries.get(entry.key) === entry) {
+      queuedHighlightEntries.delete(entry.key);
+    }
+  }
+}
+
+// hasQueuedHighlightBatches returns whether any undispatched highlight batch remains.
+// hasQueuedHighlightBatches 返回是否仍有未派发的高亮批次。
+function hasQueuedHighlightBatches(): boolean {
+  return queuedHighlightBatchCursor < queuedHighlightBatches.length;
+}
+
+// dequeueHighlightBatch returns the next queued batch without Array.shift churn.
+// dequeueHighlightBatch 返回下一个排队批次，避免 Array.shift 带来的搬移开销。
+function dequeueHighlightBatch(): HighlightQueuedBatch | undefined {
+  if (!hasQueuedHighlightBatches()) {
+    queuedHighlightBatches.length = 0;
+    queuedHighlightBatchCursor = 0;
+    return undefined;
+  }
+  const batch = queuedHighlightBatches[queuedHighlightBatchCursor];
+  queuedHighlightBatchCursor += 1;
+  if (queuedHighlightBatchCursor > 64 && queuedHighlightBatchCursor * 2 >= queuedHighlightBatches.length) {
+    queuedHighlightBatches.splice(0, queuedHighlightBatchCursor);
+    queuedHighlightBatchCursor = 0;
+  }
+  return batch;
+}
+
+// scheduleHighlightBatchDispatch schedules one highlight worker request per frame slot.
+// scheduleHighlightBatchDispatch 每个帧时隙调度一个高亮 Worker 请求。
+function scheduleHighlightBatchDispatch(): void {
+  if (pendingBatchDispatchFrame != null || pendingBatchDispatchTimeout != null) {
+    return;
+  }
+  if (typeof window === "undefined") {
+    dispatchNextHighlightBatch();
+    return;
+  }
+  pendingBatchDispatchFrame = window.requestAnimationFrame(() => {
+    pendingBatchDispatchFrame = null;
+    pendingBatchDispatchTimeout = window.setTimeout(dispatchNextHighlightBatch, DIFF_HIGHLIGHT_BATCH_DISPATCH_DELAY_MS);
+  });
+}
+
+// dispatchNextHighlightBatch posts one queued batch and reschedules the rest.
+// dispatchNextHighlightBatch 发送一个排队批次并重新调度剩余批次。
+function dispatchNextHighlightBatch(): void {
+  pendingBatchDispatchFrame = null;
+  pendingBatchDispatchTimeout = null;
+  const batch = dequeueHighlightBatch();
+  if (!batch) {
+    return;
+  }
+  if (diffHighlightWorkerFailed || batch.worker !== diffHighlightWorker) {
+    failHighlightEntryRange(batch.entries, batch.startIndex, batch.endIndex);
+  } else {
+    sendHighlightBatch(batch.worker, batch.language, batch.entries, batch.startIndex, batch.endIndex);
+  }
+  if (hasQueuedHighlightBatches()) {
+    scheduleHighlightBatchDispatch();
+  }
+}
+
+// clearScheduledHighlightBatchDispatch cancels pending frame-paced batch dispatch.
+// clearScheduledHighlightBatchDispatch 取消待执行的按帧高亮批次派发。
+function clearScheduledHighlightBatchDispatch(): void {
+  if (typeof window === "undefined") {
+    pendingBatchDispatchFrame = null;
+    pendingBatchDispatchTimeout = null;
+    return;
+  }
+  if (pendingBatchDispatchFrame != null) {
+    window.cancelAnimationFrame(pendingBatchDispatchFrame);
+    pendingBatchDispatchFrame = null;
+  }
+  if (pendingBatchDispatchTimeout != null) {
+    window.clearTimeout(pendingBatchDispatchTimeout);
+    pendingBatchDispatchTimeout = null;
+  }
+}
+
+// sendHighlightBatch posts one live language batch to the worker and records in-flight entries.
+// sendHighlightBatch 向 Worker 发送一个仍有订阅者的语言批次并记录进行中的任务。
+function sendHighlightBatch(
+  worker: Worker,
+  language: string,
+  sourceEntries: readonly HighlightLineEntry[],
+  startIndex: number,
+  endIndex: number,
+): void {
+  releaseQueuedHighlightEntryRange(sourceEntries, startIndex, endIndex);
+  let liveEntryCount = 0;
+  for (let index = startIndex; index < endIndex; index += 1) {
+    if (sourceEntries[index].subscribers.size > 0) {
+      liveEntryCount += 1;
+    }
+  }
+  if (liveEntryCount <= 0) {
+    return;
+  }
+  const id = ++nextWorkerRequestId;
+  // Request lines and sent entries are preallocated after counting live subscribers.
+  // 先统计仍有订阅者的任务数量，再预分配请求行与已发送任务数组。
+  const entries: HighlightLineEntry[] = new Array(liveEntryCount);
+  const lines: DiffHighlightWorkerLine[] = new Array(liveEntryCount);
+  let liveIndex = 0;
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const entry = sourceEntries[index];
+    if (entry.subscribers.size <= 0) {
+      continue;
+    }
+    entries[liveIndex] = entry;
+    lines[liveIndex] = { key: entry.key, content: entry.line };
+    liveIndex += 1;
+  }
+  const request: DiffHighlightWorkerRequest = {
+    kind: "highlight",
+    id,
+    language,
+    lines,
+  };
+  workerHighlightRequests.set(id, entries);
+  for (const entry of entries) {
+    inflightHighlightEntries.set(entry.key, entry);
+    inflightHighlightRequestIdsByKey.set(entry.key, id);
+  }
+  try {
+    worker.postMessage(request);
+  } catch {
+    workerHighlightRequests.delete(id);
+    for (const entry of entries) {
+      inflightHighlightEntries.delete(entry.key);
+      inflightHighlightRequestIdsByKey.delete(entry.key);
+    }
+    failHighlightEntries(entries);
+  }
+}
+
+// cancelInFlightHighlightRequestIfUnobserved cancels a worker batch only after every subscriber has left.
+// cancelInFlightHighlightRequestIfUnobserved 仅在所有订阅者都离开后取消一个 Worker 批次。
+function cancelInFlightHighlightRequestIfUnobserved(requestId: number): void {
+  const entries = workerHighlightRequests.get(requestId);
+  if (!entries) {
+    return;
+  }
+  for (const entry of entries) {
+    if (entry.subscribers.size > 0) {
       return;
     }
-    let cancelled = false;
-    void ensureHighlightLanguage(language).then(() => {
-      if (!cancelled) {
-        refresh();
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [language]);
-  return !language || Boolean(hljs.getLanguage(language));
-}
-
-// highlightedDiffLineHtml returns syntax-highlighted, HTML-escaped code for one diff line.
-// highlightedDiffLineHtml 返回单条 diff 行经过语法高亮和 HTML 转义后的代码。
-export function highlightedDiffLineHtml(line: string, language: string): string {
+  }
+  workerHighlightRequests.delete(requestId);
+  for (const entry of entries) {
+    if (inflightHighlightEntries.get(entry.key) === entry) {
+      inflightHighlightEntries.delete(entry.key);
+    }
+    if (inflightHighlightRequestIdsByKey.get(entry.key) === requestId) {
+      inflightHighlightRequestIdsByKey.delete(entry.key);
+    }
+  }
   try {
-    return hljs.highlight(line, { language, ignoreIllegals: true }).value;
+    diffHighlightWorker?.postMessage({ kind: "cancel", id: requestId } satisfies DiffHighlightWorkerCancelRequest);
   } catch {
-    return escapeHtml(line);
+    // Cancellation is best-effort; local bookkeeping already removed the obsolete request.
+    // 取消是尽力而为；本地记录已经移除了过期请求。
   }
 }
 
-// escapeHtml safely renders fallback text through dangerouslySetInnerHTML.
-// escapeHtml 为 dangerouslySetInnerHTML 安全渲染兜底文本。
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+// currentDiffHighlightWorker returns the singleton worker when the platform supports it.
+// currentDiffHighlightWorker 在平台支持时返回单例 Worker。
+function currentDiffHighlightWorker(): Worker | null {
+  if (diffHighlightWorkerFailed || typeof Worker === "undefined") {
+    return null;
+  }
+  if (!diffHighlightWorker) {
+    try {
+      diffHighlightWorker = new Worker(new URL("./diff-highlight-worker.ts", import.meta.url), {
+        type: "module",
+      });
+      diffHighlightWorker.onmessage = handleDiffHighlightWorkerMessage;
+      diffHighlightWorker.onerror = handleDiffHighlightWorkerFailure;
+      diffHighlightWorker.onmessageerror = handleDiffHighlightWorkerFailure;
+    } catch {
+      diffHighlightWorkerFailed = true;
+      return null;
+    }
+  }
+  return diffHighlightWorker;
 }
 
-// ensureHighlightLanguage imports and registers one language module if highlight.js supports it.
-// ensureHighlightLanguage 在 highlight.js 支持时导入并注册单个语言模块。
-async function ensureHighlightLanguage(language: string): Promise<void> {
-  if (hljs.getLanguage(language)) {
+// handleDiffHighlightWorkerMessage stores worker results and refreshes subscribed rows.
+// handleDiffHighlightWorkerMessage 保存 Worker 结果并刷新订阅的行。
+function handleDiffHighlightWorkerMessage(event: MessageEvent<DiffHighlightWorkerResponse>): void {
+  const response = event.data;
+  const entries = workerHighlightRequests.get(response.id);
+  if (!entries) {
     return;
   }
-  const existingLoad = pendingHighlightLanguageLoads.get(language);
-  if (existingLoad) {
-    return existingLoad;
-  }
-  const modulePath = highlightLanguageModulePath(language);
-  const loader = modulePath ? highlightLanguageModules[modulePath] : undefined;
-  if (!loader) {
-    return;
-  }
-  const load = loader()
-    .then((module) => {
-      const languageFactory = highlightLanguageFactory(module);
-      if (languageFactory && !hljs.getLanguage(language)) {
-        hljs.registerLanguage(language, languageFactory);
+  workerHighlightRequests.delete(response.id);
+  const subscribersToNotify = new Set<() => void>();
+  let resultByKey: Map<string, DiffHighlightWorkerResult> | null = null;
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index];
+    inflightHighlightEntries.delete(entry.key);
+    inflightHighlightRequestIdsByKey.delete(entry.key);
+    let result: DiffHighlightWorkerResult | undefined = response.results[index];
+    if (result?.key !== entry.key) {
+      if (!resultByKey) {
+        resultByKey = diffHighlightResultRecoveryMap(response.results);
       }
-    })
-    .finally(() => pendingHighlightLanguageLoads.delete(language));
-  pendingHighlightLanguageLoads.set(language, load);
-  return load;
-}
-
-// highlightLanguageFactory extracts a highlight.js language factory from a lazy module.
-// highlightLanguageFactory 从懒加载模块中提取 highlight.js 语言工厂。
-function highlightLanguageFactory(module: HighlightLanguageModule): LanguageFn | null {
-  if (typeof module.default === "function") {
-    return module.default;
+      result = resultByKey.get(entry.key);
+    }
+    if (result && !response.error) {
+      rememberHighlightedLine(entry.key, result.spans);
+    } else if (response.error) {
+      rememberFailedHighlightKey(entry.key);
+    }
+    collectHighlightEntrySubscribers(entry, subscribersToNotify);
   }
-  const namedFactory = Object.values(module).find((value) => typeof value === "function");
-  return typeof namedFactory === "function" ? (namedFactory as LanguageFn) : null;
+  notifyHighlightSubscribers(subscribersToNotify);
 }
 
-// languageModuleExists returns whether highlight.js has a bundled module for one language id.
-// languageModuleExists 返回 highlight.js 是否内置某个语言标识对应的模块。
-function languageModuleExists(language: string): boolean {
-  return Boolean(highlightLanguageModulePath(language));
+// diffHighlightResultRecoveryMap builds a recovery lookup only when worker result order is unexpected.
+// diffHighlightResultRecoveryMap 仅在 Worker 结果顺序异常时构建恢复查询表。
+function diffHighlightResultRecoveryMap(results: readonly DiffHighlightWorkerResult[]): Map<string, DiffHighlightWorkerResult> {
+  const resultByKey = new Map<string, DiffHighlightWorkerResult>();
+  for (const result of results) {
+    resultByKey.set(result.key, result);
+  }
+  return resultByKey;
 }
 
-// highlightLanguageModulePath resolves the Vite glob key for one highlight.js language id.
-// highlightLanguageModulePath 解析单个 highlight.js 语言标识对应的 Vite glob 键。
-function highlightLanguageModulePath(language: string): string | null {
-  const path = `/node_modules/highlight.js/es/languages/${language}.js`;
-  return Object.prototype.hasOwnProperty.call(highlightLanguageModules, path) ? path : null;
+// handleDiffHighlightWorkerFailure disables the worker and releases pending subscribers.
+// handleDiffHighlightWorkerFailure 禁用 Worker 并释放等待中的订阅者。
+function handleDiffHighlightWorkerFailure(): void {
+  diffHighlightWorkerFailed = true;
+  diffHighlightWorker?.terminate();
+  diffHighlightWorker = null;
+  const entries = collectFailedHighlightEntries();
+  pendingHighlightEntries.clear();
+  inflightHighlightEntries.clear();
+  inflightHighlightRequestIdsByKey.clear();
+  queuedHighlightEntries.clear();
+  workerHighlightRequests.clear();
+  queuedHighlightBatches.length = 0;
+  queuedHighlightBatchCursor = 0;
+  clearScheduledHighlightBatchDispatch();
+  failHighlightEntries(entries);
 }
 
-// displayPath returns the primary file path shown in the file header.
-// displayPath 返回文件头中展示的主路径。
-function displayPath(file: DiffFile): string {
-  return file.newPath && file.newPath !== "/dev/null" ? file.newPath : file.oldPath;
+// collectFailedHighlightEntries gathers unique pending sources without spread or flatMap allocations.
+// collectFailedHighlightEntries 无需 spread 或 flatMap 分配即可收集唯一待失败任务来源。
+function collectFailedHighlightEntries(): HighlightLineEntry[] {
+  const uniqueEntries = new Map<string, HighlightLineEntry>();
+  const entries: HighlightLineEntry[] = [];
+  collectUniqueHighlightEntries(pendingHighlightEntries.values(), uniqueEntries, entries);
+  collectUniqueHighlightEntries(inflightHighlightEntries.values(), uniqueEntries, entries);
+  for (const requestEntries of workerHighlightRequests.values()) {
+    collectUniqueHighlightEntries(requestEntries, uniqueEntries, entries);
+  }
+  for (let batchIndex = queuedHighlightBatchCursor; batchIndex < queuedHighlightBatches.length; batchIndex += 1) {
+    const batch = queuedHighlightBatches[batchIndex];
+    for (let index = batch.startIndex; index < batch.endIndex; index += 1) {
+      collectUniqueHighlightEntry(batch.entries[index], uniqueEntries, entries);
+    }
+  }
+  return entries;
+}
+
+// collectUniqueHighlightEntries appends entries that have not been collected by key.
+// collectUniqueHighlightEntries 追加尚未按 key 收集过的任务。
+function collectUniqueHighlightEntries(
+  source: Iterable<HighlightLineEntry>,
+  uniqueEntries: Map<string, HighlightLineEntry>,
+  entries: HighlightLineEntry[],
+): void {
+  for (const entry of source) {
+    collectUniqueHighlightEntry(entry, uniqueEntries, entries);
+  }
+}
+
+// collectUniqueHighlightEntry appends one entry only once across failure sources.
+// collectUniqueHighlightEntry 在失败来源中只追加一次单个任务。
+function collectUniqueHighlightEntry(
+  entry: HighlightLineEntry,
+  uniqueEntries: Map<string, HighlightLineEntry>,
+  entries: HighlightLineEntry[],
+): void {
+  if (uniqueEntries.has(entry.key)) {
+    return;
+  }
+  uniqueEntries.set(entry.key, entry);
+  entries.push(entry);
+}
+
+// failHighlightEntries marks entries as failed and wakes subscribers for no-token rendering.
+// failHighlightEntries 将任务标记为失败并唤醒订阅者进行无 token 渲染。
+function failHighlightEntries(entries: HighlightLineEntry[]): void {
+  const subscribersToNotify = new Set<() => void>();
+  for (const entry of entries) {
+    rememberFailedHighlightKey(entry.key);
+    collectHighlightEntrySubscribers(entry, subscribersToNotify);
+  }
+  notifyHighlightSubscribers(subscribersToNotify);
+}
+
+// failGroupedHighlightEntries marks grouped entries as failed with one cross-language notification set.
+// failGroupedHighlightEntries 使用一个跨语言通知集合将分组任务标记为失败。
+function failGroupedHighlightEntries(groupedEntries: ReadonlyMap<string, readonly HighlightLineEntry[]>): void {
+  const subscribersToNotify = new Set<() => void>();
+  for (const entries of groupedEntries.values()) {
+    for (const entry of entries) {
+      rememberFailedHighlightKey(entry.key);
+      collectHighlightEntrySubscribers(entry, subscribersToNotify);
+    }
+  }
+  notifyHighlightSubscribers(subscribersToNotify);
+}
+
+// failHighlightEntryRange marks live entries in one queued range as failed without an intermediate array.
+// failHighlightEntryRange 不创建中间数组，直接将一个排队范围中的存活任务标记为失败。
+function failHighlightEntryRange(entries: readonly HighlightLineEntry[], startIndex: number, endIndex: number): void {
+  releaseQueuedHighlightEntryRange(entries, startIndex, endIndex);
+  const subscribersToNotify = new Set<() => void>();
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const entry = entries[index];
+    if (entry.subscribers.size <= 0) {
+      continue;
+    }
+    rememberFailedHighlightKey(entry.key);
+    collectHighlightEntrySubscribers(entry, subscribersToNotify);
+  }
+  notifyHighlightSubscribers(subscribersToNotify);
+}
+
+// collectHighlightEntrySubscribers moves live subscribers into a batch-level notification set.
+// collectHighlightEntrySubscribers 将存活订阅者转移到批次级通知集合。
+function collectHighlightEntrySubscribers(entry: HighlightLineEntry, subscribersToNotify: Set<() => void>): void {
+  for (const subscriber of entry.subscribers) {
+    subscribersToNotify.add(subscriber);
+  }
+  entry.subscribers.clear();
+}
+
+// notifyHighlightSubscribers invokes each unique refresh callback once for a completed batch.
+// notifyHighlightSubscribers 对完成批次中的每个唯一刷新回调只调用一次。
+function notifyHighlightSubscribers(subscribersToNotify: ReadonlySet<() => void>): void {
+  for (const subscriber of subscribersToNotify) {
+    subscriber();
+  }
+}
+
+// collectGroupedHighlightEntry appends one highlight entry to its language bucket.
+// collectGroupedHighlightEntry 将单个高亮任务追加到对应语言分组。
+function collectGroupedHighlightEntry(entry: HighlightLineEntry, grouped: Map<string, HighlightLineEntry[]>): void {
+  const group = grouped.get(entry.language);
+  if (group) {
+    group.push(entry);
+  } else {
+    grouped.set(entry.language, [entry]);
+  }
+}
+
+// highlightCacheKey builds a stable cache key from theme, language, and source line.
+// highlightCacheKey 根据主题、语言和源码行构建稳定缓存键。
+function highlightCacheKey(line: string, language: string): string {
+  return `${DIFF_SHIKI_THEME}\u0000${language}\u0000${line}`;
+}
+
+// highlightCacheKeyForDiffLine returns a cached highlight key for one parsed diff line.
+// highlightCacheKeyForDiffLine 返回单条解析 diff 行的缓存高亮键。
+function highlightCacheKeyForDiffLine(line: DiffLine, language: string): string {
+  let keyByLanguage = diffLineHighlightCacheKeyCache.get(line);
+  if (!keyByLanguage) {
+    keyByLanguage = new Map();
+    diffLineHighlightCacheKeyCache.set(line, keyByLanguage);
+  }
+  const cached = keyByLanguage.get(language);
+  if (cached) {
+    return cached;
+  }
+  const cacheKey = highlightCacheKey(diffLineHighlightContent(line), language);
+  keyByLanguage.set(language, cacheKey);
+  return cacheKey;
+}
+
+// diffLineHighlightContent returns the exact text sent to the Shiki highlighter for one diff line.
+// diffLineHighlightContent 返回单条 diff 行发送给 Shiki 高亮器的精确文本。
+function diffLineHighlightContent(line: DiffLine): string {
+  return line.content || " ";
+}
+
+// rememberHighlightedLine stores one highlighted token span entry with FIFO eviction.
+// rememberHighlightedLine 以 FIFO 淘汰策略保存单条高亮 token span。
+function rememberHighlightedLine(cacheKey: string, spans: DiffShikiTokenSpan[]): void {
+  if (highlightedLineCache.size >= DIFF_HIGHLIGHT_CACHE_LIMIT) {
+    const oldestKey = highlightedLineCache.keys().next().value;
+    if (oldestKey) {
+      highlightedLineCache.delete(oldestKey);
+    }
+  }
+  highlightedLineCache.set(cacheKey, spans);
+}
+
+// rememberFailedHighlightKey stores one failed key with FIFO eviction.
+// rememberFailedHighlightKey 以 FIFO 淘汰策略保存单个失败高亮键。
+function rememberFailedHighlightKey(cacheKey: string): void {
+  if (failedHighlightKeys.size >= DIFF_HIGHLIGHT_FAILED_CACHE_LIMIT) {
+    const oldestKey = failedHighlightKeys.keys().next().value;
+    if (oldestKey) {
+      failedHighlightKeys.delete(oldestKey);
+    }
+  }
+  failedHighlightKeys.add(cacheKey);
 }

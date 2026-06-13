@@ -6,6 +6,7 @@ import type {
 import type {
   ServiceEventHandler,
   ServiceParams,
+  ServiceRequestOptions,
   ServiceTransport,
   ServiceUnsubscribe,
 } from "@/service/protocol";
@@ -101,15 +102,15 @@ export class BrowserServiceTransport implements ServiceTransport {
 
   // request sends one RPC call through the local HTTP bridge.
   // request 通过本地 HTTP 桥发送单个 RPC 调用。
-  async request<T>(method: string, params?: ServiceParams): Promise<T> {
+  async request<T>(method: string, params?: ServiceParams, options?: ServiceRequestOptions): Promise<T> {
     const baseUrl = await this.resolveBaseUrl();
-    let response = await this.fetchRpc(baseUrl, method, params);
+    let response = await this.fetchRpc(baseUrl, method, params, options);
     if (response.status === 401) {
       this.baseUrl = null;
       this.baseUrlPromise = null;
       clearBrowserServiceEndpointCache();
       const refreshedBaseUrl = await this.resolveBaseUrl();
-      response = await this.fetchRpc(refreshedBaseUrl, method, params);
+      response = await this.fetchRpc(refreshedBaseUrl, method, params, options);
     }
     if (!response.ok) {
       throw new Error(`Browser service RPC failed with HTTP ${response.status}.`);
@@ -123,7 +124,7 @@ export class BrowserServiceTransport implements ServiceTransport {
 
   // fetchRpc sends the raw HTTP request for one RPC call.
   // fetchRpc 发送单次 RPC 调用的原始 HTTP 请求。
-  private fetchRpc(baseUrl: string, method: string, params?: ServiceParams): Promise<Response> {
+  private fetchRpc(baseUrl: string, method: string, params?: ServiceParams, options?: ServiceRequestOptions): Promise<Response> {
     const headers: Record<string, string> = {
       "content-type": "application/json",
     };
@@ -134,6 +135,7 @@ export class BrowserServiceTransport implements ServiceTransport {
     return fetch(`${baseUrl}/rpc`, {
       method: "POST",
       headers,
+      signal: options?.signal,
       body: JSON.stringify({ method, params: params ?? null }),
     });
   }
