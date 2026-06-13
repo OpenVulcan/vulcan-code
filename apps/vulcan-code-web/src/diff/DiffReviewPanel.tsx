@@ -81,7 +81,7 @@ export function DiffReviewPanel(props: {
   const summarySearchResolvedKeyRef = React.useRef<string | null>(null);
   const summarySearchTargetAppliedKeyRef = React.useRef<string | null>(null);
   const summarySearchScrollAppliedKeyRef = React.useRef<string | null>(null);
-  const [scrollState, handleFileListScroll] = useDiffScrollState(fileListRef);
+  const [scrollState, handleFileListScroll, syncFileListScrollState] = useDiffScrollState(fileListRef);
   const snapshot = props.snapshot;
   const selection = props.selection ?? { mode: "unstaged" };
   const onLoadFileDetail = props.onLoadFileDetail;
@@ -90,6 +90,10 @@ export function DiffReviewPanel(props: {
   const [activeSearchIndex, setActiveSearchIndex] = React.useState(0);
   const [viewMode, setViewMode] = React.useState<DiffViewMode>("unified");
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
+  const diffSourceScrollResetKey = React.useMemo(
+    () => diffReviewScrollResetKey(snapshot, selection),
+    [selection, snapshot],
+  );
   const { index: searchIndex, pending: searchPending, error: searchWorkerError } = useDiffSearchIndex(snapshot, searchQuery);
   const safeActiveSearchIndex = clampDiffSearchIndex(activeSearchIndex, searchIndex.matches.length);
   const activeSearchMatch = searchIndex.matches[safeActiveSearchIndex] ?? null;
@@ -180,6 +184,15 @@ export function DiffReviewPanel(props: {
     () => mountedDiffFiles(virtualLayout, scrollState.scrollTop, scrollState.clientHeight),
     [scrollState.clientHeight, scrollState.scrollTop, virtualLayout],
   );
+  React.useLayoutEffect(() => {
+    const element = fileListRef.current;
+    if (!element) {
+      return undefined;
+    }
+    element.scrollTop = 0;
+    syncFileListScrollState();
+    return undefined;
+  }, [diffSourceScrollResetKey, syncFileListScrollState]);
   // mountedDetailHydrationRequests contains visible summary files that should be hydrated lazily.
   // mountedDetailHydrationRequests 保存当前可见且需要懒水合的摘要文件。
   const mountedDetailHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(() => {
@@ -784,6 +797,29 @@ function scheduleDiffDetailHydrationRequests(
     cancelled = true;
     clearScheduledDispatch();
   };
+}
+
+// diffReviewScrollResetKey identifies diff source changes that should reset the virtual scroll window.
+// diffReviewScrollResetKey 标识需要重置虚拟滚动窗口的 diff 来源变化。
+function diffReviewScrollResetKey(
+  // Current parsed diff snapshot.
+  // 当前已解析的 diff 快照。
+  snapshot: DiffPanelSnapshot | null,
+  // Current user-selected diff source.
+  // 当前用户选择的 diff 来源。
+  selection: DiffReviewSelection,
+): string {
+  if (!snapshot) {
+    return ["empty", selection.mode].join("\u0000");
+  }
+  return [
+    snapshot.repositoryRoot ?? "",
+    snapshot.source,
+    selection.mode,
+    selection.baseBranch ?? snapshot.selectedBaseBranch ?? "",
+    selection.compareBranch ?? snapshot.selectedCompareBranch ?? "",
+    selection.commitHash ?? snapshot.selectedCommitHash ?? "",
+  ].join("\u0000");
 }
 
 // diffSummarySearchRequestKey builds a stable backend search scope key.

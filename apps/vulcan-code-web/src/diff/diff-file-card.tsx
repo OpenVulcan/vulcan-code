@@ -908,7 +908,11 @@ function diffPlaceholderStyleHeight(style: React.CSSProperties): number {
 
 // useDiffScrollState tracks the scroll viewport for the diff file list.
 // useDiffScrollState 跟踪 diff 文件列表的滚动视口。
-export function useDiffScrollState(containerRef: React.RefObject<HTMLDivElement | null>): [DiffScrollState, React.UIEventHandler<HTMLDivElement>] {
+export function useDiffScrollState(
+  // Scrollable diff file-list element reference.
+  // 可滚动 diff 文件列表元素引用。
+  containerRef: React.RefObject<HTMLDivElement | null>,
+): [DiffScrollState, React.UIEventHandler<HTMLDivElement>, () => void] {
   const frameRef = React.useRef<number | null>(null);
   const [state, setState] = React.useState<DiffScrollState>({ scrollTop: 0, clientHeight: 0, revision: 0 });
 
@@ -959,7 +963,7 @@ export function useDiffScrollState(containerRef: React.RefObject<HTMLDivElement 
     };
   }, [containerRef, scheduleUpdate, updateState]);
 
-  return [state, scheduleUpdate];
+  return [state, scheduleUpdate, updateState];
 }
 
 // quantizedDiffScrollTop coalesces pixel-level scroll changes while keeping mounted windows conservative.

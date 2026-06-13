@@ -690,14 +690,8 @@
 .diff-inline-change {
   border-radius: 2px;
   padding: 0 1px;
-}
-
-.diff-line-row.added .diff-inline-change {
-  background: color-mix(in oklab, #2ea043 28%, transparent);
-}
-
-.diff-line-row.removed .diff-inline-change {
-  background: color-mix(in oklab, #f85149 30%, transparent);
+  background: color-mix(in oklab, currentColor 8%, transparent);
+  box-shadow: inset 0 -1px 0 currentColor;
 }
 
 .diff-binary-note {
