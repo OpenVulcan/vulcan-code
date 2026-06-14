@@ -1,6 +1,8 @@
 import * as React from "react";
 
 import {
+  renderPlainDiffFileHtmlCore,
+  renderPlainDiffVirtualRowsHtmlCore,
   type DiffHighlightedFileRenderOptions,
   type DiffHighlightedLineSpans,
   type DiffHighlightedRowsRenderOptions,
@@ -193,6 +195,10 @@ interface DiffWorkerHtmlState {
   html: string;
 }
 
+// DiffRenderFallbackHtml builds immediate HTML while the render worker catches up.
+// DiffRenderFallbackHtml 在渲染 Worker 追赶期间构建即时 HTML。
+type DiffRenderFallbackHtml = () => string;
+
 // DiffRenderWorkerCallback resolves one in-flight render request.
 // DiffRenderWorkerCallback 解析一个进行中的渲染请求。
 type DiffRenderWorkerCallback = (response: DiffRenderWorkerResponse) => void;
@@ -384,8 +390,8 @@ function disabledDiffRenderWorkerRequest(): DiffRenderWorkerRequest {
   };
 }
 
-// usePlainDiffFileHtml renders one complete unhighlighted file through the render worker only.
-// usePlainDiffFileHtml 仅通过渲染 Worker 渲染一个完整未高亮文件。
+// usePlainDiffFileHtml renders one complete unhighlighted file with an immediate visible fallback.
+// usePlainDiffFileHtml 使用即时可见兜底渲染一个完整未高亮文件。
 export function usePlainDiffFileHtml(options: DiffPlainFileRenderOptions, enabled: boolean): string {
   // shouldRender keeps the disabled sibling hook out of expensive fingerprint work.
   // shouldRender 让未启用的兄弟 hook 跳过昂贵的指纹计算。
@@ -423,15 +429,31 @@ export function usePlainDiffFileHtml(options: DiffPlainFileRenderOptions, enable
     searchPayload,
     options.viewMode,
   ]);
+  const fallbackHtml = React.useCallback(() => renderPlainDiffFileHtmlCore({
+    file: options.file,
+    searchLineKeys: options.searchLineKeys,
+    activeSearchLineKey: options.activeSearchLineKey,
+    contextControls: options.contextControls,
+    inlineDiff: options.inlineDiff,
+    viewMode: options.viewMode,
+  }), [
+    options.activeSearchLineKey,
+    options.contextControls,
+    options.file,
+    options.inlineDiff,
+    options.searchLineKeys,
+    options.viewMode,
+  ]);
   return usePlainDiffWorkerHtml({
     cacheKey,
     enabled: shouldRender,
+    fallbackHtml: shouldRender ? fallbackHtml : undefined,
     request: shouldRender ? request : disabledDiffRenderWorkerRequest,
   });
 }
 
-// usePlainDiffRowsHtml renders one unhighlighted virtual row window through the render worker only.
-// usePlainDiffRowsHtml 仅通过渲染 Worker 渲染一个未高亮虚拟行窗口。
+// usePlainDiffRowsHtml renders one unhighlighted virtual row window with an immediate visible fallback.
+// usePlainDiffRowsHtml 使用即时可见兜底渲染一个未高亮虚拟行窗口。
 export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enabled: boolean): string {
   // hasRows keeps empty virtual windows out of the render worker queue.
   // hasRows 避免空虚拟窗口进入渲染 Worker 队列。
@@ -478,9 +500,27 @@ export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enable
     options.viewMode,
     workerRows,
   ]);
+  const fallbackHtml = React.useCallback(() => renderPlainDiffVirtualRowsHtmlCore({
+    fileKey: options.fileKey,
+    rows: workerRows,
+    searchLineKeys: options.searchLineKeys,
+    activeSearchLineKey: options.activeSearchLineKey,
+    contextControls: options.contextControls,
+    inlineDiff: options.inlineDiff,
+    viewMode: options.viewMode,
+  }), [
+    options.activeSearchLineKey,
+    options.contextControls,
+    options.fileKey,
+    options.inlineDiff,
+    options.searchLineKeys,
+    options.viewMode,
+    workerRows,
+  ]);
   return usePlainDiffWorkerHtml({
     cacheKey,
     enabled: shouldRender,
+    fallbackHtml: shouldRender ? fallbackHtml : undefined,
     request: shouldRender ? request : disabledDiffRenderWorkerRequest,
   });
 }
@@ -540,9 +580,25 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     searchPayload,
     options.viewMode,
   ]);
+  const fallbackHtml = React.useCallback(() => renderPlainDiffFileHtmlCore({
+    file: options.file,
+    searchLineKeys: options.searchLineKeys,
+    activeSearchLineKey: options.activeSearchLineKey,
+    contextControls: options.contextControls,
+    inlineDiff: options.inlineDiff,
+    viewMode: options.viewMode,
+  }), [
+    options.activeSearchLineKey,
+    options.contextControls,
+    options.file,
+    options.inlineDiff,
+    options.searchLineKeys,
+    options.viewMode,
+  ]);
   return useDiffWorkerHtml({
     cacheKey,
     enabled: shouldRender,
+    fallbackHtml: shouldRender ? fallbackHtml : undefined,
     onPostSuccess: rememberPostedHighlightedLineSpans,
     request: shouldRender ? request : disabledDiffRenderWorkerRequest,
   });
@@ -612,9 +668,27 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     options.viewMode,
     workerRows,
   ]);
+  const fallbackHtml = React.useCallback(() => renderPlainDiffVirtualRowsHtmlCore({
+    fileKey: options.fileKey,
+    rows: workerRows,
+    searchLineKeys: options.searchLineKeys,
+    activeSearchLineKey: options.activeSearchLineKey,
+    contextControls: options.contextControls,
+    inlineDiff: options.inlineDiff,
+    viewMode: options.viewMode,
+  }), [
+    options.activeSearchLineKey,
+    options.contextControls,
+    options.fileKey,
+    options.inlineDiff,
+    options.searchLineKeys,
+    options.viewMode,
+    workerRows,
+  ]);
   return useDiffWorkerHtml({
     cacheKey,
     enabled: shouldRender,
+    fallbackHtml: shouldRender ? fallbackHtml : undefined,
     onPostSuccess: rememberPostedHighlightedLineSpans,
     request: shouldRender ? request : disabledDiffRenderWorkerRequest,
   });
@@ -639,8 +713,21 @@ function nextDiffWorkerHtmlState(
   return { cacheKey, html };
 }
 
-// useDiffWorkerHtml owns one async worker render lifecycle without main-thread diff rendering.
-// useDiffWorkerHtml 管理一次异步 Worker 渲染生命周期，且不在主线程渲染 diff。
+// diffWorkerFallbackHtml safely computes a synchronous visible fallback for cache misses.
+// diffWorkerFallbackHtml 为缓存未命中安全计算同步可见兜底 HTML。
+function diffWorkerFallbackHtml(fallbackHtml: DiffRenderFallbackHtml | undefined): string {
+  if (!fallbackHtml) {
+    return "";
+  }
+  try {
+    return fallbackHtml();
+  } catch (error) {
+    return diffRenderWorkerFailureHtml(error instanceof Error ? error.message : String(error));
+  }
+}
+
+// useDiffWorkerHtml owns one async worker render lifecycle with an optional same-window fallback.
+// useDiffWorkerHtml 管理一次异步 Worker 渲染生命周期，并支持同窗口可选兜底。
 function useDiffWorkerHtml(options: {
   // Stable cache key for this render request.
   // 当前渲染请求的稳定缓存 key。
@@ -654,6 +741,9 @@ function useDiffWorkerHtml(options: {
   // Request factory without id.
   // 不含 id 的请求构造器。
   request: () => DiffRenderWorkerRequest;
+  // Optional synchronous HTML used only until the worker result is ready.
+  // 仅在 Worker 结果就绪前使用的可选同步 HTML。
+  fallbackHtml?: DiffRenderFallbackHtml;
 }): string {
   // requestRef keeps the latest request factory without making the render effect restart on equivalent cache keys.
   // requestRef 保存最新请求构造器，避免等价 cache key 下因函数引用变化重启渲染 effect。
@@ -661,7 +751,7 @@ function useDiffWorkerHtml(options: {
   requestRef.current = options.request;
   const [state, setState] = React.useState<DiffWorkerHtmlState>(() => ({
     cacheKey: options.cacheKey,
-    html: diffRenderHtmlCache.get(options.cacheKey) ?? "",
+    html: diffRenderHtmlCache.get(options.cacheKey) ?? diffWorkerFallbackHtml(options.fallbackHtml),
   }));
   React.useEffect(() => {
     if (!options.enabled) {
@@ -673,6 +763,7 @@ function useDiffWorkerHtml(options: {
       setState((previous) => nextDiffWorkerHtmlState(previous, options.cacheKey, cached));
       return undefined;
     }
+    const fallbackHtml = diffWorkerFallbackHtml(options.fallbackHtml);
     const worker = currentDiffRenderWorker();
     if (!worker) {
       const failureHtml = diffRenderWorkerFailureHtml("Diff render worker is unavailable.");
@@ -683,7 +774,7 @@ function useDiffWorkerHtml(options: {
     let cancelled = false;
     let postFrame: number | null = null;
     const requestId = ++nextDiffRenderWorkerRequestId;
-    setState((previous) => nextDiffWorkerHtmlState(previous, options.cacheKey, ""));
+    setState((previous) => nextDiffWorkerHtmlState(previous, options.cacheKey, fallbackHtml));
     diffRenderWorkerCallbacks.set(requestId, (response) => {
       if (cancelled) {
         return;
@@ -729,8 +820,10 @@ function useDiffWorkerHtml(options: {
       }
       cancelQueuedDiffRenderWorkerRequest(requestId);
     };
-  }, [options.cacheKey, options.enabled, options.onPostSuccess]);
-  return state.cacheKey === options.cacheKey ? state.html : diffRenderHtmlCache.get(options.cacheKey) ?? "";
+  }, [options.cacheKey, options.enabled, options.fallbackHtml, options.onPostSuccess]);
+  return state.cacheKey === options.cacheKey
+    ? state.html
+    : diffRenderHtmlCache.get(options.cacheKey) ?? diffWorkerFallbackHtml(options.fallbackHtml);
 }
 
 // usePlainDiffWorkerHtml owns one plain render lifecycle through the shared worker hook.
@@ -748,6 +841,9 @@ function usePlainDiffWorkerHtml(options: {
   // Request factory without id.
   // 不含 id 的请求构造器。
   request: () => DiffRenderWorkerRequest;
+  // Optional synchronous HTML used only until the worker result is ready.
+  // 仅在 Worker 结果就绪前使用的可选同步 HTML。
+  fallbackHtml?: DiffRenderFallbackHtml;
 }): string {
   return useDiffWorkerHtml(options);
 }
