@@ -10,10 +10,10 @@ import {
   type DiffPlainRowsRenderOptions,
   type DiffRenderableVirtualRow,
 } from "./diff-render-html-core";
-import { highlightedDiffLineSpansForDiffLine } from "./diff-highlight";
+import { highlightedDiffLineSpansForDiffLine, useDiffShikiTheme } from "./diff-highlight";
 import { diffSearchLineKey } from "./diff-search";
 import type { DiffFile, DiffHunkSeparatorStyle, DiffIndicatorStyle, DiffLine, DiffOverflowMode, DiffViewMode } from "./types";
-import { escapeHtml, normalizeShikiLanguage, type DiffShikiTokenSpan } from "./diff-shiki-shared";
+import { escapeHtml, normalizeShikiLanguage, type DiffShikiTheme, type DiffShikiTokenSpan } from "./diff-shiki-shared";
 import type { DiffMountedVirtualRow } from "./diff-virtual-layout";
 
 // DIFF_RENDER_WORKER_CACHE_LIMIT caps retained worker-rendered plain HTML blocks.
@@ -350,6 +350,9 @@ interface DiffHighlightedSpanCollectionCacheEntry {
 // DiffHighlightedRowsSpanStableCacheEntry stores the latest semantically equal row-window span map.
 // DiffHighlightedRowsSpanStableCacheEntry 保存最新的语义等价虚拟窗口 span map。
 interface DiffHighlightedRowsSpanStableCacheEntry {
+  // Shiki theme used to collect token spans.
+  // 收集 token span 时使用的 Shiki 主题。
+  theme: DiffShikiTheme;
   // Canonical language used to collect token spans.
   // 收集 token span 时使用的规范语言。
   language: string;
@@ -367,6 +370,9 @@ interface DiffHighlightedRowsSpanStableCacheEntry {
 // DiffHighlightedFileSpanStableCacheEntry stores the latest semantically equal file-level span map.
 // DiffHighlightedFileSpanStableCacheEntry 保存最新的语义等价文件级 span map。
 interface DiffHighlightedFileSpanStableCacheEntry {
+  // Shiki theme used to collect token spans.
+  // 收集 token span 时使用的 Shiki 主题。
+  theme: DiffShikiTheme;
   // Canonical language used to collect token spans.
   // 收集 token span 时使用的规范语言。
   language: string;
@@ -576,6 +582,7 @@ export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enable
 // useHighlightedDiffFileHtml renders one highlighted complete file through the render worker.
 // useHighlightedDiffFileHtml 通过渲染 Worker 渲染一个完整高亮文件。
 export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOptions, enabled: boolean): string {
+  const theme = useDiffShikiTheme();
   // shouldRender keeps the disabled sibling hook out of highlighted fingerprint work.
   // shouldRender 让未启用的兄弟 hook 跳过高亮指纹计算。
   const shouldRender = enabled;
@@ -589,10 +596,10 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     [options.searchLineKeys, shouldRender],
   );
   const highlightedLineSpans = React.useMemo(
-    () => shouldCollectHighlightedSpans ? collectHighlightedFileLineSpans(options.file, options.language, options.highlightRevision) : undefined,
-    [options.file, options.highlightRevision, options.language, shouldCollectHighlightedSpans],
+    () => shouldCollectHighlightedSpans ? collectHighlightedFileLineSpans(options.file, options.language, options.highlightRevision, theme) : undefined,
+    [options.file, options.highlightRevision, options.language, shouldCollectHighlightedSpans, theme],
   );
-  const cacheKey = React.useMemo(() => shouldRender ? highlightedFileRenderCacheKey(options, highlightedLineSpans, searchPayload.signature) : DISABLED_DIFF_RENDER_CACHE_KEY, [
+  const cacheKey = React.useMemo(() => shouldRender ? highlightedFileRenderCacheKey(options, theme, highlightedLineSpans, searchPayload.signature) : DISABLED_DIFF_RENDER_CACHE_KEY, [
     highlightedLineSpans,
     options.activeSearchLineKey,
     options.contextControls,
@@ -603,6 +610,7 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     options.language,
     options.overflowMode,
     searchPayload,
+    theme,
     options.viewMode,
     shouldRender,
   ]);
@@ -670,6 +678,7 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
 // useHighlightedDiffRowsHtml renders one highlighted virtual row window through the render worker.
 // useHighlightedDiffRowsHtml 通过渲染 Worker 渲染一个高亮虚拟行窗口。
 export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOptions, enabled: boolean): string {
+  const theme = useDiffShikiTheme();
   // hasRows keeps empty virtual windows out of highlight span collection and render dispatch.
   // hasRows 避免空虚拟窗口进入高亮 span 收集与渲染调度。
   const hasRows = options.rows.length > 0;
@@ -686,13 +695,13 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     [options.searchLineKeys, shouldRender],
   );
   const highlightedLineSpans = React.useMemo(
-    () => shouldCollectHighlightedSpans ? collectHighlightedRowsLineSpans(options.fileKey, options.rows, options.language, options.highlightRevision) : undefined,
-    [options.fileKey, options.highlightRevision, options.language, options.rows, shouldCollectHighlightedSpans],
+    () => shouldCollectHighlightedSpans ? collectHighlightedRowsLineSpans(options.fileKey, options.rows, options.language, options.highlightRevision, theme) : undefined,
+    [options.fileKey, options.highlightRevision, options.language, options.rows, shouldCollectHighlightedSpans, theme],
   );
   // workerRows contains only the fields needed by the render worker.
   // workerRows 仅包含 render worker 所需的字段。
   const workerRows = React.useMemo(() => shouldRender ? diffRenderableRows(options.rows) : EMPTY_DIFF_RENDERABLE_ROWS, [options.rows, shouldRender]);
-  const cacheKey = React.useMemo(() => shouldRender ? highlightedRowsRenderCacheKey(options, highlightedLineSpans, searchPayload.signature) : DISABLED_DIFF_RENDER_CACHE_KEY, [
+  const cacheKey = React.useMemo(() => shouldRender ? highlightedRowsRenderCacheKey(options, theme, highlightedLineSpans, searchPayload.signature) : DISABLED_DIFF_RENDER_CACHE_KEY, [
     highlightedLineSpans,
     options.activeSearchLineKey,
     options.contextControls,
@@ -704,6 +713,7 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     options.overflowMode,
     options.rows,
     searchPayload,
+    theme,
     options.viewMode,
     shouldRender,
   ]);
@@ -1144,11 +1154,13 @@ function plainRowsRenderCacheKey(options: DiffPlainRowsWorkerOptions, searchSign
 // highlightedFileRenderCacheKey 为完整文件高亮 HTML 构建稳定缓存 key。
 function highlightedFileRenderCacheKey(
   options: DiffHighlightedFileWorkerOptions,
+  theme: DiffShikiTheme,
   highlightedLineSpans?: ReadonlyMap<string, unknown>,
   searchSignature?: string,
 ): string {
   return "highlight-file"
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + options.file.key
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + theme
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + options.language
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + highlightedSpansFingerprint(highlightedLineSpans)
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + String(options.file.rowCount ?? options.file.estimatedRowCount ?? 0)
@@ -1166,11 +1178,13 @@ function highlightedFileRenderCacheKey(
 // highlightedRowsRenderCacheKey 为虚拟行窗口高亮 HTML 构建稳定缓存 key。
 function highlightedRowsRenderCacheKey(
   options: DiffHighlightedRowsWorkerOptions,
+  theme: DiffShikiTheme,
   highlightedLineSpans?: ReadonlyMap<string, unknown>,
   searchSignature?: string,
 ): string {
   return "highlight-rows"
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + options.fileKey
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + theme
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + options.language
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + highlightedSpansFingerprint(highlightedLineSpans)
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + String(options.rows.length)
@@ -1476,7 +1490,7 @@ function appendFingerprintNumber(hash: number, value: number): number {
 
 // collectHighlightedFileLineSpans gathers cached token spans for one full file.
 // collectHighlightedFileLineSpans 收集单个完整文件中已经缓存的 token span。
-function collectHighlightedFileLineSpans(file: DiffFile, language: string, highlightRevision: number): Map<string, DiffShikiTokenSpan[]> | undefined {
+function collectHighlightedFileLineSpans(file: DiffFile, language: string, highlightRevision: number, theme: DiffShikiTheme): Map<string, DiffShikiTokenSpan[]> | undefined {
   // normalizedLanguage keeps the file-level highlight lookup on the canonical Shiki id.
   // normalizedLanguage 让文件级高亮查询复用规范化后的 Shiki 标识。
   const normalizedLanguage = normalizeShikiLanguage(language);
@@ -1486,7 +1500,7 @@ function collectHighlightedFileLineSpans(file: DiffFile, language: string, highl
   const fileFingerprint = diffFileContentFingerprint(file);
   // cacheKey identifies this file span collection for one language and highlight revision.
   // cacheKey 标识当前语言与高亮修订下的文件 span 收集结果。
-  const cacheKey = highlightedFileLineSpansCacheKey(file, fileFingerprint, normalizedLanguage, highlightRevision);
+  const cacheKey = highlightedFileLineSpansCacheKey(file, fileFingerprint, normalizedLanguage, highlightRevision, theme);
   // cachedEntry reuses the latest collection for stable parsed file objects.
   // cachedEntry 复用稳定已解析文件对象上的最新收集结果。
   const cachedEntry = highlightedFileLineSpansCache.get(file);
@@ -1503,7 +1517,7 @@ function collectHighlightedFileLineSpans(file: DiffFile, language: string, highl
       if (line.kind === "metadata") {
         continue;
       }
-      const spans = highlightedDiffLineSpansForDiffLine(line, normalizedLanguage);
+      const spans = highlightedDiffLineSpansForDiffLine(line, normalizedLanguage, theme);
       if (spans) {
         const lineKey = diffSearchLineKey(file.key, hunkIndex, lineIndex);
         spansCount += 1;
@@ -1519,6 +1533,7 @@ function collectHighlightedFileLineSpans(file: DiffFile, language: string, highl
   const stableEntry = highlightedFileLineSpansStableCache.get(file);
   if (
     stableEntry
+    && stableEntry.theme === theme
     && stableEntry.language === normalizedLanguage
     && stableEntry.fileFingerprint === fileFingerprint
     && stableEntry.spansFingerprint === spansFingerprint
@@ -1527,6 +1542,7 @@ function collectHighlightedFileLineSpans(file: DiffFile, language: string, highl
     return stableEntry.spans;
   }
   highlightedFileLineSpansStableCache.set(file, {
+    theme,
     language: normalizedLanguage,
     fileFingerprint,
     spansFingerprint,
@@ -1545,6 +1561,7 @@ function collectHighlightedRowsLineSpans(
   rows: readonly DiffMountedVirtualRow[],
   language: string,
   highlightRevision: number,
+  theme: DiffShikiTheme,
 ): Map<string, DiffShikiTokenSpan[]> | undefined {
   // normalizedLanguage keeps the virtual-window highlight lookup on the canonical Shiki id.
   // normalizedLanguage 让虚拟窗口高亮查询复用规范化后的 Shiki 标识。
@@ -1555,7 +1572,7 @@ function collectHighlightedRowsLineSpans(
   const rowsFingerprint = diffRowsContentFingerprint(rows);
   // cacheKey identifies one virtual window span collection for a language and revision.
   // cacheKey 标识当前语言与修订下的虚拟窗口 span 收集结果。
-  const cacheKey = highlightedRowsLineSpansCacheKey(fileKey, rowsFingerprint, normalizedLanguage, highlightRevision);
+  const cacheKey = highlightedRowsLineSpansCacheKey(fileKey, rowsFingerprint, normalizedLanguage, highlightRevision, theme);
   if (highlightedRowsLineSpansCache.has(cacheKey)) {
     return highlightedRowsLineSpansCache.get(cacheKey);
   }
@@ -1566,7 +1583,7 @@ function collectHighlightedRowsLineSpans(
     if (row.kind !== "line" || row.line.kind === "metadata") {
       continue;
     }
-    const spans = highlightedDiffLineSpansForDiffLine(row.line, normalizedLanguage);
+    const spans = highlightedDiffLineSpansForDiffLine(row.line, normalizedLanguage, theme);
     if (spans) {
       spansCount += 1;
       spansHash = appendFingerprintText(spansHash, row.lineKey);
@@ -1580,6 +1597,7 @@ function collectHighlightedRowsLineSpans(
   const stableEntry = highlightedRowsLineSpansStableCache.get(rows);
   if (
     stableEntry
+    && stableEntry.theme === theme
     && stableEntry.language === normalizedLanguage
     && stableEntry.rowsFingerprint === rowsFingerprint
     && stableEntry.spansFingerprint === spansFingerprint
@@ -1588,6 +1606,7 @@ function collectHighlightedRowsLineSpans(
     return stableEntry.spans;
   }
   highlightedRowsLineSpansStableCache.set(rows, {
+    theme,
     language: normalizedLanguage,
     rowsFingerprint,
     spansFingerprint,
@@ -1612,8 +1631,9 @@ function rememberHighlightedSpansFingerprint(
 
 // highlightedFileLineSpansCacheKey builds a stable key for one file span collection.
 // highlightedFileLineSpansCacheKey 为单个文件 span 收集结果构建稳定键。
-function highlightedFileLineSpansCacheKey(file: DiffFile, fileFingerprint: string, language: string, highlightRevision: number): string {
-  return language
+function highlightedFileLineSpansCacheKey(file: DiffFile, fileFingerprint: string, language: string, highlightRevision: number, theme: DiffShikiTheme): string {
+  return theme
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + language
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + String(highlightRevision)
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + file.key
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + fileFingerprint;
@@ -1626,8 +1646,10 @@ function highlightedRowsLineSpansCacheKey(
   rowsFingerprint: string,
   language: string,
   highlightRevision: number,
+  theme: DiffShikiTheme,
 ): string {
   return fileKey
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + theme
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + language
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + String(highlightRevision)
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + rowsFingerprint;

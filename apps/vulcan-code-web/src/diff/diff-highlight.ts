@@ -101,6 +101,9 @@ interface HighlightLineEntry {
   // Stable cache key for this line and language.
   // 该行与语言对应的稳定缓存键。
   key: string;
+  // Shiki theme captured when this line was queued.
+  // 该行入队时捕获的 Shiki 主题。
+  theme: DiffShikiTheme;
   // Canonical Shiki language id.
   // 规范化后的 Shiki 语言标识。
   language: string;
@@ -118,6 +121,9 @@ interface HighlightQueuedBatch {
   // Worker instance that should receive the highlight request.
   // 应接收高亮请求的 Worker 实例。
   worker: Worker;
+  // Shiki theme shared by every entry.
+  // 批次内所有条目共享的 Shiki 主题。
+  theme: DiffShikiTheme;
   // Canonical Shiki language id shared by every entry.
   // 批次内所有条目共享的规范 Shiki 语言标识。
   language: string;
@@ -196,6 +202,30 @@ let pendingBatchDispatchFrame: number | null = null;
 // pendingBatchDispatchTimeout 保存已调度的批次派发延迟。
 let pendingBatchDispatchTimeout: number | null = null;
 
+// useDiffShikiTheme subscribes React renderers to the active WebUI Shiki theme.
+// useDiffShikiTheme 让 React 渲染器订阅当前 WebUI Shiki 主题。
+export function useDiffShikiTheme(): DiffShikiTheme {
+  return React.useSyncExternalStore(
+    subscribeDiffShikiTheme,
+    currentDiffShikiTheme,
+    currentDiffShikiTheme,
+  );
+}
+
+// subscribeDiffShikiTheme listens for shell theme class changes on the document root.
+// subscribeDiffShikiTheme 监听文档根节点上的外壳主题 class 变化。
+function subscribeDiffShikiTheme(onStoreChange: () => void): () => void {
+  if (typeof document === "undefined" || typeof MutationObserver === "undefined") {
+    return () => undefined;
+  }
+  const observer = new MutationObserver(onStoreChange);
+  observer.observe(document.documentElement, {
+    attributeFilter: ["class"],
+    attributes: true,
+  });
+  return () => observer.disconnect();
+}
+
 // useHighlightLanguage reports whether the Shiki worker supports a language.
 // useHighlightLanguage 返回 Shiki Worker 是否支持某个语言。
 export function useHighlightLanguage(language: string | null): boolean {
@@ -207,6 +237,7 @@ export function useHighlightLanguage(language: string | null): boolean {
 export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtualRow[], language: string | null, enabled: boolean): number {
   const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
   const normalizedLanguage = normalizeShikiLanguage(language);
+  const theme = useDiffShikiTheme();
   React.useEffect(() => {
     if (!enabled || !normalizedLanguage) {
       return undefined;
@@ -224,7 +255,7 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
           if (!line || line.kind === "metadata") {
             continue;
           }
-          const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage);
+          const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage, theme);
           if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
             continue;
           }
@@ -232,14 +263,14 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
           scheduledKeys ??= new Set();
           scheduledKeys.add(cacheKey);
           unsubscribeList ??= [];
-          unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+          unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, theme, refresh));
         }
         continue;
       }
       if (row.kind !== "line" || row.line.kind === "metadata") {
         continue;
       }
-      const cacheKey = highlightCacheKeyForDiffLine(row.line, normalizedLanguage);
+      const cacheKey = highlightCacheKeyForDiffLine(row.line, normalizedLanguage, theme);
       if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
         continue;
       }
@@ -247,7 +278,7 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
       scheduledKeys ??= new Set();
       scheduledKeys.add(cacheKey);
       unsubscribeList ??= [];
-      unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+      unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, theme, refresh));
     }
     if (!unsubscribeList) {
       return undefined;
@@ -257,7 +288,7 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
         unsubscribe();
       }
     };
-  }, [enabled, normalizedLanguage, rows]);
+  }, [enabled, normalizedLanguage, rows, theme]);
   return revision;
 }
 
@@ -266,6 +297,7 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
 export function useHighlightedDiffFileRevision(file: DiffFile, language: string | null, enabled: boolean): number {
   const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
   const normalizedLanguage = normalizeShikiLanguage(language);
+  const theme = useDiffShikiTheme();
   React.useEffect(() => {
     if (!enabled || !normalizedLanguage) {
       return undefined;
@@ -281,7 +313,7 @@ export function useHighlightedDiffFileRevision(file: DiffFile, language: string 
         if (line.kind === "metadata") {
           continue;
         }
-        const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage);
+        const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage, theme);
         if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
           continue;
         }
@@ -289,7 +321,7 @@ export function useHighlightedDiffFileRevision(file: DiffFile, language: string 
         scheduledKeys ??= new Set();
         scheduledKeys.add(cacheKey);
         unsubscribeList ??= [];
-        unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+        unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, theme, refresh));
       }
     }
     if (!unsubscribeList) {
@@ -300,7 +332,7 @@ export function useHighlightedDiffFileRevision(file: DiffFile, language: string 
         unsubscribe();
       }
     };
-  }, [enabled, file, normalizedLanguage]);
+  }, [enabled, file, normalizedLanguage, theme]);
   return revision;
 }
 
@@ -322,13 +354,13 @@ export function highlightedDiffLineSpansForLanguage(line: string, normalizedLang
 
 // highlightedDiffLineSpansForDiffLine returns cached token spans for a parsed diff line.
 // highlightedDiffLineSpansForDiffLine 返回解析 diff 行对应的缓存 token span。
-export function highlightedDiffLineSpansForDiffLine(line: DiffLine, normalizedLanguage: string): DiffShikiTokenSpan[] | null {
-  return highlightedLineCache.get(highlightCacheKeyForDiffLine(line, normalizedLanguage)) ?? null;
+export function highlightedDiffLineSpansForDiffLine(line: DiffLine, normalizedLanguage: string, theme: DiffShikiTheme = currentDiffShikiTheme()): DiffShikiTokenSpan[] | null {
+  return highlightedLineCache.get(highlightCacheKeyForDiffLine(line, normalizedLanguage, theme)) ?? null;
 }
 
 // requestHighlightedLineByKey subscribes one row when the caller already computed the cache key.
 // requestHighlightedLineByKey 在调用方已计算缓存键时订阅单条高亮结果。
-function requestHighlightedLineByKey(key: string, line: string, language: string, onReady: () => void): () => void {
+function requestHighlightedLineByKey(key: string, line: string, language: string, theme: DiffShikiTheme, onReady: () => void): () => void {
   if (highlightedLineCache.has(key) || failedHighlightKeys.has(key)) {
     return () => undefined;
   }
@@ -336,6 +368,7 @@ function requestHighlightedLineByKey(key: string, line: string, language: string
   if (!entry) {
     entry = {
       key,
+      theme,
       language,
       line,
       subscribers: new Set(),
@@ -377,7 +410,7 @@ function scheduleHighlightFlush(): void {
 // flushPendingHighlightEntries 按语言聚合待处理行任务并发送到 Worker。
 function flushPendingHighlightEntries(): void {
   const worker = currentDiffHighlightWorker();
-  const groupedEntries = groupPendingHighlightEntriesByLanguage();
+  const groupedEntries = groupPendingHighlightEntriesByThemeAndLanguage();
   if (!groupedEntries.size) {
     return;
   }
@@ -385,11 +418,16 @@ function flushPendingHighlightEntries(): void {
     failGroupedHighlightEntries(groupedEntries);
     return;
   }
-  for (const [language, languageEntries] of groupedEntries) {
+  for (const languageEntries of groupedEntries.values()) {
+    const firstEntry = languageEntries[0];
+    if (!firstEntry) {
+      continue;
+    }
     for (let index = 0; index < languageEntries.length; index += DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT) {
       queueHighlightBatch(
         worker,
-        language,
+        firstEntry.theme,
+        firstEntry.language,
         languageEntries,
         index,
         Math.min(languageEntries.length, index + DIFF_HIGHLIGHT_WORKER_BATCH_LIMIT),
@@ -398,9 +436,9 @@ function flushPendingHighlightEntries(): void {
   }
 }
 
-// groupPendingHighlightEntriesByLanguage groups live pending entries in a single pass.
-// groupPendingHighlightEntriesByLanguage 单次遍历按语言聚合仍有订阅者的待处理任务。
-function groupPendingHighlightEntriesByLanguage(): Map<string, HighlightLineEntry[]> {
+// groupPendingHighlightEntriesByThemeAndLanguage groups live pending entries in a single pass.
+// groupPendingHighlightEntriesByThemeAndLanguage 单次遍历按主题和语言聚合仍有订阅者的待处理任务。
+function groupPendingHighlightEntriesByThemeAndLanguage(): Map<string, HighlightLineEntry[]> {
   const grouped = new Map<string, HighlightLineEntry[]>();
   for (const entry of pendingHighlightEntries.values()) {
     if (entry.subscribers.size <= 0) {
@@ -416,13 +454,14 @@ function groupPendingHighlightEntriesByLanguage(): Map<string, HighlightLineEntr
 // queueHighlightBatch 将一个批次保留到下一个节奏化派发时隙。
 function queueHighlightBatch(
   worker: Worker,
+  theme: DiffShikiTheme,
   language: string,
   entries: readonly HighlightLineEntry[],
   startIndex: number,
   endIndex: number,
 ): void {
   trackQueuedHighlightEntryRange(entries, startIndex, endIndex);
-  queuedHighlightBatches.push({ worker, language, entries, startIndex, endIndex });
+  queuedHighlightBatches.push({ worker, theme, language, entries, startIndex, endIndex });
   scheduleHighlightBatchDispatch();
 }
 
@@ -497,7 +536,7 @@ function dispatchNextHighlightBatch(): void {
   if (diffHighlightWorkerFailed || batch.worker !== diffHighlightWorker) {
     failHighlightEntryRange(batch.entries, batch.startIndex, batch.endIndex);
   } else {
-    sendHighlightBatch(batch.worker, batch.language, batch.entries, batch.startIndex, batch.endIndex);
+    sendHighlightBatch(batch.worker, batch.theme, batch.language, batch.entries, batch.startIndex, batch.endIndex);
   }
   if (hasQueuedHighlightBatches()) {
     scheduleHighlightBatchDispatch();
@@ -526,6 +565,7 @@ function clearScheduledHighlightBatchDispatch(): void {
 // sendHighlightBatch 向 Worker 发送一个仍有订阅者的语言批次并记录进行中的任务。
 function sendHighlightBatch(
   worker: Worker,
+  theme: DiffShikiTheme,
   language: string,
   sourceEntries: readonly HighlightLineEntry[],
   startIndex: number,
@@ -560,7 +600,7 @@ function sendHighlightBatch(
     kind: "highlight",
     id,
     language,
-    theme: currentDiffShikiTheme(),
+    theme,
     lines,
   };
   workerHighlightRequests.set(id, entries);
@@ -796,11 +836,12 @@ function notifyHighlightSubscribers(subscribersToNotify: ReadonlySet<() => void>
 // collectGroupedHighlightEntry appends one highlight entry to its language bucket.
 // collectGroupedHighlightEntry 将单个高亮任务追加到对应语言分组。
 function collectGroupedHighlightEntry(entry: HighlightLineEntry, grouped: Map<string, HighlightLineEntry[]>): void {
-  const group = grouped.get(entry.language);
+  const groupKey = `${entry.theme}\u0000${entry.language}`;
+  const group = grouped.get(groupKey);
   if (group) {
     group.push(entry);
   } else {
-    grouped.set(entry.language, [entry]);
+    grouped.set(groupKey, [entry]);
   }
 }
 
@@ -812,8 +853,7 @@ function highlightCacheKey(line: string, language: string, theme: DiffShikiTheme
 
 // highlightCacheKeyForDiffLine returns a cached highlight key for one parsed diff line.
 // highlightCacheKeyForDiffLine 返回单条解析 diff 行的缓存高亮键。
-function highlightCacheKeyForDiffLine(line: DiffLine, language: string): string {
-  const theme = currentDiffShikiTheme();
+function highlightCacheKeyForDiffLine(line: DiffLine, language: string, theme: DiffShikiTheme = currentDiffShikiTheme()): string {
   const themeLanguageKey = `${theme}\u0000${language}`;
   let keyByLanguage = diffLineHighlightCacheKeyCache.get(line);
   if (!keyByLanguage) {
