@@ -73,9 +73,13 @@ export function setupTargetDiffDom(
   if (!preNodes.length) {
     return undefined;
   }
-  // managers stores all per-pre manager pairs for deterministic cleanup.
-  // managers 保存所有按 pre 创建的管理器对，便于确定性清理。
-  const managers: Array<{ resizeManager: TargetDiffResizeManager; scrollSyncManager: TargetDiffSplitScrollSyncManager }> = [];
+  // managers stores all per-pre manager groups for deterministic cleanup.
+  // managers 保存所有按 pre 创建的管理器组，便于确定性清理。
+  const managers: Array<{
+    resizeManager: TargetDiffResizeManager;
+    scrollSyncManager: TargetDiffSplitScrollSyncManager;
+    selectionGuard: TargetDiffSplitSelectionGuard;
+  }> = [];
   for (const preNode of preNodes) {
     // resizeManager mirrors the target ResizeManager instance owned by one rendered file.
     // resizeManager 对齐目标中单个已渲染文件持有的 ResizeManager 实例。
@@ -83,21 +87,31 @@ export function setupTargetDiffDom(
     // scrollSyncManager mirrors the target split-scroll manager instance.
     // scrollSyncManager 对齐目标中的 split 横向滚动同步管理器实例。
     const scrollSyncManager = new TargetDiffSplitScrollSyncManager();
+    // selectionGuard keeps native text selection inside the active split side.
+    // selectionGuard 将原生文本选择限制在当前按下的分栏侧。
+    const selectionGuard = new TargetDiffSplitSelectionGuard();
     resizeManager.setup(preNode, preNode.dataset.overflow === "wrap");
     if (preNode.dataset.diffType === "split" && preNode.dataset.overflow === "scroll") {
       scrollSyncManager.setup(preNode);
+      selectionGuard.setup(preNode);
     } else {
       scrollSyncManager.cleanUp();
+      selectionGuard.cleanUp();
     }
-    managers.push({ resizeManager, scrollSyncManager });
+    managers.push({ resizeManager, scrollSyncManager, selectionGuard });
   }
   return () => {
     for (const manager of managers) {
       manager.resizeManager.cleanUp();
       manager.scrollSyncManager.cleanUp();
+      manager.selectionGuard.cleanUp();
     }
   };
 }
+
+// TargetDiffSplitSide identifies one selectable split code side.
+// TargetDiffSplitSide 标识一个可选择的分栏代码侧。
+type TargetDiffSplitSide = "deletions" | "additions";
 
 // TargetDiffSplitScrollSyncManager mirrors the target De split scroll synchronizer.
 // TargetDiffSplitScrollSyncManager 复刻目标 De 分栏滚动同步器。
@@ -120,6 +134,9 @@ class TargetDiffSplitScrollSyncManager {
   // Whether listeners are currently installed.
   // 当前是否已经安装监听器。
   private enabled = false;
+  // Whether the manager is applying a mirrored scroll programmatically.
+  // 管理器当前是否正在以编程方式应用镜像滚动。
+  private isMirroringScroll = false;
 
   // cleanUp removes target scroll listeners and resets manager state.
   // cleanUp 移除目标滚动监听并重置管理器状态。
@@ -133,6 +150,7 @@ class TargetDiffSplitScrollSyncManager {
     this.codeDeletions = undefined;
     this.codeAdditions = undefined;
     this.enabled = false;
+    this.isMirroringScroll = false;
   }
 
   // setup attaches split scroll synchronization to target code columns.
@@ -174,12 +192,13 @@ class TargetDiffSplitScrollSyncManager {
       codeAdditions.addEventListener("scroll", this.handleAdditionsScroll, { passive: true });
     }
     this.enabled = true;
+    this.syncAdditionsToDeletions();
   }
 
   // handleDeletionsScroll mirrors deletion-side horizontal scroll into the addition side.
   // handleDeletionsScroll 将删除侧横向滚动镜像到新增侧。
   private readonly handleDeletionsScroll = () => {
-    if (this.isAdditionsScrolling) {
+    if (this.isAdditionsScrolling || this.isMirroringScroll) {
       return;
     }
     this.isDeletionsScrolling = true;
@@ -187,13 +206,13 @@ class TargetDiffSplitScrollSyncManager {
     this.timeoutId = window.setTimeout(() => {
       this.isDeletionsScrolling = false;
     }, 300);
-    this.codeAdditions?.scrollTo({ left: this.codeDeletions?.scrollLeft });
+    this.syncAdditionsToDeletions();
   };
 
   // handleAdditionsScroll mirrors addition-side horizontal scroll into the deletion side.
   // handleAdditionsScroll 将新增侧横向滚动镜像到删除侧。
   private readonly handleAdditionsScroll = () => {
-    if (this.isDeletionsScrolling) {
+    if (this.isDeletionsScrolling || this.isMirroringScroll) {
       return;
     }
     this.isAdditionsScrolling = true;
@@ -201,8 +220,148 @@ class TargetDiffSplitScrollSyncManager {
     this.timeoutId = window.setTimeout(() => {
       this.isAdditionsScrolling = false;
     }, 300);
-    this.codeDeletions?.scrollTo({ left: this.codeAdditions?.scrollLeft });
+    this.syncDeletionsToAdditions();
   };
+
+  // syncAdditionsToDeletions applies the deletion scroll offset without browser smooth-scroll lag.
+  // syncAdditionsToDeletions 不经过浏览器平滑滚动延迟，直接应用删除侧滚动偏移。
+  private syncAdditionsToDeletions(): void {
+    const source = this.codeDeletions;
+    const target = this.codeAdditions;
+    if (!source || !target || target.scrollLeft === source.scrollLeft) {
+      return;
+    }
+    this.isMirroringScroll = true;
+    target.scrollLeft = source.scrollLeft;
+    this.isMirroringScroll = false;
+  }
+
+  // syncDeletionsToAdditions applies the addition scroll offset without browser smooth-scroll lag.
+  // syncDeletionsToAdditions 不经过浏览器平滑滚动延迟，直接应用新增侧滚动偏移。
+  private syncDeletionsToAdditions(): void {
+    const source = this.codeAdditions;
+    const target = this.codeDeletions;
+    if (!source || !target || target.scrollLeft === source.scrollLeft) {
+      return;
+    }
+    this.isMirroringScroll = true;
+    target.scrollLeft = source.scrollLeft;
+    this.isMirroringScroll = false;
+  }
+}
+
+// TargetDiffSplitSelectionGuard keeps native dragging selection on one split side.
+// TargetDiffSplitSelectionGuard 将原生拖拽选择限制在一个分栏侧。
+class TargetDiffSplitSelectionGuard {
+  // Diff pre root currently guarded.
+  // 当前被保护的 diff pre 根节点。
+  private preNode: HTMLElement | undefined;
+  // Whether document-level pointer cleanup listeners are installed.
+  // 当前是否已经安装文档级指针清理监听器。
+  private documentListenersEnabled = false;
+
+  // cleanUp removes pointer listeners and clears split selection state.
+  // cleanUp 移除指针监听并清理分栏选择状态。
+  cleanUp(): void {
+    this.preNode?.removeEventListener("pointerdown", this.handlePointerDown, { capture: true });
+    this.clearSelectionSide();
+    this.detachDocumentListeners();
+    this.preNode = undefined;
+  }
+
+  // setup attaches split selection guarding to one rendered diff root.
+  // setup 将分栏选择保护绑定到一个已渲染 diff 根节点。
+  setup(
+    // Diff pre root that contains split code columns.
+    // 包含分栏代码列的 diff pre 根节点。
+    preNode: HTMLElement,
+  ): void {
+    if (this.preNode !== preNode) {
+      this.cleanUp();
+      this.preNode = preNode;
+      preNode.addEventListener("pointerdown", this.handlePointerDown, { capture: true });
+    }
+  }
+
+  // handlePointerDown records the split side that owns the native selection drag.
+  // handlePointerDown 记录原生选择拖拽所属的分栏侧。
+  private readonly handlePointerDown = (event: PointerEvent) => {
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    const side = targetDiffSplitSideFromEventTarget(event.target, this.preNode);
+    if (!side || !this.preNode) {
+      this.clearSelectionSide();
+      return;
+    }
+    this.preNode.setAttribute("data-selecting-side", side);
+    this.attachDocumentListeners();
+  };
+
+  // clearSelectionSide removes the temporary split-side selection lock.
+  // clearSelectionSide 移除临时分栏选择锁定。
+  private readonly clearSelectionSide = () => {
+    this.preNode?.removeAttribute("data-selecting-side");
+  };
+
+  // attachDocumentListeners clears the selection lock when the drag ends outside the diff root.
+  // attachDocumentListeners 在拖拽于 diff 根节点外结束时清理选择锁定。
+  private attachDocumentListeners(): void {
+    if (this.documentListenersEnabled) {
+      return;
+    }
+    const ownerDocument = this.preNode?.ownerDocument ?? document;
+    ownerDocument.addEventListener("pointerup", this.handleDocumentPointerEnd, { capture: true });
+    ownerDocument.addEventListener("pointercancel", this.handleDocumentPointerEnd, { capture: true });
+    ownerDocument.defaultView?.addEventListener("blur", this.handleDocumentPointerEnd, { capture: true });
+    this.documentListenersEnabled = true;
+  }
+
+  // detachDocumentListeners removes document-level selection cleanup listeners.
+  // detachDocumentListeners 移除文档级选择清理监听器。
+  private detachDocumentListeners(): void {
+    if (!this.documentListenersEnabled) {
+      return;
+    }
+    const ownerDocument = this.preNode?.ownerDocument ?? document;
+    ownerDocument.removeEventListener("pointerup", this.handleDocumentPointerEnd, { capture: true });
+    ownerDocument.removeEventListener("pointercancel", this.handleDocumentPointerEnd, { capture: true });
+    ownerDocument.defaultView?.removeEventListener("blur", this.handleDocumentPointerEnd, { capture: true });
+    this.documentListenersEnabled = false;
+  }
+
+  // handleDocumentPointerEnd clears the split-side selection guard after dragging ends.
+  // handleDocumentPointerEnd 在拖拽结束后清理分栏选择保护。
+  private readonly handleDocumentPointerEnd = () => {
+    this.clearSelectionSide();
+    this.detachDocumentListeners();
+  };
+}
+
+// targetDiffSplitSideFromEventTarget resolves the split code side from a pointer target.
+// targetDiffSplitSideFromEventTarget 根据指针目标解析对应的分栏代码侧。
+function targetDiffSplitSideFromEventTarget(
+  // Pointer event target.
+  // 指针事件目标。
+  target: EventTarget | null,
+  // Diff pre root that bounds the search.
+  // 限制查找范围的 diff pre 根节点。
+  preNode: HTMLElement | undefined,
+): TargetDiffSplitSide | null {
+  if (!(target instanceof Element) || !preNode) {
+    return null;
+  }
+  const codeElement = target.closest<HTMLElement>("[data-code]");
+  if (!codeElement || !preNode.contains(codeElement)) {
+    return null;
+  }
+  if ("deletions" in codeElement.dataset) {
+    return "deletions";
+  }
+  if ("additions" in codeElement.dataset) {
+    return "additions";
+  }
+  return null;
 }
 
 // TargetDiffResizeManager mirrors the target Dn ResizeManager.
