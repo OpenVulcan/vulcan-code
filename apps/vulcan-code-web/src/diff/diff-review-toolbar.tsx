@@ -70,7 +70,7 @@ export function DiffPanelToolbar(props: {
   loading?: boolean;
   // Optional refresh action.
   // 可选刷新动作。
-  onRefresh?: () => void;
+  onRefresh?: () => void | Promise<void>;
   // Optional copy action receiving raw diff text.
   // 接收原始 diff 文本的可选复制动作。
   onCopyRaw?: (rawDiff: string) => void;
@@ -183,7 +183,7 @@ export function DiffPanelToolbar(props: {
         ) : null}
         {props.onRefresh ? (
           <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title="刷新 diff" type="button">
-            <RefreshCw size={14} />
+            <RefreshCw className={props.loading ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
           </button>
         ) : null}
       </div>

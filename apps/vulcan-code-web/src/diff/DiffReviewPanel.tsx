@@ -64,7 +64,7 @@ export function DiffReviewPanel(props: {
   emptyBody?: string;
   // Optional refresh action.
   // 可选刷新动作。
-  onRefresh?: () => void;
+  onRefresh?: () => void | Promise<void>;
   // Optional selection change handler.
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
@@ -86,6 +86,7 @@ export function DiffReviewPanel(props: {
   const [scrollState, handleFileListScroll, syncFileListScrollState] = useDiffScrollState(fileListRef);
   const snapshot = props.snapshot;
   const selection = props.selection ?? { mode: "unstaged" };
+  const onRefresh = props.onRefresh;
   const onLoadFileDetail = props.onLoadFileDetail;
   const onSearchWorkspaceDiff = props.onSearchWorkspaceDiff;
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -99,6 +100,9 @@ export function DiffReviewPanel(props: {
   const [expandedFileKey, setExpandedFileKey] = React.useState<string | null>(null);
   const [fileTreeFilter, setFileTreeFilter] = React.useState("");
   const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(true);
+  // refreshPending stores the immediate local refresh lock before parent loading propagates.
+  // refreshPending 保存父级 loading 传入前的本地即时刷新锁。
+  const [refreshPending, setRefreshPending] = React.useState(false);
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
   const diffSourceScrollResetKey = React.useMemo(
     () => diffReviewScrollResetKey(snapshot, selection),
@@ -140,13 +144,19 @@ export function DiffReviewPanel(props: {
       : null),
     [searchIndex.matches.length, searchPageFileKeys, searchQuery, snapshot, summarySearchPageFileKeys],
   );
+  // autoSelectedSingleFile uses the only rendered file directly instead of showing a directory landing page.
+  // autoSelectedSingleFile 在仅渲染一个文件时直接使用该文件，避免展示目录入口页。
+  const autoSelectedSingleFile = renderedSnapshot?.files.length === 1 ? renderedSnapshot.files[0] : null;
+  // effectiveExpandedFileKey keeps the single-file direct view expanded without mutating manual multi-file selection state.
+  // effectiveExpandedFileKey 让单文件直显保持展开，同时不污染多文件手动选择状态。
+  const effectiveExpandedFileKey = expandedFileKey ?? autoSelectedSingleFile?.key ?? null;
   const collapsedFileKeys = React.useMemo(
-    () => diffCollapsedFileKeys(renderedSnapshot, expandedFileKey),
-    [expandedFileKey, renderedSnapshot],
+    () => diffCollapsedFileKeys(renderedSnapshot, effectiveExpandedFileKey),
+    [effectiveExpandedFileKey, renderedSnapshot],
   );
   const selectedDiffFile = React.useMemo(
-    () => renderedSnapshot?.files.find((file) => file.key === expandedFileKey) ?? null,
-    [expandedFileKey, renderedSnapshot],
+    () => renderedSnapshot?.files.find((file) => file.key === effectiveExpandedFileKey) ?? null,
+    [effectiveExpandedFileKey, renderedSnapshot],
   );
   const selectedDiffSnapshot = React.useMemo(
     () => renderedSnapshot && selectedDiffFile
@@ -155,14 +165,20 @@ export function DiffReviewPanel(props: {
     [renderedSnapshot, selectedDiffFile],
   );
   const selectedCollapsedFileKeys = React.useMemo(
-    () => diffCollapsedFileKeys(selectedDiffSnapshot, expandedFileKey),
-    [expandedFileKey, selectedDiffSnapshot],
+    () => diffCollapsedFileKeys(selectedDiffSnapshot, effectiveExpandedFileKey),
+    [effectiveExpandedFileKey, selectedDiffSnapshot],
   );
   const virtualLayout = React.useMemo(
     () => (selectedDiffSnapshot ? buildDiffFileVirtualLayout(selectedDiffSnapshot, selectedCollapsedFileKeys, viewMode) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
     [selectedCollapsedFileKeys, selectedDiffSnapshot, viewMode],
   );
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
+  // shouldShowFileTree limits the navigation drawer to multi-file diffs.
+  // shouldShowFileTree 将导航目录限制在多文件 diff 场景。
+  const shouldShowFileTree = renderedFileCount > 1;
+  // refreshBusy merges parent loading and the local refresh lock for button state.
+  // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
+  const refreshBusy = Boolean(props.loading || refreshPending);
   const searchActive = searchQuery.trim().length > 0;
   const searchWaitingForBackendMatches = searchActive
     && !searchPending
@@ -245,6 +261,32 @@ export function DiffReviewPanel(props: {
     }
     void openProjectDirectoryPath(absolutePath);
   }, [renderedSnapshot?.repositoryRoot]);
+  // handleRefreshClick starts one refresh request and blocks duplicate clicks until it settles.
+  // handleRefreshClick 启动一次刷新请求，并在完成前阻止重复点击。
+  const handleRefreshClick = React.useCallback(() => {
+    if (!onRefresh || refreshBusy) {
+      return;
+    }
+    setRefreshPending(true);
+    try {
+      const refreshResult = onRefresh();
+      if (isPromiseLike(refreshResult)) {
+        void refreshResult.finally(() => setRefreshPending(false));
+      } else if (typeof window !== "undefined") {
+        window.setTimeout(() => setRefreshPending(false), 0);
+      } else {
+        setRefreshPending(false);
+      }
+    } catch (error) {
+      setRefreshPending(false);
+      throw error;
+    }
+  }, [onRefresh, refreshBusy]);
+  React.useEffect(() => {
+    if (!props.loading) {
+      setRefreshPending(false);
+    }
+  }, [props.loading]);
   React.useLayoutEffect(() => {
     const element = fileListRef.current;
     if (!element) {
@@ -439,9 +481,9 @@ export function DiffReviewPanel(props: {
           <strong>{props.emptyTitle ?? "Git Diff"}</strong>
           <span>{props.emptyBody ?? "当前没有可展示的 Git Diff。"}</span>
           {props.onRefresh ? (
-            <button className="diff-action-button" disabled={props.loading} onClick={() => props.onRefresh?.()} type="button">
-              <RefreshCw size={14} />
-              <span>{props.loading ? "加载中" : "刷新"}</span>
+            <button className="diff-action-button" disabled={refreshBusy} onClick={handleRefreshClick} type="button">
+              <RefreshCw className={refreshBusy ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
+              <span>{refreshBusy ? "加载中" : "刷新"}</span>
             </button>
           ) : null}
         </div>
@@ -452,13 +494,13 @@ export function DiffReviewPanel(props: {
   return (
     <section className="diff-review-panel">
       <DiffPanelToolbar
-        loading={props.loading}
+        loading={refreshBusy}
         selection={selection}
         snapshot={snapshot}
         canSearchNext={searchIndex.matches.length > 1}
         canSearchPrevious={searchIndex.matches.length > 1}
         onCopyRaw={props.onCopyRaw}
-        onRefresh={props.onRefresh}
+        onRefresh={handleRefreshClick}
         onSearchNext={() => setActiveSearchIndex((index) => nextSearchIndex(index, searchIndex.matches.length))}
         onSearchPrevious={() => setActiveSearchIndex((index) => previousSearchIndex(index, searchIndex.matches.length))}
         onSearchQueryChange={(query) => {
@@ -475,9 +517,9 @@ export function DiffReviewPanel(props: {
         viewMode={viewMode}
       />
       <div className={`diff-review-body${selectedDiffFile ? " has-selection" : " directory-only"}`}>
-        {renderedSnapshot ? (
+        {renderedSnapshot && shouldShowFileTree ? (
           <DiffFileTreeDrawer
-            activeFileKey={expandedFileKey}
+            activeFileKey={effectiveExpandedFileKey}
             files={renderedSnapshot.files}
             filter={fileTreeFilter}
             lockedOpen={!selectedDiffFile}
@@ -1703,6 +1745,18 @@ function summarySearchFilePageDescription(
 ): string {
   const visibleFileCount = Math.min(DIFF_SEARCH_PAGE_SIZE, matches.length);
   return `后端已在完整 diff 中找到 ${matches.length}${truncated ? "+" : ""} 个命中文件，当前展示前 ${visibleFileCount} 个并按需水合详情`;
+}
+
+// isPromiseLike checks whether a refresh result exposes a finalizer.
+// isPromiseLike 检查刷新结果是否提供完成回调。
+function isPromiseLike(
+  // Unknown refresh return value from the optional host callback.
+  // 可选宿主回调返回的未知刷新结果。
+  value: unknown,
+): value is Promise<void> {
+  return Boolean(value)
+    && (typeof value === "object" || typeof value === "function")
+    && typeof (value as Promise<void>).finally === "function";
 }
 
 // diffCollapsedFileKeys builds the default-collapsed, single-expanded file key set.

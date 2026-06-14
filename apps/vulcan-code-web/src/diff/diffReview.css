@@ -257,6 +257,26 @@
   padding: 0;
 }
 
+.diff-action-button:disabled,
+.diff-icon-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.diff-refresh-icon.loading {
+  animation: diff-refresh-spin 0.8s linear infinite;
+}
+
+@keyframes diff-refresh-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .diff-search-toggle.active {
   color: var(--primary);
   border-color: color-mix(in oklab, var(--primary) 42%, var(--border));

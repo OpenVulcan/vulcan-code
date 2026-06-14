@@ -68,6 +68,10 @@ let lastWorkspaceReviewVisibleSurfaceId: string | null = null;
 // workspaceReviewPanelCacheLimit 限制缓存的审核状态数量，避免长期保留旧 diff 树。
 const workspaceReviewPanelCacheLimit = 12;
 
+// DEFAULT_WORKSPACE_REVIEW_SELECTION is the live Git diff source shown when no cached choice exists.
+// DEFAULT_WORKSPACE_REVIEW_SELECTION 是没有缓存选择时展示的实时 Git diff 默认来源。
+const DEFAULT_WORKSPACE_REVIEW_SELECTION: DiffReviewSelection = { mode: "unstaged" };
+
 // WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS mirrors the target review-diff request timeout.
 // WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS 对齐目标项目的单文件 review-diff 请求超时。
 const WORKSPACE_DIFF_FILE_DETAIL_TIMEOUT_MS = 15_000;
@@ -162,7 +166,7 @@ export function WorkspaceReviewPanelHost(props: {
   // diffReviewSelection stores the current Git review source selection.
   // diffReviewSelection 保存当前 Git 审核来源选择。
   const [diffReviewSelection, setDiffReviewSelection] = React.useState<DiffReviewSelection>(
-    () => initialReviewPanelCache?.selection ?? { mode: "branch" },
+    () => initialReviewPanelCache?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION,
   );
   // diffReviewSelectionKey stores a stable key for the current Git review source.
   // diffReviewSelectionKey 保存当前 Git 审核来源的稳定键。
@@ -442,7 +446,7 @@ export function WorkspaceReviewPanelHost(props: {
     hydratedReviewPanelCacheKeyRef.current = reviewPanelCacheKey;
     workspaceReviewRequestSeqRef.current += 1;
     const cachedEntry = workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null;
-    setDiffReviewSelection(cachedEntry?.selection ?? { mode: "branch" });
+    setDiffReviewSelection(cachedEntry?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION);
     setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
     setWorkspaceReviewSurfaceId(cachedEntry?.surfaceId ?? activeSurfaceId);
     setWorkspaceReviewPath(cachedEntry?.workspacePath ?? workspacePath);
