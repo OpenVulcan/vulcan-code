@@ -77,6 +77,7 @@ export function DiffReviewPanel(props: {
   onSearchWorkspaceDiff?: (query: string, limit?: number) => Promise<WorkspaceDiffSearchResponse | null>;
 }) {
   const fileListRef = React.useRef<HTMLDivElement | null>(null);
+  const syncingSplitScrollRef = React.useRef(false);
   const summarySearchRequestSeqRef = React.useRef(0);
   const summarySearchResolvedKeyRef = React.useRef<string | null>(null);
   const summarySearchTargetAppliedKeyRef = React.useRef<string | null>(null);
@@ -219,6 +220,32 @@ export function DiffReviewPanel(props: {
   React.useEffect(() => {
     setCollapsedFileKeys(new Set());
   }, [diffSourceScrollResetKey]);
+  React.useEffect(() => {
+    const element = fileListRef.current;
+    if (!element || viewMode !== "split") {
+      return undefined;
+    }
+    const handleCodeScroll = (event: Event) => {
+      if (syncingSplitScrollRef.current) {
+        return;
+      }
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) {
+        return;
+      }
+      const side = target.classList.contains("old")
+        ? "old"
+        : target.classList.contains("new")
+          ? "new"
+          : null;
+      if (!side || !target.classList.contains("diff-split-code")) {
+        return;
+      }
+      syncDiffSplitScroll(target, target.scrollLeft, syncingSplitScrollRef);
+    };
+    element.addEventListener("scroll", handleCodeScroll, true);
+    return () => element.removeEventListener("scroll", handleCodeScroll, true);
+  }, [viewMode]);
   // mountedDetailHydrationRequests contains visible summary files that should be hydrated lazily.
   // mountedDetailHydrationRequests 保存当前可见且需要懒水合的摘要文件。
   const mountedDetailHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(() => {
@@ -420,7 +447,7 @@ export function DiffReviewPanel(props: {
         viewMode={viewMode}
       />
       <div
-        className={`diff-file-list${virtualLayout.enabled ? " virtualized" : ""}`}
+        className={`diff-file-list ${viewMode === "split" ? "split-mode" : "unified-mode"}${virtualLayout.enabled ? " virtualized" : ""}`}
         onScroll={handleFileListScroll}
         ref={fileListRef}
       >
@@ -492,6 +519,35 @@ export function DiffReviewPanel(props: {
       </div>
     </section>
   );
+}
+
+// syncDiffSplitScroll mirrors one native scrollLeft inside the source split file frame.
+// syncDiffSplitScroll 在来源分栏文件框架内镜像一个原生 scrollLeft。
+function syncDiffSplitScroll(
+  // Source split code column.
+  // 来源分栏代码列。
+  source: HTMLElement,
+  // Horizontal scroll offset in pixels.
+  // 横向滚动偏移，单位为像素。
+  scrollLeft: number,
+  // Re-entrancy guard shared by paired code-column synchronization.
+  // 成对代码列同步共享的重入保护。
+  syncingRef: React.MutableRefObject<boolean>,
+): void {
+  const frame = source.closest<HTMLElement>(".diff-code-frame.split");
+  if (!frame) {
+    return;
+  }
+  const nextScrollLeft = Math.max(0, scrollLeft);
+  syncingRef.current = true;
+  frame.querySelectorAll<HTMLElement>(".diff-split-code").forEach((node) => {
+    if (node !== source && node.scrollLeft !== nextScrollLeft) {
+      node.scrollLeft = nextScrollLeft;
+    }
+  });
+  window.setTimeout(() => {
+    syncingRef.current = false;
+  }, 300);
 }
 
 // DiffSearchPendingState displays while the search worker builds the loaded-line index.

@@ -120,6 +120,11 @@ export function DiffPanelToolbar(props: {
         >
           {props.viewMode === "split" ? <Rows3 size={14} /> : <Columns2 size={14} />}
         </button>
+        {props.onCopyRaw ? (
+          <button className="diff-icon-button" onClick={() => props.onCopyRaw?.(props.snapshot.rawDiff)} title="复制 raw diff" type="button">
+            <Copy size={14} />
+          </button>
+        ) : null}
         {props.onSearchQueryChange ? (
           <DiffSearchControl
             canSearchNext={Boolean(props.canSearchNext)}
@@ -131,11 +136,6 @@ export function DiffPanelToolbar(props: {
             onPrevious={props.onSearchPrevious}
             onQueryChange={props.onSearchQueryChange}
           />
-        ) : null}
-        {props.onCopyRaw ? (
-          <button className="diff-icon-button" onClick={() => props.onCopyRaw?.(props.snapshot.rawDiff)} title="复制 raw diff" type="button">
-            <Copy size={14} />
-          </button>
         ) : null}
         {props.onRefresh ? (
           <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title="刷新 diff" type="button">
@@ -175,38 +175,74 @@ function DiffSearchControl(props: {
   // 下一条结果处理器。
   onNext?: () => void;
 }) {
+  const [open, setOpen] = React.useState(false);
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  React.useEffect(() => {
+    if (!open || typeof window === "undefined") {
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frameId);
+  }, [open]);
+  const handleBlur = React.useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      setOpen(false);
+    }
+  }, []);
+  const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      setOpen(false);
+    }
+  }, []);
   return (
-    <div className="diff-panel-search">
-      <Search size={13} />
-      <input
-        aria-label="搜索 diff"
-        onChange={(event) => props.onQueryChange(event.currentTarget.value)}
-        placeholder="搜索 diff"
-        value={props.query}
-      />
-      {props.query ? (
-        <span className="diff-search-count" title={props.resultTruncated ? "结果已截断" : undefined}>
-          {props.resultLabel}
-        </span>
+    <div className="diff-panel-search-anchor" onBlur={handleBlur} onKeyDown={handleKeyDown}>
+      <button
+        aria-expanded={open}
+        aria-label="打开 diff 搜索"
+        className={`diff-icon-button diff-search-toggle${props.query ? " active" : ""}`}
+        onClick={() => setOpen((current) => !current)}
+        title="搜索 diff"
+        type="button"
+      >
+        <Search size={14} />
+      </button>
+      {open ? (
+        <div className="diff-panel-search-popover">
+          <div className="diff-panel-search">
+            <Search size={13} />
+            <input
+              aria-label="搜索 diff"
+              onChange={(event) => props.onQueryChange(event.currentTarget.value)}
+              placeholder="搜索 diff"
+              ref={inputRef}
+              value={props.query}
+            />
+            {props.query ? (
+              <span className="diff-search-count" title={props.resultTruncated ? "结果已截断" : undefined}>
+                {props.resultLabel}
+              </span>
+            ) : null}
+            <button
+              className="diff-search-step"
+              disabled={!props.canSearchPrevious}
+              onClick={() => props.onPrevious?.()}
+              title="上一条"
+              type="button"
+            >
+              <ChevronUp size={13} />
+            </button>
+            <button
+              className="diff-search-step"
+              disabled={!props.canSearchNext}
+              onClick={() => props.onNext?.()}
+              title="下一条"
+              type="button"
+            >
+              <ChevronDown size={13} />
+            </button>
+          </div>
+        </div>
       ) : null}
-      <button
-        className="diff-search-step"
-        disabled={!props.canSearchPrevious}
-        onClick={() => props.onPrevious?.()}
-        title="上一条"
-        type="button"
-      >
-        <ChevronUp size={13} />
-      </button>
-      <button
-        className="diff-search-step"
-        disabled={!props.canSearchNext}
-        onClick={() => props.onNext?.()}
-        title="下一条"
-        type="button"
-      >
-        <ChevronDown size={13} />
-      </button>
     </div>
   );
 }

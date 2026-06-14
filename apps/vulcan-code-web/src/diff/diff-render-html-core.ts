@@ -80,6 +80,34 @@ const DIFF_LINE_SEARCH_CLASS_NAMES = Object.freeze({
   ] as const),
 } satisfies Record<DiffLineKind, DiffLineSearchClassSet>);
 
+// DiffCodeColumnHtml stores one rendered code column's gutter and content fragments.
+// DiffCodeColumnHtml 保存单个代码列渲染后的行号栏与内容片段。
+interface DiffCodeColumnHtml {
+  // Gutter HTML fragment for the rendered column.
+  // 当前列的行号栏 HTML 片段。
+  gutter: string;
+  // Content HTML fragment for the rendered column.
+  // 当前列的内容 HTML 片段。
+  content: string;
+}
+
+// DiffSplitColumnsHtml stores the old and new rendered split columns.
+// DiffSplitColumnsHtml 保存左右分栏渲染后的旧列与新列。
+interface DiffSplitColumnsHtml {
+  // Old/deletion side column fragments.
+  // 旧侧/删除侧列片段。
+  old: DiffCodeColumnHtml;
+  // New/addition side column fragments.
+  // 新侧/新增侧列片段。
+  new: DiffCodeColumnHtml;
+}
+
+// DiffColumnsHtml stores rendered code columns for one row group.
+// DiffColumnsHtml 保存一组行对应的代码列渲染结果。
+type DiffColumnsHtml =
+  | { mode: "unified"; unified: DiffCodeColumnHtml }
+  | { mode: "split"; split: DiffSplitColumnsHtml };
+
 // DiffLineRowAttributesCacheEntry stores immutable data attributes for one rendered line key.
 // DiffLineRowAttributesCacheEntry 保存单个渲染行键对应的不可变 data 属性。
 interface DiffLineRowAttributesCacheEntry {
@@ -220,12 +248,12 @@ export function renderHighlightedDiffFileHtmlCore(options: DiffHighlightedFileRe
 // renderDiffFileHtmlCore renders one complete file as HTML.
 // renderDiffFileHtmlCore 将单个完整文件渲染为 HTML。
 function renderDiffFileHtmlCore(options: DiffPlainFileRenderOptions & DiffHighlightedRenderState): string {
-  let html = "";
+  const columns = emptyDiffColumnsHtml(options.viewMode);
   for (let hunkIndex = 0; hunkIndex < options.file.hunks.length; hunkIndex += 1) {
     const hunk = options.file.hunks[hunkIndex];
-    html += `<section class="diff-hunk">${renderHunkHeaderHtml(hunk.header, hunkIndex, options.contextControls)}<div class="diff-lines">`;
+    appendHunkHeaderColumns(columns, hunk.header, hunkIndex, options.contextControls);
     for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex += 1) {
-      html += renderLineHtml({
+      appendLineHtml(columns, {
         fileKey: options.file.key,
         hunkIndex,
         lineIndex,
@@ -237,9 +265,8 @@ function renderDiffFileHtmlCore(options: DiffPlainFileRenderOptions & DiffHighli
         viewMode: options.viewMode,
       });
     }
-    html += "</div></section>";
   }
-  return html;
+  return renderColumnsHtml(columns);
 }
 
 // renderPlainDiffVirtualRowsHtmlCore renders one mounted virtual row window as escaped plain HTML.
@@ -302,13 +329,14 @@ function renderDiffVirtualRowsHtmlCore(
   let html = "";
   const safeStartIndex = Math.max(0, Math.min(startIndex, options.rows.length));
   const safeEndIndex = Math.max(safeStartIndex, Math.min(endIndex, options.rows.length));
+  const columns = emptyDiffColumnsHtml(options.viewMode);
   for (let rowIndex = safeStartIndex; rowIndex < safeEndIndex; rowIndex += 1) {
     const row = options.rows[rowIndex];
     if (row.kind === "hunk") {
-      html += renderHunkHeaderHtml(row.header, row.hunkIndex, options.contextControls, true);
+      appendHunkHeaderColumns(columns, row.header, row.hunkIndex, options.contextControls, true);
       continue;
     }
-    html += renderLineHtml({
+    appendLineHtml(columns, {
       fileKey: options.fileKey,
       hunkIndex: row.hunkIndex,
       lineIndex: row.lineIndex,
@@ -321,6 +349,7 @@ function renderDiffVirtualRowsHtmlCore(
       viewMode: options.viewMode,
     });
   }
+  html += renderColumnsHtml(columns);
   return html;
 }
 
@@ -434,6 +463,213 @@ function renderLineHtml(options: {
   return html;
 }
 
+// emptyDiffColumnsHtml creates one mutable column accumulator for the active diff mode.
+// emptyDiffColumnsHtml 为当前 diff 模式创建一个可变列累加器。
+function emptyDiffColumnsHtml(viewMode: DiffViewMode | undefined): DiffColumnsHtml {
+  if (viewMode === "split") {
+    return {
+      mode: "split",
+      split: {
+        old: { gutter: "", content: "" },
+        new: { gutter: "", content: "" },
+      },
+    };
+  }
+  return { mode: "unified", unified: { gutter: "", content: "" } };
+}
+
+// appendLineHtml appends one diff line into the target-style column accumulator.
+// appendLineHtml 将单条 diff 行追加到目标风格的列累加器中。
+function appendLineHtml(
+  // Mutable column accumulator for the current rendered group.
+  // 当前渲染分组使用的可变列累加器。
+  columns: DiffColumnsHtml,
+  // Line render options.
+  // 单行渲染选项。
+  options: Parameters<typeof renderLineHtml>[0],
+): void {
+  const lineKey = options.lineKey ?? diffSearchLineKey(options.fileKey, options.hunkIndex, options.lineIndex);
+  const classes = plainLineClassName(options.line.kind, lineKey, options);
+  const contentHtml = lineContentHtml(options.line, lineKey, options.highlightedLineSpans, options.inlineDiff);
+  const rowAttributes = lineRowAttributes(lineKey, options);
+  if (columns.mode === "split") {
+    appendSplitLineColumns(columns.split, options.line, classes, rowAttributes, contentHtml);
+    return;
+  }
+  appendUnifiedLineColumn(columns.unified, options.line, classes, rowAttributes, contentHtml);
+}
+
+// appendHunkHeaderColumns appends one hunk separator into the active code columns.
+// appendHunkHeaderColumns 将一个 hunk 分隔行追加到当前代码列中。
+function appendHunkHeaderColumns(
+  // Mutable column accumulator for the current rendered group.
+  // 当前渲染分组使用的可变列累加器。
+  columns: DiffColumnsHtml,
+  // Hunk header text from the parsed diff.
+  // 从已解析 diff 得到的 hunk 头文本。
+  header: string,
+  // Source hunk index used by delegated hunk actions.
+  // 委托 hunk 操作使用的源 hunk 索引。
+  hunkIndex: number,
+  // Whether hunk expansion controls should be rendered.
+  // 是否渲染 hunk 展开控件。
+  contextControls = false,
+  // Whether the separator belongs to a virtual row window.
+  // 当前分隔行是否属于虚拟行窗口。
+  virtual = false,
+): void {
+  const contentHtml = hunkHeaderContentHtml(header, hunkIndex, contextControls);
+  const rowAttributes = `data-diff-row-kind="hunk" data-diff-hunk-index="${hunkIndex}"`;
+  const gutterHtml = "";
+  if (columns.mode === "split") {
+    appendHunkHeaderColumn(columns.split.old, gutterHtml, hunkHeaderContentHtml(header, hunkIndex, false), rowAttributes, virtual);
+    appendHunkHeaderColumn(columns.split.new, gutterHtml, contentHtml, rowAttributes, virtual);
+    return;
+  }
+  appendHunkHeaderColumn(columns.unified, gutterHtml, contentHtml, rowAttributes, virtual);
+}
+
+// appendHunkHeaderColumn appends one separator row to a single code column.
+// appendHunkHeaderColumn 将一个分隔行追加到单个代码列。
+function appendHunkHeaderColumn(
+  // Mutable code column accumulator.
+  // 可变的代码列累加器。
+  column: DiffCodeColumnHtml,
+  // Rendered gutter cell HTML.
+  // 已渲染的行号栏单元 HTML。
+  gutterHtml: string,
+  // Rendered content cell HTML.
+  // 已渲染的内容单元 HTML。
+  contentHtml: string,
+  // Stable row data attributes.
+  // 稳定行数据属性。
+  rowAttributes: string,
+  // Whether the row belongs to a virtual window.
+  // 当前行是否属于虚拟窗口。
+  virtual: boolean,
+): void {
+  const virtualClass = virtual ? " virtual" : "";
+  column.gutter += `<span class="diff-line-row diff-hunk-separator diff-code-gutter-line${virtualClass}" ${rowAttributes}>${gutterHtml}</span>`;
+  column.content += `<span class="diff-line-row diff-hunk-separator diff-code-content-line${virtualClass}" ${rowAttributes}>${contentHtml}</span>`;
+}
+
+// appendUnifiedLineColumn appends one unified-mode line to gutter and content columns.
+// appendUnifiedLineColumn 将一条合并模式行追加到行号栏与内容列。
+function appendUnifiedLineColumn(
+  // Mutable unified column accumulator.
+  // 可变的合并列累加器。
+  column: DiffCodeColumnHtml,
+  // Parsed diff line.
+  // 已解析 diff 行。
+  line: DiffLine,
+  // Dynamic line class string.
+  // 动态行 class 字符串。
+  classes: string,
+  // Stable row data attributes.
+  // 稳定行数据属性。
+  rowAttributes: string,
+  // Rendered line content.
+  // 已渲染行内容。
+  contentHtml: string,
+): void {
+  const lineNumberHtml = formatLineNumber(line);
+  column.gutter += `<span class="${classes} diff-code-gutter-line" ${rowAttributes}>${lineNumberHtml}</span>`;
+  column.content += `<span class="${classes} diff-code-content-line" ${rowAttributes}>${contentHtml}</span>`;
+}
+
+// appendSplitLineColumns appends one split-mode line to old and new columns.
+// appendSplitLineColumns 将一条分栏模式行追加到旧侧与新侧列。
+function appendSplitLineColumns(
+  // Mutable split column accumulator.
+  // 可变的分栏列累加器。
+  columns: DiffSplitColumnsHtml,
+  // Parsed diff line.
+  // 已解析 diff 行。
+  line: DiffLine,
+  // Dynamic line class string.
+  // 动态行 class 字符串。
+  classes: string,
+  // Stable row data attributes.
+  // 稳定行数据属性。
+  rowAttributes: string,
+  // Rendered line content.
+  // 已渲染行内容。
+  contentHtml: string,
+): void {
+  const oldLineNumber = formatOldLineNumber(line);
+  const newLineNumber = formatNewLineNumber(line);
+  const oldBuffered = line.kind === "added";
+  const newBuffered = line.kind === "removed";
+  appendSplitSideLine(columns.old, {
+    buffered: oldBuffered,
+    classes,
+    contentHtml: oldBuffered ? "" : contentHtml,
+    lineNumberHtml: oldLineNumber,
+    rowAttributes,
+    side: "old",
+  });
+  appendSplitSideLine(columns.new, {
+    buffered: newBuffered,
+    classes,
+    contentHtml: newBuffered ? "" : contentHtml,
+    lineNumberHtml: newLineNumber,
+    rowAttributes,
+    side: "new",
+  });
+}
+
+// appendSplitSideLine appends one side of a split line, including missing-side buffers.
+// appendSplitSideLine 追加分栏单侧行，并包含缺失侧 buffer。
+function appendSplitSideLine(
+  // Mutable side column accumulator.
+  // 可变的单侧列累加器。
+  column: DiffCodeColumnHtml,
+  // Split side render options.
+  // 分栏单侧渲染选项。
+  options: {
+    buffered: boolean;
+    classes: string;
+    contentHtml: string;
+    lineNumberHtml: string;
+    rowAttributes: string;
+    side: "old" | "new";
+  },
+): void {
+  const bufferClass = options.buffered ? " diff-code-buffer" : "";
+  column.gutter += `<span class="${options.classes} diff-code-gutter-line ${options.side}${bufferClass}" ${options.rowAttributes}>${options.lineNumberHtml}</span>`;
+  column.content += `<span class="${options.classes} diff-code-content-line ${options.side}${bufferClass}" ${options.rowAttributes}>${options.contentHtml}</span>`;
+}
+
+// renderColumnsHtml renders one target-style code frame from accumulated columns.
+// renderColumnsHtml 将累积的列片段渲染为目标风格代码框架。
+function renderColumnsHtml(columns: DiffColumnsHtml): string {
+  if (columns.mode === "split") {
+    return `<div class="diff-code-frame split"><code class="diff-code-column diff-split-code old" data-diff-code-column="old">${renderCodeColumnInnerHtml(columns.split.old)}</code><code class="diff-code-column diff-split-code new" data-diff-code-column="new">${renderCodeColumnInnerHtml(columns.split.new)}</code></div>`;
+  }
+  return `<div class="diff-code-frame unified"><code class="diff-code-column unified" data-diff-code-column="unified">${renderCodeColumnInnerHtml(columns.unified)}</code></div>`;
+}
+
+// renderCodeColumnInnerHtml renders the shared gutter/content structure for one code column.
+// renderCodeColumnInnerHtml 渲染单个代码列共享的行号栏/内容结构。
+function renderCodeColumnInnerHtml(column: DiffCodeColumnHtml): string {
+  return `<span class="diff-code-gutter">${column.gutter}</span><span class="diff-code-content">${column.content}</span>`;
+}
+
+// hunkHeaderContentHtml renders separator text and optional expansion controls for column layout.
+// hunkHeaderContentHtml 为列布局渲染分隔行文本与可选展开控件。
+function hunkHeaderContentHtml(header: string, hunkIndex: number, contextControls = false): string {
+  const headerText = `<span class="diff-hunk-header-text">${escapeHtml(header)}</span>`;
+  if (!contextControls) {
+    return headerText;
+  }
+  return headerText
+    + `<span class="diff-hunk-expand-controls">${
+      hunkExpansionButtonHtml(hunkIndex, "up", "向上展开上下文", "上")
+      + hunkExpansionButtonHtml(hunkIndex, "down", "向下展开上下文", "下")
+      + hunkExpansionButtonHtml(hunkIndex, "both", "双向展开上下文", "双向")
+    }</span>`;
+}
+
 // staticDiffLineHtml reads cached plain line HTML when no dynamic render state is active.
 // staticDiffLineHtml 在没有动态渲染状态时读取缓存的纯文本行 HTML。
 function staticDiffLineHtml(
@@ -542,7 +778,7 @@ function renderSplitLineHtml(line: DiffLine, classes: string, rowAttributes: str
   const newLineNumber = formatNewLineNumber(line);
   const oldContentHtml = line.kind === "added" ? "" : contentHtml;
   const newContentHtml = line.kind === "removed" ? "" : contentHtml;
-  return `<div class="${classes} split" ${rowAttributes}><span class="diff-line-number old">${oldLineNumber}</span><code class="diff-split-code old">${oldContentHtml}</code><span class="diff-line-number new">${newLineNumber}</span><code class="diff-split-code new">${newContentHtml}</code></div>`;
+  return `<div class="${classes} split" ${rowAttributes}><div class="diff-split-side old"><span class="diff-line-number old">${oldLineNumber}</span><code class="diff-split-code old"><span class="diff-split-code-inner old">${oldContentHtml}</span></code></div><div class="diff-split-side new"><span class="diff-line-number new">${newLineNumber}</span><code class="diff-split-code new"><span class="diff-split-code-inner new">${newContentHtml}</span></code></div></div>`;
 }
 
 // lineContentHtml returns highlighted token HTML when available, otherwise escaped text.
