@@ -173,6 +173,9 @@ export function DiffReviewPanel(props: {
     [selectedCollapsedFileKeys, selectedDiffSnapshot, viewMode],
   );
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
+  // isSingleFileReview marks any mode that is currently displaying one selected file body.
+  // isSingleFileReview 标记任何当前正在展示单个已选文件正文的模式。
+  const isSingleFileReview = Boolean(selectedDiffFile);
   // shouldShowFileTree limits the navigation drawer to multi-file diffs.
   // shouldShowFileTree 将导航目录限制在多文件 diff 场景。
   const shouldShowFileTree = renderedFileCount > 1;
@@ -232,6 +235,9 @@ export function DiffReviewPanel(props: {
     () => stickyDiffFileItem(virtualLayout, scrollState.scrollTop),
     [scrollState.scrollTop, virtualLayout],
   );
+  // floatingHeaderFile keeps the single-file title pinned even before regular sticky logic activates.
+  // floatingHeaderFile 让单文件标题在常规吸顶逻辑触发前也保持固定。
+  const floatingHeaderFile = isSingleFileReview ? selectedDiffFile : stickyFileItem?.file ?? null;
   const handleFileCollapsedChange = React.useCallback((fileKey: string, collapsed: boolean) => {
     setExpandedFileKey((current) => (collapsed ? (current === fileKey ? null : current) : fileKey));
     if (typeof window !== "undefined") {
@@ -530,7 +536,7 @@ export function DiffReviewPanel(props: {
           />
         ) : null}
         <div
-          className={`diff-file-list ${viewMode === "split" ? "split-mode" : "unified-mode"}${virtualLayout.enabled ? " virtualized" : ""}`}
+          className={`diff-file-list ${viewMode === "split" ? "split-mode" : "unified-mode"}${virtualLayout.enabled ? " virtualized" : ""}${isSingleFileReview ? " single-file-floating-header" : ""}`}
           onScroll={handleFileListScroll}
           ref={fileListRef}
         >
@@ -545,13 +551,13 @@ export function DiffReviewPanel(props: {
             />
           ) : selectedDiffFile ? (
             <>
-              {stickyFileItem ? (
+              {floatingHeaderFile ? (
                 <div className="diff-file-sticky-header-overlay">
                   <DiffFileHeader
-                    className="overlay"
-                    collapsed={selectedCollapsedFileKeys.has(stickyFileItem.file.key)}
-                    file={stickyFileItem.file}
-                    onToggle={() => handleFileCollapsedChange(stickyFileItem.file.key, !selectedCollapsedFileKeys.has(stickyFileItem.file.key))}
+                    className={isSingleFileReview ? "overlay glass" : "overlay"}
+                    collapsed={selectedCollapsedFileKeys.has(floatingHeaderFile.key)}
+                    file={floatingHeaderFile}
+                    onToggle={() => handleFileCollapsedChange(floatingHeaderFile.key, !selectedCollapsedFileKeys.has(floatingHeaderFile.key))}
                   />
                 </div>
               ) : null}
@@ -597,7 +603,7 @@ export function DiffReviewPanel(props: {
               )}
             </>
           ) : renderedFileCount ? (
-            <DiffDirectoryWelcome notice={snapshot.notice} />
+            null
           ) : (
             <div className="diff-empty-state in-list">
               <FileText size={20} />
@@ -924,22 +930,6 @@ function DiffTreeStats(props: {
       {props.additions ? <span className="added">{`+${props.additions}`}</span> : null}
       {props.deletions ? <span className="removed">{`-${props.deletions}`}</span> : null}
     </span>
-  );
-}
-
-// DiffDirectoryWelcome renders the default directory-first empty detail state.
-// DiffDirectoryWelcome 渲染默认目录优先模式下的空详情状态。
-function DiffDirectoryWelcome(props: {
-  // Optional backend notice.
-  // 可选后端提示。
-  notice?: string | null;
-}) {
-  return (
-    <div className="diff-empty-state in-list directory-welcome">
-      <FileText size={20} />
-      <strong>选择文件查看 Diff</strong>
-      <span>{props.notice ?? "左侧目录显示每个文件与目录的变更行数，点击文件后只渲染该文件内容。"}</span>
-    </div>
   );
 }
 
