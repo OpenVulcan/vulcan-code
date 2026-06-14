@@ -218,6 +218,24 @@ export function useHighlightedDiffWindowRevision(rows: readonly DiffMountedVirtu
     // 仅对未缓存的高亮 key 懒分配当前窗口内去重集合。
     let scheduledKeys: Set<string> | undefined;
     for (const row of rows) {
+      if (row.kind === "pair") {
+        const pairLines = [row.deletionLine, row.additionLine];
+        for (const line of pairLines) {
+          if (!line || line.kind === "metadata") {
+            continue;
+          }
+          const cacheKey = highlightCacheKeyForDiffLine(line, normalizedLanguage);
+          if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys?.has(cacheKey)) {
+            continue;
+          }
+          const content = diffLineHighlightContent(line);
+          scheduledKeys ??= new Set();
+          scheduledKeys.add(cacheKey);
+          unsubscribeList ??= [];
+          unsubscribeList.push(requestHighlightedLineByKey(cacheKey, content, normalizedLanguage, refresh));
+        }
+        continue;
+      }
       if (row.kind !== "line" || row.line.kind === "metadata") {
         continue;
       }

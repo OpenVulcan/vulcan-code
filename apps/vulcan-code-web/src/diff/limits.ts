@@ -102,11 +102,11 @@ export const DIFF_LIST_CARD_VERTICAL_GAP = 0;
 
 // DIFF_LINE_HEIGHT is the fixed visual height for one diff code row.
 // DIFF_LINE_HEIGHT 是单条 diff 代码行的固定视觉高度。
-export const DIFF_LINE_HEIGHT = 22;
+export const DIFF_LINE_HEIGHT = 20;
 
 // DIFF_HUNK_HEADER_HEIGHT is the fixed visual height for one hunk header row.
 // DIFF_HUNK_HEADER_HEIGHT 是单条 hunk 头部行的固定视觉高度。
-export const DIFF_HUNK_HEADER_HEIGHT = 29;
+export const DIFF_HUNK_HEADER_HEIGHT = 32;
 
 // DIFF_RENDER_POLICY_NOTE_HEIGHT is the fixed height used by large-file policy notes.
 // DIFF_RENDER_POLICY_NOTE_HEIGHT 是大文件渲染策略提示使用的固定高度。

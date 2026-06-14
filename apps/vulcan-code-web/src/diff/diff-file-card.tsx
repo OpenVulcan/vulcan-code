@@ -1,7 +1,7 @@
 import React from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
-import type { DiffFile, DiffHunkExpansionDirection, DiffHunkExpansionRequest, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
+import type { DiffFile, DiffHunkExpansionDirection, DiffHunkExpansionRequest, DiffRenderPreferences, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
 import {
   diffLanguageForFile,
   useHighlightedDiffFileRevision,
@@ -24,7 +24,6 @@ import {
   type DiffScrollState,
   buildDiffVirtualLayout,
   elementTopWithinScrollContainer,
-  fileTotalRowCount,
   mountedDiffRows,
 } from "./diff-virtual-layout";
 import {
@@ -33,6 +32,8 @@ import {
   usePlainDiffFileHtml,
   usePlainDiffRowsHtml,
 } from "./diff-render-worker-client";
+import { setupTargetDiffDom } from "./target-diff-dom";
+import { targetDiffFileVisualRowCount } from "./target-diff-model";
 
 // DIFF_DEFAULT_CONTEXT_LINES matches Git's default unified-diff context.
 // DIFF_DEFAULT_CONTEXT_LINES 对齐 Git 默认 unified-diff 上下文行数。
@@ -40,7 +41,7 @@ const DIFF_DEFAULT_CONTEXT_LINES = 3;
 
 // DIFF_CONTEXT_EXPANSION_STEPS defines bounded hunk context expansion requests.
 // DIFF_CONTEXT_EXPANSION_STEPS 定义受限的 hunk 上下文展开请求档位。
-const DIFF_CONTEXT_EXPANSION_STEPS = [20, 50, 100] as const;
+const DIFF_CONTEXT_EXPANSION_STEPS = [25, 50, 100] as const;
 
 // DIFF_SUMMARY_PLACEHOLDER_MAX_HUNKS caps rendered summary-only hunk skeleton nodes.
 // DIFF_SUMMARY_PLACEHOLDER_MAX_HUNKS 限制 summary-only hunk 骨架节点数量。
@@ -87,6 +88,9 @@ interface DiffFileCardProps {
   // Visual layout mode used for rendered diff rows.
   // 渲染 diff 行使用的视觉布局模式。
   viewMode: DiffViewMode;
+  // Target-compatible rendering preferences.
+  // 目标兼容的渲染偏好。
+  renderPreferences: DiffRenderPreferences;
   // Search result line keys visible on the current result page.
   // 当前结果页可见的搜索命中行键。
   searchLineKeys?: ReadonlySet<string>;
@@ -142,7 +146,7 @@ export function DiffFileHeader(props: {
 // DiffFileCard renders one file-level diff card.
 // DiffFileCard 渲染单个文件级 diff 卡片。
 export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCardProps) {
-  const rowCount = React.useMemo(() => fileTotalRowCount(props.file), [props.file]);
+  const rowCount = React.useMemo(() => targetDiffFileVisualRowCount(props.file, props.viewMode), [props.file, props.viewMode]);
   const lightweightRendering = shouldUseLightweightDiffRendering(props.file);
   const shouldUseShikiTokens = !lightweightRendering && rowCount <= DIFF_SHIKI_TOKEN_ROW_LIMIT;
   const inlineDiff = true;
@@ -176,6 +180,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
                 rowCount={rowCount}
                 inlineDiff={inlineDiff}
                 viewMode={props.viewMode}
+                renderPreferences={props.renderPreferences}
                 scrollContainerRef={props.scrollContainerRef}
                 scrollState={props.scrollState}
                 virtualHostTop={props.virtualHostTop}
@@ -602,6 +607,9 @@ function DiffFileLines(props: {
   // Visual layout mode used for rendered diff rows.
   // 渲染 diff 行使用的视觉布局模式。
   viewMode: DiffViewMode;
+  // Target-compatible rendering preferences.
+  // 目标兼容的渲染偏好。
+  renderPreferences: DiffRenderPreferences;
   // Shared scroll container used by virtualized file bodies.
   // 虚拟化文件正文使用的共享滚动容器。
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -629,6 +637,7 @@ function DiffFileLines(props: {
         language={props.language}
         inlineDiff={props.inlineDiff}
         viewMode={props.viewMode}
+        renderPreferences={props.renderPreferences}
         activeSearchLineKey={props.activeSearchLineKey}
         searchLineKeys={props.searchLineKeys}
         onExpandFileContext={props.onExpandFileContext}
@@ -642,6 +651,7 @@ function DiffFileLines(props: {
       language={props.language}
       inlineDiff={props.inlineDiff}
       viewMode={props.viewMode}
+      renderPreferences={props.renderPreferences}
       scrollContainerRef={props.scrollContainerRef}
       scrollState={props.scrollState}
       virtualHostTop={props.virtualHostTop}
@@ -670,6 +680,9 @@ function DirectDiffFileLines(props: {
   // Visual layout mode used for rendered diff rows.
   // 渲染 diff 行使用的视觉布局模式。
   viewMode: DiffViewMode;
+  // Target-compatible rendering preferences.
+  // 目标兼容的渲染偏好。
+  renderPreferences: DiffRenderPreferences;
   // Search result line keys visible on the current result page.
   // 当前结果页可见的搜索命中行键。
   searchLineKeys?: ReadonlySet<string>;
@@ -687,7 +700,10 @@ function DirectDiffFileLines(props: {
     searchLineKeys: props.searchLineKeys,
     activeSearchLineKey: props.activeSearchLineKey,
     contextControls: Boolean(props.onExpandFileContext),
+    hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
+    indicatorStyle: props.renderPreferences.indicatorStyle,
     inlineDiff: props.inlineDiff,
+    overflowMode: props.renderPreferences.overflowMode,
     viewMode: props.viewMode,
   }, !useHighlightedRenderer);
   const highlightedHtml = useHighlightedDiffFileHtml({
@@ -697,7 +713,10 @@ function DirectDiffFileLines(props: {
     searchLineKeys: props.searchLineKeys,
     activeSearchLineKey: props.activeSearchLineKey,
     contextControls: Boolean(props.onExpandFileContext),
+    hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
+    indicatorStyle: props.renderPreferences.indicatorStyle,
     inlineDiff: props.inlineDiff,
+    overflowMode: props.renderPreferences.overflowMode,
     viewMode: props.viewMode,
   }, useHighlightedRenderer);
   const html = useHighlightedRenderer ? highlightedHtml : plainHtml;
@@ -709,8 +728,9 @@ function DirectDiffFileLines(props: {
 function areDiffFileCardPropsEqual(previous: DiffFileCardProps, next: DiffFileCardProps): boolean {
   if (
     previous.file !== next.file
-    || previous.scrollContainerRef !== next.scrollContainerRef
+        || previous.scrollContainerRef !== next.scrollContainerRef
     || previous.viewMode !== next.viewMode
+    || previous.renderPreferences !== next.renderPreferences
     || previous.virtualHostTop !== next.virtualHostTop
     || previous.collapsed !== next.collapsed
     || previous.searchLineKeys !== next.searchLineKeys
@@ -721,7 +741,7 @@ function areDiffFileCardPropsEqual(previous: DiffFileCardProps, next: DiffFileCa
   ) {
     return false;
   }
-  if (fileTotalRowCount(next.file) < DIFF_FILE_VIRTUALIZATION_THRESHOLD) {
+  if (targetDiffFileVisualRowCount(next.file, next.viewMode) < DIFF_FILE_VIRTUALIZATION_THRESHOLD) {
     return true;
   }
   return previous.scrollState.scrollTop === next.scrollState.scrollTop
@@ -746,6 +766,9 @@ function VirtualDiffFileLines(props: {
   // Visual layout mode used for rendered diff rows.
   // 渲染 diff 行使用的视觉布局模式。
   viewMode: DiffViewMode;
+  // Target-compatible rendering preferences.
+  // 目标兼容的渲染偏好。
+  renderPreferences: DiffRenderPreferences;
   // Shared scroll container used by virtualized file bodies.
   // 虚拟化文件正文使用的共享滚动容器。
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -767,7 +790,7 @@ function VirtualDiffFileLines(props: {
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   const [hostTop, setHostTop] = React.useState(0);
-  const layout = React.useMemo(() => buildDiffVirtualLayout(props.file), [props.file]);
+  const layout = React.useMemo(() => buildDiffVirtualLayout(props.file, props.viewMode), [props.file, props.viewMode]);
   const effectiveHostTop = props.virtualHostTop ?? hostTop;
   // measureRevision only follows scroll changes when DOM measurement is still required.
   // measureRevision 仅在仍需 DOM 测量时跟随滚动变化。
@@ -786,7 +809,10 @@ function VirtualDiffFileLines(props: {
     searchLineKeys: props.searchLineKeys,
     activeSearchLineKey: props.activeSearchLineKey,
     contextControls: Boolean(props.onExpandFileContext),
+    hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
+    indicatorStyle: props.renderPreferences.indicatorStyle,
     inlineDiff: props.inlineDiff,
+    overflowMode: props.renderPreferences.overflowMode,
     viewMode: props.viewMode,
   }, !useHighlightedRenderer);
   const highlightedRowsHtml = useHighlightedDiffRowsHtml({
@@ -797,7 +823,10 @@ function VirtualDiffFileLines(props: {
     searchLineKeys: props.searchLineKeys,
     activeSearchLineKey: props.activeSearchLineKey,
     contextControls: Boolean(props.onExpandFileContext),
+    hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
+    indicatorStyle: props.renderPreferences.indicatorStyle,
     inlineDiff: props.inlineDiff,
+    overflowMode: props.renderPreferences.overflowMode,
     viewMode: props.viewMode,
   }, useHighlightedRenderer);
   const rowsHtml = useHighlightedRenderer ? highlightedRowsHtml : plainRowsHtml;
@@ -840,29 +869,50 @@ function DiffRowsHtml(props: {
   // hunk 上下文展开控件使用的可选委托处理器。
   onExpandFileContext?: (hunkIndex: number, direction: DiffHunkExpansionDirection) => void;
 }) {
+  const hostRef = React.useRef<HTMLDivElement | null>(null);
+  React.useLayoutEffect(() => setupTargetDiffDom(hostRef.current), [props.html]);
   const handleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const target = event.target instanceof Element
-      ? event.target.closest<HTMLElement>("[data-diff-hunk-action='expand-context']")
-      : null;
-    if (!target) {
+    const clickedElement = event.target instanceof HTMLElement ? event.target : null;
+    const expandElement = clickedElement ? targetDiffLineInfoElement(clickedElement, hostRef.current) : null;
+    if (!expandElement) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    const hunkIndex = Number.parseInt(target.dataset.diffHunkIndex ?? "", 10);
-    const direction = normalizedHunkExpansionDirection(target.dataset.diffHunkDirection);
+    const hunkRoot = expandElement.closest<HTMLElement>("[data-expand-index]");
+    const hunkIndex = Number.parseInt(hunkRoot?.getAttribute("data-expand-index") ?? "", 10);
+    const direction = normalizedHunkExpansionDirection(
+      expandElement.hasAttribute("data-expand-up")
+        ? "up"
+        : expandElement.hasAttribute("data-expand-down")
+          ? "down"
+          : "both",
+    );
     if (Number.isFinite(hunkIndex) && direction) {
       props.onExpandFileContext?.(hunkIndex, direction);
     }
   }, [props.onExpandFileContext]);
   if (!props.html && diffPlaceholderStyleHeight(props.pendingStyle) > 0) {
     return (
-      <div className="diff-plain-rendered-window" onClick={handleClick}>
+      <div className="diff-plain-rendered-window" onClick={handleClick} ref={hostRef}>
         <div aria-hidden="true" className="diff-render-placeholder" style={props.pendingStyle} />
       </div>
     );
   }
-  return <div className="diff-plain-rendered-window" dangerouslySetInnerHTML={{ __html: props.html }} onClick={handleClick} />;
+  return <div className="diff-plain-rendered-window" dangerouslySetInnerHTML={{ __html: props.html }} onClick={handleClick} ref={hostRef} />;
+}
+
+// targetDiffLineInfoElement mirrors the target event walk for line-info expansion controls.
+// targetDiffLineInfoElement 复刻目标 line-info 展开控件的事件向上遍历。
+function targetDiffLineInfoElement(start: HTMLElement, host: HTMLElement | null): HTMLElement | null {
+  let element: HTMLElement | null = start;
+  while (element && element !== host) {
+    if (element.hasAttribute("data-expand-button") || element.hasAttribute("data-unmodified-lines")) {
+      return element;
+    }
+    element = element.parentElement;
+  }
+  return null;
 }
 
 // normalizedHunkExpansionDirection validates delegated hunk direction data.
@@ -910,7 +960,7 @@ function diffMountedRowsHeight(rows: readonly DiffMountedVirtualRow[]): number {
   }
   let height = 0;
   for (const row of rows) {
-    height += row.kind === "hunk" ? DIFF_HUNK_HEADER_HEIGHT : DIFF_LINE_HEIGHT;
+    height += row.height;
   }
   diffMountedRowsHeightCache.set(rows, height);
   return height;

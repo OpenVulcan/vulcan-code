@@ -10,6 +10,32 @@ export type DiffReviewMode = "unstaged" | "staged" | "commit" | "branch";
 // DiffViewMode 标识文件 hunk 渲染使用的视觉布局。
 export type DiffViewMode = "unified" | "split";
 
+// DiffOverflowMode identifies how code columns handle long lines.
+// DiffOverflowMode 标识代码列如何处理长行。
+export type DiffOverflowMode = "scroll" | "wrap";
+
+// DiffHunkSeparatorStyle identifies the target-supported hunk separator style.
+// DiffHunkSeparatorStyle 标识目标支持的 hunk 分隔样式。
+export type DiffHunkSeparatorStyle = "simple" | "metadata" | "line-info" | "line-info-basic";
+
+// DiffIndicatorStyle identifies the target-supported change indicator style.
+// DiffIndicatorStyle 标识目标支持的变更航标样式。
+export type DiffIndicatorStyle = "bars" | "classic";
+
+// DiffRenderPreferences stores target-compatible rendering switches.
+// DiffRenderPreferences 保存目标兼容的渲染开关。
+export interface DiffRenderPreferences {
+  // Horizontal overflow behavior for rendered code columns.
+  // 渲染代码列的横向溢出行为。
+  overflowMode: DiffOverflowMode;
+  // Hunk separator style used by the target diff renderer.
+  // 目标 diff 渲染器使用的 hunk 分隔样式。
+  hunkSeparatorStyle: DiffHunkSeparatorStyle;
+  // Change indicator style used by the target diff renderer.
+  // 目标 diff 渲染器使用的变更航标样式。
+  indicatorStyle: DiffIndicatorStyle;
+}
+
 // DiffBranchSummary describes one selectable Git branch reference.
 // DiffBranchSummary 描述一个可选择的 Git 分支引用。
 export interface DiffBranchSummary {

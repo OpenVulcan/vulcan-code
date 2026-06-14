@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, ChevronDown, ChevronUp, Columns2, Copy, GitBranch, RefreshCw, Rows3, Search } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Columns2, Copy, GitBranch, ListFilter, RefreshCw, Rows3, Search } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -11,7 +11,18 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 
-import type { DiffBranchSummary, DiffCommitSummary, DiffPanelSnapshot, DiffReviewMode, DiffReviewSelection, DiffViewMode } from "./types";
+import type {
+  DiffBranchSummary,
+  DiffCommitSummary,
+  DiffHunkSeparatorStyle,
+  DiffIndicatorStyle,
+  DiffOverflowMode,
+  DiffPanelSnapshot,
+  DiffRenderPreferences,
+  DiffReviewMode,
+  DiffReviewSelection,
+  DiffViewMode,
+} from "./types";
 
 // DIFF_REVIEW_MODE_LABELS maps review modes to compact UI labels.
 // DIFF_REVIEW_MODE_LABELS 将审核模式映射为紧凑界面标签。
@@ -20,6 +31,29 @@ const DIFF_REVIEW_MODE_LABELS: Record<DiffReviewMode, string> = {
   staged: "已暂存",
   commit: "提交",
   branch: "分支",
+};
+
+// DIFF_OVERFLOW_MODE_LABELS maps target overflow modes to menu labels.
+// DIFF_OVERFLOW_MODE_LABELS 将目标溢出模式映射为菜单标签。
+const DIFF_OVERFLOW_MODE_LABELS: Record<DiffOverflowMode, string> = {
+  scroll: "横向滚动",
+  wrap: "自动换行",
+};
+
+// DIFF_HUNK_SEPARATOR_LABELS maps target hunk separator styles to menu labels.
+// DIFF_HUNK_SEPARATOR_LABELS 将目标 hunk 分隔样式映射为菜单标签。
+const DIFF_HUNK_SEPARATOR_LABELS: Record<DiffHunkSeparatorStyle, string> = {
+  "line-info": "行信息",
+  "line-info-basic": "基础行信息",
+  metadata: "元数据",
+  simple: "简洁",
+};
+
+// DIFF_INDICATOR_STYLE_LABELS maps target indicator styles to menu labels.
+// DIFF_INDICATOR_STYLE_LABELS 将目标航标样式映射为菜单标签。
+const DIFF_INDICATOR_STYLE_LABELS: Record<DiffIndicatorStyle, string> = {
+  bars: "左侧线条",
+  classic: "+/- 符号",
 };
 
 // DiffPanelToolbar renders the diff source selector and aggregate actions.
@@ -58,6 +92,9 @@ export function DiffPanelToolbar(props: {
   // Current visual diff layout mode.
   // 当前 diff 视觉布局模式。
   viewMode: DiffViewMode;
+  // Target-compatible rendering preferences.
+  // 目标兼容的渲染偏好。
+  renderPreferences: DiffRenderPreferences;
   // Search query change handler.
   // 搜索查询变更处理器。
   onSearchQueryChange?: (query: string) => void;
@@ -70,6 +107,9 @@ export function DiffPanelToolbar(props: {
   // Visual diff layout mode change handler.
   // diff 视觉布局模式变更处理器。
   onViewModeChange: (viewMode: DiffViewMode) => void;
+  // Target-compatible rendering preference change handler.
+  // 目标兼容渲染偏好变更处理器。
+  onRenderPreferencesChange: (preferences: DiffRenderPreferences) => void;
   // Optional selection change handler.
   // 可选选择变更处理器。
   onSelectionChange?: (selection: DiffReviewSelection) => void;
@@ -120,6 +160,10 @@ export function DiffPanelToolbar(props: {
         >
           {props.viewMode === "split" ? <Rows3 size={14} /> : <Columns2 size={14} />}
         </button>
+        <DiffRenderStyleMenu
+          preferences={props.renderPreferences}
+          onPreferencesChange={props.onRenderPreferencesChange}
+        />
         {props.onCopyRaw ? (
           <button className="diff-icon-button" onClick={() => props.onCopyRaw?.(props.snapshot.rawDiff)} title="复制 raw diff" type="button">
             <Copy size={14} />
@@ -144,6 +188,77 @@ export function DiffPanelToolbar(props: {
         ) : null}
       </div>
     </header>
+  );
+}
+
+// DiffRenderStyleMenu renders the target diff style switches.
+// DiffRenderStyleMenu 渲染目标 diff 风格切换项。
+function DiffRenderStyleMenu(props: {
+  // Current target-compatible rendering preferences.
+  // 当前目标兼容渲染偏好。
+  preferences: DiffRenderPreferences;
+  // Preference change handler.
+  // 偏好变更处理器。
+  onPreferencesChange: (preferences: DiffRenderPreferences) => void;
+}) {
+  const selectOverflowMode = React.useCallback((overflowMode: DiffOverflowMode) => {
+    props.onPreferencesChange({ ...props.preferences, overflowMode });
+  }, [props]);
+  const selectHunkSeparatorStyle = React.useCallback((hunkSeparatorStyle: DiffHunkSeparatorStyle) => {
+    props.onPreferencesChange({ ...props.preferences, hunkSeparatorStyle });
+  }, [props]);
+  const selectIndicatorStyle = React.useCallback((indicatorStyle: DiffIndicatorStyle) => {
+    props.onPreferencesChange({ ...props.preferences, indicatorStyle });
+  }, [props]);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button className="diff-icon-button" title="Diff 显示风格" type="button">
+          <ListFilter size={14} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="diff-style-menu" sideOffset={4}>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
+            溢出：{DIFF_OVERFLOW_MODE_LABELS[props.preferences.overflowMode]}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="diff-style-sub-menu" sideOffset={8}>
+            {(["scroll", "wrap"] as const).map((mode) => (
+              <DropdownMenuItem key={mode} onSelect={() => selectOverflowMode(mode)}>
+                {props.preferences.overflowMode === mode ? <Check size={13} /> : <span className="diff-menu-check-spacer" />}
+                {DIFF_OVERFLOW_MODE_LABELS[mode]}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
+            分隔：{DIFF_HUNK_SEPARATOR_LABELS[props.preferences.hunkSeparatorStyle]}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="diff-style-sub-menu" sideOffset={8}>
+            {(["line-info", "line-info-basic", "metadata", "simple"] as const).map((style) => (
+              <DropdownMenuItem key={style} onSelect={() => selectHunkSeparatorStyle(style)}>
+                {props.preferences.hunkSeparatorStyle === style ? <Check size={13} /> : <span className="diff-menu-check-spacer" />}
+                {DIFF_HUNK_SEPARATOR_LABELS[style]}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
+            航标：{DIFF_INDICATOR_STYLE_LABELS[props.preferences.indicatorStyle]}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="diff-style-sub-menu" sideOffset={8}>
+            {(["bars", "classic"] as const).map((style) => (
+              <DropdownMenuItem key={style} onSelect={() => selectIndicatorStyle(style)}>
+                {props.preferences.indicatorStyle === style ? <Check size={13} /> : <span className="diff-menu-check-spacer" />}
+                {DIFF_INDICATOR_STYLE_LABELS[style]}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

@@ -12,7 +12,7 @@ import {
 } from "./diff-render-html-core";
 import { highlightedDiffLineSpansForDiffLine } from "./diff-highlight";
 import { diffSearchLineKey } from "./diff-search";
-import type { DiffFile, DiffLine, DiffViewMode } from "./types";
+import type { DiffFile, DiffHunkSeparatorStyle, DiffIndicatorStyle, DiffLine, DiffOverflowMode, DiffViewMode } from "./types";
 import { escapeHtml, normalizeShikiLanguage, type DiffShikiTokenSpan } from "./diff-shiki-shared";
 import type { DiffMountedVirtualRow } from "./diff-virtual-layout";
 
@@ -72,6 +72,15 @@ type DiffRenderWorkerRequest =
       // Visual layout mode used for rendered diff rows.
       // 渲染 diff 行使用的视觉布局模式。
       viewMode?: DiffViewMode;
+      // Horizontal overflow behavior for rendered code columns.
+      // 渲染代码列的横向溢出行为。
+      overflowMode?: DiffOverflowMode;
+      // Hunk separator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的 hunk 分隔样式。
+      hunkSeparatorStyle?: DiffHunkSeparatorStyle;
+      // Change indicator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的变更航标样式。
+      indicatorStyle?: DiffIndicatorStyle;
     }
   | {
       // Request id used to match worker responses.
@@ -113,6 +122,15 @@ type DiffRenderWorkerRequest =
       // Visual layout mode used for rendered diff rows.
       // 渲染 diff 行使用的视觉布局模式。
       viewMode?: DiffViewMode;
+      // Horizontal overflow behavior for rendered code columns.
+      // 渲染代码列的横向溢出行为。
+      overflowMode?: DiffOverflowMode;
+      // Hunk separator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的 hunk 分隔样式。
+      hunkSeparatorStyle?: DiffHunkSeparatorStyle;
+      // Change indicator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的变更航标样式。
+      indicatorStyle?: DiffIndicatorStyle;
     };
 
 // DiffRenderWorkerCancelRequest asks the render worker to drop one obsolete request.
@@ -406,7 +424,10 @@ export function usePlainDiffFileHtml(options: DiffPlainFileRenderOptions, enable
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
     shouldRender,
@@ -419,13 +440,19 @@ export function usePlainDiffFileHtml(options: DiffPlainFileRenderOptions, enable
     searchLineKeySignature: searchPayload.signature,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
   ]);
@@ -434,13 +461,19 @@ export function usePlainDiffFileHtml(options: DiffPlainFileRenderOptions, enable
     searchLineKeys: options.searchLineKeys,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     options.searchLineKeys,
     options.viewMode,
   ]);
@@ -474,7 +507,10 @@ export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enable
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     options.rows,
     searchPayload,
     options.viewMode,
@@ -489,13 +525,19 @@ export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enable
     searchLineKeySignature: searchPayload.signature,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
     workerRows,
@@ -506,13 +548,19 @@ export function usePlainDiffRowsHtml(options: DiffPlainRowsWorkerOptions, enable
     searchLineKeys: options.searchLineKeys,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     options.searchLineKeys,
     options.viewMode,
     workerRows,
@@ -549,8 +597,11 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
     options.language,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
     shouldRender,
@@ -565,7 +616,10 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
       searchLineKeySignature: searchPayload.signature,
       activeSearchLineKey: options.activeSearchLineKey,
       contextControls: options.contextControls,
+      hunkSeparatorStyle: options.hunkSeparatorStyle,
+      indicatorStyle: options.indicatorStyle,
       inlineDiff: options.inlineDiff,
+      overflowMode: options.overflowMode,
       viewMode: options.viewMode,
       highlighted: highlightedPayload.highlighted,
       resetHighlightedLineSpans: highlightedPayload.reset,
@@ -576,7 +630,10 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
   ]);
@@ -585,13 +642,19 @@ export function useHighlightedDiffFileHtml(options: DiffHighlightedFileWorkerOpt
     searchLineKeys: options.searchLineKeys,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.file,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     options.searchLineKeys,
     options.viewMode,
   ]);
@@ -634,8 +697,11 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
     options.language,
+    options.overflowMode,
     options.rows,
     searchPayload,
     options.viewMode,
@@ -652,7 +718,10 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
       searchLineKeySignature: searchPayload.signature,
       activeSearchLineKey: options.activeSearchLineKey,
       contextControls: options.contextControls,
+      hunkSeparatorStyle: options.hunkSeparatorStyle,
+      indicatorStyle: options.indicatorStyle,
       inlineDiff: options.inlineDiff,
+      overflowMode: options.overflowMode,
       viewMode: options.viewMode,
       highlighted: highlightedPayload.highlighted,
       resetHighlightedLineSpans: highlightedPayload.reset,
@@ -663,7 +732,10 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     searchPayload,
     options.viewMode,
     workerRows,
@@ -674,13 +746,19 @@ export function useHighlightedDiffRowsHtml(options: DiffHighlightedRowsWorkerOpt
     searchLineKeys: options.searchLineKeys,
     activeSearchLineKey: options.activeSearchLineKey,
     contextControls: options.contextControls,
+    hunkSeparatorStyle: options.hunkSeparatorStyle,
+    indicatorStyle: options.indicatorStyle,
     inlineDiff: options.inlineDiff,
+    overflowMode: options.overflowMode,
     viewMode: options.viewMode,
   }), [
     options.activeSearchLineKey,
     options.contextControls,
     options.fileKey,
+    options.hunkSeparatorStyle,
+    options.indicatorStyle,
     options.inlineDiff,
+    options.overflowMode,
     options.searchLineKeys,
     options.viewMode,
     workerRows,
@@ -1040,6 +1118,9 @@ function plainFileRenderCacheKey(options: DiffPlainFileRenderOptions, searchSign
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.contextControls ? "controls" : "plain")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.inlineDiff ? "inline" : "line")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.viewMode ?? "unified")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.overflowMode ?? "scroll")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.hunkSeparatorStyle ?? "line-info")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.indicatorStyle ?? "bars")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + searchStateCacheKey(searchSignature, options.activeSearchLineKey);
 }
 
@@ -1053,6 +1134,9 @@ function plainRowsRenderCacheKey(options: DiffPlainRowsWorkerOptions, searchSign
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.contextControls ? "controls" : "plain")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.inlineDiff ? "inline" : "line")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.viewMode ?? "unified")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.overflowMode ?? "scroll")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.hunkSeparatorStyle ?? "line-info")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.indicatorStyle ?? "bars")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + searchStateCacheKey(searchSignature, options.activeSearchLineKey);
 }
 
@@ -1072,6 +1156,9 @@ function highlightedFileRenderCacheKey(
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.contextControls ? "controls" : "plain")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.inlineDiff ? "inline" : "line")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.viewMode ?? "unified")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.overflowMode ?? "scroll")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.hunkSeparatorStyle ?? "line-info")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.indicatorStyle ?? "bars")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + searchStateCacheKey(searchSignature, options.activeSearchLineKey);
 }
 
@@ -1091,6 +1178,9 @@ function highlightedRowsRenderCacheKey(
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.contextControls ? "controls" : "plain")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.inlineDiff ? "inline" : "line")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.viewMode ?? "unified")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.overflowMode ?? "scroll")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.hunkSeparatorStyle ?? "line-info")
+    + DIFF_RENDER_CACHE_KEY_SEPARATOR + (options.indicatorStyle ?? "bars")
     + DIFF_RENDER_CACHE_KEY_SEPARATOR + searchStateCacheKey(searchSignature, options.activeSearchLineKey);
 }
 
@@ -1142,7 +1232,7 @@ function diffRowsContentFingerprint(rows: ReadonlyArray<DiffMountedVirtualRow>):
     if (row.kind === "hunk") {
       hash = appendFingerprintText(hash, row.header);
       hash = appendFingerprintNumber(hash, row.hunkIndex);
-    } else {
+    } else if (row.kind === "line") {
       hash = appendFingerprintNumber(hash, row.hunkIndex);
       hash = appendFingerprintNumber(hash, row.lineIndex);
       hash = appendFingerprintText(hash, row.line.kind);
@@ -1150,6 +1240,27 @@ function diffRowsContentFingerprint(rows: ReadonlyArray<DiffMountedVirtualRow>):
       hash = appendFingerprintNumber(hash, row.line.oldLine ?? -1);
       hash = appendFingerprintNumber(hash, row.line.newLine ?? -1);
       hash = appendInlineChangeRangesFingerprint(hash, row.line);
+    } else {
+      hash = appendFingerprintText(hash, row.type);
+      hash = appendFingerprintNumber(hash, row.hunkIndex);
+      hash = appendFingerprintNumber(hash, row.deletionLineIndex ?? -1);
+      hash = appendFingerprintNumber(hash, row.additionLineIndex ?? -1);
+      hash = appendFingerprintText(hash, row.deletionLineKey ?? "");
+      hash = appendFingerprintText(hash, row.additionLineKey ?? "");
+      if (row.deletionLine) {
+        hash = appendFingerprintText(hash, row.deletionLine.kind);
+        hash = appendFingerprintText(hash, row.deletionLine.content);
+        hash = appendFingerprintNumber(hash, row.deletionLine.oldLine ?? -1);
+        hash = appendFingerprintNumber(hash, row.deletionLine.newLine ?? -1);
+        hash = appendInlineChangeRangesFingerprint(hash, row.deletionLine);
+      }
+      if (row.additionLine) {
+        hash = appendFingerprintText(hash, row.additionLine.kind);
+        hash = appendFingerprintText(hash, row.additionLine.content);
+        hash = appendFingerprintNumber(hash, row.additionLine.oldLine ?? -1);
+        hash = appendFingerprintNumber(hash, row.additionLine.newLine ?? -1);
+        hash = appendInlineChangeRangesFingerprint(hash, row.additionLine);
+      }
     }
   }
   const fingerprint = `${rows.length}:${hash.toString(36)}`;
@@ -1195,12 +1306,26 @@ function diffRenderableRows(rows: ReadonlyArray<DiffMountedVirtualRow>): DiffRen
       };
       continue;
     }
+    if (row.kind === "line") {
+      renderableRows[index] = {
+        kind: "line",
+        line: row.line,
+        hunkIndex: row.hunkIndex,
+        lineIndex: row.lineIndex,
+        lineKey: row.lineKey,
+      };
+      continue;
+    }
     renderableRows[index] = {
-      kind: "line",
-      line: row.line,
+      kind: "pair",
+      type: row.type,
       hunkIndex: row.hunkIndex,
-      lineIndex: row.lineIndex,
-      lineKey: row.lineKey,
+      deletionLine: row.deletionLine,
+      additionLine: row.additionLine,
+      deletionLineIndex: row.deletionLineIndex,
+      additionLineIndex: row.additionLineIndex,
+      deletionLineKey: row.deletionLineKey,
+      additionLineKey: row.additionLineKey,
     };
   }
   diffRenderableRowsCache.set(rows, renderableRows);

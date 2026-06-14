@@ -3,9 +3,19 @@ import type { CSSProperties } from "react";
 import {
   DIFF_HUNK_HEADER_HEIGHT,
   DIFF_LINE_HEIGHT,
-  DIFF_VIRTUAL_OVERSCAN_PX,
 } from "./limits";
 import { diffSearchLineKey } from "./diff-search";
+import {
+  TARGET_DIFF_VIRTUAL_METRICS,
+  targetComputeApproximateBodyHeight,
+  targetComputeRenderRangeFromWindow,
+  targetDiffFile,
+  targetDiffFileVisualRowCount,
+  targetIterateOverDiff,
+  type TargetDiffFile,
+  type TargetDiffRenderRange,
+} from "./target-diff-model";
+import type { DiffViewMode } from "./types";
 
 // DiffScrollState stores the scroll viewport used by file-level virtualizers.
 // DiffScrollState 保存文件级虚拟列表使用的滚动视口。
@@ -53,6 +63,12 @@ export interface DiffVirtualLayout {
   // Total pixel height.
   // 总像素高度。
   totalHeight: number;
+  // Target-compatible diff file model.
+  // 目标兼容 diff 文件模型。
+  targetFile: TargetDiffFile;
+  // View mode used to build this layout.
+  // 构建该布局时使用的视图模式。
+  viewMode: DiffViewMode;
 }
 
 // DiffVirtualRange stores the mounted row window and spacer heights.
@@ -108,6 +124,44 @@ export type DiffMountedVirtualRow =
       // Stable search/navigation key shared with rendered row data attributes.
       // 与已渲染行 data 属性共享的稳定搜索与导航键。
       lineKey: string;
+      // Pixel top inside the file body.
+      // 文件正文中的像素顶部。
+      top: number;
+      // Fixed row height.
+      // 固定行高。
+      height: number;
+    }
+  | {
+      // Row kind for one target paired diff row.
+      // 目标配对 diff 行类型。
+      kind: "pair";
+      // Stable row key.
+      // 稳定行键。
+      key: string;
+      // Target event row type.
+      // 目标事件行类型。
+      type: "context" | "context-expanded" | "change";
+      // Source hunk index.
+      // 源 hunk 索引。
+      hunkIndex: number;
+      // Old-side parsed line when present.
+      // 存在时的旧侧解析行。
+      deletionLine?: DiffLine;
+      // New-side parsed line when present.
+      // 存在时的新侧解析行。
+      additionLine?: DiffLine;
+      // Old-side source hunk line index.
+      // 旧侧源 hunk 行索引。
+      deletionLineIndex?: number;
+      // New-side source hunk line index.
+      // 新侧源 hunk 行索引。
+      additionLineIndex?: number;
+      // Stable old-side search/navigation key.
+      // 稳定旧侧搜索与导航键。
+      deletionLineKey?: string;
+      // Stable new-side search/navigation key.
+      // 稳定新侧搜索与导航键。
+      additionLineKey?: string;
       // Pixel top inside the file body.
       // 文件正文中的像素顶部。
       top: number;
@@ -204,13 +258,13 @@ interface DiffMountedVirtualWindowDescriptor extends DiffVirtualRange {
   rowCount: number;
 }
 
-// diffFileRowCountCache stores file row counts for the lifetime of parsed diff objects.
-// diffFileRowCountCache 在已解析 diff 对象生命周期内缓存文件行数。
-const diffFileRowCountCache = new WeakMap<DiffFile, number>();
+// diffFileRowCountCache stores view-specific file row counts for parsed diff objects.
+// diffFileRowCountCache 为已解析 diff 对象缓存按视图区分的文件行数。
+const diffFileRowCountCache = new WeakMap<DiffFile, Partial<Record<DiffViewMode, number>>>();
 
-// diffVirtualLayoutCache stores virtual layouts for stable parsed diff file objects.
-// diffVirtualLayoutCache 为稳定的已解析 diff 文件对象缓存虚拟布局。
-const diffVirtualLayoutCache = new WeakMap<DiffFile, DiffVirtualLayout>();
+// diffVirtualLayoutCache stores view-specific virtual layouts for stable parsed files.
+// diffVirtualLayoutCache 为稳定解析文件缓存按视图区分的虚拟布局。
+const diffVirtualLayoutCache = new WeakMap<DiffFile, Partial<Record<DiffViewMode, DiffVirtualLayout>>>();
 
 // diffMountedVirtualWindowCache stores the latest row window for each stable virtual layout.
 // diffMountedVirtualWindowCache 为每个稳定虚拟布局缓存最近一次行窗口。
@@ -220,41 +274,46 @@ const diffMountedVirtualWindowCache = new WeakMap<DiffVirtualLayout, DiffMounted
 // EMPTY_MOUNTED_DIFF_ROWS 让空虚拟窗口保持零分配。
 const EMPTY_MOUNTED_DIFF_ROWS: DiffMountedVirtualRow[] = [];
 
+// TARGET_DIFF_OVERSCROLL_SIZE mirrors the target virtualizer default overscroll.
+// TARGET_DIFF_OVERSCROLL_SIZE 对齐目标 virtualizer 的默认过扫描距离。
+const TARGET_DIFF_OVERSCROLL_SIZE = 1000;
+
 // fileTotalRowCount returns visual row count including hunk headers.
 // fileTotalRowCount 返回包含 hunk 头部的可视行数量。
-export function fileTotalRowCount(file: DiffFile): number {
+export function fileTotalRowCount(file: DiffFile, viewMode: DiffViewMode = "unified"): number {
   if (file.rowCount != null) {
-    return file.rowCount;
+    return viewMode === "split" ? targetDiffFileVisualRowCount(file, viewMode) : file.rowCount;
   }
   if (file.estimatedRowCount != null) {
     return file.estimatedRowCount;
   }
-  const cached = diffFileRowCountCache.get(file);
+  const cached = diffFileRowCountCache.get(file)?.[viewMode];
   if (cached != null) {
     return cached;
   }
-  let rowCount = 0;
-  for (const hunk of file.hunks) {
-    rowCount += 1 + hunk.lines.length;
-  }
-  diffFileRowCountCache.set(file, rowCount);
+  const rowCount = targetDiffFileVisualRowCount(file, viewMode);
+  const cachedByMode = diffFileRowCountCache.get(file) ?? {};
+  cachedByMode[viewMode] = rowCount;
+  diffFileRowCountCache.set(file, cachedByMode);
   return rowCount;
 }
 
 // buildDiffVirtualLayout builds compact per-hunk offsets without duplicating diff lines.
 // buildDiffVirtualLayout 构建紧凑的 hunk 偏移，不复制 diff 行。
-export function buildDiffVirtualLayout(file: DiffFile): DiffVirtualLayout {
-  const cached = diffVirtualLayoutCache.get(file);
+export function buildDiffVirtualLayout(file: DiffFile, viewMode: DiffViewMode = "unified"): DiffVirtualLayout {
+  const cached = diffVirtualLayoutCache.get(file)?.[viewMode];
   if (cached) {
     return cached;
   }
   let nextRow = 0;
   let nextTop = 0;
-  const hunkRanges: DiffVirtualHunkRange[] = new Array(file.hunks.length);
-  for (let hunkIndex = 0; hunkIndex < file.hunks.length; hunkIndex += 1) {
-    const hunk = file.hunks[hunkIndex];
-    const rowCount = 1 + hunk.lines.length;
-    const height = DIFF_HUNK_HEADER_HEIGHT + hunk.lines.length * DIFF_LINE_HEIGHT;
+  const targetFile = targetDiffFile(file);
+  const hunkRanges: DiffVirtualHunkRange[] = new Array(targetFile.hunks.length);
+  for (let hunkIndex = 0; hunkIndex < targetFile.hunks.length; hunkIndex += 1) {
+    const targetHunk = targetFile.hunks[hunkIndex];
+    const bodyRows = viewMode === "split" ? targetHunk.splitLineCount : targetHunk.unifiedLineCount;
+    const rowCount = 1 + bodyRows;
+    const height = DIFF_HUNK_HEADER_HEIGHT + bodyRows * DIFF_LINE_HEIGHT;
     hunkRanges[hunkIndex] = {
       hunkIndex,
       startRow: nextRow,
@@ -265,8 +324,16 @@ export function buildDiffVirtualLayout(file: DiffFile): DiffVirtualLayout {
     nextRow += rowCount;
     nextTop += height;
   }
-  const layout = { hunkRanges, totalRows: nextRow, totalHeight: nextTop };
-  diffVirtualLayoutCache.set(file, layout);
+  const layout = {
+    hunkRanges,
+    totalRows: nextRow,
+    totalHeight: targetComputeApproximateBodyHeight(targetFile, viewMode, TARGET_DIFF_VIRTUAL_METRICS) || nextTop,
+    targetFile,
+    viewMode,
+  };
+  const cachedByMode = diffVirtualLayoutCache.get(file) ?? {};
+  cachedByMode[viewMode] = layout;
+  diffVirtualLayoutCache.set(file, cachedByMode);
   return layout;
 }
 
@@ -276,46 +343,102 @@ export function mountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, viewp
   if (layout.totalHeight <= 0) {
     return emptyMountedDiffWindow(layout, 0, 0);
   }
-  const effectiveViewportHeight = viewportHeight > 0 ? viewportHeight : DIFF_VIRTUAL_OVERSCAN_PX;
+  const effectiveViewportHeight = viewportHeight > 0 ? viewportHeight : TARGET_DIFF_OVERSCROLL_SIZE;
   const effectiveViewportTop = Number.isFinite(viewportTop) ? viewportTop : 0;
-  const startTop = Math.max(0, effectiveViewportTop - DIFF_VIRTUAL_OVERSCAN_PX);
-  const endBottom = Math.min(layout.totalHeight, effectiveViewportTop + effectiveViewportHeight + DIFF_VIRTUAL_OVERSCAN_PX);
-  if (endBottom <= 0) {
+  const windowSpecs = targetVirtualWindowSpecs({
+    scrollTop: effectiveViewportTop,
+    scrollHeight: layout.totalHeight,
+    height: effectiveViewportHeight,
+    overscrollSize: TARGET_DIFF_OVERSCROLL_SIZE,
+  });
+  if (windowSpecs.bottom <= 0) {
     // The file is below the viewport; keep its height with a bottom spacer without mounting rows.
     // 当前文件位于视口下方；通过底部占位保留高度，但不挂载行。
     return emptyMountedDiffWindow(layout, 0, layout.totalHeight);
   }
-  if (startTop >= layout.totalHeight) {
+  if (windowSpecs.top >= layout.totalHeight) {
     return emptyMountedDiffWindow(layout, layout.totalHeight, 0);
   }
 
-  const descriptor = mountedDiffWindowDescriptor(file, layout, startTop, endBottom);
-  if (!descriptor) {
-    return mountedDiffRows(file, layout, 0, effectiveViewportHeight);
-  }
+  const renderRange = targetComputeRenderRangeFromWindow({
+    diff: layout.targetFile,
+    diffStyle: layout.viewMode,
+    fileTop: 0,
+    windowTop: windowSpecs.top,
+    windowBottom: windowSpecs.bottom,
+    totalHeight: layout.totalHeight,
+    metrics: TARGET_DIFF_VIRTUAL_METRICS,
+  });
+  const rows = buildTargetMountedDiffRows(file, layout, renderRange);
+  const descriptor = mountedDiffWindowDescriptorFromRows(layout, renderRange, rows);
   const cached = cachedMountedDiffWindow(layout, descriptor);
   if (cached) {
     return cached;
   }
-  const rows = buildMountedDiffRows(file, layout, descriptor);
   return rememberMountedDiffWindow(layout, descriptor, rows);
 }
 
-// buildMountedDiffRows creates row objects only after the descriptor proves the window changed.
-// buildMountedDiffRows 仅在 descriptor 确认窗口变化后创建行对象。
-function buildMountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, descriptor: DiffMountedVirtualWindowDescriptor): DiffMountedVirtualRow[] {
-  const rows: DiffMountedVirtualRow[] = [];
-  for (let rangeIndex = descriptor.firstHunkIndex; rangeIndex < layout.hunkRanges.length; rangeIndex += 1) {
-    const range = layout.hunkRanges[rangeIndex];
-    if (range.top >= descriptor.endBottom) {
-      break;
-    }
-    const hunk = file.hunks[range.hunkIndex];
-    if (!hunk) {
-      continue;
-    }
-    appendMountedHunkRows(rows, file, hunk, range, descriptor.startTop, descriptor.endBottom);
+// buildTargetMountedDiffRows creates mounted rows from the target render range.
+// buildTargetMountedDiffRows 根据目标渲染范围创建挂载行。
+function buildTargetMountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, renderRange: TargetDiffRenderRange): DiffMountedVirtualRow[] {
+  if (renderRange.totalLines <= 0) {
+    return EMPTY_MOUNTED_DIFF_ROWS;
   }
+  const rows: DiffMountedVirtualRow[] = [];
+  let cursor = renderRange.bufferBefore;
+  targetIterateOverDiff({
+    diff: layout.targetFile,
+    diffStyle: layout.viewMode,
+    startingLine: renderRange.startingLine,
+    totalLines: renderRange.totalLines,
+    callback: (event) => {
+      if (event.collapsedBefore > 0) {
+        rows.push({
+          kind: "hunk",
+          key: `${file.key}-target-separator-before-${event.hunkIndex}-${event.collapsedBefore}`,
+          header: event.hunk?.header ?? `${event.collapsedBefore} unmodified lines`,
+          hunkIndex: event.hunkIndex,
+          top: cursor,
+          height: TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight,
+        });
+        cursor += TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight;
+      }
+      const deletionLine = event.deletionLine ? layout.targetFile.deletionLines[event.deletionLine.lineIndex] : undefined;
+      const additionLine = event.additionLine ? layout.targetFile.additionLines[event.additionLine.lineIndex] : undefined;
+      const deletionLineIndex = event.deletionLine?.sourceLineIndex;
+      const additionLineIndex = event.additionLine?.sourceLineIndex;
+      const deletionLineKey = deletionLineIndex == null ? undefined : diffSearchLineKey(file.key, event.hunkIndex, deletionLineIndex);
+      const additionLineKey = additionLineIndex == null ? undefined : diffSearchLineKey(file.key, event.hunkIndex, additionLineIndex);
+      const noEOFCR = Boolean(event.deletionLine?.noEOFCR) || Boolean(event.additionLine?.noEOFCR);
+      rows.push({
+        kind: "pair",
+        key: `${file.key}-target-pair-${event.hunkIndex}-${event.deletionLine?.lineIndex ?? "x"}-${event.additionLine?.lineIndex ?? "x"}-${event.type}`,
+        type: event.type,
+        hunkIndex: event.hunkIndex,
+        deletionLine,
+        additionLine,
+        deletionLineIndex,
+        additionLineIndex,
+        deletionLineKey,
+        additionLineKey,
+        top: cursor,
+        height: TARGET_DIFF_VIRTUAL_METRICS.lineHeight * (noEOFCR ? 2 : 1),
+      });
+      cursor += TARGET_DIFF_VIRTUAL_METRICS.lineHeight * (noEOFCR ? 2 : 1);
+      if (event.collapsedAfter > 0) {
+        const separatorHunkIndex = event.type === "context-expanded" ? event.hunkIndex : event.hunkIndex + 1;
+        rows.push({
+          kind: "hunk",
+          key: `${file.key}-target-separator-after-${separatorHunkIndex}-${event.collapsedAfter}`,
+          header: layout.targetFile.hunks[separatorHunkIndex]?.header ?? `${event.collapsedAfter} unmodified lines`,
+          hunkIndex: separatorHunkIndex,
+          top: cursor,
+          height: TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight,
+        });
+        cursor += TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight;
+      }
+    },
+  });
   return rows;
 }
 
@@ -351,80 +474,36 @@ function emptyMountedDiffWindow(layout: DiffVirtualLayout, paddingTop: number, p
   return rememberMountedDiffWindow(layout, descriptor, EMPTY_MOUNTED_DIFF_ROWS);
 }
 
-// mountedDiffWindowDescriptor computes the visible-window signature before row allocation.
-// mountedDiffWindowDescriptor 在分配行对象前计算可见窗口签名。
-function mountedDiffWindowDescriptor(
-  file: DiffFile,
+// mountedDiffWindowDescriptorFromRows computes the cache signature for a target render range.
+// mountedDiffWindowDescriptorFromRows 计算目标渲染范围对应的缓存签名。
+function mountedDiffWindowDescriptorFromRows(
   layout: DiffVirtualLayout,
-  startTop: number,
-  endBottom: number,
-): DiffMountedVirtualWindowDescriptor | null {
-  let firstRowKind: DiffMountedVirtualBoundaryKind = "none";
-  let firstRowHunkIndex = -1;
-  let firstRowLineIndex = -1;
-  let lastRowKind: DiffMountedVirtualBoundaryKind = "none";
-  let lastRowHunkIndex = -1;
-  let lastRowLineIndex = -1;
-  let rowCount = 0;
-  let firstTop = 0;
-  let lastBottom = 0;
-  const firstHunkIndex = firstIntersectingHunkIndex(layout.hunkRanges, startTop);
-  for (let rangeIndex = firstHunkIndex; rangeIndex < layout.hunkRanges.length; rangeIndex += 1) {
-    const range = layout.hunkRanges[rangeIndex];
-    if (range.top >= endBottom) {
-      break;
-    }
-    const hunk = file.hunks[range.hunkIndex];
-    if (!hunk) {
-      continue;
-    }
-    if (range.top + DIFF_HUNK_HEADER_HEIGHT >= startTop && range.top <= endBottom) {
-      if (rowCount === 0) {
-        firstRowKind = "hunk";
-        firstRowHunkIndex = range.hunkIndex;
-        firstRowLineIndex = -1;
-        firstTop = range.top;
-      }
-      lastRowKind = "hunk";
-      lastRowHunkIndex = range.hunkIndex;
-      lastRowLineIndex = -1;
-      lastBottom = range.top + DIFF_HUNK_HEADER_HEIGHT;
-      rowCount += 1;
-    }
-    const linesTop = range.top + DIFF_HUNK_HEADER_HEIGHT;
-    const firstLine = Math.max(0, Math.floor((startTop - linesTop) / DIFF_LINE_HEIGHT));
-    const lastLine = Math.min(hunk.lines.length, Math.ceil((endBottom - linesTop) / DIFF_LINE_HEIGHT));
-    if (lastLine <= firstLine) {
-      continue;
-    }
-    if (rowCount === 0) {
-      firstRowKind = "line";
-      firstRowHunkIndex = range.hunkIndex;
-      firstRowLineIndex = firstLine;
-      firstTop = linesTop + firstLine * DIFF_LINE_HEIGHT;
-    }
-    lastRowKind = "line";
-    lastRowHunkIndex = range.hunkIndex;
-    lastRowLineIndex = lastLine - 1;
-    lastBottom = linesTop + lastLine * DIFF_LINE_HEIGHT;
-    rowCount += lastLine - firstLine;
-  }
-  if (rowCount <= 0) {
-    return null;
-  }
+  renderRange: TargetDiffRenderRange,
+  rows: readonly DiffMountedVirtualRow[],
+): DiffMountedVirtualWindowDescriptor {
+  const firstRow = rows[0];
+  const lastRow = rows.at(-1);
   return {
-    firstHunkIndex,
-    startTop,
-    endBottom,
-    firstRowKind,
-    firstRowHunkIndex,
-    firstRowLineIndex,
-    lastRowKind,
-    lastRowHunkIndex,
-    lastRowLineIndex,
-    rowCount,
-    paddingTop: firstTop,
-    paddingBottom: Math.max(0, layout.totalHeight - lastBottom),
+    firstHunkIndex: renderRange.startingLine,
+    startTop: renderRange.bufferBefore,
+    endBottom: Math.max(0, layout.totalHeight - renderRange.bufferAfter),
+    firstRowKind: firstRow?.kind === "hunk" ? "hunk" : firstRow?.kind === "pair" || firstRow?.kind === "line" ? "line" : "none",
+    firstRowHunkIndex: firstRow?.hunkIndex ?? -1,
+    firstRowLineIndex: firstRow?.kind === "pair"
+      ? firstRow.additionLineIndex ?? firstRow.deletionLineIndex ?? -1
+      : firstRow?.kind === "line"
+        ? firstRow.lineIndex
+        : -1,
+    lastRowKind: lastRow?.kind === "hunk" ? "hunk" : lastRow?.kind === "pair" || lastRow?.kind === "line" ? "line" : "none",
+    lastRowHunkIndex: lastRow?.hunkIndex ?? -1,
+    lastRowLineIndex: lastRow?.kind === "pair"
+      ? lastRow.additionLineIndex ?? lastRow.deletionLineIndex ?? -1
+      : lastRow?.kind === "line"
+        ? lastRow.lineIndex
+        : -1,
+    rowCount: rows.length,
+    paddingTop: renderRange.bufferBefore,
+    paddingBottom: Math.max(0, renderRange.bufferAfter),
   };
 }
 
@@ -478,60 +557,45 @@ function rememberMountedDiffWindow(
   return window;
 }
 
-// appendMountedHunkRows appends visible rows from one hunk range.
-// appendMountedHunkRows 从单个 hunk 范围追加可见行。
-function appendMountedHunkRows(
-  rows: DiffMountedVirtualRow[],
-  file: DiffFile,
-  hunk: DiffFile["hunks"][number],
-  range: DiffVirtualHunkRange,
-  startTop: number,
-  endBottom: number,
-): void {
-  if (range.top + DIFF_HUNK_HEADER_HEIGHT >= startTop && range.top <= endBottom) {
-    rows.push({
-      kind: "hunk",
-      key: `${file.key}-virtual-hunk-${range.hunkIndex}`,
-      header: hunk.header,
-      hunkIndex: range.hunkIndex,
-      top: range.top,
-      height: DIFF_HUNK_HEADER_HEIGHT,
-    });
+// targetVirtualWindowSpecs mirrors the target Qd helper.
+// targetVirtualWindowSpecs 对齐目标 Qd helper。
+function targetVirtualWindowSpecs(options: {
+  // Scroll top inside the container.
+  // 容器内滚动顶部。
+  scrollTop: number;
+  // Full scrollable height.
+  // 完整可滚动高度。
+  scrollHeight: number;
+  // Visible container height.
+  // 容器可见高度。
+  height: number;
+  // Optional container offset.
+  // 可选容器偏移。
+  containerOffset?: number;
+  // Whether the window should fit the viewport exactly.
+  // 窗口是否应精确贴合视口。
+  fitPerfectly?: boolean;
+  // Overscroll size.
+  // 过扫描距离。
+  overscrollSize: number;
+}): { top: number; bottom: number } {
+  const containerOffset = options.containerOffset ?? 0;
+  const overscrolledHeight = options.height + options.overscrollSize * 2;
+  const visibleHeight = options.fitPerfectly ? options.height : overscrolledHeight;
+  let scrollHeight = Math.max(options.scrollHeight, visibleHeight);
+  if (overscrolledHeight >= scrollHeight || options.fitPerfectly) {
+    const top = Math.max(options.scrollTop - containerOffset, 0);
+    const bottom = Math.min(options.scrollTop + visibleHeight, scrollHeight) - containerOffset;
+    return { top, bottom: Math.max(bottom, top) };
   }
-  const linesTop = range.top + DIFF_HUNK_HEADER_HEIGHT;
-  const firstLine = Math.max(0, Math.floor((startTop - linesTop) / DIFF_LINE_HEIGHT));
-  const lastLine = Math.min(hunk.lines.length, Math.ceil((endBottom - linesTop) / DIFF_LINE_HEIGHT));
-  for (let lineIndex = firstLine; lineIndex < lastLine; lineIndex += 1) {
-    const line = hunk.lines[lineIndex];
-    if (!line) {
-      continue;
-    }
-    rows.push({
-      kind: "line",
-      key: `${file.key}-virtual-line-${range.hunkIndex}-${lineIndex}`,
-      line,
-      hunkIndex: range.hunkIndex,
-      lineIndex,
-      lineKey: diffSearchLineKey(file.key, range.hunkIndex, lineIndex),
-      top: linesTop + lineIndex * DIFF_LINE_HEIGHT,
-      height: DIFF_LINE_HEIGHT,
-    });
+  let top = options.scrollTop + options.height / 2 - overscrolledHeight / 2;
+  let bottom = top + overscrolledHeight;
+  if (top < 0) {
+    top = 0;
   }
-}
-
-// firstIntersectingHunkIndex finds the first hunk whose pixel range intersects the viewport.
-// firstIntersectingHunkIndex 查找首个像素范围与视口相交的 hunk。
-function firstIntersectingHunkIndex(hunkRanges: DiffVirtualHunkRange[], top: number): number {
-  let low = 0;
-  let high = hunkRanges.length;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    const range = hunkRanges[middle];
-    if (range.top + range.height < top) {
-      low = middle + 1;
-    } else {
-      high = middle;
-    }
+  if (bottom > scrollHeight) {
+    bottom = scrollHeight;
   }
-  return low;
+  top = Math.floor(Math.max(top - containerOffset, 0));
+  return { top, bottom: Math.ceil(Math.max(Math.min(bottom, scrollHeight) - containerOffset, top)) };
 }

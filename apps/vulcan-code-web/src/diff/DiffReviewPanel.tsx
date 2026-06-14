@@ -16,6 +16,7 @@ import type {
   DiffFile,
   DiffHunkExpansionRequest,
   DiffPanelSnapshot,
+  DiffRenderPreferences,
   DiffReviewSelection,
   DiffViewMode,
   WorkspaceDiffSearchFileMatch,
@@ -77,7 +78,6 @@ export function DiffReviewPanel(props: {
   onSearchWorkspaceDiff?: (query: string, limit?: number) => Promise<WorkspaceDiffSearchResponse | null>;
 }) {
   const fileListRef = React.useRef<HTMLDivElement | null>(null);
-  const syncingSplitScrollRef = React.useRef(false);
   const summarySearchRequestSeqRef = React.useRef(0);
   const summarySearchResolvedKeyRef = React.useRef<string | null>(null);
   const summarySearchTargetAppliedKeyRef = React.useRef<string | null>(null);
@@ -90,6 +90,11 @@ export function DiffReviewPanel(props: {
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeSearchIndex, setActiveSearchIndex] = React.useState(0);
   const [viewMode, setViewMode] = React.useState<DiffViewMode>("unified");
+  const [renderPreferences, setRenderPreferences] = React.useState<DiffRenderPreferences>({
+    overflowMode: "scroll",
+    hunkSeparatorStyle: "line-info",
+    indicatorStyle: "bars",
+  });
   const [collapsedFileKeys, setCollapsedFileKeys] = React.useState<ReadonlySet<string>>(() => new Set());
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
   const diffSourceScrollResetKey = React.useMemo(
@@ -133,8 +138,8 @@ export function DiffReviewPanel(props: {
     [searchIndex.matches.length, searchPageFileKeys, searchQuery, snapshot, summarySearchPageFileKeys],
   );
   const virtualLayout = React.useMemo(
-    () => (renderedSnapshot ? buildDiffFileVirtualLayout(renderedSnapshot, collapsedFileKeys) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
-    [collapsedFileKeys, renderedSnapshot],
+    () => (renderedSnapshot ? buildDiffFileVirtualLayout(renderedSnapshot, collapsedFileKeys, viewMode) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
+    [collapsedFileKeys, renderedSnapshot, viewMode],
   );
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
   const searchActive = searchQuery.trim().length > 0;
@@ -220,32 +225,6 @@ export function DiffReviewPanel(props: {
   React.useEffect(() => {
     setCollapsedFileKeys(new Set());
   }, [diffSourceScrollResetKey]);
-  React.useEffect(() => {
-    const element = fileListRef.current;
-    if (!element || viewMode !== "split") {
-      return undefined;
-    }
-    const handleCodeScroll = (event: Event) => {
-      if (syncingSplitScrollRef.current) {
-        return;
-      }
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) {
-        return;
-      }
-      const side = target.classList.contains("old")
-        ? "old"
-        : target.classList.contains("new")
-          ? "new"
-          : null;
-      if (!side || !target.classList.contains("diff-split-code")) {
-        return;
-      }
-      syncDiffSplitScroll(target, target.scrollLeft, syncingSplitScrollRef);
-    };
-    element.addEventListener("scroll", handleCodeScroll, true);
-    return () => element.removeEventListener("scroll", handleCodeScroll, true);
-  }, [viewMode]);
   // mountedDetailHydrationRequests contains visible summary files that should be hydrated lazily.
   // mountedDetailHydrationRequests 保存当前可见且需要懒水合的摘要文件。
   const mountedDetailHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(() => {
@@ -440,7 +419,9 @@ export function DiffReviewPanel(props: {
           setActiveSearchIndex(0);
         }}
         onSelectionChange={props.onSelectionChange}
+        onRenderPreferencesChange={setRenderPreferences}
         onViewModeChange={setViewMode}
+        renderPreferences={renderPreferences}
         searchQuery={searchQuery}
         searchResultLabel={searchPending ? "..." : searchWorkerError ? "索引不可用" : searchResultLabel(searchIndex.matches.length, safeActiveSearchIndex, searchIndex.truncated)}
         searchResultTruncated={searchIndex.truncated}
@@ -484,6 +465,7 @@ export function DiffReviewPanel(props: {
                       scrollState={scrollState}
                       virtualHostTop={virtualLayout.policyNoticeHeight + item.linesTop}
                       viewMode={viewMode}
+                      renderPreferences={renderPreferences}
                       activeSearchLineKey={activeDiffSearchLineKeyForFile(item.file.key, activeSearchMatch)}
                       onLoadFileDetail={onLoadFileDetail}
                       onCollapsedChange={handleFileCollapsedChange}
@@ -501,6 +483,7 @@ export function DiffReviewPanel(props: {
                 scrollContainerRef={fileListRef}
                 scrollState={scrollState}
                 viewMode={viewMode}
+                renderPreferences={renderPreferences}
                 activeSearchLineKey={activeDiffSearchLineKeyForFile(file.key, activeSearchMatch)}
                 onLoadFileDetail={onLoadFileDetail}
                 onCollapsedChange={handleFileCollapsedChange}
@@ -519,35 +502,6 @@ export function DiffReviewPanel(props: {
       </div>
     </section>
   );
-}
-
-// syncDiffSplitScroll mirrors one native scrollLeft inside the source split file frame.
-// syncDiffSplitScroll 在来源分栏文件框架内镜像一个原生 scrollLeft。
-function syncDiffSplitScroll(
-  // Source split code column.
-  // 来源分栏代码列。
-  source: HTMLElement,
-  // Horizontal scroll offset in pixels.
-  // 横向滚动偏移，单位为像素。
-  scrollLeft: number,
-  // Re-entrancy guard shared by paired code-column synchronization.
-  // 成对代码列同步共享的重入保护。
-  syncingRef: React.MutableRefObject<boolean>,
-): void {
-  const frame = source.closest<HTMLElement>(".diff-code-frame.split");
-  if (!frame) {
-    return;
-  }
-  const nextScrollLeft = Math.max(0, scrollLeft);
-  syncingRef.current = true;
-  frame.querySelectorAll<HTMLElement>(".diff-split-code").forEach((node) => {
-    if (node !== source && node.scrollLeft !== nextScrollLeft) {
-      node.scrollLeft = nextScrollLeft;
-    }
-  });
-  window.setTimeout(() => {
-    syncingRef.current = false;
-  }, 300);
 }
 
 // DiffSearchPendingState displays while the search worker builds the loaded-line index.

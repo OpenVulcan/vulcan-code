@@ -6,7 +6,7 @@ import {
   type DiffHighlightedLineSpans,
   type DiffRenderableVirtualRow,
 } from "./diff-render-html-core";
-import type { DiffFile, DiffViewMode } from "./types";
+import type { DiffFile, DiffHunkSeparatorStyle, DiffIndicatorStyle, DiffOverflowMode, DiffViewMode } from "./types";
 import type { DiffShikiTokenSpan } from "./diff-shiki-shared";
 
 // DiffRenderWorkerRequest asks the worker to render one plain diff HTML block.
@@ -49,6 +49,15 @@ type DiffRenderWorkerRequest =
       // Visual layout mode used for rendered diff rows.
       // 渲染 diff 行使用的视觉布局模式。
       viewMode?: DiffViewMode;
+      // Horizontal overflow behavior for rendered code columns.
+      // 渲染代码列的横向溢出行为。
+      overflowMode?: DiffOverflowMode;
+      // Hunk separator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的 hunk 分隔样式。
+      hunkSeparatorStyle?: DiffHunkSeparatorStyle;
+      // Change indicator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的变更航标样式。
+      indicatorStyle?: DiffIndicatorStyle;
     }
   | {
       // Request id echoed back to the main thread.
@@ -90,6 +99,15 @@ type DiffRenderWorkerRequest =
       // Visual layout mode used for rendered diff rows.
       // 渲染 diff 行使用的视觉布局模式。
       viewMode?: DiffViewMode;
+      // Horizontal overflow behavior for rendered code columns.
+      // 渲染代码列的横向溢出行为。
+      overflowMode?: DiffOverflowMode;
+      // Hunk separator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的 hunk 分隔样式。
+      hunkSeparatorStyle?: DiffHunkSeparatorStyle;
+      // Change indicator style used by the target diff renderer.
+      // 目标 diff 渲染器使用的变更航标样式。
+      indicatorStyle?: DiffIndicatorStyle;
     };
 
 // DiffRenderWorkerCancelRequest asks the worker to cancel one queued or running request.
@@ -123,10 +141,6 @@ interface DiffRenderWorkerResponse {
   // Worker 是否因主线程取消而停止。
   cancelled?: boolean;
 }
-
-// DIFF_RENDER_WORKER_ROW_SLICE_LIMIT yields after rendering this many virtual rows.
-// DIFF_RENDER_WORKER_ROW_SLICE_LIMIT 每渲染这么多虚拟行后让出一次事件循环。
-const DIFF_RENDER_WORKER_ROW_SLICE_LIMIT = 96;
 
 // renderWorkerHighlightedLineSpansCache stores highlighted spans already received by this worker.
 // renderWorkerHighlightedLineSpansCache 保存当前 worker 已收到的高亮 span。
@@ -241,7 +255,10 @@ async function renderWorkerResponseForRequest(request: DiffRenderWorkerRequest):
           searchLineKeys,
           activeSearchLineKey: request.activeSearchLineKey,
           contextControls: request.contextControls,
+          hunkSeparatorStyle: request.hunkSeparatorStyle,
+          indicatorStyle: request.indicatorStyle,
           inlineDiff: request.inlineDiff,
+          overflowMode: request.overflowMode,
           viewMode: request.viewMode,
           highlightedLineSpans,
         })
@@ -250,7 +267,10 @@ async function renderWorkerResponseForRequest(request: DiffRenderWorkerRequest):
           searchLineKeys,
           activeSearchLineKey: request.activeSearchLineKey,
           contextControls: request.contextControls,
+          hunkSeparatorStyle: request.hunkSeparatorStyle,
+          indicatorStyle: request.indicatorStyle,
           inlineDiff: request.inlineDiff,
+          overflowMode: request.overflowMode,
           viewMode: request.viewMode,
         });
     } else if (highlightedLineSpans) {
@@ -281,25 +301,25 @@ async function renderPlainDiffVirtualRowsHtmlInSlices(
   request: Extract<DiffRenderWorkerRequest, { kind: "rows" }>,
   searchLineKeys: ReadonlySet<string> | undefined,
 ): Promise<string | null> {
-  let html = "";
-  for (let startIndex = 0; startIndex < request.rows.length; startIndex += DIFF_RENDER_WORKER_ROW_SLICE_LIMIT) {
-    if (isRenderRequestCancelled(request.id)) {
-      return null;
-    }
-    html += renderPlainDiffVirtualRowsHtmlRangeCore({
-      fileKey: request.fileKey,
-      rows: request.rows,
-      searchLineKeys,
-      activeSearchLineKey: request.activeSearchLineKey,
-      contextControls: request.contextControls,
-      inlineDiff: request.inlineDiff,
-      viewMode: request.viewMode,
-    }, startIndex, startIndex + DIFF_RENDER_WORKER_ROW_SLICE_LIMIT);
-    if (startIndex + DIFF_RENDER_WORKER_ROW_SLICE_LIMIT < request.rows.length) {
-      await yieldToRenderWorkerEventLoop();
-    }
+  if (isRenderRequestCancelled(request.id)) {
+    return null;
   }
-  return html;
+  await yieldToRenderWorkerEventLoop();
+  if (isRenderRequestCancelled(request.id)) {
+    return null;
+  }
+  return renderPlainDiffVirtualRowsHtmlRangeCore({
+    fileKey: request.fileKey,
+    rows: request.rows,
+    searchLineKeys,
+    activeSearchLineKey: request.activeSearchLineKey,
+    contextControls: request.contextControls,
+    hunkSeparatorStyle: request.hunkSeparatorStyle,
+    indicatorStyle: request.indicatorStyle,
+    inlineDiff: request.inlineDiff,
+    overflowMode: request.overflowMode,
+    viewMode: request.viewMode,
+  }, 0, request.rows.length);
 }
 
 // renderHighlightedDiffVirtualRowsHtmlInSlices renders highlighted virtual rows cooperatively.
@@ -309,26 +329,26 @@ async function renderHighlightedDiffVirtualRowsHtmlInSlices(
   searchLineKeys: ReadonlySet<string> | undefined,
   highlightedLineSpans: ReadonlyMap<string, DiffShikiTokenSpan[]>,
 ): Promise<string | null> {
-  let html = "";
-  for (let startIndex = 0; startIndex < request.rows.length; startIndex += DIFF_RENDER_WORKER_ROW_SLICE_LIMIT) {
-    if (isRenderRequestCancelled(request.id)) {
-      return null;
-    }
-    html += renderHighlightedDiffVirtualRowsHtmlRangeCore({
-      fileKey: request.fileKey,
-      rows: request.rows,
-      searchLineKeys,
-      activeSearchLineKey: request.activeSearchLineKey,
-      contextControls: request.contextControls,
-      inlineDiff: request.inlineDiff,
-      viewMode: request.viewMode,
-      highlightedLineSpans,
-    }, startIndex, startIndex + DIFF_RENDER_WORKER_ROW_SLICE_LIMIT);
-    if (startIndex + DIFF_RENDER_WORKER_ROW_SLICE_LIMIT < request.rows.length) {
-      await yieldToRenderWorkerEventLoop();
-    }
+  if (isRenderRequestCancelled(request.id)) {
+    return null;
   }
-  return html;
+  await yieldToRenderWorkerEventLoop();
+  if (isRenderRequestCancelled(request.id)) {
+    return null;
+  }
+  return renderHighlightedDiffVirtualRowsHtmlRangeCore({
+    fileKey: request.fileKey,
+    rows: request.rows,
+    searchLineKeys,
+    activeSearchLineKey: request.activeSearchLineKey,
+    contextControls: request.contextControls,
+    hunkSeparatorStyle: request.hunkSeparatorStyle,
+    indicatorStyle: request.indicatorStyle,
+    inlineDiff: request.inlineDiff,
+    overflowMode: request.overflowMode,
+    viewMode: request.viewMode,
+    highlightedLineSpans,
+  }, 0, request.rows.length);
 }
 
 // yieldToRenderWorkerEventLoop lets cancellation messages run between render slices.

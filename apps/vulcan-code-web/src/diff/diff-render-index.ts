@@ -11,7 +11,8 @@ import {
   shouldUseLightweightDiffRendering,
 } from "./limits";
 import { buildDiffVirtualLayout, fileTotalRowCount } from "./diff-virtual-layout";
-import type { DiffFile, DiffLine, DiffPanelSnapshot, WorkspaceDiffSearchFileMatch } from "./types";
+import { targetComputeApproximateBodyHeight, targetDiffFile } from "./target-diff-model";
+import type { DiffFile, DiffLine, DiffPanelSnapshot, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
 import type { CSSProperties } from "react";
 
 // DiffFileVirtualItem stores one file card's estimated scroll-space range.
@@ -55,6 +56,9 @@ export interface DiffFileVirtualLayout {
   // Per-file virtual ranges.
   // 每个文件的虚拟范围。
   items: DiffFileVirtualItem[];
+  // View mode used to compute file and line heights.
+  // 计算文件与行高度时使用的视图模式。
+  viewMode: DiffViewMode;
   // Per-file virtual range lookup by stable file key.
   // 按稳定文件 key 查找文件虚拟范围。
   itemByKey: Map<string, DiffFileVirtualItem>;
@@ -73,6 +77,7 @@ export const EMPTY_DIFF_FILE_VIRTUAL_LAYOUT: DiffFileVirtualLayout = {
   totalRows: 0,
   policyNoticeHeight: 0,
   items: [],
+  viewMode: "unified",
   itemByKey: new Map(),
 };
 
@@ -115,9 +120,12 @@ export function buildDiffFileVirtualLayout(
   // User-collapsed file keys that should only reserve header height.
   // 用户折叠且只应保留文件头高度的文件 key。
   collapsedFileKeys: ReadonlySet<string> = EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+  // Active diff view mode.
+  // 当前 diff 视图模式。
+  viewMode: DiffViewMode = "unified",
 ): DiffFileVirtualLayout {
   const collapseAware = collapsedFileKeys.size > 0;
-  const cached = collapseAware ? undefined : diffFileVirtualLayoutCache.get(snapshot);
+  const cached = collapseAware || viewMode !== "unified" ? undefined : diffFileVirtualLayoutCache.get(snapshot);
   if (!collapseAware && cached) {
     return cached;
   }
@@ -128,7 +136,7 @@ export function buildDiffFileVirtualLayout(
   for (let fileIndex = 0; fileIndex < snapshot.files.length; fileIndex += 1) {
     const file = snapshot.files[fileIndex];
     const collapsed = collapsedFileKeys.has(file.key);
-    const height = estimateDiffFileCardHeight(file, collapsed);
+    const height = estimateDiffFileCardHeight(file, collapsed, viewMode);
     const item = {
       file,
       top: nextTop,
@@ -137,7 +145,7 @@ export function buildDiffFileVirtualLayout(
       linesTop: nextTop + diffFileLinesHostOffset(file),
     };
     nextTop += height + DIFF_LIST_CARD_VERTICAL_GAP;
-    totalRows += fileTotalRowCount(file);
+    totalRows += fileTotalRowCount(file, viewMode);
     itemByKey.set(file.key, item);
     items[fileIndex] = item;
   }
@@ -151,9 +159,10 @@ export function buildDiffFileVirtualLayout(
     totalRows,
     policyNoticeHeight: 0,
     items,
+    viewMode,
     itemByKey,
   };
-  if (!collapseAware) {
+  if (!collapseAware && viewMode === "unified") {
     diffFileVirtualLayoutCache.set(snapshot, layout);
   }
   return layout;
@@ -256,7 +265,7 @@ export function diffScrollTopForLine(
   const rowTop = layout.policyNoticeHeight
     + item.top
     + diffFileLinesHostOffset(item.file)
-    + diffFileLineOffset(item.file, hunkIndex, lineIndex);
+    + diffFileLineOffset(item.file, hunkIndex, lineIndex, layout.viewMode);
   return Math.max(0, rowTop - offset);
 }
 
@@ -274,7 +283,7 @@ export function diffScrollTopForSummarySearchMatch(
   const rowTop = layout.policyNoticeHeight
     + item.top
     + diffFileLinesHostOffset(item.file)
-    + diffSummarySearchMatchOffset(item.file, match);
+    + diffSummarySearchMatchOffset(item.file, match, layout.viewMode);
   return Math.max(0, rowTop - offset);
 }
 
@@ -287,6 +296,9 @@ function estimateDiffFileCardHeight(
   // Whether only the sticky file header should occupy scroll space.
   // 是否只让吸顶文件头占用滚动空间。
   collapsed: boolean,
+  // Active diff view mode used by the body renderer.
+  // 正文渲染器使用的当前 diff 视图模式。
+  viewMode: DiffViewMode,
 ): number {
   if (collapsed) {
     return DIFF_LIST_CARD_HEADER_HEIGHT;
@@ -297,8 +309,10 @@ function estimateDiffFileCardHeight(
       ? Math.max(DIFF_SUMMARY_PLACEHOLDER_MIN_HEIGHT, estimateDiffRowsHeight(file, file.estimatedRowCount))
       : 58;
   } else {
-    const rowCount = monotonicDiffFileVirtualRowCount(file);
-    bodyHeight = estimateDiffRowsHeight(file, rowCount, monotonicDiffFileVirtualHunkCount(file, rowCount));
+    bodyHeight = Math.max(
+      1,
+      targetComputeApproximateBodyHeight(targetDiffFile(file), viewMode),
+    );
     if (shouldUseLightweightDiffRendering(file)) {
       bodyHeight += DIFF_RENDER_POLICY_NOTE_HEIGHT;
     }
@@ -318,6 +332,9 @@ function estimateDiffRowsHeight(
   // Optional monotonic hunk count override.
   // 可选的单调 hunk 数覆盖值。
   hunkCount?: number,
+  // Active diff view mode.
+  // 当前 diff 视图模式。
+  viewMode: DiffViewMode = "unified",
 ): number {
   const hunkRows = hunkCount
     ?? (file.hunks.length
@@ -332,8 +349,11 @@ function monotonicDiffFileVirtualRowCount(
   // File whose scroll-space row count is being estimated.
   // 正在估算滚动空间行数的文件。
   file: DiffFile,
+  // Active diff view mode.
+  // 当前 diff 视图模式。
+  viewMode: DiffViewMode = "unified",
 ): number {
-  return Math.max(1, fileTotalRowCount(file), file.estimatedRowCount ?? 0);
+  return Math.max(1, fileTotalRowCount(file, viewMode), file.estimatedRowCount ?? 0);
 }
 
 // monotonicDiffFileVirtualHunkCount keeps estimated hidden hunk space when details load.
@@ -353,8 +373,8 @@ function monotonicDiffFileVirtualHunkCount(
 
 // diffFileLineOffset estimates the pixel top of one line inside a file body.
 // diffFileLineOffset 估算单条行在文件正文中的像素顶部。
-function diffFileLineOffset(file: DiffFile, hunkIndex: number, lineIndex: number): number {
-  const hunkRange = buildDiffVirtualLayout(file).hunkRanges[hunkIndex];
+function diffFileLineOffset(file: DiffFile, hunkIndex: number, lineIndex: number, viewMode: DiffViewMode = "unified"): number {
+  const hunkRange = buildDiffVirtualLayout(file, viewMode).hunkRanges[hunkIndex];
   if (hunkRange) {
     return hunkRange.top + DIFF_HUNK_HEADER_HEIGHT + Math.max(0, lineIndex) * DIFF_LINE_HEIGHT;
   }
@@ -363,8 +383,8 @@ function diffFileLineOffset(file: DiffFile, hunkIndex: number, lineIndex: number
 
 // diffSummarySearchMatchOffset estimates a backend file-level hit inside one file body.
 // diffSummarySearchMatchOffset 估算后端文件级命中在单个文件正文内的位置。
-function diffSummarySearchMatchOffset(file: DiffFile, match: WorkspaceDiffSearchFileMatch): number {
-  const loadedOffset = diffLoadedSummarySearchMatchOffset(file, match);
+function diffSummarySearchMatchOffset(file: DiffFile, match: WorkspaceDiffSearchFileMatch, viewMode: DiffViewMode): number {
+  const loadedOffset = diffLoadedSummarySearchMatchOffset(file, match, viewMode);
   if (loadedOffset != null) {
     return loadedOffset;
   }
@@ -378,14 +398,14 @@ function diffSummarySearchMatchOffset(file: DiffFile, match: WorkspaceDiffSearch
 
 // diffLoadedSummarySearchMatchOffset maps a backend search hit when loaded hunk rows exist.
 // diffLoadedSummarySearchMatchOffset 在已加载 hunk 行存在时映射后端搜索命中。
-function diffLoadedSummarySearchMatchOffset(file: DiffFile, match: WorkspaceDiffSearchFileMatch): number | null {
+function diffLoadedSummarySearchMatchOffset(file: DiffFile, match: WorkspaceDiffSearchFileMatch, viewMode: DiffViewMode): number | null {
   const hunkIndex = match.firstHunkIndex ?? 0;
   const hunk = file.hunks[hunkIndex];
   if (!hunk) {
     return null;
   }
   const lineIndex = hunk.lines.findIndex((line) => diffLineMatchesSummarySearchPosition(line, match));
-  return diffFileLineOffset(file, hunkIndex, lineIndex >= 0 ? lineIndex : 0);
+  return diffFileLineOffset(file, hunkIndex, lineIndex >= 0 ? lineIndex : 0, viewMode);
 }
 
 // diffLineMatchesSummarySearchPosition checks whether a loaded line matches backend metadata.
