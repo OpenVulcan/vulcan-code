@@ -370,7 +370,7 @@ export function WorkbenchLayout(props: {
   // hydratedConversationIds stores conversations already requested from the service.
   // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
-    () => new Set(props.workbench.messages.map((message) => message.conversationId)),
+    () => new Set(),
   );
   // activeFeature stores the selected feature summary, including settings opened from the global button.
   // activeFeature 保存当前选中的功能区域摘要，并包含从全局按钮打开的设置页。
@@ -1467,11 +1467,11 @@ export function WorkbenchLayout(props: {
   );
 }
 
-// initialThemeMode returns the persisted shadcn theme, defaulting to dark for continuity.
-// initialThemeMode 返回持久化的 shadcn 主题，默认使用暗色以保持连续性。
+// initialThemeMode returns the persisted shadcn theme, defaulting to light.
+// initialThemeMode 返回持久化的 shadcn 主题，默认使用亮色。
 function initialThemeMode(): ThemeMode {
   const stored = window.localStorage.getItem("vulcan-webui-theme");
-  return stored === "light" || stored === "dark" ? stored : "dark";
+  return stored === "light" || stored === "dark" ? stored : "light";
 }
 
 // webuiClickTrace emits lightweight browser-console diagnostics for user initiated WebUI actions.

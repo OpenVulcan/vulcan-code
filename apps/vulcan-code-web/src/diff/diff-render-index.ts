@@ -94,6 +94,10 @@ interface DiffMountedFileWindowCacheEntry {
 // diffFileVirtualLayoutCache 按稳定 snapshot 对象缓存文件列表布局索引。
 const diffFileVirtualLayoutCache = new WeakMap<DiffPanelSnapshot, DiffFileVirtualLayout>();
 
+// EMPTY_COLLAPSED_DIFF_FILE_KEYS avoids allocating a fallback collapse set.
+// EMPTY_COLLAPSED_DIFF_FILE_KEYS 避免为默认折叠集合额外分配对象。
+const EMPTY_COLLAPSED_DIFF_FILE_KEYS: ReadonlySet<string> = new Set();
+
 // mountedDiffFileWindowCache stores the last mounted window per virtual layout.
 // mountedDiffFileWindowCache 按虚拟布局缓存最近一次挂载窗口。
 const mountedDiffFileWindowCache = new WeakMap<DiffFileVirtualLayout, DiffMountedFileWindowCacheEntry>();
@@ -104,9 +108,17 @@ const EMPTY_MOUNTED_DIFF_FILES: DiffFileVirtualItem[] = [];
 
 // buildDiffFileVirtualLayout builds the file-list virtual layout and lookup table.
 // buildDiffFileVirtualLayout 构建文件列表虚拟布局与查找表。
-export function buildDiffFileVirtualLayout(snapshot: DiffPanelSnapshot): DiffFileVirtualLayout {
-  const cached = diffFileVirtualLayoutCache.get(snapshot);
-  if (cached) {
+export function buildDiffFileVirtualLayout(
+  // Parsed diff snapshot whose files should be indexed.
+  // 需要建立索引的已解析 diff 快照。
+  snapshot: DiffPanelSnapshot,
+  // User-collapsed file keys that should only reserve header height.
+  // 用户折叠且只应保留文件头高度的文件 key。
+  collapsedFileKeys: ReadonlySet<string> = EMPTY_COLLAPSED_DIFF_FILE_KEYS,
+): DiffFileVirtualLayout {
+  const collapseAware = collapsedFileKeys.size > 0;
+  const cached = collapseAware ? undefined : diffFileVirtualLayoutCache.get(snapshot);
+  if (!collapseAware && cached) {
     return cached;
   }
   let nextTop = 0;
@@ -115,7 +127,8 @@ export function buildDiffFileVirtualLayout(snapshot: DiffPanelSnapshot): DiffFil
   const items: DiffFileVirtualItem[] = new Array(snapshot.files.length);
   for (let fileIndex = 0; fileIndex < snapshot.files.length; fileIndex += 1) {
     const file = snapshot.files[fileIndex];
-    const height = estimateDiffFileCardHeight(file);
+    const collapsed = collapsedFileKeys.has(file.key);
+    const height = estimateDiffFileCardHeight(file, collapsed);
     const item = {
       file,
       top: nextTop,
@@ -136,11 +149,13 @@ export function buildDiffFileVirtualLayout(snapshot: DiffPanelSnapshot): DiffFil
     totalHeight: Math.max(0, nextTop),
     canvasStyle: { height: Math.max(0, nextTop) },
     totalRows,
-    policyNoticeHeight: shouldShowDiffPolicyNotice(snapshot, enabled) ? DIFF_RENDER_POLICY_NOTE_HEIGHT : 0,
+    policyNoticeHeight: 0,
     items,
     itemByKey,
   };
-  diffFileVirtualLayoutCache.set(snapshot, layout);
+  if (!collapseAware) {
+    diffFileVirtualLayoutCache.set(snapshot, layout);
+  }
   return layout;
 }
 
@@ -163,6 +178,32 @@ export function mountedDiffFiles(layout: DiffFileVirtualLayout, scrollTop: numbe
     return mountedDiffFileWindow(layout, firstIndex, endIndex);
   }
   return mountedDiffFileWindow(layout, firstIndex, endIndex);
+}
+
+// stickyDiffFileItem returns the file whose header should be pinned above the virtual canvas.
+// stickyDiffFileItem 返回应在虚拟画布上方吸顶展示文件头的文件。
+export function stickyDiffFileItem(
+  // Current file-list virtual layout.
+  // 当前文件列表虚拟布局。
+  layout: DiffFileVirtualLayout,
+  // Scroll top from the shared file-list container.
+  // 共享文件列表容器的 scrollTop。
+  scrollTop: number,
+): DiffFileVirtualItem | null {
+  if (!layout.enabled || !layout.items.length) {
+    return null;
+  }
+  const virtualScrollTop = Math.max(0, scrollTop - layout.policyNoticeHeight);
+  const item = layout.items[firstVisibleFileIndex(layout.items, virtualScrollTop)];
+  if (!item) {
+    return null;
+  }
+  const stickyStart = item.top + DIFF_LIST_CARD_HEADER_HEIGHT;
+  const stickyEnd = item.top + item.height - DIFF_LIST_CARD_HEADER_HEIGHT;
+  if (virtualScrollTop < stickyStart || virtualScrollTop >= stickyEnd) {
+    return null;
+  }
+  return item;
 }
 
 // mountedDiffFileWindow returns a stable mounted item array while the index window is unchanged.
@@ -239,7 +280,17 @@ export function diffScrollTopForSummarySearchMatch(
 
 // estimateDiffFileCardHeight estimates the card height from fixed diff row metrics.
 // estimateDiffFileCardHeight 根据固定 diff 行指标估算文件卡片高度。
-function estimateDiffFileCardHeight(file: DiffFile): number {
+function estimateDiffFileCardHeight(
+  // File whose visual card height should be estimated.
+  // 需要估算视觉卡片高度的文件。
+  file: DiffFile,
+  // Whether only the sticky file header should occupy scroll space.
+  // 是否只让吸顶文件头占用滚动空间。
+  collapsed: boolean,
+): number {
+  if (collapsed) {
+    return DIFF_LIST_CARD_HEADER_HEIGHT;
+  }
   let bodyHeight = 0;
   if (file.isBinary || file.isGitlink || !file.hunks.length) {
     bodyHeight = file.isPartial && file.estimatedRowCount
@@ -350,12 +401,6 @@ function diffLineMatchesSummarySearchPosition(line: DiffLine, match: WorkspaceDi
     return false;
   }
   return match.firstOldLine != null || match.firstNewLine != null || Boolean(match.firstLineKind);
-}
-
-// shouldShowDiffPolicyNotice mirrors the panel-level policy notice visibility.
-// shouldShowDiffPolicyNotice 对齐面板级策略提示可见性。
-function shouldShowDiffPolicyNotice(snapshot: DiffPanelSnapshot, virtualized: boolean): boolean {
-  return snapshot.stats.isLarge || snapshot.isTruncated || virtualized;
 }
 
 // firstVisibleFileIndex finds the first file range that can intersect the viewport.

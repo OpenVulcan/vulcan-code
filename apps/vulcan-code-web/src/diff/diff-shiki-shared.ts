@@ -9,9 +9,23 @@ export type DiffShikiTokenSpan = readonly [
   style: string,
 ];
 
-// DIFF_SHIKI_THEME stores the TextMate theme used by the WebUI diff renderer.
-// DIFF_SHIKI_THEME 保存 WebUI diff 渲染器使用的 TextMate 主题。
-export const DIFF_SHIKI_THEME = "github-light";
+// DIFF_SHIKI_LIGHT_THEME stores the Shiki theme used by the light WebUI diff renderer.
+// DIFF_SHIKI_LIGHT_THEME 保存亮色 WebUI diff 渲染器使用的 Shiki 主题。
+export const DIFF_SHIKI_LIGHT_THEME = "github-light";
+
+// DIFF_SHIKI_DARK_THEME stores the Shiki theme used by the dark WebUI diff renderer.
+// DIFF_SHIKI_DARK_THEME 保存暗色 WebUI diff 渲染器使用的 Shiki 主题。
+export const DIFF_SHIKI_DARK_THEME = "github-dark";
+
+// DiffShikiTheme describes the WebUI diff Shiki theme identifiers.
+// DiffShikiTheme 描述 WebUI diff 使用的 Shiki 主题标识。
+export type DiffShikiTheme = typeof DIFF_SHIKI_LIGHT_THEME | typeof DIFF_SHIKI_DARK_THEME;
+
+// currentDiffShikiTheme returns the Shiki theme matching the active WebUI color mode.
+// currentDiffShikiTheme 返回与当前 WebUI 颜色模式匹配的 Shiki 主题。
+export function currentDiffShikiTheme(): DiffShikiTheme {
+  return document.documentElement.classList.contains("dark") ? DIFF_SHIKI_DARK_THEME : DIFF_SHIKI_LIGHT_THEME;
+}
 
 // DIFF_SHIKI_LANGUAGE_IDS is the explicit WebUI review language allowlist.
 // DIFF_SHIKI_LANGUAGE_IDS 是 WebUI 审查高亮显式支持的语言白名单。

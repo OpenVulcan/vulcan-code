@@ -1,7 +1,7 @@
 import React from "react";
 import { FileText, RefreshCw } from "lucide-react";
 
-import { DiffFileCard, useDiffScrollState } from "./diff-file-card";
+import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "./diff-file-card";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
 import {
   DIFF_SEARCH_DETAIL_PREFETCH_CONTEXT_LINES,
@@ -11,7 +11,6 @@ import {
   DIFF_SEARCH_PAGE_SIZE,
   DIFF_SEARCH_SUMMARY_FILE_MATCH_LIMIT,
   DIFF_SEARCH_SUMMARY_REQUEST_DEBOUNCE_MS,
-  formatLargeReasons,
 } from "./limits";
 import type {
   DiffFile,
@@ -34,6 +33,7 @@ import {
   diffScrollTopForLine,
   diffScrollTopForSummarySearchMatch,
   mountedDiffFiles,
+  stickyDiffFileItem,
   type DiffFileVirtualLayout,
 } from "./diff-render-index";
 import "./diffReview.css";
@@ -89,6 +89,7 @@ export function DiffReviewPanel(props: {
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeSearchIndex, setActiveSearchIndex] = React.useState(0);
   const [viewMode, setViewMode] = React.useState<DiffViewMode>("unified");
+  const [collapsedFileKeys, setCollapsedFileKeys] = React.useState<ReadonlySet<string>>(() => new Set());
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
   const diffSourceScrollResetKey = React.useMemo(
     () => diffReviewScrollResetKey(snapshot, selection),
@@ -131,8 +132,8 @@ export function DiffReviewPanel(props: {
     [searchIndex.matches.length, searchPageFileKeys, searchQuery, snapshot, summarySearchPageFileKeys],
   );
   const virtualLayout = React.useMemo(
-    () => (renderedSnapshot ? buildDiffFileVirtualLayout(renderedSnapshot) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
-    [renderedSnapshot],
+    () => (renderedSnapshot ? buildDiffFileVirtualLayout(renderedSnapshot, collapsedFileKeys) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
+    [collapsedFileKeys, renderedSnapshot],
   );
   const renderedFileCount = renderedSnapshot?.files.length ?? 0;
   const searchActive = searchQuery.trim().length > 0;
@@ -184,6 +185,28 @@ export function DiffReviewPanel(props: {
     () => mountedDiffFiles(virtualLayout, scrollState.scrollTop, scrollState.clientHeight),
     [scrollState.clientHeight, scrollState.scrollTop, virtualLayout],
   );
+  const stickyFileItem = React.useMemo(
+    () => stickyDiffFileItem(virtualLayout, scrollState.scrollTop),
+    [scrollState.scrollTop, virtualLayout],
+  );
+  const handleFileCollapsedChange = React.useCallback((fileKey: string, collapsed: boolean) => {
+    setCollapsedFileKeys((current) => {
+      const currentCollapsed = current.has(fileKey);
+      if (currentCollapsed === collapsed) {
+        return current;
+      }
+      const next = new Set(current);
+      if (collapsed) {
+        next.add(fileKey);
+      } else {
+        next.delete(fileKey);
+      }
+      return next;
+    });
+    if (typeof window !== "undefined") {
+      window.requestAnimationFrame(syncFileListScrollState);
+    }
+  }, [syncFileListScrollState]);
   React.useLayoutEffect(() => {
     const element = fileListRef.current;
     if (!element) {
@@ -193,6 +216,9 @@ export function DiffReviewPanel(props: {
     syncFileListScrollState();
     return undefined;
   }, [diffSourceScrollResetKey, syncFileListScrollState]);
+  React.useEffect(() => {
+    setCollapsedFileKeys(new Set());
+  }, [diffSourceScrollResetKey]);
   // mountedDetailHydrationRequests contains visible summary files that should be hydrated lazily.
   // mountedDetailHydrationRequests 保存当前可见且需要懒水合的摘要文件。
   const mountedDetailHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(() => {
@@ -409,23 +435,31 @@ export function DiffReviewPanel(props: {
           />
         ) : renderedFileCount ? (
           <>
-            <DiffSnapshotPolicyNotice
-              snapshot={snapshot}
-              searchPageDescription={searchPageDescription}
-              virtualized={virtualLayout.enabled}
-            />
+            {stickyFileItem ? (
+              <div className="diff-file-sticky-header-overlay">
+                <DiffFileHeader
+                  className="overlay"
+                  collapsed={collapsedFileKeys.has(stickyFileItem.file.key)}
+                  file={stickyFileItem.file}
+                  onToggle={() => handleFileCollapsedChange(stickyFileItem.file.key, !collapsedFileKeys.has(stickyFileItem.file.key))}
+                />
+              </div>
+            ) : null}
+            {searchPageDescription ? <DiffSearchPageNotice description={searchPageDescription} /> : null}
             {virtualLayout.enabled ? (
               <div className="diff-file-list-virtual-canvas" style={virtualLayout.canvasStyle}>
                 {mountedFiles.map((item) => (
                   <div className="diff-file-list-virtual-item" key={item.file.key} style={item.style}>
                     <DiffFileCard
                       file={item.file}
+                      collapsed={collapsedFileKeys.has(item.file.key)}
                       scrollContainerRef={fileListRef}
                       scrollState={scrollState}
                       virtualHostTop={virtualLayout.policyNoticeHeight + item.linesTop}
                       viewMode={viewMode}
                       activeSearchLineKey={activeDiffSearchLineKeyForFile(item.file.key, activeSearchMatch)}
                       onLoadFileDetail={onLoadFileDetail}
+                      onCollapsedChange={handleFileCollapsedChange}
                       summarySearchMatch={summarySearchMatchByFileKey.get(item.file.key)}
                       searchLineKeys={searchVisibleLineKeys}
                     />
@@ -435,12 +469,14 @@ export function DiffReviewPanel(props: {
             ) : renderedSnapshot?.files.map((file) => (
               <DiffFileCard
                 file={file}
+                collapsed={collapsedFileKeys.has(file.key)}
                 key={file.key}
                 scrollContainerRef={fileListRef}
                 scrollState={scrollState}
                 viewMode={viewMode}
                 activeSearchLineKey={activeDiffSearchLineKeyForFile(file.key, activeSearchMatch)}
                 onLoadFileDetail={onLoadFileDetail}
+                onCollapsedChange={handleFileCollapsedChange}
                 summarySearchMatch={summarySearchMatchByFileKey.get(file.key)}
                 searchLineKeys={searchVisibleLineKeys}
               />
@@ -474,31 +510,16 @@ function DiffSearchPendingState(props: {
   );
 }
 
-// DiffSnapshotPolicyNotice displays aggregate large-diff and virtualization state.
-// DiffSnapshotPolicyNotice 展示聚合级大 diff 与虚拟化状态。
-function DiffSnapshotPolicyNotice(props: {
-  // Parsed diff snapshot to render.
-  // 要渲染的已解析 diff 快照。
-  snapshot: DiffPanelSnapshot;
-  // Whether file-level virtualization is active.
-  // 文件级虚拟化是否处于启用状态。
-  virtualized: boolean;
-  // Optional search page status shown when search narrows rendered files.
-  // 搜索缩小渲染文件时显示的可选分页状态。
-  searchPageDescription?: string | null;
+// DiffSearchPageNotice displays only active search narrowing state.
+// DiffSearchPageNotice 仅展示搜索缩小结果集时的状态。
+function DiffSearchPageNotice(props: {
+  // Search page status shown when search narrows rendered files.
+  // 搜索缩小渲染文件时显示的分页状态。
+  description: string;
 }) {
-  if (!props.snapshot.stats.isLarge && !props.snapshot.isTruncated && !props.virtualized && !props.searchPageDescription) {
-    return null;
-  }
-  const reasons = props.snapshot.stats.largeReasons.length
-    ? formatLargeReasons(props.snapshot.stats.largeReasons)
-    : props.virtualized
-      ? "文件列表已按视口虚拟化"
-      : "diff 内容已按轻量策略渲染";
   return (
     <div className="diff-snapshot-policy-note">
-      <span>{props.searchPageDescription ?? (props.snapshot.isTruncated ? "后端返回的是截断 diff。" : reasons)}</span>
-      <span>{`${props.snapshot.stats.files} 个文件，${props.snapshot.stats.totalChangedLines} 行变更`}</span>
+      <span>{props.description}</span>
     </div>
   );
 }

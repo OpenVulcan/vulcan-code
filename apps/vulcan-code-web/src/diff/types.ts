@@ -330,8 +330,8 @@ export interface WorkspaceDiffFileDetailResponse {
   // Raw unified diff for only the requested file.
   // 仅包含请求文件的原始 unified diff。
   unifiedDiff: string;
-  // Whether the backend truncated the single-file diff payload.
-  // 后端是否截断了单文件 diff 载荷。
+  // Compatibility flag from legacy backend responses; normal file diff payloads are complete.
+  // 旧版后端响应的兼容标记；正常单文件 diff 载荷为完整内容。
   truncated?: boolean | null;
   // Optional backend notice for empty, partial, or skipped details.
   // 空详情、局部详情或跳过详情对应的后端提示。
@@ -484,8 +484,8 @@ export interface WorkspaceDiffSnapshotResponse {
   // Backend-counted changed file count.
   // 后端统计的变更文件数量。
   changedFiles: number;
-  // Backend file summaries computed before preview truncation.
-  // 后端在预览截断前计算出的文件摘要。
+  // Backend file summaries computed from the returned complete diff.
+  // 后端基于返回的完整 diff 计算出的文件摘要。
   files?: WorkspaceDiffFileSummary[];
   // Backend-counted added lines.
   // 后端统计的新增行数。
@@ -499,8 +499,8 @@ export interface WorkspaceDiffSnapshotResponse {
   // Optional backend-counted changed byte total.
   // 后端统计的可选变更字节总数。
   totalChangedBytes?: number | null;
-  // Whether the backend truncated the unified diff payload.
-  // 后端是否截断了 unified diff 载荷。
+  // Compatibility flag from legacy backend responses; normal unified diff payloads are complete.
+  // 旧版后端响应的兼容标记；正常 unified diff 载荷为完整内容。
   truncated?: boolean | null;
   // Optional backend notice for empty or partial snapshots.
   // 空快照或局部快照对应的后端提示。

@@ -1,9 +1,12 @@
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import githubDarkTheme from "shiki/themes/github-dark.mjs";
 import githubLightTheme from "shiki/themes/github-light.mjs";
 
 import {
-  DIFF_SHIKI_THEME,
+  DIFF_SHIKI_DARK_THEME,
+  DIFF_SHIKI_LIGHT_THEME,
+  type DiffShikiTheme,
   type DiffShikiTokenSpan,
   normalizeShikiLanguage,
   tokensToSpans,
@@ -33,6 +36,9 @@ interface DiffHighlightWorkerRequest {
   // Requested Shiki language id or alias.
   // 请求的 Shiki 语言标识或别名。
   language: string;
+  // Requested Shiki theme id.
+  // 请求的 Shiki 主题标识。
+  theme: DiffShikiTheme;
   // Lines to highlight in this batch.
   // 本批次需要高亮的行。
   lines: DiffHighlightWorkerLine[];
@@ -124,7 +130,7 @@ async function ensureShikiHighlighter(): Promise<HighlighterCore> {
     shikiHighlighterPromise = createHighlighterCore({
       engine: createJavaScriptRegexEngine(),
       langs: [],
-      themes: [githubLightTheme],
+      themes: [githubLightTheme, githubDarkTheme],
     });
   }
   return shikiHighlighterPromise;
@@ -158,8 +164,8 @@ async function loadShikiLanguage(highlighter: HighlighterCore, language: string)
 
 // highlightLine turns one code line into serializable token spans.
 // highlightLine 将单条代码行转换为可序列化 token span。
-function highlightLine(highlighter: HighlighterCore, line: string, language: string): DiffShikiTokenSpan[] {
-  const cacheKey = highlightWorkerTokenCacheKey(language, line);
+function highlightLine(highlighter: HighlighterCore, line: string, language: string, theme: DiffShikiTheme): DiffShikiTokenSpan[] {
+  const cacheKey = highlightWorkerTokenCacheKey(theme, language, line);
   if (cacheKey) {
     const cached = highlightedTokenCache.get(cacheKey);
     if (cached) {
@@ -168,7 +174,7 @@ function highlightLine(highlighter: HighlighterCore, line: string, language: str
   }
   const [tokens = []] = highlighter.codeToTokensBase(line, {
     lang: language,
-    theme: DIFF_SHIKI_THEME,
+    theme,
   });
   const spans: DiffShikiTokenSpan[] = tokens.length ? tokensToSpans(tokens) : [[line, ""]];
   if (cacheKey) {
@@ -183,6 +189,7 @@ async function highlightBatch(request: DiffHighlightWorkerRequest): Promise<Diff
   activeHighlightRequestIds.add(request.id);
   try {
     const normalizedLanguage = normalizeShikiLanguage(request.language);
+    const theme = normalizeDiffShikiTheme(request.theme);
     if (!normalizedLanguage) {
       return {
         id: request.id,
@@ -198,7 +205,7 @@ async function highlightBatch(request: DiffHighlightWorkerRequest): Promise<Diff
     if (isHighlightRequestCancelled(request.id)) {
       return cancelledHighlightResponse(request.id);
     }
-    const results = await highlightLinesInSlices(highlighter, request.lines, normalizedLanguage, request.id);
+    const results = await highlightLinesInSlices(highlighter, request.lines, normalizedLanguage, theme, request.id);
     if (!results) {
       return cancelledHighlightResponse(request.id);
     }
@@ -246,6 +253,7 @@ async function highlightLinesInSlices(
   highlighter: HighlighterCore,
   lines: readonly DiffHighlightWorkerLine[],
   normalizedLanguage: string,
+  theme: DiffShikiTheme,
   requestId: number,
 ): Promise<DiffHighlightWorkerResult[] | null> {
   const results: DiffHighlightWorkerResult[] = new Array(lines.length);
@@ -256,7 +264,7 @@ async function highlightLinesInSlices(
     const line = lines[index];
     results[index] = {
       key: line.key,
-      spans: highlightLine(highlighter, line.content, normalizedLanguage),
+      spans: highlightLine(highlighter, line.content, normalizedLanguage, theme),
     };
     if ((index + 1) % DIFF_HIGHLIGHT_WORKER_TOKENIZE_SLICE_LIMIT === 0 && index + 1 < lines.length) {
       await yieldToHighlightWorkerEventLoop();
@@ -291,13 +299,19 @@ function yieldToHighlightWorkerEventLoop(): Promise<void> {
   });
 }
 
+// normalizeDiffShikiTheme keeps worker requests on the registered theme set.
+// normalizeDiffShikiTheme 将 Worker 请求限制在已注册主题集合内。
+function normalizeDiffShikiTheme(theme: DiffShikiTheme | undefined): DiffShikiTheme {
+  return theme === DIFF_SHIKI_DARK_THEME ? DIFF_SHIKI_DARK_THEME : DIFF_SHIKI_LIGHT_THEME;
+}
+
 // highlightWorkerTokenCacheKey returns a bounded cache key for ordinary source lines.
 // highlightWorkerTokenCacheKey 为普通源码行返回有界缓存键。
-function highlightWorkerTokenCacheKey(language: string, line: string): string | null {
+function highlightWorkerTokenCacheKey(theme: DiffShikiTheme, language: string, line: string): string | null {
   if (line.length > DIFF_HIGHLIGHT_WORKER_TOKEN_CACHE_LINE_LENGTH_LIMIT) {
     return null;
   }
-  return `${language}\u0000${line}`;
+  return `${theme}\u0000${language}\u0000${line}`;
 }
 
 // rememberHighlightedTokenSpans stores one worker-side token span entry with FIFO eviction.

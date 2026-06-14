@@ -539,8 +539,8 @@ function inlineChangeRangesForPair(removedContent: string, addedContent: string)
     && addedTokens.length <= INLINE_DIFF_MAX_TOKEN_COUNT
   ) {
     const pairs = inlineDiffTokenLcsPairs(removedTokens, addedTokens);
-    const removedRanges = inlineChangeRangesBetweenTokenPairs(removedContent.length, removedTokens, pairs, "removed");
-    const addedRanges = inlineChangeRangesBetweenTokenPairs(addedContent.length, addedTokens, pairs, "added");
+    const removedRanges = inlineChangeRangesBetweenTokenPairs(removedContent, removedTokens, pairs, "removed");
+    const addedRanges = inlineChangeRangesBetweenTokenPairs(addedContent, addedTokens, pairs, "added");
     if (removedRanges.length || addedRanges.length) {
       return {
         removed: removedRanges,
@@ -657,10 +657,10 @@ function inlineDiffTokenLcsPairs(removedTokens: readonly InlineDiffToken[], adde
   return pairs;
 }
 
-// inlineChangeRangesBetweenTokenPairs converts unchanged token pairs into changed character ranges.
-// inlineChangeRangesBetweenTokenPairs 将未变化 token 对转换为变化字符范围。
+// inlineChangeRangesBetweenTokenPairs converts unchanged token pairs into merged changed character ranges.
+// inlineChangeRangesBetweenTokenPairs 将未变化 token 对转换为合并后的变化字符范围。
 function inlineChangeRangesBetweenTokenPairs(
-  contentLength: number,
+  content: string,
   tokens: readonly InlineDiffToken[],
   pairs: readonly InlineDiffTokenPair[],
   side: "removed" | "added",
@@ -672,7 +672,8 @@ function inlineChangeRangesBetweenTokenPairs(
     pushInlineChangeRange(ranges, previousEnd, token.start);
     previousEnd = token.end;
   }
-  pushInlineChangeRange(ranges, previousEnd, contentLength);
+  pushInlineChangeRange(ranges, previousEnd, content.length);
+  mergeInlineChangeRangesAcrossWhitespace(ranges, content);
   return ranges;
 }
 
@@ -688,6 +689,38 @@ function pushInlineChangeRange(ranges: DiffInlineChangeRange[], start: number, e
     return;
   }
   ranges.push({ start, end });
+}
+
+// mergeInlineChangeRangesAcrossWhitespace makes adjacent word-level changes render as one visual block.
+// mergeInlineChangeRangesAcrossWhitespace 让仅被空白隔开的相邻词级变更渲染为一个连续色块。
+function mergeInlineChangeRangesAcrossWhitespace(ranges: DiffInlineChangeRange[], content: string): void {
+  if (ranges.length <= 1) {
+    return;
+  }
+  let writeIndex = 0;
+  for (let readIndex = 1; readIndex < ranges.length; readIndex += 1) {
+    const previous = ranges[writeIndex];
+    const current = ranges[readIndex];
+    if (isWhitespaceOnly(content, previous.end, current.start)) {
+      previous.end = current.end;
+      continue;
+    }
+    writeIndex += 1;
+    ranges[writeIndex] = current;
+  }
+  ranges.length = writeIndex + 1;
+}
+
+// isWhitespaceOnly returns whether one content slice contains only spacing characters.
+// isWhitespaceOnly 返回一段内容是否只包含空白字符。
+function isWhitespaceOnly(content: string, start: number, end: number): boolean {
+  for (let index = start; index < end; index += 1) {
+    const code = content.charCodeAt(index);
+    if (code !== 9 && code !== 10 && code !== 13 && code !== 32) {
+      return false;
+    }
+  }
+  return true;
 }
 
 // advanceCursor updates old and new line counters after one parsed row.

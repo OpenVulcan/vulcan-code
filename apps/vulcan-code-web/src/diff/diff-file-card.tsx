@@ -72,6 +72,9 @@ interface DiffFileCardProps {
   // File-level diff data.
   // 文件级 diff 数据。
   file: DiffFile;
+  // Whether this file is currently collapsed by the review panel.
+  // 该文件当前是否被审核面板折叠。
+  collapsed: boolean;
   // Shared scroll container used by virtualized file bodies.
   // 虚拟化文件正文使用的共享滚动容器。
   scrollContainerRef: React.RefObject<HTMLDivElement | null>;
@@ -96,23 +99,59 @@ interface DiffFileCardProps {
   // Optional backend search hit shown before full detail hydration finishes.
   // 完整详情水合完成前展示的可选后端搜索命中。
   summarySearchMatch?: WorkspaceDiffSearchFileMatch;
+  // Records a user-triggered file collapse state change.
+  // 记录用户触发的文件折叠状态变化。
+  onCollapsedChange: (fileKey: string, collapsed: boolean) => void;
+}
+
+// DiffFileHeader renders the reusable file-name header for normal and sticky layers.
+// DiffFileHeader 渲染普通层与吸顶层复用的文件名头部。
+export function DiffFileHeader(props: {
+  // File-level diff data.
+  // 文件级 diff 数据。
+  file: DiffFile;
+  // Whether this file is currently collapsed.
+  // 该文件当前是否处于折叠状态。
+  collapsed: boolean;
+  // Optional extra class name for sticky overlay styling.
+  // 用于吸顶覆盖层样式的可选额外类名。
+  className?: string;
+  // Records a user-triggered collapse toggle.
+  // 记录用户触发的折叠切换。
+  onToggle: () => void;
+}) {
+  const ToggleIcon = props.collapsed ? ChevronRight : ChevronDown;
+  return (
+    <button className={props.className ? `diff-file-header ${props.className}` : "diff-file-header"} onClick={props.onToggle} type="button">
+      <ToggleIcon size={15} />
+      <div className="diff-file-paths">
+        <strong>
+          <span>{displayPath(props.file)}</span>
+          {props.file.status === "added" ? <span aria-label="新增文件" className="diff-file-status-dot" /> : null}
+        </strong>
+        {props.file.status === "renamed" ? <span>{`${props.file.oldPath} -> ${props.file.newPath}`}</span> : null}
+      </div>
+      <div className="diff-file-meta">
+        <span className="diff-stat added">+{props.file.additions}</span>
+        <span className="diff-stat removed">-{props.file.deletions}</span>
+      </div>
+    </button>
+  );
 }
 
 // DiffFileCard renders one file-level diff card.
 // DiffFileCard 渲染单个文件级 diff 卡片。
 export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCardProps) {
-  const [collapsed, setCollapsed] = React.useState(false);
-  const ToggleIcon = collapsed ? ChevronRight : ChevronDown;
   const rowCount = React.useMemo(() => fileTotalRowCount(props.file), [props.file]);
   const lightweightRendering = shouldUseLightweightDiffRendering(props.file);
   const shouldUseShikiTokens = !lightweightRendering && rowCount <= DIFF_SHIKI_TOKEN_ROW_LIMIT;
-  const inlineDiff = !lightweightRendering;
-  const language = !collapsed && shouldUseShikiTokens ? diffLanguageForFile(props.file) : null;
+  const inlineDiff = true;
+  const language = !props.collapsed && shouldUseShikiTokens ? diffLanguageForFile(props.file) : null;
   const highlightSupported = useHighlightLanguage(language);
   const contextExpansionAvailable = props.onLoadFileDetail ? canExpandDiffFileContext(props.file) : false;
   const handleToggle = React.useCallback(() => {
-    setCollapsed((previous) => !previous);
-  }, []);
+    props.onCollapsedChange(props.file.key, !props.collapsed);
+  }, [props.collapsed, props.file.key, props.onCollapsedChange]);
   const handleExpandFileContext = React.useCallback((hunkIndex: number, direction: DiffHunkExpansionDirection) => {
     if (canExpandDiffFileContext(props.file)) {
       props.onLoadFileDetail?.(props.file, nextExpandedContextLineCount(props.file), { hunkIndex, direction });
@@ -120,21 +159,8 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
   }, [props.file, props.onLoadFileDetail]);
   return (
     <article className={`diff-file-card ${props.file.status}`}>
-      <button className="diff-file-header" onClick={handleToggle} type="button">
-        <ToggleIcon size={15} />
-        <div className="diff-file-paths">
-          <strong>
-            <span>{displayPath(props.file)}</span>
-            {props.file.status === "added" ? <span aria-label="新增文件" className="diff-file-status-dot" /> : null}
-          </strong>
-          {props.file.status === "renamed" ? <span>{`${props.file.oldPath} -> ${props.file.newPath}`}</span> : null}
-        </div>
-        <div className="diff-file-meta">
-          <span className="diff-stat added">+{props.file.additions}</span>
-          <span className="diff-stat removed">-{props.file.deletions}</span>
-        </div>
-      </button>
-      {!collapsed ? (
+      <DiffFileHeader collapsed={props.collapsed} file={props.file} onToggle={handleToggle} />
+      {!props.collapsed ? (
         <div className="diff-file-body">
           {props.file.isBinary ? (
             <div className="diff-binary-note">Binary file not shown</div>
@@ -686,10 +712,12 @@ function areDiffFileCardPropsEqual(previous: DiffFileCardProps, next: DiffFileCa
     || previous.scrollContainerRef !== next.scrollContainerRef
     || previous.viewMode !== next.viewMode
     || previous.virtualHostTop !== next.virtualHostTop
+    || previous.collapsed !== next.collapsed
     || previous.searchLineKeys !== next.searchLineKeys
     || previous.activeSearchLineKey !== next.activeSearchLineKey
     || previous.onLoadFileDetail !== next.onLoadFileDetail
     || previous.summarySearchMatch !== next.summarySearchMatch
+    || previous.onCollapsedChange !== next.onCollapsedChange
   ) {
     return false;
   }

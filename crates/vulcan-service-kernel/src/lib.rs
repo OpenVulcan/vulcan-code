@@ -761,14 +761,14 @@ struct WebuiWorkspaceDiffSnapshot {
     /// Repository root used for the Git command.
     /// Git 命令使用的仓库根目录。
     repository_root: String,
-    /// Combined unified diff for tracked and lightweight untracked changes.
-    /// 已跟踪变更与轻量未跟踪变更组合后的 unified diff。
+    /// Complete combined unified diff for tracked and untracked text changes.
+    /// 已跟踪变更与未跟踪文本变更组合后的完整 unified diff。
     unified_diff: String,
     /// Number of files represented by the combined diff.
     /// 组合 diff 中包含的文件数量。
     changed_files: usize,
-    /// Complete file summaries computed before preview truncation.
-    /// 预览截断前计算出的完整文件摘要。
+    /// Complete file summaries computed from the returned diff.
+    /// 基于返回 diff 计算出的完整文件摘要。
     files: Vec<WebuiWorkspaceDiffFileSummary>,
     /// Number of added lines estimated from the combined diff.
     /// 从组合 diff 中估算出的新增行数。
@@ -782,11 +782,11 @@ struct WebuiWorkspaceDiffSnapshot {
     /// Number of changed bytes estimated from the complete combined diff.
     /// 从完整组合 diff 中估算出的变更字节数。
     total_changed_bytes: usize,
-    /// Whether the returned unified diff text was truncated for preview.
-    /// 返回的 unified diff 文本是否已因预览上限被截断。
+    /// Compatibility flag for legacy clients; normal WebUI diff payloads are returned complete.
+    /// 面向旧客户端的兼容标记；正常 WebUI diff 载荷会完整返回。
     truncated: bool,
-    /// Optional user-facing note for empty, partial, or truncated snapshots.
-    /// 空快照、局部快照或截断快照使用的可选用户提示。
+    /// Optional user-facing note for empty or partial snapshots.
+    /// 空快照或局部快照使用的可选用户提示。
     notice: Option<String>,
     /// Current Git branch name when available.
     /// 可用时的当前 Git 分支名称。
@@ -899,11 +899,11 @@ struct WebuiWorkspaceDiffFileDetail {
     /// Unified diff for the requested file only.
     /// 仅包含请求文件的 unified diff。
     unified_diff: String,
-    /// Whether the returned unified diff text was truncated for preview.
-    /// 返回的 unified diff 文本是否已因预览上限被截断。
+    /// Compatibility flag for legacy clients; normal file diff payloads are returned complete.
+    /// 面向旧客户端的兼容标记；正常单文件 diff 载荷会完整返回。
     truncated: bool,
-    /// Optional user-facing note for empty, partial, or truncated details.
-    /// 空详情、局部详情或截断详情使用的可选用户提示。
+    /// Optional user-facing note for empty or partial details.
+    /// 空详情或局部详情使用的可选用户提示。
     notice: Option<String>,
     /// Unified-diff context line count used to produce this detail payload.
     /// 生成当前详情载荷时使用的 unified-diff 上下文行数。
@@ -20207,18 +20207,6 @@ fn workspace_root() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-/// Maximum bytes retained in one WebUI diff snapshot.
-/// 单个 WebUI diff 快照保留的最大字节数。
-const WEBUI_DIFF_MAX_BYTES: usize = 2 * 1024 * 1024;
-
-/// Maximum bytes retained for one lazily loaded WebUI diff file.
-/// 单个 WebUI diff 文件懒加载详情保留的最大字节数。
-const WEBUI_DIFF_FILE_DETAIL_MAX_BYTES: usize = 3 * 1024 * 1024;
-
-/// Maximum bytes read from one untracked text file for the diff preview.
-/// 单个未跟踪文本文件用于 diff 预览的最大读取字节数。
-const WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES: u64 = 256 * 1024;
-
 /// Default unified-diff context lines used by Git when no expansion is requested.
 /// 未请求展开时 Git 默认使用的 unified-diff 上下文行数。
 const WEBUI_DIFF_DEFAULT_CONTEXT_LINES: usize = 3;
@@ -20368,8 +20356,8 @@ struct WebuiDiffSearchInputCacheEntry {
     input: WebuiDiffSearchInput,
 }
 
-/// Loads a safe, bounded Git diff snapshot for the requested workspace path.
-/// 为请求的工作区路径加载安全且有界的 Git diff 快照。
+/// Loads a complete Git diff snapshot for the requested workspace path.
+/// 为请求的工作区路径加载完整 Git diff 快照。
 fn load_webui_workspace_diff_snapshot(
     workspace_path: &str,
     request: Option<WebuiWorkspaceDiffRequest>,
@@ -20462,15 +20450,9 @@ fn load_webui_workspace_diff_snapshot(
         }
     }
 
-    let mut unified_diff = sections.join("\n");
+    let unified_diff = sections.join("\n");
     let stats = webui_unified_diff_stats(&unified_diff);
     let file_summaries = webui_unified_diff_file_summaries(&unified_diff);
-    let truncated = unified_diff.len() > WEBUI_DIFF_MAX_BYTES;
-    if unified_diff.len() > WEBUI_DIFF_MAX_BYTES {
-        unified_diff =
-            truncate_string_to_char_boundary(&unified_diff, WEBUI_DIFF_MAX_BYTES).to_string();
-        notices.push(String::from("Diff 内容过大，已截断到 WebUI 预览上限。"));
-    }
     let notice = if stats.files == 0 {
         Some(String::from("当前工作区没有可展示的 Git 变更。"))
     } else if notices.is_empty() {
@@ -20488,7 +20470,7 @@ fn load_webui_workspace_diff_snapshot(
         deletions: stats.deletions,
         total_changed_lines: stats.total_changed_lines,
         total_changed_bytes: stats.total_changed_bytes,
-        truncated,
+        truncated: false,
         notice,
         current_branch,
         default_branch,
@@ -20500,8 +20482,8 @@ fn load_webui_workspace_diff_snapshot(
     })
 }
 
-/// Loads a safe, bounded Git diff detail for one requested file.
-/// 为请求的单个文件加载安全且有界的 Git diff 详情。
+/// Loads a complete Git diff detail for one requested file.
+/// 为请求的单个文件加载完整 Git diff 详情。
 fn load_webui_workspace_diff_file_detail(
     workspace_path: &str,
     request: Option<WebuiWorkspaceDiffRequest>,
@@ -20586,16 +20568,6 @@ fn load_webui_workspace_diff_file_detail(
     )? {
         unified_diff = scoped_diff;
     }
-    let mut truncated = false;
-    if unified_diff.len() > WEBUI_DIFF_FILE_DETAIL_MAX_BYTES {
-        unified_diff =
-            truncate_string_to_char_boundary(&unified_diff, WEBUI_DIFF_FILE_DETAIL_MAX_BYTES)
-                .to_string();
-        truncated = true;
-        notices.push(String::from(
-            "文件 Diff 内容过大，已截断到 WebUI 单文件详情上限。",
-        ));
-    }
     let file_summary = webui_unified_diff_file_summaries(&unified_diff)
         .into_iter()
         .next();
@@ -20611,7 +20583,7 @@ fn load_webui_workspace_diff_file_detail(
         repository_root: normalized_workspace_path_text_from_path(&repository_root),
         file: file_summary,
         unified_diff,
-        truncated,
+        truncated: false,
         notice,
         context_lines,
         hunk_index,
@@ -21655,8 +21627,8 @@ fn ensure_webui_git_ref_text(git_ref: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Loads lightweight untracked text files as synthesized new-file hunks.
-/// 将轻量未跟踪文本文件加载为合成的新文件 hunk。
+/// Loads untracked text files as synthesized new-file hunks.
+/// 将未跟踪文本文件加载为合成的新文件 hunk。
 fn load_webui_untracked_git_diff(
     repository_root: &Path,
     notices: &mut Vec<String>,
@@ -21670,7 +21642,6 @@ fn load_webui_untracked_git_diff(
     }
 
     let mut sections = Vec::new();
-    let mut skipped_large = 0usize;
     let mut skipped_binary = 0usize;
     for raw_path in output
         .stdout
@@ -21680,13 +21651,6 @@ fn load_webui_untracked_git_diff(
         let relative_path = String::from_utf8_lossy(raw_path).replace('\\', "/");
         let file_path = repository_root.join(&relative_path);
         if !is_path_within_root(repository_root, &file_path) || !file_path.is_file() {
-            continue;
-        }
-        let metadata = fs::metadata(&file_path).map_err(|error| {
-            format!("failed to inspect untracked file `{relative_path}`: {error}")
-        })?;
-        if metadata.len() > WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES {
-            skipped_large += 1;
             continue;
         }
         let bytes = fs::read(&file_path)
@@ -21704,9 +21668,6 @@ fn load_webui_untracked_git_diff(
         sections.push(synthesize_webui_text_new_file_diff(&relative_path, &text));
     }
 
-    if skipped_large > 0 {
-        notices.push(format!("已跳过 {skipped_large} 个过大的未跟踪文件。"));
-    }
     if skipped_binary > 0 {
         notices.push(format!(
             "已将 {skipped_binary} 个未跟踪二进制文件按二进制变更展示。"
@@ -21716,8 +21677,8 @@ fn load_webui_untracked_git_diff(
     Ok(sections.join("\n"))
 }
 
-/// Loads one lightweight untracked text file as a synthesized new-file hunk.
-/// 将单个轻量未跟踪文本文件加载为合成的新文件 hunk。
+/// Loads one untracked text file as a synthesized new-file hunk.
+/// 将单个未跟踪文本文件加载为合成的新文件 hunk。
 fn load_webui_untracked_git_diff_for_path(
     repository_root: &Path,
     pathspec: &str,
@@ -21747,12 +21708,6 @@ fn load_webui_untracked_git_diff_for_path(
     let relative_path = String::from_utf8_lossy(raw_path).replace('\\', "/");
     let file_path = repository_root.join(&relative_path);
     if !is_path_within_root(repository_root, &file_path) || !file_path.is_file() {
-        return Ok(String::new());
-    }
-    let metadata = fs::metadata(&file_path)
-        .map_err(|error| format!("failed to inspect untracked file `{relative_path}`: {error}"))?;
-    if metadata.len() > WEBUI_DIFF_UNTRACKED_FILE_MAX_BYTES {
-        notices.push(String::from("该未跟踪文件过大，已跳过详情加载。"));
         return Ok(String::new());
     }
     let bytes = fs::read(&file_path)

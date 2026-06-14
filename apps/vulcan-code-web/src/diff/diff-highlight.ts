@@ -1,7 +1,8 @@
 import * as React from "react";
 
 import {
-  DIFF_SHIKI_THEME,
+  currentDiffShikiTheme,
+  type DiffShikiTheme,
   type DiffShikiTokenSpan,
   diffLanguageForFile,
   normalizeShikiLanguage,
@@ -50,6 +51,9 @@ interface DiffHighlightWorkerRequest {
   // Canonical Shiki language id.
   // 规范化后的 Shiki 语言标识。
   language: string;
+  // Shiki theme matching the active WebUI color mode.
+  // 与当前 WebUI 颜色模式匹配的 Shiki 主题。
+  theme: DiffShikiTheme;
   // Lines to highlight in this batch.
   // 本批次需要高亮的行。
   lines: DiffHighlightWorkerLine[];
@@ -538,6 +542,7 @@ function sendHighlightBatch(
     kind: "highlight",
     id,
     language,
+    theme: currentDiffShikiTheme(),
     lines,
   };
   workerHighlightRequests.set(id, entries);
@@ -783,24 +788,26 @@ function collectGroupedHighlightEntry(entry: HighlightLineEntry, grouped: Map<st
 
 // highlightCacheKey builds a stable cache key from theme, language, and source line.
 // highlightCacheKey 根据主题、语言和源码行构建稳定缓存键。
-function highlightCacheKey(line: string, language: string): string {
-  return `${DIFF_SHIKI_THEME}\u0000${language}\u0000${line}`;
+function highlightCacheKey(line: string, language: string, theme: DiffShikiTheme = currentDiffShikiTheme()): string {
+  return `${theme}\u0000${language}\u0000${line}`;
 }
 
 // highlightCacheKeyForDiffLine returns a cached highlight key for one parsed diff line.
 // highlightCacheKeyForDiffLine 返回单条解析 diff 行的缓存高亮键。
 function highlightCacheKeyForDiffLine(line: DiffLine, language: string): string {
+  const theme = currentDiffShikiTheme();
+  const themeLanguageKey = `${theme}\u0000${language}`;
   let keyByLanguage = diffLineHighlightCacheKeyCache.get(line);
   if (!keyByLanguage) {
     keyByLanguage = new Map();
     diffLineHighlightCacheKeyCache.set(line, keyByLanguage);
   }
-  const cached = keyByLanguage.get(language);
+  const cached = keyByLanguage.get(themeLanguageKey);
   if (cached) {
     return cached;
   }
-  const cacheKey = highlightCacheKey(diffLineHighlightContent(line), language);
-  keyByLanguage.set(language, cacheKey);
+  const cacheKey = highlightCacheKey(diffLineHighlightContent(line), language, theme);
+  keyByLanguage.set(themeLanguageKey, cacheKey);
   return cacheKey;
 }
 
