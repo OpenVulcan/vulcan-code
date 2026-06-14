@@ -110,6 +110,21 @@ export type DiffRenderableVirtualRow =
       // Source hunk index used by delegated hunk actions.
       // 委托 hunk 操作使用的源 hunk 索引。
       hunkIndex: number;
+      // Number of collapsed unchanged lines represented by this separator.
+      // 当前分隔条代表的折叠未修改行数。
+      collapsedLines?: number;
+      // Whether this separator is before the first hunk.
+      // 当前分隔条是否位于首个 hunk 之前。
+      isFirstHunk?: boolean;
+      // Whether this separator is after the last hunk.
+      // 当前分隔条是否位于最后 hunk 之后。
+      isLastHunk?: boolean;
+      // Hunk index expanded by the up control.
+      // 上箭头控件要展开的 hunk 索引。
+      expandUpHunkIndex?: number;
+      // Hunk index expanded by the down control.
+      // 下箭头控件要展开的 hunk 索引。
+      expandDownHunkIndex?: number;
     }
   | {
       // Row kind for a normal diff line.
@@ -233,6 +248,12 @@ interface TargetHunkSeparatorState {
   // Whether this separator can request more context from the backend.
   // 当前分隔行是否可以请求更多上下文。
   isExpandable?: boolean;
+  // Hunk index expanded by the up control.
+  // 上箭头控件要展开的 hunk 索引。
+  expandUpHunkIndex?: number;
+  // Hunk index expanded by the down control.
+  // 下箭头控件要展开的 hunk 索引。
+  expandDownHunkIndex?: number;
 }
 
 // TargetColumnsHtml stores rendered code columns for one render pass.
@@ -333,8 +354,12 @@ function renderDiffVirtualRowsHtmlCore(
     if (row.kind === "hunk") {
       flushTargetSplitBuffer(columns);
       appendHunkSeparator(columns, row.header, row.hunkIndex, options.contextControls, true, options.hunkSeparatorStyle, {
-        collapsedLines: parsedUnmodifiedLineCount(row.header),
+        collapsedLines: row.collapsedLines ?? parsedUnmodifiedLineCount(row.header),
+        isFirstHunk: row.isFirstHunk,
+        isLastHunk: row.isLastHunk,
         isExpandable: true,
+        expandUpHunkIndex: row.expandUpHunkIndex,
+        expandDownHunkIndex: row.expandDownHunkIndex,
       });
       continue;
     }
@@ -410,6 +435,8 @@ function appendTargetIterationEvent(
       isFirstHunk: event.hunkIndex === 0,
       isLastHunk: false,
       isExpandable: true,
+      expandUpHunkIndex: event.hunkIndex,
+      expandDownHunkIndex: event.hunkIndex > 0 ? event.hunkIndex - 1 : undefined,
     });
   }
   if (columns.mode === "split") {
@@ -422,12 +449,18 @@ function appendTargetIterationEvent(
   }
   if (event.collapsedAfter > 0) {
     const separatorHunkIndex = event.type === "context-expanded" ? event.hunkIndex : event.hunkIndex + 1;
+    const previousHunkIndex = targetFile.hunks.length > 0
+      ? Math.min(Math.max(event.hunkIndex, 0), targetFile.hunks.length - 1)
+      : undefined;
+    const nextHunkIndex = separatorHunkIndex < targetFile.hunks.length ? separatorHunkIndex : undefined;
     flushTargetSplitBuffer(columns);
     appendHunkSeparator(columns, `${event.collapsedAfter} unmodified lines`, separatorHunkIndex, options.contextControls, false, options.hunkSeparatorStyle, {
       collapsedLines: event.collapsedAfter,
       isFirstHunk: false,
-      isLastHunk: true,
+      isLastHunk: nextHunkIndex == null,
       isExpandable: true,
+      expandUpHunkIndex: nextHunkIndex,
+      expandDownHunkIndex: previousHunkIndex,
     });
   }
 }
@@ -675,28 +708,47 @@ function appendHunkSeparator(
 ): void {
   flushTargetSplitBuffer(columns);
   const expandIndex = contextControls && separatorState.isExpandable !== false ? hunkIndex : undefined;
-  const separatorHtml = hunkSeparatorContentHtml(header, hunkIndex, expandIndex, separatorStyle, separatorState);
+  const separatorControlsHtml = hunkSeparatorControlsHtml(header, hunkIndex, expandIndex, separatorStyle, separatorState);
+  const separatorLabelHtml = hunkSeparatorLabelHtml(header, hunkIndex, expandIndex, separatorStyle, separatorState);
   const firstLastAttributes = `${separatorState.isFirstHunk ? ` data-separator-first=""` : ""}${separatorState.isLastHunk ? ` data-separator-last=""` : ""}`;
-  const rowAttributes = `data-separator="${separatorStyle}" data-diff-row-kind="hunk" data-diff-hunk-index="${hunkIndex}"${expandIndex != null ? ` data-expand-index="${hunkIndex}"` : ""}${firstLastAttributes}${virtual ? ` data-virtual-row=""` : ""}`;
+  const expandUpAttribute = expandIndex != null && separatorState.expandUpHunkIndex != null ? ` data-expand-up-index="${separatorState.expandUpHunkIndex}"` : "";
+  const expandDownAttribute = expandIndex != null && separatorState.expandDownHunkIndex != null ? ` data-expand-down-index="${separatorState.expandDownHunkIndex}"` : "";
+  const rowAttributes = `data-separator="${separatorStyle}" data-diff-row-kind="hunk" data-diff-hunk-index="${hunkIndex}"${expandIndex != null ? ` data-expand-index="${hunkIndex}"` : ""}${expandUpAttribute}${expandDownAttribute}${firstLastAttributes}${virtual ? ` data-virtual-row=""` : ""}`;
   if (columns.mode === "split") {
-    appendTargetSeparator(columns.split.deletions, hunkIndex, hunkSeparatorContentHtml(header, hunkIndex, undefined, separatorStyle, separatorState), rowAttributes, separatorStyle);
-    appendTargetSeparator(columns.split.additions, hunkIndex, separatorHtml, rowAttributes, separatorStyle);
+    const splitContentSide = columns.visibleSide === "additions" ? "additions" : "deletions";
+    appendTargetSeparatorCells(
+      columns.split.deletions,
+      hunkIndex,
+      splitContentSide === "deletions" ? separatorControlsHtml : "",
+      splitContentSide === "deletions" ? separatorLabelHtml : "",
+      rowAttributes,
+      separatorStyle,
+    );
+    appendTargetSeparatorCells(
+      columns.split.additions,
+      hunkIndex,
+      splitContentSide === "additions" ? separatorControlsHtml : "",
+      splitContentSide === "additions" ? separatorLabelHtml : "",
+      rowAttributes,
+      separatorStyle,
+    );
   } else {
-    appendTargetSeparator(columns.unified, hunkIndex, separatorHtml, rowAttributes, separatorStyle);
+    appendTargetSeparatorCells(columns.unified, hunkIndex, separatorControlsHtml, separatorLabelHtml, rowAttributes, separatorStyle);
   }
   columns.rowCount += 1;
 }
 
 // appendTargetSeparator appends one separator cell pair to a target code column.
 // appendTargetSeparator 向目标代码列追加一组分隔 gutter/content 单元。
-function appendTargetSeparator(
+function appendTargetSeparatorCells(
   column: TargetCodeColumnHtml,
   hunkIndex: number,
+  gutterHtml: string,
   contentHtml: string,
   rowAttributes: string,
   separatorStyle: DiffHunkSeparatorStyle,
 ): void {
-  column.gutter += `<div data-separator="${separatorStyle}" data-line-index="hunk-${hunkIndex}" ${rowAttributes}>${contentHtml}</div>`;
+  column.gutter += `<div data-separator="${separatorStyle}" data-line-index="hunk-${hunkIndex}" ${rowAttributes}>${gutterHtml}</div>`;
   column.content += `<div data-separator="${separatorStyle}" data-column-content="" ${rowAttributes}>${contentHtml}</div>`;
 }
 
@@ -835,9 +887,9 @@ function renderTargetCodeColumnInnerHtml(column: TargetCodeColumnHtml, rowCount:
   return `<div data-gutter="" style="grid-row: span ${rowCount}">${column.gutter}</div><div data-content="" style="grid-row: span ${rowCount}">${column.content}</div>`;
 }
 
-// hunkSeparatorContentHtml renders separator text and optional delegated controls.
-// hunkSeparatorContentHtml 渲染分隔文本与可选委托控件。
-function hunkSeparatorContentHtml(
+// hunkSeparatorControlsHtml renders separator controls for the gutter cell.
+// hunkSeparatorControlsHtml 为行号 gutter 单元格渲染分隔条控件。
+function hunkSeparatorControlsHtml(
   header: string,
   hunkIndex: number,
   expandIndex: number | undefined,
@@ -845,7 +897,7 @@ function hunkSeparatorContentHtml(
   separatorState: TargetHunkSeparatorState = {},
 ): string {
   const chunked = (separatorState.collapsedLines ?? parsedUnmodifiedLineCount(header) ?? 0) > 100;
-  const cacheKey = `${separatorStyle}\u0000${expandIndex ?? "p"}\u0000${chunked ? "chunked" : "single"}\u0000${separatorState.isFirstHunk ? "first" : ""}\u0000${separatorState.isLastHunk ? "last" : ""}\u0000${hunkIndex}\u0000${header}`;
+  const cacheKey = `controls\u0000${separatorStyle}\u0000${expandIndex ?? "p"}\u0000${chunked ? "chunked" : "single"}\u0000${separatorState.isFirstHunk ? "first" : ""}\u0000${separatorState.isLastHunk ? "last" : ""}\u0000${separatorState.expandUpHunkIndex ?? "u"}\u0000${separatorState.expandDownHunkIndex ?? "d"}\u0000${hunkIndex}\u0000${header}`;
   const cached = diffHunkHeaderHtmlCache.get(cacheKey);
   if (cached != null) {
     return cached;
@@ -854,15 +906,40 @@ function hunkSeparatorContentHtml(
     rememberDiffHunkHeaderHtml(cacheKey, "");
     return "";
   }
-  const text = targetSeparatorWrapperHtml(header, expandIndex, chunked, separatorState);
-  rememberDiffHunkHeaderHtml(cacheKey, text);
-  return text;
+  const controls = targetSeparatorControlsHtml(expandIndex, chunked, separatorState);
+  rememberDiffHunkHeaderHtml(cacheKey, controls);
+  return controls;
 }
 
-// targetSeparatorWrapperHtml mirrors target J separator child assembly.
-// targetSeparatorWrapperHtml 复刻目标 J 的分隔行子节点组装。
-function targetSeparatorWrapperHtml(
+// hunkSeparatorLabelHtml renders separator text for the content cell.
+// hunkSeparatorLabelHtml 为内容单元格渲染分隔条文本。
+function hunkSeparatorLabelHtml(
   header: string,
+  hunkIndex: number,
+  expandIndex: number | undefined,
+  separatorStyle: DiffHunkSeparatorStyle = "line-info",
+  separatorState: TargetHunkSeparatorState = {},
+): string {
+  const cacheKey = `label\u0000${separatorStyle}\u0000${expandIndex ?? "p"}\u0000${separatorState.expandUpHunkIndex ?? "u"}\u0000${separatorState.expandDownHunkIndex ?? "d"}\u0000${hunkIndex}\u0000${header}`;
+  const cached = diffHunkHeaderHtmlCache.get(cacheKey);
+  if (cached != null) {
+    return cached;
+  }
+  if (separatorStyle === "simple") {
+    rememberDiffHunkHeaderHtml(cacheKey, "");
+    return "";
+  }
+  const expandUpAttribute = expandIndex != null && separatorState.expandUpHunkIndex != null ? ` data-expand-up-index="${separatorState.expandUpHunkIndex}"` : "";
+  const expandDownAttribute = expandIndex != null && separatorState.expandDownHunkIndex != null ? ` data-expand-down-index="${separatorState.expandDownHunkIndex}"` : "";
+  const clickableAttribute = expandIndex != null ? ` data-unmodified-lines="" role="button"` : "";
+  const label = `<div data-separator-content=""${clickableAttribute}${expandUpAttribute}${expandDownAttribute}>${escapeHtml(header)}</div>`;
+  rememberDiffHunkHeaderHtml(cacheKey, label);
+  return label;
+}
+
+// targetSeparatorControlsHtml mirrors target gutter-side separator controls.
+// targetSeparatorControlsHtml 复刻目标行号侧分隔条控件。
+function targetSeparatorControlsHtml(
   expandIndex: number | undefined,
   chunked: boolean,
   separatorState: TargetHunkSeparatorState,
@@ -870,36 +947,30 @@ function targetSeparatorWrapperHtml(
   let buttonCount = 0;
   let buttonsHtml = "";
   if (expandIndex != null) {
-    if (chunked) {
-      if (!separatorState.isFirstHunk) {
-        buttonsHtml += targetExpandButtonHtml("up");
-        buttonCount += 1;
-      }
-      if (!separatorState.isLastHunk) {
-        buttonsHtml += targetExpandButtonHtml("down");
-        buttonCount += 1;
-      }
-    } else {
-      const direction = !separatorState.isFirstHunk && !separatorState.isLastHunk
-        ? "both"
-        : separatorState.isFirstHunk
-          ? "down"
-          : "up";
-      buttonsHtml += targetExpandButtonHtml(direction);
+    if (separatorState.expandUpHunkIndex != null) {
+      buttonsHtml += targetExpandButtonHtml("up", separatorState.expandUpHunkIndex);
+      buttonCount += 1;
+    }
+    if (separatorState.expandDownHunkIndex != null) {
+      buttonsHtml += targetExpandButtonHtml("down", separatorState.expandDownHunkIndex);
       buttonCount += 1;
     }
   }
-  const expandAllHtml = chunked && expandIndex != null
-    ? `<div role="button" data-expand-button="" data-expand-all-button="">Expand all</div>`
-    : "";
-  return `<div data-separator-wrapper=""${buttonCount > 1 ? ` data-separator-multi-button=""` : ""}>${buttonsHtml}<div data-separator-content=""><span data-unmodified-lines="">${escapeHtml(header)}</span></div>${expandAllHtml}</div>`;
+  const chunkedAttribute = chunked ? ` data-separator-chunked=""` : "";
+  const expandUpAttribute = expandIndex != null && separatorState.expandUpHunkIndex != null ? ` data-expand-up-index="${separatorState.expandUpHunkIndex}"` : "";
+  const expandDownAttribute = expandIndex != null && separatorState.expandDownHunkIndex != null ? ` data-expand-down-index="${separatorState.expandDownHunkIndex}"` : "";
+  if (!buttonsHtml) {
+    return "";
+  }
+  return `<div data-separator-wrapper="" data-separator-controls=""${buttonCount > 1 ? ` data-separator-multi-button=""` : ""}${chunkedAttribute}${expandUpAttribute}${expandDownAttribute}>${buttonsHtml}</div>`;
 }
 
 // targetExpandButtonHtml mirrors target q for line-info expansion buttons.
 // targetExpandButtonHtml 复刻目标 q 的 line-info 展开按钮。
-function targetExpandButtonHtml(direction: DiffHunkExpansionDirection): string {
+function targetExpandButtonHtml(direction: DiffHunkExpansionDirection, hunkIndex?: number): string {
   const dataAttribute = direction === "both" ? "data-expand-both" : direction === "up" ? "data-expand-up" : "data-expand-down";
-  return `<div role="button" data-expand-button="" ${dataAttribute}="">${targetExpandIconHtml(direction === "both" ? "all" : "single")}</div>`;
+  const indexAttribute = hunkIndex != null ? ` data-expand-hunk-index="${hunkIndex}"` : "";
+  return `<div role="button" data-expand-button="" ${dataAttribute}=""${indexAttribute}>${targetExpandIconHtml(direction === "both" ? "all" : "single")}</div>`;
 }
 
 // targetExpandIconHtml emits the target expand SVG paths without relying on a global sprite.

@@ -32,6 +32,10 @@ export const DIFF_LIGHTWEIGHT_DETAIL_CHANGED_LINES_LIMIT = 2000;
 // DIFF_SHIKI_TOKEN_ROW_LIMIT 限制新 Worker 渲染流水线内的 Shiki token 化行数。
 export const DIFF_SHIKI_TOKEN_ROW_LIMIT = 2000;
 
+// DIFF_FILE_DETAIL_TRANSMIT_CHANGED_LINES_LIMIT mirrors the Rust gate that stops sending oversized file bodies.
+// DIFF_FILE_DETAIL_TRANSMIT_CHANGED_LINES_LIMIT 对齐 Rust 层停止传输超大文件正文的阈值。
+export const DIFF_FILE_DETAIL_TRANSMIT_CHANGED_LINES_LIMIT = 20000;
+
 // DIFF_SEARCH_PAGE_SIZE mirrors the target search result pagination size.
 // DIFF_SEARCH_PAGE_SIZE 对齐目标搜索结果分页大小。
 export const DIFF_SEARCH_PAGE_SIZE = 20;
@@ -80,9 +84,9 @@ export const DIFF_SEARCH_WORKER_INDEX_CACHE_LIMIT = 16;
 // DIFF_PARSE_WORKER_PROMISE_CACHE_LIMIT 限制主线程保留的重复原始 diff 解析 Promise 数量。
 export const DIFF_PARSE_WORKER_PROMISE_CACHE_LIMIT = 8;
 
-// DIFF_FILE_VIRTUALIZATION_THRESHOLD enables row virtualization for large file bodies.
-// DIFF_FILE_VIRTUALIZATION_THRESHOLD 为较大的文件正文启用行虚拟化。
-export const DIFF_FILE_VIRTUALIZATION_THRESHOLD = 400;
+// DIFF_FILE_VIRTUALIZATION_THRESHOLD enables row virtualization only beyond backend-transmitted bodies.
+// DIFF_FILE_VIRTUALIZATION_THRESHOLD 仅在超过后端允许传输正文的范围后启用行虚拟化。
+export const DIFF_FILE_VIRTUALIZATION_THRESHOLD = DIFF_FILE_DETAIL_TRANSMIT_CHANGED_LINES_LIMIT + 1;
 
 // DIFF_LIST_VIRTUALIZATION_FILE_LIMIT enables file-card virtualization for many-file diffs.
 // DIFF_LIST_VIRTUALIZATION_FILE_LIMIT 为多文件 diff 启用文件卡片虚拟化。

@@ -245,6 +245,9 @@ export interface DiffFile {
   // Whether this file crosses target-compatible large-file limits.
   // 该文件是否超过目标兼容的大文件限制。
   isLarge: boolean;
+  // Whether the backend intentionally omitted this file body from WebUI rendering.
+  // 后端是否有意从 WebUI 渲染载荷中省略该文件正文。
+  tooLargeToDisplay?: boolean;
   // Internal large-file reason ids used for rendering policy and diagnostics.
   // 用于渲染策略与诊断的内部大文件原因标识。
   largeReasons: string[];
@@ -257,6 +260,12 @@ export interface DiffFile {
   // Estimated hunk header count from backend summaries before lazy detail loading.
   // 懒加载详情前由后端摘要估算出的 hunk 头部数量。
   estimatedHunkCount?: number;
+  // Complete old-side source file line count returned by the backend when available.
+  // 后端可用时返回的旧侧源文件完整行数。
+  oldFileLineCount?: number | null;
+  // Complete new-side source file line count returned by the backend when available.
+  // 后端可用时返回的新侧源文件完整行数。
+  newFileLineCount?: number | null;
   // Whether only part of this file diff is available.
   // 该文件 diff 是否只有局部内容可用。
   isPartial?: boolean;
@@ -307,6 +316,9 @@ export interface WorkspaceDiffFileSummary {
   // Number of changed lines counted as additions plus deletions.
   // 以新增行加删除行计算的变更行数量。
   changedLines: number;
+  // Whether the backend intentionally omitted this file body from WebUI rendering.
+  // 后端是否有意从 WebUI 渲染载荷中省略该文件正文。
+  tooLargeToDisplay?: boolean;
   // Estimated UTF-8 byte size of changed lines in this file.
   // 该文件变更行的估算 UTF-8 字节体积。
   changedBytes: number;
@@ -316,6 +328,12 @@ export interface WorkspaceDiffFileSummary {
   // Estimated visual row count including hunk headers.
   // 包含 hunk 头部的估算可视行数。
   rowCount?: number;
+  // Complete old-side source file line count when available.
+  // 可用时旧侧源文件完整行数。
+  oldFileLineCount?: number | null;
+  // Complete new-side source file line count when available.
+  // 可用时新侧源文件完整行数。
+  newFileLineCount?: number | null;
   // Estimated hunk header count in this file diff.
   // 该文件 diff 中估算出的 hunk 头部数量。
   hunkCount?: number;

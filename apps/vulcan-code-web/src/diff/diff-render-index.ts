@@ -10,8 +10,8 @@ import {
   DIFF_VIRTUAL_OVERSCAN_PX,
   shouldUseLightweightDiffRendering,
 } from "./limits";
-import { buildDiffVirtualLayout, fileTotalRowCount } from "./diff-virtual-layout";
-import { targetComputeApproximateBodyHeight, targetDiffFile } from "./target-diff-model";
+import { buildDiffVirtualLayout, currentDiffRenderedBodyHeight, fileTotalRowCount } from "./diff-virtual-layout";
+import { targetDiffFile } from "./target-diff-model";
 import type { DiffFile, DiffLine, DiffPanelSnapshot, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
 import type { CSSProperties } from "react";
 
@@ -311,7 +311,7 @@ function estimateDiffFileCardHeight(
   } else {
     bodyHeight = Math.max(
       1,
-      targetComputeApproximateBodyHeight(targetDiffFile(file), viewMode),
+      currentDiffRenderedBodyHeight(targetDiffFile(file), viewMode),
     );
     if (shouldUseLightweightDiffRendering(file)) {
       bodyHeight += DIFF_RENDER_POLICY_NOTE_HEIGHT;

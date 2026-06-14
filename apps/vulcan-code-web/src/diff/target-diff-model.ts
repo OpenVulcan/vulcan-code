@@ -215,6 +215,17 @@ export interface TargetDiffRenderRange {
   bufferAfter: number;
 }
 
+// TargetTrailingContextExpansion stores a synthetic tail separator request.
+// TargetTrailingContextExpansion 保存一个合成的尾部上下文展开请求。
+export interface TargetTrailingContextExpansion {
+  // Hunk index that should grow downward.
+  // 应该向下扩展的 hunk 索引。
+  hunkIndex: number;
+  // Exact hidden tail line count computed from backend source file totals.
+  // 基于后端源文件总行数计算出的精确隐藏尾部行数。
+  collapsedLines: number;
+}
+
 // TargetDiffVirtualMetrics mirrors the target VirtualizedFileDiff metric object.
 // TargetDiffVirtualMetrics 对齐目标 VirtualizedFileDiff 的度量对象。
 export interface TargetDiffVirtualMetrics {
@@ -278,7 +289,42 @@ export function targetDiffFileVisualRowCount(file: DiffFile, viewMode: DiffViewM
   }
   const model = targetDiffFile(file);
   const contentRows = viewMode === "split" ? model.splitLineCount : model.unifiedLineCount;
-  return file.hunks.length + contentRows;
+  return file.hunks.length + contentRows + (targetTrailingContextExpansion(model) ? 1 : 0);
+}
+
+// targetTrailingContextExpansion returns the final hidden EOF region from backend line counts.
+// targetTrailingContextExpansion 基于后端完整行数返回最终隐藏 EOF 区域。
+export function targetTrailingContextExpansion(diff: TargetDiffFile): TargetTrailingContextExpansion | null {
+  if (diff.isPartial || diff.hunks.length === 0) {
+    return null;
+  }
+  const finalHunk = diff.hunks[diff.hunks.length - 1];
+  const oldRemaining = diff.source.oldFileLineCount == null || diff.source.status === "added"
+    ? null
+    : Math.max(diff.source.oldFileLineCount - (finalHunk.deletionStart + finalHunk.deletionCount - 1), 0);
+  const newRemaining = diff.source.newFileLineCount == null || diff.source.status === "deleted"
+    ? null
+    : Math.max(diff.source.newFileLineCount - (finalHunk.additionStart + finalHunk.additionCount - 1), 0);
+  const collapsedLines = targetComparableTrailingLineCount(oldRemaining, newRemaining);
+  if (collapsedLines <= 0) {
+    return null;
+  }
+  return {
+    hunkIndex: diff.hunks.length - 1,
+    collapsedLines,
+  };
+}
+
+// targetComparableTrailingLineCount chooses the shared hidden tail length for the visible side set.
+// targetComparableTrailingLineCount 为可见侧集合选择共享隐藏尾部长度。
+function targetComparableTrailingLineCount(oldRemaining: number | null, newRemaining: number | null): number {
+  if (oldRemaining == null) {
+    return newRemaining ?? 0;
+  }
+  if (newRemaining == null) {
+    return oldRemaining;
+  }
+  return Math.min(oldRemaining, newRemaining);
 }
 
 // targetIterateOverDiff walks target hunkContent with the same window counters as the target bundle.
@@ -380,17 +426,13 @@ export function targetIterateOverDiff(options: {
       options.collapsedContextThreshold ?? 1,
     );
     const trailingRegion = (() => {
-      if (hunk !== state.finalHunk || !targetHasTrailingContext(options.diff)) {
+      const trailingExpansion = targetTrailingContextExpansion(options.diff);
+      if (hunk !== state.finalHunk || trailingExpansion == null) {
         return undefined;
-      }
-      const additions = options.diff.additionLines.length - (hunk.additionLineIndex + hunk.additionCount);
-      const deletions = options.diff.deletionLines.length - (hunk.deletionLineIndex + hunk.deletionCount);
-      if (additions !== deletions) {
-        throw Error(`iterateOverDiff: trailing context mismatch (additions=${additions}, deletions=${deletions}) for ${options.diff.name}`);
       }
       return targetExpandedRegion(
         options.diff.isPartial,
-        Math.min(additions, deletions),
+        trailingExpansion.collapsedLines,
         options.expandedHunks,
         options.diff.hunks.length,
         options.collapsedContextThreshold ?? 1,
@@ -667,16 +709,11 @@ export function targetExpandedLineCount(
     }
   }
   const finalHunk = diff.hunks.at(-1);
-  if (finalHunk != null && targetHasTrailingContext(diff)) {
-    const additions = diff.additionLines.length - (finalHunk.additionLineIndex + finalHunk.additionCount);
-    const deletions = diff.deletionLines.length - (finalHunk.deletionLineIndex + finalHunk.deletionCount);
-    if (additions !== deletions) {
-      throw Error(`VirtualizedFileDiff: trailing context mismatch (additions=${additions}, deletions=${deletions}) for ${diff.name}`);
-    }
-    const trailingLines = Math.min(additions, deletions);
-    if (trailingLines > 0) {
-      const region = targetExpandedRegion(diff.isPartial, trailingLines, expandedHunks, diff.hunks.length, collapsedContextThreshold);
-      lineCount += region.collapsedLines === 0 ? trailingLines : region.fromStart;
+  const trailingExpansion = targetTrailingContextExpansion(diff);
+  if (finalHunk != null && trailingExpansion != null) {
+    if (trailingExpansion.collapsedLines > 0) {
+      const region = targetExpandedRegion(diff.isPartial, trailingExpansion.collapsedLines, expandedHunks, diff.hunks.length, collapsedContextThreshold);
+      lineCount += region.collapsedLines === 0 ? trailingExpansion.collapsedLines : region.fromStart;
     }
   }
   return lineCount;
@@ -1011,16 +1048,6 @@ function targetExpandedRegion(
     rangeSize,
     collapsedLines: Math.max(rangeSize - expandedLineCount, 0),
   };
-}
-
-// targetHasTrailingContext mirrors the target Ld helper.
-// targetHasTrailingContext 对齐目标 Ld helper。
-function targetHasTrailingContext(diff: TargetDiffFile): boolean {
-  const finalHunk = diff.hunks.at(-1);
-  return finalHunk == null || diff.isPartial || diff.additionLines.length === 0 || diff.deletionLines.length === 0
-    ? false
-    : finalHunk.additionLineIndex + finalHunk.additionCount < diff.additionLines.length
-      || finalHunk.deletionLineIndex + finalHunk.deletionCount < diff.deletionLines.length;
 }
 
 // targetChangedContentRanges mirrors the target Rd helper for windowed change blocks.

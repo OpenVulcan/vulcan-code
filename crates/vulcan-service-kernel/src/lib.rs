@@ -6,8 +6,9 @@ use std::{
     env, fs,
     future::Future,
     hash::{Hash, Hasher},
+    io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -846,6 +847,9 @@ struct WebuiWorkspaceDiffFileSummary {
     /// Number of changed lines counted as additions plus deletions.
     /// 以新增行加删除行计算的变更行数。
     changed_lines: usize,
+    /// Whether this file body is intentionally omitted from WebUI rendering.
+    /// 该文件正文是否被有意从 WebUI 渲染载荷中省略。
+    too_large_to_display: bool,
     /// Estimated UTF-8 byte size of changed lines in this file.
     /// 该文件变更行的估算 UTF-8 字节体积。
     changed_bytes: usize,
@@ -858,6 +862,12 @@ struct WebuiWorkspaceDiffFileSummary {
     /// Number of parsed hunk headers in this file diff.
     /// 该文件 diff 中解析到的 hunk 头部数量。
     hunk_count: usize,
+    /// Complete old-side source file line count when available.
+    /// 可用时旧侧源文件的完整行数。
+    old_file_line_count: Option<usize>,
+    /// Complete new-side source file line count when available.
+    /// 可用时新侧源文件的完整行数。
+    new_file_line_count: Option<usize>,
 }
 
 /// WebUI workspace Git diff file selector for lazy detail loading.
@@ -20211,9 +20221,13 @@ fn workspace_root() -> PathBuf {
 /// 未请求展开时 Git 默认使用的 unified-diff 上下文行数。
 const WEBUI_DIFF_DEFAULT_CONTEXT_LINES: usize = 3;
 
-/// Maximum unified-diff context lines accepted from WebUI hunk expansion.
-/// WebUI hunk 展开允许请求的最大 unified-diff 上下文行数。
-const WEBUI_DIFF_MAX_CONTEXT_LINES: usize = 100;
+/// Maximum per-file changed lines transmitted to the WebUI diff renderer.
+/// 允许传输给 WebUI diff 渲染器的单文件最大变更行数。
+const WEBUI_DIFF_FILE_TRANSMIT_CHANGED_LINES_LIMIT: usize = 20_000;
+
+/// Maximum single changed-line bytes transmitted to the WebUI diff renderer.
+/// 允许传输给 WebUI diff 渲染器的单条变更行最大字节数。
+const WEBUI_DIFF_FILE_TRANSMIT_MAX_CHANGED_LINE_BYTES_LIMIT: usize = 1024 * 1024;
 
 /// Maximum file-level search hits returned for one WebUI diff search.
 /// 单次 WebUI diff 搜索返回的最大文件级命中数。
@@ -20450,9 +20464,28 @@ fn load_webui_workspace_diff_snapshot(
         }
     }
 
-    let unified_diff = sections.join("\n");
-    let stats = webui_unified_diff_stats(&unified_diff);
-    let file_summaries = webui_unified_diff_file_summaries(&unified_diff);
+    let complete_unified_diff = sections.join("\n");
+    let stats = webui_unified_diff_stats(&complete_unified_diff);
+    let mut file_summaries = webui_unified_diff_file_summaries(&complete_unified_diff);
+    annotate_webui_diff_file_line_counts(
+        &repository_root,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+        &mut file_summaries,
+    );
+    let omitted_large_file_count = webui_large_diff_omitted_file_count(&file_summaries);
+    if omitted_large_file_count > 0 {
+        notices.push(format!(
+            "已跳过 {omitted_large_file_count} 个超过 WebUI 渲染阈值的文件正文，可展开文件后打开所在位置查看。"
+        ));
+    }
+    let unified_diff = if omitted_large_file_count > 0 {
+        webui_unified_diff_without_large_files(&complete_unified_diff, &file_summaries)
+    } else {
+        complete_unified_diff
+    };
     let notice = if stats.files == 0 {
         Some(String::from("当前工作区没有可展示的 Git 变更。"))
     } else if notices.is_empty() {
@@ -20470,7 +20503,7 @@ fn load_webui_workspace_diff_snapshot(
         deletions: stats.deletions,
         total_changed_lines: stats.total_changed_lines,
         total_changed_bytes: stats.total_changed_bytes,
-        truncated: false,
+        truncated: omitted_large_file_count > 0,
         notice,
         current_branch,
         default_branch,
@@ -20554,6 +20587,33 @@ fn load_webui_workspace_diff_file_detail(
         context_lines,
         &mut notices,
     )?;
+    let mut unfiltered_file_summaries = webui_unified_diff_file_summaries(&unified_diff);
+    annotate_webui_diff_file_line_counts(
+        &repository_root,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+        &mut unfiltered_file_summaries,
+    );
+    let unfiltered_file_summary = unfiltered_file_summaries.into_iter().next();
+    if unfiltered_file_summary
+        .as_ref()
+        .is_some_and(should_omit_webui_large_diff_file)
+    {
+        return Ok(WebuiWorkspaceDiffFileDetail {
+            repository_root: normalized_workspace_path_text_from_path(&repository_root),
+            file: unfiltered_file_summary,
+            unified_diff: String::new(),
+            truncated: true,
+            notice: Some(String::from(
+                "该文件超过 WebUI 渲染阈值，后端未传输文件 diff 正文。可打开文件所在位置查看完整内容。",
+            )),
+            context_lines,
+            hunk_index,
+            hunk_expansion_direction,
+        });
+    }
     if let Some(scoped_diff) = webui_diff_detail_hunk_scoped_unified_diff(
         &repository_root,
         request.mode,
@@ -20568,9 +20628,16 @@ fn load_webui_workspace_diff_file_detail(
     )? {
         unified_diff = scoped_diff;
     }
-    let file_summary = webui_unified_diff_file_summaries(&unified_diff)
-        .into_iter()
-        .next();
+    let mut file_summaries = webui_unified_diff_file_summaries(&unified_diff);
+    annotate_webui_diff_file_line_counts(
+        &repository_root,
+        request.mode,
+        selected_base_branch.as_deref(),
+        selected_compare_branch.as_deref(),
+        selected_commit_hash.as_deref(),
+        &mut file_summaries,
+    );
+    let file_summary = file_summaries.into_iter().next();
     let notice = if unified_diff.trim().is_empty() {
         Some(String::from("该文件当前没有可加载的 Git diff 详情。"))
     } else if notices.is_empty() {
@@ -21233,10 +21300,7 @@ fn normalized_webui_diff_search_limit(limit: usize) -> usize {
 fn normalized_webui_diff_context_lines(context_lines: Option<usize>) -> usize {
     context_lines
         .unwrap_or(WEBUI_DIFF_DEFAULT_CONTEXT_LINES)
-        .clamp(
-            WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
-            WEBUI_DIFF_MAX_CONTEXT_LINES,
-        )
+        .max(WEBUI_DIFF_DEFAULT_CONTEXT_LINES)
 }
 
 /// Normalizes an optional WebUI hunk expansion direction.
@@ -21255,10 +21319,7 @@ fn normalized_webui_diff_hunk_expansion_direction(direction: Option<&str>) -> Op
 fn webui_diff_context_arg(context_lines: usize) -> String {
     format!(
         "--unified={}",
-        context_lines.clamp(
-            WEBUI_DIFF_DEFAULT_CONTEXT_LINES,
-            WEBUI_DIFF_MAX_CONTEXT_LINES
-        )
+        context_lines.max(WEBUI_DIFF_DEFAULT_CONTEXT_LINES)
     )
 }
 
@@ -21799,6 +21860,51 @@ fn run_webui_git_command(
         .map_err(|error| format!("failed to run git command `{}`: {error}", args.join(" ")))
 }
 
+/// Runs one bounded Git command with stdin content.
+/// 使用 stdin 内容运行单个有界 Git 命令。
+fn run_webui_git_command_with_stdin(
+    working_directory: &Path,
+    args: &[&str],
+    stdin: &[u8],
+) -> Result<std::process::Output, String> {
+    let hooks_path = if cfg!(windows) { "NUL" } else { "/dev/null" };
+    let mut command = Command::new("git");
+    command
+        .current_dir(working_directory)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_PAGER", "")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-c")
+        .arg("diff.external=")
+        .arg("-c")
+        .arg(format!("core.hooksPath={hooks_path}"))
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to run git command `{}` with stdin: {error}",
+            args.join(" ")
+        )
+    })?;
+    if let Some(mut child_stdin) = child.stdin.take() {
+        child_stdin.write_all(stdin).map_err(|error| {
+            format!(
+                "failed to write stdin for git command `{}`: {error}",
+                args.join(" ")
+            )
+        })?;
+    }
+    child.wait_with_output().map_err(|error| {
+        format!(
+            "failed to wait for git command `{}` with stdin: {error}",
+            args.join(" ")
+        )
+    })
+}
+
 /// Formats a Git command failure with stderr preserved for diagnostics.
 /// 格式化 Git 命令失败信息，并保留 stderr 方便诊断。
 fn format_webui_git_error(label: &str, output: &std::process::Output) -> String {
@@ -22008,6 +22114,8 @@ fn flush_webui_diff_file_summary(
     );
     let status = final_webui_diff_file_summary_status(&summary);
     let changed_lines = summary.additions + summary.deletions;
+    let too_large_to_display = changed_lines > WEBUI_DIFF_FILE_TRANSMIT_CHANGED_LINES_LIMIT
+        || summary.max_changed_line_bytes > WEBUI_DIFF_FILE_TRANSMIT_MAX_CHANGED_LINE_BYTES_LIMIT;
     summaries.push(WebuiWorkspaceDiffFileSummary {
         key,
         old_path: summary.old_path,
@@ -22019,11 +22127,472 @@ fn flush_webui_diff_file_summary(
         is_gitlink: summary.is_gitlink,
         file_mode: summary.file_mode,
         changed_lines,
+        too_large_to_display,
         changed_bytes: summary.changed_bytes,
         max_changed_line_bytes: summary.max_changed_line_bytes,
         row_count: summary.row_count,
         hunk_count: summary.hunk_count,
+        old_file_line_count: None,
+        new_file_line_count: None,
     });
+}
+
+/// Annotates file summaries with complete old/new source line counts.
+/// 为文件摘要补充旧/新两侧源文件完整行数。
+fn annotate_webui_diff_file_line_counts(
+    repository_root: &Path,
+    mode: WebuiWorkspaceDiffMode,
+    selected_base_branch: Option<&str>,
+    selected_compare_branch: Option<&str>,
+    selected_commit_hash: Option<&str>,
+    summaries: &mut [WebuiWorkspaceDiffFileSummary],
+) {
+    let branch_merge_base = if mode == WebuiWorkspaceDiffMode::Branch {
+        selected_base_branch.zip(selected_compare_branch).and_then(
+            |(base_branch, compare_branch)| {
+                webui_git_merge_base(repository_root, base_branch, compare_branch).ok()
+            },
+        )
+    } else {
+        None
+    };
+    let old_paths = webui_diff_summary_side_paths(summaries, false);
+    let new_paths = webui_diff_summary_side_paths(summaries, true);
+    let old_counts = match mode {
+        WebuiWorkspaceDiffMode::Unstaged => {
+            webui_git_index_line_counts(repository_root, &old_paths)
+        }
+        WebuiWorkspaceDiffMode::Staged => {
+            webui_git_revision_line_counts(repository_root, "HEAD", &old_paths)
+        }
+        WebuiWorkspaceDiffMode::Commit => selected_commit_hash
+            .map(|commit_hash| format!("{commit_hash}^"))
+            .map(|parent_revision| {
+                webui_git_revision_line_counts(repository_root, &parent_revision, &old_paths)
+            })
+            .unwrap_or_default(),
+        WebuiWorkspaceDiffMode::Branch => branch_merge_base
+            .as_deref()
+            .map(|base_revision| {
+                webui_git_revision_line_counts(repository_root, base_revision, &old_paths)
+            })
+            .unwrap_or_default(),
+    };
+    let new_counts = match mode {
+        WebuiWorkspaceDiffMode::Unstaged => webui_worktree_line_counts(repository_root, &new_paths),
+        WebuiWorkspaceDiffMode::Staged => webui_git_index_line_counts(repository_root, &new_paths),
+        WebuiWorkspaceDiffMode::Commit => selected_commit_hash
+            .map(|commit_hash| {
+                webui_git_revision_line_counts(repository_root, commit_hash, &new_paths)
+            })
+            .unwrap_or_default(),
+        WebuiWorkspaceDiffMode::Branch => selected_base_branch
+            .map(|base_branch| {
+                webui_git_revision_line_counts(repository_root, base_branch, &new_paths)
+            })
+            .unwrap_or_default(),
+    };
+    for summary in summaries {
+        summary.old_file_line_count =
+            webui_diff_summary_side_line_count_from_map(summary, false, &old_counts);
+        summary.new_file_line_count =
+            webui_diff_summary_side_line_count_from_map(summary, true, &new_counts);
+    }
+}
+
+/// Collects unique safe paths for one old/new side of file summaries.
+/// 收集文件摘要旧/新一侧的唯一安全路径。
+fn webui_diff_summary_side_paths(
+    summaries: &[WebuiWorkspaceDiffFileSummary],
+    new_side: bool,
+) -> Vec<String> {
+    let mut paths = BTreeSet::new();
+    for summary in summaries {
+        let Some(path) = webui_diff_summary_side_path(summary, new_side) else {
+            continue;
+        };
+        paths.insert(path.to_string());
+    }
+    paths.into_iter().collect()
+}
+
+/// Returns one safe side path from a file summary.
+/// 从文件摘要返回单侧安全路径。
+fn webui_diff_summary_side_path(
+    summary: &WebuiWorkspaceDiffFileSummary,
+    new_side: bool,
+) -> Option<&str> {
+    if summary.is_binary || summary.is_gitlink {
+        return None;
+    }
+    let path = if new_side {
+        summary.new_path.as_str()
+    } else {
+        summary.old_path.as_str()
+    };
+    if path.is_empty()
+        || path == "/dev/null"
+        || (new_side && summary.status == "deleted")
+        || (!new_side && summary.status == "added")
+        || ensure_webui_git_pathspec_text(path).is_err()
+    {
+        return None;
+    }
+    Some(path)
+}
+
+/// Looks up one side line count from a precomputed path map.
+/// 从预计算路径映射中查询单侧行数。
+fn webui_diff_summary_side_line_count_from_map(
+    summary: &WebuiWorkspaceDiffFileSummary,
+    new_side: bool,
+    line_counts: &BTreeMap<String, usize>,
+) -> Option<usize> {
+    if (new_side && summary.status == "deleted") || (!new_side && summary.status == "added") {
+        return Some(0);
+    }
+    let path = webui_diff_summary_side_path(summary, new_side)?;
+    line_counts.get(path).copied()
+}
+
+/// Loads the merge-base hash used by a branch comparison.
+/// 加载分支对比使用的 merge-base 哈希。
+fn webui_git_merge_base(
+    repository_root: &Path,
+    base_branch: &str,
+    compare_branch: &str,
+) -> Result<String, String> {
+    ensure_webui_git_ref_text(base_branch)?;
+    ensure_webui_git_ref_text(compare_branch)?;
+    let output = run_webui_git_command(
+        repository_root,
+        &["merge-base", base_branch, compare_branch],
+    )?;
+    if !output.status.success() {
+        return Err(format_webui_git_error("git merge-base", &output));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Number of pathspecs passed to one line-count metadata command.
+/// 单次行数元数据命令传入的 pathspec 数量。
+const WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE: usize = 256;
+
+/// Counts worktree lines for many paths without spawning Git per file.
+/// 在不为每个文件启动 Git 的情况下批量统计工作区行数。
+fn webui_worktree_line_counts(repository_root: &Path, paths: &[String]) -> BTreeMap<String, usize> {
+    let mut line_counts = BTreeMap::new();
+    for path in paths {
+        let candidate = repository_root.join(path);
+        if !is_path_within_root(repository_root, &candidate) || !candidate.is_file() {
+            line_counts.insert(path.clone(), 0);
+            continue;
+        }
+        if let Ok(bytes) = fs::read(candidate) {
+            line_counts.insert(path.clone(), webui_line_count_from_bytes(&bytes));
+        }
+    }
+    line_counts
+}
+
+/// Counts index blob lines for many paths with batched Git object reads.
+/// 使用批量 Git 对象读取统计多个索引 blob 行数。
+fn webui_git_index_line_counts(
+    repository_root: &Path,
+    paths: &[String],
+) -> BTreeMap<String, usize> {
+    let blob_ids = webui_git_index_blob_ids(repository_root, paths);
+    webui_git_blob_line_counts(repository_root, blob_ids)
+}
+
+/// Counts revision blob lines for many paths with batched Git object reads.
+/// 使用批量 Git 对象读取统计指定修订中的多个 blob 行数。
+fn webui_git_revision_line_counts(
+    repository_root: &Path,
+    revision: &str,
+    paths: &[String],
+) -> BTreeMap<String, usize> {
+    if ensure_webui_git_ref_text(revision).is_err() {
+        return BTreeMap::new();
+    }
+    let blob_ids = webui_git_revision_blob_ids(repository_root, revision, paths);
+    webui_git_blob_line_counts(repository_root, blob_ids)
+}
+
+/// Loads index blob ids for many paths.
+/// 批量加载多个路径对应的索引 blob id。
+fn webui_git_index_blob_ids(repository_root: &Path, paths: &[String]) -> BTreeMap<String, String> {
+    let mut blob_ids = BTreeMap::new();
+    for chunk in paths.chunks(WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE) {
+        let mut args = vec![
+            String::from("ls-files"),
+            String::from("-s"),
+            String::from("-z"),
+            String::from("--"),
+        ];
+        args.extend(chunk.iter().cloned());
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let Ok(output) = run_webui_git_command(repository_root, &arg_refs) else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        for entry in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let text = String::from_utf8_lossy(entry);
+            let Some((metadata, path)) = text.split_once('\t') else {
+                continue;
+            };
+            let mut metadata_parts = metadata.split_whitespace();
+            let _mode = metadata_parts.next();
+            let Some(oid) = metadata_parts.next() else {
+                continue;
+            };
+            let stage = metadata_parts.next().unwrap_or("0");
+            if stage != "0" {
+                continue;
+            }
+            blob_ids.insert(path.to_string(), oid.to_string());
+        }
+    }
+    blob_ids
+}
+
+/// Loads revision blob ids for many paths.
+/// 批量加载指定修订中多个路径对应的 blob id。
+fn webui_git_revision_blob_ids(
+    repository_root: &Path,
+    revision: &str,
+    paths: &[String],
+) -> BTreeMap<String, String> {
+    let mut blob_ids = BTreeMap::new();
+    for chunk in paths.chunks(WEBUI_DIFF_LINE_COUNT_PATH_CHUNK_SIZE) {
+        let mut args = vec![
+            String::from("ls-tree"),
+            String::from("-r"),
+            String::from("-z"),
+            revision.to_string(),
+            String::from("--"),
+        ];
+        args.extend(chunk.iter().cloned());
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        let Ok(output) = run_webui_git_command(repository_root, &arg_refs) else {
+            continue;
+        };
+        if !output.status.success() {
+            continue;
+        }
+        for entry in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|entry| !entry.is_empty())
+        {
+            let text = String::from_utf8_lossy(entry);
+            let Some((metadata, path)) = text.split_once('\t') else {
+                continue;
+            };
+            let mut metadata_parts = metadata.split_whitespace();
+            let _mode = metadata_parts.next();
+            let Some(kind) = metadata_parts.next() else {
+                continue;
+            };
+            let Some(oid) = metadata_parts.next() else {
+                continue;
+            };
+            if kind != "blob" {
+                continue;
+            }
+            blob_ids.insert(path.to_string(), oid.to_string());
+        }
+    }
+    blob_ids
+}
+
+/// Counts lines for path-to-blob mappings through one batched cat-file call.
+/// 通过一次批量 cat-file 调用统计路径到 blob 映射的行数。
+fn webui_git_blob_line_counts(
+    repository_root: &Path,
+    blob_ids_by_path: BTreeMap<String, String>,
+) -> BTreeMap<String, usize> {
+    if blob_ids_by_path.is_empty() {
+        return BTreeMap::new();
+    }
+    let unique_blob_ids = blob_ids_by_path.values().cloned().collect::<BTreeSet<_>>();
+    let mut stdin = Vec::new();
+    for oid in &unique_blob_ids {
+        stdin.extend_from_slice(oid.as_bytes());
+        stdin.push(b'\n');
+    }
+    let Ok(output) =
+        run_webui_git_command_with_stdin(repository_root, &["cat-file", "--batch"], &stdin)
+    else {
+        return BTreeMap::new();
+    };
+    if !output.status.success() {
+        return BTreeMap::new();
+    }
+    let blob_counts = parse_webui_git_cat_file_line_counts(&output.stdout);
+    let mut line_counts = BTreeMap::new();
+    for (path, oid) in blob_ids_by_path {
+        if let Some(count) = blob_counts.get(&oid) {
+            line_counts.insert(path, *count);
+        }
+    }
+    line_counts
+}
+
+/// Parses `git cat-file --batch` output into blob line counts.
+/// 将 `git cat-file --batch` 输出解析为 blob 行数。
+fn parse_webui_git_cat_file_line_counts(output: &[u8]) -> BTreeMap<String, usize> {
+    let mut line_counts = BTreeMap::new();
+    let mut cursor = 0usize;
+    while cursor < output.len() {
+        let Some(header_end_offset) = output[cursor..].iter().position(|byte| *byte == b'\n')
+        else {
+            break;
+        };
+        let header_end = cursor + header_end_offset;
+        let header = String::from_utf8_lossy(&output[cursor..header_end]);
+        let mut parts = header.split_whitespace();
+        let Some(oid) = parts.next() else {
+            break;
+        };
+        let Some(kind) = parts.next() else {
+            break;
+        };
+        let Some(size_text) = parts.next() else {
+            break;
+        };
+        let Ok(size) = size_text.parse::<usize>() else {
+            break;
+        };
+        let content_start = header_end + 1;
+        let content_end = content_start.saturating_add(size);
+        if content_end > output.len() {
+            break;
+        }
+        if kind == "blob" {
+            line_counts.insert(
+                oid.to_string(),
+                webui_line_count_from_bytes(&output[content_start..content_end]),
+            );
+        }
+        cursor = content_end;
+        if cursor < output.len() && output[cursor] == b'\n' {
+            cursor += 1;
+        }
+    }
+    line_counts
+}
+
+/// Counts text lines from raw bytes using newline boundaries.
+/// 基于换行边界从原始字节统计文本行数。
+fn webui_line_count_from_bytes(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    let newline_count = bytes.iter().filter(|byte| **byte == b'\n').count();
+    if bytes.last().copied() == Some(b'\n') {
+        newline_count
+    } else {
+        newline_count + 1
+    }
+}
+
+/// Counts files whose diff body should not be transmitted to the WebUI renderer.
+/// 统计不应传输给 WebUI 渲染器的文件 diff 正文数量。
+fn webui_large_diff_omitted_file_count(
+    // Summaries computed from the complete backend diff.
+    // 从后端完整 diff 计算出的文件摘要。
+    summaries: &[WebuiWorkspaceDiffFileSummary],
+) -> usize {
+    summaries
+        .iter()
+        .filter(|summary| should_omit_webui_large_diff_file(summary))
+        .count()
+}
+
+/// Returns whether one file summary crosses the backend body-transmission gate.
+/// 返回单个文件摘要是否超过后端正文传输阈值。
+fn should_omit_webui_large_diff_file(
+    // Summary for one complete file diff section.
+    // 单个完整文件 diff 段落对应的摘要。
+    summary: &WebuiWorkspaceDiffFileSummary,
+) -> bool {
+    summary.too_large_to_display
+}
+
+/// Removes oversized file sections while keeping the complete summary list available separately.
+/// 移除超大文件段落，同时完整摘要列表仍通过独立字段返回。
+fn webui_unified_diff_without_large_files(
+    // Complete unified diff generated by Git or synthesized for untracked files.
+    // Git 生成或为未跟踪文件合成的完整 unified diff。
+    unified_diff: &str,
+    // Summaries ordered exactly like the complete diff file sections.
+    // 与完整 diff 文件段顺序一致的摘要列表。
+    summaries: &[WebuiWorkspaceDiffFileSummary],
+) -> String {
+    let mut filtered = String::new();
+    let mut current_section = String::new();
+    let mut current_summary_index: Option<usize> = None;
+    let mut next_summary_index = 0usize;
+
+    for_each_webui_unified_diff_line(unified_diff, |line| {
+        if line.starts_with("diff --git ") {
+            flush_webui_filtered_diff_section(
+                &mut filtered,
+                &mut current_section,
+                current_summary_index,
+                summaries,
+            );
+            current_summary_index = Some(next_summary_index);
+            next_summary_index += 1;
+        }
+        current_section.push_str(line);
+        current_section.push('\n');
+    });
+    flush_webui_filtered_diff_section(
+        &mut filtered,
+        &mut current_section,
+        current_summary_index,
+        summaries,
+    );
+    filtered
+}
+
+/// Appends one accumulated diff section when its summary does not cross the omit gate.
+/// 当累积的 diff 段未超过省略阈值时将其追加到过滤结果。
+fn flush_webui_filtered_diff_section(
+    // Filtered unified diff text being built.
+    // 正在构建的过滤后 unified diff 文本。
+    filtered: &mut String,
+    // Accumulated section text for the current file.
+    // 当前文件已经累积的 diff 段文本。
+    current_section: &mut String,
+    // Summary index corresponding to the current section.
+    // 当前 diff 段对应的摘要下标。
+    current_summary_index: Option<usize>,
+    // Complete summaries ordered like the original diff sections.
+    // 与原始 diff 段顺序一致的完整摘要列表。
+    summaries: &[WebuiWorkspaceDiffFileSummary],
+) {
+    if current_section.is_empty() {
+        return;
+    }
+    let omit = current_summary_index
+        .and_then(|index| summaries.get(index))
+        .is_some_and(should_omit_webui_large_diff_file);
+    if !omit {
+        if !filtered.is_empty() && !filtered.ends_with('\n') {
+            filtered.push('\n');
+        }
+        filtered.push_str(current_section);
+    }
+    current_section.clear();
 }
 
 /// Parses a standard `diff --git` header into old and new paths.

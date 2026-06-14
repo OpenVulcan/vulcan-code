@@ -1,7 +1,7 @@
 //! Tauri desktop shell for the Vulcan Code service kernel.
 //! Vulcan Code 服务内核的 Tauri 桌面壳。
 
-use std::{process::Command, sync::Arc};
+use std::{path::Path, process::Command, sync::Arc};
 
 use tauri::Emitter;
 use tokio::sync::broadcast;
@@ -113,21 +113,37 @@ fn open_path_in_system_file_manager(path: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
         let mut command = Command::new("explorer");
-        command.arg(path);
+        if Path::new(path).is_file() {
+            command.arg(format!("/select,{path}"));
+        } else {
+            command.arg(path);
+        }
         command
     };
 
     #[cfg(target_os = "macos")]
     let mut command = {
         let mut command = Command::new("open");
-        command.arg(path);
+        if Path::new(path).is_file() {
+            command.arg("-R").arg(path);
+        } else {
+            command.arg(path);
+        }
         command
     };
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
     let mut command = {
         let mut command = Command::new("xdg-open");
-        command.arg(path);
+        if Path::new(path).is_file() {
+            if let Some(parent) = Path::new(path).parent() {
+                command.arg(parent);
+            } else {
+                command.arg(path);
+            }
+        } else {
+            command.arg(path);
+        }
         command
     };
 

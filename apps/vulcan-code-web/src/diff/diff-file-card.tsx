@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight } from "lucide-react";
 
 import type { DiffFile, DiffHunkExpansionDirection, DiffHunkExpansionRequest, DiffRenderPreferences, DiffViewMode, WorkspaceDiffSearchFileMatch } from "./types";
 import {
@@ -39,9 +39,9 @@ import { targetDiffFileVisualRowCount } from "./target-diff-model";
 // DIFF_DEFAULT_CONTEXT_LINES 对齐 Git 默认 unified-diff 上下文行数。
 const DIFF_DEFAULT_CONTEXT_LINES = 3;
 
-// DIFF_CONTEXT_EXPANSION_STEPS defines bounded hunk context expansion requests.
-// DIFF_CONTEXT_EXPANSION_STEPS 定义受限的 hunk 上下文展开请求档位。
-const DIFF_CONTEXT_EXPANSION_STEPS = [25, 50, 100] as const;
+// DIFF_CONTEXT_EXPANSION_INCREMENT defines the per-click hunk context growth.
+// DIFF_CONTEXT_EXPANSION_INCREMENT 定义每次点击时 hunk 上下文增长的行数。
+const DIFF_CONTEXT_EXPANSION_INCREMENT = 50;
 
 // DIFF_SUMMARY_PLACEHOLDER_MAX_HUNKS caps rendered summary-only hunk skeleton nodes.
 // DIFF_SUMMARY_PLACEHOLDER_MAX_HUNKS 限制 summary-only hunk 骨架节点数量。
@@ -100,6 +100,9 @@ interface DiffFileCardProps {
   // Optional lazy detail loader used by retryable summary-only files.
   // 可选的懒加载详情函数，用于可重试的摘要文件。
   onLoadFileDetail?: (file: DiffFile, contextLines?: number, expansion?: DiffHunkExpansionRequest) => void;
+  // Optional host action that reveals this file in the system file manager.
+  // 可选的宿主动作，用于在系统文件管理器中定位该文件。
+  onRevealFile?: (file: DiffFile) => void;
   // Optional backend search hit shown before full detail hydration finishes.
   // 完整详情水合完成前展示的可选后端搜索命中。
   summarySearchMatch?: WorkspaceDiffSearchFileMatch;
@@ -130,8 +133,10 @@ export function DiffFileHeader(props: {
       <ToggleIcon size={15} />
       <div className="diff-file-paths">
         <strong>
+          {props.file.tooLargeToDisplay ? <AlertTriangle aria-label="超大文件未展示" className="diff-file-large-icon" size={13} /> : null}
           <span>{displayPath(props.file)}</span>
-          {props.file.status === "added" ? <span aria-label="新增文件" className="diff-file-status-dot" /> : null}
+          {props.file.status === "added" ? <span aria-label="新增文件" className="diff-file-status-dot added" /> : null}
+          {props.file.status === "deleted" ? <span aria-label="删除文件" className="diff-file-status-dot deleted" /> : null}
         </strong>
         {props.file.status === "renamed" ? <span>{`${props.file.oldPath} -> ${props.file.newPath}`}</span> : null}
       </div>
@@ -152,7 +157,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
   const inlineDiff = true;
   const language = !props.collapsed && shouldUseShikiTokens ? diffLanguageForFile(props.file) : null;
   const highlightSupported = useHighlightLanguage(language);
-  const contextExpansionAvailable = props.onLoadFileDetail ? canExpandDiffFileContext(props.file) : false;
+  const contextExpansionAvailable = props.onLoadFileDetail && !props.file.tooLargeToDisplay ? canExpandDiffFileContext(props.file) : false;
   const handleToggle = React.useCallback(() => {
     props.onCollapsedChange(props.file.key, !props.collapsed);
   }, [props.collapsed, props.file.key, props.onCollapsedChange]);
@@ -190,7 +195,12 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
               />
             </>
           ) : props.file.isPartial ? (
-            <DiffFileLoadStateNote file={props.file} summarySearchMatch={props.summarySearchMatch} onRetry={props.onLoadFileDetail} />
+            <DiffFileLoadStateNote
+              file={props.file}
+              summarySearchMatch={props.summarySearchMatch}
+              onRetry={props.onLoadFileDetail}
+              onRevealFile={props.onRevealFile}
+            />
           ) : props.file.status === "renamed" ? (
             <div className="diff-binary-note">File renamed without changes</div>
           ) : (
@@ -214,25 +224,38 @@ function DiffFileLoadStateNote(props: {
   // Optional retry action for failed or timed-out loads.
   // 失败或超时加载对应的可选重试动作。
   onRetry?: (file: DiffFile) => void;
+  // Optional action used to reveal backend-skipped files on disk.
+  // 用于在磁盘中定位后端跳过文件的可选动作。
+  onRevealFile?: (file: DiffFile) => void;
 }) {
   const loadState = props.file.fileDiffLoadState;
   const status = loadState?.status ?? "idle";
   const message = loadState?.message ?? diffFileLoadStateMessage(status);
-  const metrics = diffSummaryPlaceholderMetrics(props.file, props.summarySearchMatch);
+  const metrics = props.file.tooLargeToDisplay ? null : diffSummaryPlaceholderMetrics(props.file, props.summarySearchMatch);
   // canRetry exposes manual recovery only for terminal lazy-load states.
   // canRetry 仅为终止态懒加载状态提供手动恢复入口。
   const canRetry = Boolean(props.onRetry) && (status === "failed" || status === "timed-out");
+  // canReveal exposes the host file manager when the backend intentionally skipped the file body.
+  // canReveal 在后端主动跳过文件正文时展示宿主文件管理器入口。
+  const canReveal = Boolean(props.onRevealFile && props.file.isPartial && props.file.hunks.length === 0);
   return (
-    <div className={`diff-summary-placeholder diff-file-load-state ${status}`} style={metrics.style}>
-      <div className="diff-summary-placeholder-canvas" aria-hidden="true">
-        {renderSummaryPlaceholderHunks(metrics.hunks)}
-      </div>
+    <div className={`diff-summary-placeholder diff-file-load-state ${status}${props.file.tooLargeToDisplay ? " too-large" : ""}`} style={metrics?.style}>
+      {metrics ? (
+        <div className="diff-summary-placeholder-canvas" aria-hidden="true">
+          {renderSummaryPlaceholderHunks(metrics.hunks)}
+        </div>
+      ) : null}
       <div className="diff-summary-placeholder-note">
         <span>{message}</span>
-        {status === "idle" || status === "loading" ? <small>{`${metrics.rowCount} 行待加载，约 ${metrics.hunkCount} 个 hunk`}</small> : null}
+        {metrics && (status === "idle" || status === "loading") ? <small>{`${metrics.rowCount} 行待加载，约 ${metrics.hunkCount} 个 hunk`}</small> : null}
         {canRetry ? (
           <button className="diff-file-load-retry" onClick={() => props.onRetry?.(props.file)} type="button">
             重试
+          </button>
+        ) : null}
+        {canReveal ? (
+          <button className="diff-file-load-retry" onClick={() => props.onRevealFile?.(props.file)} type="button">
+            打开位置
           </button>
         ) : null}
       </div>
@@ -240,7 +263,7 @@ function DiffFileLoadStateNote(props: {
         <div
           className="diff-file-search-placeholder diff-summary-search-marker"
           data-diff-summary-search-file-key={props.summarySearchMatch.key}
-          style={metrics.searchStyle}
+          style={metrics?.searchStyle}
         >
           <strong>{diffSummarySearchMatchLocation(props.summarySearchMatch)}</strong>
           <div className="diff-summary-search-previews">
@@ -736,6 +759,7 @@ function areDiffFileCardPropsEqual(previous: DiffFileCardProps, next: DiffFileCa
     || previous.searchLineKeys !== next.searchLineKeys
     || previous.activeSearchLineKey !== next.activeSearchLineKey
     || previous.onLoadFileDetail !== next.onLoadFileDetail
+    || previous.onRevealFile !== next.onRevealFile
     || previous.summarySearchMatch !== next.summarySearchMatch
     || previous.onCollapsedChange !== next.onCollapsedChange
   ) {
@@ -872,7 +896,7 @@ function DiffRowsHtml(props: {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
   React.useLayoutEffect(() => setupTargetDiffDom(hostRef.current), [props.html]);
   const handleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    const clickedElement = event.target instanceof HTMLElement ? event.target : null;
+    const clickedElement = event.target instanceof Element ? event.target : null;
     const expandElement = clickedElement ? targetDiffLineInfoElement(clickedElement, hostRef.current) : null;
     if (!expandElement) {
       return;
@@ -880,7 +904,8 @@ function DiffRowsHtml(props: {
     event.preventDefault();
     event.stopPropagation();
     const hunkRoot = expandElement.closest<HTMLElement>("[data-expand-index]");
-    const hunkIndex = Number.parseInt(hunkRoot?.getAttribute("data-expand-index") ?? "", 10);
+    const hunkWrapper = expandElement.closest<HTMLElement>("[data-separator-wrapper]");
+    const fallbackHunkIndex = parseDiffExpandIndex(hunkRoot?.getAttribute("data-expand-index"));
     const direction = normalizedHunkExpansionDirection(
       expandElement.hasAttribute("data-expand-up")
         ? "up"
@@ -888,8 +913,47 @@ function DiffRowsHtml(props: {
           ? "down"
           : "both",
     );
-    if (Number.isFinite(hunkIndex) && direction) {
-      props.onExpandFileContext?.(hunkIndex, direction);
+    if (!direction) {
+      return;
+    }
+    if (direction === "up") {
+      const hunkIndex = parseDiffExpandIndex(expandElement.getAttribute("data-expand-hunk-index"))
+        ?? parseDiffExpandIndex(hunkWrapper?.getAttribute("data-expand-up-index"))
+        ?? parseDiffExpandIndex(hunkRoot?.getAttribute("data-expand-up-index"))
+        ?? fallbackHunkIndex;
+      if (hunkIndex != null) {
+        props.onExpandFileContext?.(hunkIndex, "up");
+      }
+      return;
+    }
+    if (direction === "down") {
+      const hunkIndex = parseDiffExpandIndex(expandElement.getAttribute("data-expand-hunk-index"))
+        ?? parseDiffExpandIndex(hunkWrapper?.getAttribute("data-expand-down-index"))
+        ?? parseDiffExpandIndex(hunkRoot?.getAttribute("data-expand-down-index"))
+        ?? fallbackHunkIndex;
+      if (hunkIndex != null) {
+        props.onExpandFileContext?.(hunkIndex, "down");
+      }
+      return;
+    }
+    const upHunkIndex = parseDiffExpandIndex(hunkWrapper?.getAttribute("data-expand-up-index"))
+      ?? parseDiffExpandIndex(hunkRoot?.getAttribute("data-expand-up-index"));
+    const downHunkIndex = parseDiffExpandIndex(hunkWrapper?.getAttribute("data-expand-down-index"))
+      ?? parseDiffExpandIndex(hunkRoot?.getAttribute("data-expand-down-index"));
+    if (upHunkIndex != null && downHunkIndex != null) {
+      props.onExpandFileContext?.(upHunkIndex, "both");
+      return;
+    }
+    if (upHunkIndex != null) {
+      props.onExpandFileContext?.(upHunkIndex, "up");
+      return;
+    }
+    if (downHunkIndex != null) {
+      props.onExpandFileContext?.(downHunkIndex, "down");
+      return;
+    }
+    if (fallbackHunkIndex != null) {
+      props.onExpandFileContext?.(fallbackHunkIndex, "both");
     }
   }, [props.onExpandFileContext]);
   if (!props.html && diffPlaceholderStyleHeight(props.pendingStyle) > 0) {
@@ -904,13 +968,17 @@ function DiffRowsHtml(props: {
 
 // targetDiffLineInfoElement mirrors the target event walk for line-info expansion controls.
 // targetDiffLineInfoElement 复刻目标 line-info 展开控件的事件向上遍历。
-function targetDiffLineInfoElement(start: HTMLElement, host: HTMLElement | null): HTMLElement | null {
-  let element: HTMLElement | null = start;
+function targetDiffLineInfoElement(start: Element, host: HTMLElement | null): HTMLElement | null {
+  let element: Element | null = start;
   while (element && element !== host) {
-    if (element.hasAttribute("data-expand-button") || element.hasAttribute("data-unmodified-lines")) {
+    if (element instanceof HTMLElement && (
+      element.hasAttribute("data-expand-button")
+      || element.hasAttribute("data-unmodified-lines")
+      || element.hasAttribute("data-separator-controls")
+    )) {
       return element;
     }
-    element = element.parentElement;
+    element = element.parentElement ?? (element.parentNode instanceof Element ? element.parentNode : null);
   }
   return null;
 }
@@ -922,6 +990,16 @@ function normalizedHunkExpansionDirection(value: string | undefined): DiffHunkEx
     return value;
   }
   return null;
+}
+
+// parseDiffExpandIndex parses delegated separator hunk indexes.
+// parseDiffExpandIndex 解析委托分隔条上的 hunk 索引。
+function parseDiffExpandIndex(value: string | null | undefined): number | null {
+  if (value == null || value.trim() === "") {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 // diffFileLoadedRowsHeight returns the fixed-pixel height for loaded hunks in one file.
@@ -1069,13 +1147,11 @@ function displayPath(file: DiffFile): string {
 // nextExpandedContextLineCount 返回单个文件下一档受限 Git 上下文大小。
 function nextExpandedContextLineCount(file: DiffFile): number {
   const currentContextLineCount = file.contextLineCount ?? DIFF_DEFAULT_CONTEXT_LINES;
-  return DIFF_CONTEXT_EXPANSION_STEPS.find((step) => step > currentContextLineCount)
-    ?? DIFF_CONTEXT_EXPANSION_STEPS[DIFF_CONTEXT_EXPANSION_STEPS.length - 1];
+  return Math.max(DIFF_CONTEXT_EXPANSION_INCREMENT, currentContextLineCount + DIFF_CONTEXT_EXPANSION_INCREMENT);
 }
 
 // canExpandDiffFileContext returns whether another larger Git context step exists.
 // canExpandDiffFileContext 返回是否还存在更大的 Git 上下文档位。
 function canExpandDiffFileContext(file: DiffFile): boolean {
-  const currentContextLineCount = file.contextLineCount ?? DIFF_DEFAULT_CONTEXT_LINES;
-  return DIFF_CONTEXT_EXPANSION_STEPS.some((step) => step > currentContextLineCount);
+  return !file.tooLargeToDisplay;
 }

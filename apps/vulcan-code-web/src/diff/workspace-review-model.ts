@@ -175,6 +175,17 @@ export async function diffFileFromWorkspaceDetailAsync(
   fallbackFile: DiffFile,
   expansion?: DiffHunkExpansionRequest,
 ): Promise<DiffFile | null> {
+  if (response.truncated && response.file?.tooLargeToDisplay && !response.unifiedDiff.trim()) {
+    return {
+      ...fallbackFile,
+      ...workspaceDiffFileFieldsFromSummary(response.file),
+      isPartial: true,
+      fileDiffLoadState: { status: "loaded", message: response.notice ?? "该文件超过 WebUI 展示阈值，未传输 diff 正文。" },
+      contextLineCount: response.contextLines ?? fallbackFile.contextLineCount,
+      rawDiff: fallbackFile.rawDiff,
+      hunks: [],
+    };
+  }
   const snapshot = await parseUnifiedDiffAsync(response.unifiedDiff, "workspace", response.repositoryRoot);
   return diffFileFromParsedWorkspaceDetail(response, fallbackFile, snapshot, expansion);
 }
@@ -580,14 +591,19 @@ function mergeWorkspaceDiffSummaries(
       changedBytes: summary.changedBytes,
       maxChangedLineBytes: summary.maxChangedLineBytes,
       isLarge: largeReasons.length > 0,
+      tooLargeToDisplay: Boolean(summary.tooLargeToDisplay),
       largeReasons,
       rowCount: parsedFile?.rowCount,
       estimatedRowCount: summary.rowCount,
       estimatedHunkCount: summary.hunkCount,
-      isPartial: truncated && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length,
+      oldFileLineCount: summary.oldFileLineCount ?? parsedFile?.oldFileLineCount ?? null,
+      newFileLineCount: summary.newFileLineCount ?? parsedFile?.newFileLineCount ?? null,
+      isPartial: (truncated || summary.tooLargeToDisplay) && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length,
       fileDiffLoadState: parsedFile?.fileDiffLoadState
-        ?? (truncated && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length
-          ? { status: "idle" }
+        ?? (summary.tooLargeToDisplay && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length
+          ? { status: "loaded", message: "该文件超过 WebUI 展示阈值，未传输 diff 正文。" }
+          : truncated && !summary.isBinary && !summary.isGitlink && !parsedFile?.hunks.length
+            ? { status: "idle" }
           : parsedFile?.hunks.length
             ? { status: "loaded" }
             : undefined),
@@ -597,6 +613,36 @@ function mergeWorkspaceDiffSummaries(
     };
   }
   return files;
+}
+
+// workspaceDiffFileFieldsFromSummary maps backend summary fields onto an existing file detail.
+// workspaceDiffFileFieldsFromSummary 将后端摘要字段映射到已有文件详情上。
+function workspaceDiffFileFieldsFromSummary(
+  // Backend file summary returned with a skipped or loaded detail response.
+  // 跳过或已加载详情响应中返回的后端文件摘要。
+  summary: WorkspaceDiffFileSummary,
+): Pick<DiffFile, "oldPath" | "newPath" | "status" | "additions" | "deletions" | "isBinary" | "isGitlink" | "fileMode" | "changedLines" | "changedBytes" | "maxChangedLineBytes" | "isLarge" | "tooLargeToDisplay" | "largeReasons" | "estimatedRowCount" | "estimatedHunkCount" | "oldFileLineCount" | "newFileLineCount"> {
+  const largeReasons = diffFileLargeReasons(summary);
+  return {
+    oldPath: summary.oldPath,
+    newPath: summary.newPath,
+    status: summary.status,
+    additions: summary.additions,
+    deletions: summary.deletions,
+    isBinary: summary.isBinary,
+    isGitlink: summary.isGitlink,
+    fileMode: summary.fileMode ?? null,
+    changedLines: summary.changedLines,
+    changedBytes: summary.changedBytes,
+    maxChangedLineBytes: summary.maxChangedLineBytes,
+    isLarge: largeReasons.length > 0,
+    tooLargeToDisplay: Boolean(summary.tooLargeToDisplay),
+    largeReasons,
+    estimatedRowCount: summary.rowCount,
+    estimatedHunkCount: summary.hunkCount,
+    oldFileLineCount: summary.oldFileLineCount ?? null,
+    newFileLineCount: summary.newFileLineCount ?? null,
+  };
 }
 
 // loadedRawDiffFromFiles rebuilds copyable raw diff from loaded file sections.
@@ -636,9 +682,12 @@ function workspaceDiffSummaryFromFile(file: DiffFile): WorkspaceDiffFileSummary 
     isGitlink: file.isGitlink,
     fileMode: file.fileMode,
     changedLines: file.changedLines,
+    tooLargeToDisplay: file.tooLargeToDisplay,
     changedBytes: file.changedBytes,
     maxChangedLineBytes: file.maxChangedLineBytes,
     rowCount: file.estimatedRowCount ?? file.rowCount ?? 0,
+    oldFileLineCount: file.oldFileLineCount ?? null,
+    newFileLineCount: file.newFileLineCount ?? null,
     hunkCount: file.estimatedHunkCount ?? file.hunks.length,
   };
 }

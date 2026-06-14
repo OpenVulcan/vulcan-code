@@ -7,7 +7,6 @@ import {
 import { diffSearchLineKey } from "./diff-search";
 import {
   TARGET_DIFF_VIRTUAL_METRICS,
-  targetComputeApproximateBodyHeight,
   targetComputeRenderRangeFromWindow,
   targetDiffFile,
   targetDiffFileVisualRowCount,
@@ -98,6 +97,21 @@ export type DiffMountedVirtualRow =
       // Source hunk index.
       // 源 hunk 索引。
       hunkIndex: number;
+      // Number of collapsed unchanged lines represented by this separator.
+      // 当前分隔条代表的折叠未修改行数。
+      collapsedLines?: number;
+      // Whether this separator is before the first hunk.
+      // 当前分隔条是否位于首个 hunk 之前。
+      isFirstHunk?: boolean;
+      // Whether this separator is after the last hunk.
+      // 当前分隔条是否位于最后 hunk 之后。
+      isLastHunk?: boolean;
+      // Hunk index expanded by the up control.
+      // 上箭头控件要展开的 hunk 索引。
+      expandUpHunkIndex?: number;
+      // Hunk index expanded by the down control.
+      // 下箭头控件要展开的 hunk 索引。
+      expandDownHunkIndex?: number;
       // Pixel top inside the file body.
       // 文件正文中的像素顶部。
       top: number;
@@ -278,6 +292,13 @@ const EMPTY_MOUNTED_DIFF_ROWS: DiffMountedVirtualRow[] = [];
 // TARGET_DIFF_OVERSCROLL_SIZE 对齐目标 virtualizer 的默认过扫描距离。
 const TARGET_DIFF_OVERSCROLL_SIZE = 1000;
 
+// CURRENT_DIFF_VIRTUAL_METRICS matches the rendered CSS row model used by this WebUI.
+// CURRENT_DIFF_VIRTUAL_METRICS 匹配当前 WebUI 实际渲染 CSS 行模型。
+const CURRENT_DIFF_VIRTUAL_METRICS = Object.freeze({
+  ...TARGET_DIFF_VIRTUAL_METRICS,
+  fileGap: 0,
+});
+
 // fileTotalRowCount returns visual row count including hunk headers.
 // fileTotalRowCount 返回包含 hunk 头部的可视行数量。
 export function fileTotalRowCount(file: DiffFile, viewMode: DiffViewMode = "unified"): number {
@@ -327,7 +348,7 @@ export function buildDiffVirtualLayout(file: DiffFile, viewMode: DiffViewMode = 
   const layout = {
     hunkRanges,
     totalRows: nextRow,
-    totalHeight: targetComputeApproximateBodyHeight(targetFile, viewMode, TARGET_DIFF_VIRTUAL_METRICS) || nextTop,
+    totalHeight: currentDiffRenderedBodyHeight(targetFile, viewMode) || nextTop,
     targetFile,
     viewMode,
   };
@@ -367,7 +388,7 @@ export function mountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, viewp
     windowTop: windowSpecs.top,
     windowBottom: windowSpecs.bottom,
     totalHeight: layout.totalHeight,
-    metrics: TARGET_DIFF_VIRTUAL_METRICS,
+    metrics: CURRENT_DIFF_VIRTUAL_METRICS,
   });
   const rows = buildTargetMountedDiffRows(file, layout, renderRange);
   const descriptor = mountedDiffWindowDescriptorFromRows(layout, renderRange, rows);
@@ -396,8 +417,13 @@ function buildTargetMountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, r
         rows.push({
           kind: "hunk",
           key: `${file.key}-target-separator-before-${event.hunkIndex}-${event.collapsedBefore}`,
-          header: event.hunk?.header ?? `${event.collapsedBefore} unmodified lines`,
+          header: `${event.collapsedBefore} unmodified lines`,
           hunkIndex: event.hunkIndex,
+          collapsedLines: event.collapsedBefore,
+          isFirstHunk: event.hunkIndex === 0,
+          isLastHunk: false,
+          expandUpHunkIndex: event.hunkIndex,
+          expandDownHunkIndex: event.hunkIndex > 0 ? event.hunkIndex - 1 : undefined,
           top: cursor,
           height: TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight,
         });
@@ -427,11 +453,20 @@ function buildTargetMountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, r
       cursor += TARGET_DIFF_VIRTUAL_METRICS.lineHeight * (noEOFCR ? 2 : 1);
       if (event.collapsedAfter > 0) {
         const separatorHunkIndex = event.type === "context-expanded" ? event.hunkIndex : event.hunkIndex + 1;
+        const previousHunkIndex = layout.targetFile.hunks.length > 0
+          ? Math.min(Math.max(event.hunkIndex, 0), layout.targetFile.hunks.length - 1)
+          : undefined;
+        const nextHunkIndex = separatorHunkIndex < layout.targetFile.hunks.length ? separatorHunkIndex : undefined;
         rows.push({
           kind: "hunk",
           key: `${file.key}-target-separator-after-${separatorHunkIndex}-${event.collapsedAfter}`,
-          header: layout.targetFile.hunks[separatorHunkIndex]?.header ?? `${event.collapsedAfter} unmodified lines`,
+          header: `${event.collapsedAfter} unmodified lines`,
           hunkIndex: separatorHunkIndex,
+          collapsedLines: event.collapsedAfter,
+          isFirstHunk: false,
+          isLastHunk: nextHunkIndex == null,
+          expandUpHunkIndex: nextHunkIndex,
+          expandDownHunkIndex: previousHunkIndex,
           top: cursor,
           height: TARGET_DIFF_VIRTUAL_METRICS.hunkSeparatorHeight,
         });
@@ -440,6 +475,28 @@ function buildTargetMountedDiffRows(file: DiffFile, layout: DiffVirtualLayout, r
     },
   });
   return rows;
+}
+
+// currentDiffRenderedBodyHeight computes body height from emitted rows without target-only gaps.
+// currentDiffRenderedBodyHeight 按当前已发射行计算不含目标专用间隙的正文高度。
+export function currentDiffRenderedBodyHeight(targetFile: TargetDiffFile, viewMode: DiffViewMode): number {
+  let height = 0;
+  targetIterateOverDiff({
+    diff: targetFile,
+    diffStyle: viewMode,
+    callback: ({ collapsedBefore, collapsedAfter, deletionLine, additionLine }) => {
+      if (collapsedBefore > 0) {
+        height += DIFF_HUNK_HEADER_HEIGHT;
+      }
+      const noEOFCR = Boolean(additionLine?.noEOFCR) || Boolean(deletionLine?.noEOFCR);
+      height += DIFF_LINE_HEIGHT * (noEOFCR ? 2 : 1);
+      if (collapsedAfter > 0) {
+        height += DIFF_HUNK_HEADER_HEIGHT;
+      }
+      return false;
+    },
+  });
+  return height;
 }
 
 // elementTopWithinScrollContainer measures one child top in scroll-content coordinates.

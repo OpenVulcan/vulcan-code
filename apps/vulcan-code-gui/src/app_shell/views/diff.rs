@@ -332,30 +332,24 @@ impl VulcanWorkbench {
     }
     /// Renders one omission block inserted between separated hunk editors.
     /// 渲染插入在分离 hunk 编辑器之间的省略块。
+    /// Renders one omission block inserted between separated hunk editors.
+    /// 渲染插入在分离 hunk 编辑器之间的省略块。
     pub(super) fn view_diff_gap_block(&self, omitted_lines: usize) -> Element<'_, Message> {
         let label = if omitted_lines > 0 {
-            format!("… 省略 {omitted_lines} 行未变化的内容")
+            format!("▴ ▾   省略 {omitted_lines} 行未变化的内容")
         } else {
-            String::from("… 分隔下一个变更片区")
+            String::from("▴ ▾   分隔下一个变更片区")
         };
 
         container(
-            container(
-                row![
-                    space().width(diff_gutter_block_width()),
-                    container(text(label).size(12))
-                        .padding([2, DIFF_CODE_EDITOR_HORIZONTAL_PADDING])
-                        .width(Fill),
-                ]
-                .spacing(0)
-                .width(Fill),
-            )
-            .center_y(DIFF_GAP_BLOCK_HEIGHT)
-            .height(DIFF_GAP_BLOCK_HEIGHT),
+            container(text(label).size(11))
+                .center_x(Fill)
+                .center_y(DIFF_GAP_BLOCK_HEIGHT)
+                .height(DIFF_GAP_BLOCK_HEIGHT),
         )
         .width(Fill)
         .height(DIFF_GAP_BLOCK_HEIGHT)
-        .style(style::diff_block_style)
+        .style(style::diff_gap_block_style)
         .into()
     }
     /// Renders one hunk-level diff block with its own editor and gutter.

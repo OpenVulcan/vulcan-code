@@ -1232,6 +1232,11 @@ function diffRowsContentFingerprint(rows: ReadonlyArray<DiffMountedVirtualRow>):
     if (row.kind === "hunk") {
       hash = appendFingerprintText(hash, row.header);
       hash = appendFingerprintNumber(hash, row.hunkIndex);
+      hash = appendFingerprintNumber(hash, row.collapsedLines ?? -1);
+      hash = appendFingerprintNumber(hash, row.isFirstHunk ? 1 : 0);
+      hash = appendFingerprintNumber(hash, row.isLastHunk ? 1 : 0);
+      hash = appendFingerprintNumber(hash, row.expandUpHunkIndex ?? -1);
+      hash = appendFingerprintNumber(hash, row.expandDownHunkIndex ?? -1);
     } else if (row.kind === "line") {
       hash = appendFingerprintNumber(hash, row.hunkIndex);
       hash = appendFingerprintNumber(hash, row.lineIndex);
@@ -1303,6 +1308,11 @@ function diffRenderableRows(rows: ReadonlyArray<DiffMountedVirtualRow>): DiffRen
         kind: "hunk",
         header: row.header,
         hunkIndex: row.hunkIndex,
+        collapsedLines: row.collapsedLines,
+        isFirstHunk: row.isFirstHunk,
+        isLastHunk: row.isLastHunk,
+        expandUpHunkIndex: row.expandUpHunkIndex,
+        expandDownHunkIndex: row.expandDownHunkIndex,
       };
       continue;
     }

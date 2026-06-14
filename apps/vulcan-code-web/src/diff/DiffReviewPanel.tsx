@@ -3,6 +3,7 @@ import { FileText, RefreshCw } from "lucide-react";
 
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "./diff-file-card";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
+import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import {
   DIFF_SEARCH_DETAIL_PREFETCH_CONTEXT_LINES,
   DIFF_SEARCH_DETAIL_PREFETCH_DISPATCH_DELAY_MS,
@@ -95,7 +96,7 @@ export function DiffReviewPanel(props: {
     hunkSeparatorStyle: "line-info",
     indicatorStyle: "bars",
   });
-  const [collapsedFileKeys, setCollapsedFileKeys] = React.useState<ReadonlySet<string>>(() => new Set());
+  const [expandedFileKey, setExpandedFileKey] = React.useState<string | null>(null);
   const [summarySearchState, setSummarySearchState] = React.useState<DiffSummarySearchState>(EMPTY_DIFF_SUMMARY_SEARCH_STATE);
   const diffSourceScrollResetKey = React.useMemo(
     () => diffReviewScrollResetKey(snapshot, selection),
@@ -136,6 +137,10 @@ export function DiffReviewPanel(props: {
       )
       : null),
     [searchIndex.matches.length, searchPageFileKeys, searchQuery, snapshot, summarySearchPageFileKeys],
+  );
+  const collapsedFileKeys = React.useMemo(
+    () => diffCollapsedFileKeys(renderedSnapshot, expandedFileKey),
+    [expandedFileKey, renderedSnapshot],
   );
   const virtualLayout = React.useMemo(
     () => (renderedSnapshot ? buildDiffFileVirtualLayout(renderedSnapshot, collapsedFileKeys, viewMode) : EMPTY_DIFF_FILE_VIRTUAL_LAYOUT),
@@ -196,23 +201,18 @@ export function DiffReviewPanel(props: {
     [scrollState.scrollTop, virtualLayout],
   );
   const handleFileCollapsedChange = React.useCallback((fileKey: string, collapsed: boolean) => {
-    setCollapsedFileKeys((current) => {
-      const currentCollapsed = current.has(fileKey);
-      if (currentCollapsed === collapsed) {
-        return current;
-      }
-      const next = new Set(current);
-      if (collapsed) {
-        next.add(fileKey);
-      } else {
-        next.delete(fileKey);
-      }
-      return next;
-    });
+    setExpandedFileKey((current) => (collapsed ? (current === fileKey ? null : current) : fileKey));
     if (typeof window !== "undefined") {
       window.requestAnimationFrame(syncFileListScrollState);
     }
   }, [syncFileListScrollState]);
+  const handleRevealFile = React.useCallback((file: DiffFile) => {
+    const absolutePath = diffAbsoluteFilePath(renderedSnapshot?.repositoryRoot, file);
+    if (!absolutePath) {
+      return;
+    }
+    void openProjectDirectoryPath(absolutePath);
+  }, [renderedSnapshot?.repositoryRoot]);
   React.useLayoutEffect(() => {
     const element = fileListRef.current;
     if (!element) {
@@ -223,13 +223,26 @@ export function DiffReviewPanel(props: {
     return undefined;
   }, [diffSourceScrollResetKey, syncFileListScrollState]);
   React.useEffect(() => {
-    setCollapsedFileKeys(new Set());
+    setExpandedFileKey(null);
   }, [diffSourceScrollResetKey]);
+  // Resyncs viewport state after virtual layout height changes.
+  // 虚拟布局高度变化后重新同步视口状态。
+  React.useLayoutEffect(() => {
+    if (typeof window === "undefined") {
+      syncFileListScrollState();
+      return undefined;
+    }
+    const frameId = window.requestAnimationFrame(syncFileListScrollState);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [syncFileListScrollState, virtualLayout.totalHeight]);
   // mountedDetailHydrationRequests contains visible summary files that should be hydrated lazily.
   // mountedDetailHydrationRequests 保存当前可见且需要懒水合的摘要文件。
   const mountedDetailHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(() => {
     let requests: DiffSearchDetailPrefetchCandidate[] | null = null;
     for (const item of mountedFiles) {
+      if (collapsedFileKeys.has(item.file.key)) {
+        continue;
+      }
       if (!shouldLoadDiffFileDetail(item.file)) {
         continue;
       }
@@ -237,7 +250,7 @@ export function DiffReviewPanel(props: {
       requests.push(diffSearchDetailPrefetchCandidateForFile(item.file, summarySearchMatchByFileKey.get(item.file.key)));
     }
     return requests ?? EMPTY_DIFF_DETAIL_HYDRATION_REQUESTS;
-  }, [mountedFiles, summarySearchMatchByFileKey]);
+  }, [collapsedFileKeys, mountedFiles, summarySearchMatchByFileKey]);
   // backendSearchHydrationRequests excludes requests already covered by visible summary hydration.
   // backendSearchHydrationRequests 排除已由可见摘要水合覆盖的请求。
   const backendSearchHydrationRequests = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(
@@ -468,6 +481,7 @@ export function DiffReviewPanel(props: {
                       renderPreferences={renderPreferences}
                       activeSearchLineKey={activeDiffSearchLineKeyForFile(item.file.key, activeSearchMatch)}
                       onLoadFileDetail={onLoadFileDetail}
+                      onRevealFile={handleRevealFile}
                       onCollapsedChange={handleFileCollapsedChange}
                       summarySearchMatch={summarySearchMatchByFileKey.get(item.file.key)}
                       searchLineKeys={searchVisibleLineKeys}
@@ -486,6 +500,7 @@ export function DiffReviewPanel(props: {
                 renderPreferences={renderPreferences}
                 activeSearchLineKey={activeDiffSearchLineKeyForFile(file.key, activeSearchMatch)}
                 onLoadFileDetail={onLoadFileDetail}
+                onRevealFile={handleRevealFile}
                 onCollapsedChange={handleFileCollapsedChange}
                 summarySearchMatch={summarySearchMatchByFileKey.get(file.key)}
                 searchLineKeys={searchVisibleLineKeys}
@@ -1113,10 +1128,66 @@ function summarySearchFilePageDescription(
   return `后端已在完整 diff 中找到 ${matches.length}${truncated ? "+" : ""} 个命中文件，当前展示前 ${visibleFileCount} 个并按需水合详情`;
 }
 
+// diffCollapsedFileKeys builds the default-collapsed, single-expanded file key set.
+// diffCollapsedFileKeys 构建默认全折叠且仅允许单个文件展开的 key 集合。
+function diffCollapsedFileKeys(
+  // Current rendered snapshot after search projection.
+  // 搜索投影后的当前渲染快照。
+  snapshot: DiffPanelSnapshot | null,
+  // The only file key allowed to stay expanded.
+  // 唯一允许保持展开的文件 key。
+  expandedFileKey: string | null,
+): ReadonlySet<string> {
+  const collapsed = new Set<string>();
+  if (!snapshot) {
+    return collapsed;
+  }
+  for (const file of snapshot.files) {
+    if (file.key !== expandedFileKey) {
+      collapsed.add(file.key);
+    }
+  }
+  return collapsed;
+}
+
+// diffAbsoluteFilePath returns the best local path for revealing one diff file.
+// diffAbsoluteFilePath 返回用于在文件管理器中定位单个 diff 文件的最佳本地路径。
+function diffAbsoluteFilePath(
+  // Repository root returned by the backend.
+  // 后端返回的仓库根目录。
+  repositoryRoot: string | null | undefined,
+  // File whose current or previous path should be revealed.
+  // 需要定位当前路径或旧路径的文件。
+  file: DiffFile,
+): string | null {
+  const root = repositoryRoot?.trim();
+  if (!root) {
+    return null;
+  }
+  const relativePath = diffRevealRelativePath(file);
+  if (!relativePath) {
+    return root;
+  }
+  const separator = root.includes("\\") ? "\\" : "/";
+  return `${root.replace(/[\\/]+$/, "")}${separator}${relativePath.replace(/[\\/]+/g, separator)}`;
+}
+
+// diffRevealRelativePath returns the non-null side path for one diff file.
+// diffRevealRelativePath 返回单个 diff 文件可定位的非空侧路径。
+function diffRevealRelativePath(
+  // File whose visible path should be normalized for the host file manager.
+  // 需要为宿主文件管理器归一化可见路径的文件。
+  file: DiffFile,
+): string | null {
+  const path = file.newPath && file.newPath !== "/dev/null" ? file.newPath : file.oldPath;
+  const normalized = path.trim();
+  return normalized && normalized !== "/dev/null" ? normalized : null;
+}
+
 // shouldLoadDiffFileDetail returns whether one mounted summary needs backend detail hydration.
 // shouldLoadDiffFileDetail 返回单个已挂载摘要是否需要后端详情水合。
 function shouldLoadDiffFileDetail(file: DiffFile): boolean {
-  return Boolean(file.isPartial && !file.isBinary && !file.isGitlink && file.changedLines > 0);
+  return Boolean(file.isPartial && !file.tooLargeToDisplay && !file.isBinary && !file.isGitlink && file.changedLines > 0);
 }
 
 // diffSearchDetailPrefetchCandidates selects a small batch of summary-only files to hydrate for search.

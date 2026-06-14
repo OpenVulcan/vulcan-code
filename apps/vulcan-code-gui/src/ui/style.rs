@@ -85,6 +85,22 @@ pub fn diff_block_style(theme: &Theme) -> container::Style {
     }
 }
 
+/// Returns the container style used by diff gap / omission blocks inserted between separated hunks.
+/// 返回插入在分离 hunk 之间的省略块使用的容器样式。
+pub fn diff_gap_block_style(theme: &Theme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style {
+        background: Some(palette.background.weak.color.scale_alpha(0.22).into()),
+        border: Border {
+            radius: 0.0.into(),
+            width: 0.0,
+            color: Color::TRANSPARENT,
+        },
+        ..Default::default()
+    }
+}
+
 /// Returns the borderless text editor style used inside diff code blocks.
 /// 返回 diff 代码区内部使用的无边框文本编辑器样式。
 pub fn diff_code_editor_style(theme: &Theme, _status: text_editor::Status) -> text_editor::Style {
