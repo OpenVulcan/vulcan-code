@@ -195,9 +195,21 @@ function diffFileFromParsedWorkspaceDetail(
   const expansion = normalizedWorkspaceDiffHunkExpansion(response, requestedExpansion);
   const mergedFile = expansion ? diffFileWithExpandedHunk(fallbackFile, file, expansion) ?? file : file;
   const hunkScopedSummaryDetail = Boolean(expansion && fallbackFile.isPartial && fallbackFile.hunks.length === 0);
+  const estimatedRowCount = monotonicWorkspaceDiffCountEstimate(
+    fallbackFile.estimatedRowCount,
+    mergedFile.estimatedRowCount,
+    mergedFile.rowCount,
+  );
+  const estimatedHunkCount = monotonicWorkspaceDiffCountEstimate(
+    fallbackFile.estimatedHunkCount,
+    mergedFile.estimatedHunkCount,
+    mergedFile.hunks.length,
+  );
   return {
     ...mergedFile,
     key: fallbackFile.key,
+    estimatedRowCount,
+    estimatedHunkCount,
     isPartial: hunkScopedSummaryDetail || Boolean(response.truncated),
     fileDiffLoadState: hunkScopedSummaryDetail
       ? { status: "loaded", message: response.notice ?? "已加载搜索命中的 hunk，完整文件内容仍可按需加载。" }
@@ -207,6 +219,23 @@ function diffFileFromParsedWorkspaceDetail(
     rawDiff: response.unifiedDiff || file.rawDiff || fallbackFile.rawDiff,
     contextLineCount: response.contextLines ?? fallbackFile.contextLineCount,
   };
+}
+
+// monotonicWorkspaceDiffCountEstimate returns a non-decreasing row or hunk estimate.
+// monotonicWorkspaceDiffCountEstimate 返回不会减少的行数或 hunk 数估算。
+function monotonicWorkspaceDiffCountEstimate(
+  // Existing estimate from the previous summary or hydrated file.
+  // 来自上一版摘要或已水合文件的既有估算。
+  previousEstimate: number | null | undefined,
+  // New estimate returned with the latest detail payload.
+  // 最新详情载荷返回的新估算。
+  nextEstimate: number | null | undefined,
+  // Parsed concrete count from the latest detail payload.
+  // 最新详情载荷解析出的实际数量。
+  parsedCount: number | null | undefined,
+): number | undefined {
+  const value = Math.max(previousEstimate ?? 0, nextEstimate ?? 0, parsedCount ?? 0);
+  return value > 0 ? value : undefined;
 }
 
 // normalizedWorkspaceDiffHunkExpansion resolves the requested or echoed hunk expansion intent.

@@ -306,6 +306,7 @@
   min-height: 0;
   padding: 0;
   overflow: auto;
+  overflow-anchor: none;
 }
 
 .diff-file-list.virtualized {
@@ -316,6 +317,7 @@
   position: relative;
   min-width: 0;
   min-height: 100%;
+  overflow-anchor: none;
 }
 
 .diff-file-list-virtual-item {
@@ -324,6 +326,7 @@
   right: 0;
   left: 0;
   contain: layout paint style;
+  overflow-anchor: none;
 }
 
 .diff-snapshot-policy-note,
