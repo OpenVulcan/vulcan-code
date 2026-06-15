@@ -14,9 +14,9 @@ export type DiffViewMode = "unified" | "split";
 // DiffOverflowMode 标识代码列如何处理长行。
 export type DiffOverflowMode = "scroll" | "wrap";
 
-// DiffHunkSeparatorStyle identifies the target-supported hunk separator style.
-// DiffHunkSeparatorStyle 标识目标支持的 hunk 分隔样式。
-export type DiffHunkSeparatorStyle = "simple" | "metadata" | "line-info" | "line-info-basic";
+// DiffHunkSeparatorStyle identifies the supported hunk separator style.
+// DiffHunkSeparatorStyle 标识支持的 hunk 分隔样式。
+export type DiffHunkSeparatorStyle = "line-info" | "simple";
 
 // DiffIndicatorStyle identifies the target-supported change indicator style.
 // DiffIndicatorStyle 标识目标支持的变更航标样式。

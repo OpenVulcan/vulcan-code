@@ -43,9 +43,7 @@ const DIFF_OVERFLOW_MODE_LABELS: Record<DiffOverflowMode, string> = {
 // DIFF_HUNK_SEPARATOR_LABELS maps target hunk separator styles to menu labels.
 // DIFF_HUNK_SEPARATOR_LABELS 将目标 hunk 分隔样式映射为菜单标签。
 const DIFF_HUNK_SEPARATOR_LABELS: Record<DiffHunkSeparatorStyle, string> = {
-  "line-info": "行信息",
-  "line-info-basic": "基础行信息",
-  metadata: "元数据",
+  "line-info": "默认",
   simple: "简洁",
 };
 
@@ -119,17 +117,18 @@ export function DiffPanelToolbar(props: {
   const compareBranch = props.selection.compareBranch ?? props.snapshot.selectedCompareBranch ?? props.snapshot.defaultBranch ?? "";
   const titleText = props.selection.mode === "commit" && selectedCommit
     ? selectedCommit.subject
-    : `${props.snapshot.stats.files} 个文件`;
+    : null;
   return (
     <header className="diff-panel-header">
       <div className="diff-panel-main">
         <div className="diff-panel-title-row">
           <DiffModeMenu
+            changedFileCount={props.snapshot.stats.files}
             commits={props.snapshot.recentCommits ?? []}
             selection={props.selection}
             onSelectionChange={props.onSelectionChange}
           />
-          <span className="diff-panel-title-text">{titleText}</span>
+          {titleText ? <span className="diff-panel-title-text">{titleText}</span> : null}
           <span className="diff-stat added">+{props.snapshot.stats.additions}</span>
           <span className="diff-stat removed">-{props.snapshot.stats.deletions}</span>
         </div>
@@ -158,7 +157,7 @@ export function DiffPanelToolbar(props: {
           title={props.viewMode === "split" ? "切换到统一视图" : "切换到分栏视图"}
           type="button"
         >
-          {props.viewMode === "split" ? <Rows3 size={14} /> : <Columns2 size={14} />}
+          {props.viewMode === "split" ? <Rows3 size={12} /> : <Columns2 size={12} />}
         </button>
         <DiffRenderStyleMenu
           preferences={props.renderPreferences}
@@ -166,7 +165,7 @@ export function DiffPanelToolbar(props: {
         />
         {props.onCopyRaw ? (
           <button className="diff-icon-button" onClick={() => props.onCopyRaw?.(props.snapshot.rawDiff)} title="复制 raw diff" type="button">
-            <Copy size={14} />
+            <Copy size={12} />
           </button>
         ) : null}
         {props.onSearchQueryChange ? (
@@ -183,7 +182,7 @@ export function DiffPanelToolbar(props: {
         ) : null}
         {props.onRefresh ? (
           <button className="diff-icon-button" disabled={props.loading} onClick={() => props.onRefresh?.()} title="刷新 diff" type="button">
-            <RefreshCw className={props.loading ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={14} />
+            <RefreshCw className={props.loading ? "diff-refresh-icon loading" : "diff-refresh-icon"} size={12} />
           </button>
         ) : null}
       </div>
@@ -214,7 +213,7 @@ function DiffRenderStyleMenu(props: {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="diff-icon-button" title="Diff 显示风格" type="button">
-          <ListFilter size={14} />
+          <ListFilter size={12} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="diff-style-menu" sideOffset={4}>
@@ -233,10 +232,10 @@ function DiffRenderStyleMenu(props: {
         </DropdownMenuSub>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="diff-mode-sub-trigger">
-            分隔：{DIFF_HUNK_SEPARATOR_LABELS[props.preferences.hunkSeparatorStyle]}
+            行信息：{DIFF_HUNK_SEPARATOR_LABELS[props.preferences.hunkSeparatorStyle]}
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="diff-style-sub-menu" sideOffset={8}>
-            {(["line-info", "line-info-basic", "metadata", "simple"] as const).map((style) => (
+            {(["line-info", "simple"] as const).map((style) => (
               <DropdownMenuItem key={style} onSelect={() => selectHunkSeparatorStyle(style)}>
                 {props.preferences.hunkSeparatorStyle === style ? <Check size={13} /> : <span className="diff-menu-check-spacer" />}
                 {DIFF_HUNK_SEPARATOR_LABELS[style]}
@@ -319,7 +318,7 @@ function DiffSearchControl(props: {
         title="搜索 diff"
         type="button"
       >
-        <Search size={14} />
+        <Search size={12} />
       </button>
       {open ? (
         <div className="diff-panel-search-popover">
@@ -368,6 +367,9 @@ function DiffModeMenu(props: {
   // Current Git review source selection.
   // 当前 Git 审核来源选择。
   selection: DiffReviewSelection;
+  // Number of files changed by the current diff source.
+  // 当前 diff 来源中发生变动的文件数量。
+  changedFileCount: number;
   // Recent commits available for commit review mode.
   // 提交审核模式可用的最近提交。
   commits: DiffCommitSummary[];
@@ -379,11 +381,13 @@ function DiffModeMenu(props: {
     props.onSelectionChange?.({ ...props.selection, mode });
   }, [props]);
   const selectedCommitHash = props.selection.commitHash ?? props.commits[0]?.hash ?? null;
+  const shouldShowFileCount = props.selection.mode !== "commit";
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button className="diff-mode-trigger" type="button">
           <span>{DIFF_REVIEW_MODE_LABELS[props.selection.mode]}</span>
+          {shouldShowFileCount ? <span className="diff-mode-count">{props.changedFileCount}</span> : null}
           <ChevronDown size={13} />
         </button>
       </DropdownMenuTrigger>

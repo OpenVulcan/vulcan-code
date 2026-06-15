@@ -393,13 +393,19 @@ function emptyTargetColumns(viewMode: DiffViewMode | undefined, file?: DiffFile)
       rowCount: 0,
       visibleSide: file?.status === "added" ? "additions" : file?.status === "deleted" ? "deletions" : "both",
       split: {
-        deletions: { gutter: "", content: "" },
-        additions: { gutter: "", content: "" },
+        deletions: emptyTargetCodeColumn(),
+        additions: emptyTargetCodeColumn(),
       },
       pendingBuffer: { side: undefined, size: 0 },
     };
   }
-  return { mode: "unified", rowCount: 0, unified: { gutter: "", content: "" } };
+  return { mode: "unified", rowCount: 0, unified: emptyTargetCodeColumn() };
+}
+
+// emptyTargetCodeColumn creates one mutable target code-column accumulator.
+// emptyTargetCodeColumn 创建一个可变目标代码列累加器。
+function emptyTargetCodeColumn(): TargetCodeColumnHtml {
+  return { gutter: "", content: "" };
 }
 
 // appendTargetIteratedRows appends target iterator rows in the active view mode.
@@ -748,8 +754,11 @@ function appendTargetSeparatorCells(
   rowAttributes: string,
   separatorStyle: DiffHunkSeparatorStyle,
 ): void {
-  column.gutter += `<div data-separator="${separatorStyle}" data-line-index="hunk-${hunkIndex}" ${rowAttributes}>${gutterHtml}</div>`;
-  column.content += `<div data-separator="${separatorStyle}" data-column-content="" ${rowAttributes}>${contentHtml}</div>`;
+  appendTargetColumnCells(
+    column,
+    `<div data-separator="${separatorStyle}" data-line-index="hunk-${hunkIndex}" ${rowAttributes}>${gutterHtml}</div>`,
+    `<div data-separator="${separatorStyle}" data-column-content="" ${rowAttributes}>${contentHtml}</div>`,
+  );
 }
 
 // appendUnifiedLine appends one line to the unified target column.
@@ -777,8 +786,11 @@ function appendUnifiedLine(
 ): void {
   const lineType = options.lineType ?? unifiedLineType(line);
   const lineNumber = line.kind === "removed" ? line.oldLine : line.newLine;
-  column.gutter += targetGutterLineHtml(lineType, lineNumber, `${line.oldLine ?? ""},${line.newLine ?? ""}`, options);
-  column.content += targetContentLineHtml(line, lineType, "unified", options);
+  appendTargetColumnCells(
+    column,
+    targetGutterLineHtml(lineType, lineNumber, `${line.oldLine ?? ""},${line.newLine ?? ""}`, options),
+    targetContentLineHtml(line, lineType, "unified", options),
+  );
 }
 
 // appendSplitSideLine appends one real line to a target split side.
@@ -806,15 +818,44 @@ function appendSplitSideLine(
   },
 ): void {
   const lineNumber = side === "deletions" ? line.oldLine : line.newLine;
-  column.gutter += targetGutterLineHtml(options.lineType, lineNumber, `${line.oldLine ?? ""},${line.newLine ?? ""}`, options);
-  column.content += targetContentLineHtml(line, options.lineType, side, options);
+  appendTargetColumnCells(
+    column,
+    targetGutterLineHtml(options.lineType, lineNumber, `${line.oldLine ?? ""},${line.newLine ?? ""}`, options),
+    targetContentLineHtml(line, options.lineType, side, options),
+  );
 }
 
 // appendTargetBuffer appends one target-style missing-side buffer row.
 // appendTargetBuffer 追加一条目标风格缺失侧 buffer 行。
 function appendTargetBuffer(column: TargetCodeColumnHtml, lineType: string, size = 1): void {
-  column.gutter += `<div data-gutter-buffer="buffer" data-buffer-size="${size}" data-line-type="${lineType}" style="grid-row: span ${size};min-height:calc(${size} * 1lh);"></div>`;
-  column.content += `<div data-content-buffer="" data-buffer-size="${size}" style="grid-row: span ${size};min-height:calc(${size} * 1lh)"></div>`;
+  appendTargetColumnCells(
+    column,
+    `<div data-gutter-buffer="buffer" data-buffer-size="${size}" data-line-type="${lineType}" style="min-height:calc(${size} * 1lh);"></div>`,
+    `<div data-content-buffer="" data-buffer-size="${size}" style="min-height:calc(${size} * 1lh)"></div>`,
+    size,
+  );
+}
+
+// appendTargetColumnCells appends one gutter/content pair for both scroll and wrap layouts.
+// appendTargetColumnCells 同时为滚动布局和换行布局追加一组行号/内容单元。
+function appendTargetColumnCells(column: TargetCodeColumnHtml, gutterHtml: string, contentHtml: string, rowSpan = 1): void {
+  if (rowSpan > 1) {
+    column.gutter += withTargetGridSpan(gutterHtml, rowSpan);
+    column.content += withTargetGridSpan(contentHtml, rowSpan);
+    return;
+  }
+  column.gutter += gutterHtml;
+  column.content += contentHtml;
+}
+
+// withTargetGridSpan applies the logical row span used by buffer rows.
+// withTargetGridSpan 为 buffer 行应用逻辑行跨度。
+function withTargetGridSpan(html: string, rowSpan: number): string {
+  const gridRow = `grid-row: span ${rowSpan};`;
+  if (html.includes(` style="`)) {
+    return html.replace(` style="`, ` style="${gridRow}`);
+  }
+  return html.replace("<div ", `<div style="${gridRow}" `);
 }
 
 // targetGutterLineHtml renders one target-style gutter line.
@@ -871,19 +912,19 @@ function renderTargetColumnsHtml(columns: TargetColumnsHtml, options: DiffPlainR
   const indicatorStyle = options.indicatorStyle ?? "bars";
   if (columns.mode === "split") {
     if (columns.visibleSide === "deletions") {
-      return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-deletions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.deletions, rowCount)}</code></pre>`;
+      return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-deletions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.deletions, rowCount, overflowMode)}</code></pre>`;
     }
     if (columns.visibleSide === "additions") {
-      return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-additions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.additions, rowCount)}</code></pre>`;
+      return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-additions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.additions, rowCount, overflowMode)}</code></pre>`;
     }
-    return `<pre data-diff="" data-diff-type="split" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-deletions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.deletions, rowCount)}</code><code data-code="" data-container-size="" data-additions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.additions, rowCount)}</code></pre>`;
+    return `<pre data-diff="" data-diff-type="split" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-deletions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.deletions, rowCount, overflowMode)}</code><code data-code="" data-container-size="" data-additions="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.split.additions, rowCount, overflowMode)}</code></pre>`;
   }
-  return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-unified="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.unified, rowCount)}</code></pre>`;
+  return `<pre data-diff="" data-diff-type="single" data-overflow="${overflowMode}" data-background="" data-indicators="${indicatorStyle}" style="--diffs-min-number-column-width-default:4ch"><code data-code="" data-container-size="" data-unified="" style="grid-row: span ${rowCount}">${renderTargetCodeColumnInnerHtml(columns.unified, rowCount, overflowMode)}</code></pre>`;
 }
 
 // renderTargetCodeColumnInnerHtml renders one target code node's gutter/content grid.
 // renderTargetCodeColumnInnerHtml 渲染单个目标 code 节点的 gutter/content 网格。
-function renderTargetCodeColumnInnerHtml(column: TargetCodeColumnHtml, rowCount: number): string {
+function renderTargetCodeColumnInnerHtml(column: TargetCodeColumnHtml, rowCount: number, _overflowMode: DiffOverflowMode): string {
   return `<div data-gutter="" style="grid-row: span ${rowCount}">${column.gutter}</div><div data-content="" style="grid-row: span ${rowCount}">${column.content}</div>`;
 }
 
