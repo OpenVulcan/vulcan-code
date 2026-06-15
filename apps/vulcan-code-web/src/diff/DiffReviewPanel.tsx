@@ -52,9 +52,21 @@ const DEFAULT_DIFF_RENDER_PREFERENCES: DiffRenderPreferences = {
   indicatorStyle: "bars",
 };
 
+// DEFAULT_DIFF_VIEW_MODE provides the first-run diff layout before persistence exists.
+// DEFAULT_DIFF_VIEW_MODE 提供持久化数据不存在时的首次 diff 布局。
+const DEFAULT_DIFF_VIEW_MODE: DiffViewMode = "unified";
+
 // DiffFileDetailLoader lazily requests one file-level diff detail from the host.
 // DiffFileDetailLoader 从宿主懒请求单个文件级 diff 详情。
 type DiffFileDetailLoader = (file: DiffFile, contextLines?: number, expansion?: DiffHunkExpansionRequest) => void;
+
+// DiffRenderPreferenceStorage stores persisted display switches including the visual layout.
+// DiffRenderPreferenceStorage 保存包含视觉布局在内的持久化显示开关。
+type DiffRenderPreferenceStorage = Partial<DiffRenderPreferences> & {
+  // Persisted visual layout mode.
+  // 持久化的视觉布局模式。
+  viewMode?: DiffViewMode;
+};
 
 // initialDiffRenderPreferences returns persisted diff render preferences with schema validation.
 // initialDiffRenderPreferences 返回经过结构校验的持久化 diff 渲染偏好。
@@ -70,14 +82,29 @@ function initialDiffRenderPreferences(): DiffRenderPreferences {
   }
 }
 
-// persistDiffRenderPreferences stores the latest render preferences for future review panels.
-// persistDiffRenderPreferences 为后续审核面板保存最新渲染偏好。
-function persistDiffRenderPreferences(preferences: DiffRenderPreferences): void {
+// initialDiffViewMode returns the persisted visual diff layout mode with schema validation.
+// initialDiffViewMode 返回经过结构校验的持久化 diff 视觉布局模式。
+function initialDiffViewMode(): DiffViewMode {
+  if (typeof window === "undefined") {
+    return DEFAULT_DIFF_VIEW_MODE;
+  }
+  try {
+    const stored = window.localStorage.getItem(DIFF_RENDER_PREFERENCES_STORAGE_KEY);
+    const value = stored ? JSON.parse(stored) as DiffRenderPreferenceStorage : null;
+    return normalizeDiffViewMode(value?.viewMode);
+  } catch {
+    return DEFAULT_DIFF_VIEW_MODE;
+  }
+}
+
+// persistDiffDisplayPreferences stores the latest render preferences and visual layout together.
+// persistDiffDisplayPreferences 将最新渲染偏好与视觉布局一起保存。
+function persistDiffDisplayPreferences(viewMode: DiffViewMode, preferences: DiffRenderPreferences): void {
   if (typeof window === "undefined") {
     return;
   }
   try {
-    window.localStorage.setItem(DIFF_RENDER_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    window.localStorage.setItem(DIFF_RENDER_PREFERENCES_STORAGE_KEY, JSON.stringify({ ...preferences, viewMode }));
   } catch {
     // Ignore quota or privacy-mode failures because rendering can continue with in-memory state.
     // 忽略容量或隐私模式失败，因为渲染仍可使用内存状态继续。
@@ -104,6 +131,14 @@ function normalizeDiffRenderPreferences(candidate: unknown): DiffRenderPreferenc
       ? value.indicatorStyle
       : DEFAULT_DIFF_RENDER_PREFERENCES.indicatorStyle,
   };
+}
+
+// normalizeDiffViewMode upgrades unknown storage data into a supported visual layout mode.
+// normalizeDiffViewMode 将未知存储数据升级为受支持的视觉布局模式。
+function normalizeDiffViewMode(candidate: unknown): DiffViewMode {
+  return candidate === "split" || candidate === "unified"
+    ? candidate
+    : DEFAULT_DIFF_VIEW_MODE;
 }
 
 // DiffReviewPanel renders one structured Git diff snapshot.
@@ -158,7 +193,7 @@ export function DiffReviewPanel(props: {
   // searchScrollRequest increments only for Enter or step-button navigation.
   // searchScrollRequest 仅在 Enter 或上下条按钮导航时递增。
   const [searchScrollRequest, setSearchScrollRequest] = React.useState(0);
-  const [viewMode, setViewMode] = React.useState<DiffViewMode>("unified");
+  const [viewMode, setViewMode] = React.useState<DiffViewMode>(initialDiffViewMode);
   const [renderPreferences, setRenderPreferences] = React.useState<DiffRenderPreferences>(initialDiffRenderPreferences);
   const [expandedFileKey, setExpandedFileKey] = React.useState<string | null>(null);
   const [fileTreeFilter, setFileTreeFilter] = React.useState("");
@@ -341,8 +376,8 @@ export function DiffReviewPanel(props: {
   }, [props.loading]);
 
   React.useEffect(() => {
-    persistDiffRenderPreferences(renderPreferences);
-  }, [renderPreferences]);
+    persistDiffDisplayPreferences(viewMode, renderPreferences);
+  }, [renderPreferences, viewMode]);
   React.useLayoutEffect(() => {
     const element = fileListRef.current;
     if (!element) {
