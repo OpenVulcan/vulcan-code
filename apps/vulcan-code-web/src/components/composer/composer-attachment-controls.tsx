@@ -21,6 +21,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary } from "@/types";
 
@@ -45,17 +50,24 @@ export function ComposerAttachmentMenu(props: {
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          aria-label="添加附件"
-          className="composer-add-button"
-          size="icon"
-          type="button"
-          variant="secondary"
-        >
-          <Plus size={17} />
-        </Button>
-      </DropdownMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label="添加附件"
+              className="composer-add-button"
+              size="icon"
+              type="button"
+              variant="secondary"
+            >
+              <Plus size={17} />
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent className="composer-control-tooltip" side="top">
+          <strong>扩展</strong>
+        </TooltipContent>
+      </Tooltip>
       <DropdownMenuContent align="start" className="composer-attachment-menu" side="top" sideOffset={8}>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>

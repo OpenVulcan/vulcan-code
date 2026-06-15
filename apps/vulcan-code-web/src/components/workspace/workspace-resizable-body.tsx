@@ -5,11 +5,6 @@ import {
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { Button } from "@/components/ui/button";
-import {
-  ResizableHandle,
-  ResizablePanel,
-  ResizablePanelGroup,
-} from "@/components/ui/resizable";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import {
   Tooltip,
@@ -31,6 +26,15 @@ import {
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS matches the CSS slide animation duration.
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS 对齐 CSS 右侧面板滑动动画时长。
 const WORKSPACE_CONTEXT_PANEL_TRANSITION_MS = 220;
+// WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH stores the initial docked context panel width.
+// WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH 保存停靠上下文面板的初始宽度。
+const WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH = 420;
+// WORKSPACE_CONTEXT_PANEL_MIN_WIDTH stores the smallest manual docked panel width.
+// WORKSPACE_CONTEXT_PANEL_MIN_WIDTH 保存停靠面板手动调整时的最小宽度。
+const WORKSPACE_CONTEXT_PANEL_MIN_WIDTH = 320;
+// WORKSPACE_CONTEXT_PANEL_MAX_WIDTH stores the largest manual docked panel width.
+// WORKSPACE_CONTEXT_PANEL_MAX_WIDTH 保存停靠面板手动调整时的最大宽度。
+const WORKSPACE_CONTEXT_PANEL_MAX_WIDTH = 640;
 
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
@@ -114,6 +118,9 @@ export function WorkspaceResizableBody(props: {
     mounted: props.rightPanelOpen,
     visible: props.rightPanelOpen,
   }));
+  // dockedPanelWidth stores the user-adjustable non-floating context panel width.
+  // dockedPanelWidth 保存用户可调整的非浮动上下文面板宽度。
+  const [dockedPanelWidth, setDockedPanelWidth] = React.useState(WORKSPACE_CONTEXT_PANEL_DEFAULT_WIDTH);
   React.useEffect(() => {
     let frameId: number | null = null;
     let timeoutId: number | null = null;
@@ -156,15 +163,57 @@ export function WorkspaceResizableBody(props: {
   // rightPanelVisualState selects the transition class shared by docked and floating panels.
   // rightPanelVisualState 选择停靠与浮动面板共用的过渡类名。
   const rightPanelVisualState = rightPanelTransition.visible ? "is-open" : "is-closed";
+  // dockedPanelOpen indicates whether the non-floating panel currently reserves visible width.
+  // dockedPanelOpen 表示非浮动面板当前是否保留可见宽度。
+  const dockedPanelOpen = rightPanelTransition.visible && !rightPanelTransition.floating;
+  // dockedPanelMounted indicates whether the non-floating panel remains in the flex layout.
+  // dockedPanelMounted 表示非浮动面板是否仍保留在 flex 布局中。
+  const dockedPanelMounted = rightPanelTransition.mounted && !rightPanelTransition.floating;
+  // dockedLayoutStyle feeds the animated context width into CSS.
+  // dockedLayoutStyle 将动画所需的上下文宽度传入 CSS。
+  const dockedLayoutStyle = {
+    "--workspace-context-panel-width": dockedPanelOpen ? `${dockedPanelWidth}px` : "0px",
+  } as React.CSSProperties;
+  // handleDockedResizePointerDown starts manual resizing for the docked context panel.
+  // handleDockedResizePointerDown 启动停靠上下文面板的手动调整宽度。
+  const handleDockedResizePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!dockedPanelOpen) {
+      return;
+    }
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = dockedPanelWidth;
+    const shellWidth = event.currentTarget
+      .closest(".workspace-resizable-body-shell")
+      ?.getBoundingClientRect().width ?? window.innerWidth;
+    const maxWidth = Math.max(
+      WORKSPACE_CONTEXT_PANEL_MIN_WIDTH,
+      Math.min(WORKSPACE_CONTEXT_PANEL_MAX_WIDTH, shellWidth - 800 - 9),
+    );
+    // clampDockedPanelWidth keeps manual resizing inside usable workspace bounds.
+    // clampDockedPanelWidth 将手动调整宽度限制在可用工作区范围内。
+    const clampDockedPanelWidth = (width: number) => Math.min(
+      maxWidth,
+      Math.max(WORKSPACE_CONTEXT_PANEL_MIN_WIDTH, width),
+    );
+    // handlePointerMove mirrors the old right-edge panel drag behavior.
+    // handlePointerMove 复刻原右侧面板拖拽时左移增宽、右移减宽的行为。
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      setDockedPanelWidth(clampDockedPanelWidth(startWidth - (moveEvent.clientX - startX)));
+    };
+    // handlePointerUp clears document-level drag listeners after resizing.
+    // handlePointerUp 在调整结束后清理文档级拖拽监听。
+    const handlePointerUp = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp, { once: true });
+  }, [dockedPanelOpen, dockedPanelWidth]);
   return (
     <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
-      <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
-        <ResizablePanel
-          className="workspace-main-panel"
-          defaultSize={rightPanelTransition.mounted && !rightPanelTransition.floating ? 68 : 100}
-          id="workspaceMain"
-          minSize="800px"
-        >
+      <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
+        <div className="workspace-main-panel">
           <section className="workspace-main-shell">
             <ConsoleHeader
               draftConversation={props.selectedDraftConversation}
@@ -180,16 +229,19 @@ export function WorkspaceResizableBody(props: {
             />
             {props.children}
           </section>
-        </ResizablePanel>
-        {rightPanelTransition.mounted && !rightPanelTransition.floating ? (
+        </div>
+        {dockedPanelMounted ? (
           <>
-            <ResizableHandle className={cn("workspace-context-resize-handle", rightPanelVisualState)} withHandle />
-            <ResizablePanel
+            <div
+              aria-label="调整右侧面板宽度"
+              aria-orientation="vertical"
+              className={cn("workspace-context-resize-handle", rightPanelVisualState)}
+              onPointerDown={handleDockedResizePointerDown}
+              role="separator"
+            />
+            <div
               className={cn("workspace-context-panel", rightPanelVisualState)}
-              defaultSize={32}
-              groupResizeBehavior="preserve-pixel-size"
               id="workspaceContext"
-              minSize="320px"
             >
               <WorkspaceContextPanel
                 selectedDraftConversation={props.selectedDraftConversation}
@@ -202,10 +254,10 @@ export function WorkspaceResizableBody(props: {
                 loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
                 loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               />
-            </ResizablePanel>
+            </div>
           </>
         ) : null}
-      </ResizablePanelGroup>
+      </div>
       {rightPanelTransition.mounted && rightPanelTransition.floating ? (
         <div className={cn("workspace-context-floating-panel", rightPanelVisualState)}>
           <WorkspaceContextPanel

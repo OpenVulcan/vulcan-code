@@ -4789,10 +4789,16 @@ async fn service_select_workbench_model(
         return Err(String::from("模型选择缺少 Provider 或模型标识。"));
     }
 
-    let workbench = {
+    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         let agent_runtime = guard
             .agent_runtime
             .as_mut()
@@ -4814,10 +4820,50 @@ async fn service_select_workbench_model(
         provider_config::save_configuration_file(&next_configuration)
             .map_err(|error| format!("保存模型选择失败：{error}"))?;
         agent_runtime.provider_configuration = next_configuration.clone();
-        guard.workbench.providers = providers(&next_configuration);
-        guard.workbench.reasoning_selection = reasoning_selection(&next_configuration);
-        guard.workbench.clone()
+        let selected_effort = active_reasoning_selection_effort(&next_configuration);
+        let openrouter_endpoint_route = (provider_id == "openrouter")
+            .then(|| {
+                provider_config::openrouter_endpoint_route_for_model(&next_configuration, &model_id)
+            })
+            .flatten();
+        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                runtime_state.active_provider_id = Some(provider_id.clone());
+                runtime_state.active_model_id = Some(model_id.clone());
+                runtime_state.active_openrouter_endpoint_route = openrouter_endpoint_route;
+                if let Some(selected_effort) = selected_effort {
+                    runtime_state.active_reasoning_effort = Some(selected_effort);
+                }
+                runtime_state.updated_at = current_unix_millis_text();
+                session_id
+            })
+        });
+        refresh_workbench_runtime_controls_locked(
+            &mut guard,
+            &next_configuration,
+            &ai_tool_configuration,
+        );
+        (
+            controller_runtime,
+            persist_session_id,
+            guard.workspace_snapshot.clone(),
+            guard.workbench.clone(),
+        )
     };
+
+    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+    ) {
+        spawn_workspace_session_runtime_state_persist_task(
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            Some(String::from("model_selection")),
+        );
+    }
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
@@ -4832,10 +4878,16 @@ async fn service_select_workbench_reasoning_effort(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
-    let workbench = {
+    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         let agent_runtime = guard
             .agent_runtime
             .as_mut()
@@ -4845,9 +4897,39 @@ async fn service_select_workbench_reasoning_effort(
         provider_config::save_configuration_file(&next_configuration)
             .map_err(|error| format!("保存思考档位失败：{error}"))?;
         agent_runtime.provider_configuration = next_configuration.clone();
-        guard.workbench.reasoning_selection = reasoning_selection(&next_configuration);
-        guard.workbench.clone()
+        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                runtime_state.active_reasoning_effort = Some(selected_effort);
+                runtime_state.updated_at = current_unix_millis_text();
+                session_id
+            })
+        });
+        refresh_workbench_runtime_controls_locked(
+            &mut guard,
+            &next_configuration,
+            &ai_tool_configuration,
+        );
+        (
+            controller_runtime,
+            persist_session_id,
+            guard.workspace_snapshot.clone(),
+            guard.workbench.clone(),
+        )
     };
+
+    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+    ) {
+        spawn_workspace_session_runtime_state_persist_task(
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            Some(String::from("reasoning_selection")),
+        );
+    }
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
@@ -6523,7 +6605,7 @@ async fn service_select_conversation(
         token_budget_runtime,
         mcp_catalog,
         logs,
-        provider_configuration,
+        mut provider_configuration,
         ai_tool_configuration,
         live_context_budgets,
         pending_question,
@@ -6578,11 +6660,18 @@ async fn service_select_conversation(
         return refresh_workbench_snapshot(state).await;
     }
     workspace_snapshot.selected_session = session_id;
+    restore_webui_runtime_controls_for_session(
+        &mut provider_configuration,
+        workspace_snapshot.session_runtime_state.get(&session_id),
+    );
     let (surface_messages, subagent_navigation) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.active_subagent_panel = None;
+        if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
+            agent_runtime.provider_configuration = provider_configuration.clone();
+        }
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
@@ -6929,6 +7018,108 @@ fn refresh_settings_projection_locked(
     guard.workbench.ai_capability_vendor_catalog = ai_capability_vendor_catalog();
     guard.workbench.composer_attachment_capabilities =
         composer_attachment_capabilities(provider_configuration, &ai_tool_configuration);
+}
+
+/// Returns the mutable runtime state for the currently selected regular session.
+/// 返回当前选中常规会话的可变运行态。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the retained WebUI workspace snapshot.
+/// `workspace` 是 WebUI 保留的工作区快照。
+///
+/// # Returns
+/// 返回值
+/// The selected session id and its mutable runtime-state entry when a regular session is selected.
+/// 当当前选中常规会话时，返回会话 id 及其可变运行态条目。
+fn selected_session_runtime_state_mut(
+    workspace: &mut WorkspaceSnapshot,
+) -> Option<(SessionId, &mut SessionRuntimeStateEntry)> {
+    let session_id = workspace.selected_session;
+    if session_id == SessionId::nil()
+        || !workspace
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+    {
+        return None;
+    }
+    let runtime_state = workspace
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: current_unix_millis_text(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    Some((session_id, runtime_state))
+}
+
+/// Refreshes model, reasoning, attachment, and context-usage projections after runtime controls change.
+/// 在运行控制项变化后刷新模型、思考、附件与上下文占用投影。
+///
+/// # Parameters
+/// 参数
+/// `guard` is the locked service state being updated.
+/// `guard` 是正在更新的服务状态锁。
+/// `provider_configuration` is the effective provider configuration for the selected session.
+/// `provider_configuration` 是当前选中会话的生效 Provider 配置。
+/// `ai_tool_configuration` is the effective AI tool capability configuration.
+/// `ai_tool_configuration` 是生效的 AI 工具能力配置。
+fn refresh_workbench_runtime_controls_locked(
+    guard: &mut ServiceBridgeState,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) {
+    let context_usage = guard.workspace_snapshot.as_ref().and_then(|workspace| {
+        context_usage_snapshot_from_runtime_state(
+            workspace.selected_session,
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session),
+            &guard.live_context_budgets,
+            provider_configuration,
+            ai_tool_configuration,
+        )
+    });
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.providers = providers(provider_configuration);
+    guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
+    guard.workbench.composer_attachment_capabilities =
+        composer_attachment_capabilities(provider_configuration, ai_tool_configuration);
+    guard.workbench.context_usage = context_usage;
+}
+
+/// Restores WebUI runtime controls from one session-scoped runtime state when possible.
+/// 在可行时从单个会话运行态恢复 WebUI 运行控制项。
+///
+/// # Parameters
+/// 参数
+/// `provider_configuration` is the mutable provider configuration used to build the next workbench.
+/// `provider_configuration` 是用于构建下一份工作台快照的可变 Provider 配置。
+/// `runtime_state` is the selected session runtime-state entry.
+/// `runtime_state` 是当前选中会话的运行态条目。
+fn restore_webui_runtime_controls_for_session(
+    provider_configuration: &mut ProviderConfigurationFile,
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) {
+    let Some(runtime_state) = runtime_state else {
+        return;
+    };
+    if let (Some(provider_id), Some(model_id)) = (
+        runtime_state.active_provider_id.as_deref(),
+        runtime_state.active_model_id.as_deref(),
+    ) {
+        let model_is_available =
+            provider_config::effective_model_choices(provider_id, provider_configuration)
+                .into_iter()
+                .any(|choice| choice.id == model_id);
+        if model_is_available {
+            provider_configuration.model = Some(format!("{provider_id}/{model_id}"));
+        }
+    }
+    if let Some(reasoning_effort) = runtime_state.active_reasoning_effort {
+        provider_configuration.workbench_reasoning_effort = Some(reasoning_effort);
+    }
 }
 
 /// Stores provider and MCP runtime changes after a configuration mutation.
@@ -18628,6 +18819,8 @@ fn workbench_from_runtime(
             workspace.selected_session,
             selected_runtime_state,
             live_context_budgets,
+            provider_configuration,
+            ai_tool_configuration,
         ),
     }
 }
@@ -18802,9 +18995,21 @@ fn context_usage_snapshot_from_runtime_state(
     session_id: SessionId,
     runtime_state: Option<&SessionRuntimeStateEntry>,
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> Option<ContextUsageSnapshot> {
     let runtime_state = runtime_state?;
-    let context_budget = live_context_budgets.get(&session_id);
+    let historical_context_budget;
+    let context_budget = if let Some(context_budget) = live_context_budgets.get(&session_id) {
+        Some(context_budget)
+    } else {
+        historical_context_budget = historical_context_budget_snapshot_from_runtime_state(
+            runtime_state,
+            provider_configuration,
+            ai_tool_configuration,
+        );
+        historical_context_budget.as_ref()
+    };
     let mut tooltip_rows = Vec::new();
     if let Some(context_budget) = context_budget {
         tooltip_rows.push(format!(
@@ -18834,7 +19039,7 @@ fn context_usage_snapshot_from_runtime_state(
             tooltip_rows.push(format!("最近 API：{}", provider_usage_label(usage)));
         }
     } else {
-        tooltip_rows.push(String::from("请求拆分：等待预算引擎计算"));
+        tooltip_rows.push(String::from("请求拆分：暂无历史用量，等待预算引擎计算"));
     }
 
     tooltip_rows.push(if runtime_state.last_compaction_id.is_some() {
@@ -18856,6 +19061,146 @@ fn context_usage_snapshot_from_runtime_state(
         tooltip_title: String::from("上下文占用"),
         tooltip_rows,
     })
+}
+
+/// Builds one historical context-budget snapshot from the last persisted provider usage.
+/// 根据最近一次持久化 Provider 用量构建历史上下文预算快照。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the selected session runtime-state entry.
+/// `runtime_state` 是当前选中会话的运行态条目。
+/// `provider_configuration` is used to resolve the session model catalog entry.
+/// `provider_configuration` 用于解析会话模型目录项。
+/// `ai_tool_configuration` is used to resolve effective model capability overrides.
+/// `ai_tool_configuration` 用于解析生效模型能力覆盖。
+///
+/// # Returns
+/// 返回值
+/// A best-effort context budget snapshot when historical usage exists.
+/// 当存在历史用量时返回尽力而为的上下文预算快照。
+fn historical_context_budget_snapshot_from_runtime_state(
+    runtime_state: &SessionRuntimeStateEntry,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Option<ContextBudgetSnapshot> {
+    let observed_usage = runtime_state
+        .last_successful_provider_usage
+        .as_ref()
+        .or(runtime_state.last_provider_usage.as_ref())
+        .filter(|usage| usage.has_any_tokens())?;
+    let provider_id = runtime_state.active_provider_id.as_deref()?;
+    let model_id = runtime_state.active_model_id.as_deref()?;
+    let capabilities = runtime_state_model_capabilities(
+        runtime_state,
+        provider_configuration,
+        ai_tool_configuration,
+    );
+    let effective_input_limit = capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.input_limit.or(capabilities.context_limit));
+    let input_tokens = vulcan_context::observed_input_tokens_from_usage(Some(observed_usage))
+        .or(observed_usage.total_tokens)
+        .unwrap_or_default();
+    let mut usage_ratio = effective_input_limit
+        .map(|limit| input_tokens as f32 / limit.max(1) as f32)
+        .unwrap_or(0.0);
+    if effective_input_limit.is_none() && input_tokens > 0 {
+        usage_ratio = 0.01;
+    }
+
+    Some(ContextBudgetSnapshot {
+        fingerprint: runtime_state
+            .live_context_budget_fingerprint
+            .clone()
+            .unwrap_or_else(|| format!("historical:{provider_id}:{model_id}")),
+        context_limit: capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.context_limit),
+        effective_input_limit,
+        reserved_output_tokens: capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.output_limit)
+            .unwrap_or_default(),
+        reserved_reasoning_tokens: 0,
+        reserved_compaction_tokens: 0,
+        compaction_auto_enabled: false,
+        baseline_matches_active_runtime: true,
+        baseline_budget_fingerprint_matches: true,
+        baseline_assembly_fingerprint_matches: true,
+        baseline_mismatch_reason: None,
+        estimated_system_tokens: 0,
+        estimated_history_tokens: input_tokens,
+        estimated_prompt_tokens: 0,
+        estimated_tool_tokens: 0,
+        estimated_input_tokens: input_tokens,
+        estimated_total_tokens: observed_usage.total_tokens.unwrap_or_else(|| {
+            input_tokens
+                .saturating_add(observed_usage.output_tokens.unwrap_or_default())
+                .saturating_add(observed_usage.reasoning_tokens.unwrap_or_default())
+        }),
+        usage_ratio,
+        observed_usage: Some(observed_usage.clone()),
+        severity: historical_context_budget_severity(usage_ratio),
+    })
+}
+
+/// Resolves model capabilities for the model recorded by one session runtime state.
+/// 为单个会话运行态记录的模型解析模型能力。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` supplies the provider and model identity.
+/// `runtime_state` 提供供应商与模型身份。
+/// `provider_configuration` supplies enabled model catalog data.
+/// `provider_configuration` 提供已启用模型目录数据。
+/// `ai_tool_configuration` supplies capability overrides.
+/// `ai_tool_configuration` 提供能力覆盖配置。
+///
+/// # Returns
+/// 返回值
+/// Effective model capabilities when the provider can be resolved.
+/// 当供应商可解析时返回生效模型能力。
+fn runtime_state_model_capabilities(
+    runtime_state: &SessionRuntimeStateEntry,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Option<ResolvedModelCapabilities> {
+    let provider_id = runtime_state.active_provider_id.as_ref()?;
+    let model_id = runtime_state.active_model_id.as_ref()?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .find(|model| model.id == *model_id);
+    Some(resolve_effective_model_capabilities(
+        definition,
+        model.as_ref(),
+        ai_tool_configuration,
+    ))
+}
+
+/// Resolves one historical usage ratio into the shared context-budget severity buckets.
+/// 将历史占用比例解析为共享上下文预算严重级别。
+///
+/// # Parameters
+/// 参数
+/// `usage_ratio` is the input-token usage ratio against the effective window.
+/// `usage_ratio` 是输入 token 相对有效窗口的占用比例。
+///
+/// # Returns
+/// 返回值
+/// The broad context-budget severity bucket.
+/// 返回粗粒度上下文预算严重级别。
+fn historical_context_budget_severity(usage_ratio: f32) -> ContextBudgetSeverity {
+    if usage_ratio >= vulcan_context::CONTEXT_BUDGET_OVERFLOW_RATIO {
+        ContextBudgetSeverity::Overflow
+    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_COMPACTION_RATIO {
+        ContextBudgetSeverity::CompactSoon
+    } else if usage_ratio >= vulcan_context::CONTEXT_BUDGET_WARNING_RATIO {
+        ContextBudgetSeverity::Warning
+    } else {
+        ContextBudgetSeverity::Healthy
+    }
 }
 
 /// Builds the context-budget token breakdown rows used by the tooltip.

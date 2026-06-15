@@ -236,13 +236,10 @@ export function ComposerPanel(props: {
     if (!activeModelChoiceKey) {
       return;
     }
-    const currentStillAvailable = availableModelChoices.some(
-      (choice) => modelPickerChoiceKey(choice) === modelChoice,
-    );
-    if (!modelChoice || !currentStillAvailable) {
+    if (modelChoice !== activeModelChoiceKey) {
       setModelChoice(activeModelChoiceKey);
     }
-  }, [activeModelChoiceKey, availableModelChoices, modelChoice]);
+  }, [activeModelChoiceKey, modelChoice]);
 
   React.useEffect(() => {
     setDisabledAiCapabilityKinds(defaultDisabledAiCapabilityKinds(props.aiCapabilities));
@@ -523,6 +520,23 @@ export function ComposerPanel(props: {
     }
   }, [props, reasoningEffort]);
 
+  // toggleExecutionMode switches between build and plan without leaving the composer focus flow.
+  // toggleExecutionMode 在不离开输入区焦点流的情况下切换构建与计划模式。
+  const toggleExecutionMode = React.useCallback(() => {
+    setExecutionMode((current) => current === "plan" ? "build" : "plan");
+  }, []);
+
+  // handleComposerContainerKeyDown captures Shift+Tab as the work-mode shortcut.
+  // handleComposerContainerKeyDown 将 Shift+Tab 捕获为工作模式快捷键。
+  const handleComposerContainerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Tab" || !event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    toggleExecutionMode();
+  }, [toggleExecutionMode]);
+
   // handleComposerKeyDown maps Enter to send while keeping Shift+Enter as a newline.
   // handleComposerKeyDown 将 Enter 映射为发送，并保留 Shift+Enter 换行。
   const handleComposerKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -583,6 +597,7 @@ export function ComposerPanel(props: {
         onDragLeave={() => setIsAttachmentDragOver(false)}
         onDragOver={handleComposerDragOver}
         onDrop={handleComposerDrop}
+        onKeyDownCapture={handleComposerContainerKeyDown}
       >
         <input
           accept={attachmentInputAccept}
@@ -646,6 +661,14 @@ export function ComposerPanel(props: {
               fallbackLabel={t("composer.selectFallback")}
               onValueChange={setExecutionMode}
               options={executionModeOptions}
+              tooltip={(
+                <>
+                  <strong>工作模式</strong>
+                  <span>Shift+Tab 切换</span>
+                  <span>构建：计划执行、完整工具</span>
+                  <span>计划：编辑前先出计划</span>
+                </>
+              )}
               value={executionMode}
             />
             <ModelPickerControl
@@ -681,6 +704,7 @@ export function ComposerPanel(props: {
               onValueChange={(value) => void handleReasoningEffortChange(value)}
               openSignal={reasoningPickerOpenSignal}
               options={reasoningEffortOptions}
+              tooltip={<strong>思考级别</strong>}
               value={reasoningEffort}
             />
             {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (

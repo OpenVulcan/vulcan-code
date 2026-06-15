@@ -4,6 +4,11 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import type { ProviderSummary } from "@/types";
 
@@ -82,20 +87,29 @@ export function ModelPickerControl(props: {
 
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          aria-label={props.ariaLabel}
-          className="composer-select-trigger model"
-          disabled={choices.length === 0}
-          type="button"
-          variant="outline"
-        >
-          <span className="composer-select-icon"><Cpu size={15} /></span>
-          <span className="composer-select-copy">
-            <span className="composer-select-label">{selectedChoice?.modelName ?? props.fallbackLabel}</span>
-          </span>
-        </Button>
-      </DropdownMenuTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <Button
+              aria-label={props.ariaLabel}
+              className="composer-select-trigger model"
+              disabled={choices.length === 0}
+              type="button"
+              variant="outline"
+            >
+              <span className="composer-select-icon"><Cpu size={15} /></span>
+              <span className="composer-select-copy">
+                <span className="composer-select-label">{selectedChoice?.modelName ?? props.fallbackLabel}</span>
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent className="composer-control-tooltip" side="top">
+          <strong>点击选择模型</strong>
+          <span>当前模型：{selectedChoice?.modelName ?? props.fallbackLabel}</span>
+          <span>当前供应商：{selectedChoice?.providerName ?? "-"}</span>
+        </TooltipContent>
+      </Tooltip>
       <DropdownMenuContent align="start" className="model-picker-content" sideOffset={8}>
         <div className="model-picker-filter">
           <Search size={14} />

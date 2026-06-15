@@ -181,6 +181,15 @@ export function ComposerAiCapabilityControl(props: {
     () => selectedTargets.map((target) => target.targetSelector),
     [selectedTargets],
   );
+  const capabilityTooltipRows = React.useMemo(
+    () => composerCapabilityTooltipRows(
+      visibleCapabilities,
+      props.disabledKinds,
+      props.disabledTargetSelectors,
+      props.targetOrder,
+    ),
+    [props.disabledKinds, props.disabledTargetSelectors, props.targetOrder, visibleCapabilities],
+  );
   // handleTargetDragEnd applies the dnd-kit order directly to current-message route overrides.
   // handleTargetDragEnd 将 dnd-kit 顺序直接应用到当前消息级路由覆盖。
   const handleTargetDragEnd = React.useCallback((event: DragEndEvent) => {
@@ -209,28 +218,40 @@ export function ComposerAiCapabilityControl(props: {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <button
-          aria-label={props.ariaLabel}
-          className="composer-capability-trigger composer-select-trigger capability"
-          type="button"
-        >
-          <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
-          <span className="composer-select-copy">
-            <span className="composer-capability-icon-row" aria-label={triggerSubtitle}>
-              {visibleCapabilities.map(({ option, capability }) => (
-                <ComposerCapabilityIcon
-                  enabled={Boolean(capability?.available) && !props.disabledKinds.has(option.value)}
-                  key={option.value}
-                  label={props.locale === "zh-CN" ? option.labelZh : option.labelEn}
-                  option={option}
-                  size={11}
-                />
-              ))}
-            </span>
-          </span>
-        </button>
-      </DialogTrigger>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DialogTrigger asChild>
+            <button
+              aria-label={props.ariaLabel}
+              className="composer-capability-trigger composer-select-trigger capability"
+              type="button"
+            >
+              <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
+              <span className="composer-select-copy">
+                <span className="composer-capability-icon-row" aria-label={triggerSubtitle}>
+                  {visibleCapabilities.map(({ option, capability }) => (
+                    <ComposerCapabilityIcon
+                      enabled={Boolean(capability?.available) && !props.disabledKinds.has(option.value)}
+                      key={option.value}
+                      label={props.locale === "zh-CN" ? option.labelZh : option.labelEn}
+                      option={option}
+                      size={11}
+                    />
+                  ))}
+                </span>
+              </span>
+            </button>
+          </DialogTrigger>
+        </TooltipTrigger>
+        <TooltipContent className="composer-control-tooltip" side="top">
+          <strong>点击设置扩展能力</strong>
+          {capabilityTooltipRows.length ? (
+            capabilityTooltipRows.map((row) => <span key={row}>{row}</span>)
+          ) : (
+            <span>暂无已启用模块</span>
+          )}
+        </TooltipContent>
+      </Tooltip>
       <DialogContent className="composer-capability-dialog">
         <DialogHeader>
           <DialogTitle>{props.locale === "zh-CN" ? "当前消息能力设置" : "Current-message capabilities"}</DialogTitle>
@@ -384,6 +405,36 @@ function ComposerCapabilityTargetRow(props: {
   );
 }
 
+// composerCapabilityTooltipRows builds compact enabled module rows for the capability trigger tooltip.
+// composerCapabilityTooltipRows 为能力触发器 tooltip 构建紧凑的已启用模块行。
+function composerCapabilityTooltipRows(
+  entries: Array<{ option: ComposerAiCapabilityOption; capability: AiCapabilitySummary | undefined }>,
+  disabledKinds: Set<AiCapabilityKind>,
+  disabledTargetSelectors: Set<string>,
+  targetOrder: Map<AiCapabilityKind, string[]>,
+): string[] {
+  return entries.flatMap(({ option, capability }) => {
+    if (!capability?.available || disabledKinds.has(option.value)) {
+      return [];
+    }
+    const targetLabels = orderedAiCapabilityTargets(capability, targetOrder)
+      .filter((target) => target.enabled && !disabledTargetSelectors.has(target.targetSelector))
+      .map(composerCapabilityTargetTooltipLabel);
+    if (!targetLabels.length) {
+      return [];
+    }
+    const visibleLabels = targetLabels.slice(0, 4);
+    const suffix = targetLabels.length > visibleLabels.length ? "..." : "";
+    return [`${option.labelZh}：${visibleLabels.join("、")}${suffix}`];
+  });
+}
+
+// composerCapabilityTargetTooltipLabel returns the shortest useful display label for one capability target.
+// composerCapabilityTargetTooltipLabel 返回单个能力目标最短可用展示标签。
+function composerCapabilityTargetTooltipLabel(target: AiCapabilityTargetSummary): string {
+  return target.targetName || target.targetAlias || target.vendorName || target.vendorId;
+}
+
 // ComposerSelectControl renders one iced-aligned compact composer selector.
 // ComposerSelectControl 渲染一个对齐 iced 的紧凑输入区选择器。
 export function ComposerSelectControl(props: {
@@ -414,6 +465,9 @@ export function ComposerSelectControl(props: {
   // Optional signal that opens the selector from an external slash-command route.
   // 可选信号，用于从外部 slash 指令路由打开选择器。
   openSignal?: number;
+  // Optional tooltip shown when hovering the closed trigger.
+  // 鼠标悬停闭合触发器时显示的可选提示。
+  tooltip?: React.ReactNode;
   // Selection change handler.
   // 选项变更处理函数。
   onValueChange: (value: string) => void;
@@ -432,18 +486,38 @@ export function ComposerSelectControl(props: {
 
   return (
     <Select onOpenChange={setOpen} onValueChange={props.onValueChange} open={open} value={props.value}>
-      <SelectTrigger
-        aria-label={props.ariaLabel}
-        className={cn("composer-select-trigger", props.className)}
-      >
-        {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
-        <span className={cn("composer-select-copy", !props.icon && "centered")}>
-          <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
-          {!props.hideTriggerSubtitle && (props.triggerSubtitle || selectedOption?.subtitle) ? (
-            <span className="composer-select-subtitle">{props.triggerSubtitle ?? selectedOption?.subtitle}</span>
-          ) : null}
-        </span>
-      </SelectTrigger>
+      {props.tooltip ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <SelectTrigger
+              aria-label={props.ariaLabel}
+              className={cn("composer-select-trigger", props.className)}
+            >
+              {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
+              <span className={cn("composer-select-copy", !props.icon && "centered")}>
+                <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
+                {!props.hideTriggerSubtitle && (props.triggerSubtitle || selectedOption?.subtitle) ? (
+                  <span className="composer-select-subtitle">{props.triggerSubtitle ?? selectedOption?.subtitle}</span>
+                ) : null}
+              </span>
+            </SelectTrigger>
+          </TooltipTrigger>
+          <TooltipContent className="composer-control-tooltip" side="top">{props.tooltip}</TooltipContent>
+        </Tooltip>
+      ) : (
+        <SelectTrigger
+          aria-label={props.ariaLabel}
+          className={cn("composer-select-trigger", props.className)}
+        >
+          {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
+          <span className={cn("composer-select-copy", !props.icon && "centered")}>
+            <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
+            {!props.hideTriggerSubtitle && (props.triggerSubtitle || selectedOption?.subtitle) ? (
+              <span className="composer-select-subtitle">{props.triggerSubtitle ?? selectedOption?.subtitle}</span>
+            ) : null}
+          </span>
+        </SelectTrigger>
+      )}
       <SelectContent align="start" className="composer-select-content" position="popper">
         {props.options.map((option) => (
           <SelectItem className="composer-select-item" key={option.value} value={option.value}>

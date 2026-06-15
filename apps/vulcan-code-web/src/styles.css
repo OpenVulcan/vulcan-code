@@ -1419,10 +1419,14 @@ button {
 .workspace-resizable-body {
   min-width: 0;
   min-height: 0;
+  width: 100%;
   height: 100%;
+  display: flex;
+  overflow: hidden;
 }
 
 .workspace-main-panel {
+  flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1438,11 +1442,14 @@ button {
 }
 
 .workspace-context-resize-handle {
+  flex: 0 0 9px;
   width: 9px;
   background: transparent;
   cursor: col-resize;
   opacity: 1;
-  transition: opacity 160ms ease;
+  transition:
+    opacity 160ms ease,
+    width 220ms cubic-bezier(0.2, 0.72, 0.22, 1);
 }
 
 .workspace-context-resize-handle::before {
@@ -1453,28 +1460,31 @@ button {
 }
 
 .workspace-context-resize-handle.is-closed {
+  flex-basis: 0;
+  width: 0;
   opacity: 0;
   pointer-events: none;
 }
 
 .workspace-context-panel {
-  min-width: 260px;
+  flex: 0 0 var(--workspace-context-panel-width, 420px);
+  width: var(--workspace-context-panel-width, 420px);
+  min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border);
   background: var(--background);
   overflow: hidden;
   opacity: 1;
-  transform: translateX(0);
   transition:
-    transform 220ms cubic-bezier(0.2, 0.72, 0.22, 1),
+    flex-basis 220ms cubic-bezier(0.2, 0.72, 0.22, 1),
+    width 220ms cubic-bezier(0.2, 0.72, 0.22, 1),
     opacity 160ms ease;
-  will-change: transform, opacity;
+  will-change: flex-basis, width, opacity;
 }
 
 .workspace-context-panel.is-closed {
   opacity: 0;
   pointer-events: none;
-  transform: translateX(calc(100% + 12px));
 }
 
 .workspace-context-floating-panel {
@@ -3471,6 +3481,28 @@ button {
   line-height: 1.35;
 }
 
+.composer-control-tooltip {
+  display: grid;
+  align-items: start;
+  gap: 4px;
+  max-width: 280px;
+  white-space: normal;
+}
+
+.composer-control-tooltip strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.composer-control-tooltip span {
+  color: color-mix(in oklch, currentColor 78%, transparent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .composer-select-trigger {
   height: 26px;
   min-width: 0;
@@ -3953,7 +3985,7 @@ button {
 
 .composer-panel textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 60px;
   max-height: 300px;
   overflow-y: auto;
   resize: none;
