@@ -16,7 +16,6 @@ import {
   Boxes,
   Folder,
   FolderPlus,
-  LayoutDashboard,
   Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -241,7 +240,7 @@ export function ProjectSidebar(props: {
         <SidebarMenu>
           <SidebarMenuItem>
             <div aria-current="page" className="vcn-sidebar-static-item">
-              <LayoutDashboard size={16} />
+              <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
               <span className="vcn-sidebar-label strong">{t("sidebar.console")}</span>
             </div>
           </SidebarMenuItem>

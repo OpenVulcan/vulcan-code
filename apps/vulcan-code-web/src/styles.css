@@ -42,7 +42,7 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
-  --app-header-height: 58px;
+  --app-header-height: 30px;
 }
 
 * {
@@ -113,11 +113,10 @@ button {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 18px;
+  gap: 10px;
   border-right: 0;
-  border-bottom: 1px solid var(--border);
   background: var(--background);
-  padding: 0 14px;
+  padding: 0 0 0 10px;
   overflow: hidden;
 }
 
@@ -128,6 +127,7 @@ button {
 
 .titlebar-drag-region {
   align-self: stretch;
+  height: 30px;
   min-width: 56px;
   cursor: default;
 }
@@ -136,9 +136,10 @@ button {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  height: 30px;
   margin-bottom: 0;
-  padding: 0 6px;
+  padding: 3px 4px 3px 3px;
 }
 
 .brand[data-tauri-drag-region] > * {
@@ -146,27 +147,31 @@ button {
 }
 
 .brand-mark {
-  width: 30px;
-  height: 30px;
+  width: 24px;
+  height: 24px;
   display: grid;
   place-items: center;
   background: var(--primary);
   color: var(--primary-foreground);
   font-weight: 800;
-  border-radius: 7px;
+  border-radius: 6px;
 }
 
-.brand strong,
-.brand span {
-  display: block;
-  line-height: 1.15;
+.sidebar-brand-mark {
+  flex: 0 0 24px;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .brand strong {
+  display: block;
+  overflow: hidden;
   font-size: 13px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.brand span,
 .step-item span,
 .module-card span,
 .data-card span,
@@ -180,7 +185,8 @@ button {
 .feature-nav-shell {
   min-width: 0;
   display: flex;
-  align-items: center;
+  align-self: stretch;
+  align-items: flex-end;
   gap: 3px;
 }
 
@@ -190,8 +196,9 @@ button {
 
 .feature-nav {
   min-width: 0;
+  height: 100%;
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 6px;
   overflow-x: auto;
   overflow-y: hidden;
@@ -235,18 +242,42 @@ button {
   font-size: 12px;
 }
 
+.global-actions .status-pill,
+.global-actions .theme-toggle,
+.global-actions .language-select-trigger {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.global-actions .status-pill:hover,
+.global-actions .theme-toggle:hover,
+.global-actions .language-select-trigger:hover,
+.global-actions .language-select-trigger[data-state="open"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.global-actions .theme-toggle:focus-visible,
+.global-actions .language-select-trigger:focus-visible {
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .window-controls {
   height: 100%;
+  min-height: 30px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 2px;
+  gap: 0;
+  align-self: stretch;
 }
 
 .window-control-button {
-  width: 29px;
-  height: 26px;
-  border-radius: 7px;
+  width: 46px;
+  height: 30px;
+  border-radius: 0;
   color: var(--muted-foreground);
 }
 
@@ -268,7 +299,14 @@ button {
   align-items: center;
   gap: 7px;
   padding: 0 8px;
+  border-radius: 7px 7px 0 0;
   text-align: left;
+  transform: translateY(1px);
+}
+
+.feature-nav .feature-button:active,
+.feature-nav .feature-button[data-variant="secondary"]:active {
+  transform: translateY(1px);
 }
 
 .feature-button span {
@@ -1203,14 +1241,14 @@ button {
 
 .console-header {
   min-width: 0;
-  min-height: 58px;
+  min-height: 46px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   border-bottom: 1px solid var(--border);
   background: var(--background);
-  padding: 0 18px;
+  padding: 0 14px;
 }
 
 .console-header-main {
@@ -1218,7 +1256,7 @@ button {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 
 .feature-header-title-stack {
@@ -1250,7 +1288,7 @@ button {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .console-header h1 {
@@ -1259,7 +1297,7 @@ button {
   margin: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1437,7 +1475,7 @@ button {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-rows: 58px minmax(0, 1fr);
+  grid-template-rows: 46px minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -6193,6 +6231,15 @@ button {
 .status-pill.error {
   border-color: var(--destructive);
   color: var(--destructive);
+}
+
+.global-actions .status-pill,
+.global-actions .status-pill.ready,
+.global-actions .status-pill.warning,
+.global-actions .status-pill.error {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .statusbar {

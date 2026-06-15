@@ -75,7 +75,7 @@ function FeatureSidebar(props: {
         <SidebarMenu>
           <SidebarMenuItem>
             <div aria-current="page" className="vcn-sidebar-static-item">
-              {areaIconMap[props.activeArea]}
+              <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
               <span className="vcn-sidebar-label strong">{feature?.label ?? "工作台"}</span>
             </div>
           </SidebarMenuItem>

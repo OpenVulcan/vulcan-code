@@ -51,15 +51,10 @@ export function BrandHeader(props: {
   // 品牌块是否应作为 Tauri 原生拖动区域。
   dragRegion?: boolean;
 }) {
-  // t translates shell labels used by the brand block.
-  // t 翻译品牌区域使用的外壳标签。
-  const { t } = useI18n();
   return (
     <div className="brand" data-tauri-drag-region={props.dragRegion ? "" : undefined}>
-      <div className="brand-mark">V</div>
       <div>
         <strong>Vulcan Code</strong>
-        <span>{t("app.subtitle")}</span>
       </div>
     </div>
   );

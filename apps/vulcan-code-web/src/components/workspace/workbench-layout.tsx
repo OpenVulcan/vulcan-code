@@ -452,6 +452,18 @@ export function WorkbenchLayout(props: {
     await shellClient.toggleWindowMaximize();
     window.setTimeout(() => void refreshWindowMaximizedState(), 40);
   }, [refreshWindowMaximizedState]);
+  // handleTitlebarDoubleClick toggles maximize only from non-interactive titlebar space.
+  // handleTitlebarDoubleClick 仅在非交互标题栏区域双击时切换最大化。
+  const handleTitlebarDoubleClick = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!showWindowControls) {
+      return;
+    }
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest("[data-no-drag], button, a, input, textarea, select, [role='button'], [role='menuitem']")) {
+      return;
+    }
+    void toggleWindowMaximize();
+  }, [showWindowControls, toggleWindowMaximize]);
   React.useEffect(() => {
     if (!showWindowControls) {
       return;
@@ -1317,6 +1329,7 @@ export function WorkbenchLayout(props: {
       <header
         className="main-menu"
         aria-label="主菜单"
+        onDoubleClick={handleTitlebarDoubleClick}
       >
         <BrandHeader dragRegion={showWindowControls} />
         <FeatureNav
