@@ -2892,7 +2892,7 @@ button {
   inset: 0;
   min-width: 0;
   min-height: 0;
-  padding: 48px 20px 16px;
+  padding: 48px 20px calc(var(--composer-dock-height, 132px) + 48px);
   overflow-x: hidden;
   overflow-y: auto;
   overflow-anchor: none;
@@ -3052,7 +3052,9 @@ button {
 }
 
 .composer-dock {
-  position: relative;
+  position: absolute;
+  right: max(16px, calc((100% - 800px) / 2));
+  bottom: 16px;
   z-index: 5;
   width: 800px;
   max-width: calc(100% - 32px);
@@ -3068,13 +3070,7 @@ button {
   will-change: bottom, transform;
 }
 
-.chat-grid > .composer-dock {
-  position: absolute;
-  right: max(16px, calc((100% - 800px) / 2));
-  bottom: 16px;
-}
-
-.chat-grid > .composer-dock.empty-mode {
+.composer-dock.empty-mode {
   bottom: calc(50% - 94px);
 }
 

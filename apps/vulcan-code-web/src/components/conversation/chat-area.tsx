@@ -317,20 +317,12 @@ export function ChatArea(props: ChatAreaProps) {
     return true;
   }, []);
 
-  // handleComposerDockHeightChange keeps the sticky footer from pushing a tail-locked transcript away.
-  // handleComposerDockHeightChange 避免粘性底部输入区高度变化时把贴底转录推离底部。
+  // handleComposerDockHeightChange updates overlay spacing without mutating transcript scroll.
+  // handleComposerDockHeightChange 更新浮层间距但不修改转录滚动位置。
   const handleComposerDockHeightChange = React.useCallback((height: number) => {
     setComposerDockHeight((current) => {
       if (current === height) {
         return current;
-      }
-      if (shouldFollowConversationTailRef.current) {
-        window.requestAnimationFrame(() => {
-          const element = workspaceRef.current;
-          if (element) {
-            element.scrollTop = element.scrollHeight;
-          }
-        });
       }
       return height;
     });
@@ -506,8 +498,8 @@ export function ChatArea(props: ChatAreaProps) {
     return () => window.clearTimeout(timeout);
   }, [emptyPromptVisible, isEmptyConversation]);
 
-  // composerDock renders either inside the scroll footer or as the empty-state floating composer.
-  // composerDock 渲染滚动底部插槽中的输入区，或空会话状态下的浮动输入区。
+  // composerDock stays as a floating layer outside the transcript scroll flow.
+  // composerDock 作为转录滚动流之外的浮动层保持挂载。
   const composerDock = (
     <ComposerDock
       aiCapabilities={props.workbench.aiCapabilities ?? []}
@@ -576,7 +568,7 @@ export function ChatArea(props: ChatAreaProps) {
               ? conversationVirtualizerStatesRef.current.get(activeSurfaceConversationId) ?? null
               : null}
             onVirtualizerStateChange={handleTimelineVirtualizerStateChange}
-            footer={isEmptyConversation ? null : composerDock}
+            footer={null}
             suppressEmptyPlaceholder={isEmptyConversation}
             onCopyText={props.onCopyText}
             onLoadToolDetail={props.onLoadToolDetail}
@@ -591,7 +583,7 @@ export function ChatArea(props: ChatAreaProps) {
               leaving={streamingThinkingOverlayLeaving}
             />
           ) : null}
-          {isEmptyConversation ? composerDock : null}
+          {composerDock}
         </>
       )}
     </div>
