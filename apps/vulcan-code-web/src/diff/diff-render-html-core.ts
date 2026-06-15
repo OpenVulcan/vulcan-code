@@ -867,8 +867,9 @@ function targetGutterLineHtml(
   options: { lineKey?: string; searchLineKeys?: ReadonlySet<string>; activeSearchLineKey?: string | null },
 ): string {
   const selected = targetSearchAttributes(options.lineKey, options.searchLineKeys, options.activeSearchLineKey);
+  const lineKeyAttribute = options.lineKey ? ` data-diff-line-key="${escapeHtml(options.lineKey)}"` : "";
   const numberHtml = lineNumber == null ? "" : `<span data-line-number-content="">${lineNumber}</span>`;
-  return `<div data-line-type="${lineType}" data-column-number="${lineNumber ?? ""}" data-line-index="${escapeHtml(lineIndex)}"${selected}>${numberHtml}</div>`;
+  return `<div data-line-type="${lineType}" data-column-number="${lineNumber ?? ""}" data-line-index="${escapeHtml(lineIndex)}"${lineKeyAttribute}${selected}>${numberHtml}</div>`;
 }
 
 // targetContentLineHtml renders one target-style content line.

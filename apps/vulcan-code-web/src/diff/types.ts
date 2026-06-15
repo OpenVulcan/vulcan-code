@@ -28,6 +28,9 @@ export interface DiffRenderPreferences {
   // Horizontal overflow behavior for rendered code columns.
   // 渲染代码列的横向溢出行为。
   overflowMode: DiffOverflowMode;
+  // Whether paired changed lines render word-level inline diff marks.
+  // 是否为成对变更行渲染词级行内差异标记。
+  inlineDiff: boolean;
   // Hunk separator style used by the target diff renderer.
   // 目标 diff 渲染器使用的 hunk 分隔样式。
   hunkSeparatorStyle: DiffHunkSeparatorStyle;

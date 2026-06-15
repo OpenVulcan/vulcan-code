@@ -67,6 +67,23 @@ const diffFileLoadedRowsPlaceholderStyleCache = new WeakMap<DiffFile, React.CSSP
 // diffMountedRowsPlaceholderStyleCache 按挂载行窗口缓存稳定等待占位样式。
 const diffMountedRowsPlaceholderStyleCache = new WeakMap<readonly DiffMountedVirtualRow[], React.CSSProperties>();
 
+// EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS keeps worker-rendered HTML independent from live search input.
+// EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS 让 Worker 渲染 HTML 与实时搜索输入解耦。
+const EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS: ReadonlySet<string> = new Set<string>();
+
+// diffRowsDomSetupKey captures mode preferences that require rebinding target DOM managers.
+// diffRowsDomSetupKey 捕获需要重新绑定目标 DOM 管理器的模式偏好。
+function diffRowsDomSetupKey(
+  // Current visual diff mode.
+  // 当前 diff 视觉模式。
+  viewMode: DiffViewMode,
+  // Current target-compatible render preferences.
+  // 当前目标兼容渲染偏好。
+  preferences: DiffRenderPreferences,
+): string {
+  return `${viewMode}:${preferences.overflowMode}:${preferences.hunkSeparatorStyle}:${preferences.indicatorStyle}`;
+}
+
 // DiffFileCardProps stores render inputs for one memoized file card.
 // DiffFileCardProps 保存单个记忆化文件卡片的渲染输入。
 interface DiffFileCardProps {
@@ -154,7 +171,7 @@ export const DiffFileCard = React.memo(function DiffFileCard(props: DiffFileCard
   const rowCount = React.useMemo(() => targetDiffFileVisualRowCount(props.file, props.viewMode), [props.file, props.viewMode]);
   const lightweightRendering = shouldUseLightweightDiffRendering(props.file);
   const shouldUseShikiTokens = !lightweightRendering && rowCount <= DIFF_SHIKI_TOKEN_ROW_LIMIT;
-  const inlineDiff = true;
+  const inlineDiff = props.renderPreferences.inlineDiff;
   const language = !props.collapsed && shouldUseShikiTokens ? diffLanguageForFile(props.file) : null;
   const highlightSupported = useHighlightLanguage(language);
   const contextExpansionAvailable = props.onLoadFileDetail && !props.file.tooLargeToDisplay ? canExpandDiffFileContext(props.file) : false;
@@ -720,8 +737,8 @@ function DirectDiffFileLines(props: {
   const highlightRevision = useHighlightedDiffFileRevision(props.file, props.language, useHighlightedRenderer);
   const plainHtml = usePlainDiffFileHtml({
     file: props.file,
-    searchLineKeys: props.searchLineKeys,
-    activeSearchLineKey: props.activeSearchLineKey,
+    searchLineKeys: EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS,
+    activeSearchLineKey: null,
     contextControls: Boolean(props.onExpandFileContext),
     hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
     indicatorStyle: props.renderPreferences.indicatorStyle,
@@ -733,8 +750,8 @@ function DirectDiffFileLines(props: {
     file: props.file,
     language: props.language ?? "text",
     highlightRevision,
-    searchLineKeys: props.searchLineKeys,
-    activeSearchLineKey: props.activeSearchLineKey,
+    searchLineKeys: EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS,
+    activeSearchLineKey: null,
     contextControls: Boolean(props.onExpandFileContext),
     hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
     indicatorStyle: props.renderPreferences.indicatorStyle,
@@ -743,7 +760,17 @@ function DirectDiffFileLines(props: {
     viewMode: props.viewMode,
   }, useHighlightedRenderer);
   const html = useHighlightedRenderer ? highlightedHtml : plainHtml;
-  return <DiffRowsHtml html={html} onExpandFileContext={props.onExpandFileContext} pendingStyle={diffFileLoadedRowsPlaceholderStyle(props.file)} />;
+  return (
+    <DiffRowsHtml
+      activeSearchLineKey={props.activeSearchLineKey}
+      domSetupKey={diffRowsDomSetupKey(props.viewMode, props.renderPreferences)}
+      html={html}
+      key={diffRowsDomSetupKey(props.viewMode, props.renderPreferences)}
+      onExpandFileContext={props.onExpandFileContext}
+      pendingStyle={diffFileLoadedRowsPlaceholderStyle(props.file)}
+      searchLineKeys={props.searchLineKeys}
+    />
+  );
 }
 
 // areDiffFileCardPropsEqual avoids re-rendering unaffected file cards during scroll or collapse.
@@ -830,8 +857,8 @@ function VirtualDiffFileLines(props: {
   const plainRowsHtml = usePlainDiffRowsHtml({
     fileKey: props.file.key,
     rows: window.rows,
-    searchLineKeys: props.searchLineKeys,
-    activeSearchLineKey: props.activeSearchLineKey,
+    searchLineKeys: EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS,
+    activeSearchLineKey: null,
     contextControls: Boolean(props.onExpandFileContext),
     hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
     indicatorStyle: props.renderPreferences.indicatorStyle,
@@ -844,8 +871,8 @@ function VirtualDiffFileLines(props: {
     rows: window.rows,
     language: props.language ?? "text",
     highlightRevision,
-    searchLineKeys: props.searchLineKeys,
-    activeSearchLineKey: props.activeSearchLineKey,
+    searchLineKeys: EMPTY_DIFF_RENDER_SEARCH_LINE_KEYS,
+    activeSearchLineKey: null,
     contextControls: Boolean(props.onExpandFileContext),
     hunkSeparatorStyle: props.renderPreferences.hunkSeparatorStyle,
     indicatorStyle: props.renderPreferences.indicatorStyle,
@@ -874,7 +901,15 @@ function VirtualDiffFileLines(props: {
   return (
     <div className="diff-virtual-lines" ref={hostRef}>
       {window.paddingTop > 0 ? <div aria-hidden="true" className="diff-virtual-spacer" style={window.topSpacerStyle} /> : null}
-      <DiffRowsHtml html={rowsHtml} onExpandFileContext={props.onExpandFileContext} pendingStyle={diffMountedRowsPlaceholderStyle(window.rows)} />
+      <DiffRowsHtml
+        activeSearchLineKey={props.activeSearchLineKey}
+        domSetupKey={diffRowsDomSetupKey(props.viewMode, props.renderPreferences)}
+        html={rowsHtml}
+        key={diffRowsDomSetupKey(props.viewMode, props.renderPreferences)}
+        onExpandFileContext={props.onExpandFileContext}
+        pendingStyle={diffMountedRowsPlaceholderStyle(window.rows)}
+        searchLineKeys={props.searchLineKeys}
+      />
       {window.paddingBottom > 0 ? <div aria-hidden="true" className="diff-virtual-spacer" style={window.bottomSpacerStyle} /> : null}
     </div>
   );
@@ -886,6 +921,15 @@ function DiffRowsHtml(props: {
   // Rendered HTML for the mounted row window.
   // 已挂载行窗口或整文件对应的渲染 HTML。
   html: string;
+  // Stable key for DOM managers that depend on view and overflow mode outside raw HTML identity.
+  // DOM 管理器稳定键，用于覆盖仅靠原始 HTML 身份无法表达的视图和溢出模式变化。
+  domSetupKey: string;
+  // Search result line keys visible on the current result page.
+  // 当前结果页可见的搜索命中行键。
+  searchLineKeys?: ReadonlySet<string>;
+  // Active search result line key.
+  // 当前活跃搜索命中行键。
+  activeSearchLineKey?: string | null;
   // Stable placeholder style used while worker HTML is pending.
   // Worker HTML 等待期间使用的稳定占位样式。
   pendingStyle: React.CSSProperties;
@@ -894,7 +938,10 @@ function DiffRowsHtml(props: {
   onExpandFileContext?: (hunkIndex: number, direction: DiffHunkExpansionDirection) => void;
 }) {
   const hostRef = React.useRef<HTMLDivElement | null>(null);
-  React.useLayoutEffect(() => setupTargetDiffDom(hostRef.current), [props.html]);
+  useTargetDiffDomSetup(hostRef, props.domSetupKey, props.html);
+  React.useLayoutEffect(() => {
+    applyDiffSearchMarkers(hostRef.current, props.searchLineKeys, props.activeSearchLineKey);
+  }, [props.activeSearchLineKey, props.html, props.searchLineKeys]);
   const handleClick = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     const clickedElement = event.target instanceof Element ? event.target : null;
     const expandElement = clickedElement ? targetDiffLineInfoElement(clickedElement, hostRef.current) : null;
@@ -964,6 +1011,100 @@ function DiffRowsHtml(props: {
     );
   }
   return <div className="diff-plain-rendered-window" dangerouslySetInnerHTML={{ __html: props.html }} onClick={handleClick} ref={hostRef} />;
+}
+
+// useTargetDiffDomSetup installs target DOM managers and retries when cached HTML swaps its inner structure.
+// useTargetDiffDomSetup 安装目标 DOM 管理器，并在缓存 HTML 替换内部结构时重试绑定。
+function useTargetDiffDomSetup(
+  // Rendered HTML host element reference.
+  // 已渲染 HTML 宿主元素引用。
+  hostRef: React.RefObject<HTMLDivElement | null>,
+  // Stable key for mode changes that require rebinding DOM managers.
+  // 需要重新绑定 DOM 管理器的模式变化稳定键。
+  domSetupKey: string,
+  // Rendered HTML identity used by React to update the host subtree.
+  // React 用于更新宿主子树的已渲染 HTML 身份。
+  html: string,
+): void {
+  React.useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!host) {
+      return undefined;
+    }
+    let cleanup: (() => void) | undefined;
+    let frameId = -1;
+    // install refreshes all target DOM managers after React has committed the current subtree.
+    // install 在 React 提交当前子树后刷新所有目标 DOM 管理器。
+    const install = () => {
+      cleanup?.();
+      cleanup = setupTargetDiffDom(host);
+    };
+    // scheduleInstall coalesces repeated structure and size events into one animation frame.
+    // scheduleInstall 将连续结构和尺寸事件合并到一个动画帧中执行。
+    const scheduleInstall = () => {
+      if (frameId !== -1) {
+        return;
+      }
+      frameId = window.requestAnimationFrame(() => {
+        frameId = -1;
+        install();
+      });
+    };
+    install();
+    const mutationObserver = typeof MutationObserver === "undefined"
+      ? null
+      : new MutationObserver(scheduleInstall);
+    mutationObserver?.observe(host, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["data-diff-type", "data-overflow"],
+    });
+    return () => {
+      mutationObserver?.disconnect();
+      if (frameId !== -1) {
+        window.cancelAnimationFrame(frameId);
+      }
+      cleanup?.();
+    };
+  }, [domSetupKey, hostRef, html]);
+}
+
+// applyDiffSearchMarkers updates search markers on mounted rows without regenerating diff HTML.
+// applyDiffSearchMarkers 在已挂载行上更新搜索标记，避免重新生成 diff HTML。
+function applyDiffSearchMarkers(
+  // Root element containing the rendered diff HTML.
+  // 包含已渲染 diff HTML 的根元素。
+  root: HTMLElement | null,
+  // Search result line keys visible on the current result page.
+  // 当前结果页可见的搜索命中行键。
+  searchLineKeys: ReadonlySet<string> | undefined,
+  // Active search result line key.
+  // 当前活跃搜索命中行键。
+  activeSearchLineKey: string | null | undefined,
+): void {
+  if (!root) {
+    return;
+  }
+  root.querySelectorAll<HTMLElement>("[data-search-match],[data-search-active]").forEach((element) => {
+    element.removeAttribute("data-search-match");
+    element.removeAttribute("data-search-active");
+  });
+  if (!searchLineKeys?.size && !activeSearchLineKey) {
+    return;
+  }
+  root.querySelectorAll<HTMLElement>("[data-diff-line-key]").forEach((element) => {
+    const lineKey = element.getAttribute("data-diff-line-key");
+    if (!lineKey) {
+      return;
+    }
+    if (searchLineKeys?.has(lineKey)) {
+      element.setAttribute("data-search-match", "");
+    }
+    if (activeSearchLineKey === lineKey) {
+      element.setAttribute("data-search-active", "");
+    }
+  });
 }
 
 // targetDiffLineInfoElement mirrors the target event walk for line-info expansion controls.

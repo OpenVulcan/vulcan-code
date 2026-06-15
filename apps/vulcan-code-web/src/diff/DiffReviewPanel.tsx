@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronRight, FileText, FileWarning, Folder, FolderClosed, FolderOpen, Search, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FileWarning, Folder, ListCollapse, ListTree, Search, RefreshCw } from "lucide-react";
 
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "./diff-file-card";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
@@ -9,7 +9,6 @@ import {
   DIFF_SEARCH_DETAIL_PREFETCH_DISPATCH_DELAY_MS,
   DIFF_SEARCH_DETAIL_PREFETCH_LIMIT,
   DIFF_SEARCH_DETAIL_PREFETCH_TARGET_MATCHES,
-  DIFF_SEARCH_PAGE_SIZE,
   DIFF_SEARCH_SUMMARY_FILE_MATCH_LIMIT,
   DIFF_SEARCH_SUMMARY_REQUEST_DEBOUNCE_MS,
 } from "./limits";
@@ -40,9 +39,72 @@ import {
 } from "./diff-render-index";
 import "./diffReview.css";
 
+// DIFF_RENDER_PREFERENCES_STORAGE_KEY stores WebUI diff display preference state.
+// DIFF_RENDER_PREFERENCES_STORAGE_KEY 保存 WebUI diff 显示偏好状态。
+const DIFF_RENDER_PREFERENCES_STORAGE_KEY = "vulcan-webui-diff-render-preferences";
+
+// DEFAULT_DIFF_RENDER_PREFERENCES provides target-compatible first-run rendering switches.
+// DEFAULT_DIFF_RENDER_PREFERENCES 提供首次运行时的目标兼容渲染开关。
+const DEFAULT_DIFF_RENDER_PREFERENCES: DiffRenderPreferences = {
+  overflowMode: "scroll",
+  inlineDiff: true,
+  hunkSeparatorStyle: "line-info",
+  indicatorStyle: "bars",
+};
+
 // DiffFileDetailLoader lazily requests one file-level diff detail from the host.
 // DiffFileDetailLoader 从宿主懒请求单个文件级 diff 详情。
 type DiffFileDetailLoader = (file: DiffFile, contextLines?: number, expansion?: DiffHunkExpansionRequest) => void;
+
+// initialDiffRenderPreferences returns persisted diff render preferences with schema validation.
+// initialDiffRenderPreferences 返回经过结构校验的持久化 diff 渲染偏好。
+function initialDiffRenderPreferences(): DiffRenderPreferences {
+  if (typeof window === "undefined") {
+    return DEFAULT_DIFF_RENDER_PREFERENCES;
+  }
+  try {
+    const stored = window.localStorage.getItem(DIFF_RENDER_PREFERENCES_STORAGE_KEY);
+    return normalizeDiffRenderPreferences(stored ? JSON.parse(stored) : null);
+  } catch {
+    return DEFAULT_DIFF_RENDER_PREFERENCES;
+  }
+}
+
+// persistDiffRenderPreferences stores the latest render preferences for future review panels.
+// persistDiffRenderPreferences 为后续审核面板保存最新渲染偏好。
+function persistDiffRenderPreferences(preferences: DiffRenderPreferences): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(DIFF_RENDER_PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+  } catch {
+    // Ignore quota or privacy-mode failures because rendering can continue with in-memory state.
+    // 忽略容量或隐私模式失败，因为渲染仍可使用内存状态继续。
+  }
+}
+
+// normalizeDiffRenderPreferences upgrades unknown storage data into a complete supported preference object.
+// normalizeDiffRenderPreferences 将未知存储数据升级为完整且受支持的偏好对象。
+function normalizeDiffRenderPreferences(candidate: unknown): DiffRenderPreferences {
+  const value = typeof candidate === "object" && candidate !== null
+    ? candidate as Partial<Record<keyof DiffRenderPreferences, unknown>>
+    : {};
+  return {
+    overflowMode: value.overflowMode === "wrap" || value.overflowMode === "scroll"
+      ? value.overflowMode
+      : DEFAULT_DIFF_RENDER_PREFERENCES.overflowMode,
+    inlineDiff: typeof value.inlineDiff === "boolean"
+      ? value.inlineDiff
+      : DEFAULT_DIFF_RENDER_PREFERENCES.inlineDiff,
+    hunkSeparatorStyle: value.hunkSeparatorStyle === "simple" || value.hunkSeparatorStyle === "line-info"
+      ? value.hunkSeparatorStyle
+      : DEFAULT_DIFF_RENDER_PREFERENCES.hunkSeparatorStyle,
+    indicatorStyle: value.indicatorStyle === "classic" || value.indicatorStyle === "bars"
+      ? value.indicatorStyle
+      : DEFAULT_DIFF_RENDER_PREFERENCES.indicatorStyle,
+  };
+}
 
 // DiffReviewPanel renders one structured Git diff snapshot.
 // DiffReviewPanel 渲染单个结构化 Git diff 快照。
@@ -82,7 +144,9 @@ export function DiffReviewPanel(props: {
   const summarySearchRequestSeqRef = React.useRef(0);
   const summarySearchResolvedKeyRef = React.useRef<string | null>(null);
   const summarySearchTargetAppliedKeyRef = React.useRef<string | null>(null);
-  const summarySearchScrollAppliedKeyRef = React.useRef<string | null>(null);
+  // searchScrollAppliedRequestRef prevents one explicit navigation request from scrolling repeatedly after layout updates.
+  // searchScrollAppliedRequestRef 防止一次显式导航请求在布局更新后重复滚动。
+  const searchScrollAppliedRequestRef = React.useRef(0);
   const [scrollState, handleFileListScroll, syncFileListScrollState] = useDiffScrollState(fileListRef);
   const snapshot = props.snapshot;
   const selection = props.selection ?? { mode: "unstaged" };
@@ -91,12 +155,11 @@ export function DiffReviewPanel(props: {
   const onSearchWorkspaceDiff = props.onSearchWorkspaceDiff;
   const [searchQuery, setSearchQuery] = React.useState("");
   const [activeSearchIndex, setActiveSearchIndex] = React.useState(0);
+  // searchScrollRequest increments only for Enter or step-button navigation.
+  // searchScrollRequest 仅在 Enter 或上下条按钮导航时递增。
+  const [searchScrollRequest, setSearchScrollRequest] = React.useState(0);
   const [viewMode, setViewMode] = React.useState<DiffViewMode>("unified");
-  const [renderPreferences, setRenderPreferences] = React.useState<DiffRenderPreferences>({
-    overflowMode: "scroll",
-    hunkSeparatorStyle: "line-info",
-    indicatorStyle: "bars",
-  });
+  const [renderPreferences, setRenderPreferences] = React.useState<DiffRenderPreferences>(initialDiffRenderPreferences);
   const [expandedFileKey, setExpandedFileKey] = React.useState<string | null>(null);
   const [fileTreeFilter, setFileTreeFilter] = React.useState("");
   const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(true);
@@ -108,42 +171,9 @@ export function DiffReviewPanel(props: {
     () => diffReviewScrollResetKey(snapshot, selection),
     [selection, snapshot],
   );
-  const { index: searchIndex, pending: searchPending, error: searchWorkerError } = useDiffSearchIndex(snapshot, searchQuery);
-  const safeActiveSearchIndex = clampDiffSearchIndex(activeSearchIndex, searchIndex.matches.length);
-  const activeSearchMatch = searchIndex.matches[safeActiveSearchIndex] ?? null;
-  const summarySearchRequestKey = React.useMemo(
-    () => diffSummarySearchRequestKey(snapshot, selection, searchQuery),
-    [searchQuery, selection, snapshot],
-  );
-  const activeSummarySearchMatches = summarySearchState.requestKey === summarySearchRequestKey
-    ? summarySearchState.matches
-    : EMPTY_SUMMARY_SEARCH_MATCHES;
-  const activeSummarySearchPending = summarySearchState.requestKey === summarySearchRequestKey && summarySearchState.pending;
-  const summarySearchDerived = React.useMemo(
-    () => diffSummarySearchDerived(activeSummarySearchMatches),
-    [activeSummarySearchMatches],
-  );
-  const summarySearchMatchByFileKey = summarySearchDerived.matchByFileKey;
-  const summarySearchPageFileKeys = summarySearchDerived.pageFileKeys;
-  const searchVisiblePage = React.useMemo(
-    () => diffSearchVisiblePage(searchIndex.matches, safeActiveSearchIndex),
-    [safeActiveSearchIndex, searchIndex.matches],
-  );
-  const searchPageMatches = searchVisiblePage.matches;
-  const searchPageFileKeys = searchVisiblePage.fileKeys;
-  const searchVisibleLineKeys = searchVisiblePage.lineKeys;
-  const renderedSnapshot = React.useMemo(
-    () => (snapshot
-      ? projectedSearchSnapshot(
-        snapshot,
-        searchQuery,
-        searchIndex.matches.length,
-        searchPageFileKeys,
-        summarySearchPageFileKeys,
-      )
-      : null),
-    [searchIndex.matches.length, searchPageFileKeys, searchQuery, snapshot, summarySearchPageFileKeys],
-  );
+  // renderedSnapshot must not be narrowed by search because the diff body height must stay stable while typing.
+  // renderedSnapshot 不能被搜索缩窄，因为输入搜索内容时 diff 主体高度必须保持稳定。
+  const renderedSnapshot = snapshot;
   // autoSelectedSingleFile uses the only rendered file directly instead of showing a directory landing page.
   // autoSelectedSingleFile 在仅渲染一个文件时直接使用该文件，避免展示目录入口页。
   const autoSelectedSingleFile = renderedSnapshot?.files.length === 1 ? renderedSnapshot.files[0] : null;
@@ -164,6 +194,29 @@ export function DiffReviewPanel(props: {
       : null,
     [renderedSnapshot, selectedDiffFile],
   );
+  // searchScopeSnapshot limits search to the file body currently shown in the review pane.
+  // searchScopeSnapshot 将搜索限制在审核面板当前实际展示的文件正文内。
+  const searchScopeSnapshot = selectedDiffSnapshot;
+  const { index: searchIndex, pending: searchPending, error: searchWorkerError } = useDiffSearchIndex(searchScopeSnapshot, searchQuery);
+  const safeActiveSearchIndex = clampDiffSearchIndex(activeSearchIndex, searchIndex.matches.length);
+  const activeSearchMatch = searchIndex.matches[safeActiveSearchIndex] ?? null;
+  const summarySearchRequestKey = React.useMemo(
+    () => diffSummarySearchRequestKey(searchScopeSnapshot, selection, searchQuery),
+    [searchQuery, searchScopeSnapshot, selection],
+  );
+  const activeSummarySearchMatches = summarySearchState.requestKey === summarySearchRequestKey
+    ? summarySearchState.matches
+    : EMPTY_SUMMARY_SEARCH_MATCHES;
+  const summarySearchDerived = React.useMemo(
+    () => diffSummarySearchDerived(activeSummarySearchMatches),
+    [activeSummarySearchMatches],
+  );
+  const summarySearchMatchByFileKey = summarySearchDerived.matchByFileKey;
+  const searchVisiblePage = React.useMemo(
+    () => diffSearchVisiblePage(searchIndex.matches, safeActiveSearchIndex),
+    [safeActiveSearchIndex, searchIndex.matches],
+  );
+  const searchVisibleLineKeys = searchVisiblePage.lineKeys;
   const selectedCollapsedFileKeys = React.useMemo(
     () => diffCollapsedFileKeys(selectedDiffSnapshot, effectiveExpandedFileKey),
     [effectiveExpandedFileKey, selectedDiffSnapshot],
@@ -183,34 +236,10 @@ export function DiffReviewPanel(props: {
   // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
   const refreshBusy = Boolean(props.loading || refreshPending);
   const searchActive = searchQuery.trim().length > 0;
-  const searchWaitingForBackendMatches = searchActive
-    && !searchPending
-    && searchIndex.matches.length === 0
-    && activeSummarySearchPending;
-  const searchHasNoMatches = searchActive
-    && !searchPending
-    && !activeSummarySearchPending
-    && searchIndex.matches.length === 0
-    && activeSummarySearchMatches.length === 0;
-  const searchPageDescription = React.useMemo(
-    () => searchActive && searchIndex.matches.length
-      ? searchFilePageDescription(searchPageMatches, searchPageFileKeys, searchIndex.matches.length)
-      : searchActive && activeSummarySearchMatches.length
-        ? summarySearchFilePageDescription(activeSummarySearchMatches, summarySearchState.truncated)
-      : null,
-    [
-      activeSummarySearchMatches,
-      searchActive,
-      searchIndex.matches.length,
-      searchPageFileKeys,
-      searchPageMatches,
-      summarySearchState.truncated,
-    ],
-  );
   const backendSearchPrefetchCandidates = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(
-    () => snapshot && searchActive && !searchPending
+    () => searchScopeSnapshot && searchActive && !searchPending
       ? diffSearchDetailPrefetchCandidates(
-        snapshot,
+        searchScopeSnapshot,
         searchQuery,
         searchIndex.matches,
         safeActiveSearchIndex,
@@ -224,7 +253,7 @@ export function DiffReviewPanel(props: {
       searchIndex.matches,
       searchPending,
       searchQuery,
-      snapshot,
+      searchScopeSnapshot,
     ],
   );
   const mountedFiles = React.useMemo(
@@ -288,11 +317,32 @@ export function DiffReviewPanel(props: {
       throw error;
     }
   }, [onRefresh, refreshBusy]);
+  // requestSearchScroll records one user-requested search navigation scroll.
+  // requestSearchScroll 记录一次用户请求的搜索导航滚动。
+  const requestSearchScroll = React.useCallback(() => {
+    setSearchScrollRequest((request) => request + 1);
+  }, []);
+  // handleSearchNext moves to the next loaded search match and requests one scroll.
+  // handleSearchNext 移动到下一条已加载搜索命中并请求一次滚动。
+  const handleSearchNext = React.useCallback(() => {
+    setActiveSearchIndex((index) => nextSearchIndex(index, searchIndex.matches.length));
+    requestSearchScroll();
+  }, [requestSearchScroll, searchIndex.matches.length]);
+  // handleSearchPrevious moves to the previous loaded search match and requests one scroll.
+  // handleSearchPrevious 移动到上一条已加载搜索命中并请求一次滚动。
+  const handleSearchPrevious = React.useCallback(() => {
+    setActiveSearchIndex((index) => previousSearchIndex(index, searchIndex.matches.length));
+    requestSearchScroll();
+  }, [requestSearchScroll, searchIndex.matches.length]);
   React.useEffect(() => {
     if (!props.loading) {
       setRefreshPending(false);
     }
   }, [props.loading]);
+
+  React.useEffect(() => {
+    persistDiffRenderPreferences(renderPreferences);
+  }, [renderPreferences]);
   React.useLayoutEffect(() => {
     const element = fileListRef.current;
     if (!element) {
@@ -346,11 +396,27 @@ export function DiffReviewPanel(props: {
     }
   }, [activeSearchIndex, searchIndex.matches.length]);
   React.useEffect(() => {
-    if (!activeSearchMatch) {
+    if (searchScrollRequest === 0 || searchScrollAppliedRequestRef.current === searchScrollRequest) {
       return;
     }
-    scrollToDiffSearchMatch(fileListRef.current, virtualLayout, activeSearchMatch);
-  }, [activeSearchMatch, virtualLayout]);
+    if (activeSearchMatch && scrollToDiffSearchMatch(fileListRef.current, virtualLayout, activeSearchMatch)) {
+      searchScrollAppliedRequestRef.current = searchScrollRequest;
+      return;
+    }
+    if (!activeSearchMatch && activeSummarySearchMatches.length && searchIndex.matches.length === 0 && !summarySearchState.pending) {
+      const target = activeSummarySearchMatches[0];
+      if (scrollToDiffSummarySearchMatch(fileListRef.current, virtualLayout, target)) {
+        searchScrollAppliedRequestRef.current = searchScrollRequest;
+      }
+    }
+  }, [
+    activeSearchMatch,
+    activeSummarySearchMatches,
+    searchIndex.matches.length,
+    searchScrollRequest,
+    summarySearchState.pending,
+    virtualLayout,
+  ]);
   React.useEffect(() => {
     if (!summarySearchRequestKey || !onSearchWorkspaceDiff || !searchActive || searchPending) {
       if (!summarySearchRequestKey) {
@@ -366,6 +432,9 @@ export function DiffReviewPanel(props: {
       return;
     }
     const requestSeq = summarySearchRequestSeqRef.current + 1;
+    // requestFileKey freezes the visible file scope for this asynchronous backend search.
+    // requestFileKey 固定本次异步后端搜索对应的可见文件作用域。
+    const requestFileKey = searchScopeSnapshot?.files[0]?.key ?? null;
     summarySearchRequestSeqRef.current = requestSeq;
     setSummarySearchState({
       requestKey: summarySearchRequestKey,
@@ -383,14 +452,19 @@ export function DiffReviewPanel(props: {
           if (summarySearchRequestSeqRef.current !== requestSeq) {
             return;
           }
+          // scopedMatches removes backend matches from files that are not currently displayed.
+          // scopedMatches 移除当前未显示文件中的后端命中。
+          const scopedMatches = requestFileKey
+            ? (response?.matches ?? []).filter((match) => match.key === requestFileKey)
+            : EMPTY_SUMMARY_SEARCH_MATCHES;
           summarySearchResolvedKeyRef.current = summarySearchRequestKey;
           summarySearchTargetAppliedKeyRef.current = null;
           setSummarySearchState({
             requestKey: summarySearchRequestKey,
             query: response?.query ?? requestQuery,
-            matches: response?.matches ?? [],
+            matches: scopedMatches,
             pending: false,
-            truncated: Boolean(response?.truncated),
+            truncated: false,
             scannedLines: response?.scannedLines ?? 0,
             error: null,
           });
@@ -424,6 +498,7 @@ export function DiffReviewPanel(props: {
     searchIndex.matches.length,
     searchPending,
     searchQuery,
+    searchScopeSnapshot,
     summarySearchRequestKey,
   ]);
   React.useEffect(() => {
@@ -446,25 +521,6 @@ export function DiffReviewPanel(props: {
     searchIndex.matches,
     summarySearchRequestKey,
     summarySearchState.pending,
-  ]);
-  React.useEffect(() => {
-    if (!activeSummarySearchMatches.length || searchIndex.matches.length > 0 || summarySearchState.pending) {
-      return;
-    }
-    const target = activeSummarySearchMatches[0];
-    const targetKey = diffSummarySearchTargetKey(summarySearchRequestKey, target);
-    if (!targetKey || summarySearchScrollAppliedKeyRef.current === targetKey) {
-      return;
-    }
-    if (scrollToDiffSummarySearchMatch(fileListRef.current, virtualLayout, target)) {
-      summarySearchScrollAppliedKeyRef.current = targetKey;
-    }
-  }, [
-    activeSummarySearchMatches,
-    searchIndex.matches.length,
-    summarySearchRequestKey,
-    summarySearchState.pending,
-    virtualLayout,
   ]);
   React.useEffect(() => {
     if (!onLoadFileDetail || !mountedDetailHydrationRequests.length) {
@@ -507,18 +563,19 @@ export function DiffReviewPanel(props: {
         canSearchPrevious={searchIndex.matches.length > 1}
         onCopyRaw={props.onCopyRaw}
         onRefresh={handleRefreshClick}
-        onSearchNext={() => setActiveSearchIndex((index) => nextSearchIndex(index, searchIndex.matches.length))}
-        onSearchPrevious={() => setActiveSearchIndex((index) => previousSearchIndex(index, searchIndex.matches.length))}
+        onSearchNext={handleSearchNext}
+        onSearchPrevious={handleSearchPrevious}
         onSearchQueryChange={(query) => {
           setSearchQuery(query);
           setActiveSearchIndex(0);
         }}
+        onSearchSubmit={handleSearchNext}
         onSelectionChange={props.onSelectionChange}
         onRenderPreferencesChange={setRenderPreferences}
         onViewModeChange={setViewMode}
         renderPreferences={renderPreferences}
         searchQuery={searchQuery}
-        searchResultLabel={searchPending ? "..." : searchWorkerError ? "索引不可用" : searchResultLabel(searchIndex.matches.length, safeActiveSearchIndex, searchIndex.truncated)}
+        searchResultLabel={searchWorkerError ? "索引不可用" : searchResultLabel(searchIndex.matches.length, safeActiveSearchIndex, searchIndex.truncated)}
         searchResultTruncated={searchIndex.truncated}
         viewMode={viewMode}
       />
@@ -540,16 +597,7 @@ export function DiffReviewPanel(props: {
           onScroll={handleFileListScroll}
           ref={fileListRef}
         >
-          {searchActive && (searchPending || searchWaitingForBackendMatches) ? (
-            <DiffSearchPendingState query={searchQuery} />
-          ) : searchHasNoMatches ? (
-            <DiffSearchEmptyState
-              error={searchWorkerError}
-              query={searchQuery}
-              scannedLines={searchIndex.scannedLines}
-              prefetchingMore={activeSummarySearchPending || backendSearchHydrationRequests.length > 0}
-            />
-          ) : selectedDiffFile ? (
+          {selectedDiffFile ? (
             <>
               {floatingHeaderFile ? (
                 <div className="diff-file-sticky-header-overlay">
@@ -561,7 +609,6 @@ export function DiffReviewPanel(props: {
                   />
                 </div>
               ) : null}
-              {searchPageDescription ? <DiffSearchPageNotice description={searchPageDescription} /> : null}
               {virtualLayout.enabled ? (
                 <div className="diff-file-list-virtual-canvas" style={virtualLayout.canvasStyle}>
                   {mountedFiles.map((item) => (
@@ -614,22 +661,6 @@ export function DiffReviewPanel(props: {
         </div>
       </div>
     </section>
-  );
-}
-
-// DiffSearchPendingState displays while the search worker builds the loaded-line index.
-// DiffSearchPendingState 在搜索 Worker 构建已加载行索引时显示。
-function DiffSearchPendingState(props: {
-  // Current search query.
-  // 当前搜索查询。
-  query: string;
-}) {
-  return (
-    <div className="diff-empty-state in-list">
-      <FileText size={20} />
-      <strong>正在搜索</strong>
-      <span>{`正在索引已加载 diff 中的 “${props.query.trim()}”。`}</span>
-    </div>
   );
 }
 
@@ -812,7 +843,7 @@ function DiffFileTreeDrawer(props: {
               title="全部展开"
               type="button"
             >
-              <FolderOpen size={13} />
+              <ListTree size={13} />
             </button>
             <button
               aria-label="全部折叠"
@@ -821,7 +852,7 @@ function DiffFileTreeDrawer(props: {
               title="全部折叠"
               type="button"
             >
-              <FolderClosed size={13} />
+              <ListCollapse size={13} />
             </button>
           </span>
         </label>
@@ -1140,51 +1171,6 @@ function diffFileTreeExtensionLabel(
   return extension ? extension.slice(0, 3).toUpperCase() : "•";
 }
 
-// DiffSearchPageNotice displays only active search narrowing state.
-// DiffSearchPageNotice 仅展示搜索缩小结果集时的状态。
-function DiffSearchPageNotice(props: {
-  // Search page status shown when search narrows rendered files.
-  // 搜索缩小渲染文件时显示的分页状态。
-  description: string;
-}) {
-  return (
-    <div className="diff-snapshot-policy-note">
-      <span>{props.description}</span>
-    </div>
-  );
-}
-
-// DiffSearchEmptyState displays an empty state when a query has no loaded-line matches.
-// DiffSearchEmptyState 在查询没有已加载行命中时显示空状态。
-function DiffSearchEmptyState(props: {
-  // Current search query.
-  // 当前搜索查询。
-  query: string;
-  // Number of loaded diff lines scanned.
-  // 已扫描的已加载 diff 行数量。
-  scannedLines: number;
-  // Optional local worker search error.
-  // 可选的本地 Worker 搜索错误。
-  error?: string | null;
-  // Whether summary-only files are being requested for this search.
-  // 当前搜索是否正在请求摘要文件详情。
-  prefetchingMore?: boolean;
-}) {
-  return (
-    <div className="diff-empty-state in-list">
-      <FileText size={20} />
-      <strong>{props.error ? "搜索索引暂不可用" : props.prefetchingMore ? "正在加载更多文件" : "没有匹配结果"}</strong>
-      <span>
-        {props.error
-          ? `已停止在主线程重建搜索索引：${props.error}`
-          : props.prefetchingMore
-            ? `已在 ${props.scannedLines} 行已加载 diff 中搜索 “${props.query.trim()}”，正在按需加载更多文件详情。`
-            : `已在 ${props.scannedLines} 行已加载 diff 中搜索 “${props.query.trim()}”。`}
-      </span>
-    </div>
-  );
-}
-
 // DiffSummarySearchState stores the compact backend file-hit search state.
 // DiffSummarySearchState 保存紧凑后端文件命中搜索状态。
 interface DiffSummarySearchState {
@@ -1196,7 +1182,7 @@ interface DiffSummarySearchState {
   query: string;
   // File-level matches returned by the backend.
   // 后端返回的文件级命中。
-  matches: WorkspaceDiffSearchFileMatch[];
+  matches: readonly WorkspaceDiffSearchFileMatch[];
   // Whether the backend search request is still pending.
   // 后端搜索请求是否仍在进行。
   pending: boolean;
@@ -1259,26 +1245,12 @@ interface DiffScoredSearchDetailPrefetchCandidate {
   summaryMatch?: WorkspaceDiffSearchFileMatch;
 }
 
-// DiffSnapshotFileIndexEntry stores one file and its original snapshot position.
-// DiffSnapshotFileIndexEntry 保存单个文件及其在原始快照中的位置。
-interface DiffSnapshotFileIndexEntry {
-  // File object from the source snapshot.
-  // 源快照中的文件对象。
-  file: DiffFile;
-  // Zero-based file position in the source snapshot.
-  // 文件在源快照中的从零开始的位置。
-  index: number;
-}
-
 // DiffSummarySearchDerived stores all first-order indexes for one backend search result array.
 // DiffSummarySearchDerived 保存一组后端搜索结果的一阶派生索引。
 interface DiffSummarySearchDerived {
   // First backend match by file key.
   // 每个文件 key 对应的首个后端命中。
   matchByFileKey: Map<string, WorkspaceDiffSearchFileMatch>;
-  // First page of backend-hit file keys shown before detail hydration.
-  // 详情水合前展示的首屏后端命中文件 key。
-  pageFileKeys: Set<string>;
   // Ranked backend hits by file key for detail prefetch scoring.
   // 用于详情预取评分的按文件 key 排名信息。
   rankByKey: Map<string, DiffSummarySearchRank>;
@@ -1288,14 +1260,6 @@ interface DiffSummarySearchDerived {
 // diffFilePathTextCache 按稳定 diff 文件对象缓存归一化路径搜索文本。
 const diffFilePathTextCache = new WeakMap<DiffFile, string>();
 
-// projectedSearchSnapshotCache stores search-projected snapshots by source snapshot and file-key set identity.
-// projectedSearchSnapshotCache 按源 snapshot 与文件 key 集合身份缓存搜索投影后的 snapshot。
-const projectedSearchSnapshotCache = new WeakMap<DiffPanelSnapshot, WeakMap<ReadonlySet<string>, DiffPanelSnapshot>>();
-
-// projectedSearchSnapshotFileIndexCache stores file lookup indexes per source snapshot.
-// projectedSearchSnapshotFileIndexCache 按源 snapshot 缓存文件查找索引。
-const projectedSearchSnapshotFileIndexCache = new WeakMap<DiffPanelSnapshot, Map<string, DiffSnapshotFileIndexEntry>>();
-
 // EMPTY_SUMMARY_SEARCH_MATCHES keeps inactive backend search matches reference-stable.
 // EMPTY_SUMMARY_SEARCH_MATCHES 保持未激活后端搜索命中列表引用稳定。
 const EMPTY_SUMMARY_SEARCH_MATCHES: readonly WorkspaceDiffSearchFileMatch[] = Object.freeze([]);
@@ -1304,7 +1268,6 @@ const EMPTY_SUMMARY_SEARCH_MATCHES: readonly WorkspaceDiffSearchFileMatch[] = Ob
 // EMPTY_SUMMARY_SEARCH_DERIVED 保持未激活后端搜索派生索引引用稳定。
 const EMPTY_SUMMARY_SEARCH_DERIVED: DiffSummarySearchDerived = Object.freeze({
   matchByFileKey: new Map<string, WorkspaceDiffSearchFileMatch>(),
-  pageFileKeys: new Set<string>(),
   rankByKey: new Map<string, DiffSummarySearchRank>(),
 });
 
@@ -1491,6 +1454,7 @@ function diffSummarySearchRequestKey(
   return [
     snapshot.repositoryRoot ?? "",
     snapshot.source,
+    snapshot.files.map((file) => file.key).join("\u0001"),
     selection.mode,
     selection.baseBranch ?? "",
     selection.compareBranch ?? "",
@@ -1529,15 +1493,11 @@ function diffSummarySearchDerived(matches: readonly WorkspaceDiffSearchFileMatch
     return cached;
   }
   const matchByFileKey = new Map<string, WorkspaceDiffSearchFileMatch>();
-  const pageFileKeys = new Set<string>();
   const rankByKey = new Map<string, DiffSummarySearchRank>();
   for (let index = 0; index < matches.length; index += 1) {
     const match = matches[index];
     if (!matchByFileKey.has(match.key)) {
       matchByFileKey.set(match.key, match);
-    }
-    if (pageFileKeys.size < DIFF_SEARCH_PAGE_SIZE) {
-      pageFileKeys.add(match.key);
     }
     rankByKey.set(match.key, {
       index,
@@ -1546,7 +1506,7 @@ function diffSummarySearchDerived(matches: readonly WorkspaceDiffSearchFileMatch
       match,
     });
   }
-  const derived = { matchByFileKey, pageFileKeys, rankByKey };
+  const derived = { matchByFileKey, rankByKey };
   summarySearchDerivedCache.set(matches, derived);
   return derived;
 }
@@ -1603,138 +1563,6 @@ function diffSearchMatchMatchesSummaryTarget(match: DiffSearchMatch, target: Wor
     return false;
   }
   return true;
-}
-
-// projectedSearchSnapshot narrows rendered files to the active search file page.
-// projectedSearchSnapshot 将渲染文件缩小到当前搜索文件分页。
-function projectedSearchSnapshot(
-  snapshot: DiffPanelSnapshot,
-  query: string,
-  matchCount: number,
-  fileKeys: ReadonlySet<string>,
-  summaryFileKeys: ReadonlySet<string>,
-): DiffPanelSnapshot {
-  if (!query.trim()) {
-    return snapshot;
-  }
-  if (matchCount <= 0 && summaryFileKeys.size <= 0) {
-    return snapshot;
-  }
-  const projectedFileKeys = matchCount > 0 ? fileKeys : summaryFileKeys;
-  if (projectedFileKeys.size <= 0) {
-    return snapshot;
-  }
-  const cachedProjection = cachedProjectedSearchSnapshot(snapshot, projectedFileKeys);
-  if (cachedProjection) {
-    return cachedProjection;
-  }
-  const projectedFiles = projectedSnapshotFiles(snapshot, projectedFileKeys);
-  if (projectedFiles.length === snapshot.files.length) {
-    rememberProjectedSearchSnapshot(snapshot, projectedFileKeys, snapshot);
-    return snapshot;
-  }
-  const projectedSnapshot = {
-    ...snapshot,
-    files: projectedFiles,
-  };
-  rememberProjectedSearchSnapshot(snapshot, projectedFileKeys, projectedSnapshot);
-  return projectedSnapshot;
-}
-
-// projectedSnapshotFiles maps a small search file page back to source files in original order.
-// projectedSnapshotFiles 将小规模搜索文件分页映射回原始顺序的源文件列表。
-function projectedSnapshotFiles(snapshot: DiffPanelSnapshot, fileKeys: ReadonlySet<string>): DiffFile[] {
-  const fileIndexByKey = diffSnapshotFileIndexByKey(snapshot);
-  const projectedEntries: DiffSnapshotFileIndexEntry[] = [];
-  for (const fileKey of fileKeys) {
-    const entry = fileIndexByKey.get(fileKey);
-    if (entry) {
-      projectedEntries.push(entry);
-    }
-  }
-  if (projectedEntries.length > 1) {
-    projectedEntries.sort(compareDiffSnapshotFileIndexEntries);
-  }
-  const projectedFiles: DiffFile[] = new Array(projectedEntries.length);
-  for (let index = 0; index < projectedEntries.length; index += 1) {
-    projectedFiles[index] = projectedEntries[index].file;
-  }
-  return projectedFiles;
-}
-
-// diffSnapshotFileIndexByKey returns an O(1) file lookup index for one stable snapshot.
-// diffSnapshotFileIndexByKey 返回单个稳定 snapshot 的 O(1) 文件查找索引。
-function diffSnapshotFileIndexByKey(snapshot: DiffPanelSnapshot): Map<string, DiffSnapshotFileIndexEntry> {
-  const cached = projectedSearchSnapshotFileIndexCache.get(snapshot);
-  if (cached) {
-    return cached;
-  }
-  const fileIndexByKey = new Map<string, DiffSnapshotFileIndexEntry>();
-  for (let index = 0; index < snapshot.files.length; index += 1) {
-    const file = snapshot.files[index];
-    fileIndexByKey.set(file.key, { file, index });
-  }
-  projectedSearchSnapshotFileIndexCache.set(snapshot, fileIndexByKey);
-  return fileIndexByKey;
-}
-
-// compareDiffSnapshotFileIndexEntries keeps projected search files in original snapshot order.
-// compareDiffSnapshotFileIndexEntries 保持搜索投影文件与原始快照顺序一致。
-function compareDiffSnapshotFileIndexEntries(
-  // Left indexed file entry.
-  // 左侧带索引的文件条目。
-  left: DiffSnapshotFileIndexEntry,
-  // Right indexed file entry.
-  // 右侧带索引的文件条目。
-  right: DiffSnapshotFileIndexEntry,
-): number {
-  return left.index - right.index;
-}
-
-// cachedProjectedSearchSnapshot reads a cached search projection for one stable file-key set.
-// cachedProjectedSearchSnapshot 读取指定稳定文件 key 集合对应的搜索投影缓存。
-function cachedProjectedSearchSnapshot(snapshot: DiffPanelSnapshot, fileKeys: ReadonlySet<string>): DiffPanelSnapshot | null {
-  return projectedSearchSnapshotCache.get(snapshot)?.get(fileKeys) ?? null;
-}
-
-// rememberProjectedSearchSnapshot stores one projected snapshot without retaining old source snapshots forever.
-// rememberProjectedSearchSnapshot 缓存单个投影 snapshot，且不会永久保留旧源 snapshot。
-function rememberProjectedSearchSnapshot(
-  snapshot: DiffPanelSnapshot,
-  fileKeys: ReadonlySet<string>,
-  projectedSnapshot: DiffPanelSnapshot,
-): void {
-  let projectionByFileKeys = projectedSearchSnapshotCache.get(snapshot);
-  if (!projectionByFileKeys) {
-    projectionByFileKeys = new WeakMap();
-    projectedSearchSnapshotCache.set(snapshot, projectionByFileKeys);
-  }
-  projectionByFileKeys.set(fileKeys, projectedSnapshot);
-}
-
-// searchFilePageDescription formats the search-mode file paging notice.
-// searchFilePageDescription 格式化搜索态文件分页提示。
-function searchFilePageDescription(
-  pageMatches: DiffSearchMatch[],
-  pageFileKeys: ReadonlySet<string>,
-  totalMatches: number,
-): string {
-  const firstMatch = pageMatches[0];
-  const lastMatch = pageMatches[pageMatches.length - 1];
-  if (!firstMatch || !lastMatch) {
-    return "搜索结果按匹配文件分页展示";
-  }
-  return `搜索结果按匹配文件分页展示：当前 ${pageFileKeys.size} 个文件，显示 ${pageMatches.length} / ${totalMatches} 条命中`;
-}
-
-// summarySearchFilePageDescription formats backend-hit file paging before detail hydration finishes.
-// summarySearchFilePageDescription 格式化详情水合完成前的后端命中文件分页提示。
-function summarySearchFilePageDescription(
-  matches: readonly WorkspaceDiffSearchFileMatch[],
-  truncated: boolean,
-): string {
-  const visibleFileCount = Math.min(DIFF_SEARCH_PAGE_SIZE, matches.length);
-  return `后端已在完整 diff 中找到 ${matches.length}${truncated ? "+" : ""} 个命中文件，当前展示前 ${visibleFileCount} 个并按需水合详情`;
 }
 
 // isPromiseLike checks whether a refresh result exposes a finalizer.
@@ -2010,19 +1838,20 @@ function scrollToDiffSearchMatch(
   container: HTMLDivElement | null,
   layout: DiffFileVirtualLayout,
   match: DiffSearchMatch,
-): void {
+): boolean {
   if (!container) {
-    return;
+    return false;
   }
   const scrollTop = diffScrollTopForLine(layout, match.fileKey, match.hunkIndex, match.lineIndex);
   if (scrollTop == null) {
-    return;
+    return false;
   }
   container.scrollTop = scrollTop;
   window.requestAnimationFrame(() => {
     const lineElement = container.querySelector<HTMLElement>(`[data-diff-line-key="${match.lineKey}"]`);
     lineElement?.scrollIntoView({ block: "center" });
   });
+  return true;
 }
 
 // scrollToDiffSummarySearchMatch scrolls to a backend file-level hit before detail hydration finishes.

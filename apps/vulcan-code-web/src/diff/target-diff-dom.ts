@@ -116,21 +116,18 @@ type TargetDiffSplitSide = "deletions" | "additions";
 // TargetDiffSplitScrollSyncManager mirrors the target De split scroll synchronizer.
 // TargetDiffSplitScrollSyncManager 复刻目标 De 分栏滚动同步器。
 class TargetDiffSplitScrollSyncManager {
-  // Whether the deletion side is currently driving synchronization.
-  // 删除侧当前是否正在驱动同步。
-  private isDeletionsScrolling = false;
-  // Whether the addition side is currently driving synchronization.
-  // 新增侧当前是否正在驱动同步。
-  private isAdditionsScrolling = false;
-  // Debounce timeout used to release the current driving side.
-  // 用于释放当前驱动侧的防抖计时器。
-  private timeoutId = -1;
   // Deletion code column element.
   // 删除侧 code 列元素。
   private codeDeletions: HTMLElement | undefined;
   // Addition code column element.
   // 新增侧 code 列元素。
   private codeAdditions: HTMLElement | undefined;
+  // Resize observer used to keep both split sides on one horizontal width.
+  // 用于让分栏两侧保持同一横向宽度的尺寸观察器。
+  private resizeObserver: ResizeObserver | undefined;
+  // Pending animation frame used to batch split-width recalculation.
+  // 用于批处理分栏宽度重算的待执行动画帧。
+  private resizeFrameId = -1;
   // Whether listeners are currently installed.
   // 当前是否已经安装监听器。
   private enabled = false;
@@ -146,7 +143,11 @@ class TargetDiffSplitScrollSyncManager {
     }
     this.codeDeletions?.removeEventListener("scroll", this.handleDeletionsScroll);
     this.codeAdditions?.removeEventListener("scroll", this.handleAdditionsScroll);
-    window.clearTimeout(this.timeoutId);
+    this.resizeObserver?.disconnect();
+    if (this.resizeFrameId !== -1) {
+      window.cancelAnimationFrame(this.resizeFrameId);
+      this.resizeFrameId = -1;
+    }
     this.codeDeletions = undefined;
     this.codeAdditions = undefined;
     this.enabled = false;
@@ -191,37 +192,76 @@ class TargetDiffSplitScrollSyncManager {
       this.codeAdditions = codeAdditions;
       codeAdditions.addEventListener("scroll", this.handleAdditionsScroll, { passive: true });
     }
+    this.setupSplitWidthObserver(codeDeletions, codeAdditions);
     this.enabled = true;
-    this.syncAdditionsToDeletions();
+    this.scheduleSplitColumnWidthSync();
   }
 
   // handleDeletionsScroll mirrors deletion-side horizontal scroll into the addition side.
   // handleDeletionsScroll 将删除侧横向滚动镜像到新增侧。
   private readonly handleDeletionsScroll = () => {
-    if (this.isAdditionsScrolling || this.isMirroringScroll) {
+    if (this.isMirroringScroll) {
       return;
     }
-    this.isDeletionsScrolling = true;
-    window.clearTimeout(this.timeoutId);
-    this.timeoutId = window.setTimeout(() => {
-      this.isDeletionsScrolling = false;
-    }, 300);
     this.syncAdditionsToDeletions();
   };
 
   // handleAdditionsScroll mirrors addition-side horizontal scroll into the deletion side.
   // handleAdditionsScroll 将新增侧横向滚动镜像到删除侧。
   private readonly handleAdditionsScroll = () => {
-    if (this.isDeletionsScrolling || this.isMirroringScroll) {
+    if (this.isMirroringScroll) {
       return;
     }
-    this.isAdditionsScrolling = true;
-    window.clearTimeout(this.timeoutId);
-    this.timeoutId = window.setTimeout(() => {
-      this.isAdditionsScrolling = false;
-    }, 300);
     this.syncDeletionsToAdditions();
   };
+
+  // setupSplitWidthObserver watches split code columns for viewport-width changes.
+  // setupSplitWidthObserver 监听分栏代码列的视口宽度变化。
+  private setupSplitWidthObserver(
+    // Deletion code column element.
+    // 删除侧 code 列元素。
+    codeDeletions: HTMLElement,
+    // Addition code column element.
+    // 新增侧 code 列元素。
+    codeAdditions: HTMLElement,
+  ): void {
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = new ResizeObserver(this.scheduleSplitColumnWidthSync);
+    this.resizeObserver.observe(codeDeletions);
+    this.resizeObserver.observe(codeAdditions);
+  }
+
+  // scheduleSplitColumnWidthSync batches split column width measurement after layout settles.
+  // scheduleSplitColumnWidthSync 在布局稳定后批量测量分栏列宽。
+  private readonly scheduleSplitColumnWidthSync = () => {
+    if (this.resizeFrameId !== -1) {
+      return;
+    }
+    this.resizeFrameId = window.requestAnimationFrame(() => {
+      this.resizeFrameId = -1;
+      this.syncSplitColumnWidths();
+      this.syncAdditionsToDeletions();
+    });
+  };
+
+  // syncSplitColumnWidths gives both split sides the same horizontal content span.
+  // syncSplitColumnWidths 让分栏两侧获得相同的横向内容跨度。
+  private syncSplitColumnWidths(): void {
+    const deletionContentWidth = targetDiffScrollableContentWidth(this.codeDeletions);
+    const additionContentWidth = targetDiffScrollableContentWidth(this.codeAdditions);
+    const contentWidth = Math.max(deletionContentWidth, additionContentWidth);
+    if (contentWidth <= 0) {
+      this.codeDeletions?.style.removeProperty("--diffs-split-content-width");
+      this.codeAdditions?.style.removeProperty("--diffs-split-content-width");
+      return;
+    }
+    const value = `${Math.ceil(contentWidth)}px`;
+    this.codeDeletions?.style.setProperty("--diffs-split-content-width", value);
+    this.codeAdditions?.style.setProperty("--diffs-split-content-width", value);
+  }
 
   // syncAdditionsToDeletions applies the deletion scroll offset without browser smooth-scroll lag.
   // syncAdditionsToDeletions 不经过浏览器平滑滚动延迟，直接应用删除侧滚动偏移。
@@ -362,6 +402,23 @@ function targetDiffSplitSideFromEventTarget(
     return "additions";
   }
   return null;
+}
+
+// targetDiffScrollableContentWidth returns the scrollable content width without the sticky gutter.
+// targetDiffScrollableContentWidth 返回扣除吸附行号栏后的可横向滚动内容宽度。
+function targetDiffScrollableContentWidth(
+  // Code column element to measure.
+  // 要测量的代码列元素。
+  codeElement: HTMLElement | undefined,
+): number {
+  if (!codeElement) {
+    return 0;
+  }
+  // gutterWidth mirrors the target convention that the first child is the number gutter grid.
+  // gutterWidth 对齐目标约定：第一个子元素是行号栏网格。
+  const firstChild = codeElement.firstElementChild;
+  const gutterWidth = firstChild instanceof HTMLElement ? firstChild.getBoundingClientRect().width : 0;
+  return Math.max(Math.ceil(codeElement.scrollWidth - gutterWidth), 0);
 }
 
 // TargetDiffResizeManager mirrors the target Dn ResizeManager.

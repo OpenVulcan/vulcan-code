@@ -66,14 +66,6 @@ const EMPTY_DIFF_SEARCH_WORKER_STATE: DiffSearchWorkerState = {
   error: null,
 };
 
-// PENDING_DIFF_SEARCH_WORKER_STATE is reused while the worker indexes the latest query.
-// PENDING_DIFF_SEARCH_WORKER_STATE 在 Worker 索引最新查询时复用。
-const PENDING_DIFF_SEARCH_WORKER_STATE: DiffSearchWorkerState = {
-  index: EMPTY_DIFF_SEARCH_INDEX,
-  pending: true,
-  error: null,
-};
-
 // DIFF_SEARCH_WORKER_UNAVAILABLE_STATE is reused after worker construction is unavailable.
 // DIFF_SEARCH_WORKER_UNAVAILABLE_STATE 在搜索 Worker 不可构造时复用。
 const DIFF_SEARCH_WORKER_UNAVAILABLE_STATE: DiffSearchWorkerState = {
@@ -177,7 +169,11 @@ export function useDiffSearchIndex(snapshot: DiffPanelSnapshot | null, query: st
     let postTimeout: number | null = null;
     const requestId = ++nextSearchWorkerRequestId;
     const snapshotKey = diffSearchSnapshotKey(snapshot);
-    setState(PENDING_DIFF_SEARCH_WORKER_STATE);
+    setState((previous) => ({
+      index: previous.index,
+      pending: true,
+      error: null,
+    }));
     searchWorkerCallbacks.set(requestId, (response) => {
       if (cancelled) {
         return;
