@@ -26,7 +26,6 @@ import {
   Minimize2,
   MinusIcon,
   Moon,
-  Settings,
   SquareIcon,
   Sun,
   Wrench,
@@ -170,9 +169,6 @@ export function FeatureNav(props: {
 // GlobalActions renders app-wide controls in the primary menu bar.
 // GlobalActions 渲染主菜单栏中的全局控制。
 export function GlobalActions(props: {
-  // Active top-level area used to lock the settings button visual state.
-  // 当前顶层区域，用于锁定设置按钮视觉状态。
-  activeArea: MainAreaId;
   // Startup snapshot used for the compact online indicator.
   // 紧凑在线状态指示使用的启动快照。
   startup: StartupSnapshot;
@@ -188,9 +184,6 @@ export function GlobalActions(props: {
   // Toggles between light and dark theme.
   // 在亮色与暗色主题之间切换。
   onToggleTheme: () => void;
-  // Opens the settings feature area.
-  // 打开设置功能区域。
-  onOpenSettings: () => void;
 }) {
   // t translates global action labels.
   // t 翻译全局操作标签。
@@ -227,17 +220,6 @@ export function GlobalActions(props: {
           <SelectItem value="en-US">EN</SelectItem>
         </SelectContent>
       </Select>
-      <Button
-        aria-pressed={props.activeArea === "settings"}
-        aria-label={t("global.openSettings")}
-        className="icon-button"
-        onClick={props.onOpenSettings}
-        size="icon"
-        type="button"
-        variant={props.activeArea === "settings" ? "secondary" : "outline"}
-      >
-        <Settings size={18} />
-      </Button>
     </div>
   );
 }

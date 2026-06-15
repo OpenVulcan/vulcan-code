@@ -222,16 +222,16 @@ button {
 }
 
 .theme-toggle {
-  width: 32px;
-  height: 32px;
+  width: 26px;
+  height: 26px;
   padding: 0;
 }
 
 .language-select-trigger {
-  width: 54px;
-  height: 32px;
+  width: 46px;
+  height: 26px;
   justify-content: center;
-  padding-inline: 10px;
+  padding-inline: 8px;
   font-size: 12px;
 }
 
@@ -244,8 +244,8 @@ button {
 }
 
 .window-control-button {
-  width: 36px;
-  height: 32px;
+  width: 29px;
+  height: 26px;
   border-radius: 7px;
   color: var(--muted-foreground);
 }
@@ -262,12 +262,12 @@ button {
 
 .feature-button {
   width: auto;
-  height: 34px;
+  height: 27px;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 10px;
+  gap: 7px;
+  padding: 0 8px;
   text-align: left;
 }
 

@@ -256,6 +256,12 @@ export function WorkbenchLayout(props: {
     description: i18n.t("area.settings.description"),
     status: i18n.t("feature.status.preview"),
   }), [i18n]);
+  // localizedTopFeatureAreas keeps settings as the final primary navigation item.
+  // localizedTopFeatureAreas 将设置保留为主导航的最后一项。
+  const localizedTopFeatureAreas = React.useMemo(
+    () => [...localizedPrimaryFeatureAreas, localizedSettingsFeatureArea],
+    [localizedPrimaryFeatureAreas, localizedSettingsFeatureArea],
+  );
   // activeArea stores the currently selected feature area.
   // activeArea 保存当前选中的功能区域。
   const [activeArea, setActiveArea] = React.useState<MainAreaId>("chat");
@@ -372,11 +378,9 @@ export function WorkbenchLayout(props: {
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
     () => new Set(),
   );
-  // activeFeature stores the selected feature summary, including settings opened from the global button.
-  // activeFeature 保存当前选中的功能区域摘要，并包含从全局按钮打开的设置页。
-  const activeFeature = activeArea === "settings"
-    ? localizedSettingsFeatureArea
-    : localizedPrimaryFeatureAreas.find((area) => area.id === activeArea) ?? localizedPrimaryFeatureAreas[0];
+  // activeFeature stores the selected feature summary from the complete top navigation list.
+  // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
+  const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -1316,19 +1320,17 @@ export function WorkbenchLayout(props: {
       >
         <BrandHeader dragRegion={showWindowControls} />
         <FeatureNav
-          areas={localizedPrimaryFeatureAreas}
+          areas={localizedTopFeatureAreas}
           activeArea={activeArea}
           onSelect={setActiveArea}
         />
         {showWindowControls ? <div className="titlebar-drag-region" data-tauri-drag-region /> : null}
         <GlobalActions
-          activeArea={activeArea}
           startup={props.startup}
           theme={theme}
           locale={i18n.locale}
           onChangeLocale={i18n.setLocale}
           onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-          onOpenSettings={() => setActiveArea("settings")}
         />
         {showWindowControls ? (
           <WindowControls
