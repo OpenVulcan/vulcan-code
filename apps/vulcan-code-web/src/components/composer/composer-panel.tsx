@@ -1,5 +1,5 @@
 import React from "react";
-import { Send, Square } from "lucide-react";
+import { Brain, Send, Square } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -669,17 +669,18 @@ export function ComposerPanel(props: {
               onTargetReorder={handleAiCapabilityTargetReorder}
               onTargetToggle={handleAiCapabilityTargetToggle}
             />
-            <ContextUsageOrb snapshot={props.contextUsage} />
           </div>
           <div className="composer-toolbar-right">
+            <ContextUsageOrb snapshot={props.contextUsage} />
             <ComposerSelectControl
               ariaLabel={t("composer.aria.reasoning")}
               className="reasoning no-indicator"
               fallbackLabel={t("composer.selectFallback")}
+              hideTriggerSubtitle
+              icon={<Brain size={15} />}
               onValueChange={(value) => void handleReasoningEffortChange(value)}
               openSignal={reasoningPickerOpenSignal}
               options={reasoningEffortOptions}
-              triggerSubtitle={t("composer.reasoning.subtitle")}
               value={reasoningEffort}
             />
             {props.isConversationRunning && (draftInput.trim() || attachments.length > 0) ? (

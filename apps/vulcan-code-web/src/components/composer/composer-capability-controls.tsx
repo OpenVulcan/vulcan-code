@@ -79,9 +79,7 @@ export function ContextUsageOrb(props: {
           className={cn("context-usage-orb", `severity-${severity}`)}
           style={style}
           type="button"
-        >
-          <span className="context-usage-orb-label">{percent}%</span>
-        </button>
+        />
       </TooltipTrigger>
       <TooltipContent align="end" className="context-usage-tooltip" side="top">
         <strong>{title}</strong>
@@ -219,7 +217,6 @@ export function ComposerAiCapabilityControl(props: {
         >
           <span className="composer-select-icon"><SlidersHorizontal size={15} /></span>
           <span className="composer-select-copy">
-            <span className="composer-select-label">{props.locale === "zh-CN" ? "扩展能力" : "Extended Capability"}</span>
             <span className="composer-capability-icon-row" aria-label={triggerSubtitle}>
               {visibleCapabilities.map(({ option, capability }) => (
                 <ComposerCapabilityIcon
@@ -402,6 +399,9 @@ export function ComposerSelectControl(props: {
   // Optional subtitle rendered only inside the closed trigger.
   // 仅在闭合触发器中渲染的可选副标题。
   triggerSubtitle?: string;
+  // Whether the closed trigger should suppress subtitle text.
+  // 闭合触发器是否隐藏副标题文本。
+  hideTriggerSubtitle?: boolean;
   // CSS class suffix controlling the iced-aligned fixed width.
   // 控制 iced 对齐固定宽度的 CSS 类后缀。
   className: string;
@@ -439,7 +439,7 @@ export function ComposerSelectControl(props: {
         {props.icon ? <span className="composer-select-icon">{props.icon}</span> : null}
         <span className={cn("composer-select-copy", !props.icon && "centered")}>
           <span className="composer-select-label">{selectedOption?.label ?? props.fallbackLabel}</span>
-          {props.triggerSubtitle || selectedOption?.subtitle ? (
+          {!props.hideTriggerSubtitle && (props.triggerSubtitle || selectedOption?.subtitle) ? (
             <span className="composer-select-subtitle">{props.triggerSubtitle ?? selectedOption?.subtitle}</span>
           ) : null}
         </span>

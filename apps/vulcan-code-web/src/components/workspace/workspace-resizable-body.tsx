@@ -28,6 +28,10 @@ import {
   PanelRightOpen,
 } from "lucide-react";
 
+// WORKSPACE_CONTEXT_PANEL_TRANSITION_MS matches the CSS slide animation duration.
+// WORKSPACE_CONTEXT_PANEL_TRANSITION_MS 对齐 CSS 右侧面板滑动动画时长。
+const WORKSPACE_CONTEXT_PANEL_TRANSITION_MS = 220;
+
 // DraftConversationSelection describes a not-yet-persisted conversation opened from a project.
 // DraftConversationSelection 描述从项目打开但尚未持久化的草稿会话。
 export interface DraftConversationSelection {
@@ -103,12 +107,61 @@ export function WorkspaceResizableBody(props: {
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  // rightPanelTransition keeps the context panel mounted long enough for exit animation.
+  // rightPanelTransition 让右侧上下文面板在退出动画结束前保持挂载。
+  const [rightPanelTransition, setRightPanelTransition] = React.useState(() => ({
+    floating: props.rightPanelFloating,
+    mounted: props.rightPanelOpen,
+    visible: props.rightPanelOpen,
+  }));
+  React.useEffect(() => {
+    let frameId: number | null = null;
+    let timeoutId: number | null = null;
+
+    if (props.rightPanelOpen) {
+      setRightPanelTransition((current) => ({
+        floating: props.rightPanelFloating,
+        mounted: true,
+        visible: current.mounted,
+      }));
+      frameId = window.requestAnimationFrame(() => {
+        setRightPanelTransition((current) => ({
+          ...current,
+          floating: props.rightPanelFloating,
+          visible: true,
+        }));
+      });
+    } else {
+      setRightPanelTransition((current) => (
+        current.mounted ? { ...current, visible: false } : current
+      ));
+      timeoutId = window.setTimeout(() => {
+        setRightPanelTransition({
+          floating: props.rightPanelFloating,
+          mounted: false,
+          visible: false,
+        });
+      }, WORKSPACE_CONTEXT_PANEL_TRANSITION_MS);
+    }
+
+    return () => {
+      if (frameId != null) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (timeoutId != null) {
+        window.clearTimeout(timeoutId);
+      }
+    };
+  }, [props.rightPanelFloating, props.rightPanelOpen]);
+  // rightPanelVisualState selects the transition class shared by docked and floating panels.
+  // rightPanelVisualState 选择停靠与浮动面板共用的过渡类名。
+  const rightPanelVisualState = rightPanelTransition.visible ? "is-open" : "is-closed";
   return (
-    <div className={cn("workspace-resizable-body-shell", props.rightPanelFloating && "has-floating-context")}>
+    <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
       <ResizablePanelGroup className="workspace-resizable-body" defaultLayout={{ workspaceMain: 68, workspaceContext: 32 }} orientation="horizontal">
         <ResizablePanel
           className="workspace-main-panel"
-          defaultSize={props.rightPanelOpen && !props.rightPanelFloating ? 68 : 100}
+          defaultSize={rightPanelTransition.mounted && !rightPanelTransition.floating ? 68 : 100}
           id="workspaceMain"
           minSize="800px"
         >
@@ -128,11 +181,11 @@ export function WorkspaceResizableBody(props: {
             {props.children}
           </section>
         </ResizablePanel>
-        {props.rightPanelOpen && !props.rightPanelFloating ? (
+        {rightPanelTransition.mounted && !rightPanelTransition.floating ? (
           <>
-            <ResizableHandle className="workspace-context-resize-handle" withHandle />
+            <ResizableHandle className={cn("workspace-context-resize-handle", rightPanelVisualState)} withHandle />
             <ResizablePanel
-              className="workspace-context-panel"
+              className={cn("workspace-context-panel", rightPanelVisualState)}
               defaultSize={32}
               groupResizeBehavior="preserve-pixel-size"
               id="workspaceContext"
@@ -153,8 +206,8 @@ export function WorkspaceResizableBody(props: {
           </>
         ) : null}
       </ResizablePanelGroup>
-      {props.rightPanelOpen && props.rightPanelFloating ? (
-        <div className="workspace-context-floating-panel">
+      {rightPanelTransition.mounted && rightPanelTransition.floating ? (
+        <div className={cn("workspace-context-floating-panel", rightPanelVisualState)}>
           <WorkspaceContextPanel
             floating
             selectedDraftConversation={props.selectedDraftConversation}

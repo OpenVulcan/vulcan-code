@@ -93,9 +93,6 @@ export function ModelPickerControl(props: {
           <span className="composer-select-icon"><Cpu size={15} /></span>
           <span className="composer-select-copy">
             <span className="composer-select-label">{selectedChoice?.modelName ?? props.fallbackLabel}</span>
-            {selectedChoice ? (
-              <span className="composer-select-subtitle">{selectedChoice.providerName}</span>
-            ) : null}
           </span>
         </Button>
       </DropdownMenuTrigger>
