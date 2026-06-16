@@ -48,7 +48,14 @@ import {
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
 import { WorkbenchDialogs } from "@/components/workspace/workbench-dialogs";
-import { WorkspaceShell } from "@/components/workspace/workspace-shell";
+import {
+  WorkspaceShell,
+  type WorkspaceMainView,
+} from "@/components/workspace/workspace-shell";
+import type {
+  SkillActionProps,
+  SkillSubAreaId,
+} from "@/components/features/skills/SkillsArea";
 import { cn } from "@/lib/utils";
 import { useI18n, type LocaleCode } from "@/i18n";
 import type {
@@ -247,7 +254,10 @@ export function WorkbenchLayout(props: {
   const i18n = useI18n();
   // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
   // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
-  const localizedPrimaryFeatureAreas = React.useMemo(() => buildPrimaryFeatureAreas(i18n.t), [i18n.t]);
+  const localizedPrimaryFeatureAreas = React.useMemo(
+    () => buildPrimaryFeatureAreas(i18n.t).filter((area) => !["automation", "plugins", "skills"].includes(area.id)),
+    [i18n.t],
+  );
   // localizedSettingsFeatureArea stores the translated settings metadata.
   // localizedSettingsFeatureArea 保存已翻译的设置元数据。
   const localizedSettingsFeatureArea = React.useMemo<FeatureAreaSummary>(() => ({
@@ -265,6 +275,12 @@ export function WorkbenchLayout(props: {
   // activeArea stores the currently selected feature area.
   // activeArea 保存当前选中的功能区域。
   const [activeArea, setActiveArea] = React.useState<MainAreaId>("chat");
+  // workspaceMainView stores the selected main surface inside the workbench.
+  // workspaceMainView 保存工作台内部当前选中的主内容界面。
+  const [workspaceMainView, setWorkspaceMainView] = React.useState<WorkspaceMainView>("chat");
+  // activeWorkbenchSkillSubArea stores the embedded skills settings sub page.
+  // activeWorkbenchSkillSubArea 保存内嵌技能设置的子页面。
+  const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("lua");
   // theme stores the current shadcn visual theme.
   // theme 保存当前 shadcn 视觉主题。
   const [theme, setTheme] = React.useState<ThemeMode>(() => initialThemeMode());
@@ -381,6 +397,31 @@ export function WorkbenchLayout(props: {
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
   const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
+  // handleSelectTopFeatureArea routes top navigation away from the embedded skills view.
+  // handleSelectTopFeatureArea 将顶部导航路由出内嵌技能视图。
+  const handleSelectTopFeatureArea = React.useCallback((area: MainAreaId) => {
+    if (area === "skills") {
+      setActiveArea("chat");
+      setWorkspaceMainView("skills");
+      return;
+    }
+    setActiveArea(area);
+    if (area === "chat") {
+      setWorkspaceMainView("chat");
+    }
+  }, []);
+  // handleOpenWorkspaceSkills opens skills settings inside the workbench main panel.
+  // handleOpenWorkspaceSkills 在工作台主面板内部打开技能设置。
+  const handleOpenWorkspaceSkills = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("skills");
+  }, []);
+  // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
+  // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
+  const handleOpenWorkspaceChat = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("chat");
+  }, []);
   // selectedConversation stores the conversation used by the console header.
   // selectedConversation 保存控制台标题栏使用的当前会话。
   const selectedConversation = workbenchState.conversations.find((conversation) => conversation.id === selectedConversationId);
@@ -607,6 +648,23 @@ export function WorkbenchLayout(props: {
     }
   }, [applyAgentSkillsCatalog, workbenchState.agentSkills]);
 
+  // skillActions groups service-backed skill management actions for every skills surface.
+  // skillActions 为所有技能界面归组服务端技能管理动作。
+  const skillActions = React.useMemo<SkillActionProps>(() => ({
+    onRefreshLuaSkills: () => applySkillWorkbenchAction(refreshLuaSkillsCatalog),
+    onInstallLuaSkill: (skillId, source, sourceType) => applySkillWorkbenchAction(() => installLuaSkill(skillId, source, sourceType)),
+    onUpdateLuaSkill: (skillId) => applySkillWorkbenchAction(() => updateLuaSkill(skillId)),
+    onSetLuaSkillEnabled: (skillId, enabled) => applySkillWorkbenchAction(() => setLuaSkillEnabled(skillId, enabled)),
+    onUninstallLuaSkill: (skillId) => applySkillWorkbenchAction(() => uninstallLuaSkill(skillId)),
+    onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => (
+      applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
+    ),
+    onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
+    onInstallSystemAgentSkills: () => applySkillWorkbenchAction(installSystemAgentSkills),
+    onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
+    onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
+  }), [applySkillWorkbenchAction, handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled]);
+
   // handleProjectIconConfirm persists the selected project icon override.
   // handleProjectIconConfirm 持久化选择的项目图标覆盖。
   const handleProjectIconConfirm = React.useCallback(async (project: ProjectSummary, icon: ProjectIconSelection) => {
@@ -639,6 +697,7 @@ export function WorkbenchLayout(props: {
   // handleCreateConversation creates and selects a new empty conversation for a project.
   // handleCreateConversation 为项目创建并选中一个新的空白会话。
   const handleCreateConversation = React.useCallback(async (project: ProjectSummary) => {
+    handleOpenWorkspaceChat();
     const draftId = `draft-${project.id}-${Date.now()}`;
     setDraftConversation({
       id: draftId,
@@ -648,7 +707,7 @@ export function WorkbenchLayout(props: {
     setSelectedConversationId(draftId);
     setConversationLoadError(null);
     setLoadingConversationId(null);
-  }, []);
+  }, [handleOpenWorkspaceChat]);
 
   // handleCreateProject opens the service-backed project folder picker.
   // handleCreateProject 打开服务驱动的项目文件夹选择器。
@@ -1067,6 +1126,7 @@ export function WorkbenchLayout(props: {
   // handleSelectConversation selects a conversation and persists its read marker.
   // handleSelectConversation 选择会话并持久化它的已读标记。
   const handleSelectConversation = React.useCallback((conversationId: string) => {
+    handleOpenWorkspaceChat();
     subagentNavigationRequestSeqRef.current += 1;
     subagentRoutePreferenceRef.current = { parentConversationId: conversationId, taskId: null };
     setSelectedConversationId(conversationId);
@@ -1089,7 +1149,7 @@ export function WorkbenchLayout(props: {
       .catch((error) => {
         toast.error(error instanceof Error ? error.message : String(error));
       });
-  }, []);
+  }, [handleOpenWorkspaceChat]);
 
   // handleRenameConfirm commits the current rename dialog value.
   // handleRenameConfirm 提交当前重命名对话框值。
@@ -1314,7 +1374,7 @@ export function WorkbenchLayout(props: {
       case "skill":
         return { handled: true, replacementText: SLASH_SKILL_PROMPT };
       case "skills":
-        setActiveArea("skills");
+        handleOpenWorkspaceSkills();
         return { handled: true };
       case "compact":
         void handleCompactSelectedConversationContext();
@@ -1322,7 +1382,7 @@ export function WorkbenchLayout(props: {
       default:
         return { handled: false };
     }
-  }, [handleCompactSelectedConversationContext]);
+  }, [handleCompactSelectedConversationContext, handleOpenWorkspaceSkills]);
 
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
@@ -1335,7 +1395,7 @@ export function WorkbenchLayout(props: {
         <FeatureNav
           areas={localizedTopFeatureAreas}
           activeArea={activeArea}
-          onSelect={setActiveArea}
+          onSelect={handleSelectTopFeatureArea}
         />
         {showWindowControls ? <div className="titlebar-drag-region" data-tauri-drag-region /> : null}
         <GlobalActions
@@ -1358,6 +1418,8 @@ export function WorkbenchLayout(props: {
           <WorkspaceShell
             startup={props.startup}
             workbench={consoleWorkbenchState}
+            activeSkillSubArea={activeWorkbenchSkillSubArea}
+            mainView={workspaceMainView}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
@@ -1367,12 +1429,15 @@ export function WorkbenchLayout(props: {
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
+            onOpenSkills={handleOpenWorkspaceSkills}
+            onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
+            skillActions={skillActions}
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
             onStopConversationRun={handleStopConversationRun}
@@ -1398,18 +1463,7 @@ export function WorkbenchLayout(props: {
             activeFeature={activeFeature}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
-            skillActions={{
-              onRefreshLuaSkills: () => applySkillWorkbenchAction(refreshLuaSkillsCatalog),
-              onInstallLuaSkill: (skillId, source, sourceType) => applySkillWorkbenchAction(() => installLuaSkill(skillId, source, sourceType)),
-              onUpdateLuaSkill: (skillId) => applySkillWorkbenchAction(() => updateLuaSkill(skillId)),
-              onSetLuaSkillEnabled: (skillId, enabled) => applySkillWorkbenchAction(() => setLuaSkillEnabled(skillId, enabled)),
-              onUninstallLuaSkill: (skillId) => applySkillWorkbenchAction(() => uninstallLuaSkill(skillId)),
-              onSetLuaSkillToolRegistrationState: (skillId, localName, registrationState) => applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState)),
-              onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
-              onInstallSystemAgentSkills: () => applySkillWorkbenchAction(installSystemAgentSkills),
-              onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
-              onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
-            }}
+            skillActions={skillActions}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,
               onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),

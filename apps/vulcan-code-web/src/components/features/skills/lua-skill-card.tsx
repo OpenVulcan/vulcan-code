@@ -62,16 +62,14 @@ export function LuaSkillCard(props: {
           <div className="skill-card-title-line">
             <strong>{props.skill.displayName}</strong>
             <div className="skill-card-title-meta">
+              {props.skill.enabled ? (
+                <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge>
+              ) : (
+                <Badge variant="destructive">{t("skills.status.stopped")}</Badge>
+              )}
+              <Badge variant="outline">{sourceTypeLabel}</Badge>
               <Badge variant="secondary">v{props.skill.version}</Badge>
             </div>
-          </div>
-          <div className="skill-card-badges">
-            {props.skill.enabled ? (
-              <Badge className="skill-card-enabled-badge">{t("skills.status.enabled")}</Badge>
-            ) : (
-              <Badge variant="destructive">{t("skills.status.stopped")}</Badge>
-            )}
-            <Badge variant="outline">{sourceTypeLabel}</Badge>
           </div>
         </div>
       </header>

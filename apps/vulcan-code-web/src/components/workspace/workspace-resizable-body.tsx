@@ -77,6 +77,18 @@ export function WorkspaceResizableBody(props: {
   // Main chat surface rendered inside the workspace body.
   // 渲染在工作区主体内的主会话界面。
   children: React.ReactNode;
+  // Optional title overriding the conversation header title.
+  // 覆盖会话标题栏标题的可选标题。
+  headerTitle?: string;
+  // Optional detail line shown below the override header title.
+  // 显示在覆盖标题下方的可选详情行。
+  headerDetail?: string;
+  // Optional action cluster rendered on the override header right side.
+  // 渲染在覆盖标题右侧的可选操作区。
+  headerActions?: React.ReactNode;
+  // Whether the right panel toggle should be hidden for the current main view.
+  // 当前主视图是否隐藏右侧面板切换按钮。
+  hideRightPanelToggle?: boolean;
   // Toggles the right context panel.
   // 切换右侧上下文面板。
   onToggleRightPanel: () => void;
@@ -216,10 +228,15 @@ export function WorkspaceResizableBody(props: {
         <div className="workspace-main-panel">
           <section className="workspace-main-shell">
             <ConsoleHeader
+              className={props.headerTitle ? "workspace-custom-header" : undefined}
               draftConversation={props.selectedDraftConversation}
               conversation={props.selectedConversation}
+              detail={props.headerDetail}
+              headerActions={props.headerActions}
+              hideRightPanelToggle={props.hideRightPanelToggle}
               rightPanelOpen={props.rightPanelOpen}
               subagentNavigation={props.workbench.subagentNavigation}
+              title={props.headerTitle}
               onToggleLeftPanel={props.onToggleLeftPanel}
               onToggleRightPanel={props.onToggleRightPanel}
               onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -281,9 +298,24 @@ export function WorkspaceResizableBody(props: {
 // ConsoleHeader renders the inset title bar for the current conversation.
 // ConsoleHeader 渲染当前会话的 inset 标题栏。
 function ConsoleHeader(props: {
+  // Optional CSS class for specialized header layouts.
+  // 专用标题栏布局使用的可选 CSS 类。
+  className?: string;
   // Current selected conversation summary.
   // 当前选中会话摘要。
   conversation?: ConversationSummary;
+  // Optional override title used by embedded workspace views.
+  // 内嵌工作台视图使用的可选覆盖标题。
+  title?: string;
+  // Optional override detail used by embedded workspace views.
+  // 内嵌工作台视图使用的可选覆盖详情。
+  detail?: string;
+  // Optional override actions used by embedded workspace views.
+  // 内嵌工作台视图使用的可选覆盖操作区。
+  headerActions?: React.ReactNode;
+  // Whether to hide the conversation right-panel toggle.
+  // 是否隐藏会话右侧面板切换按钮。
+  hideRightPanelToggle?: boolean;
   // Current draft conversation selection.
   // 当前草稿会话选择。
   draftConversation: DraftConversationSelection | null;
@@ -318,38 +350,53 @@ function ConsoleHeader(props: {
   // rightPanelLabel describes the current right panel toggle action.
   // rightPanelLabel 描述当前右侧面板切换动作。
   const rightPanelLabel = props.rightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
+  // headerTitle chooses an embedded view title before falling back to conversation naming.
+  // headerTitle 优先使用内嵌视图标题，否则回退到会话命名。
+  const headerTitle = props.title ?? (props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title"));
 
   return (
-    <header className="console-header">
+    <header className={cn("console-header", props.className)}>
       <div className="console-header-main">
         <SidebarTrigger onClick={props.onToggleLeftPanel} />
         <span className="console-header-separator" aria-hidden="true" />
-        <h1>{props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title")}</h1>
-        <SubagentNavigationMenu
-          navigation={props.subagentNavigation}
-          onCloseSubagentPanel={props.onCloseSubagentPanel}
-          onOpenSubagentPanel={props.onOpenSubagentPanel}
-          onStopSubagentTask={props.onStopSubagentTask}
-          onTrace={props.onTrace}
-        />
+        {props.detail ? (
+          <div className="workspace-custom-header-title">
+            <h1>{headerTitle}</h1>
+            <small>{props.detail}</small>
+          </div>
+        ) : (
+          <h1>{headerTitle}</h1>
+        )}
+        {!props.title ? (
+          <SubagentNavigationMenu
+            navigation={props.subagentNavigation}
+            onCloseSubagentPanel={props.onCloseSubagentPanel}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            onStopSubagentTask={props.onStopSubagentTask}
+            onTrace={props.onTrace}
+          />
+        ) : null}
       </div>
       <div className="console-header-actions">
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label={rightPanelLabel}
-              aria-pressed={props.rightPanelOpen}
-              className="icon-button"
-              onClick={props.onToggleRightPanel}
-              size="icon-sm"
-              type="button"
-              variant={props.rightPanelOpen ? "secondary" : "ghost"}
-            >
-              {props.rightPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
-        </Tooltip>
+        {props.headerActions}
+        {!props.hideRightPanelToggle ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label={rightPanelLabel}
+                aria-pressed={props.rightPanelOpen}
+                className="icon-button"
+                onClick={props.onToggleRightPanel}
+                size="icon-sm"
+                type="button"
+                variant={props.rightPanelOpen ? "secondary" : "ghost"}
+              >
+                {props.rightPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
+          </Tooltip>
+        ) : null}
       </div>
     </header>
   );

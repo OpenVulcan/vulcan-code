@@ -16,6 +16,7 @@ import {
   Boxes,
   Folder,
   FolderPlus,
+  Hammer,
   Pin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,12 @@ export function ProjectSidebar(props: {
   onConversationMenuAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   onCreateConversation: (project: ProjectSummary) => void;
   onCreateProject: () => void;
+  // Opens the skills feature area from the workbench sidebar.
+  // 从工作台侧栏打开技能功能区。
+  onOpenSkills: () => void;
+  // Whether the embedded skills settings view is currently active.
+  // 内嵌技能设置视图当前是否激活。
+  skillsActive: boolean;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
@@ -243,6 +250,17 @@ export function ProjectSidebar(props: {
               <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
               <span className="vcn-sidebar-label strong">{t("sidebar.console")}</span>
             </div>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              active={props.skillsActive}
+              className="workspace-sidebar-feature-button"
+              onClick={props.onOpenSkills}
+              tooltip={t("area.skills")}
+            >
+              <Hammer size={16} />
+              <span className="vcn-sidebar-label strong">{t("area.skills")}</span>
+            </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>

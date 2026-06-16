@@ -12,11 +12,19 @@ import type {
 import {
   parseConversationBlocks,
 } from "@/components/conversation/conversation-transcript";
+import type {
+  SkillActionProps,
+  SkillSubAreaId,
+} from "@/components/features/skills/SkillsArea";
 import {
   ProjectSidebar,
   type ConversationMenuAction,
   type ProjectMenuAction,
 } from "@/components/project/ProjectSidebar";
+import {
+  WorkspaceSkillsSettings,
+  type WorkspaceSkillsHeaderState,
+} from "@/components/workspace/workspace-skills-settings";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 import {
   WorkspaceResizableBody,
@@ -41,6 +49,10 @@ import type {
 } from "@/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 
+// WorkspaceMainView identifies the active main surface inside the workbench.
+// WorkspaceMainView 标识工作台内部当前激活的主内容界面。
+export type WorkspaceMainView = "chat" | "skills";
+
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
 interface WorkspaceShellProps {
@@ -50,6 +62,12 @@ interface WorkspaceShellProps {
   // Workbench snapshot rendered by the project tree and conversation area.
   // 项目树与会话区渲染使用的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Active main surface inside the workbench.
+  // 工作台内部当前激活的主内容界面。
+  mainView: WorkspaceMainView;
+  // Selected embedded skills sub page.
+  // 当前选中的内嵌技能子页面。
+  activeSkillSubArea: SkillSubAreaId;
   // Draft conversation selected before a persisted session exists.
   // 持久会话创建前选中的草稿会话。
   selectedDraftConversation: DraftConversationSelection | null;
@@ -77,6 +95,12 @@ interface WorkspaceShellProps {
   // Opens the create-project flow.
   // 打开创建项目流程。
   onCreateProject: () => void;
+  // Opens the skills feature area from the workbench sidebar.
+  // 从工作台侧栏打开技能功能区。
+  onOpenSkills: () => void;
+  // Updates the selected embedded skills sub page.
+  // 更新当前选中的内嵌技能子页面。
+  onSelectSkillSubArea: (subArea: SkillSubAreaId) => void;
   // Persists the expanded project id list.
   // 持久化展开的项目标识列表。
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
@@ -95,6 +119,9 @@ interface WorkspaceShellProps {
   // Selects the active reasoning effort for the workbench.
   // 选择工作台当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
+  // Service-backed skill page actions.
+  // 服务端支持的技能页面动作。
+  skillActions: SkillActionProps;
   // Routes one composer slash command.
   // 路由一个输入区斜杠命令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
@@ -204,6 +231,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
+  // skillsHeaderState stores the title projection published by the embedded skills page.
+  // skillsHeaderState 保存内嵌技能页发布的标题栏投影。
+  const [skillsHeaderState, setSkillsHeaderState] = React.useState<WorkspaceSkillsHeaderState>({
+    actions: null,
+    detail: "LuaSkills",
+    title: "技能设置",
+  });
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -227,6 +261,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
     setRightPanelOpen(true);
   }, [rightPanelOpen, sidebar.open]);
+
+  React.useEffect(() => {
+    if (props.mainView === "skills" && rightPanelOpen) {
+      setRightPanelOpen(false);
+      setRightPanelFloating(false);
+    }
+  }, [props.mainView, rightPanelOpen]);
 
   React.useEffect(() => {
     const element = shellRef.current;
@@ -285,6 +326,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onConversationMenuAction={props.onConversationMenuAction}
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
+        onOpenSkills={props.onOpenSkills}
+        skillsActive={props.mainView === "skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
         onReorderProjects={props.onReorderProjects}
@@ -299,6 +342,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           selectedDraftConversation={props.selectedDraftConversation}
           selectedConversation={props.selectedConversation}
           selectedConversationId={props.selectedConversationId}
+          headerActions={props.mainView === "skills" ? skillsHeaderState.actions : undefined}
+          headerDetail={props.mainView === "skills" ? skillsHeaderState.detail : undefined}
+          headerTitle={props.mainView === "skills" ? skillsHeaderState.title : undefined}
+          hideRightPanelToggle={props.mainView === "skills"}
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -311,31 +358,41 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
           onTrace={props.onTrace}
         >
-          <ChatArea
-            startup={props.startup}
-            workbench={props.workbench}
-            selectedDraftConversation={props.selectedDraftConversation}
-            selectedConversationId={props.selectedConversationId}
-            loadingConversationId={props.loadingConversationId}
-            conversationLoadError={props.conversationLoadError}
-            onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-            onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-            onSlashCommand={props.onSlashCommand}
-            onSubmitPrompt={props.onSubmitPrompt}
-            onStopConversationRun={props.onStopConversationRun}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
-            onCloseSubagentPanel={props.onCloseSubagentPanel}
-            onStopSubagentTask={props.onStopSubagentTask}
-            onEditPendingPrompt={props.onEditPendingPrompt}
-            onInsertPendingPrompt={props.onInsertPendingPrompt}
-            onRemovePendingPrompt={props.onRemovePendingPrompt}
-            onReorderPendingPrompts={props.onReorderPendingPrompts}
-            onStageAttachmentBytes={props.onStageAttachmentBytes}
-            onCopyText={props.onCopyText}
-            onLoadToolDetail={props.onLoadToolDetail}
-            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-            onTrace={props.onTrace}
-          />
+          {props.mainView === "skills" ? (
+            <WorkspaceSkillsSettings
+              activeSubArea={props.activeSkillSubArea}
+              onActiveSubAreaChange={props.onSelectSkillSubArea}
+              onHeaderStateChange={setSkillsHeaderState}
+              skillActions={props.skillActions}
+              workbench={props.workbench}
+            />
+          ) : (
+            <ChatArea
+              startup={props.startup}
+              workbench={props.workbench}
+              selectedDraftConversation={props.selectedDraftConversation}
+              selectedConversationId={props.selectedConversationId}
+              loadingConversationId={props.loadingConversationId}
+              conversationLoadError={props.conversationLoadError}
+              onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+              onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+              onSlashCommand={props.onSlashCommand}
+              onSubmitPrompt={props.onSubmitPrompt}
+              onStopConversationRun={props.onStopConversationRun}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+              onCloseSubagentPanel={props.onCloseSubagentPanel}
+              onStopSubagentTask={props.onStopSubagentTask}
+              onEditPendingPrompt={props.onEditPendingPrompt}
+              onInsertPendingPrompt={props.onInsertPendingPrompt}
+              onRemovePendingPrompt={props.onRemovePendingPrompt}
+              onReorderPendingPrompts={props.onReorderPendingPrompts}
+              onStageAttachmentBytes={props.onStageAttachmentBytes}
+              onCopyText={props.onCopyText}
+              onLoadToolDetail={props.onLoadToolDetail}
+              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+              onTrace={props.onTrace}
+            />
+          )}
         </WorkspaceResizableBody>
       </SidebarInset>
     </div>
