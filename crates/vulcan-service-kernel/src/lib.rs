@@ -88,7 +88,10 @@ use vulcan_context::{
     append_record_body_delta,
 };
 use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
-use vulcan_context_injection::{ContextInjectionState, InjectionKind, InjectionPanelCard};
+use vulcan_context_injection::{
+    ContextInjectionState, InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem,
+    InjectionKind, InjectionPanelCard,
+};
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
     ConversationAttachment, ConversationAttachmentKind, ProviderRequestSnapshot,
@@ -172,6 +175,13 @@ use vulcan_workspace_store::{
         WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
     },
 };
+
+/// Context-injection tag used for the latest session AI capability runtime update.
+/// 最新会话 AI 能力运行时变更注入使用的上下文注入标签。
+const SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG: &str = "session_ai_capability_update";
+/// Stable dedupe key that replaces stale AI capability update notices in the current context window.
+/// 用于在当前上下文窗口内替换旧 AI 能力变更通知的稳定去重键。
+const SESSION_AI_CAPABILITY_UPDATE_DEDUPE_KEY: &str = "session_ai_capability_update:latest";
 
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
@@ -5492,9 +5502,10 @@ async fn service_save_session_ai_capability_configuration(
         parse_session_ai_capability_disabled_kinds(request.disabled_ai_capability_kinds)?;
     let disabled_target_selectors =
         parse_ai_capability_target_selectors(Some(request.disabled_ai_capability_target_selectors));
-    let target_order_overrides =
-        parse_ai_capability_target_order_overrides(Some(request.ai_capability_target_order_overrides))?;
-    let (controller_runtime, workspace_snapshot, mut next_configuration) = {
+    let target_order_overrides = parse_ai_capability_target_order_overrides(Some(
+        request.ai_capability_target_order_overrides,
+    ))?;
+    let (controller_runtime, workspace_snapshot, provider_configuration, previous_configuration) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -5516,9 +5527,11 @@ async fn service_save_session_ai_capability_configuration(
             && owning_project_id_for_session(workspace_snapshot, session_id).as_deref()
                 != Some(project_id)
         {
-            return Err(String::from("当前会话与请求项目不匹配，已拒绝保存 AI 能力配置。"));
+            return Err(String::from(
+                "当前会话与请求项目不匹配，已拒绝保存 AI 能力配置。",
+            ));
         }
-        let next_configuration = session_ai_tool_configuration_or_default(
+        let previous_configuration = session_ai_tool_configuration_or_default(
             workspace_snapshot,
             session_id,
             &default_ai_tool_configuration,
@@ -5527,15 +5540,37 @@ async fn service_save_session_ai_capability_configuration(
         (
             controller_runtime,
             workspace_snapshot.clone(),
-            next_configuration,
+            guard
+                .agent_runtime
+                .as_ref()
+                .map(|runtime| runtime.provider_configuration.clone())
+                .unwrap_or_default(),
+            previous_configuration,
         )
     };
+    let mut next_configuration = previous_configuration.clone();
     apply_session_ai_capability_dialog_draft(
         &mut next_configuration,
         &disabled_kinds,
         &disabled_target_selectors,
         &target_order_overrides,
     )?;
+    let model_capabilities = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| {
+            runtime_state_model_capabilities(
+                runtime_state,
+                &provider_configuration,
+                &next_configuration,
+            )
+        })
+        .or_else(|| active_provider_configuration_model_capabilities(&provider_configuration));
+    let capability_update_injection = session_ai_capability_configuration_update_injection(
+        &previous_configuration,
+        &next_configuration,
+        model_capabilities.as_ref(),
+    );
     let updated_at = current_unix_millis_text();
     let mut addon_state = SessionAddonState::new(session_id);
     let _ = addon_state.set_ai_tool_configuration(&next_configuration, updated_at.clone());
@@ -5553,10 +5588,8 @@ async fn service_save_session_ai_capability_configuration(
         addon_state,
     )
     .await?;
-    let workspace_snapshot = with_workspace_mutation_preserving_subagent_navigation(
-        &app,
-        &state,
-        |workspace| {
+    let workspace_snapshot =
+        with_workspace_mutation_preserving_subagent_navigation(&app, &state, |workspace| {
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -5565,9 +5598,13 @@ async fn service_save_session_ai_capability_configuration(
                     ..SessionRuntimeStateEntry::default()
                 });
             runtime_state.ai_tool_configuration = Some(next_configuration.clone());
+            if let Some(injection) = capability_update_injection.clone() {
+                runtime_state
+                    .context_injection_state
+                    .apply_insert(injection, &updated_at);
+            }
             runtime_state.updated_at = updated_at.clone();
-        },
-    )?;
+        })?;
     emit_session_addon_changed_event(
         &app,
         session_id,
@@ -5577,6 +5614,141 @@ async fn service_save_session_ai_capability_configuration(
     );
     let _ = workspace_snapshot;
     current_workbench_snapshot_from_state(&state)
+}
+
+/// Builds one context-window-scoped model notice for session AI capability changes.
+/// 为会话 AI 能力变化构建一条仅在当前上下文窗口内生效的模型通知。
+///
+/// # Parameters
+/// 参数
+/// `previous_configuration` is the session configuration before the save operation.
+/// `previous_configuration` 是保存操作前的会话配置。
+/// `next_configuration` is the session configuration after the save operation.
+/// `next_configuration` 是保存操作后的会话配置。
+/// `model_capabilities` describes native capability support for the active model.
+/// `model_capabilities` 描述当前模型的原生能力支持。
+///
+/// # Returns
+/// 返回值
+/// A persistent hidden-user injection that clears on context compaction, or `None` when nothing model-visible changed.
+/// 返回一条上下文压缩时清除的持久隐藏用户注入；若无模型可见变化则返回 `None`。
+fn session_ai_capability_configuration_update_injection(
+    previous_configuration: &PersistedAiToolConfiguration,
+    next_configuration: &PersistedAiToolConfiguration,
+    model_capabilities: Option<&ResolvedModelCapabilities>,
+) -> Option<InjectionInsert> {
+    let previous_capabilities = ai_capabilities(previous_configuration, model_capabilities);
+    let next_capabilities = ai_capabilities(next_configuration, model_capabilities);
+    let mut changes = Vec::new();
+    for kind in WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS {
+        let Some(previous) = previous_capabilities
+            .iter()
+            .find(|capability| capability.kind == kind.key())
+        else {
+            continue;
+        };
+        let Some(next) = next_capabilities
+            .iter()
+            .find(|capability| capability.kind == kind.key())
+        else {
+            continue;
+        };
+        let previous_default = ai_capability_default_route(previous_configuration, kind);
+        let next_default = ai_capability_default_route(next_configuration, kind);
+        let mut details = Vec::new();
+        if previous.enabled != next.enabled {
+            let state = if next.enabled { "ENABLED" } else { "DISABLED" };
+            details.push(format!(
+                "state changed: {state}; native={}, bridged={}",
+                next.native, next.bridged
+            ));
+        }
+        if previous_default != next_default {
+            details.push(format!(
+                "default route changed: {} -> {}",
+                format_ai_capability_default_route(previous_default.as_ref()),
+                format_ai_capability_default_route(next_default.as_ref())
+            ));
+        }
+        if !details.is_empty() {
+            changes.push(format!(
+                "- `{}` ({}): {}",
+                next.kind,
+                next.label,
+                details.join("; ")
+            ));
+        }
+    }
+    if changes.is_empty() {
+        return None;
+    }
+    let content = format!(
+        "Runtime AI extension capability update for this session.\n\
+         Treat this block as newer than any earlier conversation history about available tools.\n\
+         The following session AI extension capability changes were just saved:\n{}\n\n\
+         Operational rule: rely on the currently registered tool schema and this latest runtime update. \
+         If a capability is listed as DISABLED or no matching tool is registered in the tool schema, do not claim you can call it. \
+         This notice is persistent only for the current context window and must be forgotten after context compaction.",
+        changes.join("\n")
+    );
+    let mut item = InjectionInsertItem::new(content);
+    item.dedupe_key = Some(SESSION_AI_CAPABILITY_UPDATE_DEDUPE_KEY.to_string());
+    item.compaction_policy = Some(InjectionCompactionPolicy::Clear);
+    let mut insert = InjectionInsert::single(
+        InjectionKind::Persistent,
+        SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG,
+        "Latest saved session AI extension capability changes. This notice clears on context compaction.",
+        String::new(),
+        None,
+    );
+    insert.items = vec![item];
+    insert.compaction_policy = InjectionCompactionPolicy::Clear;
+    insert.source_display = Some(String::from("Session AI capabilities"));
+    insert.priority = -35;
+    Some(insert)
+}
+
+/// Returns the default route selected by the first enabled target for one capability.
+/// 返回单个能力由首个已启用目标决定的默认路由。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the AI tool configuration to inspect.
+/// `configuration` 是需要检查的 AI 工具配置。
+/// `kind` selects the semantic capability.
+/// `kind` 选择语义能力。
+///
+/// # Returns
+/// 返回值
+/// The first enabled route target and model id when a host route exists.
+/// 存在宿主路由时返回首个已启用路由目标及模型标识。
+fn ai_capability_default_route(
+    configuration: &PersistedAiToolConfiguration,
+    kind: AiToolKind,
+) -> Option<(String, String)> {
+    configuration
+        .resolved_route_targets_for_kind(kind)
+        .into_iter()
+        .next()
+        .map(|target| (target.target_selector, target.model_id))
+}
+
+/// Formats one optional AI capability default route for model-facing notices.
+/// 为面向模型的通知格式化单个可选 AI 能力默认路由。
+///
+/// # Parameters
+/// 参数
+/// `route` is the optional default route tuple.
+/// `route` 是可选的默认路由元组。
+///
+/// # Returns
+/// 返回值
+/// A compact stable route label.
+/// 返回紧凑稳定的路由标签。
+fn format_ai_capability_default_route(route: Option<&(String, String)>) -> String {
+    route
+        .map(|(target, model)| format!("`{target}` using model `{model}`"))
+        .unwrap_or_else(|| String::from("none"))
 }
 
 /// Persists one complete session addon document after the caller enters the addon write queue.
@@ -10487,11 +10659,8 @@ fn spawn_workspace_session_addon_state_persist_task(
     spawn_service_task(async move {
         let persist_lock = webui_workspace_persist_lock();
         let _persist_guard = persist_lock.lock().await;
-        if !webui_session_addon_persist_versions_are_current(
-            &state,
-            session_id,
-            &persist_versions,
-        ) {
+        if !webui_session_addon_persist_versions_are_current(&state, session_id, &persist_versions)
+        {
             return;
         }
         let Some((session, archived)) = workspace_snapshot
@@ -20164,7 +20333,10 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
-        default_ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
+        default_ai_capabilities: ai_capabilities(
+            &ProviderConfigurationFile::default().ai_tools,
+            None,
+        ),
         ai_capability_vendors: ai_capability_vendors(
             &ProviderConfigurationFile::default().ai_tools,
         ),
@@ -24445,6 +24617,113 @@ mod tests {
         assert_eq!(image_capability.targets.len(), 1);
     }
 
+    /// Verifies reordering non-default targets does not create a model-facing runtime notice.
+    /// 验证仅重排非默认目标时不会创建面向模型的运行时通知。
+    #[test]
+    fn ai_capability_update_injection_ignores_non_default_route_reorder() {
+        let previous_configuration = test_web_search_ai_tool_configuration(&[
+            "search/minimax",
+            "search/ollama",
+            "search/tavily",
+        ]);
+        let next_configuration = test_web_search_ai_tool_configuration(&[
+            "search/minimax",
+            "search/tavily",
+            "search/ollama",
+        ]);
+
+        let injection = session_ai_capability_configuration_update_injection(
+            &previous_configuration,
+            &next_configuration,
+            None,
+        );
+
+        assert!(
+            injection.is_none(),
+            "non-default route swaps should not affect model-facing tool guidance"
+        );
+    }
+
+    /// Verifies changing the first enabled target creates one default-route notice.
+    /// 验证首个已启用目标变化时会创建一条默认路由通知。
+    #[test]
+    fn ai_capability_update_injection_reports_default_route_change() {
+        let previous_configuration =
+            test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
+        let next_configuration =
+            test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+
+        let injection = session_ai_capability_configuration_update_injection(
+            &previous_configuration,
+            &next_configuration,
+            None,
+        )
+        .expect("default route change should create injection");
+        let content = &injection.items[0].content;
+
+        assert!(content.contains("default route changed"));
+        assert!(content.contains("`search/minimax` using model `minimax-model`"));
+        assert!(content.contains("`search/ollama` using model `ollama-model`"));
+        assert_eq!(
+            content
+                .matches("- `web_search` (网页搜索): default route changed")
+                .count(),
+            1
+        );
+    }
+
+    /// Verifies one capability combines switch and default-route changes into one compaction-scoped persistent injection.
+    /// 验证同一能力会将开关与默认路由变化合并进一条压缩作用域持久注入。
+    #[test]
+    fn ai_capability_update_injection_combines_state_and_default_route_changes_until_compaction() {
+        let previous_configuration =
+            test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
+        let mut next_configuration =
+            test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+        next_configuration
+            .disabled_capability_kinds
+            .insert(AiToolKind::WebSearch);
+
+        let injection = session_ai_capability_configuration_update_injection(
+            &previous_configuration,
+            &next_configuration,
+            None,
+        )
+        .expect("combined change should create injection");
+        let content = &injection.items[0].content;
+
+        assert_eq!(injection.kind, InjectionKind::Persistent);
+        assert_eq!(injection.ttl_turns, None);
+        assert_eq!(
+            injection.compaction_policy,
+            InjectionCompactionPolicy::Clear
+        );
+        assert_eq!(content.matches("- `web_search`").count(), 1);
+        assert!(content.contains("state changed: DISABLED"));
+        assert!(content.contains("default route changed"));
+
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(injection, "1");
+        let group = state
+            .groups
+            .get(SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG)
+            .expect("injection group should exist before compaction");
+        let item = group.items.values().next().expect("injection item");
+        assert_eq!(group.kind, InjectionKind::Persistent);
+        assert_eq!(item.ttl_turns, None);
+        assert_eq!(item.compaction_policy, InjectionCompactionPolicy::Clear);
+
+        state.apply_compaction();
+
+        assert!(
+            state
+                .groups
+                .get(SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG)
+                .is_none(),
+            "context compaction should clear runtime capability update notices"
+        );
+    }
+
     /// Builds a minimal usable image-understanding host route for WebUI capability summary tests.
     /// 为 WebUI 能力摘要测试构建一条最小可用的图片理解宿主路由。
     fn test_understand_image_ai_tool_configuration() -> PersistedAiToolConfiguration {
@@ -24470,6 +24749,50 @@ mod tests {
                     ..vulcan_provider_config::config::PersistedUnderstandImageConfiguration::default(
                     )
                 },
+            ..PersistedAiToolConfiguration::default()
+        }
+    }
+
+    /// Builds a web-search configuration with ordered enabled host targets.
+    /// 构建一份带有有序启用宿主目标的网页搜索配置。
+    fn test_web_search_ai_tool_configuration(
+        target_order: &[&str],
+    ) -> PersistedAiToolConfiguration {
+        PersistedAiToolConfiguration {
+            vendors: vec![PersistedAiCapabilityVendorEntry {
+                id: String::from("search"),
+                vendor_id: String::from("search"),
+                name: String::from("Search"),
+                enabled: true,
+                api_key: String::from("token"),
+                connection_mode: None,
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "minimax",
+                        "minimax-model",
+                    ),
+                    PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "ollama",
+                        "ollama-model",
+                    ),
+                    PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::WebSearch,
+                        "tavily",
+                        "tavily-model",
+                    ),
+                ],
+            }],
+            web_search: vulcan_provider_config::config::PersistedWebSearchConfiguration {
+                target_order: target_order
+                    .iter()
+                    .map(|target| target.to_string())
+                    .collect(),
+                ..vulcan_provider_config::config::PersistedWebSearchConfiguration::default()
+            },
             ..PersistedAiToolConfiguration::default()
         }
     }
