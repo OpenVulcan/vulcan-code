@@ -14,6 +14,7 @@ import {
 } from "@dnd-kit/sortable";
 import {
   Boxes,
+  BrainCircuit,
   Folder,
   FolderPlus,
   Hammer,
@@ -59,12 +60,18 @@ export function ProjectSidebar(props: {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Opens the memory feature area from the workbench sidebar.
+  // 从工作台侧栏打开记忆功能区。
+  onOpenMemory: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void;
   // Whether the embedded skills settings view is currently active.
   // 内嵌技能设置视图当前是否激活。
   skillsActive: boolean;
+  // Whether the embedded memory settings view is currently active.
+  // 内嵌记忆设置视图当前是否激活。
+  memoryActive: boolean;
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
   onProjectMenuAction: (action: ProjectMenuAction, project: ProjectSummary) => void;
   onReorderProjects: (projectIds: string[]) => void;
@@ -122,6 +129,15 @@ export function ProjectSidebar(props: {
   // regularProjects keeps non-pinned projects in their service-provided order.
   // regularProjects 保留普通项目在服务端快照中的原始顺序。
   const regularProjects = React.useMemo(() => props.projects.filter((project) => !project.pinned), [props.projects]);
+  // featureSurfaceActive tracks whether the global sidebar selection is a non-chat feature page.
+  // featureSurfaceActive 跟踪全局侧栏选择是否处于非会话功能页面。
+  const featureSurfaceActive = props.skillsActive || props.memoryActive;
+  // visibleProjectRows keeps pinned projects inline while the sidebar is expanded.
+  // visibleProjectRows 在侧栏展开时将置顶项目保留在常规项目列表内。
+  const visibleProjectRows = sidebarState === "collapsed" ? regularProjects : props.projects;
+  // visiblePinnedProjects exposes project pin state only in collapsed icon navigation.
+  // visiblePinnedProjects 仅在折叠图标导航中暴露项目置顶状态。
+  const visiblePinnedProjects = sidebarState === "collapsed" ? pinnedProjects : [];
   // nowMs refreshes relative time labels without touching hover or confirmation state.
   // nowMs 刷新相对时间标签且不触碰悬停或确认状态。
   const [nowMs, setNowMs] = React.useState(() => Date.now());
@@ -198,7 +214,7 @@ export function ProjectSidebar(props: {
     return (
       <SortableProjectRow
         conversations={projectConversations}
-        hasSelectedConversation={props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
+        hasSelectedConversation={!featureSurfaceActive && props.selectedConversationId ? projectConversationIds.has(props.selectedConversationId) : false}
         isOpen={openProjectIds.has(project.id)}
         isConversationListExpanded={expandedConversationProjectIds.has(project.id)}
         isPinnedConversation={(conversationId) => props.pinnedConversationIds.has(conversationId)}
@@ -239,7 +255,7 @@ export function ProjectSidebar(props: {
       compactPinned={compactPinned}
       conversation={conversation}
       isPinned={props.pinnedConversationIds.has(conversation.id)}
-      isSelected={props.selectedConversationId === conversation.id}
+      isSelected={!featureSurfaceActive && props.selectedConversationId === conversation.id}
       key={conversation.id}
       locale={locale}
       nowMs={nowMs}
@@ -253,8 +269,8 @@ export function ProjectSidebar(props: {
     <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
-          activeArea={props.skillsActive ? "skills" : "chat"}
-          currentLabel={props.skillsActive ? t("area.skills") : t("sidebar.console")}
+          activeArea={props.skillsActive ? "skills" : props.memoryActive ? "memory" : "chat"}
+          currentLabel={props.skillsActive ? t("area.skills") : props.memoryActive ? t("area.memory") : t("sidebar.console")}
           onSelectArea={props.onSelectArea}
         />
         <SidebarMenu>
@@ -269,15 +285,26 @@ export function ProjectSidebar(props: {
               <span className="vcn-sidebar-label strong">{t("area.skills")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              active={props.memoryActive}
+              className="workspace-sidebar-feature-button"
+              onClick={props.onOpenMemory}
+              tooltip={t("area.memory")}
+            >
+              <BrainCircuit size={16} />
+              <span className="vcn-sidebar-label strong">{t("area.memory")}</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {pinnedConversations.length > 0 || pinnedProjects.length > 0 ? (
+        {pinnedConversations.length > 0 || visiblePinnedProjects.length > 0 ? (
           <SidebarGroup className="project-section pinned-project-section">
             {renderProjectGroupLabel(t("sidebar.pinned"), <Pin size={15} />)}
             <SidebarMenu className="pinned-tree-list">
               {pinnedConversations.map((conversation) => renderConversationRow(conversation, true))}
-              {pinnedProjects.length > 0 ? renderSortableProjectSection(pinnedProjects) : null}
+              {visiblePinnedProjects.length > 0 ? renderSortableProjectSection(visiblePinnedProjects) : null}
             </SidebarMenu>
           </SidebarGroup>
         ) : null}
@@ -296,7 +323,7 @@ export function ProjectSidebar(props: {
               </Button>
             ))}
             <SidebarMenu>
-              {renderSortableProjectSection(regularProjects)}
+              {renderSortableProjectSection(visibleProjectRows)}
               {props.projects.length === 0 ? (
                 <SidebarMenuItem>
                   <SidebarMenuButton className="muted" tooltip={t("sidebar.noProjects")}>

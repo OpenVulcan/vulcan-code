@@ -4,8 +4,6 @@ import {
   primaryFeatureAreas as buildPrimaryFeatureAreas,
 } from "@/components/features/feature-shell";
 import {
-  BrandHeader,
-  FeatureNav,
   GlobalActions,
   RepositoryLink,
   StatusbarRuntimeActivities,
@@ -56,6 +54,9 @@ import type {
   SkillActionProps,
   SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import type {
+  MemorySubAreaId,
+} from "@/components/features/memory/MemoryArea";
 import { cn } from "@/lib/utils";
 import { useI18n, type LocaleCode } from "@/i18n";
 import type {
@@ -281,6 +282,9 @@ export function WorkbenchLayout(props: {
   // activeWorkbenchSkillSubArea stores the embedded skills settings sub page.
   // activeWorkbenchSkillSubArea 保存内嵌技能设置的子页面。
   const [activeWorkbenchSkillSubArea, setActiveWorkbenchSkillSubArea] = React.useState<SkillSubAreaId>("lua");
+  // activeWorkbenchMemorySubArea stores the embedded memory settings sub page.
+  // activeWorkbenchMemorySubArea 保存内嵌记忆设置的子页面。
+  const [activeWorkbenchMemorySubArea, setActiveWorkbenchMemorySubArea] = React.useState<MemorySubAreaId>("status");
   // theme stores the current shadcn visual theme.
   // theme 保存当前 shadcn 视觉主题。
   const [theme, setTheme] = React.useState<ThemeMode>(() => initialThemeMode());
@@ -405,16 +409,25 @@ export function WorkbenchLayout(props: {
       setWorkspaceMainView("skills");
       return;
     }
-    setActiveArea(area);
-    if (area === "chat") {
-      setWorkspaceMainView("chat");
+    if (area === "memory") {
+      setActiveArea("chat");
+      setWorkspaceMainView("memory");
+      return;
     }
+    setActiveArea(area);
+    setWorkspaceMainView("chat");
   }, []);
   // handleOpenWorkspaceSkills opens skills settings inside the workbench main panel.
   // handleOpenWorkspaceSkills 在工作台主面板内部打开技能设置。
   const handleOpenWorkspaceSkills = React.useCallback(() => {
     setActiveArea("chat");
     setWorkspaceMainView("skills");
+  }, []);
+  // handleOpenWorkspaceMemory opens memory settings inside the workbench main panel.
+  // handleOpenWorkspaceMemory 在工作台主面板内部打开记忆设置。
+  const handleOpenWorkspaceMemory = React.useCallback(() => {
+    setActiveArea("chat");
+    setWorkspaceMainView("memory");
   }, []);
   // handleOpenWorkspaceChat returns the workbench main panel to the conversation surface.
   // handleOpenWorkspaceChat 将工作台主面板切回会话界面。
@@ -537,6 +550,36 @@ export function WorkbenchLayout(props: {
       unlisten?.();
     };
   }, [refreshWindowMaximizedState, showWindowControls]);
+  // shellChromeActions moves app-wide status and window controls into the shared content header.
+  // shellChromeActions 将应用级状态与窗口控制移动到共享内容标题栏中。
+  const shellChromeActions = (
+    <div className="app-chrome-actions" data-no-drag>
+      {showWindowControls ? (
+        <WindowControls
+          leadingControl={(
+            <GlobalActions
+              startup={props.startup}
+              theme={theme}
+              locale={i18n.locale}
+              onChangeLocale={i18n.setLocale}
+              onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+            />
+          )}
+          isMaximized={isWindowMaximized}
+          onMaximizeToggle={toggleWindowMaximize}
+          onMaximizeStateRefresh={refreshWindowMaximizedState}
+        />
+      ) : (
+        <GlobalActions
+          startup={props.startup}
+          theme={theme}
+          locale={i18n.locale}
+          onChangeLocale={i18n.setLocale}
+          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
+        />
+      )}
+    </div>
+  );
 
   // applyProjectActionSnapshot merges a project-menu operation result into the local workbench.
   // applyProjectActionSnapshot 将项目菜单操作结果合并进本地工作台。
@@ -1386,43 +1429,20 @@ export function WorkbenchLayout(props: {
 
   return (
     <div className={`app-shell ${showConsoleSidebar ? "with-console-sidebar" : "without-console-sidebar"} ${showWindowControls ? "tauri-shell" : "browser-shell"}`}>
-      <header
-        className="main-menu"
-        aria-label="主菜单"
-        onDoubleClick={handleTitlebarDoubleClick}
-      >
-        <BrandHeader dragRegion={showWindowControls} />
-        <FeatureNav
-          areas={localizedTopFeatureAreas}
-          activeArea={activeArea}
-          onSelect={handleSelectTopFeatureArea}
-        />
-        {showWindowControls ? <div className="titlebar-drag-region" data-tauri-drag-region /> : null}
-        <GlobalActions
-          startup={props.startup}
-          theme={theme}
-          locale={i18n.locale}
-          onChangeLocale={i18n.setLocale}
-          onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
-        />
-        {showWindowControls ? (
-          <WindowControls
-            isMaximized={isWindowMaximized}
-            onMaximizeToggle={toggleWindowMaximize}
-            onMaximizeStateRefresh={refreshWindowMaximizedState}
-          />
-        ) : null}
-      </header>
       <main className="workspace">
         {showConsoleSidebar ? (
           <WorkspaceShell
             startup={props.startup}
             workbench={consoleWorkbenchState}
             activeSkillSubArea={activeWorkbenchSkillSubArea}
+            activeMemorySubArea={activeWorkbenchMemorySubArea}
             mainView={workspaceMainView}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
+            chromeActions={shellChromeActions}
+            titlebarDragRegion={showWindowControls}
+            onTitlebarDoubleClick={handleTitlebarDoubleClick}
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
             pinnedConversationIds={pinnedConversationIds}
@@ -1430,8 +1450,10 @@ export function WorkbenchLayout(props: {
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
             onOpenSkills={handleOpenWorkspaceSkills}
+            onOpenMemory={handleOpenWorkspaceMemory}
             onSelectArea={handleSelectTopFeatureArea}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
+            onSelectMemorySubArea={setActiveWorkbenchMemorySubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
@@ -1439,6 +1461,10 @@ export function WorkbenchLayout(props: {
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
             skillActions={skillActions}
+            memoryActions={{
+              onRunVmmAction: runVmmMemoryAction,
+              onSaveVmmConfig: (request) => applySkillWorkbenchAction(() => saveVmmMemoryConfig(request)),
+            }}
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
             onStopConversationRun={handleStopConversationRun}
@@ -1491,6 +1517,9 @@ export function WorkbenchLayout(props: {
             }}
             startup={props.startup}
             workbench={workbenchState}
+            chromeActions={shellChromeActions}
+            titlebarDragRegion={showWindowControls}
+            onTitlebarDoubleClick={handleTitlebarDoubleClick}
           />
         )}
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}

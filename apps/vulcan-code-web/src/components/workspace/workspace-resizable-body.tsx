@@ -86,6 +86,15 @@ export function WorkspaceResizableBody(props: {
   // Optional action cluster rendered on the override header right side.
   // 渲染在覆盖标题右侧的可选操作区。
   headerActions?: React.ReactNode;
+  // App-wide chrome actions rendered at the far right of the shared header.
+  // 渲染在共享标题栏最右侧的应用级窗口控制区。
+  chromeActions?: React.ReactNode;
+  // Whether shared title bar empty space should be a native drag region.
+  // 共享标题栏空白区域是否作为原生拖动区域。
+  titlebarDragRegion?: boolean;
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
   // Whether the right panel toggle should be hidden for the current main view.
   // 当前主视图是否隐藏右侧面板切换按钮。
   hideRightPanelToggle?: boolean;
@@ -233,6 +242,9 @@ export function WorkspaceResizableBody(props: {
         conversation={props.selectedConversation}
         detail={props.headerDetail}
         headerActions={props.headerActions}
+        chromeActions={props.chromeActions}
+        titlebarDragRegion={props.titlebarDragRegion}
+        onTitlebarDoubleClick={props.onTitlebarDoubleClick}
         hideRightPanelToggle={props.hideRightPanelToggle}
         rightPanelOpen={props.rightPanelOpen}
         subagentNavigation={props.workbench.subagentNavigation}
@@ -307,6 +319,15 @@ function ConsoleHeader(props: {
   // Optional override actions used by embedded workspace views.
   // 内嵌工作台视图使用的可选覆盖操作区。
   headerActions?: React.ReactNode;
+  // App-wide chrome actions rendered at the far right of the shared header.
+  // 渲染在共享标题栏最右侧的应用级窗口控制区。
+  chromeActions?: React.ReactNode;
+  // Whether shared title bar empty space should be a native drag region.
+  // 共享标题栏空白区域是否作为原生拖动区域。
+  titlebarDragRegion?: boolean;
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
   // Whether to hide the conversation right-panel toggle.
   // 是否隐藏会话右侧面板切换按钮。
   hideRightPanelToggle?: boolean;
@@ -354,12 +375,21 @@ function ConsoleHeader(props: {
         <SidebarTrigger onClick={props.onToggleLeftPanel} />
         <span className="console-header-separator" aria-hidden="true" />
         {props.detail ? (
-          <div className="workspace-custom-header-title">
+          <div
+            className="workspace-custom-header-title"
+            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.onTitlebarDoubleClick}
+          >
             <h1>{headerTitle}</h1>
             <small>{props.detail}</small>
           </div>
         ) : (
-          <h1>{headerTitle}</h1>
+          <h1
+            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+            onDoubleClick={props.onTitlebarDoubleClick}
+          >
+            {headerTitle}
+          </h1>
         )}
         {!props.title ? (
           <SubagentNavigationMenu
@@ -370,6 +400,12 @@ function ConsoleHeader(props: {
             onTrace={props.onTrace}
           />
         ) : null}
+        <span
+          aria-hidden="true"
+          className="console-header-drag-fill"
+          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+          onDoubleClick={props.onTitlebarDoubleClick}
+        />
       </div>
       <div className="console-header-actions">
         {props.headerActions}
@@ -391,6 +427,7 @@ function ConsoleHeader(props: {
             <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
           </Tooltip>
         ) : null}
+        {props.chromeActions}
       </div>
     </header>
   );

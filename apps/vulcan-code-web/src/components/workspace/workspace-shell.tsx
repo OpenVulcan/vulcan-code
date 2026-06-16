@@ -16,6 +16,10 @@ import type {
   SkillActionProps,
   SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import type {
+  MemoryActionProps,
+  MemorySubAreaId,
+} from "@/components/features/memory/MemoryArea";
 import {
   ProjectSidebar,
   type ConversationMenuAction,
@@ -25,6 +29,10 @@ import {
   WorkspaceSkillsSettings,
   type WorkspaceSkillsHeaderState,
 } from "@/components/workspace/workspace-skills-settings";
+import {
+  WorkspaceMemorySettings,
+  type WorkspaceMemoryHeaderState,
+} from "@/components/workspace/workspace-memory-settings";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
 import {
   WorkspaceResizableBody,
@@ -52,7 +60,7 @@ import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-sna
 
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
-export type WorkspaceMainView = "chat" | "skills";
+export type WorkspaceMainView = "chat" | "skills" | "memory";
 
 // WorkspaceShellProps contains the visible workspace layout state and injected service edges.
 // WorkspaceShellProps 包含可见工作区布局状态和注入的服务边界。
@@ -69,6 +77,9 @@ interface WorkspaceShellProps {
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
   activeSkillSubArea: SkillSubAreaId;
+  // Selected embedded memory sub page.
+  // 当前选中的内嵌记忆子页面。
+  activeMemorySubArea: MemorySubAreaId;
   // Draft conversation selected before a persisted session exists.
   // 持久会话创建前选中的草稿会话。
   selectedDraftConversation: DraftConversationSelection | null;
@@ -99,12 +110,18 @@ interface WorkspaceShellProps {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Opens the memory feature area from the workbench sidebar.
+  // 从工作台侧栏打开记忆功能区。
+  onOpenMemory: () => void;
   // Selects one top-level application area from the sidebar brand menu.
   // 从侧栏品牌菜单选择一个顶层应用区域。
   onSelectArea: (area: MainAreaId) => void;
   // Updates the selected embedded skills sub page.
   // 更新当前选中的内嵌技能子页面。
   onSelectSkillSubArea: (subArea: SkillSubAreaId) => void;
+  // Updates the selected embedded memory sub page.
+  // 更新当前选中的内嵌记忆子页面。
+  onSelectMemorySubArea: (subArea: MemorySubAreaId) => void;
   // Persists the expanded project id list.
   // 持久化展开的项目标识列表。
   onExpandedProjectIdsChange: (projectIds: string[]) => void;
@@ -126,9 +143,21 @@ interface WorkspaceShellProps {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps;
+  // Service-backed memory page actions.
+  // 服务端支持的记忆页面动作。
+  memoryActions: MemoryActionProps;
   // Fixed footer content pinned to the workspace bottom edge.
   // 固定在工作区底边的信息栏内容。
   footer?: React.ReactNode;
+  // App-wide chrome actions rendered in the shared content header.
+  // 渲染在共享内容标题栏中的应用级窗口控制区。
+  chromeActions?: React.ReactNode;
+  // Whether shared title bar empty space should be a native drag region.
+  // 共享标题栏空白区域是否作为原生拖动区域。
+  titlebarDragRegion?: boolean;
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
   // Routes one composer slash command.
   // 路由一个输入区斜杠命令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
@@ -245,6 +274,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     detail: "LuaSkills",
     title: "技能设置",
   });
+  // memoryHeaderState stores the title projection published by the embedded memory page.
+  // memoryHeaderState 保存内嵌记忆页发布的标题栏投影。
+  const [memoryHeaderState, setMemoryHeaderState] = React.useState<WorkspaceMemoryHeaderState>({
+    actions: null,
+    detail: "状态",
+    title: "记忆设置",
+  });
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -270,7 +306,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   }, [rightPanelOpen, sidebar.open]);
 
   React.useEffect(() => {
-    if (props.mainView === "skills" && rightPanelOpen) {
+    if (props.mainView !== "chat" && rightPanelOpen) {
       setRightPanelOpen(false);
       setRightPanelFloating(false);
     }
@@ -334,7 +370,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
         onOpenSkills={props.onOpenSkills}
+        onOpenMemory={props.onOpenMemory}
         onSelectArea={props.onSelectArea}
+        memoryActive={props.mainView === "memory"}
         skillsActive={props.mainView === "skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}
@@ -350,10 +388,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           selectedDraftConversation={props.selectedDraftConversation}
           selectedConversation={props.selectedConversation}
           selectedConversationId={props.selectedConversationId}
-          headerActions={props.mainView === "skills" ? skillsHeaderState.actions : undefined}
-          headerDetail={props.mainView === "skills" ? skillsHeaderState.detail : undefined}
-          headerTitle={props.mainView === "skills" ? skillsHeaderState.title : undefined}
-          hideRightPanelToggle={props.mainView === "skills"}
+          headerActions={props.mainView === "skills" ? skillsHeaderState.actions : props.mainView === "memory" ? memoryHeaderState.actions : undefined}
+          chromeActions={props.chromeActions}
+          titlebarDragRegion={props.titlebarDragRegion}
+          onTitlebarDoubleClick={props.onTitlebarDoubleClick}
+          headerDetail={props.mainView === "skills" ? skillsHeaderState.detail : props.mainView === "memory" ? memoryHeaderState.detail : undefined}
+          headerTitle={props.mainView === "skills" ? skillsHeaderState.title : props.mainView === "memory" ? memoryHeaderState.title : undefined}
+          hideRightPanelToggle={props.mainView !== "chat"}
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -372,6 +413,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
               onActiveSubAreaChange={props.onSelectSkillSubArea}
               onHeaderStateChange={setSkillsHeaderState}
               skillActions={props.skillActions}
+              workbench={props.workbench}
+            />
+          ) : props.mainView === "memory" ? (
+            <WorkspaceMemorySettings
+              activeSubArea={props.activeMemorySubArea}
+              onActiveSubAreaChange={props.onSelectMemorySubArea}
+              onHeaderStateChange={setMemoryHeaderState}
+              memoryActions={props.memoryActions}
               workbench={props.workbench}
             />
           ) : (

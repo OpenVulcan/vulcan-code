@@ -77,6 +77,15 @@ function FeatureShell(props: {
   // Workbench snapshot used by feature pages.
   // 功能页面使用的工作台快照。
   workbench: WorkbenchSnapshot
+  // App-wide chrome actions rendered in the shared content header.
+  // 渲染在共享内容标题栏中的应用级窗口控制区。
+  chromeActions?: React.ReactNode
+  // Whether shared title bar empty space should be a native drag region.
+  // 共享标题栏空白区域是否作为原生拖动区域。
+  titlebarDragRegion?: boolean
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
 }) {
   const { locale, t } = useI18n()
   // activeSkillSubArea keeps the left menu and right skill tabs synchronized.
@@ -227,6 +236,9 @@ function FeatureShell(props: {
         <div className="feature-main-shell">
           <FeatureHeader
             action={skillHeaderAction ?? settingsHeaderAction}
+            chromeActions={props.chromeActions}
+            titlebarDragRegion={props.titlebarDragRegion}
+            onTitlebarDoubleClick={props.onTitlebarDoubleClick}
             feature={headerFeature}
           />
           <FeatureShellContent
@@ -265,6 +277,15 @@ function FeatureHeader(props: {
   // Optional right-side action rendered in the feature header.
   // 渲染在功能标题栏右侧的可选操作。
   action?: React.ReactNode
+  // App-wide chrome actions rendered at the far right of the feature header.
+  // 渲染在功能标题栏最右侧的应用级窗口控制区。
+  chromeActions?: React.ReactNode
+  // Whether shared title bar empty space should be a native drag region.
+  // 共享标题栏空白区域是否作为原生拖动区域。
+  titlebarDragRegion?: boolean
+  // Handles title bar double-click maximize or restore behavior.
+  // 处理标题栏双击最大化或还原行为。
+  onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
   // Feature metadata displayed in the header.
   // 标题栏中展示的功能元数据。
   feature?: FeatureAreaSummary
@@ -274,12 +295,25 @@ function FeatureHeader(props: {
       <div className="console-header-main">
         <SidebarTrigger />
         <span className="console-header-separator" aria-hidden="true" />
-        <div className="feature-header-title-stack">
+        <div
+          className="feature-header-title-stack"
+          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+          onDoubleClick={props.onTitlebarDoubleClick}
+        >
           <h1>{props.feature?.label ?? "工作台"}</h1>
           {props.feature?.description ? <small>{props.feature.description}</small> : null}
         </div>
+        <span
+          aria-hidden="true"
+          className="console-header-drag-fill"
+          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+          onDoubleClick={props.onTitlebarDoubleClick}
+        />
       </div>
-      {props.action}
+      <div className="console-header-actions">
+        {props.action}
+        {props.chromeActions}
+      </div>
     </header>
   )
 }

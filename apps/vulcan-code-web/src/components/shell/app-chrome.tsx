@@ -2,11 +2,14 @@ import React from "react";
 import { Button } from "@/components/ui/button";
 import { ShinyText } from "@/components/ui/shiny-text";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-} from "@/components/ui/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { StatusPill } from "@/components/shared/status";
 import type { StatusbarRuntimeActivity } from "@/components/conversation/conversation-model";
 import { areaIconMap } from "@/components/features/feature-shell";
@@ -21,6 +24,8 @@ import type {
 import { toast } from "sonner";
 import {
   Bot,
+  Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Minimize2,
@@ -192,30 +197,72 @@ export function GlobalActions(props: {
   // statusKind keeps preview visually distinct from a live ready service.
   // statusKind 让预览状态与真实在线服务在视觉上保持区分。
   const statusKind = isPreviewMode ? "warning" : props.startup.ready ? "ready" : "running";
+  // selectTheme switches theme only when the requested mode differs from the current mode.
+  // selectTheme 仅在目标主题与当前主题不同时切换主题。
+  const selectTheme = React.useCallback((theme: AppChromeThemeMode) => {
+    if (props.theme !== theme) {
+      props.onToggleTheme();
+    }
+  }, [props]);
 
   return (
-    <div className="global-actions" data-no-drag>
-      <StatusPill status={statusKind} label={statusLabel} />
-      <Button
-        aria-label={props.theme === "dark" ? t("global.toggleLight") : t("global.toggleDark")}
-        className="theme-toggle"
-        onClick={props.onToggleTheme}
-        size="icon"
-        type="button"
-        variant="outline"
-      >
-        {props.theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
-      </Button>
-      <Select value={props.locale} onValueChange={(value) => props.onChangeLocale(value as LocaleCode)}>
-        <SelectTrigger aria-label={t("global.language")} className="language-select-trigger">
-          <span>{props.locale === "zh-CN" ? "中" : "EN"}</span>
-        </SelectTrigger>
-        <SelectContent align="end" position="popper">
-          <SelectItem value="zh-CN">中</SelectItem>
-          <SelectItem value="en-US">EN</SelectItem>
-        </SelectContent>
-      </Select>
-    </div>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          aria-label="打开应用菜单"
+          className="window-control-button app-chrome-menu-button"
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          <ChevronDown size={16} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="app-chrome-menu" side="bottom" sideOffset={0}>
+        <DropdownMenuItem className="app-chrome-menu-status" disabled>
+          <span>状态</span>
+          <StatusPill status={statusKind} label={statusLabel} />
+        </DropdownMenuItem>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="app-chrome-menu-row">
+            {props.theme === "dark" ? <Moon size={15} /> : <Sun size={15} />}
+            <span>主题</span>
+            <small>{props.theme === "dark" ? "暗色" : "亮色"}</small>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="app-chrome-menu-sub">
+            <DropdownMenuItem onSelect={() => selectTheme("light")}>
+              <Sun size={15} />
+              <span>亮色</span>
+              {props.theme === "light" ? <Check className="app-chrome-menu-check" size={14} /> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => selectTheme("dark")}>
+              <Moon size={15} />
+              <span>暗色</span>
+              {props.theme === "dark" ? <Check className="app-chrome-menu-check" size={14} /> : null}
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="app-chrome-menu-row">
+            <span className="app-chrome-menu-language-mark">{props.locale === "zh-CN" ? "中" : "EN"}</span>
+            <span>语言</span>
+            <small>{props.locale === "zh-CN" ? "中文" : "English"}</small>
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent className="app-chrome-menu-sub">
+            <DropdownMenuItem onSelect={() => props.onChangeLocale("zh-CN")}>
+              <span className="app-chrome-menu-language-mark">中</span>
+              <span>中文</span>
+              {props.locale === "zh-CN" ? <Check className="app-chrome-menu-check" size={14} /> : null}
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => props.onChangeLocale("en-US")}>
+              <span className="app-chrome-menu-language-mark">EN</span>
+              <span>English</span>
+              {props.locale === "en-US" ? <Check className="app-chrome-menu-check" size={14} /> : null}
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -246,6 +293,9 @@ export function StatusbarRuntimeActivities(props: {
 // WindowControls renders Tauri-only custom minimize, maximize, and close buttons.
 // WindowControls 渲染仅 Tauri 使用的自定义最小化、最大化与关闭按钮。
 export function WindowControls(props: {
+  // Optional control rendered before minimize, maximize, and close.
+  // 渲染在最小化、最大化、关闭按钮之前的可选控件。
+  leadingControl?: React.ReactNode;
   // Whether the current Tauri window is maximized.
   // 当前 Tauri 窗口是否处于最大化状态。
   isMaximized: boolean;
@@ -283,6 +333,7 @@ export function WindowControls(props: {
 
   return (
     <div className="window-controls" data-no-drag>
+      {props.leadingControl}
       <Button
         aria-label="最小化窗口"
         className="window-control-button"

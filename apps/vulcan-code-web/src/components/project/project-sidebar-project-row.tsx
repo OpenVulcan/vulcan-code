@@ -106,7 +106,7 @@ export function SortableProjectRow(props: {
           <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
             <SidebarMenuButton
               aria-expanded={props.isOpen}
-              className={cn("project-folder-button", props.hasSelectedConversation && "project-folder-active")}
+              className="project-folder-button"
               onClick={() => props.onToggleOpen(props.project.id)}
               tooltip={`${props.project.name}\n${props.project.path}`}
             >
