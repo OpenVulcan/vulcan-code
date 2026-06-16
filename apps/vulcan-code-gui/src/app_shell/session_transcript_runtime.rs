@@ -1488,11 +1488,13 @@ impl VulcanWorkbench {
         &mut self,
         session_id: SessionId,
     ) -> &mut SessionRuntimeStateEntry {
+        let default_ai_tool_configuration = self.default_ai_tool_configuration.clone();
         self.hydrated_session_ids.insert(session_id);
         self.dirty_session_payload_ids.insert(session_id);
         self.session_runtime_state
             .entry(session_id)
             .or_insert_with(|| SessionRuntimeStateEntry {
+                ai_tool_configuration: Some(default_ai_tool_configuration),
                 updated_at: current_unix_millis_text(),
                 ..SessionRuntimeStateEntry::default()
             })

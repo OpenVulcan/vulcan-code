@@ -2180,6 +2180,7 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::OpenWorkbenchAiCapabilityPanel => {
+                self.load_ai_tool_configuration_for_session(self.selected_session);
                 self.workbench_ai_capability_panel_open = true;
                 Task::none()
             }

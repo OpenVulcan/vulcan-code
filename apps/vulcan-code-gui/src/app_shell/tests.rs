@@ -24,6 +24,7 @@ use crate::model::{
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
 };
+use crate::provider_config::AiToolKind;
 use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
 use crate::workbench_prompt_turn::{
     SharedPromptTurnRuntimeBeginInput, begin_shared_prompt_turn_with_runtime_state,
@@ -343,6 +344,105 @@ fn rendered_command_session_card_marks_missing_runtime_session_as_stopped() {
         .expect("read command-session status");
 
     assert_eq!(status, "stopped");
+}
+
+/// Verifies loading a session without an explicit AI capability configuration materializes a private default copy instead of reusing the previously active session configuration.
+/// 验证加载缺少显式 AI 能力配置的会话时会物化一份私有默认副本，而不是复用上一个活跃会话配置。
+#[test]
+fn loading_session_ai_configuration_materializes_default_copy_when_missing() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let configured_session_id = SessionId::from_u128(0xA11);
+    let missing_session_id = SessionId::from_u128(0xB22);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(configured_session_id, "已有配置"));
+    workbench
+        .sessions
+        .push(test_session_summary(missing_session_id, "缺少配置"));
+    workbench
+        .default_ai_tool_configuration
+        .disabled_capability_kinds
+        .clear();
+
+    let mut configured_session_configuration = workbench.default_ai_tool_configuration.clone();
+    configured_session_configuration
+        .disabled_capability_kinds
+        .insert(AiToolKind::ImageGeneration);
+    workbench.session_runtime_state.insert(
+        configured_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(configured_session_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench
+        .session_runtime_state
+        .insert(missing_session_id, SessionRuntimeStateEntry::default());
+    workbench.ai_tool_configuration = configured_session_configuration;
+
+    workbench.load_ai_tool_configuration_for_session(missing_session_id);
+
+    assert_eq!(
+        workbench.ai_tool_configuration.disabled_capability_kinds,
+        workbench
+            .default_ai_tool_configuration
+            .disabled_capability_kinds
+    );
+    let materialized_configuration = workbench
+        .session_runtime_state
+        .get(&missing_session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .expect("missing session should receive a private AI capability configuration copy");
+    assert_eq!(
+        materialized_configuration.disabled_capability_kinds,
+        workbench
+            .default_ai_tool_configuration
+            .disabled_capability_kinds
+    );
+}
+
+/// Verifies direct selected-session repair reloads the target session AI capability metadata.
+/// 验证直接修正选中会话时会重新载入目标会话的 AI 能力元数据。
+#[test]
+fn ensure_valid_selected_session_reloads_session_ai_configuration() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let stale_session_id = SessionId::from_u128(0xC33);
+    let visible_session_id = SessionId::from_u128(0xD44);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(visible_session_id, "目标会话"));
+    workbench
+        .default_ai_tool_configuration
+        .disabled_capability_kinds
+        .clear();
+
+    let mut stale_configuration = workbench.default_ai_tool_configuration.clone();
+    stale_configuration
+        .disabled_capability_kinds
+        .insert(AiToolKind::ImageGeneration);
+    let mut target_configuration = workbench.default_ai_tool_configuration.clone();
+    target_configuration
+        .disabled_capability_kinds
+        .insert(AiToolKind::VideoGeneration);
+    workbench.session_runtime_state.insert(
+        visible_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(target_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = stale_session_id;
+    workbench.ai_tool_configuration = stale_configuration;
+
+    workbench.ensure_valid_selected_session();
+
+    assert_eq!(workbench.selected_session, visible_session_id);
+    assert_eq!(
+        workbench.ai_tool_configuration.disabled_capability_kinds,
+        target_configuration.disabled_capability_kinds
+    );
 }
 
 /// Verifies session title generation only runs for the first user turn and leaves later turns unchanged.

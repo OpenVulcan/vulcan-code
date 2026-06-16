@@ -418,6 +418,7 @@ impl VulcanWorkbench {
             self.active_subagent_panel = None;
         }
         self.sync_workspace_path_with_selected_session();
+        self.load_ai_tool_configuration_for_session(self.selected_session);
     }
 
     /// Builds one stable project identifier from a title and path while avoiding collisions in the current tree.
@@ -501,6 +502,7 @@ impl VulcanWorkbench {
             self.active_subagent_panel = None;
             self.hovered_task_session = Some(restored_session_id);
             self.sync_workspace_path_with_session(restored_session_id);
+            self.load_ai_tool_configuration_for_session(restored_session_id);
         }
         self.ensure_valid_selected_session();
         self.status_message = format!("已恢复归档项目 `{restored_title}`。");
@@ -561,6 +563,7 @@ impl VulcanWorkbench {
         self.active_subagent_panel = None;
         self.hovered_task_session = Some(session_id);
         self.sync_workspace_path_with_session(session_id);
+        self.load_ai_tool_configuration_for_session(session_id);
         self.ensure_valid_selected_session();
         self.status_message = format!("已恢复归档会话 `{restored_title}`。");
         self.push_activity(

@@ -1424,11 +1424,18 @@ impl VulcanWorkbench {
                 self.ai_tool_configuration.disabled_capability_kinds.clone();
             return;
         }
-        self.ai_tool_configuration = self
-            .session_runtime_state
-            .get(&session_id)
-            .and_then(|runtime_state| runtime_state.ai_tool_configuration.clone())
-            .unwrap_or_else(|| self.default_ai_tool_configuration.clone());
+        let default_configuration = self.default_ai_tool_configuration.clone();
+        let configuration = {
+            let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+            if runtime_state.ensure_ai_tool_configuration(&default_configuration) {
+                runtime_state.updated_at = current_unix_millis_text();
+            }
+            runtime_state
+                .ai_tool_configuration
+                .clone()
+                .unwrap_or(default_configuration)
+        };
+        self.ai_tool_configuration = configuration;
         self.workbench_disabled_ai_capability_kinds =
             self.ai_tool_configuration.disabled_capability_kinds.clone();
         self.reconcile_workbench_ai_capability_runtime_state();
