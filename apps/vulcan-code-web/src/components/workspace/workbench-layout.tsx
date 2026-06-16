@@ -255,7 +255,7 @@ export function WorkbenchLayout(props: {
   // localizedPrimaryFeatureAreas stores the translated top navigation metadata.
   // localizedPrimaryFeatureAreas 保存已翻译的顶部导航元数据。
   const localizedPrimaryFeatureAreas = React.useMemo(
-    () => buildPrimaryFeatureAreas(i18n.t).filter((area) => !["automation", "plugins", "skills"].includes(area.id)),
+    () => buildPrimaryFeatureAreas(i18n.t).filter((area) => area.id !== "skills"),
     [i18n.t],
   );
   // localizedSettingsFeatureArea stores the translated settings metadata.

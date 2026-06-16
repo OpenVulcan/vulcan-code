@@ -1,7 +1,4 @@
-import { Wrench } from "lucide-react";
-import { PanelTitle, StatusPill } from "@/components/shared/status";
 import {
-  AutomationArea,
   SettingsFeatureContent,
   type SettingsActionProps,
 } from "@/components/features/settings/SettingsFeatureContent";
@@ -17,7 +14,6 @@ import {
 } from "@/components/features/memory/MemoryArea";
 import type {
   MainAreaId,
-  PluginSummary,
   ProviderSummary,
   SettingsSubAreaId,
   StartupSnapshot,
@@ -90,20 +86,6 @@ export function FeatureContent(props: {
       </div>
     );
   }
-  if (props.activeArea === "automation") {
-    return (
-      <div className="feature-content">
-        <AutomationArea commandSessions={props.workbench.commandSessions} modules={props.workbench.modules} />
-      </div>
-    );
-  }
-  if (props.activeArea === "plugins") {
-    return (
-      <div className="feature-content">
-        <PluginsArea plugins={props.workbench.plugins} />
-      </div>
-    );
-  }
   if (props.activeArea === "memory") {
     return (
       <div className="feature-content">
@@ -138,28 +120,4 @@ export function FeatureContent(props: {
   }
 
   return null;
-}
-
-// PluginsArea renders plugin control center.
-// PluginsArea 渲染插件控制中心。
-function PluginsArea(props: {
-  // Plugin summaries shown in the plugin center.
-  // 插件中心展示的插件摘要。
-  plugins: PluginSummary[];
-}) {
-  return (
-    <section className="panel full-height">
-      <PanelTitle icon={<Wrench size={17} />} title="插件中心" />
-      <div className="card-grid">
-        {props.plugins.map((plugin) => (
-          <article className="data-card" key={plugin.id}>
-            <StatusPill status={plugin.status === "已启用" ? "ready" : "warning"} label={plugin.status} />
-            <strong>{plugin.name}</strong>
-            <span>{plugin.kind}</span>
-            <p>{plugin.capability}</p>
-          </article>
-        ))}
-      </div>
-    </section>
-  );
 }

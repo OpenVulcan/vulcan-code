@@ -3,13 +3,9 @@ import {
   Bot,
   BrainCircuit,
   ChevronDown,
-  GitBranch,
   Hammer,
   PanelTopOpen,
-  PlugZap,
   Settings,
-  TerminalSquare,
-  Wrench,
 } from "lucide-react"
 
 import { formatSkillText } from "@/components/features/featureText"
@@ -383,8 +379,6 @@ function CollapsedSettingsGroupMenu(props: {
 const areaIconMap: Record<MainAreaId, React.ReactNode> = {
   chat: <PanelTopOpen size={17} />,
   skills: <Hammer size={17} />,
-  automation: <GitBranch size={17} />,
-  plugins: <Wrench size={17} />,
   memory: <BrainCircuit size={17} />,
   settings: <Settings size={17} />,
 }
@@ -395,8 +389,6 @@ function primaryFeatureAreas(t: ReturnType<typeof useI18n>["t"]): FeatureAreaSum
   return [
     { id: "chat", label: t("area.chat"), description: t("area.chat.description"), status: t("feature.status.available") },
     { id: "skills", label: t("area.skills"), description: t("area.skills.description"), status: t("feature.status.preview") },
-    { id: "automation", label: t("area.automation"), description: t("area.automation.description"), status: t("feature.status.planned") },
-    { id: "plugins", label: t("area.plugins"), description: t("area.plugins.description"), status: t("feature.status.preview") },
     { id: "memory", label: t("area.memory"), description: t("area.memory.description"), status: t("feature.status.preview") },
   ]
 }
@@ -411,18 +403,6 @@ function featureSidebarRows(activeArea: MainAreaId, workbench: WorkbenchSnapshot
     return [
       { id: "skills-lua", label: "Lua Skills", detail: formatSkillText(t("skills.sidebar.luaDetail"), { count: workbench.luaSkills.skills.length }), icon: <Hammer size={16} /> },
       { id: "skills-agent", label: "Agent Skills", detail: formatSkillText(t("skills.sidebar.agentDetail"), { count: workbench.agentSkills.skills.length }), icon: <Bot size={16} /> },
-    ]
-  }
-  if (activeArea === "automation") {
-    return [
-      { id: "automation-workflow", label: "工作流", detail: "等待运行时接入", icon: <GitBranch size={16} /> },
-      { id: "automation-sessions", label: "后台任务", detail: `${workbench.commandSessions.length} 条命令会话`, icon: <TerminalSquare size={16} /> },
-    ]
-  }
-  if (activeArea === "plugins") {
-    return [
-      { id: "plugins-installed", label: "已安装插件", detail: `${workbench.plugins.length} 个插件`, icon: <PlugZap size={16} /> },
-      { id: "plugins-webui", label: "WebUI 面板", detail: "高级插件控制入口", icon: <PanelTopOpen size={16} /> },
     ]
   }
   if (activeArea === "memory") {

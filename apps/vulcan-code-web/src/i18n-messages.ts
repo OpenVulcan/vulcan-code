@@ -8,19 +8,14 @@ export type TranslationKey =
   | "app.subtitle"
   | "area.chat"
   | "area.skills"
-  | "area.automation"
-  | "area.plugins"
   | "area.memory"
   | "area.settings"
   | "area.chat.description"
   | "area.skills.description"
-  | "area.automation.description"
-  | "area.plugins.description"
   | "area.memory.description"
   | "area.settings.description"
   | "feature.status.available"
   | "feature.status.preview"
-  | "feature.status.planned"
   | "global.openSettings"
   | "global.toggleDark"
   | "global.toggleLight"
@@ -196,19 +191,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.subtitle": "Ai Coding",
     "area.chat": "工作台",
     "area.skills": "技能",
-    "area.automation": "自动",
-    "area.plugins": "插件",
     "area.memory": "记忆",
     "area.settings": "设置",
     "area.chat.description": "项目会话、消息流与模型输入区",
     "area.skills.description": "LuaSkills、工具能力与技能包",
-    "area.automation.description": "自动化任务、工作流与后台执行",
-    "area.plugins.description": "插件中心与 WebUI 控制面板",
     "area.memory.description": "VMM 用户、项目与会话记忆",
     "area.settings.description": "项目、模型、工具、诊断与系统设置",
     "feature.status.available": "可用",
     "feature.status.preview": "预览",
-    "feature.status.planned": "规划中",
     "global.openSettings": "打开设置",
     "global.toggleDark": "切换为暗色主题",
     "global.toggleLight": "切换为亮色主题",
@@ -381,19 +371,14 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "app.subtitle": "Ai Coding",
     "area.chat": "Workspace",
     "area.skills": "Skills",
-    "area.automation": "Automation",
-    "area.plugins": "Plugins",
     "area.memory": "Memory",
     "area.settings": "Settings",
     "area.chat.description": "Project sessions, message stream, and model input",
     "area.skills.description": "LuaSkills, tool capability, and skill packages",
-    "area.automation.description": "Automation tasks, workflows, and background execution",
-    "area.plugins.description": "Plugin center and WebUI control panels",
     "area.memory.description": "VMM user, project, and conversation memory",
     "area.settings.description": "Projects, models, tools, diagnostics, and system settings",
     "feature.status.available": "Available",
     "feature.status.preview": "Preview",
-    "feature.status.planned": "Planned",
     "global.openSettings": "Open settings",
     "global.toggleDark": "Switch to dark theme",
     "global.toggleLight": "Switch to light theme",

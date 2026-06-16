@@ -135,20 +135,12 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   featureAreas: [
     { id: "chat", label: "工作台", description: "项目会话、消息流与模型输入区", status: "可用" },
     { id: "skills", label: "技能", description: "LuaSkills、工具能力与技能包", status: "预览" },
-    { id: "automation", label: "自动", description: "自动化任务、工作流与后台执行", status: "规划中" },
-    { id: "plugins", label: "插件", description: "插件中心与 WebUI 控制面板", status: "预览" },
     { id: "memory", label: "记忆", description: "VMM 用户、项目与会话记忆", status: "预览" },
     { id: "settings", label: "设置", description: "项目、模型、工具、诊断与系统设置", status: "预览" },
   ],
   composerSlashCommands: browserFallbackSlashCommands,
   pendingPrompts: [],
   pendingQuestion: null,
-  plugins: [
-    { id: "vulcan-codekit", name: "Vulcan CodeKit", kind: "LuaSkill", status: "预览", capability: "代码搜索、AST 定位、结构化 patch" },
-    { id: "vulcan-curl", name: "Vulcan Curl", kind: "LuaSkill", status: "预览", capability: "HTTP GET/POST 与受控请求" },
-    { id: "vulcan-testkit", name: "Vulcan TestKit", kind: "LuaSkill", status: "预览", capability: "构建、测试、日志压缩与诊断" },
-    { id: "ai-short-drama", name: "AI 短剧工作流", kind: "Workflow WebUI", status: "规划中", capability: "脚本、素材、播放器与工作流控制面板" },
-  ],
   luaSkills: {
     runtimeRoot: "D:/openvulcan/vulcan-code/output/lua_runtime",
     systemLuaLib: "D:/openvulcan/vulcan-code/output/lua_runtime/system_lua_lib",
@@ -197,7 +189,6 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   settings: [
     { id: "runtime", label: "运行时", description: "Core Service、LuaSkills、VLDB、MCP", items: ["启动模式", "运行时目录", "MCP 工具策略"] },
     { id: "providers", label: "模型与 Provider", description: "模型供应商、默认模型、工具能力与推理配置", items: ["默认 Provider", "默认模型", "工具调用", "推理强度"] },
-    { id: "plugins", label: "插件", description: "LuaSkills、Rust lib 插件、WebUI 控制面板", items: ["插件目录", "权限声明", "WebUI 面板"] },
     { id: "remote", label: "远程访问", description: "未来浏览器、手机、远程客户端访问 Core Service 的设置", items: ["监听地址", "访问令牌", "远程开关", "审计日志"] },
   ],
   providers: [

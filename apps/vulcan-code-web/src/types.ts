@@ -4,7 +4,7 @@ export type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "e
 
 // MainAreaId describes selectable top-level WebUI areas.
 // MainAreaId 描述 WebUI 顶层可选择区域。
-export type MainAreaId = "chat" | "skills" | "automation" | "plugins" | "memory" | "settings";
+export type MainAreaId = "chat" | "skills" | "memory" | "settings";
 
 // SettingsSubAreaId describes secondary settings pages aligned with the legacy iced settings tree.
 // SettingsSubAreaId 描述与旧 iced 设置树对齐的设置二级页面。
@@ -629,26 +629,6 @@ export interface FeatureAreaSummary {
   status: string;
 }
 
-// PluginSummary describes one plugin shown in plugin center.
-// PluginSummary 描述插件中心展示的单个插件。
-export interface PluginSummary {
-  // Stable plugin identifier.
-  // 稳定插件标识。
-  id: string;
-  // Plugin display name.
-  // 插件显示名称。
-  name: string;
-  // Plugin kind.
-  // 插件类型。
-  kind: string;
-  // Plugin status.
-  // 插件状态。
-  status: string;
-  // Plugin capability summary.
-  // 插件能力摘要。
-  capability: string;
-}
-
 // SettingSectionSummary describes one settings group.
 // SettingSectionSummary 描述单个设置分组。
 export interface SettingSectionSummary {
@@ -1250,9 +1230,6 @@ export interface WorkbenchSnapshot {
   // Main feature areas.
   // 主功能区域。
   featureAreas: FeatureAreaSummary[];
-  // Plugin summaries.
-  // 插件摘要。
-  plugins: PluginSummary[];
   // Lua Skills catalog.
   // Lua Skills 目录。
   luaSkills: LuaSkillsCatalogSummary;

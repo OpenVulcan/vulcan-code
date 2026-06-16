@@ -31,7 +31,6 @@ import type {
 } from "@/types";
 
 export type { SettingsActionProps } from "@/components/features/settings/settings-action-types";
-export { AutomationArea } from "@/components/features/settings/settings-automation-area";
 export {
   activeSettingsHeaderSummary,
   settingsSubAreaCapabilityKind,
