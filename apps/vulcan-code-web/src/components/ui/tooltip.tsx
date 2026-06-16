@@ -3,6 +3,34 @@ import { Tooltip as TooltipPrimitive } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+// POINTER_FOCUS_SUPPRESSION_MS keeps pointer-activated triggers from reopening tooltips after focus restoration.
+// POINTER_FOCUS_SUPPRESSION_MS 防止指针点击过的触发器在焦点恢复后重新弹出 tooltip。
+const POINTER_FOCUS_SUPPRESSION_MS = 10 * 60 * 1000
+
+// pointerFocusSuppressionUntil stores the focus-suppression deadline for pointer-activated trigger elements.
+// pointerFocusSuppressionUntil 保存指针激活触发器元素的焦点抑制截止时间。
+const pointerFocusSuppressionUntil = new WeakMap<HTMLElement, number>()
+
+// suppressTooltipFocusAfterPointer marks one trigger so restored focus will not reopen its tooltip.
+// suppressTooltipFocusAfterPointer 标记一个触发器，使恢复焦点不会重新打开它的 tooltip。
+function suppressTooltipFocusAfterPointer(element: HTMLElement) {
+  pointerFocusSuppressionUntil.set(element, Date.now() + POINTER_FOCUS_SUPPRESSION_MS)
+}
+
+// tooltipFocusShouldBeSuppressed returns whether focus should be hidden from Radix Tooltip.
+// tooltipFocusShouldBeSuppressed 返回当前焦点是否应对 Radix Tooltip 隐藏。
+function tooltipFocusShouldBeSuppressed(element: HTMLElement) {
+  const suppressionDeadline = pointerFocusSuppressionUntil.get(element)
+  if (!suppressionDeadline) {
+    return false
+  }
+  if (Date.now() > suppressionDeadline) {
+    pointerFocusSuppressionUntil.delete(element)
+    return false
+  }
+  return true
+}
+
 function TooltipProvider({
   delayDuration = 0,
   ...props
@@ -23,9 +51,32 @@ function Tooltip({
 }
 
 function TooltipTrigger({
+  onFocusCapture,
+  onPointerDownCapture,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />
+  return (
+    <TooltipPrimitive.Trigger
+      data-slot="tooltip-trigger"
+      {...props}
+      onFocusCapture={(event) => {
+        onFocusCapture?.(event)
+        if (
+          !event.defaultPrevented
+          && event.currentTarget instanceof HTMLElement
+          && tooltipFocusShouldBeSuppressed(event.currentTarget)
+        ) {
+          event.stopPropagation()
+        }
+      }}
+      onPointerDownCapture={(event) => {
+        onPointerDownCapture?.(event)
+        if (!event.defaultPrevented && event.currentTarget instanceof HTMLElement) {
+          suppressTooltipFocusAfterPointer(event.currentTarget)
+        }
+      }}
+    />
+  )
 }
 
 function TooltipContent({
