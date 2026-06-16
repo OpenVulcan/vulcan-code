@@ -918,6 +918,7 @@ impl VulcanWorkbench {
                 self.composer_scrollbar_drag_grab_offset = None;
                 let mut did_commit_pending_prompt_drop = false;
                 let mut committed_pending_prompt_session_id = None;
+                let mut did_commit_ai_capability_route_drop = false;
                 let mut tasks = Vec::new();
                 if self.main_window_id == Some(window_id) {
                     if let Some(modal) = self.workbench_image_preview_modal.as_mut() {
@@ -989,11 +990,12 @@ impl VulcanWorkbench {
                     if let Some((capability_kind, dragged_target_selector, drop_target)) =
                         committed_ai_capability_route_drop
                     {
-                        let _ = self.apply_ai_capability_route_drop_target(
-                            capability_kind,
-                            &dragged_target_selector,
-                            &drop_target,
-                        );
+                        did_commit_ai_capability_route_drop = self
+                            .apply_ai_capability_route_drop_target(
+                                capability_kind,
+                                &dragged_target_selector,
+                                &drop_target,
+                            );
                     }
                     self.dragging_ai_capability_route_target = None;
                     self.active_ai_capability_route_drop_target = None;
@@ -1006,6 +1008,12 @@ impl VulcanWorkbench {
                     && let Some(session_id) = committed_pending_prompt_session_id
                 {
                     tasks.push(self.persist_single_session_runtime_state_task(session_id));
+                }
+                if did_commit_ai_capability_route_drop && self.selected_session != SessionId::nil()
+                {
+                    tasks.push(
+                        self.persist_single_session_runtime_state_task(self.selected_session),
+                    );
                 }
                 Task::batch(tasks)
             }
@@ -1933,8 +1941,7 @@ impl VulcanWorkbench {
                 self.persist_ai_tool_configuration_change(format!(
                     "web-search 路由已切换为「{}」并自动保存。",
                     mode.label()
-                ));
-                Task::none()
+                ))
             }
             Message::OpenAiCapabilityRoutingPicker(capability_kind) => {
                 if capability_kind == AiToolKind::WebSearch {
@@ -1966,15 +1973,15 @@ impl VulcanWorkbench {
                             capability_kind.label(),
                             vendor_id,
                             target_alias
-                        ));
+                        ))
                     }
-                    Ok(false) => {}
+                    Ok(false) => Task::none(),
                     Err(error) => {
                         self.ai_tool_notice = error.clone();
                         self.status_message = error;
+                        Task::none()
                     }
                 }
-                Task::none()
             }
             Message::RemoveAiCapabilityVendor(vendor_id) => {
                 let vendor_name = self
@@ -2164,7 +2171,7 @@ impl VulcanWorkbench {
                 target_selector,
             } => {
                 if self.remove_ai_capability_route_target(capability_kind, &target_selector) {
-                    self.persist_ai_tool_configuration_change(format!(
+                    return self.persist_ai_tool_configuration_change(format!(
                         "已从“{}”中移除 `{}` 并自动保存。",
                         capability_kind.label(),
                         target_selector
@@ -2183,6 +2190,9 @@ impl VulcanWorkbench {
             Message::WorkbenchAiCapabilitySectionSelected(section) => {
                 self.workbench_ai_capability_section = section;
                 Task::none()
+            }
+            Message::SyncSelectedSessionAiCapabilityConfigurationFromDefault => {
+                self.sync_selected_session_ai_tool_configuration_from_default()
             }
             Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled } => {
                 match section.capability_kind() {
@@ -2206,11 +2216,10 @@ impl VulcanWorkbench {
                             .len();
                         if configured_target_count > 0 {
                             let state_label = if enabled { "启用" } else { "关闭" };
-                            self.persist_ai_tool_configuration_change(format!(
+                            return self.persist_ai_tool_configuration_change(format!(
                                 "已{state_label}“{}”并自动保存。已保留既有目标勾选与顺序偏好。",
                                 capability_kind.label()
                             ));
-                            return Task::none();
                         } else {
                             self.status_message = format!(
                                 "“{}”当前还没有可快速切换的已配置接口，请先在左侧能力页中完成配置。",
@@ -3076,6 +3085,7 @@ impl VulcanWorkbench {
                 self.hovered_task_session = Some(session_id);
                 self.clear_pending_prompt_drag_state();
                 self.sync_workspace_path_with_selected_session();
+                self.load_ai_tool_configuration_for_session(session_id);
                 self.restore_runtime_controls_for_session(session_id);
                 self.reload_project_prompt_settings_draft();
                 self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);

@@ -307,6 +307,7 @@ impl VulcanWorkbench {
         self.session_runtime_state
             .entry(session_id)
             .or_insert_with(|| SessionRuntimeStateEntry {
+                ai_tool_configuration: Some(self.default_ai_tool_configuration.clone()),
                 updated_at: current_unix_millis_text(),
                 ..SessionRuntimeStateEntry::default()
             });
@@ -323,6 +324,7 @@ impl VulcanWorkbench {
         self.hovered_task_session = Some(session_id);
         self.suppress_task_session_hover = false;
         self.sync_workspace_path_with_session(session_id);
+        self.load_ai_tool_configuration_for_session(session_id);
         self.status_message =
             format!("已在项目 `{project_title}` 下创建新的空白对话草稿，等待首条真实输入。");
         self.push_activity(

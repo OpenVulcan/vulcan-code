@@ -170,11 +170,10 @@ impl VulcanWorkbench {
             );
         }
 
-        self.persist_ai_tool_configuration_change(format!(
+        return self.persist_ai_tool_configuration_change(format!(
             "已更新“{}”的启用接口并自动保存。",
             picker.capability_kind.label()
         ));
-        Task::none()
     }
 
     /// Opens the shared AI capability vendor editor either for one brand-new vendor or for one already configured vendor instance.
@@ -288,22 +287,28 @@ impl VulcanWorkbench {
         } else {
             format!("已更新共享能力供应商 `{display_name}` 并自动保存。")
         };
-        self.persist_ai_tool_configuration_change(success_notice);
-        Task::none()
+        self.persist_ai_tool_configuration_change(success_notice)
     }
 
     /// Persists the current standalone AI capability configuration immediately after one successful in-memory mutation and updates the shared status notices.
     /// 在一次成功的内存配置变更之后立即持久化当前独立 AI 能力配置，并更新共享状态提示。
-    pub(super) fn persist_ai_tool_configuration_change(&mut self, success_notice: String) {
+    pub(super) fn persist_ai_tool_configuration_change(
+        &mut self,
+        success_notice: String,
+    ) -> Task<Message> {
         match self.save_ai_tool_configuration() {
             Ok(()) => {
                 self.ai_tool_notice = success_notice;
                 self.status_message = self.ai_tool_notice.clone();
+                if self.selected_session != SessionId::nil() {
+                    return self.persist_single_session_runtime_state_task(self.selected_session);
+                }
             }
             Err(error) => {
                 self.ai_tool_notice = error.clone();
                 self.status_message = error;
             }
         }
+        Task::none()
     }
 }

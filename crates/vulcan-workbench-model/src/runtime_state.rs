@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use vulcan_context::SessionConversationState;
 use vulcan_context_injection::ContextInjectionState;
 use vulcan_core::types::{ConversationAttachment, ProviderUsageSnapshot};
-use vulcan_provider_config::config::PersistedPromptSkillState;
 use vulcan_provider_config::config::{
-    AiToolKind, OpenRouterEndpointRouteSelection, ReasoningEffortLevel,
+    AiToolKind, OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration,
+    PersistedPromptSkillState, ReasoningEffortLevel,
 };
 use vulcan_vmm::{PostActionRequest, ProfileNodeEntry, VmmConfigLayer};
 
@@ -1178,6 +1178,56 @@ mod tests {
         ));
     }
 
+    /// Initializes a missing session AI configuration from the default template.
+    /// 从默认模板初始化缺失的会话 AI 配置。
+    #[test]
+    fn session_runtime_state_initializes_missing_ai_tool_configuration() {
+        let default_configuration = PersistedAiToolConfiguration {
+            disabled_capability_kinds: BTreeSet::from([AiToolKind::WebSearch]),
+            ..PersistedAiToolConfiguration::default()
+        };
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+
+        assert!(runtime_state.ensure_ai_tool_configuration(&default_configuration));
+
+        let session_configuration = runtime_state
+            .ai_tool_configuration
+            .as_ref()
+            .expect("session configuration should be initialized");
+        assert_eq!(
+            session_configuration.disabled_capability_kinds,
+            BTreeSet::from([AiToolKind::WebSearch])
+        );
+    }
+
+    /// Keeps an existing session AI configuration independent from later default-template changes.
+    /// 保持既有会话 AI 配置独立于后续默认模板变化。
+    #[test]
+    fn session_runtime_state_keeps_existing_ai_tool_configuration() {
+        let mut runtime_state = SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(PersistedAiToolConfiguration {
+                disabled_capability_kinds: BTreeSet::from([AiToolKind::UnderstandImage]),
+                ..PersistedAiToolConfiguration::default()
+            }),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let next_default_configuration = PersistedAiToolConfiguration {
+            disabled_capability_kinds: BTreeSet::from([AiToolKind::WebSearch]),
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        assert!(!runtime_state.ensure_ai_tool_configuration(&next_default_configuration));
+
+        let session_configuration = runtime_state
+            .ai_tool_configuration
+            .as_ref()
+            .expect("existing session configuration should remain present");
+        assert_eq!(
+            session_configuration.disabled_capability_kinds,
+            BTreeSet::from([AiToolKind::UnderstandImage])
+        );
+    }
+
     #[test]
     fn pending_prompt_panel_drop_target_matches_iced_before_semantics() {
         let mut ui_state = SessionTranscriptUiState {
@@ -1716,6 +1766,10 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_temperature: Option<f32>,
+    /// Session-scoped AI capability routing configuration cloned from the default template.
+    /// 从默认模板复制而来的会话级 AI 能力路由配置。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_tool_configuration: Option<PersistedAiToolConfiguration>,
     /// Session-level prompt skill state overrides.
     /// 会话级提示词技能状态覆盖。
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -1798,4 +1852,50 @@ pub struct SessionRuntimeStateEntry {
     /// Unix-millis text capturing when the runtime state was last refreshed.
     /// 捕获运行时状态最近刷新时间的 Unix 毫秒文本。
     pub updated_at: String,
+}
+
+impl SessionRuntimeStateEntry {
+    /// Ensures the session owns an AI capability configuration cloned from the default template.
+    /// 确保当前会话拥有一份从默认模板复制而来的 AI 能力配置。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `default_configuration` is the current default AI capability template.
+    /// `default_configuration` 是当前默认 AI 能力配置模板。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the session configuration was initialized by this call.
+    /// 当本次调用初始化了会话配置时返回 `true`。
+    pub fn ensure_ai_tool_configuration(
+        &mut self,
+        default_configuration: &PersistedAiToolConfiguration,
+    ) -> bool {
+        if self.ai_tool_configuration.is_some() {
+            return false;
+        }
+        self.ai_tool_configuration = Some(default_configuration.clone());
+        true
+    }
+
+    /// Returns the session AI capability configuration or the default template when not initialized yet.
+    /// 返回会话 AI 能力配置；若尚未初始化则返回默认模板。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `default_configuration` is the fallback default AI capability template.
+    /// `default_configuration` 是作为回退使用的默认 AI 能力配置模板。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The effective session-scoped AI capability configuration reference.
+    /// 生效的会话级 AI 能力配置引用。
+    pub fn ai_tool_configuration_or_default<'a>(
+        &'a self,
+        default_configuration: &'a PersistedAiToolConfiguration,
+    ) -> &'a PersistedAiToolConfiguration {
+        self.ai_tool_configuration
+            .as_ref()
+            .unwrap_or(default_configuration)
+    }
 }

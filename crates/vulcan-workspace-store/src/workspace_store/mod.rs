@@ -1629,6 +1629,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         active_openrouter_endpoint_route: None,
         active_reasoning_effort: None,
         active_temperature: None,
+        ai_tool_configuration: None,
         prompt_skill_overrides: Default::default(),
         context_injection_state: row
             .context_injection_json

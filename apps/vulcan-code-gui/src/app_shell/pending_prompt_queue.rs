@@ -633,10 +633,17 @@ impl VulcanWorkbench {
             before_target,
         );
         if did_move {
-            self.persist_ai_tool_configuration_change(format!(
-                "已更新“{}”的目标顺序并自动保存。",
-                capability_kind.label()
-            ));
+            match self.save_ai_tool_configuration() {
+                Ok(()) => {
+                    self.ai_tool_notice =
+                        format!("已更新“{}”的目标顺序并自动保存。", capability_kind.label());
+                    self.status_message = self.ai_tool_notice.clone();
+                }
+                Err(error) => {
+                    self.ai_tool_notice = error.clone();
+                    self.status_message = error;
+                }
+            }
         }
         did_move
     }

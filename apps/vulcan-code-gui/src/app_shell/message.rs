@@ -632,6 +632,9 @@ pub(super) enum Message {
     /// Selects one capability section inside the workbench quick AI capability panel.
     /// 在工作台快捷 AI 能力面板内部选中某个能力分区。
     WorkbenchAiCapabilitySectionSelected(WorkbenchAiCapabilitySection),
+    /// Replaces the selected session AI capability configuration with the default template.
+    /// 使用默认模板替换当前选中会话的 AI 能力配置。
+    SyncSelectedSessionAiCapabilityConfigurationFromDefault,
     /// Quickly enables or disables one capability from the top checkbox grid of the quick capability panel.
     /// 从快捷能力面板顶部勾选网格中快速启用或关闭某个能力。
     WorkbenchAiCapabilitySectionEnabledToggled {

@@ -31,6 +31,10 @@ impl VulcanWorkbench {
         .padding(0)
         .style(style::workbench_model_trigger_button_style)
         .on_press(Message::CloseWorkbenchAiCapabilityPanel);
+        let sync_default_button = button("使用默认配置")
+            .padding([6, 10])
+            .style(button::secondary)
+            .on_press(Message::SyncSelectedSessionAiCapabilityConfigurationFromDefault);
         let left_navigation = scrollable(
             WorkbenchAiCapabilitySection::ALL
                 .into_iter()
@@ -71,6 +75,7 @@ impl VulcanWorkbench {
                         ]
                         .spacing(4),
                         space::horizontal(),
+                        sync_default_button,
                         close_button,
                     ]
                     .align_y(Center),

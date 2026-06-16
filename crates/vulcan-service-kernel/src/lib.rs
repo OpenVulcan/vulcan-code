@@ -3539,12 +3539,18 @@ async fn service_submit_conversation_prompt(
                 ),
             );
             let workspace_path = workspace_path_for_session(&workspace_snapshot, session_id);
+            let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
+                &workspace_snapshot,
+                session_id,
+                &agent_runtime.ai_tool_configuration,
+            );
             let entry = build_webui_pending_prompt_panel_entry(
                 prompt,
                 attachments,
                 current_pending_prompt_model_reference(&agent_runtime.provider_configuration),
                 pending_prompt_runtime_options_from_submission(
-                    &agent_runtime,
+                    &agent_runtime.provider_configuration,
+                    session_ai_tool_configuration,
                     reasoning_effort.as_deref(),
                     disabled_ai_capability_kinds.as_deref(),
                 )?,
@@ -3614,6 +3620,11 @@ async fn service_submit_conversation_prompt(
         ),
     );
     ensure_webui_session_runtime_state(&mut workspace_snapshot, session_id, None);
+    ensure_session_ai_tool_configuration(
+        &mut workspace_snapshot,
+        session_id,
+        &agent_runtime.ai_tool_configuration,
+    );
     if conversation_id.is_some() {
         let mut guard = state
             .lock()
@@ -3634,8 +3645,13 @@ async fn service_submit_conversation_prompt(
         ),
     );
     let submit_run_prepare_started_at = current_unix_millis_value();
-    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
+    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
+        &workspace_snapshot,
+        session_id,
         &agent_runtime.ai_tool_configuration,
+    );
+    let disabled_ai_capability_kinds = effective_workbench_disabled_ai_capability_kinds(
+        session_ai_tool_configuration,
         disabled_ai_capability_kinds.as_deref(),
     )?;
     let disabled_ai_capability_target_selectors =
@@ -7011,6 +7027,16 @@ fn refresh_settings_projection_locked(
                 .map(|runtime| runtime.ai_tool_configuration.clone())
         })
         .unwrap_or_default();
+    let selected_ai_tool_configuration = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&workspace.selected_session)
+                .and_then(|runtime_state| runtime_state.ai_tool_configuration.clone())
+        })
+        .unwrap_or_else(|| ai_tool_configuration.clone());
     guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
@@ -7018,13 +7044,13 @@ fn refresh_settings_projection_locked(
     let ai_capability_model_capabilities =
         active_provider_configuration_model_capabilities(provider_configuration);
     guard.workbench.ai_capabilities = ai_capabilities(
-        &ai_tool_configuration,
+        &selected_ai_tool_configuration,
         ai_capability_model_capabilities.as_ref(),
     );
-    guard.workbench.ai_capability_vendors = ai_capability_vendors(&ai_tool_configuration);
+    guard.workbench.ai_capability_vendors = ai_capability_vendors(&selected_ai_tool_configuration);
     guard.workbench.ai_capability_vendor_catalog = ai_capability_vendor_catalog();
     guard.workbench.composer_attachment_capabilities =
-        composer_attachment_capabilities(provider_configuration, &ai_tool_configuration);
+        composer_attachment_capabilities(provider_configuration, &selected_ai_tool_configuration);
 }
 
 /// Returns the mutable runtime state for the currently selected regular session.
@@ -7059,6 +7085,72 @@ fn selected_session_runtime_state_mut(
             ..SessionRuntimeStateEntry::default()
         });
     Some((session_id, runtime_state))
+}
+
+/// Returns the AI capability configuration owned by one session or the default template.
+/// 返回指定会话拥有的 AI 能力配置，若会话尚无配置则返回默认模板。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the retained workspace snapshot that may contain session-scoped runtime state.
+/// `workspace` 是可能包含会话级运行态的保留工作区快照。
+/// `session_id` selects the session whose configuration should be used.
+/// `session_id` 选择应使用其配置的会话。
+/// `default_configuration` is the default AI capability template.
+/// `default_configuration` 是默认 AI 能力配置模板。
+///
+/// # Returns
+/// 返回值
+/// The session-scoped AI capability configuration when present, otherwise the default template.
+/// 存在时返回会话级 AI 能力配置，否则返回默认模板。
+fn session_ai_tool_configuration_or_default<'a>(
+    workspace: &'a WorkspaceSnapshot,
+    session_id: SessionId,
+    default_configuration: &'a PersistedAiToolConfiguration,
+) -> &'a PersistedAiToolConfiguration {
+    workspace
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .unwrap_or(default_configuration)
+}
+
+/// Initializes one session AI capability configuration from the default template when absent.
+/// 在缺失时使用默认模板初始化单个会话的 AI 能力配置。
+///
+/// # Parameters
+/// 参数
+/// `workspace` is the retained workspace snapshot that owns the session runtime state.
+/// `workspace` 是拥有会话运行态的保留工作区快照。
+/// `session_id` selects the session that should receive its own configuration snapshot.
+/// `session_id` 选择应接收独立配置快照的会话。
+/// `default_configuration` is the default AI capability template.
+/// `default_configuration` 是默认 AI 能力配置模板。
+///
+/// # Returns
+/// 返回值
+/// `true` when this call initialized the session configuration.
+/// 当本次调用初始化了会话配置时返回 `true`。
+fn ensure_session_ai_tool_configuration(
+    workspace: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    default_configuration: &PersistedAiToolConfiguration,
+) -> bool {
+    if session_id == SessionId::nil() {
+        return false;
+    }
+    let runtime_state = workspace
+        .session_runtime_state
+        .entry(session_id)
+        .or_insert_with(|| SessionRuntimeStateEntry {
+            updated_at: current_unix_millis_text(),
+            ..SessionRuntimeStateEntry::default()
+        });
+    if runtime_state.ensure_ai_tool_configuration(default_configuration) {
+        runtime_state.updated_at = current_unix_millis_text();
+        return true;
+    }
+    false
 }
 
 /// Refreshes model, reasoning, attachment, and context-usage projections after runtime controls change.
@@ -8242,10 +8334,9 @@ fn runtime_parts_from_state(
     ),
     String,
 > {
-    let mut guard = state
+    let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    refresh_agent_runtime_ai_tool_configuration_locked(&mut guard);
     let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
         String::from("service is still starting; controller runtime is not ready")
     })?;
@@ -8266,55 +8357,6 @@ fn runtime_parts_from_state(
         mcp_catalog,
         guard.startup.recent_logs.clone(),
     ))
-}
-
-/// Refreshes the retained AgentRuntimeBridge AI capability snapshot from the persisted standalone file.
-/// 从持久化独立配置文件刷新保留的 AgentRuntimeBridge AI 能力快照。
-fn refresh_agent_runtime_ai_tool_configuration_locked(guard: &mut ServiceBridgeState) {
-    let mut log_messages = Vec::new();
-    let Some(agent_runtime) = guard.agent_runtime.as_mut() else {
-        return;
-    };
-    match vulcan_agent_runtime::ai_tool_configuration::load_ai_tool_configuration_file(
-        &agent_runtime.provider_configuration,
-    ) {
-        Ok(loaded) => {
-            if loaded.normalized
-                && let Err(error) =
-                    vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
-                        &loaded.configuration,
-                    )
-            {
-                log_messages.push(format!(
-                    "[webui-service] ai capability configuration normalization save failed before runtime clone: {error}"
-                ));
-            }
-            if agent_runtime.ai_tool_configuration != loaded.configuration {
-                agent_runtime.ai_tool_configuration = loaded.configuration;
-                log_messages.push(String::from(
-                    "[webui-service] ai capability configuration refreshed before runtime clone",
-                ));
-            }
-        }
-        Err(error) => {
-            log_messages.push(format!(
-                "[webui-service] ai capability configuration refresh failed before runtime clone: {error}"
-            ));
-        }
-    }
-    for message in log_messages {
-        push_service_recent_log_locked(guard, message);
-    }
-}
-
-/// Appends one bounded service startup log line while the caller already owns the service-state lock.
-/// 在调用方已持有服务状态锁时追加一条有界服务启动日志。
-fn push_service_recent_log_locked(guard: &mut ServiceBridgeState, message: String) {
-    guard.startup.recent_logs.push(message);
-    if guard.startup.recent_logs.len() > 200 {
-        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
-        guard.startup.recent_logs.drain(0..overflow);
-    }
 }
 
 /// Loads the workspace snapshot and hydrates the selected submitted session when it already exists.
@@ -9248,20 +9290,21 @@ fn current_pending_prompt_model_reference(
 /// Captures runtime controls for one queued WebUI prompt from the shared service router input.
 /// 从共享服务路由输入捕获单条 WebUI 排队提示词的运行控制参数。
 fn pending_prompt_runtime_options_from_submission(
-    agent_runtime: &AgentRuntimeBridge,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
     reasoning_effort: Option<&str>,
     disabled_ai_capability_kinds: Option<&[String]>,
 ) -> Result<PendingPromptRuntimeOptions, String> {
     Ok(PendingPromptRuntimeOptions {
         reasoning_effort: reasoning_effort
             .and_then(parse_reasoning_effort)
-            .or_else(|| active_reasoning_selection_effort(&agent_runtime.provider_configuration))
+            .or_else(|| active_reasoning_selection_effort(provider_configuration))
             .unwrap_or(ReasoningEffortLevel::Medium),
         temperature: None,
         web_search_override: Default::default(),
         web_search_provider_id: None,
         disabled_ai_capability_kinds: effective_workbench_disabled_ai_capability_kinds(
-            &agent_runtime.ai_tool_configuration,
+            ai_tool_configuration,
             disabled_ai_capability_kinds,
         )?,
     })
@@ -10482,8 +10525,13 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
         session_id,
         Some(start.precheck_request.turn_id()),
     );
-    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
+    let session_ai_tool_configuration = session_ai_tool_configuration_or_default(
+        &workspace_snapshot,
+        session_id,
         &agent_runtime.ai_tool_configuration,
+    );
+    let ai_tool_configuration = effective_ai_tool_configuration_for_prompt_overrides(
+        session_ai_tool_configuration,
         &start.disabled_ai_capability_kinds,
         &start.disabled_ai_capability_target_selectors,
         &start.ai_capability_target_order_overrides,
@@ -10963,11 +11011,12 @@ fn spawn_agent_stream_task(
         webui_trace("stream_task_entered", format!("session={session_id}"));
         let mut record_ids = SessionStreamingRecordIds::default();
         let mut reached_finished_event = false;
+        let prompt_ai_tool_configuration = request.ai_tool_configuration.clone();
         let prompt_intervention = build_webui_prompt_intervention(
             app.clone(),
             task_state.clone(),
             agent_runtime.provider_configuration.clone(),
-            agent_runtime.ai_tool_configuration.clone(),
+            prompt_ai_tool_configuration,
         );
         let provider_stream_create_started_at = current_unix_millis_value();
         webui_trace(
@@ -14019,20 +14068,34 @@ fn spawn_webui_context_compaction_task(
     plan: CompactionPlan,
 ) -> Result<(), String> {
     let mcp_runtime_access = agent_runtime.mcp_runtime.clone();
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)
+        .ok()
+        .flatten();
+    let workspace_path = workspace_snapshot
+        .as_ref()
+        .map(|workspace| workspace_path_for_session(workspace, session_id))
+        .unwrap_or_else(|| workspace_root().display().to_string());
+    let ai_tool_configuration = workspace_snapshot
+        .as_ref()
+        .map(|workspace| {
+            session_ai_tool_configuration_or_default(
+                workspace,
+                session_id,
+                &agent_runtime.ai_tool_configuration,
+            )
+            .clone()
+        })
+        .unwrap_or_else(|| agent_runtime.ai_tool_configuration.clone());
     let request = mcp_runtime_access.map(|mcp_runtime_access| PromptCompactionJobRequest {
         session_id,
         session_title: current_session_title_from_state(&state, session_id),
-        workspace_path: current_workspace_snapshot_from_shared_state(&state)
-            .ok()
-            .flatten()
-            .map(|workspace| workspace_path_for_session(&workspace, session_id))
-            .unwrap_or_else(|| workspace_root().display().to_string()),
+        workspace_path,
         plan: plan.clone(),
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_label: agent_runtime.provider_configuration.model.clone(),
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
             .unwrap_or(ReasoningEffortLevel::Medium),
-        ai_tool_configuration: agent_runtime.ai_tool_configuration.clone(),
+        ai_tool_configuration,
         agent_profile_catalog: agent_runtime.agent_profile_catalog.clone(),
         luaskills_runtime: agent_runtime.luaskills_runtime.clone(),
         mcp_runtime_access,
@@ -18728,6 +18791,9 @@ fn workbench_from_runtime(
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    let selected_ai_tool_configuration = selected_runtime_state
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .unwrap_or(ai_tool_configuration);
     let ai_capability_model_capabilities =
         active_provider_configuration_model_capabilities(provider_configuration);
     let restorable_project_ids = workspace
@@ -18836,14 +18902,14 @@ fn workbench_from_runtime(
         mcp_servers: mcp_servers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
         ai_capabilities: ai_capabilities(
-            ai_tool_configuration,
+            selected_ai_tool_configuration,
             ai_capability_model_capabilities.as_ref(),
         ),
-        ai_capability_vendors: ai_capability_vendors(ai_tool_configuration),
+        ai_capability_vendors: ai_capability_vendors(selected_ai_tool_configuration),
         ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
             provider_configuration,
-            ai_tool_configuration,
+            selected_ai_tool_configuration,
         ),
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: selected_runtime_state

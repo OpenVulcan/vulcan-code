@@ -1387,6 +1387,77 @@ impl VulcanWorkbench {
             .collect();
     }
 
+    /// Stores the active AI capability configuration into one session runtime state.
+    /// 将活跃 AI 能力配置写入指定会话运行态。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the session that should receive the active configuration snapshot.
+    /// `session_id` 是应接收活跃配置快照的会话。
+    pub(super) fn store_active_ai_tool_configuration_for_session(&mut self, session_id: SessionId) {
+        if session_id == SessionId::nil() {
+            return;
+        }
+        let mut configuration = self.ai_tool_configuration.clone();
+        configuration.disabled_capability_kinds = self
+            .effective_workbench_disabled_ai_capability_kinds()
+            .into_iter()
+            .filter(|kind| kind.supports_workbench_quick_toggle())
+            .collect();
+        configuration.normalize();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.ai_tool_configuration = Some(configuration);
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
+    /// Loads one session AI capability configuration into the active workbench editing snapshot.
+    /// 将指定会话的 AI 能力配置载入工作台活跃编辑快照。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `session_id` is the selected session whose configuration should become active.
+    /// `session_id` 是配置应成为活跃状态的选中会话。
+    pub(super) fn load_ai_tool_configuration_for_session(&mut self, session_id: SessionId) {
+        if session_id == SessionId::nil() {
+            self.ai_tool_configuration = self.default_ai_tool_configuration.clone();
+            self.workbench_disabled_ai_capability_kinds =
+                self.ai_tool_configuration.disabled_capability_kinds.clone();
+            return;
+        }
+        self.ai_tool_configuration = self
+            .session_runtime_state
+            .get(&session_id)
+            .and_then(|runtime_state| runtime_state.ai_tool_configuration.clone())
+            .unwrap_or_else(|| self.default_ai_tool_configuration.clone());
+        self.workbench_disabled_ai_capability_kinds =
+            self.ai_tool_configuration.disabled_capability_kinds.clone();
+        self.reconcile_workbench_ai_capability_runtime_state();
+    }
+
+    /// Replaces the selected session AI capability configuration with the default template.
+    /// 使用默认模板替换当前选中会话的 AI 能力配置。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A persistence task for the selected session runtime state.
+    /// 当前选中会话运行态的持久化任务。
+    pub(super) fn sync_selected_session_ai_tool_configuration_from_default(
+        &mut self,
+    ) -> Task<Message> {
+        let session_id = self.selected_session;
+        if session_id == SessionId::nil() {
+            self.status_message = String::from("当前没有选中会话，无法同步默认 AI 能力配置。");
+            return Task::none();
+        }
+        self.ai_tool_configuration = self.default_ai_tool_configuration.clone();
+        self.workbench_disabled_ai_capability_kinds =
+            self.ai_tool_configuration.disabled_capability_kinds.clone();
+        self.store_active_ai_tool_configuration_for_session(session_id);
+        self.refresh_runtime_foundation();
+        self.status_message = String::from("已将当前会话的 AI 能力配置同步为默认配置。");
+        self.persist_single_session_runtime_state_task(session_id)
+    }
+
     /// Reconciles the current-message AI capability toggles against actual native or host availability.
     /// 根据真实原生或宿主可用性对齐当前消息级 AI 能力开关。
     pub(super) fn reconcile_workbench_ai_capability_runtime_state(&mut self) {
@@ -2392,15 +2463,22 @@ impl VulcanWorkbench {
         provider_config::save_configuration_file(&self.provider_configuration)
     }
 
-    /// Persists standalone AI capability configuration and refreshes the runtime foundation.
-    /// 持久化独立 AI 能力配置并刷新运行时基础架构。
+    /// Persists the active session AI capability configuration in memory and refreshes the runtime foundation.
+    /// 在内存中持久化活跃会话 AI 能力配置并刷新运行时基础架构。
     pub(super) fn save_ai_tool_configuration(&mut self) -> Result<(), String> {
         self.reconcile_workbench_ai_capability_runtime_state();
         self.sync_workbench_ai_capability_runtime_preferences_into_configuration();
-        ai_tool_configuration::save_ai_tool_configuration_file(&self.ai_tool_configuration)?;
-        if !self.provider_configuration.ai_tools.is_default() {
-            self.provider_configuration.ai_tools = PersistedAiToolConfiguration::default();
-            provider_config::save_configuration_file(&self.provider_configuration)?;
+        if self.selected_session != SessionId::nil() {
+            self.store_active_ai_tool_configuration_for_session(self.selected_session);
+        } else {
+            self.default_ai_tool_configuration = self.ai_tool_configuration.clone();
+            ai_tool_configuration::save_ai_tool_configuration_file(
+                &self.default_ai_tool_configuration,
+            )?;
+            if !self.provider_configuration.ai_tools.is_default() {
+                self.provider_configuration.ai_tools = PersistedAiToolConfiguration::default();
+                provider_config::save_configuration_file(&self.provider_configuration)?;
+            }
         }
         self.refresh_runtime_foundation();
         Ok(())

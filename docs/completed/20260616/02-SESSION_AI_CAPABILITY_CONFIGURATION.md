@@ -140,3 +140,59 @@
 4. 子代理和 fork 会话的配置继承语义需要在实现时统一，否则会出现派生会话与父会话能力不一致。
 5. 当前工作区已有未提交修复，实施前需要先提交当前代码作为检查点，降低后续大改回滚成本。
 
+## 执行变更总结
+
+### 1. 核心修复与调整概述
+
+本次调整先提交了 AI 扩展能力工具注册与路由配置的检查点提交，随后按方案实现会话级 AI 能力配置隔离。共享会话运行态新增 `ai_tool_configuration` 字段，用于保存每个会话独立的 AI 能力配置。桌面 GUI 中默认 AI 能力配置与当前会话活跃配置分离：新会话复制默认配置，切换会话只读取目标会话配置，不保存旧会话；配置发生变更时才写入当前会话运行态并触发单会话持久化。快捷能力面板新增“使用默认配置”按钮，可将当前会话配置覆盖为默认模板。Service/WebUI 的执行请求、队列提示词、上下文压缩与 workbench 快照摘要改为会话配置优先，缺失时回退默认模板，同时移除了 `runtime_parts_from_state` 热路径无条件读写默认配置文件的逻辑。
+
+### 2. 📂文件变更清单
+
+新增：
+
+- 无新增源码文件。
+
+修改：
+
+- `crates/vulcan-workbench-model/src/runtime_state.rs`：新增会话级 AI 能力配置字段、辅助方法与单元测试。
+- `crates/vulcan-workspace-store/src/workspace_store/mod.rs`：旧版 runtime row 转换时补齐 `ai_tool_configuration: None`。
+- `apps/vulcan-code-gui/src/app_shell/mod.rs`：新增默认 AI 能力配置模板字段，并在工作区快照恢复后载入选中会话配置。
+- `apps/vulcan-code-gui/src/app_shell/configuration.rs`：新增会话配置载入、保存、默认同步逻辑；配置保存改为当前会话优先。
+- `apps/vulcan-code-gui/src/app_shell/update.rs`：会话切换改为只读取目标会话配置；配置变更入口返回会话持久化任务。
+- `apps/vulcan-code-gui/src/app_shell/ai_capability_runtime.rs`：配置保存 helper 改为返回持久化任务。
+- `apps/vulcan-code-gui/src/app_shell/pending_prompt_queue.rs`：AI 能力路由拖拽排序后保存当前会话配置。
+- `apps/vulcan-code-gui/src/app_shell/task_tree.rs`：新建草稿会话时复制默认 AI 能力配置。
+- `apps/vulcan-code-gui/src/app_shell/message.rs`：新增同步默认配置消息。
+- `apps/vulcan-code-gui/src/app_shell/views/ai_capability.rs`：快捷能力面板新增“使用默认配置”按钮。
+- `crates/vulcan-service-kernel/src/lib.rs`：执行、队列、上下文压缩、Workbench 摘要改为会话配置优先；移除热路径无条件刷新默认配置文件逻辑。
+
+删除：
+
+- 删除了 Service 中未使用的热路径配置刷新函数与对应日志 helper。
+
+### 3. 💻关键代码调整详情
+
+- `SessionRuntimeStateEntry` 新增 `ai_tool_configuration: Option<PersistedAiToolConfiguration>`，并提供 `ensure_ai_tool_configuration` 与 `ai_tool_configuration_or_default`，保证旧会话兼容与会话配置独立。
+- GUI 新增 `default_ai_tool_configuration` 字段，原 `ai_tool_configuration` 语义收敛为当前活跃会话配置。`load_ai_tool_configuration_for_session` 只读取目标会话配置，不标脏、不保存；`store_active_ai_tool_configuration_for_session` 只在配置变更时写入当前会话。
+- `save_ai_tool_configuration` 在有选中会话时仅保存到当前会话 runtime state；没有选中会话时才保存默认模板文件。
+- `persist_ai_tool_configuration_change` 改为返回 `Task<Message>`，确保配置变更会触发单会话 runtime state 持久化。
+- `service_submit_conversation_prompt`、`continue_webui_prompt_turn_after_precheck_from_state`、`spawn_webui_context_compaction_task` 使用会话配置构造 effective AI tool configuration。
+- `workbench_from_runtime` 与 `refresh_settings_projection_locked` 使用 selected session 配置生成 AI 能力摘要，避免默认配置修改覆盖当前会话展示。
+- `runtime_parts_from_state` 不再无条件读取并保存 AI 能力配置文件，避免热路径 IO 与默认模板污染会话。
+
+### 4. ⚠️遗留问题与注意事项
+
+- 当前默认配置模板仍由既有独立 AI 能力配置文件承载；默认配置编辑入口与会话配置编辑入口的产品表达后续可进一步拆分得更明确。
+- WebUI 的快捷配置主要依赖当前 workbench snapshot 与提交参数；本次已保证 Service 侧摘要与执行使用会话配置优先，但未额外新增 WebUI 专属按钮组件。
+- 外部进程修改默认配置文件后的 hash/metadata 监听刷新尚未单独实现；本次先移除了热路径无条件刷新，后续可在明确刷新点接入两阶段 hash 校验。
+- 子代理和派生会话当前仍需结合具体创建语义继续复核是否应继承父会话配置或默认配置。
+
+### 5. 验证记录
+
+- `cargo check -p vulcan-agent-runtime -p vulcan-provider-config -p vulcan-workbench-model -p vulcan-workspace-store -p vulcan-service-kernel -p vulcan-code-gui`
+- `cargo test -p vulcan-workbench-model session_runtime_state_initializes_missing_ai_tool_configuration --lib`
+- `cargo test -p vulcan-workbench-model session_runtime_state_keeps_existing_ai_tool_configuration --lib`
+- `cargo test -p vulcan-agent-runtime ai_fallback_visibility_ignores_legacy_global_tool_allow_list --lib`
+- `cargo test -p vulcan-agent-runtime understand_image_fallback_alias_is_registered_without_image_attachments --lib`
+- `cargo test -p vulcan-provider-config normalize_filters_unsupported_disabled_capability_kinds --lib`
+- `cargo test -p vulcan-provider-config normalize_preserves_non_web_disabled_capability_with_host_target --lib`

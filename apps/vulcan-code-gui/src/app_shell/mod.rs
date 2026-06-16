@@ -1654,8 +1654,11 @@ pub struct VulcanWorkbench {
     /// Structured VMM management workbench state for the dedicated memory panel.
     /// 专用记忆面板使用的结构化 VMM 管理工作台状态。
     vmm_management_workbench: VmmManagementWorkbenchState,
-    /// Standalone AI capability tool configuration loaded from the dedicated Vulcan AI capability file.
-    /// 从独立 Vulcan AI 能力配置文件载入的独立 AI 能力工具配置。
+    /// Default AI capability tool configuration used as the template for new sessions.
+    /// 作为新会话模板使用的默认 AI 能力工具配置。
+    default_ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Active session AI capability tool configuration currently shown and edited by the workbench.
+    /// 工作台当前展示与编辑的活跃会话 AI 能力工具配置。
     ai_tool_configuration: PersistedAiToolConfiguration,
     /// User-visible agent profile catalog loaded from the dedicated user directory and state file.
     /// 从独立用户目录与状态文件载入的面向用户 Agent 配置目录。
@@ -2227,6 +2230,7 @@ impl VulcanWorkbench {
         let about_license_catalog = AboutLicenseCatalog::empty();
         let about_license_document_buffers = BTreeMap::new();
 
+        let default_ai_tool_configuration = ai_tool_configuration.clone();
         let startup_controller_configuration = controller_configuration.clone();
         let initial_execution_mode = if matches!(
             agent_profile_catalog.state.selected_agent_id.as_deref(),
@@ -2428,6 +2432,7 @@ impl VulcanWorkbench {
             vmm_settings_draft,
             project_vmm_settings_draft: ProjectVmmSettingsDraft::default(),
             vmm_management_workbench: VmmManagementWorkbenchState::new(),
+            default_ai_tool_configuration,
             ai_tool_configuration,
             agent_profile_catalog,
             selected_user_agent_profile_id,
@@ -3050,7 +3055,7 @@ impl VulcanWorkbench {
             .map(|vendor| vendor.name.clone())
             .unwrap_or_else(|| provider_config::ai_capability_vendor_display_name(vendor_id));
         if self.remove_ai_capability_vendor(vendor_id) {
-            self.persist_ai_tool_configuration_change(format!(
+            return self.persist_ai_tool_configuration_change(format!(
                 "已移除共享能力供应商 `{vendor_name}` 并自动保存。"
             ));
         } else {
@@ -3543,6 +3548,7 @@ impl VulcanWorkbench {
             .clear();
         self.sync_workspace_path_with_selected_session();
         self.workspace_path = normalize_workspace_path_text(&self.workspace_path);
+        self.load_ai_tool_configuration_for_session(self.selected_session);
         self.refresh_all_session_queued_steps();
     }
 
