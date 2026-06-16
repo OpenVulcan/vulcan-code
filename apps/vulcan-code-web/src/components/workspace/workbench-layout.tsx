@@ -1455,6 +1455,13 @@ export function WorkbenchLayout(props: {
             onCopyText={copyText}
             onLoadToolDetail={loadCachedConversationToolDetail}
             resolveMediaSourceUrl={localMediaSourceUrl}
+            footer={(
+              <footer className="statusbar workspace-statusbar">
+                <span>版本 {props.workbench.appVersion}</span>
+                <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
+                <RepositoryLink onOpenExternalUrl={openExternalUrl} />
+              </footer>
+            )}
             onTrace={webuiClickTrace}
           />
         ) : (
@@ -1486,11 +1493,6 @@ export function WorkbenchLayout(props: {
         )}
         {showStartupOverlay ? <StartupOverlay startup={props.startup} /> : null}
       </main>
-      <footer className="statusbar">
-        <span>版本 {props.workbench.appVersion}</span>
-        <StatusbarRuntimeActivities activities={statusbarRuntimeActivities} />
-        <RepositoryLink onOpenExternalUrl={openExternalUrl} />
-      </footer>
       <WorkbenchDialogs
         archiveProjectSubmitting={archiveProjectSubmitting}
         archiveProjectTarget={archiveProjectTarget}

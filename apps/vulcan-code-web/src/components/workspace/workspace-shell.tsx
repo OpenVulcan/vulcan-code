@@ -122,6 +122,9 @@ interface WorkspaceShellProps {
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps;
+  // Fixed footer content pinned to the workspace bottom edge.
+  // 固定在工作区底边的信息栏内容。
+  footer?: React.ReactNode;
   // Routes one composer slash command.
   // 路由一个输入区斜杠命令。
   onSlashCommand: (command: ComposerSlashCommandSummary) => ComposerSlashCommandResult;
@@ -394,6 +397,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
             />
           )}
         </WorkspaceResizableBody>
+        {props.footer ? (
+          <div className="workspace-statusbar-host">
+            {props.footer}
+          </div>
+        ) : null}
       </SidebarInset>
     </div>
   );
