@@ -1936,18 +1936,11 @@ impl VulcanWorkbench {
                 ));
                 Task::none()
             }
-            Message::UnderstandImageRoutingModeSelected(mode) => {
-                self.ai_capability_routing_picker = None;
-                self.ai_tool_configuration.understand_image.mode = mode;
-                self.persist_ai_tool_configuration_change(format!(
-                    "图像理解路由已切换为「{}」并自动保存。",
-                    mode.label()
-                ));
-                Task::none()
-            }
             Message::OpenAiCapabilityRoutingPicker(capability_kind) => {
-                self.ai_capability_routing_picker =
-                    Some(AiCapabilityRoutingPickerState { capability_kind });
+                if capability_kind == AiToolKind::WebSearch {
+                    self.ai_capability_routing_picker =
+                        Some(AiCapabilityRoutingPickerState { capability_kind });
+                }
                 Task::none()
             }
             Message::CloseAiCapabilityRoutingPicker => {

@@ -433,27 +433,18 @@ fn configured_understand_image_candidate(
         .into_iter()
         .filter(|attachment| attachment.kind == ConversationAttachmentKind::Image)
         .collect::<Vec<_>>();
-    if image_attachments.is_empty() {
-        return None;
-    }
 
     let target_summary = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::UnderstandImage))
         .collect::<Vec<_>>()
         .join(", ");
-    let image_summary = image_attachments
-        .iter()
-        .map(|attachment| attachment.file_name.clone())
-        .collect::<Vec<_>>()
-        .join(", ");
-
     Some(VulcanToolCandidate {
         descriptor: VulcanToolDescriptor {
             id: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
             name: UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID.to_string(),
             description: format!(
-                "Read image attachments from the current session through the user-configured image-understanding target chain. Available `target` values: {}. Available images: {}.",
-                target_summary, image_summary
+                "Read image attachments from the current session through the user-configured image-understanding target chain. Available `target` values: {}. Use a resource id for pasted or uploaded attachments, or a full local path for path-based images.",
+                target_summary
             ),
             help_text: None,
             source: VulcanToolSourceKind::Native,
@@ -1187,10 +1178,15 @@ mod tests {
     use super::{
         AiToolFallbackAlias, append_ai_tool_fallback_aliases, build_luaskills_dispatch_candidate,
         build_luaskills_help_candidate, build_vulcan_tools_manager,
-        inject_host_managed_pwd_if_needed, luaskills_entry_to_call_view,
+        configured_understand_image_candidate, inject_host_managed_pwd_if_needed,
+        luaskills_entry_to_call_view,
     };
     use crate::luaskills_runtime::PWD_PARAMETER_NAME;
-    use crate::provider_config::AiToolKind;
+    use crate::provider_config::{
+        AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+        PersistedAiToolConfiguration, PersistedUnderstandImageConfiguration,
+        UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+    };
     use crate::tooling::build_native_tool_catalog;
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
@@ -1203,6 +1199,33 @@ mod tests {
         VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
     };
     use vulcan_vmm::VmmConfigLayer;
+
+    /// Builds one configured image-understanding route used by stable registration tests.
+    /// 构建供稳定注册测试使用的一条已配置图片理解路由。
+    fn test_understand_image_configuration() -> PersistedAiToolConfiguration {
+        PersistedAiToolConfiguration {
+            vendors: vec![PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                connection_mode: None,
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![PersistedAiCapabilityTargetBinding::new(
+                    AiToolKind::UnderstandImage,
+                    "minimax",
+                    "minimax",
+                )],
+            }],
+            understand_image: PersistedUnderstandImageConfiguration {
+                target_order: vec![String::from("minimax/minimax")],
+                ..PersistedUnderstandImageConfiguration::default()
+            },
+            ..PersistedAiToolConfiguration::default()
+        }
+    }
 
     /// Builds one inert host-tool candidate used by fallback alias tests.
     /// 构建一条供回退别名测试使用的惰性宿主工具候选项。
@@ -1255,6 +1278,40 @@ mod tests {
         assert_eq!(
             resolved.definitions[0].parameters_schema["properties"]["query"]["type"],
             "string"
+        );
+    }
+
+    /// Verifies configured image understanding remains exposed as a semantic fallback tool even before any image attachment exists.
+    /// 验证已配置的图片理解即使当前还没有图片附件，也会稳定暴露为语义回退工具。
+    #[test]
+    fn understand_image_fallback_alias_is_registered_without_image_attachments() {
+        let candidate = configured_understand_image_candidate(
+            test_understand_image_configuration(),
+            Vec::new(),
+        )
+        .expect("configured image understanding should produce a backing tool");
+        let mut candidates = vec![candidate];
+
+        append_ai_tool_fallback_aliases(
+            &mut candidates,
+            vec![AiToolFallbackAlias {
+                kind: AiToolKind::UnderstandImage,
+                fallback_tool_id: String::from(UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID),
+            }],
+        );
+
+        let resolved = VulcanToolsManager::new(candidates).resolve_for_execution_mode("Build");
+
+        assert_eq!(resolved.descriptors.len(), 1);
+        assert_eq!(resolved.descriptors[0].id, "understand_image");
+        assert_eq!(
+            resolved.descriptors[0].source,
+            VulcanToolSourceKind::AiFallback
+        );
+        assert!(
+            resolved.definitions[0].parameters_schema["properties"]["image"]
+                .get("enum")
+                .is_none()
         );
     }
 

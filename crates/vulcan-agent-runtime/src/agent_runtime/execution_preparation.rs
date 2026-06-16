@@ -453,12 +453,6 @@ impl ToolExposureSelectorState {
     fn has_mcp_allow(&self) -> bool {
         !self.mcp_tool_allowed.is_empty() || !self.mcp_server_allowed.is_empty()
     }
-
-    /// Returns whether AI-specific allow selectors are active for this request.
-    /// 返回当前请求是否启用了 AI 专属允许选择器。
-    fn has_ai_allow(&self) -> bool {
-        !self.ai_allowed_raw.is_empty()
-    }
 }
 
 /// Flexible allow and deny selector payload extracted from JSON overrides.
@@ -770,9 +764,9 @@ fn vulcan_tool_descriptor_is_visible(
         return true;
     }
     match source {
+        VulcanToolSourceKind::AiFallback => true,
         VulcanToolSourceKind::LuaSkills => selectors.has_luaskills_allow(),
         VulcanToolSourceKind::Mcp => selectors.has_mcp_allow(),
-        VulcanToolSourceKind::AiFallback => selectors.has_ai_allow(),
         VulcanToolSourceKind::Native => {
             selectors.has_luaskills_allow()
                 && (id == LUASKILL_HELP_TOOL_NAME || id == CALL_LUASKILL_TOOL_NAME)
@@ -903,6 +897,7 @@ mod tests {
         ToolExposureSelectorState, ai_tool_configuration_for_execution_request,
         filter_luaskills_entries, filter_native_tool_ids,
         filter_resolved_tool_set_by_tool_exposure, prepare_execution,
+        vulcan_tool_descriptor_is_visible,
     };
     use crate::agent_profile::AgentProfileCatalog;
     use crate::agent_runtime::config::PLAN_AGENT_ID;
@@ -1059,6 +1054,32 @@ mod tests {
                 .disabled_capability_kinds
                 .contains(&AiToolKind::MusicGeneration)
         );
+    }
+
+    /// Verifies legacy global tool allow-lists do not hide configured AI fallback tools.
+    /// 验证旧版全局工具白名单不会隐藏已配置的 AI 回退工具。
+    #[test]
+    fn ai_fallback_visibility_ignores_legacy_global_tool_allow_list() {
+        let snapshot = ToolExposureSnapshot {
+            allowed_tools: vec![String::from("shell_command")],
+            ..ToolExposureSnapshot::default()
+        };
+        let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+
+        assert!(vulcan_tool_descriptor_is_visible(
+            "understand_image",
+            "understand_image",
+            "Read image attachments",
+            VulcanToolSourceKind::AiFallback,
+            &selectors,
+        ));
+        assert!(!vulcan_tool_descriptor_is_visible(
+            "read_file",
+            "read_file",
+            "Read one file",
+            VulcanToolSourceKind::Native,
+            &selectors,
+        ));
     }
 
     /// Verifies LuaSkills family allow-list keeps the shared dispatcher even when global tool allow-list is also present.

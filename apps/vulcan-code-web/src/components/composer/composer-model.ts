@@ -250,6 +250,8 @@ export function aiCapabilitySignature(capabilities: AiCapabilitySummary[]): stri
       capability.kind,
       capability.available ? "1" : "0",
       capability.enabled ? "1" : "0",
+      capability.native ? "1" : "0",
+      capability.bridged ? "1" : "0",
       ...capability.targets.map((target) => [
         target.targetSelector,
         target.enabled ? "1" : "0",

@@ -119,6 +119,12 @@ export interface AiCapabilitySummary {
   // Whether the capability is globally enabled.
   // 当前能力是否全局启用。
   enabled: boolean;
+  // Whether the active provider/model handles this capability natively.
+  // 当前 Provider/模型是否原生处理该能力。
+  native: boolean;
+  // Whether host-side AI tools bridge this capability.
+  // 宿主侧 AI 工具是否桥接该能力。
+  bridged: boolean;
   // Configured targets under this capability.
   // 当前能力下已配置的目标。
   targets: AiCapabilityTargetSummary[];

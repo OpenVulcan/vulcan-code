@@ -685,6 +685,12 @@ pub struct AiCapabilitySummary {
     /// Whether the capability is globally enabled in the workbench configuration.
     /// 当前能力是否在工作台配置中全局启用。
     pub enabled: bool,
+    /// Whether the active provider/model can handle this semantic capability natively.
+    /// 当前 Provider/模型是否能原生处理该语义能力。
+    pub native: bool,
+    /// Whether host-side AI tools can bridge this semantic capability.
+    /// 宿主侧 AI 工具是否能桥接该语义能力。
+    pub bridged: bool,
     /// Configured route targets under this semantic capability.
     /// 当前语义能力下已配置的路由目标。
     pub targets: Vec<AiCapabilityTargetSummary>,

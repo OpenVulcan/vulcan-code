@@ -2661,18 +2661,6 @@ impl VulcanWorkbench {
                             true,
                             Some(Message::OpenAiCapabilityRoutingPicker(capability_kind)),
                         ),
-                        AiToolKind::UnderstandImage => self.view_workbench_dual_line_trigger(
-                            None,
-                            self.ai_tool_configuration
-                                .understand_image
-                                .mode
-                                .label()
-                                .to_string(),
-                            String::from("路由策略"),
-                            220.0,
-                            true,
-                            Some(Message::OpenAiCapabilityRoutingPicker(capability_kind)),
-                        ),
                         _ => space::horizontal().width(0).into(),
                     };
                     actions = actions.push(routing_trigger);

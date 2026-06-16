@@ -482,9 +482,6 @@ pub(super) enum Message {
     /// Selects the global web-search routing mode.
     /// 选择全局网页搜索路由模式。
     WebSearchRoutingModeSelected(WebSearchRoutingMode),
-    /// Selects the global native-versus-host routing mode for image understanding.
-    /// 选择图像理解的全局原生与宿主桥接路由模式。
-    UnderstandImageRoutingModeSelected(NativeBridgeRoutingMode),
     /// Opens the compact routing-strategy picker used by one concrete capability settings page.
     /// 打开某个具体能力设置页使用的紧凑路由策略选择弹窗。
     OpenAiCapabilityRoutingPicker(AiToolKind),

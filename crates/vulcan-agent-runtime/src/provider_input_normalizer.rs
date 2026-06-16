@@ -159,20 +159,35 @@ fn build_attachment_ai_tool_bridge_text(
     tool_hints: &[(&str, &str)],
 ) -> String {
     let local_path = attachment.local_path.trim();
+    let selector = attachment_ai_tool_selector(attachment);
+    let resource_id = attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("none");
     let tool_summary = tool_hints
         .iter()
         .map(|(tool_name, parameter_name)| {
-            format!(
-                "`{tool_name}`（传 `{parameter_name}=\"{}\"`）",
-                attachment.file_name
-            )
+            format!("`{tool_name}`（传 `{parameter_name}=\"{selector}\"`）")
         })
         .collect::<Vec<_>>()
         .join("、");
     format!(
-        "INFO: Attachment \"{}\" is kept locally and will not be uploaded as a native multimodal attachment for the current model. Local path: `{}`. If you need to inspect or reuse it, use host AI tools: {}.",
-        attachment.file_name, local_path, tool_summary,
+        "INFO: Attachment \"{}\" is kept locally and will not be uploaded as a native multimodal attachment for the current model. Resource id: `{}`. Local path: `{}`. If you need to inspect or reuse it, use host AI tools with the resource id or full local path: {}.",
+        attachment.file_name, resource_id, local_path, tool_summary,
     )
+}
+
+/// Chooses the stable selector shown in bridge hints for host AI tool calls.
+/// 为宿主 AI 工具调用提示选择稳定选择器。
+fn attachment_ai_tool_selector(attachment: &ConversationAttachment) -> &str {
+    attachment
+        .asset_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| attachment.local_path.trim())
 }
 
 /// Resolves the host AI tools that can still consume one downgraded attachment kind.
@@ -320,7 +335,8 @@ mod tests {
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.starts_with("INFO: Attachment"));
         assert!(normalized.text.contains("understand_image"));
-        assert!(normalized.text.contains("image=\"demo.png\""));
+        assert!(normalized.text.contains("Resource id: `asset-demo.png`"));
+        assert!(normalized.text.contains("image=\"asset-demo.png\""));
         assert!(
             normalized
                 .text

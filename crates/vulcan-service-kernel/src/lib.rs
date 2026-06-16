@@ -57,7 +57,9 @@ use vulcan_agent_runtime::{
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
-    provider_capabilities::{ResolvedModelCapabilities, resolve_effective_model_capabilities},
+    provider_capabilities::{
+        ResolvedModelCapabilities, resolve_effective_model_capabilities, resolve_model_capabilities,
+    },
     provider_config::{
         self, PersistedAiToolConfiguration, PersistedModelOverrideEntry, ProviderConfigurationFile,
         ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
@@ -7013,7 +7015,12 @@ fn refresh_settings_projection_locked(
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
-    guard.workbench.ai_capabilities = ai_capabilities(&ai_tool_configuration);
+    let ai_capability_model_capabilities =
+        active_provider_configuration_model_capabilities(provider_configuration);
+    guard.workbench.ai_capabilities = ai_capabilities(
+        &ai_tool_configuration,
+        ai_capability_model_capabilities.as_ref(),
+    );
     guard.workbench.ai_capability_vendors = ai_capability_vendors(&ai_tool_configuration);
     guard.workbench.ai_capability_vendor_catalog = ai_capability_vendor_catalog();
     guard.workbench.composer_attachment_capabilities =
@@ -8235,9 +8242,10 @@ fn runtime_parts_from_state(
     ),
     String,
 > {
-    let guard = state
+    let mut guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
+    refresh_agent_runtime_ai_tool_configuration_locked(&mut guard);
     let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
         String::from("service is still starting; controller runtime is not ready")
     })?;
@@ -8258,6 +8266,55 @@ fn runtime_parts_from_state(
         mcp_catalog,
         guard.startup.recent_logs.clone(),
     ))
+}
+
+/// Refreshes the retained AgentRuntimeBridge AI capability snapshot from the persisted standalone file.
+/// 从持久化独立配置文件刷新保留的 AgentRuntimeBridge AI 能力快照。
+fn refresh_agent_runtime_ai_tool_configuration_locked(guard: &mut ServiceBridgeState) {
+    let mut log_messages = Vec::new();
+    let Some(agent_runtime) = guard.agent_runtime.as_mut() else {
+        return;
+    };
+    match vulcan_agent_runtime::ai_tool_configuration::load_ai_tool_configuration_file(
+        &agent_runtime.provider_configuration,
+    ) {
+        Ok(loaded) => {
+            if loaded.normalized
+                && let Err(error) =
+                    vulcan_agent_runtime::ai_tool_configuration::save_ai_tool_configuration_file(
+                        &loaded.configuration,
+                    )
+            {
+                log_messages.push(format!(
+                    "[webui-service] ai capability configuration normalization save failed before runtime clone: {error}"
+                ));
+            }
+            if agent_runtime.ai_tool_configuration != loaded.configuration {
+                agent_runtime.ai_tool_configuration = loaded.configuration;
+                log_messages.push(String::from(
+                    "[webui-service] ai capability configuration refreshed before runtime clone",
+                ));
+            }
+        }
+        Err(error) => {
+            log_messages.push(format!(
+                "[webui-service] ai capability configuration refresh failed before runtime clone: {error}"
+            ));
+        }
+    }
+    for message in log_messages {
+        push_service_recent_log_locked(guard, message);
+    }
+}
+
+/// Appends one bounded service startup log line while the caller already owns the service-state lock.
+/// 在调用方已持有服务状态锁时追加一条有界服务启动日志。
+fn push_service_recent_log_locked(guard: &mut ServiceBridgeState, message: String) {
+    guard.startup.recent_logs.push(message);
+    if guard.startup.recent_logs.len() > 200 {
+        let overflow = guard.startup.recent_logs.len().saturating_sub(200);
+        guard.startup.recent_logs.drain(0..overflow);
+    }
 }
 
 /// Loads the workspace snapshot and hydrates the selected submitted session when it already exists.
@@ -18671,6 +18728,8 @@ fn workbench_from_runtime(
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
+    let ai_capability_model_capabilities =
+        active_provider_configuration_model_capabilities(provider_configuration);
     let restorable_project_ids = workspace
         .task_projects
         .iter()
@@ -18776,7 +18835,10 @@ fn workbench_from_runtime(
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
-        ai_capabilities: ai_capabilities(ai_tool_configuration),
+        ai_capabilities: ai_capabilities(
+            ai_tool_configuration,
+            ai_capability_model_capabilities.as_ref(),
+        ),
         ai_capability_vendors: ai_capability_vendors(ai_tool_configuration),
         ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
@@ -19179,6 +19241,22 @@ fn runtime_state_model_capabilities(
     ))
 }
 
+/// Resolves base model capabilities for the globally selected provider model.
+/// 为全局选中的供应商模型解析基础模型能力。
+fn active_provider_configuration_model_capabilities(
+    provider_configuration: &ProviderConfigurationFile,
+) -> Option<ResolvedModelCapabilities> {
+    let (provider_id, model_id) = provider_configuration
+        .model
+        .as_deref()
+        .and_then(provider_config::parse_active_model_reference)?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .find(|model| model.id == model_id);
+    Some(resolve_model_capabilities(definition, model.as_ref()))
+}
+
 /// Resolves one historical usage ratio into the shared context-budget severity buckets.
 /// 将历史占用比例解析为共享上下文预算严重级别。
 ///
@@ -19438,7 +19516,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         providers: providers(&ProviderConfigurationFile::default()),
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
-        ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools),
+        ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
         ai_capability_vendors: ai_capability_vendors(
             &ProviderConfigurationFile::default().ai_tools,
         ),
@@ -19886,6 +19964,7 @@ fn provider_fields(
 /// 与 iced 工作台快捷开关界面顺序一致的 AI 能力摘要。
 fn ai_capabilities(
     configuration: &vulcan_provider_config::config::PersistedAiToolConfiguration,
+    model_capabilities: Option<&ResolvedModelCapabilities>,
 ) -> Vec<AiCapabilitySummary> {
     WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS
         .into_iter()
@@ -19903,16 +19982,39 @@ fn ai_capabilities(
                     enabled: target.enabled,
                 })
                 .collect::<Vec<_>>();
-            let available = configuration.has_usable_targets_for_kind(kind);
+            let native = ai_capability_has_native_path(kind, model_capabilities);
+            let bridged = configuration.has_usable_targets_for_kind(kind);
+            let available = native || bridged;
             AiCapabilitySummary {
                 kind: kind.key().to_string(),
                 label: kind.label().to_string(),
                 available,
                 enabled: available && !configuration.disabled_capability_kinds.contains(&kind),
+                native,
+                bridged,
                 targets,
             }
         })
         .collect()
+}
+
+/// Returns whether one semantic AI capability has a provider-native path for the active model snapshot.
+/// 返回指定语义 AI 能力在当前模型快照中是否存在 Provider 原生路径。
+fn ai_capability_has_native_path(
+    kind: AiToolKind,
+    model_capabilities: Option<&ResolvedModelCapabilities>,
+) -> bool {
+    let Some(model_capabilities) = model_capabilities else {
+        return false;
+    };
+    if kind == AiToolKind::UnderstandImage {
+        return model_capabilities.supports_input_modality("image");
+    }
+    model_capabilities.ai_tools.iter().any(|tool| {
+        tool.kind == kind
+            && tool.native_provider_tool
+            && tool.policy != vulcan_provider_config::config::AiToolPolicy::Disabled
+    })
 }
 
 /// Creates shared AI capability vendor summaries from the standalone AI tool configuration.
@@ -23650,6 +23752,79 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+
+    /// Verifies image understanding remains available through the native model path when no host target is configured.
+    /// 验证未配置宿主目标时，图片理解仍会通过模型原生路径显示为可用。
+    #[test]
+    fn ai_capabilities_marks_understand_image_native_for_vision_model() {
+        let configuration = PersistedAiToolConfiguration::default();
+        let model_capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text"), String::from("image")],
+            ..ResolvedModelCapabilities::default()
+        };
+        let summaries = ai_capabilities(&configuration, Some(&model_capabilities));
+        let image_capability = summaries
+            .iter()
+            .find(|summary| summary.kind == AiToolKind::UnderstandImage.key())
+            .expect("image-understanding capability summary should exist");
+
+        assert!(image_capability.available);
+        assert!(image_capability.enabled);
+        assert!(image_capability.native);
+        assert!(!image_capability.bridged);
+        assert!(image_capability.targets.is_empty());
+    }
+
+    /// Verifies image understanding reports the host bridge path when a configured target exists for a text-only model.
+    /// 验证纯文本模型存在已配置目标时，图片理解会报告宿主桥接路径。
+    #[test]
+    fn ai_capabilities_marks_understand_image_bridged_for_text_model() {
+        let configuration = test_understand_image_ai_tool_configuration();
+        let model_capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text")],
+            ..ResolvedModelCapabilities::default()
+        };
+        let summaries = ai_capabilities(&configuration, Some(&model_capabilities));
+        let image_capability = summaries
+            .iter()
+            .find(|summary| summary.kind == AiToolKind::UnderstandImage.key())
+            .expect("image-understanding capability summary should exist");
+
+        assert!(image_capability.available);
+        assert!(image_capability.enabled);
+        assert!(!image_capability.native);
+        assert!(image_capability.bridged);
+        assert_eq!(image_capability.targets.len(), 1);
+    }
+
+    /// Builds a minimal usable image-understanding host route for WebUI capability summary tests.
+    /// 为 WebUI 能力摘要测试构建一条最小可用的图片理解宿主路由。
+    fn test_understand_image_ai_tool_configuration() -> PersistedAiToolConfiguration {
+        PersistedAiToolConfiguration {
+            vendors: vec![PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                connection_mode: None,
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![PersistedAiCapabilityTargetBinding::new(
+                    AiToolKind::UnderstandImage,
+                    "minimax",
+                    "minimax",
+                )],
+            }],
+            understand_image:
+                vulcan_provider_config::config::PersistedUnderstandImageConfiguration {
+                    target_order: vec![String::from("minimax/minimax")],
+                    ..vulcan_provider_config::config::PersistedUnderstandImageConfiguration::default(
+                    )
+                },
+            ..PersistedAiToolConfiguration::default()
+        }
+    }
 
     /// Ensures every frontend business RPC method has a kernel dispatcher arm.
     /// 确保每个前端业务 RPC 方法都有服务内核分发分支。

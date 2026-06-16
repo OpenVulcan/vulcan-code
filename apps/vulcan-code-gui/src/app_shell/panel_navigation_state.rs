@@ -333,10 +333,7 @@ impl SettingsSection {
     /// Returns whether the current settings section should expose a compact routing-strategy selector.
     /// 返回当前设置分区是否应暴露紧凑路由策略选择器。
     pub(super) const fn supports_routing_strategy(self) -> bool {
-        matches!(
-            self,
-            Self::AiCapabilityWebSearch | Self::AiCapabilityUnderstandImage
-        )
+        matches!(self, Self::AiCapabilityWebSearch)
     }
 }
 

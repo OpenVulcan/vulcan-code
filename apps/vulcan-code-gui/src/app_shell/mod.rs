@@ -221,11 +221,10 @@ use crate::model::{
 use crate::project_temp_maintenance;
 use crate::provider_capabilities::resolve_effective_model_capabilities;
 use crate::provider_config::{
-    self, AiToolKind, ModelChoice, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
-    PersistedControllerConfiguration, PersistedMcpTransportKind, PersistedModelOverrideEntry,
-    PersistedProviderEntry, ProviderChoice, ProviderConfigurationFile, ProviderFieldKey,
-    ProviderRuntimeKind, ReasoningSelectionOption, SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS,
-    WebSearchRoutingMode,
+    self, AiToolKind, ModelChoice, PersistedAiToolConfiguration, PersistedControllerConfiguration,
+    PersistedMcpTransportKind, PersistedModelOverrideEntry, PersistedProviderEntry, ProviderChoice,
+    ProviderConfigurationFile, ProviderFieldKey, ProviderRuntimeKind, ReasoningSelectionOption,
+    SESSION_TRANSCRIPT_TURN_PAGE_SIZE_OPTIONS, WebSearchRoutingMode,
 };
 use crate::selectable_transcript::{
     SelectableTranscriptCommand, SelectableTranscriptContextMenuMediaKind,

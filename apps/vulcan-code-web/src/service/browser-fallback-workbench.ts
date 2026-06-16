@@ -226,6 +226,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       label: "网页搜索",
       available: true,
       enabled: true,
+      native: false,
+      bridged: true,
       targets: [
         {
           targetSelector: "builtin/web-search",
@@ -243,6 +245,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       label: "图片理解",
       available: false,
       enabled: false,
+      native: false,
+      bridged: false,
       targets: [],
     },
     {
@@ -250,6 +254,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       label: "图片生成",
       available: false,
       enabled: false,
+      native: false,
+      bridged: false,
       targets: [],
     },
   ],

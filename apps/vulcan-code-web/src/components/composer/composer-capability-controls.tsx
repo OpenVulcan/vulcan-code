@@ -267,6 +267,17 @@ export function ComposerAiCapabilityControl(props: {
               const available = Boolean(capability?.available);
               const enabled = available && !props.disabledKinds.has(option.value);
               const targetCount = capability?.targets.length ?? 0;
+              const sourceLabel = capability?.native
+                ? targetCount > 0
+                  ? props.locale === "zh-CN"
+                    ? `模型原生 + ${targetCount} 个目标`
+                    : `Native + ${targetCount} targets`
+                  : props.locale === "zh-CN"
+                    ? "模型原生"
+                    : "Native model"
+                : props.locale === "zh-CN"
+                  ? `${targetCount} 个目标`
+                  : `${targetCount} targets`;
               return (
                 <div
                   className={cn(
@@ -302,9 +313,7 @@ export function ComposerAiCapabilityControl(props: {
                       <span>{props.locale === "zh-CN" ? option.labelZh : option.labelEn}</span>
                       <small>
                         {available
-                          ? props.locale === "zh-CN"
-                            ? `${targetCount} 个目标`
-                            : `${targetCount} targets`
+                          ? sourceLabel
                           : props.locale === "zh-CN"
                             ? "暂无可用目标"
                             : "No targets"}
@@ -351,7 +360,13 @@ export function ComposerAiCapabilityControl(props: {
               </DndContext>
             ) : (
               <div className="composer-capability-dialog-empty">
-                {props.locale === "zh-CN" ? "当前能力暂无已配置目标。" : "This capability has no configured targets."}
+                {selectedCapability?.native
+                  ? props.locale === "zh-CN"
+                    ? "当前能力由所选模型原生处理。"
+                    : "This capability is handled natively by the selected model."
+                  : props.locale === "zh-CN"
+                    ? "当前能力暂无已配置目标。"
+                    : "This capability has no configured targets."}
               </div>
             )}
           </section>
@@ -417,14 +432,16 @@ function composerCapabilityTooltipRows(
     if (!capability?.available || disabledKinds.has(option.value)) {
       return [];
     }
+    const sourceLabels = capability.native ? ["模型原生"] : [];
     const targetLabels = orderedAiCapabilityTargets(capability, targetOrder)
       .filter((target) => target.enabled && !disabledTargetSelectors.has(target.targetSelector))
       .map(composerCapabilityTargetTooltipLabel);
-    if (!targetLabels.length) {
+    const routeLabels = sourceLabels.concat(targetLabels);
+    if (!routeLabels.length) {
       return [];
     }
-    const visibleLabels = targetLabels.slice(0, 4);
-    const suffix = targetLabels.length > visibleLabels.length ? "..." : "";
+    const visibleLabels = routeLabels.slice(0, 4);
+    const suffix = routeLabels.length > visibleLabels.length ? "..." : "";
     return [`${option.labelZh}：${visibleLabels.join("、")}${suffix}`];
   });
 }

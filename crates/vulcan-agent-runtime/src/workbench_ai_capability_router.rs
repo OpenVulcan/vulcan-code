@@ -44,36 +44,29 @@ pub fn parse_workbench_ai_tool_kind(value: &str) -> Option<AiToolKind> {
     }
 }
 
-/// Builds the disabled capability set using the same quick-toggle rules as the iced workbench.
-/// 使用与 iced 工作台相同的快捷开关规则构建禁用能力集合。
+/// Builds the disabled capability set from explicit quick-toggle choices only.
+/// 仅根据显式快捷开关选择构建禁用能力集合。
 ///
 /// # Parameters
 /// 参数
-/// `configuration` is the persisted AI tool route configuration.
-/// `configuration` 是持久化的 AI 工具路由配置。
+/// `configuration` is the persisted AI tool configuration that carries explicit disabled choices.
+/// `configuration` 是携带显式关闭选择的持久化 AI 工具配置。
 /// `requested_disabled_kinds` contains user-disabled WebUI capability keys for this prompt.
 /// `requested_disabled_kinds` 包含本次提示词中用户在 WebUI 禁用的能力键。
 ///
 /// # Returns
 /// 返回值
-/// The effective disabled AI tool kind set after unavailable routes are forced off.
-/// 强制关闭不可用路由后的有效禁用 AI 工具类型集合。
+/// The effective disabled AI tool kind set without deriving native capability availability from host targets.
+/// 不基于宿主目标推导原生能力可用性后的有效禁用 AI 工具类型集合。
 pub fn effective_workbench_disabled_ai_capability_kinds(
     configuration: &PersistedAiToolConfiguration,
     requested_disabled_kinds: Option<&[String]>,
 ) -> Result<BTreeSet<AiToolKind>, String> {
-    let mut disabled = if let Some(requested_disabled_kinds) = requested_disabled_kinds {
-        parse_disabled_capability_keys(requested_disabled_kinds)?
+    if let Some(requested_disabled_kinds) = requested_disabled_kinds {
+        Ok(parse_disabled_capability_keys(requested_disabled_kinds)?)
     } else {
-        configuration.disabled_capability_kinds.clone()
-    };
-
-    for kind in WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS {
-        if !configuration.has_usable_targets_for_kind(kind) {
-            disabled.insert(kind);
-        }
+        Ok(configuration.disabled_capability_kinds.clone())
     }
-    Ok(disabled)
 }
 
 /// Applies current-message capability disables to a cloned AI tool configuration.
@@ -211,4 +204,45 @@ fn parse_disabled_capability_keys(
         }
     }
     Ok(disabled)
+}
+
+#[cfg(test)]
+mod tests {
+    //! Workbench AI capability router regression tests.
+    //! 工作台 AI 能力路由器回归测试。
+
+    use super::effective_workbench_disabled_ai_capability_kinds;
+    use vulcan_provider_config::config::{AiToolKind, PersistedAiToolConfiguration};
+
+    /// Keeps capabilities enabled by default even when no host target is configured.
+    /// 即使未配置宿主目标，也默认保持能力不被强制关闭。
+    #[test]
+    fn disabled_capability_set_does_not_infer_unavailable_from_host_targets() {
+        let configuration = PersistedAiToolConfiguration::default();
+
+        let disabled = effective_workbench_disabled_ai_capability_kinds(&configuration, None)
+            .expect("disabled capability set should resolve");
+
+        assert!(
+            disabled.is_empty(),
+            "host target absence should not disable native-capable tools"
+        );
+    }
+
+    /// Still honors explicit per-prompt disabled capability choices from the WebUI.
+    /// 仍然遵守 WebUI 为单次提示词显式选择的关闭能力。
+    #[test]
+    fn disabled_capability_set_honors_explicit_prompt_choices() {
+        let configuration = PersistedAiToolConfiguration::default();
+
+        let disabled = effective_workbench_disabled_ai_capability_kinds(
+            &configuration,
+            Some(&[String::from("web_search"), String::from("understand_image")]),
+        )
+        .expect("explicit disabled capability set should resolve");
+
+        assert!(disabled.contains(&AiToolKind::WebSearch));
+        assert!(disabled.contains(&AiToolKind::UnderstandImage));
+        assert_eq!(disabled.len(), 2);
+    }
 }

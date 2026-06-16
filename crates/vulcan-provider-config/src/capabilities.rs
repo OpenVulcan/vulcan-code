@@ -4,11 +4,10 @@
 use crate::provider_config::{
     AiToolDeclaration, AiToolKind, AiToolPolicy, IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
     MUSIC_COVER_PROVIDER_CHAIN_TOOL_ID, MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID, ModelChoice,
-    ModelInterleavedCapability, NativeBridgeRoutingMode, PersistedAiToolConfiguration,
-    PersistedProviderOptions, ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID,
-    SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
-    VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
-    WebSearchRoutingMode,
+    ModelInterleavedCapability, PersistedAiToolConfiguration, PersistedProviderOptions,
+    ProviderApiFamily, SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID, SupportedProviderDefinition,
+    UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
+    WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
 };
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachmentKind;
@@ -243,35 +242,35 @@ pub fn apply_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
     );
-    apply_generic_host_only_ai_tool_runtime_configuration(
+    apply_generic_native_first_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::ImageGeneration,
         IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID,
         &["image"],
     );
-    apply_generic_host_only_ai_tool_runtime_configuration(
+    apply_generic_native_first_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::VideoGeneration,
         VIDEO_GENERATION_PROVIDER_CHAIN_TOOL_ID,
         &["video"],
     );
-    apply_generic_host_only_ai_tool_runtime_configuration(
+    apply_generic_native_first_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::SpeechSynthesis,
         SPEECH_SYNTHESIS_PROVIDER_CHAIN_TOOL_ID,
         &["audio"],
     );
-    apply_generic_host_only_ai_tool_runtime_configuration(
+    apply_generic_native_first_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::MusicGeneration,
         MUSIC_GENERATION_PROVIDER_CHAIN_TOOL_ID,
         &["audio"],
     );
-    apply_generic_host_only_ai_tool_runtime_configuration(
+    apply_generic_native_first_ai_tool_runtime_configuration(
         &mut capabilities.ai_tools,
         configuration,
         AiToolKind::MusicCover,
@@ -372,20 +371,11 @@ fn apply_understand_image_runtime_configuration(
         return;
     }
 
-    match root_configuration.understand_image.mode {
-        NativeBridgeRoutingMode::NativeOnly => {
-            if let Some(index) = existing_index {
-                ai_tools.remove(index);
-            }
-            return;
+    if model_supports_native_image {
+        if let Some(index) = existing_index {
+            ai_tools.remove(index);
         }
-        NativeBridgeRoutingMode::NativeFirst if model_supports_native_image => {
-            if let Some(index) = existing_index {
-                ai_tools.remove(index);
-            }
-            return;
-        }
-        NativeBridgeRoutingMode::NativeFirst | NativeBridgeRoutingMode::HostOnly => {}
+        return;
     }
 
     let mut capability = existing_index
@@ -405,9 +395,9 @@ fn apply_understand_image_runtime_configuration(
     }
 }
 
-/// Applies one generic host-only capability whenever the user has enabled at least one target for that semantic tool.
-/// 当用户至少为某个语义工具启用了一条目标时，应用一条通用宿主侧能力配置。
-fn apply_generic_host_only_ai_tool_runtime_configuration(
+/// Applies one generic native-first capability with a host fallback whenever the user has enabled at least one target for that semantic tool.
+/// 当用户至少为某个语义工具启用了一条目标时，应用一条通用原生优先、宿主兜底的能力配置。
+fn apply_generic_native_first_ai_tool_runtime_configuration(
     ai_tools: &mut Vec<ResolvedAiToolCapability>,
     configuration: &PersistedAiToolConfiguration,
     capability_kind: AiToolKind,
@@ -418,27 +408,47 @@ fn apply_generic_host_only_ai_tool_runtime_configuration(
         .iter()
         .position(|tool| tool.kind == capability_kind);
     if !configuration.has_usable_targets_for_kind(capability_kind) {
-        if let Some(index) = existing_index {
-            ai_tools.remove(index);
-        }
         return;
     }
 
-    let capability = ResolvedAiToolCapability {
-        kind: capability_kind,
-        policy: AiToolPolicy::ForceHost,
-        native_provider_tool: false,
-        native_tool_type: None,
-        native_request_patch: None,
-        fallback_tool_id: Some(fallback_tool_id.to_string()),
-        requires_approval: false,
-        result_modalities: result_modalities
+    let mut capability = existing_index
+        .and_then(|index| ai_tools.get(index).cloned())
+        .unwrap_or_else(|| ResolvedAiToolCapability {
+            kind: capability_kind,
+            policy: AiToolPolicy::ForceHost,
+            native_provider_tool: false,
+            native_tool_type: None,
+            native_request_patch: None,
+            fallback_tool_id: None,
+            requires_approval: false,
+            result_modalities: Vec::new(),
+            citation_support: false,
+            source_label: String::from("用户配置"),
+        });
+    let native_available = capability.native_provider_tool
+        && (capability
+            .native_tool_type
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+            || capability.native_request_patch.is_some());
+    capability.policy = if native_available {
+        AiToolPolicy::Auto
+    } else {
+        AiToolPolicy::ForceHost
+    };
+    if !native_available {
+        capability.native_provider_tool = false;
+        capability.native_tool_type = None;
+        capability.native_request_patch = None;
+    }
+    capability.fallback_tool_id = Some(fallback_tool_id.to_string());
+    if capability.result_modalities.is_empty() {
+        capability.result_modalities = result_modalities
             .iter()
             .map(|value| value.to_string())
-            .collect(),
-        citation_support: false,
-        source_label: String::from("用户配置"),
-    };
+            .collect();
+    }
+    capability.source_label = format!("{} · 用户策略", capability.source_label);
 
     if let Some(index) = existing_index {
         ai_tools[index] = capability;
@@ -793,13 +803,12 @@ mod tests {
         resolve_model_capabilities, resolve_provider_api_key, resolve_provider_api_key_with_lookup,
     };
     use crate::provider_config::{
-        AiToolKind, AiToolPolicy, ModelChoice, NativeBridgeRoutingMode,
-        PersistedAiToolConfiguration, PersistedProviderOptions,
-        PersistedUnderstandImageConfiguration, PersistedWebSearchConfiguration,
-        ProviderBaseUrlConfig, ProviderBaseUrlKind, ProviderModelDiscoveryConfig,
-        ProviderModelDiscoveryKind, ProviderRuntimeKind, SupportedProviderDefinition,
-        UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID, WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID,
-        WebSearchRoutingMode,
+        AiToolDeclaration, AiToolKind, AiToolPolicy, ModelChoice, PersistedAiToolConfiguration,
+        PersistedProviderOptions, PersistedUnderstandImageConfiguration,
+        PersistedWebSearchConfiguration, ProviderBaseUrlConfig, ProviderBaseUrlKind,
+        ProviderModelDiscoveryConfig, ProviderModelDiscoveryKind, ProviderRuntimeKind,
+        SupportedProviderDefinition, UNDERSTAND_IMAGE_PROVIDER_CHAIN_TOOL_ID,
+        WEB_SEARCH_PROVIDER_CHAIN_TOOL_ID, WebSearchRoutingMode,
     };
     use std::collections::BTreeMap;
 
@@ -1123,7 +1132,6 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
-                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1174,7 +1182,6 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
-                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1241,7 +1248,6 @@ mod tests {
                 ],
             }],
             understand_image: PersistedUnderstandImageConfiguration {
-                mode: NativeBridgeRoutingMode::NativeFirst,
                 target_order: vec![String::from("minimax/minimax")],
                 providers: Vec::new(),
             },
@@ -1342,6 +1348,86 @@ mod tests {
             capabilities.allows_staged_attachment_kind(
                 vulcan_core::types::ConversationAttachmentKind::Audio
             )
+        );
+    }
+
+    /// Keeps provider-native media capabilities first and only adds configured host targets as fallback routes.
+    /// 保持 Provider 原生媒体能力优先，并仅把已配置宿主目标作为兜底路由加入。
+    #[test]
+    fn ai_tool_configuration_preserves_native_generation_with_host_fallback() {
+        let mut definition = test_provider_definition();
+        definition.ai_tools.push(AiToolDeclaration::provider_native(
+            AiToolKind::ImageGeneration,
+            "native_image_generation",
+        ));
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let configuration = PersistedAiToolConfiguration {
+            vendors: vec![crate::provider_config::PersistedAiCapabilityVendorEntry {
+                id: String::from("minimax"),
+                vendor_id: String::from("minimax"),
+                name: String::from("MiniMax"),
+                enabled: true,
+                api_key: String::from("token"),
+                connection_mode: None,
+                base_url: String::new(),
+                region: String::from("global"),
+                targets: vec![
+                    crate::provider_config::PersistedAiCapabilityTargetBinding::new(
+                        AiToolKind::ImageGeneration,
+                        "image-01",
+                        "image-01",
+                    ),
+                ],
+            }],
+            ..PersistedAiToolConfiguration::default()
+        };
+
+        apply_ai_tool_runtime_configuration(&mut capabilities, &configuration);
+
+        let image_generation = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::ImageGeneration)
+            .expect("native image generation should remain exposed");
+        assert_eq!(image_generation.policy, AiToolPolicy::Auto);
+        assert!(image_generation.native_provider_tool);
+        assert_eq!(
+            image_generation.native_tool_type.as_deref(),
+            Some("native_image_generation")
+        );
+        assert_eq!(
+            image_generation.fallback_tool_id.as_deref(),
+            Some(crate::provider_config::IMAGE_GENERATION_PROVIDER_CHAIN_TOOL_ID)
+        );
+    }
+
+    /// Leaves provider-native media capabilities untouched when no host target is configured.
+    /// 未配置宿主目标时保持 Provider 原生媒体能力不变。
+    #[test]
+    fn ai_tool_configuration_keeps_native_generation_without_host_targets() {
+        let mut definition = test_provider_definition();
+        definition.ai_tools.push(AiToolDeclaration::provider_native(
+            AiToolKind::ImageGeneration,
+            "native_image_generation",
+        ));
+        let mut capabilities = resolve_model_capabilities(&definition, None);
+
+        apply_ai_tool_runtime_configuration(
+            &mut capabilities,
+            &PersistedAiToolConfiguration::default(),
+        );
+
+        let image_generation = capabilities
+            .ai_tools
+            .iter()
+            .find(|tool| tool.kind == AiToolKind::ImageGeneration)
+            .expect("native image generation should remain exposed");
+        assert_eq!(image_generation.policy, AiToolPolicy::Auto);
+        assert!(image_generation.native_provider_tool);
+        assert_eq!(
+            image_generation.fallback_tool_id.as_deref(),
+            None,
+            "host fallback should not be invented without configured targets"
         );
     }
 }

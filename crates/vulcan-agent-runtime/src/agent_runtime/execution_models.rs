@@ -5,7 +5,9 @@ use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
 use crate::context_budget::ContextBudgetSnapshot;
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::SessionId;
-use crate::provider_config::{PersistedAiToolConfiguration, ReasoningEffortLevel};
+use crate::provider_config::{
+    AiToolKind, AiToolPolicy, PersistedAiToolConfiguration, ReasoningEffortLevel,
+};
 use crate::provider_config::{
     PersistedPromptConfiguration, PersistedPromptPersonalitySelection,
     ProjectPromptSkillsConfiguration,
@@ -382,17 +384,45 @@ impl ExecutionPreparation {
                 }
             ),
         ];
-        if !self.model_blueprint.capabilities.ai_tools.is_empty() {
-            rows.push(format!(
-                "AI 专用工具：{}",
-                self.model_blueprint
-                    .capabilities
-                    .ai_tools
-                    .iter()
-                    .map(|tool| format!("{}({:?})", tool.kind.key(), tool.policy))
-                    .collect::<Vec<_>>()
-                    .join("、")
-            ));
+        let mut ai_tool_routes = Vec::new();
+        if self
+            .model_blueprint
+            .capabilities
+            .supports_input_modality("image")
+        {
+            ai_tool_routes.push(String::from("understand_image(模型原生)"));
+        }
+        ai_tool_routes.extend(
+            self.model_blueprint
+                .capabilities
+                .ai_tools
+                .iter()
+                .filter(|tool| {
+                    !(tool.kind == AiToolKind::UnderstandImage
+                        && self
+                            .model_blueprint
+                            .capabilities
+                            .supports_input_modality("image"))
+                })
+                .map(|tool| {
+                    let route_label = if tool.policy == AiToolPolicy::Disabled {
+                        "禁用"
+                    } else if tool.native_provider_tool {
+                        "模型原生"
+                    } else if tool
+                        .fallback_tool_id
+                        .as_deref()
+                        .is_some_and(|value| !value.trim().is_empty())
+                    {
+                        "宿主工具"
+                    } else {
+                        "未解析"
+                    };
+                    format!("{}({route_label})", tool.kind.key())
+                }),
+        );
+        if !ai_tool_routes.is_empty() {
+            rows.push(format!("AI 扩展能力路由：{}", ai_tool_routes.join("、")));
         }
 
         if let Some(context_budget) = self.context_budget.as_ref() {

@@ -549,10 +549,24 @@ impl VulcanWorkbench {
     /// Returns whether the currently active workbench model declares one native web-search capability regardless of the current user routing preference.
     /// 返回当前激活工作台模型是否声明了原生网页搜索能力，并且不受当前用户路由偏好的影响。
     fn active_workbench_has_native_web_search(&self) -> bool {
+        self.active_workbench_has_native_ai_capability(
+            crate::provider_config::AiToolKind::WebSearch,
+        )
+    }
+
+    /// Returns whether the currently active workbench model declares one native path for a semantic AI capability.
+    /// 返回当前激活工作台模型是否声明了某个语义 AI 能力的原生路径。
+    fn active_workbench_has_native_ai_capability(
+        &self,
+        capability_kind: crate::provider_config::AiToolKind,
+    ) -> bool {
         self.active_workbench_base_model_capabilities()
             .is_some_and(|capabilities| {
+                if capability_kind == crate::provider_config::AiToolKind::UnderstandImage {
+                    return capabilities.supports_input_modality("image");
+                }
                 capabilities.ai_tools.iter().any(|tool| {
-                    tool.kind == crate::provider_config::AiToolKind::WebSearch
+                    tool.kind == capability_kind
                         && tool.native_provider_tool
                         && tool.policy != crate::provider_config::AiToolPolicy::Disabled
                 })
@@ -1321,6 +1335,7 @@ impl VulcanWorkbench {
         };
         self.ai_tool_configuration
             .has_usable_targets_for_kind(capability_kind)
+            || self.active_workbench_has_native_ai_capability(capability_kind)
     }
 
     /// Returns whether the requested quick-panel capability section stays enabled for the current workbench send chain.
@@ -1354,24 +1369,12 @@ impl VulcanWorkbench {
                 .contains(&capability_kind)
     }
 
-    /// Builds the runtime-disabled AI capability set after force-disabling every semantic capability that currently lacks at least one usable configured target.
-    /// 构建运行时关闭的 AI 能力集合，并强制关闭当前缺少可用已配置目标的所有语义能力。
+    /// Builds the runtime-disabled AI capability set without deriving availability from host-target configuration alone.
+    /// 构建运行时关闭的 AI 能力集合，不再仅凭宿主目标配置推导可用性。
     pub(super) fn effective_workbench_disabled_ai_capability_kinds(
         &self,
     ) -> std::collections::BTreeSet<crate::provider_config::AiToolKind> {
-        let mut disabled = self.workbench_disabled_ai_capability_kinds.clone();
-        for section in super::WorkbenchAiCapabilitySection::ALL {
-            let Some(capability_kind) = section.capability_kind() else {
-                continue;
-            };
-            if !self
-                .ai_tool_configuration
-                .has_usable_targets_for_kind(capability_kind)
-            {
-                disabled.insert(capability_kind);
-            }
-        }
-        disabled
+        self.workbench_disabled_ai_capability_kinds.clone()
     }
 
     /// Synchronizes the current workbench quick-toggle state back into the persisted standalone AI capability configuration snapshot.
@@ -1384,17 +1387,14 @@ impl VulcanWorkbench {
             .collect();
     }
 
-    /// Reconciles the current-message AI capability toggles so every semantic capability without usable configured targets is force-closed until the user explicitly re-enables it later.
-    /// 对当前消息级 AI 能力开关执行对齐：凡是缺少可用已配置目标的语义能力都会被强制关闭，后续需由用户显式重新开启。
+    /// Reconciles the current-message AI capability toggles against actual native or host availability.
+    /// 根据真实原生或宿主可用性对齐当前消息级 AI 能力开关。
     pub(super) fn reconcile_workbench_ai_capability_runtime_state(&mut self) {
         for section in super::WorkbenchAiCapabilitySection::ALL {
             let Some(capability_kind) = section.capability_kind() else {
                 continue;
             };
-            if self
-                .ai_tool_configuration
-                .has_usable_targets_for_kind(capability_kind)
-            {
+            if self.workbench_ai_capability_is_available(section) {
                 continue;
             }
             self.workbench_disabled_ai_capability_kinds
@@ -1442,10 +1442,7 @@ impl VulcanWorkbench {
         let Some(capability_kind) = section.capability_kind() else {
             return;
         };
-        if !self
-            .ai_tool_configuration
-            .has_usable_targets_for_kind(capability_kind)
-        {
+        if !self.workbench_ai_capability_is_available(section) {
             self.workbench_disabled_ai_capability_kinds
                 .insert(capability_kind);
             if capability_kind == crate::provider_config::AiToolKind::WebSearch {

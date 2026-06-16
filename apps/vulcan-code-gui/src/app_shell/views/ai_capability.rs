@@ -49,7 +49,7 @@ impl VulcanWorkbench {
             } else if selected_section.supports_routing_strategy() {
                 self.view_ai_capability_unavailable_page(
                     selected_section.label(),
-                    "当前能力入口已预留；后续接通后，这里会提供原生优先与工具理解等路由策略选项。",
+                    "当前能力入口已预留；后续接通后，这里会提供联网搜索路由策略选项。",
                 )
                 .into()
             } else {
@@ -843,27 +843,6 @@ impl VulcanWorkbench {
                 .spacing(8)
                 .into(),
             ),
-            AiToolKind::UnderstandImage => Some(
-                column![
-                    text("路由策略").size(13),
-                    pick_list(
-                        NativeBridgeRoutingMode::ALL.to_vec(),
-                        Some(self.ai_tool_configuration.understand_image.mode),
-                        Message::UnderstandImageRoutingModeSelected,
-                    )
-                    .width(Fill)
-                    .placeholder("选择图像理解路由策略"),
-                    text(
-                        self.ai_tool_configuration
-                            .understand_image
-                            .mode
-                            .description()
-                    )
-                    .size(12),
-                ]
-                .spacing(8)
-                .into(),
-            ),
             _ => None,
         }
     }
@@ -1419,40 +1398,6 @@ impl VulcanWorkbench {
                         )
                     })
                     .on_press(Message::WebSearchRoutingModeSelected(mode))
-                    .into()
-                }))
-                .spacing(6)
-                .into(),
-            ),
-            AiToolKind::UnderstandImage => (
-                "选择图像理解路由策略",
-                "当前能力会按这里选定的顺序，决定优先使用模型原生视觉，还是优先走宿主理解桥接工具。",
-                column(NativeBridgeRoutingMode::ALL.into_iter().map(|mode| {
-                    let is_selected = self.ai_tool_configuration.understand_image.mode == mode;
-                    button(
-                        container(
-                            column![
-                                text(mode.label()).size(13).width(Fill),
-                                text(mode.description())
-                                    .size(11)
-                                    .color(palette.background.base.text.scale_alpha(0.62))
-                                    .width(Fill),
-                            ]
-                            .spacing(4),
-                        )
-                        .width(Fill)
-                        .center_y(Fill),
-                    )
-                    .width(Fill)
-                    .padding([8, 10])
-                    .style(move |theme, status| {
-                        style::workbench_model_picker_option_button_style(
-                            theme,
-                            status,
-                            is_selected,
-                        )
-                    })
-                    .on_press(Message::UnderstandImageRoutingModeSelected(mode))
                     .into()
                 }))
                 .spacing(6)

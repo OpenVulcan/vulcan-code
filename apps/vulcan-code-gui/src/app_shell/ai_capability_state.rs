@@ -98,10 +98,7 @@ impl WorkbenchAiCapabilitySection {
     /// Returns whether the current section should show one routing-strategy block above the target list.
     /// 返回当前分区是否应在目标列表上方展示路由策略区块。
     pub(super) const fn supports_routing_strategy(self) -> bool {
-        matches!(
-            self,
-            Self::WebSearch | Self::UnderstandImage | Self::UnderstandVideo | Self::UnderstandAudio
-        )
+        matches!(self, Self::WebSearch)
     }
 }
 

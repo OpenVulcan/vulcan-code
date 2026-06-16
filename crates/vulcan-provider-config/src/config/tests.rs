@@ -969,8 +969,8 @@ fn usable_targets_for_kind_is_capped_at_twenty() {
     );
 }
 
-/// Verifies only workbench-quick-toggle capability kinds remain persisted inside the standalone AI capability configuration.
-/// 验证只有参与工作台快捷总开关的能力类型才会保留在独立 AI 能力配置持久化字段中。
+/// Verifies only workbench quick-toggle kinds are filtered while explicit supported disables are preserved.
+/// 验证仅过滤非工作台快捷开关类型，同时保留受支持能力的显式关闭状态。
 #[test]
 fn normalize_filters_unsupported_disabled_capability_kinds() {
     let mut configuration = PersistedAiToolConfiguration {
@@ -987,6 +987,30 @@ fn normalize_filters_unsupported_disabled_capability_kinds() {
     assert_eq!(
         configuration.disabled_capability_kinds,
         BTreeSet::from([AiToolKind::WebSearch, AiToolKind::UnderstandImage])
+    );
+}
+
+/// Verifies explicit non-web disables are preserved when a matching host target is still configured.
+/// 验证仍配置匹配宿主目标时，会保留非联网能力的显式关闭状态。
+#[test]
+fn normalize_preserves_non_web_disabled_capability_with_host_target() {
+    let mut vendor = PersistedAiCapabilityVendorEntry::new(String::from("minimax"));
+    vendor.enabled = true;
+    vendor.targets.push(PersistedAiCapabilityTargetBinding::new(
+        AiToolKind::ImageGeneration,
+        "image-01",
+        "image-01",
+    ));
+    let mut configuration = PersistedAiToolConfiguration {
+        disabled_capability_kinds: BTreeSet::from([AiToolKind::ImageGeneration]),
+        vendors: vec![vendor],
+        ..PersistedAiToolConfiguration::default()
+    };
+
+    let _ = configuration.normalize();
+    assert_eq!(
+        configuration.disabled_capability_kinds,
+        BTreeSet::from([AiToolKind::ImageGeneration])
     );
 }
 

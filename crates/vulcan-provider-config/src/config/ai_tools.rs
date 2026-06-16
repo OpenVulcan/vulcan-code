@@ -302,70 +302,6 @@ impl WebSearchRoutingMode {
     }
 }
 
-/// User-selected routing mode for native multimodal input versus one host-provided understanding bridge.
-/// 用户为原生多模态输入与宿主理解桥接能力选择的路由模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum NativeBridgeRoutingMode {
-    /// Only keep the model's native multimodal understanding path.
-    /// 仅保留模型原生多模态理解路径。
-    NativeOnly,
-    /// Prefer the model's native multimodal understanding path, then fall back to one host bridge.
-    /// 优先使用模型原生多模态理解路径，再回退到宿主桥接能力。
-    NativeFirst,
-    /// Always expose the host bridge instead of relying on native understanding.
-    /// 始终暴露宿主桥接能力，而不是依赖原生理解。
-    HostOnly,
-}
-
-impl NativeBridgeRoutingMode {
-    /// All routing modes shown by native-versus-host bridge pickers in stable order.
-    /// 原生与宿主桥接选择器按稳定顺序展示的全部路由模式。
-    pub const ALL: [Self; 3] = [Self::NativeFirst, Self::NativeOnly, Self::HostOnly];
-
-    /// Returns the compact settings label for the current routing mode.
-    /// 返回当前路由模式在设置界面使用的紧凑标签。
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::NativeOnly => "仅使用模型原生",
-            Self::NativeFirst => "原生优先，工具兜底",
-            Self::HostOnly => "仅使用工具理解",
-        }
-    }
-
-    /// Returns one explanatory sentence for settings and diagnostics surfaces.
-    /// 返回用于设置与诊断界面的一句解释说明。
-    pub const fn description(self) -> &'static str {
-        match self {
-            Self::NativeOnly => {
-                "仅在模型自身声明支持对应输入模态时使用原生理解，不额外暴露宿主理解工具。"
-            }
-            Self::NativeFirst => {
-                "优先依赖模型原生多模态输入；当模型不支持时，再暴露宿主理解工具补位。"
-            }
-            Self::HostOnly => {
-                "无论模型是否具备原生多模态输入，都优先暴露宿主理解工具并通过工具链完成理解。"
-            }
-        }
-    }
-}
-
-impl Default for NativeBridgeRoutingMode {
-    /// Returns the safest default that keeps native input first and uses the host bridge only as a fallback.
-    /// 返回最稳妥的默认值，优先保留原生输入，并仅在需要时使用宿主桥接作为回退。
-    fn default() -> Self {
-        Self::NativeFirst
-    }
-}
-
-impl fmt::Display for NativeBridgeRoutingMode {
-    /// Formats one native-versus-host routing mode as a user-facing label.
-    /// 将单个原生与宿主路由模式格式化为面向用户的标签。
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.label())
-    }
-}
-
 impl Default for WebSearchRoutingMode {
     /// Returns the conservative default that preserves provider-native behavior.
     /// 返回保守默认值，以保留供应商原生行为。
@@ -1393,10 +1329,6 @@ pub struct PersistedWebSearchConfiguration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PersistedUnderstandImageConfiguration {
-    /// User-selected native-versus-host routing mode for image understanding.
-    /// 用户为图片理解选择的原生与宿主路由模式。
-    #[serde(default)]
-    pub mode: NativeBridgeRoutingMode,
     /// Ordered fully qualified `vendor/target` selectors used when the semantic tool receives `target=auto`.
     /// 当语义工具收到 `target=auto` 时使用的完整 `供应商/目标` 选择器顺序。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1412,7 +1344,6 @@ impl Default for PersistedUnderstandImageConfiguration {
     /// 构建默认图片理解配置。
     fn default() -> Self {
         Self {
-            mode: NativeBridgeRoutingMode::default(),
             target_order: Vec::new(),
             providers: Vec::new(),
         }

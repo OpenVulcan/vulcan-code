@@ -17,7 +17,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::time::{Duration, sleep};
@@ -204,18 +203,13 @@ struct StagedGeneratedAsset {
 /// 构建语义 `image_generation` 工具的参数模式。
 pub fn configured_image_generation_parameters_schema(
     configuration: &PersistedAiToolConfiguration,
-    conversation_attachments: &[ConversationAttachment],
+    _conversation_attachments: &[ConversationAttachment],
 ) -> Value {
     let target_enum = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::ImageGeneration))
         .collect::<Vec<_>>();
-    let image_names =
-        available_attachment_names(conversation_attachments, ConversationAttachmentKind::Image);
-    let subject_image_description = attachment_selector_description(
-        "Optional reference image attachment selector.",
-        "image",
-        &image_names,
-    );
+    let subject_image_description =
+        attachment_selector_description("Optional reference image attachment selector.", "image");
     json!({
         "type": "object",
         "properties": {
@@ -237,28 +231,17 @@ pub fn configured_image_generation_parameters_schema(
 /// 构建语义 `video_generation` 工具的参数模式。
 pub fn configured_video_generation_parameters_schema(
     configuration: &PersistedAiToolConfiguration,
-    conversation_attachments: &[ConversationAttachment],
+    _conversation_attachments: &[ConversationAttachment],
 ) -> Value {
     let target_enum = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::VideoGeneration))
         .collect::<Vec<_>>();
-    let image_names =
-        available_attachment_names(conversation_attachments, ConversationAttachmentKind::Image);
-    let first_image_description = attachment_selector_description(
-        "Optional first-frame image selector.",
-        "image",
-        &image_names,
-    );
-    let last_image_description = attachment_selector_description(
-        "Optional last-frame image selector.",
-        "image",
-        &image_names,
-    );
-    let subject_image_description = attachment_selector_description(
-        "Optional subject reference image selector.",
-        "image",
-        &image_names,
-    );
+    let first_image_description =
+        attachment_selector_description("Optional first-frame image selector.", "image");
+    let last_image_description =
+        attachment_selector_description("Optional last-frame image selector.", "image");
+    let subject_image_description =
+        attachment_selector_description("Optional subject reference image selector.", "image");
     json!({
         "type": "object",
         "properties": {
@@ -324,15 +307,12 @@ pub fn configured_music_generation_parameters_schema(
 /// 构建语义 `music_cover` 工具的参数模式。
 pub fn configured_music_cover_parameters_schema(
     configuration: &PersistedAiToolConfiguration,
-    conversation_attachments: &[ConversationAttachment],
+    _conversation_attachments: &[ConversationAttachment],
 ) -> Value {
     let target_enum = std::iter::once(String::from("auto"))
         .chain(configuration.usable_targets_for_kind(AiToolKind::MusicCover))
         .collect::<Vec<_>>();
-    let audio_names =
-        available_attachment_names(conversation_attachments, ConversationAttachmentKind::Audio);
-    let audio_description =
-        attachment_selector_description("Reference audio selector.", "audio", &audio_names);
+    let audio_description = attachment_selector_description("Reference audio selector.", "audio");
     json!({
         "type": "object",
         "properties": {
@@ -1563,17 +1543,34 @@ fn resolve_attachment_by_name<'a>(
     attachments.iter().find(|attachment| {
         attachment.kind == *expected_kind
             && (attachment
-                .file_name
-                .eq_ignore_ascii_case(&normalized_selector)
-                || attachment.local_path.eq_ignore_ascii_case(selector.trim())
+                .local_path
+                .trim()
+                .eq_ignore_ascii_case(selector.trim())
                 || attachment
-                    .asset_id
+                    .source_path
                     .as_deref()
-                    .is_some_and(|asset_id| asset_id.eq_ignore_ascii_case(&normalized_selector))
+                    .is_some_and(|source_path| {
+                        source_path.trim().eq_ignore_ascii_case(selector.trim())
+                    })
+                || attachment
+                    .preview_local_path
+                    .as_deref()
+                    .is_some_and(|preview_path| {
+                        preview_path.trim().eq_ignore_ascii_case(selector.trim())
+                    })
+                || attachment
+                    .file_name
+                    .trim()
+                    .eq_ignore_ascii_case(&normalized_selector)
+                || attachment.asset_id.as_deref().is_some_and(|asset_id| {
+                    asset_id.trim().eq_ignore_ascii_case(&normalized_selector)
+                })
                 || Path::new(&attachment.local_path)
                     .file_name()
                     .and_then(|value| value.to_str())
-                    .is_some_and(|file_name| file_name.eq_ignore_ascii_case(&normalized_selector)))
+                    .is_some_and(|file_name| {
+                        file_name.trim().eq_ignore_ascii_case(&normalized_selector)
+                    }))
     })
 }
 
@@ -1651,48 +1648,11 @@ fn resolve_local_selector_path(workspace_path: &str, selector: &str) -> PathBuf 
     )
 }
 
-/// Builds the ordered unique file-name list visible to the current conversation for one attachment kind.
-/// 针对单个附件类型构建当前会话可见的有序唯一文件名列表。
-fn available_attachment_names(
-    attachments: &[ConversationAttachment],
-    expected_kind: ConversationAttachmentKind,
-) -> Vec<String> {
-    let mut seen = BTreeSet::new();
-    let mut names = Vec::new();
-
-    for attachment in attachments {
-        if attachment.kind != expected_kind {
-            continue;
-        }
-        let name = attachment.file_name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        let lowered = name.to_ascii_lowercase();
-        if seen.insert(lowered) {
-            names.push(name.to_string());
-        }
-    }
-
-    names
-}
-
-/// Builds one selector description that allows either a visible attachment name or one direct local file path returned by a previous tool call.
-/// 构建一条选择器说明，使其既允许使用可见附件名，也允许使用前序工具调用返回的直接本地文件路径。
-fn attachment_selector_description(
-    base_description: &str,
-    modality_name: &str,
-    available_names: &[String],
-) -> String {
-    // Human-readable preview of currently visible attachment names for the requested modality.
-    // 当前对目标模态可见附件名的人类可读预览文本。
-    let available_preview = if available_names.is_empty() {
-        String::from("none")
-    } else {
-        available_names.join(", ")
-    };
+/// Builds one stable selector description that accepts resource ids or explicit local paths.
+/// 构建一条同时接受资源标识与显式本地路径的稳定选择器说明。
+fn attachment_selector_description(base_description: &str, modality_name: &str) -> String {
     format!(
-        "{base_description} You may pass a visible {modality_name} attachment file name, asset id, or any existing local file path, including one returned by a previous generation tool. Available names: {available_preview}."
+        "{base_description} Use the resource id provided for pasted or uploaded {modality_name} attachments, or use a full local path when the {modality_name} was provided as a path or returned by another host tool. Legacy file names are still accepted for compatibility."
     )
 }
 
