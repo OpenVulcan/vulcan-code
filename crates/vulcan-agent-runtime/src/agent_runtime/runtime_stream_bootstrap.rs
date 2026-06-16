@@ -4,6 +4,7 @@
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
+use crate::agent_runtime::execution_preparation::PreparedToolSnapshot;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap_core::{
     RuntimeBootstrapCore, build_runtime_bootstrap_core, seed_runtime_request_snapshot,
@@ -80,6 +81,7 @@ pub(crate) async fn bootstrap_runtime_stream(
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     request: &ExecutionPreparationRequest,
     mut preparation: ExecutionPreparation,
+    tool_snapshot: PreparedToolSnapshot,
 ) -> Result<RuntimeStreamBootstrap, String> {
     let RuntimeBootstrapResources {
         active_agent,
@@ -90,7 +92,13 @@ pub(crate) async fn bootstrap_runtime_stream(
         discovery_rows,
         discovery_errors,
         mut warnings,
-    } = resolve_runtime_bootstrap_resources(foundation, luaskills_runtime, request, &preparation);
+    } = resolve_runtime_bootstrap_resources(
+        foundation,
+        luaskills_runtime,
+        request,
+        &preparation,
+        tool_snapshot,
+    );
     let RuntimeBootstrapCore {
         system_preamble,
         prompt_layers,

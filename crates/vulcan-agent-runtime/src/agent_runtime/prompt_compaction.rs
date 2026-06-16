@@ -2,7 +2,7 @@
 //! 共享提示词式上下文压缩运行时。
 
 use crate::agent_profile::AgentProfileCatalog;
-use crate::agent_runtime::execution_preparation::prepare_execution;
+use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_bootstrap::bootstrap_runtime_stream;
 use crate::agent_runtime::runtime_stream_driver::drive_runtime_stream_launch;
@@ -224,13 +224,13 @@ pub fn stream_prompt_compaction_foundation_job(
             source_conversation_state,
         );
 
-        let preparation = match prepare_execution(
+        let prepared = match prepare_execution_with_tool_snapshot(
             &request.foundation,
             request.luaskills_runtime.clone(),
             &request.provider_configuration,
             &launch_request,
         ) {
-            Ok(preparation) => preparation,
+            Ok(prepared) => prepared,
             Err(error) => {
                 yield PromptCompactionStreamEvent::Finished(Err(format!(
                     "Prompt compaction preparation failed: {error}"
@@ -242,7 +242,8 @@ pub fn stream_prompt_compaction_foundation_job(
             &request.foundation,
             request.luaskills_runtime.clone(),
             &launch_request,
-            preparation,
+            prepared.preparation,
+            prepared.tool_snapshot,
         )
         .await;
         let bootstrap = match bootstrap {

@@ -38,6 +38,10 @@ use vulcan_agent_runtime::{
             PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionStreamEvent,
             stream_prompt_compaction_job,
         },
+        prompt_composer_runtime::{
+            invalidate_runtime_prompt_luaskill_catalog_cache,
+            invalidate_runtime_prompt_tool_visibility_cache,
+        },
         question_runtime::{PendingQuestionChangeCallback, QuestionRuntime},
         task_runtime::{DetachedTaskRuntimeEvent, TaskRuntime},
         token_budget_runtime::TokenBudgetRuntime,
@@ -5226,6 +5230,7 @@ async fn service_save_provider_model_override(
         }
         provider_config::save_configuration_file(&next_configuration)
             .map_err(|error| format!("保存模型能力失败：{error}"))?;
+        invalidate_runtime_prompt_tool_visibility_cache();
         agent_runtime.provider_configuration = next_configuration.clone();
         refresh_settings_projection_locked(&mut guard, &next_configuration, None);
         guard.workbench.clone()
@@ -5292,6 +5297,7 @@ async fn service_save_ai_capability_vendor(
             &next_ai_tool_configuration,
         )
         .map_err(|error| format!("保存 AI 能力供应商失败：{error}"))?;
+        invalidate_runtime_prompt_tool_visibility_cache();
         agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
         let provider_configuration = agent_runtime.provider_configuration.clone();
         refresh_settings_projection_locked(
@@ -5330,6 +5336,7 @@ async fn service_remove_ai_capability_vendor(
             &next_ai_tool_configuration,
         )
         .map_err(|error| format!("移除 AI 能力供应商失败：{error}"))?;
+        invalidate_runtime_prompt_tool_visibility_cache();
         agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
         let provider_configuration = agent_runtime.provider_configuration.clone();
         refresh_settings_projection_locked(
@@ -5379,6 +5386,7 @@ async fn service_set_ai_capability_target_enabled(
             &next_ai_tool_configuration,
         )
         .map_err(|error| format!("保存 AI 能力目标失败：{error}"))?;
+        invalidate_runtime_prompt_tool_visibility_cache();
         agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
         let provider_configuration = agent_runtime.provider_configuration.clone();
         refresh_settings_projection_locked(
@@ -5468,6 +5476,7 @@ async fn service_save_ai_capability_targets(
             &next_ai_tool_configuration,
         )
         .map_err(|error| format!("保存 AI 能力目标列表失败：{error}"))?;
+        invalidate_runtime_prompt_tool_visibility_cache();
         agent_runtime.ai_tool_configuration = next_ai_tool_configuration.clone();
         let provider_configuration = agent_runtime.provider_configuration.clone();
         refresh_settings_projection_locked(
@@ -5559,11 +5568,7 @@ async fn service_save_session_ai_capability_configuration(
         .session_runtime_state
         .get(&session_id)
         .and_then(|runtime_state| {
-            runtime_state_model_capabilities(
-                runtime_state,
-                &provider_configuration,
-                &next_configuration,
-            )
+            runtime_state_base_model_capabilities(runtime_state, &provider_configuration)
         })
         .or_else(|| active_provider_configuration_model_capabilities(&provider_configuration));
     let capability_update_injection = session_ai_capability_configuration_update_injection(
@@ -5588,6 +5593,7 @@ async fn service_save_session_ai_capability_configuration(
         addon_state,
     )
     .await?;
+    invalidate_runtime_prompt_tool_visibility_cache();
     let workspace_snapshot =
         with_workspace_mutation_preserving_subagent_navigation(&app, &state, |workspace| {
             let runtime_state = workspace
@@ -5653,6 +5659,9 @@ fn session_ai_capability_configuration_update_injection(
         else {
             continue;
         };
+        if ai_capability_has_native_path(kind, model_capabilities) {
+            continue;
+        }
         let previous_default = ai_capability_default_route(previous_configuration, kind);
         let next_default = ai_capability_default_route(next_configuration, kind);
         let mut details = Vec::new();
@@ -7386,6 +7395,7 @@ fn sync_agent_luaskills_tool_cache(guard: &mut ServiceBridgeState) -> Result<(),
         String::from("LuaSkills 工具缓存锁已损坏，无法同步 Agent Runtime 工具缓存。")
     })?;
     *tool_entries = entries;
+    invalidate_runtime_prompt_luaskill_catalog_cache();
     guard.startup.recent_logs.push(format!(
         "[webui-service] luaskills: synced {entry_count} agent-runtime tool entries"
     ));
@@ -20057,6 +20067,33 @@ fn runtime_state_model_capabilities(
     ))
 }
 
+/// Resolves base model capabilities for the model recorded by one session runtime state.
+/// 为单个会话运行态记录的模型解析基础模型能力。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` supplies the provider and model identity.
+/// `runtime_state` 提供供应商与模型身份。
+/// `provider_configuration` supplies enabled model catalog data.
+/// `provider_configuration` 提供已启用模型目录数据。
+///
+/// # Returns
+/// 返回值
+/// Base model capabilities before user AI-extension routing overlays are applied.
+/// 返回应用用户 AI 扩展路由覆盖之前的基础模型能力。
+fn runtime_state_base_model_capabilities(
+    runtime_state: &SessionRuntimeStateEntry,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Option<ResolvedModelCapabilities> {
+    let provider_id = runtime_state.active_provider_id.as_ref()?;
+    let model_id = runtime_state.active_model_id.as_ref()?;
+    let definition = provider_config::supported_provider_by_id(provider_id)?;
+    let model = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .find(|model| model.id == *model_id);
+    Some(resolve_model_capabilities(definition, model.as_ref()))
+}
+
 /// Resolves base model capabilities for the globally selected provider model.
 /// 为全局选中的供应商模型解析基础模型能力。
 fn active_provider_configuration_model_capabilities(
@@ -24572,6 +24609,8 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_agent_runtime::provider_capabilities::ResolvedAiToolCapability;
+    use vulcan_provider_config::config::AiToolPolicy;
 
     /// Verifies image understanding remains available through the native model path when no host target is configured.
     /// 验证未配置宿主目标时，图片理解仍会通过模型原生路径显示为可用。
@@ -24641,6 +24680,68 @@ mod tests {
         assert!(
             injection.is_none(),
             "non-default route swaps should not affect model-facing tool guidance"
+        );
+    }
+
+    /// Verifies bridge setting changes do not create notices when the active model has native image input.
+    /// 验证当前模型具备原生图片输入时，桥接设置变化不会创建通知。
+    #[test]
+    fn ai_capability_update_injection_ignores_image_bridge_changes_for_native_model() {
+        let previous_configuration = test_understand_image_ai_tool_configuration();
+        let mut next_configuration = previous_configuration.clone();
+        next_configuration
+            .disabled_capability_kinds
+            .insert(AiToolKind::UnderstandImage);
+        let model_capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text"), String::from("image")],
+            ..ResolvedModelCapabilities::default()
+        };
+
+        let injection = session_ai_capability_configuration_update_injection(
+            &previous_configuration,
+            &next_configuration,
+            Some(&model_capabilities),
+        );
+
+        assert!(
+            injection.is_none(),
+            "native image input should make bridge toggles model-invisible"
+        );
+    }
+
+    /// Verifies default-route changes do not create notices when the active model has native web search.
+    /// 验证当前模型具备原生联网搜索时，默认路由变化不会创建通知。
+    #[test]
+    fn ai_capability_update_injection_ignores_web_search_route_changes_for_native_model() {
+        let previous_configuration =
+            test_web_search_ai_tool_configuration(&["search/minimax", "search/ollama"]);
+        let next_configuration =
+            test_web_search_ai_tool_configuration(&["search/ollama", "search/minimax"]);
+        let model_capabilities = ResolvedModelCapabilities {
+            ai_tools: vec![ResolvedAiToolCapability {
+                kind: AiToolKind::WebSearch,
+                policy: AiToolPolicy::ForceNative,
+                native_provider_tool: true,
+                native_tool_type: Some(String::from("web_search_preview")),
+                native_request_patch: None,
+                fallback_tool_id: None,
+                requires_approval: false,
+                result_modalities: Vec::new(),
+                citation_support: true,
+                source_label: String::from("test-native"),
+            }],
+            ..ResolvedModelCapabilities::default()
+        };
+
+        let injection = session_ai_capability_configuration_update_injection(
+            &previous_configuration,
+            &next_configuration,
+            Some(&model_capabilities),
+        );
+
+        assert!(
+            injection.is_none(),
+            "native web search should make bridge route changes model-invisible"
         );
     }
 

@@ -5,7 +5,9 @@ use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::{
     ExecutionPreparation, ExecutionPreparationRequest, ExecutionRunReport,
 };
-use crate::agent_runtime::execution_preparation::prepare_execution;
+use crate::agent_runtime::execution_preparation::{
+    PreparedToolSnapshot, prepare_execution_with_tool_snapshot,
+};
 use crate::agent_runtime::question_runtime::QuestionRuntime;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::runtime_stream_preparation_failure::build_preparation_failure_report;
@@ -35,6 +37,9 @@ pub(crate) struct RuntimePreparedLaunchInput {
     /// Validated execution preparation built from the runtime foundation and request.
     /// 根据运行时基础架构与执行请求构建出的通过校验的执行准备对象。
     pub preparation: ExecutionPreparation,
+    /// Execution-only tool snapshot resolved together with the preparation data.
+    /// 与准备数据一起解析得到的仅执行期工具快照。
+    pub tool_snapshot: PreparedToolSnapshot,
 }
 
 impl RuntimePreparedLaunchInput {
@@ -43,12 +48,14 @@ impl RuntimePreparedLaunchInput {
     fn from_resources(
         resources: RuntimePreparationResources,
         preparation: ExecutionPreparation,
+        tool_snapshot: PreparedToolSnapshot,
     ) -> Self {
         Self {
             foundation: resources.foundation,
             luaskills_runtime: resources.luaskills_runtime,
             request: resources.request,
             preparation,
+            tool_snapshot,
         }
     }
 }
@@ -77,13 +84,13 @@ pub(crate) fn prepare_runtime_launch_input(
         token_budget_runtime,
         request,
     );
-    let preparation = match prepare_execution(
+    let prepared = match prepare_execution_with_tool_snapshot(
         &resources.foundation,
         resources.luaskills_runtime.clone(),
         config,
         &resources.request,
     ) {
-        Ok(preparation) => preparation,
+        Ok(prepared) => prepared,
         Err(error) => {
             return Err(build_preparation_failure_report(
                 resources.request.session_id,
@@ -94,6 +101,7 @@ pub(crate) fn prepare_runtime_launch_input(
 
     Ok(RuntimePreparedLaunchInput::from_resources(
         resources,
-        preparation,
+        prepared.preparation,
+        prepared.tool_snapshot,
     ))
 }

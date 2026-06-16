@@ -3,7 +3,7 @@
 
 use crate::agent_runtime::events::{ExecutionStreamEvent, RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};
-use crate::agent_runtime::execution_preparation::prepare_execution;
+use crate::agent_runtime::execution_preparation::prepare_execution_with_tool_snapshot;
 use crate::agent_runtime::prompt_compaction::{
     PromptCompactionFoundationJobRequest, PromptCompactionStreamEvent,
     stream_prompt_compaction_foundation_job,
@@ -4593,7 +4593,7 @@ async fn prepare_task_runtime_stream_launch(
 ) -> Result<crate::agent_runtime::runtime_stream_launch_payload::RuntimeStreamLaunch, String> {
     let (config, request) =
         build_task_runtime_preparation_request(context, invocation, resolved_config);
-    let preparation = prepare_execution(
+    let prepared = prepare_execution_with_tool_snapshot(
         &context.foundation,
         context.luaskills_runtime.clone(),
         &config,
@@ -4603,7 +4603,8 @@ async fn prepare_task_runtime_stream_launch(
         &context.foundation,
         context.luaskills_runtime.clone(),
         &request,
-        preparation,
+        prepared.preparation,
+        prepared.tool_snapshot,
     )
     .await?;
     let child_context = TaskExecutionRuntimeContext::new(

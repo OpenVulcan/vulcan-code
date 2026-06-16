@@ -1,17 +1,13 @@
-//! Runtime stream bootstrap resource resolution for tools, MCP discovery, and warning aggregation.
-//! 面向工具、MCP 发现与告警汇总的运行时流 bootstrap 资源解析模块。
+//! Runtime stream bootstrap resource collection for prepared tools, MCP discovery, and warning aggregation.
+//! 面向已准备工具、MCP 发现与告警汇总的运行时流 bootstrap 资源收集模块。
 
 use crate::agent_runtime::config::RuntimeAgentDefinition;
 use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
 use crate::agent_runtime::execution_models::{ExecutionPreparation, ExecutionPreparationRequest};
-use crate::agent_runtime::execution_preparation::{
-    filter_resolved_tool_definitions_by_tool_exposure, resolve_execution_tool_exposure,
-};
+use crate::agent_runtime::execution_preparation::PreparedToolSnapshot;
 use crate::agent_runtime::runtime::RuntimeFoundation;
 use crate::agent_runtime::task_runtime::TaskRuntime;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
-use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
-use std::path::PathBuf;
 use std::sync::Arc;
 use vulcan_tools_manager::{ResolvedToolDefinition, VulcanToolsManager};
 
@@ -44,60 +40,22 @@ pub(crate) struct RuntimeBootstrapResources {
     pub warnings: Vec<String>,
 }
 
-/// Resolves agent-scoped tools and MCP discovery outputs before provider-facing bootstrap state is derived.
-/// 在推导面向 Provider 的 bootstrap 状态之前，先解析代理作用域工具与 MCP 发现结果。
+/// Collects prepared tool snapshots and MCP discovery outputs before provider-facing bootstrap state is derived.
+/// 在推导面向 Provider 的 bootstrap 状态之前，收集已准备工具快照与 MCP 发现结果。
 pub(crate) fn resolve_runtime_bootstrap_resources(
     foundation: &RuntimeFoundation,
-    luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
-    request: &ExecutionPreparationRequest,
+    _luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
+    _request: &ExecutionPreparationRequest,
     preparation: &ExecutionPreparation,
+    tool_snapshot: PreparedToolSnapshot,
 ) -> RuntimeBootstrapResources {
     let active_agent = foundation
         .agent_definition(&preparation.agent_id)
         .or_else(|| foundation.active_agent_definition())
         .cloned();
-    let active_agent_tool_id = active_agent
-        .as_ref()
-        .map(|agent| agent.id.clone())
-        .unwrap_or_else(|| preparation.agent_id.clone());
     let task_runtime = foundation.task_runtime();
-    let tool_exposure = resolve_execution_tool_exposure(foundation, &active_agent_tool_id, request);
-    let tools_manager = build_vulcan_tools_manager(
-        Arc::clone(&task_runtime),
-        foundation.question_runtime(),
-        foundation.native_tool_catalog().clone(),
-        luaskills_runtime,
-        (!preparation.workspace_path.is_empty())
-            .then(|| PathBuf::from(preparation.workspace_path.clone())),
-        preparation.conversation_attachments.clone(),
-        tool_exposure.native_tool_ids.clone(),
-        tool_exposure.luaskills_tools.clone(),
-        tool_exposure.luaskills_dispatch_tools.clone(),
-        tool_exposure.mcp_tools.clone(),
-        tool_exposure.ai_tool_configuration.clone(),
-        resolve_ai_tool_fallback_aliases(&preparation.model_blueprint),
-        vulcan_prompt_skills::enabled_skill_names(&preparation.prompt_skills),
-        preparation.prompt_skill_user_root.clone(),
-        preparation.implicit_luaskill_prompt_entries.clone(),
-        preparation.project_vmm.clone(),
-        preparation.session_vmm.clone(),
-    );
-    let mut resolved_tool_definitions = tools_manager
-        .resolve_for_execution_mode(&preparation.execution_mode)
-        .definitions;
-    filter_resolved_tool_definitions_by_tool_exposure(
-        &mut resolved_tool_definitions,
-        &tool_exposure,
-    );
-    let prompt_skill_tool_available = preparation.prompt_purpose.supports_user_turn_tooling()
-        && vulcan_prompt_skills::render_prompt_skills_instructions(&preparation.prompt_skills)
-            .is_some();
-    if !prompt_skill_tool_available {
-        resolved_tool_definitions.retain(|definition| definition.descriptor.id != "skill");
-    }
-    if preparation.prompt_purpose.disables_provider_tools() {
-        resolved_tool_definitions.clear();
-    }
+    let tools_manager = tool_snapshot.tools_manager;
+    let resolved_tool_definitions = tool_snapshot.resolved_tool_definitions;
     let mcp_overview = foundation.mcp_overview();
     let discovery_report = mcp_overview.discovery_report();
     let (discovery_events, discovery_rows, discovery_errors, discovery_warnings) =

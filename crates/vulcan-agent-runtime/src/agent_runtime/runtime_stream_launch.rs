@@ -57,6 +57,7 @@ async fn build_runtime_stream_launch_from_prepared_input(
         luaskills_runtime,
         request,
         preparation,
+        tool_snapshot,
     } = prepared_launch_input;
     let foundation = Arc::new(foundation);
     let task_execution_context = Some(TaskExecutionRuntimeContext::new(
@@ -66,25 +67,31 @@ async fn build_runtime_stream_launch_from_prepared_input(
         request.clone(),
     ));
     let preparation_for_failure = preparation.clone();
-    let bootstrap =
-        match bootstrap_runtime_stream(&foundation, luaskills_runtime, &request, preparation).await
-        {
-            Ok(bootstrap) => bootstrap,
-            Err(error) => {
-                return Err(ExecutionRunReport::failure(
-                    request.session_id,
-                    Some(preparation_for_failure),
-                    0,
-                    None,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    None,
-                    error,
-                ));
-            }
-        };
+    let bootstrap = match bootstrap_runtime_stream(
+        &foundation,
+        luaskills_runtime,
+        &request,
+        preparation,
+        tool_snapshot,
+    )
+    .await
+    {
+        Ok(bootstrap) => bootstrap,
+        Err(error) => {
+            return Err(ExecutionRunReport::failure(
+                request.session_id,
+                Some(preparation_for_failure),
+                0,
+                None,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                error,
+            ));
+        }
+    };
 
     Ok(build_runtime_stream_launch_payload(
         &request,

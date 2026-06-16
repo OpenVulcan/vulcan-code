@@ -26,7 +26,9 @@ use vulcan_session_core::{
     ToolExposureSnapshot, normalized_tool_selector_set, tool_selector_matches,
 };
 use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
-use vulcan_tools_manager::{ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind};
+use vulcan_tools_manager::{
+    ResolvedToolDefinition, ResolvedToolSet, VulcanToolSourceKind, VulcanToolsManager,
+};
 
 use vulcan_luaskills_prompt::LUASKILL_HELP_TOOL_NAME;
 
@@ -73,14 +75,36 @@ pub(crate) struct ExecutionToolExposureSelection {
     selectors: ToolExposureSelectorState,
 }
 
-/// Builds one validated execution-preparation object from the current runtime foundation and GUI request.
-/// 根据当前运行时基础架构与 GUI 请求构建一份通过校验的执行准备对象。
-pub(crate) fn prepare_execution(
+/// Prepared execution plus execution-only tool registration objects resolved from the same snapshot.
+/// 从同一份快照解析得到的执行准备结果与仅执行期使用的工具注册对象。
+pub(crate) struct PreparedExecution {
+    /// Validated execution preparation that is safe to clone into UI events and reports.
+    /// 可安全克隆进 UI 事件与报告中的已校验执行准备结果。
+    pub preparation: ExecutionPreparation,
+    /// Execution-only tool snapshot consumed by provider bootstrap and dispatch.
+    /// 供 Provider bootstrap 与工具调度消费的仅执行期工具快照。
+    pub tool_snapshot: PreparedToolSnapshot,
+}
+
+/// Execution-only tool snapshot captured during preparation without leaking into UI-facing preparation data.
+/// 准备阶段捕获的仅执行期工具快照，不泄漏进面向 UI 的准备数据。
+pub(crate) struct PreparedToolSnapshot {
+    /// Host-owned tool manager captured with the resolved tool registration snapshot.
+    /// 随已解析工具注册快照一起捕获的宿主自有工具管理器。
+    pub tools_manager: VulcanToolsManager,
+    /// Provider-registered tool definitions resolved once during execution preparation.
+    /// 在执行准备阶段一次性解析得到的 Provider 注册工具定义集合。
+    pub resolved_tool_definitions: Vec<ResolvedToolDefinition>,
+}
+
+/// Builds one validated execution preparation and the matching execution-only tool snapshot.
+/// 构建一份已校验执行准备结果以及与之匹配的仅执行期工具快照。
+pub(crate) fn prepare_execution_with_tool_snapshot(
     foundation: &RuntimeFoundation,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     config: &ProviderConfigurationFile,
     request: &ExecutionPreparationRequest,
-) -> Result<ExecutionPreparation, String> {
+) -> Result<PreparedExecution, String> {
     let active_agent = match request.execution_agent_id.as_deref() {
         Some(agent_id) => foundation
             .agent_definition(agent_id)
@@ -234,7 +258,9 @@ pub(crate) fn prepare_execution(
 
     let mcp_overview = foundation.mcp_overview();
 
-    Ok(ExecutionPreparation {
+    let resolved_tool_definitions = resolved_tools.definitions;
+    let tool_descriptors = resolved_tools.descriptors;
+    let preparation = ExecutionPreparation {
         session_id: request.session_id,
         session_title: request.session_title.clone(),
         agent_id: active_agent.id.clone(),
@@ -256,7 +282,7 @@ pub(crate) fn prepare_execution(
         implicit_luaskill_prompt_entries,
         prompt_skill_developer_segment,
         skill_names: foundation.skill_names_for_agent(&active_agent.id),
-        tool_descriptors: resolved_tools.descriptors,
+        tool_descriptors,
         delegate_agents: active_agent.delegates.clone(),
         enabled_mcp_servers: mcp_overview.active_summary_rows().to_vec(),
         warnings,
@@ -273,6 +299,15 @@ pub(crate) fn prepare_execution(
         session_vmm,
         boundary_events: request.boundary_events.clone(),
         runtime_system_updates: request.runtime_system_updates.clone(),
+    };
+    let tool_snapshot = PreparedToolSnapshot {
+        tools_manager,
+        resolved_tool_definitions,
+    };
+
+    Ok(PreparedExecution {
+        preparation,
+        tool_snapshot,
     })
 }
 
@@ -896,7 +931,7 @@ mod tests {
     use super::{
         ToolExposureSelectorState, ai_tool_configuration_for_execution_request,
         filter_luaskills_entries, filter_native_tool_ids,
-        filter_resolved_tool_set_by_tool_exposure, prepare_execution,
+        filter_resolved_tool_set_by_tool_exposure, prepare_execution_with_tool_snapshot,
         vulcan_tool_descriptor_is_visible,
     };
     use crate::agent_profile::AgentProfileCatalog;
@@ -940,8 +975,10 @@ mod tests {
         let mut request = test_execution_preparation_request();
         request.execution_agent_id = Some(String::from(PLAN_AGENT_ID));
 
-        let preparation = prepare_execution(&foundation, None, &config, &request)
-            .expect("preparation should route to the requested agent");
+        let preparation =
+            prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+                .expect("preparation should route to the requested agent")
+                .preparation;
 
         assert_eq!(preparation.agent_id, PLAN_AGENT_ID);
         assert_eq!(preparation.agent_name, "方案代理");
@@ -963,8 +1000,11 @@ mod tests {
         let mut request = test_execution_preparation_request();
         request.execution_agent_id = Some(String::from("missing-agent"));
 
-        let error = prepare_execution(&foundation, None, &config, &request)
-            .expect_err("missing requested agent should fail");
+        let error = match prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+        {
+            Ok(_) => panic!("missing requested agent should fail"),
+            Err(error) => error,
+        };
 
         assert!(error.contains("missing-agent"));
         assert!(error.contains("未能在运行时基础架构中解析到"));
@@ -1094,13 +1134,23 @@ mod tests {
             ..ToolExposureSnapshot::default()
         };
         let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+        // Candidate native shell tool expected to survive both descriptor and definition filtering.
+        // 预期在描述与定义两侧过滤后都保留的原生命令工具候选。
+        let shell_tool = test_resolved_tool("shell_command", VulcanToolSourceKind::Native);
+        // Candidate LuaSkills dispatcher expected to survive because the family allow-list needs it.
+        // 由于 LuaSkills 族允许列表需要调度器，预期在过滤后保留的调度工具候选。
+        let luaskills_dispatcher =
+            test_resolved_tool(CALL_LUASKILL_TOOL_NAME, VulcanToolSourceKind::Native);
+        // Candidate ask tool expected to be removed by the legacy global allow-list.
+        // 预期会被旧版全局允许列表移除的 ask 工具候选。
+        let ask_tool = test_resolved_tool("ask", VulcanToolSourceKind::Native);
         let mut resolved = ResolvedToolSet {
-            descriptors: Vec::new(),
-            definitions: vec![
-                test_resolved_tool("shell_command", VulcanToolSourceKind::Native),
-                test_resolved_tool(CALL_LUASKILL_TOOL_NAME, VulcanToolSourceKind::Native),
-                test_resolved_tool("ask", VulcanToolSourceKind::Native),
+            descriptors: vec![
+                shell_tool.descriptor.clone(),
+                luaskills_dispatcher.descriptor.clone(),
+                ask_tool.descriptor.clone(),
             ],
+            definitions: vec![shell_tool, luaskills_dispatcher, ask_tool],
         };
         let exposure = super::ExecutionToolExposureSelection {
             native_tool_ids: Vec::new(),
@@ -1120,6 +1170,50 @@ mod tests {
             .map(|definition| definition.descriptor.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(remaining, vec!["shell_command", CALL_LUASKILL_TOOL_NAME]);
+        let remaining_descriptors = resolved
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            remaining_descriptors,
+            vec!["shell_command", CALL_LUASKILL_TOOL_NAME]
+        );
+    }
+
+    /// Verifies execution preparation stores prompt descriptors and provider definitions from one resolved tool snapshot.
+    /// 验证执行准备会从同一份已解析工具快照保存提示词描述与 Provider 定义。
+    #[test]
+    fn prepare_execution_captures_matching_tool_descriptor_and_definition_snapshot() {
+        let config = test_provider_config();
+        let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+            &config,
+            &AgentProfileCatalog::default(),
+            None,
+            Some(configured_mcp_runtime_access(&config)),
+        );
+        let request = test_execution_preparation_request();
+
+        let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+            .expect("preparation should resolve one stable tool snapshot");
+
+        let descriptor_ids = prepared
+            .preparation
+            .tool_descriptors
+            .iter()
+            .map(|descriptor| descriptor.id.as_str())
+            .collect::<Vec<_>>();
+        let definition_ids = prepared
+            .tool_snapshot
+            .resolved_tool_definitions
+            .iter()
+            .map(|definition| definition.descriptor.id.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !descriptor_ids.is_empty(),
+            "test fixture should expose at least one tool"
+        );
+        assert_eq!(descriptor_ids, definition_ids);
     }
 
     /// Builds one provider configuration that can resolve a provider blueprint without touching the network.
