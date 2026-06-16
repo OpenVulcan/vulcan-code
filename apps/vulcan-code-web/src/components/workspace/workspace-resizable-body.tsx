@@ -181,6 +181,9 @@ export function WorkspaceResizableBody(props: {
   // dockedPanelMounted indicates whether the non-floating panel remains in the flex layout.
   // dockedPanelMounted 表示非浮动面板是否仍保留在 flex 布局中。
   const dockedPanelMounted = rightPanelTransition.mounted && !rightPanelTransition.floating;
+  // rightPanelMounted keeps one context panel instance alive across floating and docked modes.
+  // rightPanelMounted 让同一个上下文面板实例在浮动与停靠模式切换时保持存活。
+  const rightPanelMounted = rightPanelTransition.mounted;
   // dockedLayoutStyle feeds the animated context width into CSS.
   // dockedLayoutStyle 将动画所需的上下文宽度传入 CSS。
   const dockedLayoutStyle = {
@@ -224,26 +227,26 @@ export function WorkspaceResizableBody(props: {
   }, [dockedPanelOpen, dockedPanelWidth]);
   return (
     <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
+      <ConsoleHeader
+        className={props.headerTitle ? "workspace-custom-header" : undefined}
+        draftConversation={props.selectedDraftConversation}
+        conversation={props.selectedConversation}
+        detail={props.headerDetail}
+        headerActions={props.headerActions}
+        hideRightPanelToggle={props.hideRightPanelToggle}
+        rightPanelOpen={props.rightPanelOpen}
+        subagentNavigation={props.workbench.subagentNavigation}
+        title={props.headerTitle}
+        onToggleLeftPanel={props.onToggleLeftPanel}
+        onToggleRightPanel={props.onToggleRightPanel}
+        onOpenSubagentPanel={props.onOpenSubagentPanel}
+        onCloseSubagentPanel={props.onCloseSubagentPanel}
+        onStopSubagentTask={props.onStopSubagentTask}
+        onTrace={props.onTrace}
+      />
       <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
         <div className="workspace-main-panel">
           <section className="workspace-main-shell">
-            <ConsoleHeader
-              className={props.headerTitle ? "workspace-custom-header" : undefined}
-              draftConversation={props.selectedDraftConversation}
-              conversation={props.selectedConversation}
-              detail={props.headerDetail}
-              headerActions={props.headerActions}
-              hideRightPanelToggle={props.hideRightPanelToggle}
-              rightPanelOpen={props.rightPanelOpen}
-              subagentNavigation={props.workbench.subagentNavigation}
-              title={props.headerTitle}
-              onToggleLeftPanel={props.onToggleLeftPanel}
-              onToggleRightPanel={props.onToggleRightPanel}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
-              onCloseSubagentPanel={props.onCloseSubagentPanel}
-              onStopSubagentTask={props.onStopSubagentTask}
-              onTrace={props.onTrace}
-            />
             {props.children}
           </section>
         </div>
@@ -256,41 +259,32 @@ export function WorkspaceResizableBody(props: {
               onPointerDown={handleDockedResizePointerDown}
               role="separator"
             />
-            <div
-              className={cn("workspace-context-panel", rightPanelVisualState)}
-              id="workspaceContext"
-            >
-              <WorkspaceContextPanel
-                selectedDraftConversation={props.selectedDraftConversation}
-                selectedConversationId={props.selectedConversationId}
-                workbench={props.workbench}
-                onClose={props.onToggleRightPanel}
-                onCopyRawDiff={props.onCopyRawDiff}
-                parseConversationBlocks={props.parseConversationBlocks}
-                loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
-                loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
-                loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
-              />
-            </div>
           </>
         ) : null}
+        {rightPanelMounted ? (
+          <div
+            className={cn(
+              "workspace-context-panel",
+              rightPanelVisualState,
+              rightPanelTransition.floating && "is-floating",
+            )}
+            id="workspaceContext"
+          >
+            <WorkspaceContextPanel
+              floating={rightPanelTransition.floating}
+              selectedDraftConversation={props.selectedDraftConversation}
+              selectedConversationId={props.selectedConversationId}
+              workbench={props.workbench}
+              onClose={props.onToggleRightPanel}
+              onCopyRawDiff={props.onCopyRawDiff}
+              parseConversationBlocks={props.parseConversationBlocks}
+              loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
+              loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
+              loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
+            />
+          </div>
+        ) : null}
       </div>
-      {rightPanelTransition.mounted && rightPanelTransition.floating ? (
-        <div className={cn("workspace-context-floating-panel", rightPanelVisualState)}>
-          <WorkspaceContextPanel
-            floating
-            selectedDraftConversation={props.selectedDraftConversation}
-            selectedConversationId={props.selectedConversationId}
-            workbench={props.workbench}
-            onClose={props.onToggleRightPanel}
-            onCopyRawDiff={props.onCopyRawDiff}
-            parseConversationBlocks={props.parseConversationBlocks}
-            loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
-            loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
-            loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
-          />
-        </div>
-      ) : null}
     </div>
   );
 }

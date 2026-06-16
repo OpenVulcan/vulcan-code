@@ -1,6 +1,4 @@
 import React from "react";
-import { PanelRightClose } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import {
   Tabs,
   TabsContent,
@@ -121,18 +119,6 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
             <TabsTrigger value="memory">{t("contextPanel.memory")}</TabsTrigger>
           </TabsList>
-          {props.floating && props.onClose ? (
-            <Button
-              aria-label={t("contextPanel.close")}
-              className="context-panel-close-button"
-              onClick={props.onClose}
-              size="icon-sm"
-              type="button"
-              variant="ghost"
-            >
-              <PanelRightClose size={16} />
-            </Button>
-          ) : null}
         </div>
         <TabsContent className="context-tab-content review-tab-content" value="review">
           <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>

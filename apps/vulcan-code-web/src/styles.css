@@ -1230,9 +1230,9 @@ button {
   flex: 1;
   display: flex;
   align-items: stretch;
-  margin: 10px 10px 10px 0;
+  margin: 0;
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 14px 0 0 14px;
   background: var(--background);
   box-shadow: 0 1px 2px color-mix(in oklch, var(--foreground) 7%, transparent);
   overflow: hidden;
@@ -1240,7 +1240,7 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] + .vcn-sidebar-inset {
-  margin-left: 10px;
+  margin-left: 0;
 }
 
 .console-header {
@@ -1497,12 +1497,15 @@ button {
 }
 
 .workspace-resizable-body-shell {
+  --workspace-header-height: 46px;
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   width: 100%;
   height: auto;
+  display: grid;
+  grid-template-rows: var(--workspace-header-height) minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1511,6 +1514,7 @@ button {
   min-height: 0;
   width: 100%;
   height: 100%;
+  position: relative;
   display: flex;
   overflow: hidden;
 }
@@ -1526,8 +1530,8 @@ button {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  display: grid;
-  grid-template-rows: 46px minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -1559,6 +1563,7 @@ button {
 .workspace-context-panel {
   flex: 0 0 var(--workspace-context-panel-width, 420px);
   width: var(--workspace-context-panel-width, 420px);
+  height: 100%;
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border);
@@ -1577,17 +1582,18 @@ button {
   pointer-events: none;
 }
 
-.workspace-context-floating-panel {
+.workspace-context-panel.is-floating {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
   z-index: 12;
+  flex: none;
   width: min(420px, calc(100% - 28px));
+  height: auto;
   border-left: 1px solid var(--border);
   background: var(--background);
-  box-shadow: -18px 0 38px color-mix(in oklch, var(--foreground) 11%, transparent);
-  overflow: hidden;
+  overflow: visible;
   opacity: 1;
   transform: translateX(0);
   transition:
@@ -1596,7 +1602,22 @@ button {
   will-change: transform, opacity;
 }
 
-.workspace-context-floating-panel.is-closed {
+.workspace-context-panel.is-floating::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -12px;
+  width: 12px;
+  pointer-events: none;
+  background: linear-gradient(
+    to left,
+    color-mix(in oklch, var(--foreground) 8%, transparent),
+    transparent
+  );
+}
+
+.workspace-context-panel.is-floating.is-closed {
   opacity: 0;
   pointer-events: none;
   transform: translateX(calc(100% + 12px));
@@ -1604,7 +1625,6 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .workspace-context-panel,
-  .workspace-context-floating-panel,
   .workspace-context-resize-handle {
     transition: none;
   }
