@@ -9,9 +9,10 @@ use crate::conversation_protocol::{
 };
 use crate::data_plane::{APP_SPACE_ID, ControllerRuntimeHandle};
 use crate::model::{
-    SessionCompactionEntry, SessionId, SessionMessageEntry, SessionMessageRecordKind,
-    SessionRunPhase, SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTitleSource,
-    SessionTranscriptUiState, TaskProjectSummary, VmmProfileSyncState, VmmWritebackOutboxEntry,
+    SessionAddonState, SessionCompactionEntry, SessionId, SessionMessageEntry,
+    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
+    SessionSummary, SessionTitleSource, SessionTranscriptUiState, TaskProjectSummary,
+    VmmProfileSyncState, VmmWritebackOutboxEntry,
 };
 use crate::provider_usage::parse_provider_usage_from_json;
 use serde::Deserialize;
@@ -31,6 +32,7 @@ use vulcan_vmm::VmmConfigLayer;
 
 mod persistence;
 mod segmented_session_store;
+mod session_addon_store;
 mod session_load;
 
 pub use self::segmented_session_store::find_segmented_session_directory_for_task_store;
@@ -46,15 +48,16 @@ use self::segmented_session_store::{
     replay_segmented_session_context, segmented_session_directory,
     state_document_from_runtime_state, write_state,
 };
+use self::session_addon_store::read_session_addon_state;
 pub use persistence::{
     archive_project_sessions, archive_project_with_sessions, archive_single_session,
     archive_single_session_for_project, permanently_delete_archived_project,
     permanently_delete_archived_session, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_order_update, persist_project_pinned_and_order_update,
-    persist_single_session_runtime_state_update, persist_single_session_update,
-    persist_workspace_snapshot, remove_project_after_archiving_sessions, rename_project,
-    rename_single_session_metadata, restore_project_with_sessions, restore_single_session,
-    toggle_project_pinned,
+    persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
+    persist_single_session_update, persist_workspace_snapshot,
+    remove_project_after_archiving_sessions, rename_project, rename_single_session_metadata,
+    restore_project_with_sessions, restore_single_session, toggle_project_pinned,
 };
 pub use session_load::{
     load_session_history_page, load_session_hydration_snapshot,
@@ -473,24 +476,38 @@ pub async fn load_workspace_snapshot(
                 session_id,
             );
         }
-        if !archived && let Some(state_document) = read_state(&session_dir)? {
-            if !state_document.runtime_state.is_null() {
-                let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
-                    state_document.runtime_state,
-                )
-                .map_err(|error| {
-                    format!("解析分段会话 `{}` 的 state.json 失败：{error}", row.id)
-                })?;
-                if runtime_state.updated_at.trim().is_empty()
-                    && !state_document.updated_at.trim().is_empty()
-                {
-                    runtime_state.updated_at = state_document.updated_at;
+        if !archived {
+            let mut runtime_state = if let Some(state_document) = read_state(&session_dir)? {
+                if state_document.runtime_state.is_null() {
+                    None
+                } else {
+                    let mut runtime_state = serde_json::from_value::<SessionRuntimeStateEntry>(
+                        state_document.runtime_state,
+                    )
+                    .map_err(|error| {
+                        format!("解析分段会话 `{}` 的 state.json 失败：{error}", row.id)
+                    })?;
+                    if runtime_state.updated_at.trim().is_empty()
+                        && !state_document.updated_at.trim().is_empty()
+                    {
+                        runtime_state.updated_at = state_document.updated_at;
+                    }
+                    hydrate_runtime_state_from_segmented_replay_if_missing(
+                        session_id,
+                        &session_dir,
+                        &mut runtime_state,
+                    )?;
+                    Some(runtime_state)
                 }
-                hydrate_runtime_state_from_segmented_replay_if_missing(
-                    session_id,
-                    &session_dir,
-                    &mut runtime_state,
-                )?;
+            } else {
+                None
+            };
+            if let Some(addon_state) = read_session_addon_state(&session_dir)? {
+                addon_state.apply_to_runtime_state(
+                    runtime_state.get_or_insert_with(SessionRuntimeStateEntry::default),
+                );
+            }
+            if let Some(mut runtime_state) = runtime_state {
                 let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
                 runtime_state_map.insert(session_id, runtime_state);
             }
@@ -1629,6 +1646,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
         active_openrouter_endpoint_route: None,
         active_reasoning_effort: None,
         active_temperature: None,
+        active_work_mode: None,
         ai_tool_configuration: None,
         prompt_skill_overrides: Default::default(),
         context_injection_state: row

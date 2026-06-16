@@ -16,6 +16,7 @@ import {
 import {
   normalizedComposerSlashCommandId,
   SLASH_SKILL_PROMPT,
+  type ComposerAiCapabilityConfigurationSave,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -87,6 +88,7 @@ import {
   reorderPendingPrompts,
   replyPendingQuestion,
   stageComposerAttachmentBytes,
+  saveSessionAiCapabilityConfiguration,
   stopConversationRun,
   stopSubagentTask,
   submitConversationPrompt,
@@ -843,6 +845,42 @@ export function WorkbenchLayout(props: {
     }
   }, [selectedConversation, selectedConversationId, selectedDraftConversation, workbenchState.projects]);
 
+  // handleSaveAiCapabilityConfiguration persists the composer capability dialog for the active session.
+  // handleSaveAiCapabilityConfiguration 持久化当前会话的输入区能力弹窗配置。
+  const handleSaveAiCapabilityConfiguration = React.useCallback(async (request: ComposerAiCapabilityConfigurationSave): Promise<boolean> => {
+    const activeProjectId =
+      selectedDraftConversation?.projectId
+      ?? selectedConversation?.projectId
+      ?? workbenchState.projects[0]?.id
+      ?? null;
+    const activeConversationId = selectedDraftConversation
+      ? null
+      : selectedConversation?.id ?? null;
+    if (!activeConversationId) {
+      toast.error("请先创建或选择一个会话，再保存 AI 能力设置。");
+      return false;
+    }
+    try {
+      const snapshot = await saveSessionAiCapabilityConfiguration(
+        activeProjectId,
+        activeConversationId,
+        request.disabledAiCapabilityKinds,
+        request.disabledAiCapabilityTargetSelectors,
+        request.aiCapabilityTargetOrderOverrides,
+      );
+      if (!snapshot) {
+        toast.info("浏览器预览模式下无法保存会话 AI 能力设置。");
+        return false;
+      }
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      toast.success("已保存当前会话 AI 能力设置。");
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation, workbenchState.projects]);
+
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
@@ -1467,6 +1505,7 @@ export function WorkbenchLayout(props: {
             }}
             onSlashCommand={handleComposerSlashCommand}
             onSubmitPrompt={handleSubmitConversationPrompt}
+            onSaveAiCapabilityConfiguration={handleSaveAiCapabilityConfiguration}
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onCloseSubagentPanel={handleCloseSubagentPanel}

@@ -8,6 +8,7 @@ use super::segmented_session_store::{
     read_segmented_session_tool_detail_window, read_segmented_session_turn_window, read_state,
     replay_segmented_session_context, segmented_lines_to_session_messages,
 };
+use super::session_addon_store::read_session_addon_state;
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
 use std::collections::BTreeSet;
@@ -619,19 +620,25 @@ fn load_segmented_runtime_state(
     };
     let runtime_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)?;
     let Some(state_document) = read_state(&session_dir)? else {
-        return runtime_state_from_runtime_or_segmented_replay(
+        let mut runtime_state = runtime_state_from_runtime_or_segmented_replay(
             session_id,
             runtime_conversation_state,
             &session_dir,
-        );
+        )?;
+        let _ =
+            apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
+        return Ok(runtime_state);
     };
     let has_runtime_state = !state_document.runtime_state.is_null();
     if !has_runtime_state && state_document.current_context.is_null() {
-        return runtime_state_from_runtime_or_segmented_replay(
+        let mut runtime_state = runtime_state_from_runtime_or_segmented_replay(
             session_id,
             runtime_conversation_state,
             &session_dir,
-        );
+        )?;
+        let _ =
+            apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
+        return Ok(runtime_state);
     }
     let mut runtime_state = if has_runtime_state {
         serde_json::from_value::<SessionRuntimeStateEntry>(state_document.runtime_state)
@@ -647,8 +654,15 @@ fn load_segmented_runtime_state(
     if let Some(conversation_state) = runtime_conversation_state {
         runtime_state.conversation_state = conversation_state;
     }
+    let mut runtime_state = Some(runtime_state);
+    let addon_applied =
+        apply_session_addon_state_to_loaded_runtime_state(&session_dir, &mut runtime_state)?;
+    let Some(mut runtime_state) = runtime_state else {
+        return Ok(None);
+    };
     if !has_runtime_state
         && !applied_context
+        && !addon_applied
         && runtime_state.conversation_state.messages.is_empty()
         && runtime_state.conversation_state.records.is_empty()
     {
@@ -658,6 +672,33 @@ fn load_segmented_runtime_state(
         repair_duplicate_conversation_record_ids(session_id, &mut runtime_state.conversation_state);
     let _ = sanitize_loaded_runtime_state_for_fresh_process(&mut runtime_state);
     Ok(Some(runtime_state))
+}
+
+/// Applies addon state to an optional loaded runtime state.
+/// 将附属状态应用到一个可选的已加载运行态。
+///
+/// # Parameters
+/// 参数
+/// `session_dir` is the resolved segmented session directory.
+/// `session_dir` 是已解析的分段会话目录。
+/// `runtime_state` is the optional runtime state that receives addon-owned fields.
+/// `runtime_state` 是接收附属状态字段的可选运行态。
+///
+/// # Returns
+/// 返回值
+/// `true` when an addon document existed and was applied.
+/// 当附属状态文档存在且已应用时返回 `true`。
+fn apply_session_addon_state_to_loaded_runtime_state(
+    session_dir: &std::path::Path,
+    runtime_state: &mut Option<SessionRuntimeStateEntry>,
+) -> Result<bool, String> {
+    let Some(addon_state) = read_session_addon_state(session_dir)? else {
+        return Ok(false);
+    };
+    addon_state.apply_to_runtime_state(
+        runtime_state.get_or_insert_with(SessionRuntimeStateEntry::default),
+    );
+    Ok(true)
 }
 
 /// Rebuilds runtime state from runtime JSONL when available, otherwise falls back to segmented replay.

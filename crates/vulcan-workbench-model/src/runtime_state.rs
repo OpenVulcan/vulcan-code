@@ -1766,6 +1766,10 @@ pub struct SessionRuntimeStateEntry {
     /// 最近一次该会话激活时选择的可选温度覆盖。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_temperature: Option<f32>,
+    /// Last user-selected work mode key for this session.
+    /// 该会话最近一次选择的工作模式键。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_work_mode: Option<String>,
     /// Session-scoped AI capability routing configuration cloned from the default template.
     /// 从默认模板复制而来的会话级 AI 能力路由配置。
     #[serde(default, skip_serializing_if = "Option::is_none")]

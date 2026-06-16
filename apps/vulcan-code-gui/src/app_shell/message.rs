@@ -52,6 +52,16 @@ pub(super) enum Message {
     /// Applies the completed single-session runtime-state persistence result.
     /// 应用单个会话运行时状态持久化完成结果。
     SessionRuntimeStatePersisted(Result<(), String>),
+    /// Applies the completed single-session addon-state persistence result.
+    /// 应用单个会话附属状态持久化完成结果。
+    SessionAddonStatePersisted(
+        SessionId,
+        Vec<SessionAddonNamespace>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Result<(), String>,
+    ),
     /// Applies the completed project metadata persistence result.
     /// 应用项目元数据持久化完成结果。
     ProjectMetadataPersisted(Result<(), String>),
@@ -629,6 +639,9 @@ pub(super) enum Message {
     /// Closes the workbench quick AI capability panel without changing the selected section.
     /// 在不改变当前分区选择的前提下关闭工作台快捷 AI 能力面板。
     CloseWorkbenchAiCapabilityPanel,
+    /// Saves dirty changes from the workbench quick AI capability panel.
+    /// 保存工作台快捷 AI 能力面板中的未保存变更。
+    SaveWorkbenchAiCapabilityPanel,
     /// Selects one capability section inside the workbench quick AI capability panel.
     /// 在工作台快捷 AI 能力面板内部选中某个能力分区。
     WorkbenchAiCapabilitySectionSelected(WorkbenchAiCapabilitySection),

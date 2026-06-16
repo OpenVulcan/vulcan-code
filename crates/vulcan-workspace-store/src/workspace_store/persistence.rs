@@ -12,6 +12,7 @@ use super::segmented_session_store::{
     restore_segmented_session_by_created_date, segmented_session_directory,
     state_document_from_runtime_state, sync_runtime_log_from_conversation_state, write_state,
 };
+use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
 use crate::conversation_protocol::conversation_state_to_session_messages;
 
@@ -266,6 +267,64 @@ pub async fn persist_single_session_runtime_state_update(
         .await?;
 
     Ok(())
+}
+
+/// Persists one session addon document without rewriting transcript or runtime-state documents.
+/// 持久化单个会话附属状态文档，且不重写转录或运行态文档。
+///
+/// # Parameters
+/// 参数
+/// `controller` is the workspace data-plane controller handle.
+/// `controller` 是工作区数据平面控制器句柄。
+/// `task_projects` are the in-memory project summaries used to resolve session ownership.
+/// `task_projects` 是用于解析会话归属的内存项目摘要。
+/// `session` is the session summary that owns the addon state.
+/// `session` 是拥有附属状态的会话摘要。
+/// `archived` describes whether the session lives in the archived tree.
+/// `archived` 描述该会话是否位于归档树。
+/// `addon_state` is the full namespace-split addon document to write.
+/// `addon_state` 是要写入的完整命名空间拆分附属状态文档。
+///
+/// # Returns
+/// 返回值
+/// The merged addon document that was written successfully.
+/// 成功写入后的合并附属状态文档。
+pub async fn persist_single_session_addon_state_update(
+    controller: ControllerRuntimeHandle,
+    task_projects: &[TaskProjectSummary],
+    session: &SessionSummary,
+    archived: bool,
+    addon_state: &SessionAddonState,
+) -> Result<SessionAddonState, String> {
+    if addon_state.session_id != session.id {
+        return Err(format!(
+            "单会话附属状态保存失败：附属状态会话 `{}` 与目标会话 `{}` 不一致",
+            addon_state.session_id, session.id
+        ));
+    }
+    let session_owner_map = session_owner_map_from_projects(task_projects);
+    let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
+        return Err(format!(
+            "单会话附属状态保存失败：未找到会话所属项目：{}",
+            session.id
+        ));
+    };
+
+    let session_id_text = session.id.to_string();
+    let locator = segmented_session_locator_from_summary(session, project_id, archived);
+    let session_dir =
+        ensure_segmented_session_directory_for_locator(&controller, &session_id_text, &locator)?;
+    let mut merged_state = read_session_addon_state(&session_dir)?
+        .unwrap_or_else(|| SessionAddonState::new(session.id));
+    for (namespace, value) in &addon_state.namespaces {
+        let _ = merged_state.set_json_namespace(
+            *namespace,
+            value.value.clone(),
+            value.updated_at.clone(),
+        );
+    }
+    write_session_addon_state(&session_dir, &merged_state)?;
+    Ok(merged_state)
 }
 
 /// Renames one visible session by exact locator metadata without scanning segmented directories.

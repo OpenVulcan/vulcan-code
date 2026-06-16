@@ -35,6 +35,20 @@ export interface ComposerSubmission {
   aiCapabilityTargetOrderOverrides: Record<string, string[]>;
 }
 
+// ComposerAiCapabilityConfigurationSave describes one session-scoped capability dialog save.
+// ComposerAiCapabilityConfigurationSave 描述一次会话级能力弹窗保存。
+export interface ComposerAiCapabilityConfigurationSave {
+  // Complete disabled semantic capability kind list.
+  // 完整禁用语义能力类型列表。
+  disabledAiCapabilityKinds: AiCapabilityKind[];
+  // Complete disabled target selector list.
+  // 完整禁用目标选择器列表。
+  disabledAiCapabilityTargetSelectors: string[];
+  // Complete target order overrides grouped by capability kind.
+  // 按能力类型分组的完整目标顺序覆盖。
+  aiCapabilityTargetOrderOverrides: Record<string, string[]>;
+}
+
 // ComposerSlashCommandOpenTarget names existing composer popups opened by slash commands.
 // ComposerSlashCommandOpenTarget 命名 slash 指令可打开的现有输入区弹窗。
 export type ComposerSlashCommandOpenTarget = "model" | "reasoning";

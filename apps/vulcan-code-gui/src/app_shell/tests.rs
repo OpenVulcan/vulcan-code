@@ -4,8 +4,9 @@ use super::workbench_model_state::{
 };
 use super::{
     ActiveSessionCompactionState, AiCapabilityRouteDropTarget, CommandSessionToolModalSummary,
-    ComposerSlashCommand, Message, PromptCompactionExecution, SessionPromptCompactionTrigger,
-    ToolModalPresentation, VulcanWorkbench, build_command_session_stop_result_metadata,
+    ComposerSlashCommand, ExecutionMode, Message, PromptCompactionExecution,
+    SessionHydrationSnapshot, SessionPromptCompactionTrigger, ToolModalPresentation,
+    VulcanWorkbench, WorkbenchAiCapabilitySection, build_command_session_stop_result_metadata,
     build_composer_slash_command_state, build_session_record_message_id,
     build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
     compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
@@ -20,9 +21,11 @@ use crate::context_budget::{ContextBudgetSnapshot, ContextCompactionPolicy};
 use crate::context_compaction::{CompactionPlan, CompactionSkillResult};
 use crate::conversation_protocol::SessionConversationState;
 use crate::model::{
-    PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource, SessionId,
+    AiCapabilityPanelSaveState, PendingPromptRuntimeOptions, PendingPromptWebSearchOverride,
+    PendingSessionPromptEntry, PendingSessionPromptSource, SessionAddonNamespace, SessionId,
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
+    TaskProjectSummary,
 };
 use crate::provider_config::{
     AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
@@ -549,6 +552,714 @@ fn web_search_route_order_survives_session_switch() {
         vec![
             String::from("ollama/ollama"),
             String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
+    );
+}
+
+/// Verifies web-search route order survives the real session-selected update flow.
+/// 验证网页搜索路由顺序在真实会话切换消息流程中仍能保留。
+#[test]
+fn web_search_route_order_survives_session_selected_message_flow() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let edited_session_id = SessionId::from_u128(0xE77);
+    let other_session_id = SessionId::from_u128(0xF88);
+    workbench.sessions.clear();
+    workbench.task_projects.clear();
+    workbench.task_projects.push(TaskProjectSummary::new(
+        String::from("project-alpha"),
+        String::from("Project Alpha"),
+        String::from("D:\\project-alpha"),
+        false,
+        0,
+        None,
+        None,
+        vec![edited_session_id, other_session_id],
+    ));
+    workbench.sessions.push(SessionSummary::new(
+        edited_session_id,
+        Some(String::from("project-alpha")),
+        "已编辑会话",
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    ));
+    workbench.sessions.push(SessionSummary::new(
+        other_session_id,
+        Some(String::from("project-alpha")),
+        "默认会话",
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    ));
+
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        edited_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.session_runtime_state.insert(
+        other_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = edited_session_id;
+    workbench.load_ai_tool_configuration_for_session(edited_session_id);
+
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+
+    let _ = workbench.update(Message::SessionSelected(other_session_id));
+    assert_eq!(
+        workbench.ai_tool_configuration.web_search.target_order,
+        vec![
+            String::from("minimax/minimax"),
+            String::from("ollama/ollama"),
+            String::from("tavily/tavily"),
+        ]
+    );
+
+    let _ = workbench.update(Message::SessionSelected(edited_session_id));
+    assert_eq!(
+        workbench.ai_tool_configuration.web_search.target_order,
+        vec![
+            String::from("ollama/ollama"),
+            String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
+    );
+}
+
+/// Verifies the full mouse-drag message flow stores the reordered route on the selected session.
+/// 验证完整鼠标拖拽消息流程会把重排后的路由保存到当前选中会话。
+#[test]
+fn web_search_route_order_drag_message_flow_updates_session_configuration() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xE99);
+    workbench.sessions.clear();
+    workbench.task_projects.clear();
+    workbench.task_projects.push(TaskProjectSummary::new(
+        String::from("project-alpha"),
+        String::from("Project Alpha"),
+        String::from("D:\\project-alpha"),
+        false,
+        0,
+        None,
+        None,
+        vec![session_id],
+    ));
+    workbench.sessions.push(SessionSummary::new(
+        session_id,
+        Some(String::from("project-alpha")),
+        "拖拽会话",
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    ));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+    let window_id = workbench.main_window_id.expect("main window id");
+
+    let _ = workbench.update(Message::WindowPointerMoved(
+        window_id,
+        iced::Point::new(0.0, 0.0),
+    ));
+    let _ = workbench.update(Message::StartAiCapabilityRouteDrag {
+        capability_kind: AiToolKind::WebSearch,
+        target_selector: String::from("minimax/minimax"),
+    });
+    let _ = workbench.update(Message::WindowPointerMoved(
+        window_id,
+        iced::Point::new(20.0, 0.0),
+    ));
+    let _ = workbench.update(Message::AiCapabilityRouteDropPreviewMoved {
+        capability_kind: AiToolKind::WebSearch,
+        target_selector: String::from("tavily/tavily"),
+        position: iced::Point::new(0.0, 0.0),
+    });
+    let _ = workbench.update(Message::WindowLeftButtonReleased(window_id));
+
+    let stored_configuration = workbench
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .expect("session route configuration");
+    assert_eq!(
+        stored_configuration.web_search.target_order,
+        vec![
+            String::from("ollama/ollama"),
+            String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
+    );
+}
+
+/// Verifies stale hydration does not replace a locally edited AI capability route order.
+/// 验证旧水合快照不会替换本地已编辑的 AI 能力路由顺序。
+#[test]
+fn stale_hydration_preserves_locally_updated_ai_configuration() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEAA);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "水合竞态会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            updated_at: String::from("10"),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+
+    workbench.apply_session_hydration_snapshot(SessionHydrationSnapshot {
+        session_id,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        compactions: Vec::new(),
+        runtime_state: Some(SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            updated_at: String::from("10"),
+            ..SessionRuntimeStateEntry::default()
+        }),
+        earliest_ordinal: None,
+        has_more_history: false,
+    });
+
+    let stored_configuration = workbench
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .expect("session route configuration");
+    assert_eq!(
+        stored_configuration.web_search.target_order,
+        vec![
+            String::from("ollama/ollama"),
+            String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
+    );
+}
+
+/// Verifies newer hydration replaces a locally edited AI capability snapshot and clears the temporary guard.
+/// 验证更新的水合快照会替换本地已编辑的 AI 能力快照并清理临时保护标记。
+#[test]
+fn newer_hydration_replaces_locally_updated_ai_configuration() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEAB);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "水合更新会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            updated_at: String::from("10"),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+    let newer_snapshot_updated_at = workbench
+        .locally_updated_ai_tool_configuration_sessions
+        .get(&session_id)
+        .and_then(|guard| guard.updated_at.parse::<u128>().ok())
+        .map(|updated_at| updated_at.saturating_add(1).to_string())
+        .expect("local guard");
+    workbench
+        .session_runtime_state
+        .get_mut(&session_id)
+        .expect("local runtime state")
+        .updated_at = String::from("20");
+
+    workbench.apply_session_hydration_snapshot(SessionHydrationSnapshot {
+        session_id,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        compactions: Vec::new(),
+        runtime_state: Some(SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            updated_at: newer_snapshot_updated_at,
+            ..SessionRuntimeStateEntry::default()
+        }),
+        earliest_ordinal: None,
+        has_more_history: false,
+    });
+
+    let stored_configuration = workbench
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .expect("session route configuration");
+    assert_eq!(
+        stored_configuration.web_search.target_order,
+        vec![
+            String::from("minimax/minimax"),
+            String::from("ollama/ollama"),
+            String::from("tavily/tavily"),
+        ]
+    );
+    assert!(
+        !workbench
+            .locally_updated_ai_tool_configuration_sessions
+            .contains_key(&session_id)
+    );
+}
+
+/// Verifies execution mode is remembered per session and restored during session switching.
+/// 验证执行模式会按会话记忆，并在会话切换时恢复。
+#[test]
+fn work_mode_survives_session_switch() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let plan_session_id = SessionId::from_u128(0xEAC);
+    let build_session_id = SessionId::from_u128(0xEAD);
+    workbench.sessions.clear();
+    workbench.task_projects.clear();
+    workbench.task_projects.push(TaskProjectSummary::new(
+        String::from("project-work-mode"),
+        String::from("Project Work Mode"),
+        String::from("D:\\project-work-mode"),
+        false,
+        0,
+        None,
+        None,
+        vec![plan_session_id, build_session_id],
+    ));
+    workbench.sessions.push(SessionSummary::new(
+        plan_session_id,
+        Some(String::from("project-work-mode")),
+        "Plan 会话",
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    ));
+    workbench.sessions.push(SessionSummary::new(
+        build_session_id,
+        Some(String::from("project-work-mode")),
+        "Build 会话",
+        String::new(),
+        SessionState::Draft,
+        0,
+        0,
+        String::from("刚刚"),
+    ));
+    workbench.agent_profile_catalog.state.selected_agent_id = None;
+    workbench.session_runtime_state.insert(
+        plan_session_id,
+        SessionRuntimeStateEntry {
+            active_work_mode: Some(String::from("plan")),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.session_runtime_state.insert(
+        build_session_id,
+        SessionRuntimeStateEntry {
+            active_work_mode: Some(String::from("build")),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+
+    let _ = workbench.update(Message::SessionSelected(plan_session_id));
+    assert_eq!(workbench.execution_mode, ExecutionMode::Plan);
+
+    let _ = workbench.update(Message::SessionSelected(build_session_id));
+    assert_eq!(workbench.execution_mode, ExecutionMode::Build);
+}
+
+/// Verifies quick AI capability panel route edits remain draft-only until the save action runs.
+/// 验证快捷 AI 能力面板中的路由编辑在保存前只保留为草稿。
+#[test]
+fn ai_capability_panel_route_edit_is_draft_until_saved() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEAE);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "AI 能力草稿会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    let _ = workbench.update(Message::OpenWorkbenchAiCapabilityPanel);
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+
+    let draft_order = workbench
+        .ai_tool_configuration
+        .web_search
+        .target_order
+        .clone();
+    let stored_order = workbench
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .map(|configuration| configuration.web_search.target_order.clone())
+        .expect("stored configuration");
+
+    assert_eq!(
+        draft_order,
+        vec![
+            String::from("ollama/ollama"),
+            String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
+    );
+    assert_eq!(
+        stored_order,
+        vec![
+            String::from("minimax/minimax"),
+            String::from("ollama/ollama"),
+            String::from("tavily/tavily"),
+        ]
+    );
+}
+
+/// Verifies closing a dirty quick AI capability panel asks before discarding or saving.
+/// 验证关闭存在未保存变更的快捷 AI 能力面板时会先询问。
+#[test]
+fn ai_capability_panel_dirty_close_prompts_for_choice() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEAF);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "AI 能力关闭确认会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    let _ = workbench.update(Message::OpenWorkbenchAiCapabilityPanel);
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+    let _ = workbench.update(Message::CloseWorkbenchAiCapabilityPanel);
+
+    assert!(workbench.workbench_ai_capability_panel_open);
+    assert!(workbench.workbench_notice_modal.is_some());
+}
+
+/// Verifies quick AI capability section toggles are tracked as unsaved panel drafts.
+/// 验证快捷 AI 能力分区开关会被识别为未保存的面板草稿。
+#[test]
+fn ai_capability_panel_section_toggle_is_draft_dirty() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEB0);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "AI 能力开关草稿会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    let _ = workbench.update(Message::OpenWorkbenchAiCapabilityPanel);
+    let _ = workbench.update(Message::WorkbenchAiCapabilitySectionEnabledToggled {
+        section: WorkbenchAiCapabilitySection::WebSearch,
+        enabled: false,
+    });
+
+    assert!(workbench.workbench_ai_capability_panel_has_unsaved_changes());
+    assert!(
+        workbench
+            .workbench_disabled_ai_capability_kinds
+            .contains(&AiToolKind::WebSearch)
+    );
+    let _ = workbench.update(Message::CloseWorkbenchAiCapabilityPanel);
+    assert!(workbench.workbench_ai_capability_panel_open);
+    assert!(workbench.workbench_notice_modal.is_some());
+}
+
+/// Verifies discarding a web-search quick-toggle draft restores the runtime override too.
+/// 验证放弃网页搜索快捷开关草稿时也会恢复运行时覆盖模式。
+#[test]
+fn ai_capability_panel_discard_restores_web_search_override() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEB2);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "AI 能力放弃恢复会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+    workbench.enable_workbench_web_search();
+    let baseline_override = workbench.workbench_web_search_override;
+
+    let _ = workbench.update(Message::OpenWorkbenchAiCapabilityPanel);
+    let _ = workbench.update(Message::WorkbenchAiCapabilitySectionEnabledToggled {
+        section: WorkbenchAiCapabilitySection::WebSearch,
+        enabled: false,
+    });
+    assert_eq!(
+        workbench.workbench_web_search_override,
+        PendingPromptWebSearchOverride::Disabled
+    );
+
+    workbench.discard_workbench_ai_capability_panel_changes();
+
+    assert_eq!(workbench.workbench_web_search_override, baseline_override);
+    assert!(
+        !workbench
+            .workbench_disabled_ai_capability_kinds
+            .contains(&AiToolKind::WebSearch)
+    );
+}
+
+/// Verifies loading another session realigns web-search runtime override with that session configuration.
+/// 验证切换到另一个会话时会按该会话配置重新对齐网页搜索运行时覆盖。
+#[test]
+fn web_search_override_follows_loaded_session_ai_configuration() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let disabled_session_id = SessionId::from_u128(0xEB3);
+    let enabled_session_id = SessionId::from_u128(0xEB4);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(disabled_session_id, "联网关闭会话"));
+    workbench
+        .sessions
+        .push(test_session_summary(enabled_session_id, "联网开启会话"));
+    let mut disabled_configuration = test_web_search_route_configuration();
+    disabled_configuration
+        .disabled_capability_kinds
+        .insert(AiToolKind::WebSearch);
+    let enabled_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = enabled_configuration.clone();
+    workbench.session_runtime_state.insert(
+        disabled_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(disabled_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.session_runtime_state.insert(
+        enabled_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(enabled_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+
+    workbench.selected_session = disabled_session_id;
+    workbench.load_ai_tool_configuration_for_session(disabled_session_id);
+    assert_eq!(
+        workbench
+            .current_pending_prompt_runtime_options()
+            .web_search_override,
+        PendingPromptWebSearchOverride::Disabled
+    );
+
+    let _ = workbench.update(Message::SessionSelected(enabled_session_id));
+
+    assert!(
+        !workbench
+            .workbench_disabled_ai_capability_kinds
+            .contains(&AiToolKind::WebSearch)
+    );
+    assert_ne!(
+        workbench
+            .current_pending_prompt_runtime_options()
+            .web_search_override,
+        PendingPromptWebSearchOverride::Disabled
+    );
+}
+
+/// Verifies the quick AI capability panel only closes for its own save callback.
+/// 验证快捷 AI 能力面板只会响应自身发起的保存回调并关闭。
+#[test]
+fn ai_capability_panel_save_ignores_unrelated_ai_capability_callback() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let session_id = SessionId::from_u128(0xEB1);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(session_id, "AI 能力保存指纹会话"));
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = session_id;
+
+    let _ = workbench.update(Message::OpenWorkbenchAiCapabilityPanel);
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+    let _ = workbench.update(Message::SaveWorkbenchAiCapabilityPanel);
+    let pending_save = workbench
+        .workbench_ai_capability_panel_pending_save
+        .clone()
+        .expect("pending quick-panel save");
+    assert!(
+        workbench
+            .locally_updated_ai_tool_configuration_sessions
+            .contains_key(&session_id)
+    );
+    assert_eq!(
+        workbench.workbench_ai_capability_panel_save_state,
+        AiCapabilityPanelSaveState::Saving
+    );
+
+    let _ = workbench.update(Message::SessionAddonStatePersisted(
+        session_id,
+        vec![SessionAddonNamespace::AiCapabilities],
+        Some(String::from("unrelated-save")),
+        Some(pending_save.hash.clone()),
+        Some(String::from("wrong-request-id")),
+        Ok(()),
+    ));
+
+    assert!(workbench.workbench_ai_capability_panel_open);
+    assert_eq!(
+        workbench.workbench_ai_capability_panel_save_state,
+        AiCapabilityPanelSaveState::Saving
+    );
+    assert!(
+        workbench
+            .workbench_ai_capability_panel_pending_save
+            .is_some()
+    );
+
+    let _ = workbench.update(Message::SessionAddonStatePersisted(
+        session_id,
+        vec![SessionAddonNamespace::AiCapabilities],
+        Some(String::from("addon-timestamp-can-differ")),
+        Some(pending_save.hash),
+        Some(pending_save.request_id),
+        Ok(()),
+    ));
+
+    assert!(!workbench.workbench_ai_capability_panel_open);
+    assert_eq!(
+        workbench.workbench_ai_capability_panel_save_state,
+        AiCapabilityPanelSaveState::Saved
+    );
+    assert!(
+        workbench
+            .workbench_ai_capability_panel_pending_save
+            .is_none()
+    );
+    assert!(
+        !workbench
+            .locally_updated_ai_tool_configuration_sessions
+            .contains_key(&session_id)
+    );
+
+    workbench.apply_session_hydration_snapshot(SessionHydrationSnapshot {
+        session_id,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        compactions: Vec::new(),
+        runtime_state: Some(SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(test_web_search_route_configuration()),
+            updated_at: String::from("1"),
+            ..SessionRuntimeStateEntry::default()
+        }),
+        earliest_ordinal: None,
+        has_more_history: false,
+    });
+    let hydrated_order = workbench
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.ai_tool_configuration.as_ref())
+        .map(|configuration| configuration.web_search.target_order.clone())
+        .expect("hydrated configuration");
+    assert_eq!(
+        hydrated_order,
+        vec![
+            String::from("minimax/minimax"),
+            String::from("ollama/ollama"),
             String::from("tavily/tavily"),
         ]
     );

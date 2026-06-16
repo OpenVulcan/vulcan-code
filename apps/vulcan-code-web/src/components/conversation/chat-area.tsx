@@ -5,6 +5,7 @@ import {
 } from "@/components/composer/composer-dock";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
+  ComposerAiCapabilityConfigurationSave,
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -88,6 +89,9 @@ interface ChatAreaProps {
   // Submits one composer prompt.
   // 提交一个输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Persists one session-scoped AI capability draft.
+  // 持久化单个会话级 AI 能力草稿。
+  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;
@@ -503,6 +507,7 @@ export function ChatArea(props: ChatAreaProps) {
   const composerDock = (
     <ComposerDock
       aiCapabilities={props.workbench.aiCapabilities ?? []}
+      defaultAiCapabilities={props.workbench.defaultAiCapabilities ?? []}
       attachmentCapabilities={props.workbench.composerAttachmentCapabilities ?? []}
       projectId={selectedProject?.id ?? props.selectedDraftConversation?.projectId ?? null}
       conversationId={selectedConversation?.id ?? null}
@@ -515,6 +520,7 @@ export function ChatArea(props: ChatAreaProps) {
       onSlashCommand={props.onSlashCommand}
       onComposerDockHeightChange={handleComposerDockHeightChange}
       onSubmitPrompt={props.onSubmitPrompt}
+      onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
       onStopConversationRun={props.onStopConversationRun}
       onStageAttachmentBytes={props.onStageAttachmentBytes}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}

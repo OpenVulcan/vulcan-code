@@ -4078,7 +4078,8 @@ button {
   height: min(520px, calc(100vh - 88px));
   max-height: min(520px, calc(100vh - 88px));
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 0;
   padding: 18px;
 }
 
@@ -4097,6 +4098,7 @@ button {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 16px;
+  margin-top: 12px;
 }
 
 .composer-capability-dialog-left,
@@ -4188,45 +4190,13 @@ button {
 }
 
 .composer-capability-dialog-right {
+  min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 12px;
-}
-
-.composer-capability-detail-header {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  padding: 10px 12px;
-  background: var(--muted);
-}
-
-.composer-capability-detail-icon {
-  width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 0;
-  background: var(--background);
-  color: var(--foreground);
-  box-shadow: inset 0 0 0 1px var(--border);
-}
-
-.composer-capability-detail-copy strong {
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 14px;
-  line-height: 18px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .composer-capability-target-table {
-  min-height: 0;
+  min-height: 100%;
   display: grid;
   align-content: start;
   gap: 6px;
@@ -4279,6 +4249,56 @@ button {
   border-radius: 12px;
   color: var(--muted-foreground);
   font-size: 12px;
+}
+
+.composer-capability-dialog-footer {
+  margin: 0 -18px -18px;
+  align-items: center;
+  flex-direction: row;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  padding: 12px 18px;
+}
+
+.composer-capability-dialog-save-hint {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-capability-save-button {
+  min-width: 86px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.composer-capability-default-button {
+  min-width: 112px;
+}
+
+.composer-capability-save-button.saved {
+  background: color-mix(in srgb, #16a34a 16%, var(--primary));
+}
+
+.composer-capability-save-spinner {
+  animation: composer-capability-save-spin 0.86s linear infinite;
+}
+
+.composer-capability-close-confirm-dialog {
+  width: min(390px, calc(100vw - 48px));
+}
+
+@keyframes composer-capability-save-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .composer-select-trigger.reasoning {

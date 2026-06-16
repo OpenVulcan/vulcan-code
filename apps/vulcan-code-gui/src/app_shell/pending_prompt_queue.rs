@@ -623,6 +623,9 @@ impl VulcanWorkbench {
         dragged_target_selector: &str,
         drop_target: &AiCapabilityRouteDropTarget,
     ) -> bool {
+        if self.workbench_ai_capability_panel_save_state == AiCapabilityPanelSaveState::Saving {
+            return false;
+        }
         let before_target = match drop_target {
             AiCapabilityRouteDropTarget::Before(target_selector) => Some(target_selector.as_str()),
             AiCapabilityRouteDropTarget::End => None,
@@ -633,6 +636,13 @@ impl VulcanWorkbench {
             before_target,
         );
         if did_move {
+            if self.workbench_ai_capability_panel_open {
+                self.mark_workbench_ai_capability_panel_draft_changed(format!(
+                    "已调整“{}”目标顺序，点击保存后写入当前会话配置。",
+                    capability_kind.label()
+                ));
+                return true;
+            }
             match self.save_ai_tool_configuration() {
                 Ok(()) => {
                     self.ai_tool_notice =

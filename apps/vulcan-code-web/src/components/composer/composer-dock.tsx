@@ -2,6 +2,7 @@ import React from "react";
 import { ArrowDown } from "lucide-react";
 import { type ModelPickerChoice } from "@/components/composer/model-picker-control";
 import {
+  type ComposerAiCapabilityConfigurationSave,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -37,6 +38,9 @@ export function ComposerDock(props: {
   // AI capability route summaries used by the composer capability tree.
   // 输入区能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Default AI capability route summaries used to reset the session draft.
+  // 用于重置会话草稿的默认 AI 能力路由摘要。
+  defaultAiCapabilities: AiCapabilitySummary[];
   // Attachment capability gates used by composer attachment controls.
   // 输入区附件控件使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -88,6 +92,9 @@ export function ComposerDock(props: {
   // onSubmitPrompt sends one composer prompt through the workbench runtime.
   // onSubmitPrompt 通过工作台运行时发送一条输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // onSaveAiCapabilityConfiguration persists one session-scoped capability draft.
+  // onSaveAiCapabilityConfiguration 持久化单个会话级能力草稿。
+  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -172,6 +179,7 @@ export function ComposerDock(props: {
       ) : null}
       <ComposerPanel
         aiCapabilities={props.aiCapabilities}
+        defaultAiCapabilities={props.defaultAiCapabilities}
         attachmentCapabilities={props.attachmentCapabilities}
         projectId={props.projectId}
         conversationId={props.conversationId}
@@ -185,6 +193,7 @@ export function ComposerDock(props: {
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
+        onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}

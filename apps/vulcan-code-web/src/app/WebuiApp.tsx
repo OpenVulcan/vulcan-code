@@ -12,6 +12,7 @@ import {
 import { I18nProvider } from "@/i18n";
 import type {
   StartupSnapshot,
+  SessionAddonChangedEvent,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
 } from "@/types";
@@ -60,6 +61,9 @@ export function WebuiApp() {
   // serviceWasDisconnectedRef suppresses recovery toasts before the first real disconnect.
   // serviceWasDisconnectedRef 在首次真实断开前抑制恢复提示。
   const serviceWasDisconnectedRef = React.useRef(false);
+  // workbenchSnapshotSeqRef rejects stale full-snapshot updates across every snapshot source.
+  // workbenchSnapshotSeqRef 在所有快照来源之间拒绝过期的全量快照更新。
+  const workbenchSnapshotSeqRef = React.useRef(0);
 
   React.useEffect(() => {
     // handleConnectionStatusChange maps transport-level connection changes to user-visible toasts.
@@ -135,6 +139,7 @@ export function WebuiApp() {
             }),
             serviceClient.subscribe<WorkbenchSnapshot>("workbench", (payload) => {
               if (!cancelled) {
+                workbenchSnapshotSeqRef.current += 1;
                 setWorkbench(payload);
               }
             }),
@@ -157,6 +162,24 @@ export function WebuiApp() {
                 }, STREAMING_DELTA_FLUSH_MS);
               }
             }),
+            serviceClient.subscribe<SessionAddonChangedEvent>("session.addon.changed", () => {
+              if (cancelled) {
+                return;
+              }
+              const refreshSeq = workbenchSnapshotSeqRef.current + 1;
+              workbenchSnapshotSeqRef.current = refreshSeq;
+              void loadWorkbenchSnapshot()
+                .then((snapshot) => {
+                  if (!cancelled && workbenchSnapshotSeqRef.current === refreshSeq) {
+                    setWorkbench(snapshot);
+                  }
+                })
+                .catch((nextError) => {
+                  if (!cancelled) {
+                    console.warn("Failed to refresh workbench after session addon change.", nextError);
+                  }
+                });
+            }),
           ]);
           if (cancelled) {
             subscriptions.forEach((unsubscribe) => unsubscribe());
@@ -174,6 +197,7 @@ export function WebuiApp() {
           retryDelayMs = 500;
           setError(null);
           setStartup(nextStartup);
+          workbenchSnapshotSeqRef.current += 1;
           setWorkbench(nextWorkbench);
         }
       } catch (nextError) {

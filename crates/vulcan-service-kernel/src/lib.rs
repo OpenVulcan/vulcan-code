@@ -112,10 +112,10 @@ use vulcan_service_api::{
     PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
-    RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SettingSectionSummary,
-    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
-    SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
-    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
+    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
+    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
+    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
     WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
     WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
@@ -142,8 +142,9 @@ use vulcan_workbench_model::{
     PendingPromptModelReference, PendingPromptPanelDropTarget, PendingPromptPanelEntry,
     PendingPromptPanelEntryState, PendingPromptQueueRouteError, PendingPromptQueueRouteOutcome,
     PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
-    SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SessionId, SessionMessageEntry,
-    SessionMessageKind, SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry,
+    SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SessionAddonNamespace,
+    SessionAddonState, SessionId, SessionMessageEntry, SessionMessageKind,
+    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeControls, SessionRuntimeStateEntry,
     SessionState, SessionSummary, SessionTitleSource, SessionTurnStatsStatus,
     SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
     apply_pending_prompt_panel_drop_target, attach_tool_display_state_to_metadata,
@@ -333,6 +334,28 @@ struct AiCapabilityTargetsSaveRequest {
     /// Ordered target bindings to keep for this capability.
     /// 当前能力需要保留的有序目标绑定集合。
     targets: Vec<AiCapabilityTargetSaveInput>,
+}
+
+/// Session-scoped AI capability configuration save request sent by the WebUI composer dialog.
+/// WebUI 输入区弹窗发送的会话级 AI 能力配置保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionAiCapabilityConfigurationSaveRequest {
+    /// Owning project id used only as a fallback when no conversation id exists.
+    /// 所属项目标识，仅在会话标识不存在时作为回退使用。
+    project_id: Option<String>,
+    /// Conversation id whose addon AI capability namespace should be updated.
+    /// 需要更新附属 AI 能力命名空间的会话标识。
+    conversation_id: Option<String>,
+    /// Complete disabled capability kind list from the dialog draft.
+    /// 弹窗草稿中的完整禁用能力类型列表。
+    disabled_ai_capability_kinds: Vec<String>,
+    /// Complete disabled target selector list from the dialog draft.
+    /// 弹窗草稿中的完整禁用目标选择器列表。
+    disabled_ai_capability_target_selectors: Vec<String>,
+    /// Complete target order overrides grouped by capability kind.
+    /// 按能力类型分组的完整目标顺序覆盖。
+    ai_capability_target_order_overrides: BTreeMap<String, Vec<String>>,
 }
 
 /// AI capability target binding submitted by the WebUI settings page.
@@ -603,6 +626,9 @@ pub struct ServiceBridgeState {
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     session_persist_versions: BTreeMap<SessionId, u64>,
+    /// Latest addon persistence version keyed by session id and addon namespace.
+    /// 按会话标识与附属状态命名空间索引的最新附属状态持久化版本。
+    session_addon_persist_versions: BTreeMap<(SessionId, SessionAddonNamespace), u64>,
 }
 
 /// Thread-safe service state handle.
@@ -1634,6 +1660,7 @@ pub fn create_service_bridge_state(
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_addon_persist_versions: BTreeMap::new(),
     }))
 }
 
@@ -1999,6 +2026,14 @@ async fn dispatch_service_rpc(
         "service_save_ai_capability_targets" => rpc_json_result(
             service_save_ai_capability_targets(app, state, rpc_required_param(&params, "request")?)
                 .await,
+        ),
+        "service_save_session_ai_capability_configuration" => rpc_json_result(
+            service_save_session_ai_capability_configuration(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
         ),
         "service_save_mcp_server_configuration" => rpc_json_result(
             service_save_mcp_server_configuration(
@@ -4807,7 +4842,13 @@ async fn service_select_workbench_model(
         return Err(String::from("模型选择缺少 Provider 或模型标识。"));
     }
 
-    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) = {
+    let (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+        workbench,
+        default_ai_tool_configuration,
+    ) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -4866,6 +4907,7 @@ async fn service_select_workbench_model(
             persist_session_id,
             guard.workspace_snapshot.clone(),
             guard.workbench.clone(),
+            ai_tool_configuration,
         )
     };
 
@@ -4874,13 +4916,23 @@ async fn service_select_workbench_model(
         persist_session_id,
         persist_workspace_snapshot,
     ) {
-        spawn_workspace_session_runtime_state_persist_task(
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
+        if let Some(addon_state) = session_addon_state_from_workspace_snapshot(
+            &workspace_snapshot,
             session_id,
-            Some(String::from("model_selection")),
-        );
+            &default_ai_tool_configuration,
+            &[SessionAddonNamespace::RuntimeControls],
+        ) {
+            spawn_workspace_session_addon_state_persist_task(
+                app.clone(),
+                state.clone(),
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                addon_state,
+                vec![SessionAddonNamespace::RuntimeControls],
+                Some(String::from("model_selection")),
+            );
+        }
     }
 
     emit_workbench_event(&app, &workbench);
@@ -4896,7 +4948,13 @@ async fn service_select_workbench_reasoning_effort(
 ) -> Result<WorkbenchSnapshot, String> {
     let selected_effort =
         parse_reasoning_effort(effort.trim()).ok_or_else(|| format!("未知思考档位：{effort}"))?;
-    let (controller_runtime, persist_session_id, persist_workspace_snapshot, workbench) = {
+    let (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+        workbench,
+        default_ai_tool_configuration,
+    ) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -4932,6 +4990,7 @@ async fn service_select_workbench_reasoning_effort(
             persist_session_id,
             guard.workspace_snapshot.clone(),
             guard.workbench.clone(),
+            ai_tool_configuration,
         )
     };
 
@@ -4940,13 +4999,23 @@ async fn service_select_workbench_reasoning_effort(
         persist_session_id,
         persist_workspace_snapshot,
     ) {
-        spawn_workspace_session_runtime_state_persist_task(
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
+        if let Some(addon_state) = session_addon_state_from_workspace_snapshot(
+            &workspace_snapshot,
             session_id,
-            Some(String::from("reasoning_selection")),
-        );
+            &default_ai_tool_configuration,
+            &[SessionAddonNamespace::RuntimeControls],
+        ) {
+            spawn_workspace_session_addon_state_persist_task(
+                app.clone(),
+                state.clone(),
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                addon_state,
+                vec![SessionAddonNamespace::RuntimeControls],
+                Some(String::from("reasoning_selection")),
+            );
+        }
     }
 
     emit_workbench_event(&app, &workbench);
@@ -5400,6 +5469,204 @@ async fn service_save_ai_capability_targets(
     };
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Saves the current session AI capability quick-panel draft into the session addon document.
+/// 将当前会话 AI 能力快捷面板草稿保存到会话附属状态文档。
+async fn service_save_session_ai_capability_configuration(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: SessionAiCapabilityConfigurationSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_id = request
+        .conversation_id
+        .as_deref()
+        .and_then(parse_session_id)
+        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能保存会话级 AI 能力配置。"))?;
+    let requested_project_id = request
+        .project_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let disabled_kinds =
+        parse_session_ai_capability_disabled_kinds(request.disabled_ai_capability_kinds)?;
+    let disabled_target_selectors =
+        parse_ai_capability_target_selectors(Some(request.disabled_ai_capability_target_selectors));
+    let target_order_overrides =
+        parse_ai_capability_target_order_overrides(Some(request.ai_capability_target_order_overrides))?;
+    let (controller_runtime, workspace_snapshot, mut next_configuration) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let default_ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+            return Err(format!("未找到要保存 AI 能力配置的会话：{session_id}"));
+        }
+        if let Some(project_id) = requested_project_id
+            && owning_project_id_for_session(workspace_snapshot, session_id).as_deref()
+                != Some(project_id)
+        {
+            return Err(String::from("当前会话与请求项目不匹配，已拒绝保存 AI 能力配置。"));
+        }
+        let next_configuration = session_ai_tool_configuration_or_default(
+            workspace_snapshot,
+            session_id,
+            &default_ai_tool_configuration,
+        )
+        .clone();
+        (
+            controller_runtime,
+            workspace_snapshot.clone(),
+            next_configuration,
+        )
+    };
+    apply_session_ai_capability_dialog_draft(
+        &mut next_configuration,
+        &disabled_kinds,
+        &disabled_target_selectors,
+        &target_order_overrides,
+    )?;
+    let updated_at = current_unix_millis_text();
+    let mut addon_state = SessionAddonState::new(session_id);
+    let _ = addon_state.set_ai_tool_configuration(&next_configuration, updated_at.clone());
+    invalidate_webui_session_addon_persist_version(
+        &state,
+        session_id,
+        SessionAddonNamespace::AiCapabilities,
+    )?;
+    let addon_persist_lock = webui_workspace_persist_lock();
+    let _addon_persist_guard = addon_persist_lock.lock().await;
+    let persisted_addon_state = persist_workspace_session_addon_state_update(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        addon_state,
+    )
+    .await?;
+    let workspace_snapshot = with_workspace_mutation_preserving_subagent_navigation(
+        &app,
+        &state,
+        |workspace| {
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: updated_at.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            runtime_state.ai_tool_configuration = Some(next_configuration.clone());
+            runtime_state.updated_at = updated_at.clone();
+        },
+    )?;
+    emit_session_addon_changed_event(
+        &app,
+        session_id,
+        &[SessionAddonNamespace::AiCapabilities],
+        persisted_addon_state.revision,
+        latest_session_addon_updated_at(&persisted_addon_state),
+    );
+    let _ = workspace_snapshot;
+    current_workbench_snapshot_from_state(&state)
+}
+
+/// Persists one complete session addon document after the caller enters the addon write queue.
+/// 调用方进入附属状态写入队列后，持久化单个完整会话附属状态文档。
+async fn persist_workspace_session_addon_state_update(
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    addon_state: SessionAddonState,
+) -> Result<SessionAddonState, String> {
+    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
+        return Err(format!("未找到要保存附属状态的会话：{session_id}"));
+    }
+    let Some((session, archived)) = workspace_snapshot
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .map(|session| (session.clone(), false))
+        .or_else(|| {
+            workspace_snapshot
+                .archived_sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .map(|session| (session.clone(), true))
+        })
+    else {
+        return Err(format!("未找到要保存附属状态的会话：{session_id}"));
+    };
+    let task_projects = workspace_snapshot
+        .task_projects
+        .iter()
+        .cloned()
+        .chain(workspace_snapshot.archived_task_projects.iter().cloned())
+        .collect::<Vec<_>>();
+    vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
+        controller_runtime,
+        &task_projects,
+        &session,
+        archived,
+        &addon_state,
+    )
+    .await
+    .map_err(|error| format!("会话附属状态保存失败：{error}"))
+}
+
+/// Parses the complete disabled capability list from the WebUI session dialog.
+/// 解析 WebUI 会话弹窗中的完整禁用能力列表。
+fn parse_session_ai_capability_disabled_kinds(
+    raw_kinds: Vec<String>,
+) -> Result<BTreeSet<AiToolKind>, String> {
+    let mut disabled_kinds = BTreeSet::new();
+    for raw_kind in raw_kinds {
+        let capability_kind = parse_ai_tool_kind(&raw_kind)?;
+        if capability_kind.supports_workbench_quick_toggle() {
+            disabled_kinds.insert(capability_kind);
+        }
+    }
+    Ok(disabled_kinds)
+}
+
+/// Applies one WebUI session dialog draft to a persisted AI capability configuration.
+/// 将 WebUI 会话弹窗草稿应用到持久化 AI 能力配置。
+fn apply_session_ai_capability_dialog_draft(
+    configuration: &mut PersistedAiToolConfiguration,
+    disabled_kinds: &BTreeSet<AiToolKind>,
+    disabled_target_selectors: &BTreeSet<String>,
+    target_order_overrides: &BTreeMap<AiToolKind, Vec<String>>,
+) -> Result<(), String> {
+    configuration.disabled_capability_kinds = disabled_kinds.clone();
+    for vendor in &mut configuration.vendors {
+        let vendor_id = vendor.vendor_id.trim().to_ascii_lowercase();
+        for binding in &mut vendor.targets {
+            if !binding.capability_kind.supports_workbench_quick_toggle() {
+                continue;
+            }
+            let selector = format!("{}/{}", vendor_id, binding.target_alias());
+            binding.enabled = !disabled_target_selectors
+                .iter()
+                .any(|disabled| disabled.eq_ignore_ascii_case(&selector));
+        }
+    }
+    for (capability_kind, target_order) in target_order_overrides {
+        set_ai_capability_target_order_for_kind(
+            configuration,
+            *capability_kind,
+            target_order.clone(),
+        )?;
+    }
+    configuration.normalize();
+    Ok(())
 }
 
 /// Replaces the persisted target order for one AI capability kind.
@@ -6997,6 +7264,121 @@ fn emit_workbench_event(app: &ServiceEventEmitter, workbench: &WorkbenchSnapshot
         "workbench_snapshot_emit",
         ServiceEvent::Workbench(Box::new(workbench.clone())),
     );
+}
+
+/// Emits one session-addon namespace change event to connected UI clients.
+/// 向已连接 UI 客户端发送一条会话附属状态命名空间变更事件。
+///
+/// # Parameters
+/// 参数
+/// `app` is the service event emitter.
+/// `app` 是服务事件发送器。
+/// `session_id` selects the changed session.
+/// `session_id` 选择发生变化的会话。
+/// `namespaces` are the addon namespaces that changed.
+/// `namespaces` 是发生变化的附属状态命名空间。
+/// `revision` is the latest known addon document revision.
+/// `revision` 是当前已知的最新附属状态文档版本。
+/// `updated_at` is the latest update timestamp.
+/// `updated_at` 是最近更新时间戳。
+fn emit_session_addon_changed_event(
+    app: &ServiceEventEmitter,
+    session_id: SessionId,
+    namespaces: &[SessionAddonNamespace],
+    revision: u64,
+    updated_at: String,
+) {
+    let event = SessionAddonChangedEvent {
+        session_id: session_id.to_string(),
+        namespaces: namespaces
+            .iter()
+            .map(|namespace| namespace.as_key().to_string())
+            .collect(),
+        revision,
+        updated_at,
+        source_instance_id: None,
+    };
+    emit_service_event_with_trace(
+        app,
+        "session_addon_changed_emit",
+        ServiceEvent::SessionAddonChanged(Box::new(event)),
+    );
+}
+
+/// Builds a session addon document from a workspace snapshot and legacy runtime state.
+/// 从工作区快照与旧运行态构建会话附属状态文档。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` supplies the legacy runtime state.
+/// `workspace_snapshot` 提供旧运行态。
+/// `session_id` selects the session being exported.
+/// `session_id` 选择正在导出的会话。
+/// `default_ai_tool_configuration` supplies the default AI capability template.
+/// `default_ai_tool_configuration` 提供默认 AI 能力模板。
+/// `namespaces` limits the addon namespaces exported from the runtime snapshot.
+/// `namespaces` 限定从运行态快照导出的附属状态命名空间。
+///
+/// # Returns
+/// 返回值
+/// The derived addon state when the session runtime state exists.
+/// 当会话运行态存在时返回派生附属状态。
+fn session_addon_state_from_workspace_snapshot(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    default_ai_tool_configuration: &PersistedAiToolConfiguration,
+    namespaces: &[SessionAddonNamespace],
+) -> Option<SessionAddonState> {
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .or_else(|| {
+            workspace_snapshot
+                .archived_session_runtime_state
+                .get(&session_id)
+        })?;
+    let updated_at = current_unix_millis_text();
+    let mut addon_state = SessionAddonState::new(session_id);
+    for namespace in namespaces {
+        match namespace {
+            SessionAddonNamespace::RuntimeControls => {
+                if let Some(controls) = SessionRuntimeControls::from_runtime_state(runtime_state) {
+                    let _ = addon_state.set_runtime_controls(&controls, updated_at.clone());
+                }
+            }
+            SessionAddonNamespace::AiCapabilities => {
+                let configuration = runtime_state
+                    .ai_tool_configuration
+                    .as_ref()
+                    .unwrap_or(default_ai_tool_configuration);
+                let _ = addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
+            }
+            _ => {}
+        }
+    }
+    (!addon_state.namespaces.is_empty()).then_some(addon_state)
+}
+
+/// Returns the latest update timestamp recorded in one addon document.
+/// 返回一个附属状态文档中记录的最近更新时间。
+///
+/// # Parameters
+/// 参数
+/// `addon_state` is the addon document to inspect.
+/// `addon_state` 是要检查的附属状态文档。
+///
+/// # Returns
+/// 返回值
+/// The latest namespace update timestamp, or the current timestamp when the document is empty.
+/// 最新命名空间更新时间；文档为空时返回当前时间戳。
+fn latest_session_addon_updated_at(addon_state: &SessionAddonState) -> String {
+    addon_state
+        .namespaces
+        .values()
+        .map(|entry| entry.updated_at.as_str())
+        .max()
+        .map(str::to_string)
+        .unwrap_or_else(current_unix_millis_text)
 }
 
 /// Emits one service event and traces the serialized payload size when diagnostics are enabled.
@@ -10056,6 +10438,111 @@ fn spawn_workspace_session_runtime_state_persist_task(
     });
 }
 
+/// Spawns a background write for one session addon-state document.
+/// 为单个会话附属状态文档启动后台写入任务。
+///
+/// # Parameters
+/// 参数
+/// `app` is the event emitter used after the file write succeeds.
+/// `app` 是文件写入成功后使用的事件发送器。
+/// `state` owns the addon persistence version table used to reject stale writes.
+/// `state` 持有用于拒绝过期写入的附属状态持久化版本表。
+/// `controller_runtime` is the data-plane controller handle.
+/// `controller_runtime` 是数据平面控制器句柄。
+/// `workspace_snapshot` supplies session ownership and runtime compatibility fields.
+/// `workspace_snapshot` 提供会话归属与运行态兼容字段。
+/// `session_id` selects the addon document to persist.
+/// `session_id` 选择要持久化的附属状态文档。
+/// `addon_state` is the already-derived addon document to persist.
+/// `addon_state` 是已经派生完成且需要持久化的附属状态文档。
+/// `changed_namespaces` are the namespace keys represented by this write.
+/// `changed_namespaces` 是本次写入代表的命名空间键。
+/// `reason` labels the write site for diagnostics.
+/// `reason` 标记写入来源，供诊断使用。
+fn spawn_workspace_session_addon_state_persist_task(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    addon_state: SessionAddonState,
+    changed_namespaces: Vec<SessionAddonNamespace>,
+    reason: Option<String>,
+) {
+    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
+        return;
+    }
+    let mut persist_versions = Vec::new();
+    for namespace in &changed_namespaces {
+        match next_webui_session_addon_persist_version(&state, session_id, *namespace) {
+            Ok(version) => persist_versions.push((*namespace, version)),
+            Err(error) => {
+                eprintln!(
+                    "[webui-service] background session-addon persist version failed: {error}"
+                );
+                return;
+            }
+        }
+    }
+    spawn_service_task(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_addon_persist_versions_are_current(
+            &state,
+            session_id,
+            &persist_versions,
+        ) {
+            return;
+        }
+        let Some((session, archived)) = workspace_snapshot
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| (session.clone(), false))
+            .or_else(|| {
+                workspace_snapshot
+                    .archived_sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| (session.clone(), true))
+            })
+        else {
+            return;
+        };
+        let task_projects = workspace_snapshot
+            .task_projects
+            .iter()
+            .cloned()
+            .chain(workspace_snapshot.archived_task_projects.iter().cloned())
+            .collect::<Vec<_>>();
+        match vulcan_workspace_store::workspace_store::persist_single_session_addon_state_update(
+            controller_runtime,
+            &task_projects,
+            &session,
+            archived,
+            &addon_state,
+        )
+        .await
+        {
+            Ok(merged_state) => {
+                emit_session_addon_changed_event(
+                    &app,
+                    session_id,
+                    &changed_namespaces,
+                    merged_state.revision,
+                    latest_session_addon_updated_at(&merged_state),
+                );
+            }
+            Err(error) => {
+                let reason_label = reason.as_deref().unwrap_or("session_addon");
+                eprintln!(
+                    "[webui-service] background session-addon persist failed ({reason_label}): {error}"
+                );
+            }
+        }
+    });
+}
+
 /// Allocates the next background persistence version for one WebUI session.
 /// 为一个 WebUI 会话分配下一次后台持久化版本。
 ///
@@ -10131,6 +10618,96 @@ fn invalidate_webui_session_persist_version(
     session_id: SessionId,
 ) -> Result<(), String> {
     let _ = next_webui_session_persist_version(state, session_id)?;
+    Ok(())
+}
+
+/// Allocates the next background addon persistence version for one session namespace.
+/// 为一个会话命名空间分配下一次后台附属状态持久化版本。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session addon persistence version table.
+/// `state` 持有按会话划分的附属状态持久化版本表。
+/// `session_id` selects the session whose addon namespace is being persisted.
+/// `session_id` 选择正在持久化附属状态命名空间的会话。
+/// `namespace` selects the addon namespace being persisted.
+/// `namespace` 选择正在持久化的附属状态命名空间。
+///
+/// # Returns
+/// 返回值
+/// The version assigned to the new background addon persistence task for that namespace.
+/// 返回分配给该命名空间的新后台附属状态持久化任务版本。
+fn next_webui_session_addon_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    namespace: SessionAddonNamespace,
+) -> Result<u64, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let key = (session_id, namespace);
+    let next_version = guard
+        .session_addon_persist_versions
+        .get(&key)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(1);
+    guard
+        .session_addon_persist_versions
+        .insert(key, next_version);
+    Ok(next_version)
+}
+
+/// Returns whether a background addon persistence task is still latest for every namespace it writes.
+/// 判断某个后台附属状态持久化任务是否仍是其写入的所有命名空间的最新任务。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session addon persistence version table.
+/// `state` 持有按会话划分的附属状态持久化版本表。
+/// `session_id` selects the session whose addon namespaces are being persisted.
+/// `session_id` 选择正在持久化附属状态命名空间的会话。
+/// `persist_versions` are the task-local addon persistence versions keyed by namespace.
+/// `persist_versions` 是按命名空间记录的任务本地附属状态持久化版本。
+///
+/// # Returns
+/// 返回值
+/// `true` when the task may write the addon document.
+/// 当该任务可以写入附属状态文档时返回 `true`。
+fn webui_session_addon_persist_versions_are_current(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    persist_versions: &[(SessionAddonNamespace, u64)],
+) -> bool {
+    let Ok(guard) = state.lock() else {
+        return false;
+    };
+    persist_versions.iter().all(|(namespace, version)| {
+        guard
+            .session_addon_persist_versions
+            .get(&(session_id, *namespace))
+            .copied()
+            == Some(*version)
+    })
+}
+
+/// Invalidates older background addon persistence snapshots for one session namespace.
+/// 使某个会话命名空间上较旧的后台附属状态持久化快照失效。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the per-session addon persistence version table.
+/// `state` 持有按会话划分的附属状态持久化版本表。
+/// `session_id` selects the session whose pending addon namespace writes should be invalidated.
+/// `session_id` 选择需要使待处理附属状态命名空间写入失效的会话。
+/// `namespace` selects the addon namespace whose pending writes should be invalidated.
+/// `namespace` 选择需要使待处理写入失效的附属状态命名空间。
+fn invalidate_webui_session_addon_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    namespace: SessionAddonNamespace,
+) -> Result<(), String> {
+    let _ = next_webui_session_addon_persist_version(state, session_id, namespace)?;
     Ok(())
 }
 
@@ -18905,6 +19482,10 @@ fn workbench_from_runtime(
             selected_ai_tool_configuration,
             ai_capability_model_capabilities.as_ref(),
         ),
+        default_ai_capabilities: ai_capabilities(
+            ai_tool_configuration,
+            ai_capability_model_capabilities.as_ref(),
+        ),
         ai_capability_vendors: ai_capability_vendors(selected_ai_tool_configuration),
         ai_capability_vendor_catalog: ai_capability_vendor_catalog(),
         composer_attachment_capabilities: composer_attachment_capabilities(
@@ -19583,6 +20164,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
+        default_ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
         ai_capability_vendors: ai_capability_vendors(
             &ProviderConfigurationFile::default().ai_tools,
         ),
@@ -25044,6 +25626,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         }));
         let report = ExecutionRunReport {
             session_id: task_session_id,
@@ -25141,6 +25724,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -25256,6 +25840,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -25553,6 +26138,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         }
     }
 
@@ -26291,6 +26877,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         };
         let child_message =
             SessionMessageEntry::new(SessionMessageKind::Assistant, "输出", "子代理增量")
@@ -26388,6 +26975,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -26478,6 +27066,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),

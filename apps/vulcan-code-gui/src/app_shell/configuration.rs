@@ -1407,7 +1407,17 @@ impl VulcanWorkbench {
         configuration.normalize();
         let runtime_state = self.ensure_session_runtime_state_mut(session_id);
         runtime_state.ai_tool_configuration = Some(configuration);
-        runtime_state.updated_at = current_unix_millis_text();
+        let updated_at = current_unix_millis_text();
+        runtime_state.updated_at = updated_at.clone();
+        let guard_hash =
+            stable_ai_tool_configuration_hash(runtime_state.ai_tool_configuration.as_ref());
+        self.locally_updated_ai_tool_configuration_sessions.insert(
+            session_id,
+            AiToolConfigurationLocalGuard {
+                updated_at,
+                hash: guard_hash,
+            },
+        );
     }
 
     /// Loads one session AI capability configuration into the active workbench editing snapshot.
@@ -1422,6 +1432,8 @@ impl VulcanWorkbench {
             self.ai_tool_configuration = self.default_ai_tool_configuration.clone();
             self.workbench_disabled_ai_capability_kinds =
                 self.ai_tool_configuration.disabled_capability_kinds.clone();
+            self.reconcile_workbench_ai_capability_runtime_state();
+            self.sync_workbench_web_search_override_from_ai_capability_state();
             return;
         }
         let default_configuration = self.default_ai_tool_configuration.clone();
@@ -1439,6 +1451,7 @@ impl VulcanWorkbench {
         self.workbench_disabled_ai_capability_kinds =
             self.ai_tool_configuration.disabled_capability_kinds.clone();
         self.reconcile_workbench_ai_capability_runtime_state();
+        self.sync_workbench_web_search_override_from_ai_capability_state();
     }
 
     /// Replaces the selected session AI capability configuration with the default template.
@@ -1459,10 +1472,15 @@ impl VulcanWorkbench {
         self.ai_tool_configuration = self.default_ai_tool_configuration.clone();
         self.workbench_disabled_ai_capability_kinds =
             self.ai_tool_configuration.disabled_capability_kinds.clone();
+        self.reconcile_workbench_ai_capability_runtime_state();
+        self.sync_workbench_web_search_override_from_ai_capability_state();
         self.store_active_ai_tool_configuration_for_session(session_id);
         self.refresh_runtime_foundation();
         self.status_message = String::from("已将当前会话的 AI 能力配置同步为默认配置。");
-        self.persist_single_session_update_task(session_id)
+        self.persist_single_session_addon_state_task(
+            session_id,
+            vec![SessionAddonNamespace::AiCapabilities],
+        )
     }
 
     /// Reconciles the current-message AI capability toggles against actual native or host availability.
@@ -1510,6 +1528,19 @@ impl VulcanWorkbench {
         self.workbench_web_search_provider_id = None;
     }
 
+    /// Synchronizes the runtime web-search override from the current AI capability quick-toggle state.
+    /// 根据当前 AI 能力快捷开关状态同步运行时网页搜索覆盖模式。
+    pub(super) fn sync_workbench_web_search_override_from_ai_capability_state(&mut self) {
+        if self
+            .effective_workbench_disabled_ai_capability_kinds()
+            .contains(&crate::provider_config::AiToolKind::WebSearch)
+        {
+            self.disable_workbench_web_search();
+        } else {
+            self.enable_workbench_web_search();
+        }
+    }
+
     /// Updates one quick-panel semantic capability toggle without mutating the persisted target-enabled preferences.
     /// 更新一条快捷能力分区的语义能力开关，但不修改持久化目标启用偏好。
     pub(super) fn set_workbench_ai_capability_enabled(
@@ -1530,8 +1561,12 @@ impl VulcanWorkbench {
         }
         if capability_kind == crate::provider_config::AiToolKind::WebSearch {
             if enabled {
+                self.workbench_disabled_ai_capability_kinds
+                    .remove(&capability_kind);
                 self.enable_workbench_web_search();
             } else {
+                self.workbench_disabled_ai_capability_kinds
+                    .insert(capability_kind);
                 self.disable_workbench_web_search();
             }
             return;
@@ -2046,7 +2081,10 @@ impl VulcanWorkbench {
                 notes.join(" ")
             )
         };
-        Task::none()
+        self.persist_single_session_addon_state_task(
+            self.selected_session,
+            vec![SessionAddonNamespace::RuntimeControls],
+        )
     }
 
     /// Stores the current workbench model and runtime controls on the selected session.
@@ -2092,6 +2130,19 @@ impl VulcanWorkbench {
         runtime_state.updated_at = current_unix_millis_text();
     }
 
+    /// Stores the current work mode on the selected session runtime state.
+    /// 将当前工作模式记录到选中会话运行态。
+    pub(super) fn remember_active_session_work_mode(&mut self) {
+        let session_id = self.selected_session;
+        if session_id.is_nil() {
+            return;
+        }
+        let execution_mode = self.execution_mode.as_key().to_string();
+        let runtime_state = self.ensure_session_runtime_state_mut(session_id);
+        runtime_state.active_work_mode = Some(execution_mode);
+        runtime_state.updated_at = current_unix_millis_text();
+    }
+
     /// Restores remembered model and runtime controls when switching to a session.
     /// 切换到会话时恢复其记住的模型与运行参数。
     pub(super) fn restore_runtime_controls_for_session(&mut self, session_id: SessionId) {
@@ -2126,6 +2177,26 @@ impl VulcanWorkbench {
             None => {
                 self.temperature_enabled = false;
             }
+        }
+    }
+
+    /// Restores remembered work mode when switching to a session.
+    /// 切换到会话时恢复其记住的工作模式。
+    pub(super) fn restore_work_mode_for_session(&mut self, session_id: SessionId) {
+        let Some(runtime_state) = self.session_runtime_state(session_id) else {
+            return;
+        };
+        let Some(mode) = runtime_state
+            .active_work_mode
+            .as_deref()
+            .and_then(ExecutionMode::from_key)
+        else {
+            return;
+        };
+        if self.selected_agent_requires_plan_mode() {
+            self.execution_mode = ExecutionMode::Plan;
+        } else {
+            self.execution_mode = mode;
         }
     }
 
@@ -3126,6 +3197,29 @@ mod tests {
             PersistedPromptPersonalitySelection::Named(String::from("architect"))
         );
     }
+}
+
+/// Builds a stable hash for one optional AI capability configuration snapshot.
+/// 为一个可选 AI 能力配置快照构建稳定哈希。
+///
+/// # Parameters
+/// 参数
+/// `configuration` is the optional configuration snapshot to hash.
+/// `configuration` 是要计算哈希的可选配置快照。
+///
+/// # Returns
+/// 返回值
+/// A stable hexadecimal hash string for equality checks.
+/// 用于相等性检查的稳定十六进制哈希字符串。
+pub(super) fn stable_ai_tool_configuration_hash(
+    configuration: Option<&PersistedAiToolConfiguration>,
+) -> String {
+    let serialized = configuration
+        .and_then(|configuration| serde_json::to_string(configuration).ok())
+        .unwrap_or_default();
+    let mut hasher = DefaultHasher::new();
+    serialized.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Parses one optional positive integer field from an editor text buffer.

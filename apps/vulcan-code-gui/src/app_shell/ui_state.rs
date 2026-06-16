@@ -55,6 +55,12 @@ pub(super) enum WorkbenchNoticeConfirmAction {
         /// 确认时捕获的清理执行请求。
         request: ProjectAttachmentCleanupExecutionRequest,
     },
+    /// Saves dirty quick AI capability panel changes before closing the panel.
+    /// 保存快捷 AI 能力面板中的未保存变更后关闭面板。
+    SaveWorkbenchAiCapabilityPanel,
+    /// Discards dirty quick AI capability panel changes and closes the panel.
+    /// 放弃快捷 AI 能力面板中的未保存变更并关闭面板。
+    DiscardWorkbenchAiCapabilityPanel,
 }
 
 /// Reusable blocking notice modal state shared by acknowledgement and confirmation prompts.
@@ -73,6 +79,9 @@ pub(super) struct WorkbenchNoticeModalState {
     /// Optional secondary dismiss button label.
     /// 可选次要取消按钮标签。
     pub(super) dismiss_label: Option<String>,
+    /// Optional domain action executed when the secondary dismiss button is pressed.
+    /// 点击次要取消按钮时执行的可选业务动作。
+    pub(super) dismiss_action: Option<WorkbenchNoticeConfirmAction>,
     /// Domain action executed when the primary confirmation button is pressed.
     /// 点击主确认按钮时执行的业务动作。
     pub(super) confirm_action: WorkbenchNoticeConfirmAction,

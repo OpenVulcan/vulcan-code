@@ -16,10 +16,12 @@ import {
   defaultDisabledAiCapabilityTargetSelectors,
   exactComposerSlashCommand,
   hasBlockingComposerPopup,
+  isComposerAiCapabilityKind,
   isComposerPrintableKey,
   isComposerTextEntryElement,
   serializeAiCapabilityTargetOrder,
   type AiCapabilityKind,
+  type ComposerAiCapabilityConfigurationSave,
   type ComposerSelectOption,
   type ComposerSlashCommandResult,
   type ComposerSubmission,
@@ -65,12 +67,27 @@ function composerShortcutHint(baseHint: string): string {
   return baseHint;
 }
 
+// defaultAiCapabilityTargetOrderFromRecord restores a typed route order map from a saved request payload.
+// defaultAiCapabilityTargetOrderFromRecord 从已保存请求载荷恢复类型化路由顺序映射。
+function defaultAiCapabilityTargetOrderFromRecord(record: Record<string, string[]>): Map<AiCapabilityKind, string[]> {
+  const order = new Map<AiCapabilityKind, string[]>();
+  for (const [kind, selectors] of Object.entries(record)) {
+    if (isComposerAiCapabilityKind(kind)) {
+      order.set(kind, [...selectors]);
+    }
+  }
+  return order;
+}
+
 // ComposerPanel renders the first-version message input surface.
 // ComposerPanel 渲染第一版消息输入区域。
 export function ComposerPanel(props: {
   // AI capability route summaries used by the quick capability tree.
   // 快捷能力树使用的 AI 能力路由摘要。
   aiCapabilities: AiCapabilitySummary[];
+  // Default AI capability route summaries used to reset the session draft.
+  // 用于重置会话草稿的默认 AI 能力路由摘要。
+  defaultAiCapabilities: AiCapabilitySummary[];
   // Attachment capability gates used by add/drop/paste.
   // 添加、拖拽与粘贴使用的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -110,6 +127,9 @@ export function ComposerPanel(props: {
   // Sends one validated composer submission through the caller runtime.
   // 通过调用方运行时发送一条已校验输入区提交。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Persists one session-scoped AI capability configuration draft.
+  // 持久化单个会话级 AI 能力配置草稿。
+  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -198,14 +218,14 @@ export function ComposerPanel(props: {
   // modelChoice stores the selected provider/model key shown by the shared model picker.
   // modelChoice 保存共享模型筛选器展示的 provider/model 选择键。
   const [modelChoice, setModelChoice] = React.useState("");
-  // disabledAiCapabilityKinds stores current-message quick-toggle disables.
-  // disabledAiCapabilityKinds 保存当前消息级快捷开关禁用项。
+  // disabledAiCapabilityKinds stores the session-synchronized quick-toggle disables.
+  // disabledAiCapabilityKinds 保存与会话同步的快捷开关禁用项。
   const [disabledAiCapabilityKinds, setDisabledAiCapabilityKinds] = React.useState<Set<AiCapabilityKind>>(() => new Set());
-  // disabledAiCapabilityTargetSelectors stores current-message target-route disables.
-  // disabledAiCapabilityTargetSelectors 保存当前消息级目标路由禁用项。
+  // disabledAiCapabilityTargetSelectors stores the session-synchronized target-route disables.
+  // disabledAiCapabilityTargetSelectors 保存与会话同步的目标路由禁用项。
   const [disabledAiCapabilityTargetSelectors, setDisabledAiCapabilityTargetSelectors] = React.useState<Set<string>>(() => new Set());
-  // aiCapabilityTargetOrder stores current-message target route ordering.
-  // aiCapabilityTargetOrder 保存当前消息级目标路由顺序。
+  // aiCapabilityTargetOrder stores the session-synchronized target route ordering.
+  // aiCapabilityTargetOrder 保存与会话同步的目标路由顺序。
   const [aiCapabilityTargetOrder, setAiCapabilityTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
   // reasoningEffort stores the backend-synchronized reasoning-effort selection.
   // reasoningEffort 保存与后端同步的思考档位选择。
@@ -225,8 +245,8 @@ export function ComposerPanel(props: {
     const activeChoice = availableModelChoices.find((choice) => choice.active) ?? availableModelChoices[0];
     return modelPickerChoiceKey(activeChoice);
   }, [availableModelChoices]);
-  // capabilitySignature prevents unrelated workbench streaming snapshots from resetting prompt overrides.
-  // capabilitySignature 防止无关的工作台流式快照重置提示词级能力覆盖。
+  // capabilitySignature prevents unrelated workbench streaming snapshots from resetting session-synced capability state.
+  // capabilitySignature 防止无关的工作台流式快照重置会话同步的能力状态。
   const capabilitySignature = React.useMemo(
     () => aiCapabilitySignature(props.aiCapabilities),
     [props.aiCapabilities],
@@ -455,47 +475,18 @@ export function ComposerPanel(props: {
     window.requestAnimationFrame(() => composerTextareaRef.current?.focus({ preventScroll: true }));
   }, [props]);
 
-  // handleAiCapabilityToggle updates the current-message disabled capability set.
-  // handleAiCapabilityToggle 更新当前消息级禁用能力集合。
-  const handleAiCapabilityToggle = React.useCallback((kind: AiCapabilityKind, enabled: boolean) => {
-    setDisabledAiCapabilityKinds((current) => {
-      const next = new Set(current);
-      if (enabled) {
-        next.delete(kind);
-      } else {
-        next.add(kind);
-      }
-      return next;
-    });
-  }, []);
-
-  // handleAiCapabilityTargetToggle updates the current-message disabled target selector set.
-  // handleAiCapabilityTargetToggle 更新当前消息级禁用目标选择器集合。
-  const handleAiCapabilityTargetToggle = React.useCallback((targetSelector: string, enabled: boolean) => {
-    setDisabledAiCapabilityTargetSelectors((current) => {
-      const next = new Set(current);
-      if (enabled) {
-        next.delete(targetSelector);
-      } else {
-        next.add(targetSelector);
-      }
-      return next;
-    });
-  }, []);
-
-  // handleAiCapabilityTargetReorder replaces the prompt-level route order for one capability.
-  // handleAiCapabilityTargetReorder 替换单个能力的提示词级路由顺序。
-  const handleAiCapabilityTargetReorder = React.useCallback((kind: AiCapabilityKind, targetSelectors: string[]) => {
-    setAiCapabilityTargetOrder((current) => {
-      const next = new Map(current);
-      const currentOrder = next.get(kind) ?? [];
-      if (currentOrder.length === targetSelectors.length && currentOrder.every((selector, index) => selector === targetSelectors[index])) {
-        return current;
-      }
-      next.set(kind, targetSelectors);
-      return next;
-    });
-  }, []);
+  // handleAiCapabilityConfigurationSave persists the dialog draft and mirrors it locally after success.
+  // handleAiCapabilityConfigurationSave 持久化弹窗草稿，并在成功后同步到本地。
+  const handleAiCapabilityConfigurationSave = React.useCallback(async (request: ComposerAiCapabilityConfigurationSave) => {
+    const saved = await props.onSaveAiCapabilityConfiguration(request);
+    if (!saved) {
+      return false;
+    }
+    setDisabledAiCapabilityKinds(new Set(request.disabledAiCapabilityKinds));
+    setDisabledAiCapabilityTargetSelectors(new Set(request.disabledAiCapabilityTargetSelectors));
+    setAiCapabilityTargetOrder(defaultAiCapabilityTargetOrderFromRecord(request.aiCapabilityTargetOrderOverrides));
+    return true;
+  }, [props]);
 
   // handleModelChoiceChange applies one model choice locally and through the shared backend.
   // handleModelChoiceChange 在本地与共享后端应用单个模型选择。
@@ -684,13 +675,12 @@ export function ComposerPanel(props: {
             <ComposerAiCapabilityControl
               ariaLabel={t("composer.aria.capability")}
               capabilities={props.aiCapabilities}
+              defaultCapabilities={props.defaultAiCapabilities}
               disabledKinds={disabledAiCapabilityKinds}
               disabledTargetSelectors={disabledAiCapabilityTargetSelectors}
               targetOrder={aiCapabilityTargetOrder}
               locale={locale}
-              onToggle={handleAiCapabilityToggle}
-              onTargetReorder={handleAiCapabilityTargetReorder}
-              onTargetToggle={handleAiCapabilityTargetToggle}
+              onSaveConfiguration={handleAiCapabilityConfigurationSave}
             />
           </div>
           <div className="composer-toolbar-right">

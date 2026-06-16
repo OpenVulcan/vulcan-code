@@ -2,6 +2,7 @@
 //! 从主工作台模块中抽取的会话加载方法。
 
 use super::*;
+use crate::app_shell::configuration::stable_ai_tool_configuration_hash;
 
 impl VulcanWorkbench {
     /// Schedules the first lazy hydration task for one session when it has not been loaded yet.
@@ -115,7 +116,11 @@ impl VulcanWorkbench {
                 .insert(session_id, projected_messages);
             self.archived_session_compactions
                 .insert(session_id, snapshot.compactions);
-            if let Some(runtime_state) = snapshot.runtime_state {
+            if let Some(mut runtime_state) = snapshot.runtime_state {
+                self.preserve_local_ai_tool_configuration_for_hydrated_runtime_state(
+                    session_id,
+                    &mut runtime_state,
+                );
                 self.archived_session_runtime_state
                     .insert(session_id, runtime_state);
             }
@@ -123,7 +128,11 @@ impl VulcanWorkbench {
             self.session_messages.insert(session_id, projected_messages);
             self.session_compactions
                 .insert(session_id, snapshot.compactions);
-            if let Some(runtime_state) = snapshot.runtime_state {
+            if let Some(mut runtime_state) = snapshot.runtime_state {
+                self.preserve_local_ai_tool_configuration_for_hydrated_runtime_state(
+                    session_id,
+                    &mut runtime_state,
+                );
                 self.session_runtime_state.insert(session_id, runtime_state);
             }
         }
@@ -154,6 +163,55 @@ impl VulcanWorkbench {
             self.status_message =
                 String::from("已清理旧版 VMM 画像隐藏注入，画像基点将只通过系统提示词复用。");
         }
+    }
+
+    /// Preserves a locally edited AI capability configuration when an older hydration snapshot returns later.
+    /// 当更早的水合快照较晚返回时，保留本地已编辑的 AI 能力配置。
+    fn preserve_local_ai_tool_configuration_for_hydrated_runtime_state(
+        &mut self,
+        session_id: SessionId,
+        runtime_state: &mut SessionRuntimeStateEntry,
+    ) {
+        let Some(local_guard) = self
+            .locally_updated_ai_tool_configuration_sessions
+            .get(&session_id)
+            .cloned()
+        else {
+            return;
+        };
+        let Some(local_runtime_state) = self
+            .session_runtime_state
+            .get(&session_id)
+            .or_else(|| self.archived_session_runtime_state.get(&session_id))
+        else {
+            return;
+        };
+        let Some(local_configuration) = local_runtime_state.ai_tool_configuration.clone() else {
+            return;
+        };
+        let local_hash = stable_ai_tool_configuration_hash(Some(&local_configuration));
+        if local_hash != local_guard.hash {
+            self.locally_updated_ai_tool_configuration_sessions
+                .remove(&session_id);
+            return;
+        }
+        let local_updated_at = local_runtime_state.updated_at.clone();
+        let effective_local_updated_at = if parse_unix_millis_text(&local_updated_at)
+            >= parse_unix_millis_text(&local_guard.updated_at)
+        {
+            local_updated_at
+        } else {
+            local_guard.updated_at
+        };
+        if parse_unix_millis_text(&effective_local_updated_at)
+            < parse_unix_millis_text(&runtime_state.updated_at)
+        {
+            self.locally_updated_ai_tool_configuration_sessions
+                .remove(&session_id);
+            return;
+        }
+        runtime_state.ai_tool_configuration = Some(local_configuration);
+        runtime_state.updated_at = effective_local_updated_at;
     }
 
     /// Prepends one older transcript page to an already hydrated session cache.

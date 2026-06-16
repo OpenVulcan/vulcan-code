@@ -15,6 +15,9 @@ impl VulcanWorkbench {
 
         let palette = self.app_theme.extended_palette();
         let selected_section = self.workbench_ai_capability_section;
+        let has_unsaved_changes = self.workbench_ai_capability_panel_has_unsaved_changes();
+        let is_saving =
+            self.workbench_ai_capability_panel_save_state == AiCapabilityPanelSaveState::Saving;
         let close_button = button(
             container(
                 codicon::chrome_close()
@@ -31,10 +34,13 @@ impl VulcanWorkbench {
         .padding(0)
         .style(style::workbench_model_trigger_button_style)
         .on_press(Message::CloseWorkbenchAiCapabilityPanel);
-        let sync_default_button = button("使用默认配置")
+        let mut sync_default_button = button("使用默认配置")
             .padding([6, 10])
-            .style(button::secondary)
-            .on_press(Message::SyncSelectedSessionAiCapabilityConfigurationFromDefault);
+            .style(button::secondary);
+        if !is_saving {
+            sync_default_button = sync_default_button
+                .on_press(Message::SyncSelectedSessionAiCapabilityConfigurationFromDefault);
+        }
         let left_navigation = scrollable(
             WorkbenchAiCapabilitySection::ALL
                 .into_iter()
@@ -63,6 +69,51 @@ impl VulcanWorkbench {
                 )
                 .into()
             };
+        let save_label = match self.workbench_ai_capability_panel_save_state {
+            AiCapabilityPanelSaveState::Saving => "保存中...",
+            AiCapabilityPanelSaveState::Saved => "已保存",
+            AiCapabilityPanelSaveState::Idle if has_unsaved_changes => "保存",
+            AiCapabilityPanelSaveState::Idle => "无变更",
+        };
+        let save_icon: Element<'_, Message> = match self.workbench_ai_capability_panel_save_state {
+            AiCapabilityPanelSaveState::Saving => codicon::sync().size(14).line_height(1.0).into(),
+            AiCapabilityPanelSaveState::Saved => codicon::check().size(14).line_height(1.0).into(),
+            AiCapabilityPanelSaveState::Idle => codicon::check().size(14).line_height(1.0).into(),
+        };
+        let mut save_button = button(
+            container(
+                row![save_icon, text(save_label).size(13)]
+                    .spacing(7)
+                    .align_y(Center),
+            )
+            .width(Fill)
+            .center(Fill),
+        )
+        .width(104)
+        .padding([7, 12])
+        .style(if has_unsaved_changes && !is_saving {
+            button::primary
+        } else {
+            button::secondary
+        });
+        if has_unsaved_changes && !is_saving {
+            save_button = save_button.on_press(Message::SaveWorkbenchAiCapabilityPanel);
+        }
+        let save_hint = if is_saving {
+            "正在写入当前会话的独立 AI 能力配置。"
+        } else if has_unsaved_changes {
+            "排序、勾选与快捷开关会先保留为草稿，点击保存后写入当前会话。"
+        } else {
+            "当前面板没有未保存变更。"
+        };
+        let footer = row![
+            text(save_hint)
+                .size(12)
+                .color(palette.background.base.text.scale_alpha(0.62)),
+            space::horizontal(),
+            save_button,
+        ]
+        .align_y(Center);
         let modal_card = container(
             column![
                 container(
@@ -113,6 +164,15 @@ impl VulcanWorkbench {
                 ]
                 .spacing(0)
                 .height(420),
+                rule::horizontal(1),
+                container(footer)
+                    .padding(iced::Padding {
+                        top: 14.0,
+                        right: 0.0,
+                        bottom: 0.0,
+                        left: 0.0,
+                    })
+                    .width(Fill),
             ]
             .spacing(0),
         )

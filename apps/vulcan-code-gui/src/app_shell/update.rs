@@ -1,6 +1,7 @@
 //! Workbench message dispatch loop extracted from the main application module.
 //! 从主应用模块中抽取的工作台消息分发循环。
 
+use super::configuration::stable_ai_tool_configuration_hash;
 use super::prompt_skills_update::load_prompt_skills_catalog_task;
 use super::*;
 
@@ -471,6 +472,88 @@ impl VulcanWorkbench {
                 if let Err(error) = result {
                     self.status_message = format!("会话运行时状态保存失败：{error}");
                     self.push_activity(ActivityLevel::Warning, "会话运行时状态保存失败", error);
+                }
+
+                Task::none()
+            }
+            Message::SessionAddonStatePersisted(
+                session_id,
+                namespaces,
+                _ai_capability_updated_at,
+                ai_capability_hash,
+                request_id,
+                result,
+            ) => {
+                let ai_capability_persisted =
+                    namespaces.contains(&SessionAddonNamespace::AiCapabilities);
+                let panel_pending_save_matches = ai_capability_persisted
+                    && self
+                        .workbench_ai_capability_panel_pending_save
+                        .as_ref()
+                        .is_some_and(|pending| {
+                            pending.session_id == session_id
+                                && request_id.as_deref() == Some(pending.request_id.as_str())
+                                && self
+                                    .session_runtime_state
+                                    .get(&session_id)
+                                    .and_then(|runtime_state| {
+                                        runtime_state.ai_tool_configuration.as_ref()
+                                    })
+                                    .map(|configuration| {
+                                        stable_ai_tool_configuration_hash(Some(configuration))
+                                            == pending.hash
+                                    })
+                                    .unwrap_or(false)
+                        });
+                match result {
+                    Ok(()) => {
+                        if ai_capability_persisted
+                            && let Some(saved_hash) = ai_capability_hash.as_deref()
+                            && self
+                                .locally_updated_ai_tool_configuration_sessions
+                                .get(&session_id)
+                                .is_some_and(|current| {
+                                    current.hash == saved_hash
+                                        && self
+                                            .session_runtime_state
+                                            .get(&session_id)
+                                            .and_then(|runtime_state| {
+                                                runtime_state.ai_tool_configuration.as_ref()
+                                            })
+                                            .map(|configuration| {
+                                                stable_ai_tool_configuration_hash(Some(
+                                                    configuration,
+                                                )) == current.hash
+                                            })
+                                            .unwrap_or(false)
+                                })
+                        {
+                            self.locally_updated_ai_tool_configuration_sessions
+                                .remove(&session_id);
+                        }
+                        if self.workbench_ai_capability_panel_save_state
+                            == AiCapabilityPanelSaveState::Saving
+                            && panel_pending_save_matches
+                        {
+                            self.workbench_ai_capability_panel_save_state =
+                                AiCapabilityPanelSaveState::Saved;
+                            self.workbench_ai_capability_panel_baseline = None;
+                            self.workbench_ai_capability_panel_pending_save = None;
+                            self.workbench_ai_capability_panel_open = false;
+                        }
+                    }
+                    Err(error) => {
+                        if self.workbench_ai_capability_panel_save_state
+                            == AiCapabilityPanelSaveState::Saving
+                            && panel_pending_save_matches
+                        {
+                            self.workbench_ai_capability_panel_pending_save = None;
+                            self.workbench_ai_capability_panel_save_state =
+                                AiCapabilityPanelSaveState::Idle;
+                        }
+                        self.status_message = format!("会话附属状态保存失败：{error}");
+                        self.push_activity(ActivityLevel::Warning, "会话附属状态保存失败", error);
+                    }
                 }
 
                 Task::none()
@@ -1009,9 +1092,14 @@ impl VulcanWorkbench {
                 {
                     tasks.push(self.persist_single_session_runtime_state_task(session_id));
                 }
-                if did_commit_ai_capability_route_drop && self.selected_session != SessionId::nil()
+                if did_commit_ai_capability_route_drop
+                    && self.selected_session != SessionId::nil()
+                    && !self.workbench_ai_capability_panel_open
                 {
-                    tasks.push(self.persist_single_session_update_task(self.selected_session));
+                    tasks.push(self.persist_single_session_addon_state_task(
+                        self.selected_session,
+                        vec![SessionAddonNamespace::AiCapabilities],
+                    ));
                 }
                 Task::batch(tasks)
             }
@@ -1251,7 +1339,15 @@ impl VulcanWorkbench {
             Message::ResetWorkbenchImagePreviewZoom => self.reset_workbench_image_preview_zoom(),
             Message::ConfirmWorkbenchNoticeModal => self.confirm_workbench_notice_modal(),
             Message::CloseWorkbenchNoticeModal => {
-                self.workbench_notice_modal = None;
+                let dismiss_action = self
+                    .workbench_notice_modal
+                    .take()
+                    .and_then(|modal| modal.dismiss_action);
+                if let Some(WorkbenchNoticeConfirmAction::DiscardWorkbenchAiCapabilityPanel) =
+                    dismiss_action
+                {
+                    self.discard_workbench_ai_capability_panel_changes();
+                }
                 if self.active_question_modal.is_some() {
                     self.sync_active_question_modal_focus()
                 } else {
@@ -1358,8 +1454,7 @@ impl VulcanWorkbench {
                     return Task::none();
                 }
                 if self.workbench_ai_capability_panel_open {
-                    self.workbench_ai_capability_panel_open = false;
-                    return Task::none();
+                    return self.request_close_workbench_ai_capability_panel();
                 }
                 if self.workbench_reasoning_picker_open {
                     self.workbench_reasoning_picker_open = false;
@@ -1407,8 +1502,7 @@ impl VulcanWorkbench {
                     return Task::done(Message::SaveMcpServerConfiguration);
                 }
                 if self.workbench_ai_capability_panel_open {
-                    self.workbench_ai_capability_panel_open = false;
-                    return Task::none();
+                    return self.request_close_workbench_ai_capability_panel();
                 }
                 if self.workbench_reasoning_picker_open {
                     self.workbench_reasoning_picker_open = false;
@@ -1934,8 +2028,20 @@ impl VulcanWorkbench {
                 Task::none()
             }
             Message::WebSearchRoutingModeSelected(mode) => {
+                if self.workbench_ai_capability_panel_save_state
+                    == AiCapabilityPanelSaveState::Saving
+                {
+                    return Task::none();
+                }
                 self.ai_capability_routing_picker = None;
                 self.ai_tool_configuration.web_search.mode = mode;
+                if self.workbench_ai_capability_panel_open {
+                    self.mark_workbench_ai_capability_panel_draft_changed(format!(
+                        "web-search 路由已切换为「{}」，点击保存后写入当前会话配置。",
+                        mode.label()
+                    ));
+                    return Task::none();
+                }
                 self.persist_ai_tool_configuration_change(format!(
                     "web-search 路由已切换为「{}」并自动保存。",
                     mode.label()
@@ -1958,6 +2064,11 @@ impl VulcanWorkbench {
                 target_alias,
                 enabled,
             } => {
+                if self.workbench_ai_capability_panel_save_state
+                    == AiCapabilityPanelSaveState::Saving
+                {
+                    return Task::none();
+                }
                 match self.set_ai_capability_target_enabled(
                     capability_kind,
                     &vendor_id,
@@ -1966,6 +2077,15 @@ impl VulcanWorkbench {
                 ) {
                     Ok(true) => {
                         let state_label = if enabled { "启用" } else { "停用" };
+                        if self.workbench_ai_capability_panel_open {
+                            self.mark_workbench_ai_capability_panel_draft_changed(format!(
+                                "已{state_label}“{}”中的 `{}/{}`，点击保存后写入当前会话配置。",
+                                capability_kind.label(),
+                                vendor_id,
+                                target_alias
+                            ));
+                            return Task::none();
+                        }
                         self.persist_ai_tool_configuration_change(format!(
                             "已{state_label}“{}”中的 `{}/{}` 并自动保存。",
                             capability_kind.label(),
@@ -2086,6 +2206,11 @@ impl VulcanWorkbench {
                 capability_kind,
                 target_selector,
             } => {
+                if self.workbench_ai_capability_panel_save_state
+                    == AiCapabilityPanelSaveState::Saving
+                {
+                    return Task::none();
+                }
                 if let Some(position) = self.main_window_cursor_position {
                     self.pending_ai_capability_route_drag = Some(PendingAiCapabilityRouteDrag {
                         capability_kind,
@@ -2168,7 +2293,20 @@ impl VulcanWorkbench {
                 capability_kind,
                 target_selector,
             } => {
+                if self.workbench_ai_capability_panel_save_state
+                    == AiCapabilityPanelSaveState::Saving
+                {
+                    return Task::none();
+                }
                 if self.remove_ai_capability_route_target(capability_kind, &target_selector) {
+                    if self.workbench_ai_capability_panel_open {
+                        self.mark_workbench_ai_capability_panel_draft_changed(format!(
+                            "已从“{}”中移除 `{}`，点击保存后写入当前会话配置。",
+                            capability_kind.label(),
+                            target_selector
+                        ));
+                        return Task::none();
+                    }
                     return self.persist_ai_tool_configuration_change(format!(
                         "已从“{}”中移除 `{}` 并自动保存。",
                         capability_kind.label(),
@@ -2177,23 +2315,37 @@ impl VulcanWorkbench {
                 }
                 Task::none()
             }
-            Message::OpenWorkbenchAiCapabilityPanel => {
-                self.load_ai_tool_configuration_for_session(self.selected_session);
-                self.workbench_ai_capability_panel_open = true;
-                Task::none()
-            }
+            Message::OpenWorkbenchAiCapabilityPanel => self.open_workbench_ai_capability_panel(),
             Message::CloseWorkbenchAiCapabilityPanel => {
-                self.workbench_ai_capability_panel_open = false;
-                Task::none()
+                self.request_close_workbench_ai_capability_panel()
+            }
+            Message::SaveWorkbenchAiCapabilityPanel => {
+                self.save_workbench_ai_capability_panel_changes()
             }
             Message::WorkbenchAiCapabilitySectionSelected(section) => {
                 self.workbench_ai_capability_section = section;
                 Task::none()
             }
             Message::SyncSelectedSessionAiCapabilityConfigurationFromDefault => {
+                if self.workbench_ai_capability_panel_open {
+                    self.ai_tool_configuration = self.default_ai_tool_configuration.clone();
+                    self.workbench_disabled_ai_capability_kinds =
+                        self.ai_tool_configuration.disabled_capability_kinds.clone();
+                    self.reconcile_workbench_ai_capability_runtime_state();
+                    self.sync_workbench_web_search_override_from_ai_capability_state();
+                    self.mark_workbench_ai_capability_panel_draft_changed(
+                        "已载入默认 AI 能力配置，点击保存后写入当前会话配置。",
+                    );
+                    return Task::none();
+                }
                 self.sync_selected_session_ai_tool_configuration_from_default()
             }
             Message::WorkbenchAiCapabilitySectionEnabledToggled { section, enabled } => {
+                if self.workbench_ai_capability_panel_save_state
+                    == AiCapabilityPanelSaveState::Saving
+                {
+                    return Task::none();
+                }
                 match section.capability_kind() {
                     Some(capability_kind) => {
                         let usable_target_count = self
@@ -2215,6 +2367,15 @@ impl VulcanWorkbench {
                             .len();
                         if configured_target_count > 0 {
                             let state_label = if enabled { "启用" } else { "关闭" };
+                            if self.workbench_ai_capability_panel_open {
+                                return {
+                                    self.mark_workbench_ai_capability_panel_draft_changed(format!(
+                                        "已{state_label}“{}”，点击保存后写入当前会话配置。",
+                                        capability_kind.label()
+                                    ));
+                                    Task::none()
+                                };
+                            }
                             return self.persist_ai_tool_configuration_change(format!(
                                 "已{state_label}“{}”并自动保存。已保留既有目标勾选与顺序偏好。",
                                 capability_kind.label()
@@ -3008,7 +3169,11 @@ impl VulcanWorkbench {
                     self.execution_mode = mode;
                     self.status_message = format!("执行模式已切换为 {mode}。");
                 }
-                Task::none()
+                self.remember_active_session_work_mode();
+                self.persist_single_session_addon_state_task(
+                    self.selected_session,
+                    vec![SessionAddonNamespace::WorkMode],
+                )
             }
             Message::WorkbenchReasoningEffortSelected(option) => {
                 self.workbench_reasoning_picker_open = false;
@@ -3027,7 +3192,10 @@ impl VulcanWorkbench {
                         );
                     }
                 }
-                Task::none()
+                self.persist_single_session_addon_state_task(
+                    self.selected_session,
+                    vec![SessionAddonNamespace::RuntimeControls],
+                )
             }
             Message::CycleExecutionMode => {
                 if self.selected_agent_requires_plan_mode() {
@@ -3041,12 +3209,19 @@ impl VulcanWorkbench {
                     };
                     self.status_message = format!("执行模式已切换为 {}。", self.execution_mode);
                 }
-                Task::none()
+                self.remember_active_session_work_mode();
+                self.persist_single_session_addon_state_task(
+                    self.selected_session,
+                    vec![SessionAddonNamespace::WorkMode],
+                )
             }
             Message::TemperatureChanged(value) => {
                 self.temperature = value;
                 self.remember_active_session_runtime_controls(None);
-                Task::none()
+                self.persist_single_session_addon_state_task(
+                    self.selected_session,
+                    vec![SessionAddonNamespace::RuntimeControls],
+                )
             }
             Message::TemperatureEnabledToggled(enabled) => {
                 self.temperature_enabled = enabled;
@@ -3056,7 +3231,10 @@ impl VulcanWorkbench {
                 } else {
                     String::from("已关闭显式温度参数，后续执行将使用模型默认值。")
                 };
-                Task::none()
+                self.persist_single_session_addon_state_task(
+                    self.selected_session,
+                    vec![SessionAddonNamespace::RuntimeControls],
+                )
             }
             Message::GeneratePlanToggled(enabled) => {
                 self.generate_plan = enabled;
@@ -3086,6 +3264,7 @@ impl VulcanWorkbench {
                 self.sync_workspace_path_with_selected_session();
                 self.load_ai_tool_configuration_for_session(session_id);
                 self.restore_runtime_controls_for_session(session_id);
+                self.restore_work_mode_for_session(session_id);
                 self.reload_project_prompt_settings_draft();
                 self.restore_session_composer_draft(&previous_workspace_path, &previous_scope);
                 self.clear_transcript_drag_auto_scrolls();

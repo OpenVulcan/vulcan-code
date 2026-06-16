@@ -373,6 +373,26 @@ export interface WorkbenchDeltaEnvelope {
   delta: WorkbenchDelta;
 }
 
+// SessionAddonChangedEvent describes one persisted session addon-state namespace change.
+// SessionAddonChangedEvent 描述一次已持久化的会话附属状态命名空间变化。
+export interface SessionAddonChangedEvent {
+  // Session identifier whose addon state changed.
+  // 附属状态发生变化的会话标识。
+  sessionId: string;
+  // Changed addon namespace keys.
+  // 已变化的附属状态命名空间键。
+  namespaces: string[];
+  // Latest addon document revision after the change.
+  // 变化后的最新附属状态文档版本。
+  revision: number;
+  // Unix-millis text representing the latest addon update time.
+  // 表示最近附属状态更新时间的 Unix 毫秒文本。
+  updatedAt: string;
+  // Optional local instance id that originated the change.
+  // 发起该变化的可选本地实例标识。
+  sourceInstanceId?: string | null;
+}
+
 // ComposerAttachmentCapabilitySummary describes whether one attachment kind is allowed.
 // ComposerAttachmentCapabilitySummary 描述单种附件类型当前是否允许使用。
 export interface ComposerAttachmentCapabilitySummary {
@@ -1257,6 +1277,9 @@ export interface WorkbenchSnapshot {
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];
+  // Default AI capability route summaries used to reset one session draft.
+  // 用于重置单个会话草稿的默认 AI 能力路由摘要。
+  defaultAiCapabilities?: AiCapabilitySummary[];
   // Shared AI capability vendor summaries.
   // 共享 AI 能力供应商摘要。
   aiCapabilityVendors?: AiCapabilityVendorSummary[];

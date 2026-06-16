@@ -199,6 +199,10 @@ pub struct WorkbenchSnapshot {
     /// 输入区快捷控制展示的 AI 能力路由摘要。
     #[serde(default)]
     pub ai_capabilities: Vec<AiCapabilitySummary>,
+    /// Default AI capability route summaries used to reset one session draft.
+    /// 用于重置单个会话草稿的默认 AI 能力路由摘要。
+    #[serde(default)]
+    pub default_ai_capabilities: Vec<AiCapabilitySummary>,
     /// Shared AI capability vendor summaries shown in settings.
     /// 设置中展示的共享 AI 能力供应商摘要。
     #[serde(default)]
@@ -1719,6 +1723,29 @@ pub struct LogEntrySummary {
     pub message: String,
 }
 
+/// Describes one session addon-state namespace change emitted to connected UI clients.
+/// 描述一次发送给已连接 UI 客户端的会话附属状态命名空间变更。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionAddonChangedEvent {
+    /// Session identifier whose addon state changed.
+    /// 附属状态发生变化的会话标识。
+    pub session_id: String,
+    /// Changed addon namespace keys.
+    /// 已变化的附属状态命名空间键。
+    pub namespaces: Vec<String>,
+    /// Latest addon document revision after the change.
+    /// 变化后的最新附属状态文档版本。
+    pub revision: u64,
+    /// Unix-millis text representing the latest addon update time.
+    /// 表示最近附属状态更新时间的 Unix 毫秒文本。
+    pub updated_at: String,
+    /// Optional local instance id that originated the change.
+    /// 发起该变化的可选本地实例标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_instance_id: Option<String>,
+}
+
 /// Represents one event emitted from the local service bridge.
 /// 表示本地服务桥接层发出的单个事件。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -1733,6 +1760,9 @@ pub enum ServiceEvent {
     /// Partial workbench update event.
     /// 局部工作台更新事件。
     WorkbenchDelta(Box<WorkbenchDeltaEnvelope>),
+    /// Session addon namespace change event.
+    /// 会话附属状态命名空间变更事件。
+    SessionAddonChanged(Box<SessionAddonChangedEvent>),
 }
 
 /// Receives one service event emitted by the Core Service boundary.

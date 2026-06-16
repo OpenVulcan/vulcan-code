@@ -5,6 +5,7 @@ mod activity;
 mod project;
 mod runtime_state;
 mod session;
+mod session_addon;
 mod subagent;
 mod turn_stats;
 
@@ -33,6 +34,10 @@ pub use runtime_state::{
 pub use session::{
     SessionId, SessionRunPhase, SessionState, SessionSummary, SessionTitleSource,
     build_session_record_message_id,
+};
+pub use session_addon::{
+    SESSION_ADDON_SCHEMA_VERSION, SessionAddonNamespace, SessionAddonState, SessionContextAnchor,
+    SessionRuntimeControls, SessionWorkMode, VersionedSessionAddonValue,
 };
 pub use subagent::{
     SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SubagentTaskPanelState,

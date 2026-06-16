@@ -6,8 +6,12 @@ use super::segmented_session_store::{
     append_segmented_session_message_update, create_segmented_session,
     read_segmented_session_event_window, read_state,
 };
+use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
-use crate::model::{PendingPromptPanelEntry, PendingPromptPanelEntryState};
+use crate::model::{
+    PendingPromptPanelEntry, PendingPromptPanelEntryState, SessionAddonNamespace,
+    SessionAddonState, SessionRuntimeControls,
+};
 use vulcan_context::SessionMessageKind;
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
@@ -52,6 +56,75 @@ fn loaded_runtime_state_drops_process_scoped_precheck_latch() {
         Some("message-1")
     );
     assert!(runtime_state.active_precheck_turn_id.is_none());
+}
+
+/// Verifies session addon persistence writes only the addon document beside segmented state.
+/// 验证会话附属状态持久化只写入分段状态旁的附属文档。
+#[test]
+fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-workspace-session-addon-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7011);
+    let session_dir = create_segmented_session(
+        &root,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-addon"),
+            created_date: String::from("2026-06-16"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-addon")),
+            title: Some(String::from("addon persist")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create session");
+    let state_document = state_document_from_runtime_state(
+        &session_id.to_string(),
+        &SessionRuntimeStateEntry {
+            active_provider_id: Some(String::from("old-provider")),
+            active_model_id: Some(String::from("old-model")),
+            updated_at: String::from("200"),
+            ..SessionRuntimeStateEntry::default()
+        },
+    )
+    .expect("state document");
+    write_state(&session_dir, &state_document).expect("write state");
+    let before_state = std::fs::read_to_string(session_dir.join("state.json")).expect("read state");
+
+    let mut addon_state = SessionAddonState::new(session_id);
+    addon_state.set_runtime_controls(
+        &SessionRuntimeControls {
+            active_agent_id: None,
+            active_provider_id: Some(String::from("new-provider")),
+            active_model_id: Some(String::from("new-model")),
+            active_openrouter_endpoint_route: None,
+            active_reasoning_effort: None,
+            active_temperature: None,
+        },
+        String::from("300"),
+    );
+    write_session_addon_state(&session_dir, &addon_state).expect("write addon");
+
+    let after_state = std::fs::read_to_string(session_dir.join("state.json")).expect("read state");
+    let restored_addon = read_session_addon_state(&session_dir)
+        .expect("read addon")
+        .expect("addon exists");
+
+    assert_eq!(before_state, after_state);
+    assert!(
+        restored_addon
+            .namespace(SessionAddonNamespace::RuntimeControls)
+            .is_some()
+    );
+    assert_eq!(
+        restored_addon
+            .runtime_controls()
+            .and_then(|controls| controls.active_provider_id),
+        Some(String::from("new-provider"))
+    );
 }
 
 /// Verifies lightweight state.json startup loading restores transcript context from segmented JSONL.

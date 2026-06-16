@@ -6,6 +6,7 @@ import type {
 } from "@/components/conversation/conversation-detail";
 import type { ModelPickerChoice } from "@/components/composer/model-picker-control";
 import type {
+  ComposerAiCapabilityConfigurationSave,
   ComposerSlashCommandResult,
   ComposerSubmission,
 } from "@/components/composer/composer-model";
@@ -164,6 +165,9 @@ interface WorkspaceShellProps {
   // Submits one composer prompt.
   // 提交一个输入区提示词。
   onSubmitPrompt: (submission: ComposerSubmission) => Promise<boolean>;
+  // Persists one session-scoped AI capability draft.
+  // 持久化单个会话级 AI 能力草稿。
+  onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;
@@ -435,6 +439,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
               onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
               onSlashCommand={props.onSlashCommand}
               onSubmitPrompt={props.onSubmitPrompt}
+              onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
               onStopConversationRun={props.onStopConversationRun}
               onOpenSubagentPanel={props.onOpenSubagentPanel}
               onCloseSubagentPanel={props.onCloseSubagentPanel}

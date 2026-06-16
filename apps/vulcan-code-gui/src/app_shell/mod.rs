@@ -70,6 +70,7 @@ use self::composer_attachments::ComposerUndoSnapshot;
 use self::composer_command_state::{
     ComposerSlashCommand, ComposerSlashCommandState, build_composer_slash_command_state,
 };
+use self::configuration::stable_ai_tool_configuration_hash;
 use self::helpers::*;
 use self::oauth_flow::*;
 use self::perf::*;
@@ -198,13 +199,15 @@ use crate::luaskills_runtime::{
 };
 use crate::mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access};
 use crate::model::{
-    ActivityEntry, ActivityLevel, ExecutionMode, PENDING_PROMPT_QUEUE_LIMIT, PaneKind,
-    PendingPromptModelReference, PendingPromptPanelEntry, PendingPromptPanelEntryState,
-    PendingPromptRuntimeOptions, PendingPromptWebSearchOverride, PendingSessionPromptEntry,
-    PendingSessionPromptSource, SelectedSubagentTaskPanel, SessionCompactionEntry,
-    SessionComposerDraftState, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeStateEntry, SessionState,
-    SessionSummary, SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus,
+    ActivityEntry, ActivityLevel, AiCapabilityPanelDraftSnapshot, AiCapabilityPanelPendingSave,
+    AiCapabilityPanelSaveState, AiToolConfigurationLocalGuard, ExecutionMode,
+    PENDING_PROMPT_QUEUE_LIMIT, PaneKind, PendingPromptModelReference, PendingPromptPanelEntry,
+    PendingPromptPanelEntryState, PendingPromptRuntimeOptions, PendingPromptWebSearchOverride,
+    PendingSessionPromptEntry, PendingSessionPromptSource, SelectedSubagentTaskPanel,
+    SessionAddonNamespace, SessionAddonState, SessionCompactionEntry, SessionComposerDraftState,
+    SessionId, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
+    SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
+    SessionTitleSource, SessionTurnStats, SessionTurnStatsStatus, SessionWorkMode,
     SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
     build_session_record_message_id, collect_running_subagent_task_states_for_tree,
     merge_subagent_task_panel_cache, normalize_subagent_task_panel_state,
@@ -1660,6 +1663,19 @@ pub struct VulcanWorkbench {
     /// Active session AI capability tool configuration currently shown and edited by the workbench.
     /// 工作台当前展示与编辑的活跃会话 AI 能力工具配置。
     ai_tool_configuration: PersistedAiToolConfiguration,
+    /// Local AI capability update timestamps that must survive stale hydration snapshots.
+    /// 必须避开旧水合快照覆盖的本地 AI 能力更新时间。
+    locally_updated_ai_tool_configuration_sessions:
+        BTreeMap<SessionId, AiToolConfigurationLocalGuard>,
+    /// Baseline AI capability draft snapshot captured when the quick panel was opened.
+    /// 快捷面板打开时捕获的 AI 能力草稿快照基线。
+    workbench_ai_capability_panel_baseline: Option<AiCapabilityPanelDraftSnapshot>,
+    /// In-flight quick-panel save fingerprint used to ignore unrelated persistence callbacks.
+    /// 用于忽略无关持久化回调的快捷面板保存中指纹。
+    workbench_ai_capability_panel_pending_save: Option<AiCapabilityPanelPendingSave>,
+    /// Save state shown by the quick AI capability panel footer.
+    /// 快捷 AI 能力面板底部展示的保存状态。
+    workbench_ai_capability_panel_save_state: AiCapabilityPanelSaveState,
     /// User-visible agent profile catalog loaded from the dedicated user directory and state file.
     /// 从独立用户目录与状态文件载入的面向用户 Agent 配置目录。
     agent_profile_catalog: AgentProfileCatalog,
@@ -2434,6 +2450,10 @@ impl VulcanWorkbench {
             vmm_management_workbench: VmmManagementWorkbenchState::new(),
             default_ai_tool_configuration,
             ai_tool_configuration,
+            locally_updated_ai_tool_configuration_sessions: BTreeMap::new(),
+            workbench_ai_capability_panel_baseline: None,
+            workbench_ai_capability_panel_pending_save: None,
+            workbench_ai_capability_panel_save_state: AiCapabilityPanelSaveState::Idle,
             agent_profile_catalog,
             selected_user_agent_profile_id,
             agent_profile_form,
@@ -2962,6 +2982,7 @@ impl VulcanWorkbench {
             body: body.into(),
             confirm_label: String::from("确认"),
             dismiss_label: None,
+            dismiss_action: None,
             confirm_action: WorkbenchNoticeConfirmAction::Acknowledge,
         });
     }
@@ -2981,6 +3002,28 @@ impl VulcanWorkbench {
             body: body.into(),
             confirm_label: confirm_label.into(),
             dismiss_label: Some(dismiss_label.into()),
+            dismiss_action: None,
+            confirm_action,
+        });
+    }
+
+    /// Opens the reusable blocking workbench notice modal with explicit confirm and dismiss actions.
+    /// 使用明确的确认与取消业务动作打开可复用阻塞工作台提示弹窗。
+    fn show_workbench_choice_modal(
+        &mut self,
+        title: impl Into<String>,
+        body: impl Into<String>,
+        confirm_label: impl Into<String>,
+        dismiss_label: impl Into<String>,
+        confirm_action: WorkbenchNoticeConfirmAction,
+        dismiss_action: WorkbenchNoticeConfirmAction,
+    ) {
+        self.workbench_notice_modal = Some(WorkbenchNoticeModalState {
+            title: title.into(),
+            body: body.into(),
+            confirm_label: confirm_label.into(),
+            dismiss_label: Some(dismiss_label.into()),
+            dismiss_action: Some(dismiss_action),
             confirm_action,
         });
     }
@@ -3014,6 +3057,13 @@ impl VulcanWorkbench {
             }
             WorkbenchNoticeConfirmAction::ExecuteProjectAttachmentCleanup { request } => {
                 self.start_project_attachment_cleanup_execution(request)
+            }
+            WorkbenchNoticeConfirmAction::SaveWorkbenchAiCapabilityPanel => {
+                self.save_workbench_ai_capability_panel_changes()
+            }
+            WorkbenchNoticeConfirmAction::DiscardWorkbenchAiCapabilityPanel => {
+                self.discard_workbench_ai_capability_panel_changes();
+                Task::none()
             }
         }
     }
@@ -3896,6 +3946,130 @@ impl VulcanWorkbench {
                 .await
             },
             Message::SessionRuntimeStatePersisted,
+        )
+    }
+
+    /// Builds one asynchronous persistence task for selected session addon-state namespaces.
+    /// 为选定的会话附属状态命名空间构建一次异步持久化任务。
+    fn persist_single_session_addon_state_task(
+        &mut self,
+        session_id: SessionId,
+        namespaces: Vec<SessionAddonNamespace>,
+    ) -> Task<Message> {
+        self.persist_single_session_addon_state_task_with_request_id(session_id, namespaces, None)
+    }
+
+    /// Builds one asynchronous persistence task with an optional caller request id.
+    /// 使用可选调用方请求标识构建一次异步会话附属状态持久化任务。
+    fn persist_single_session_addon_state_task_with_request_id(
+        &mut self,
+        session_id: SessionId,
+        namespaces: Vec<SessionAddonNamespace>,
+        request_id: Option<String>,
+    ) -> Task<Message> {
+        let Some(controller_runtime) = self.controller_runtime.clone() else {
+            return Task::none();
+        };
+        if namespaces.is_empty() {
+            return Task::none();
+        }
+        let Some((session, archived)) = self
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| (session.clone(), false))
+            .or_else(|| {
+                self.archived_sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| (session.clone(), true))
+            })
+        else {
+            return Task::none();
+        };
+        let Some(runtime_state) = self
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .or_else(|| {
+                self.archived_session_runtime_state
+                    .get(&session_id)
+                    .cloned()
+            })
+        else {
+            return Task::none();
+        };
+        let updated_at = current_unix_millis_text();
+        let mut addon_state = SessionAddonState::new(session_id);
+        for namespace in &namespaces {
+            match namespace {
+                SessionAddonNamespace::AiCapabilities => {
+                    let configuration = runtime_state
+                        .ai_tool_configuration
+                        .as_ref()
+                        .unwrap_or(&self.default_ai_tool_configuration);
+                    let _ =
+                        addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
+                }
+                SessionAddonNamespace::RuntimeControls => {
+                    if let Some(controls) =
+                        SessionRuntimeControls::from_runtime_state(&runtime_state)
+                    {
+                        let _ = addon_state.set_runtime_controls(&controls, updated_at.clone());
+                    }
+                }
+                SessionAddonNamespace::WorkMode => {
+                    if let Some(work_mode) = SessionWorkMode::from_runtime_state(&runtime_state) {
+                        let _ = addon_state.set_work_mode(&work_mode, updated_at.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if addon_state.namespaces.is_empty() {
+            return Task::none();
+        }
+        let task_projects = self
+            .task_projects
+            .iter()
+            .cloned()
+            .chain(self.archived_task_projects.iter().cloned())
+            .collect::<Vec<_>>();
+
+        let ai_capability_updated_at = namespaces
+            .contains(&SessionAddonNamespace::AiCapabilities)
+            .then_some(updated_at.clone());
+        let ai_capability_hash = namespaces
+            .contains(&SessionAddonNamespace::AiCapabilities)
+            .then(|| {
+                runtime_state
+                    .ai_tool_configuration
+                    .as_ref()
+                    .unwrap_or(&self.default_ai_tool_configuration)
+            })
+            .map(|configuration| stable_ai_tool_configuration_hash(Some(configuration)));
+        Task::perform(
+            async move {
+                workspace_store::persist_single_session_addon_state_update(
+                    controller_runtime,
+                    &task_projects,
+                    &session,
+                    archived,
+                    &addon_state,
+                )
+                .await
+                .map(|_| ())
+            },
+            move |result| {
+                Message::SessionAddonStatePersisted(
+                    session_id,
+                    namespaces,
+                    ai_capability_updated_at,
+                    ai_capability_hash,
+                    request_id,
+                    result,
+                )
+            },
         )
     }
 
