@@ -301,7 +301,7 @@ impl VulcanWorkbench {
                 self.ai_tool_notice = success_notice;
                 self.status_message = self.ai_tool_notice.clone();
                 if self.selected_session != SessionId::nil() {
-                    return self.persist_single_session_runtime_state_task(self.selected_session);
+                    return self.persist_single_session_update_task(self.selected_session);
                 }
             }
             Err(error) => {

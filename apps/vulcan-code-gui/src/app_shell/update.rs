@@ -1011,9 +1011,7 @@ impl VulcanWorkbench {
                 }
                 if did_commit_ai_capability_route_drop && self.selected_session != SessionId::nil()
                 {
-                    tasks.push(
-                        self.persist_single_session_runtime_state_task(self.selected_session),
-                    );
+                    tasks.push(self.persist_single_session_update_task(self.selected_session));
                 }
                 Task::batch(tasks)
             }

@@ -1462,7 +1462,7 @@ impl VulcanWorkbench {
         self.store_active_ai_tool_configuration_for_session(session_id);
         self.refresh_runtime_foundation();
         self.status_message = String::from("已将当前会话的 AI 能力配置同步为默认配置。");
-        self.persist_single_session_runtime_state_task(session_id)
+        self.persist_single_session_update_task(session_id)
     }
 
     /// Reconciles the current-message AI capability toggles against actual native or host availability.

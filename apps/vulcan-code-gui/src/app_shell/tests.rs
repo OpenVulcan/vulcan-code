@@ -3,9 +3,9 @@ use super::workbench_model_state::{
     format_openrouter_throughput_tokens_per_second, value_as_f64,
 };
 use super::{
-    ActiveSessionCompactionState, CommandSessionToolModalSummary, ComposerSlashCommand, Message,
-    PromptCompactionExecution, SessionPromptCompactionTrigger, ToolModalPresentation,
-    VulcanWorkbench, build_command_session_stop_result_metadata,
+    ActiveSessionCompactionState, AiCapabilityRouteDropTarget, CommandSessionToolModalSummary,
+    ComposerSlashCommand, Message, PromptCompactionExecution, SessionPromptCompactionTrigger,
+    ToolModalPresentation, VulcanWorkbench, build_command_session_stop_result_metadata,
     build_composer_slash_command_state, build_session_record_message_id,
     build_session_turn_stats_from_state, clear_selectable_transcript_render_cache_stash,
     compact_tool_detail_message_for_projection, composer_text_has_submittable_content,
@@ -24,7 +24,10 @@ use crate::model::{
     SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind, SessionRunPhase,
     SessionRuntimeStateEntry, SessionState, SessionSummary, SessionTurnStatsStatus,
 };
-use crate::provider_config::AiToolKind;
+use crate::provider_config::{
+    AiToolKind, PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+    PersistedAiToolConfiguration, PersistedWebSearchConfiguration,
+};
 use crate::tooling::command_session_runtime::{CommandSessionSnapshot, CommandSessionStatus};
 use crate::workbench_prompt_turn::{
     SharedPromptTurnRuntimeBeginInput, begin_shared_prompt_turn_with_runtime_state,
@@ -57,6 +60,48 @@ fn test_session_summary(id: SessionId, title: &str) -> SessionSummary {
         0,
         String::from("刚刚"),
     )
+}
+
+/// Builds a deterministic web-search route configuration with three configured targets.
+/// 构建一份包含三条已配置目标的稳定网页搜索路由配置。
+fn test_web_search_route_configuration() -> PersistedAiToolConfiguration {
+    let mut minimax_vendor = PersistedAiCapabilityVendorEntry::new("minimax");
+    minimax_vendor
+        .targets
+        .push(PersistedAiCapabilityTargetBinding::new(
+            AiToolKind::WebSearch,
+            "minimax",
+            "minimax",
+        ));
+    let mut ollama_vendor = PersistedAiCapabilityVendorEntry::new("ollama");
+    ollama_vendor
+        .targets
+        .push(PersistedAiCapabilityTargetBinding::new(
+            AiToolKind::WebSearch,
+            "ollama",
+            "ollama",
+        ));
+    let mut tavily_vendor = PersistedAiCapabilityVendorEntry::new("tavily");
+    tavily_vendor
+        .targets
+        .push(PersistedAiCapabilityTargetBinding::new(
+            AiToolKind::WebSearch,
+            "tavily",
+            "tavily",
+        ));
+
+    PersistedAiToolConfiguration {
+        vendors: vec![minimax_vendor, ollama_vendor, tavily_vendor],
+        web_search: PersistedWebSearchConfiguration {
+            target_order: vec![
+                String::from("minimax/minimax"),
+                String::from("ollama/ollama"),
+                String::from("tavily/tavily"),
+            ],
+            ..PersistedWebSearchConfiguration::default()
+        },
+        ..PersistedAiToolConfiguration::default()
+    }
 }
 
 /// Builds one compact pending-session prompt entry for queue-order unit tests.
@@ -442,6 +487,70 @@ fn ensure_valid_selected_session_reloads_session_ai_configuration() {
     assert_eq!(
         workbench.ai_tool_configuration.disabled_capability_kinds,
         target_configuration.disabled_capability_kinds
+    );
+}
+
+/// Verifies a web-search target reorder remains attached to the edited session after switching away and back.
+/// 验证网页搜索目标重排后，切出再切回仍然绑定在被编辑会话上。
+#[test]
+fn web_search_route_order_survives_session_switch() {
+    let (mut workbench, _task) = VulcanWorkbench::new();
+    let edited_session_id = SessionId::from_u128(0xE55);
+    let other_session_id = SessionId::from_u128(0xF66);
+    workbench.sessions.clear();
+    workbench
+        .sessions
+        .push(test_session_summary(edited_session_id, "已编辑会话"));
+    workbench
+        .sessions
+        .push(test_session_summary(other_session_id, "默认会话"));
+
+    let default_configuration = test_web_search_route_configuration();
+    workbench.default_ai_tool_configuration = default_configuration.clone();
+    workbench.ai_tool_configuration = default_configuration.clone();
+    workbench.session_runtime_state.insert(
+        edited_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.session_runtime_state.insert(
+        other_session_id,
+        SessionRuntimeStateEntry {
+            ai_tool_configuration: Some(default_configuration.clone()),
+            ..SessionRuntimeStateEntry::default()
+        },
+    );
+    workbench.selected_session = edited_session_id;
+    workbench.load_ai_tool_configuration_for_session(edited_session_id);
+
+    assert!(workbench.apply_ai_capability_route_drop_target(
+        AiToolKind::WebSearch,
+        "minimax/minimax",
+        &AiCapabilityRouteDropTarget::Before(String::from("tavily/tavily")),
+    ));
+
+    workbench.selected_session = other_session_id;
+    workbench.load_ai_tool_configuration_for_session(other_session_id);
+    assert_eq!(
+        workbench.ai_tool_configuration.web_search.target_order,
+        vec![
+            String::from("minimax/minimax"),
+            String::from("ollama/ollama"),
+            String::from("tavily/tavily"),
+        ]
+    );
+
+    workbench.selected_session = edited_session_id;
+    workbench.load_ai_tool_configuration_for_session(edited_session_id);
+    assert_eq!(
+        workbench.ai_tool_configuration.web_search.target_order,
+        vec![
+            String::from("ollama/ollama"),
+            String::from("minimax/minimax"),
+            String::from("tavily/tavily"),
+        ]
     );
 }
 
