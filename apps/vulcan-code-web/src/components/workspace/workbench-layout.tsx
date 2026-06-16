@@ -1430,6 +1430,7 @@ export function WorkbenchLayout(props: {
             onCreateConversation={handleCreateConversation}
             onCreateProject={handleCreateProject}
             onOpenSkills={handleOpenWorkspaceSkills}
+            onSelectArea={handleSelectTopFeatureArea}
             onSelectSkillSubArea={setActiveWorkbenchSkillSubArea}
             onExpandedProjectIdsChange={handleExpandedProjectIdsChange}
             onProjectMenuAction={handleProjectMenuAction}
@@ -1470,6 +1471,7 @@ export function WorkbenchLayout(props: {
             activeFeature={activeFeature}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
+            onSelectArea={handleSelectTopFeatureArea}
             skillActions={skillActions}
             memoryActions={{
               onRunVmmAction: runVmmMemoryAction,

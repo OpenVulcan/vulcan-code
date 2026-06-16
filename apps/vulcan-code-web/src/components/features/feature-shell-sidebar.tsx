@@ -18,6 +18,7 @@ import {
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -26,6 +27,10 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import {
+  SidebarBrandMenu,
+  SidebarUserMenu,
+} from "@/components/sidebar/sidebar-profile-menus"
 import { useI18n } from "@/i18n"
 import type {
   FeatureAreaSummary,
@@ -58,6 +63,9 @@ function FeatureSidebar(props: {
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
+  // Selects one top-level application area from the sidebar brand menu.
+  // 从侧栏品牌菜单选择一个顶层应用区域。
+  onSelectArea: (area: MainAreaId) => void
   // Workbench snapshot used for sidebar counters.
   // 侧栏计数使用的工作台快照。
   workbench: WorkbenchSnapshot
@@ -68,14 +76,11 @@ function FeatureSidebar(props: {
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <div aria-current="page" className="vcn-sidebar-static-item">
-              <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
-              <span className="vcn-sidebar-label strong">{feature?.label ?? "工作台"}</span>
-            </div>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <SidebarBrandMenu
+          activeArea={props.activeArea}
+          currentLabel={feature?.label ?? "工作台"}
+          onSelectArea={props.onSelectArea}
+        />
       </SidebarHeader>
       <SidebarContent>
         {props.activeArea === "settings" ? (
@@ -94,6 +99,9 @@ function FeatureSidebar(props: {
           />
         )}
       </SidebarContent>
+      <SidebarFooter>
+        <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
+      </SidebarFooter>
     </Sidebar>
   )
 }

@@ -144,6 +144,12 @@ function SidebarContent({ className, ...props }: React.ComponentProps<"div">) {
   return <div className={cn("vcn-sidebar-content", className)} data-slot="sidebar-content" {...props} />
 }
 
+// SidebarFooter renders fixed controls below the scrollable sidebar body.
+// SidebarFooter 渲染位于可滚动侧栏主体下方的固定控制区。
+function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
+  return <div className={cn("vcn-sidebar-footer", className)} data-slot="sidebar-footer" {...props} />
+}
+
 // SidebarGroup renders one sidebar navigation group.
 // SidebarGroup 渲染一个侧栏导航分组。
 function SidebarGroup({ className, ...props }: React.ComponentProps<"div">) {
@@ -235,6 +241,7 @@ function SidebarMenuAction({
 export {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,

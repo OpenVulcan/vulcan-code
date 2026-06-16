@@ -516,6 +516,11 @@ button {
   padding: 10px;
 }
 
+.vcn-sidebar-footer {
+  flex: 0 0 auto;
+  padding: 8px 10px 10px;
+}
+
 .vcn-sidebar-content {
   min-height: 0;
   flex: 1;
@@ -642,11 +647,118 @@ button {
   margin-top: 2px;
 }
 
+.sidebar-profile-button {
+  min-height: 42px;
+  gap: 8px;
+  padding: 6px;
+}
+
+.sidebar-brand-button .sidebar-brand-mark,
+.sidebar-user-avatar {
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--sidebar-primary);
+  color: var(--sidebar-primary-foreground);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.sidebar-user-avatar {
+  background: color-mix(in oklch, var(--sidebar-accent) 82%, var(--foreground) 12%);
+  color: var(--sidebar-accent-foreground);
+}
+
+.sidebar-profile-label {
+  flex: 1 1 auto;
+  text-align: left;
+  line-height: 1.1;
+}
+
+.sidebar-profile-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+
+.sidebar-profile-menu {
+  min-width: 220px;
+}
+
+.sidebar-profile-menu-item {
+  gap: 8px;
+  min-height: 30px;
+  cursor: pointer;
+}
+
+.sidebar-profile-menu-item.muted {
+  color: var(--muted-foreground);
+}
+
+.sidebar-profile-menu-check {
+  margin-left: auto;
+  color: var(--sidebar-accent-foreground);
+}
+
+.sidebar-user-menu-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-user-menu-label span:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sidebar-user-menu-label strong,
+.sidebar-user-menu-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-user-menu-label small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
   width: 34px;
   min-height: 34px;
   justify-content: center;
   padding: 7px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-header,
+.vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-footer {
+  align-items: center;
+  padding-right: 6px;
+  padding-left: 6px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .sidebar-profile-button {
+  width: 34px;
+  height: 34px;
+  max-height: 34px;
+  min-height: 34px;
+  padding: 2px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-button .sidebar-brand-mark,
+.vcn-sidebar[data-collapsible="icon"] .sidebar-user-avatar {
+  width: 30px;
+  height: 30px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .sidebar-profile-chevron {
+  display: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
@@ -845,13 +957,18 @@ button {
 
 .vcn-sidebar[data-collapsible="icon"] .project-tree-item {
   width: 34px;
-  margin-left: 4px;
+  margin-left: 0;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button {
   width: 34px;
   min-width: 34px;
+  height: 34px;
+  max-height: 34px;
+  min-height: 34px;
   margin-inline: 0;
+  padding: 2px;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button > svg {
@@ -867,7 +984,7 @@ button {
 
 .vcn-sidebar[data-collapsible="icon"] .pinned-tree-list > .vcn-sidebar-menu-item {
   width: 34px;
-  margin-left: 4px;
+  margin-left: 0;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .pinned-conversation-button.with-pinned-icon {
@@ -906,6 +1023,7 @@ button {
 
 .collapsed-project-hover-root {
   width: 34px;
+  height: 34px;
 }
 
 .collapsed-project-flyout {

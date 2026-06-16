@@ -42,6 +42,7 @@ import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ConversationSummary,
+  MainAreaId,
   PendingPromptSummary,
   ProjectSummary,
   StartupSnapshot,
@@ -98,6 +99,9 @@ interface WorkspaceShellProps {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Selects one top-level application area from the sidebar brand menu.
+  // 从侧栏品牌菜单选择一个顶层应用区域。
+  onSelectArea: (area: MainAreaId) => void;
   // Updates the selected embedded skills sub page.
   // 更新当前选中的内嵌技能子页面。
   onSelectSkillSubArea: (subArea: SkillSubAreaId) => void;
@@ -330,6 +334,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCreateConversation={props.onCreateConversation}
         onCreateProject={props.onCreateProject}
         onOpenSkills={props.onOpenSkills}
+        onSelectArea={props.onSelectArea}
         skillsActive={props.mainView === "skills"}
         onExpandedProjectIdsChange={props.onExpandedProjectIdsChange}
         onProjectMenuAction={props.onProjectMenuAction}

@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupLabel,
   SidebarHeader,
@@ -31,9 +32,13 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import {
+  SidebarBrandMenu,
+  SidebarUserMenu,
+} from "@/components/sidebar/sidebar-profile-menus";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { ConversationSummary, ProjectSummary } from "@/types";
+import type { ConversationSummary, MainAreaId, ProjectSummary } from "@/types";
 import { ConversationTreeRow } from "./project-sidebar-conversation-row";
 import { SortableProjectRow } from "./project-sidebar-project-row";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
@@ -54,6 +59,9 @@ export function ProjectSidebar(props: {
   // Opens the skills feature area from the workbench sidebar.
   // 从工作台侧栏打开技能功能区。
   onOpenSkills: () => void;
+  // Selects one top-level application area from the sidebar brand menu.
+  // 从侧栏品牌菜单选择一个顶层应用区域。
+  onSelectArea: (area: MainAreaId) => void;
   // Whether the embedded skills settings view is currently active.
   // 内嵌技能设置视图当前是否激活。
   skillsActive: boolean;
@@ -244,13 +252,12 @@ export function ProjectSidebar(props: {
   return (
     <Sidebar className={cn(activeProjectDragId && "project-drag-active")} collapsible="icon" variant="inset">
       <SidebarHeader>
+        <SidebarBrandMenu
+          activeArea={props.skillsActive ? "skills" : "chat"}
+          currentLabel={props.skillsActive ? t("area.skills") : t("sidebar.console")}
+          onSelectArea={props.onSelectArea}
+        />
         <SidebarMenu>
-          <SidebarMenuItem>
-            <div aria-current="page" className="vcn-sidebar-static-item">
-              <span aria-hidden="true" className="brand-mark sidebar-brand-mark">V</span>
-              <span className="vcn-sidebar-label strong">{t("sidebar.console")}</span>
-            </div>
-          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               active={props.skillsActive}
@@ -304,6 +311,9 @@ export function ProjectSidebar(props: {
             </SidebarMenu>
           </SidebarGroup>
       </SidebarContent>
+      <SidebarFooter>
+        <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />
+      </SidebarFooter>
     </Sidebar>
   );
 }

@@ -59,6 +59,9 @@ function FeatureShell(props: {
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
+  // Selects one top-level application area from the sidebar brand menu.
+  // 从侧栏品牌菜单选择一个顶层应用区域。
+  onSelectArea: (area: MainAreaId) => void
   // Service-backed skill page actions.
   // 服务端支持的技能页面动作。
   skillActions: SkillActionProps
@@ -217,6 +220,7 @@ function FeatureShell(props: {
         onSelectMemorySubArea={setActiveMemorySubArea}
         onSelectSkillSubArea={setActiveSkillSubArea}
         onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+        onSelectArea={props.onSelectArea}
         workbench={props.workbench}
       />
       <SidebarInset>
