@@ -116,6 +116,9 @@ export function WorkspaceResizableBody(props: {
   // Copies raw diff text from the right context panel.
   // 从右侧上下文面板复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
+  // Runs one VMM memory action for the right context panel.
+  // 为右侧上下文面板执行单个 VMM 记忆动作。
+  onRunVmmAction: WorkspaceContextPanelProps["onRunVmmAction"];
   // Parses conversation messages into display blocks for the right context panel.
   // 为右侧上下文面板将会话消息解析为展示块。
   parseConversationBlocks: WorkspaceContextPanelProps["parseConversationBlocks"];
@@ -289,6 +292,7 @@ export function WorkspaceResizableBody(props: {
               workbench={props.workbench}
               onClose={props.onToggleRightPanel}
               onCopyRawDiff={props.onCopyRawDiff}
+              onRunVmmAction={props.onRunVmmAction}
               parseConversationBlocks={props.parseConversationBlocks}
               loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}

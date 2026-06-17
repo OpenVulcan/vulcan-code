@@ -18,6 +18,8 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
   ConversationMessage,
+  VmmMemoryActionRequest,
+  VmmMemoryActionResult,
   WorkbenchSnapshot,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
@@ -72,6 +74,9 @@ export interface WorkspaceContextPanelProps {
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
+  // Runs one VMM memory management action.
+  // 执行单个 VMM 记忆管理动作。
+  onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
   // Parses one conversation message into render blocks.
   // 将单条会话消息解析为渲染块。
   parseConversationBlocks: (message: ConversationMessage) => WorkspaceConversationBlock[];
@@ -135,11 +140,27 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
           </React.Suspense>
         </TabsContent>
         <TabsContent className="context-tab-content" value="memory">
-          <WorkspaceMemoryPanel snapshot={props.workbench.contextInjection ?? null} />
+          <WorkspaceMemoryPanel
+            selectedProjectId={selectedContextProjectId(props)}
+            snapshot={props.workbench.contextInjection ?? null}
+            onRunVmmAction={props.onRunVmmAction}
+          />
         </TabsContent>
       </Tabs>
     </aside>
   );
+}
+
+// selectedContextProjectId resolves the current project id for project-scoped VMM actions.
+// selectedContextProjectId 解析当前用于项目级 VMM 动作的项目标识。
+function selectedContextProjectId(props: WorkspaceContextPanelProps): string | null {
+  if (props.selectedDraftConversation?.projectId) {
+    return props.selectedDraftConversation.projectId;
+  }
+  const selectedConversation = props.workbench.conversations.find(
+    (conversation) => conversation.id === props.selectedConversationId,
+  );
+  return selectedConversation?.projectId ?? null;
 }
 
 // WorkspaceReviewPanelLoading renders while the review panel chunk is loading.

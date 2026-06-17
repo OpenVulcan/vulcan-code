@@ -385,6 +385,9 @@ pub enum ProfileTarget {
     /// Space profile target.
     /// 空间画像目标。
     ProfileTargetSpace,
+    /// All supported profile targets for read-only profile node queries.
+    /// 用于只读画像节点查询的全部支持目标。
+    ProfileTargetAll,
 }
 
 /// Source kind of one durable VMM profile node.
@@ -694,6 +697,10 @@ pub struct ContextItem {
     /// VMM 返回的人类可读创建时间。
     #[serde(default)]
     pub created_datetime: String,
+    /// Durable memory id when the context item came from a memory row.
+    /// 当上下文项来自记忆行时对应的长期记忆标识。
+    #[serde(default)]
+    pub memory_id: u64,
 }
 
 /// Response body for VMM PreCheck.
@@ -1031,6 +1038,47 @@ pub struct WriteMemoriesResponse {
     /// 按顺序返回的主动写入结果。
     #[serde(default)]
     pub items: Vec<WriteMemoryResultItem>,
+    /// Trace id returned by VMM.
+    /// VMM 返回的追踪标识。
+    #[serde(default)]
+    pub trace_id: String,
+}
+
+/// Request body for VMM DeleteMemories.
+/// VMM DeleteMemories 请求体。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteMemoriesRequest {
+    /// Numeric VMM user identifier used to scope the delete.
+    /// 用于限定删除范围的 VMM 数字用户标识。
+    pub user_id: u64,
+    /// Numeric VMM project identifier used to scope the delete.
+    /// 用于限定删除范围的 VMM 数字项目标识。
+    pub project_id: u64,
+    /// Durable memory ids requested for deletion.
+    /// 请求删除的长期记忆标识集合。
+    #[serde(default)]
+    pub memory_ids: Vec<u64>,
+    /// Human or AI supplied deletion reason.
+    /// 人类或 AI 提供的删除原因。
+    #[serde(default)]
+    pub reason: String,
+}
+
+/// Response body for VMM DeleteMemories.
+/// VMM DeleteMemories 响应体。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeleteMemoriesResponse {
+    /// Memory ids that were marked deleted by VMM.
+    /// 已被 VMM 标记为删除的记忆标识集合。
+    #[serde(default)]
+    pub deleted_memory_ids: Vec<u64>,
+    /// Memory ids that were missing, already deleted, inactive, or outside scope.
+    /// 不存在、已删除、非 active 或不属于当前范围的记忆标识集合。
+    #[serde(default)]
+    pub not_found_memory_ids: Vec<u64>,
+    /// Vector rows deleted immediately by VMM.
+    /// VMM 即时删除的向量行数。
+    pub deleted_vector_rows: u64,
     /// Trace id returned by VMM.
     /// VMM 返回的追踪标识。
     #[serde(default)]

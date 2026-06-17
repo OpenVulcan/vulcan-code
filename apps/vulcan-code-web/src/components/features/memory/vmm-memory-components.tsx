@@ -1,5 +1,5 @@
 import * as React from "react"
-import { FileText, History } from "lucide-react"
+import { FileText, History, Trash2 } from "lucide-react"
 
 import { StatusPill } from "@/components/shared/status"
 import type { MemorySummary, VmmConfigDraftSummary, VmmMemoryActionResult, VmmMemorySnapshot } from "@/types"
@@ -261,13 +261,38 @@ export function VmmBundlePreview(props: { result: VmmMemoryActionResult | null }
 
 // VmmToolResult renders compact tool-debug results.
 // VmmToolResult 渲染紧凑的工具调试结果。
-export function VmmToolResult(props: { result: VmmMemoryActionResult | null }) {
+export function VmmToolResult(props: {
+  // Latest action result.
+  // 最近动作结果。
+  result: VmmMemoryActionResult | null
+  // Optional memory deletion callback used by search rows.
+  // 检索行使用的可选记忆删除回调。
+  onDeleteMemory?: (memoryId: number) => void
+}) {
   if (!props.result) {
     return <p className="vmm-muted">工具调试结果会按动作显示。</p>;
   }
   if (props.result.kind === "search_memory_events") {
     const groups = vmmResultArray(props.result, "results");
-    return <div className="vmm-row-list">{groups.flatMap((group, groupIndex) => vmmArray(group.hits).map((hit, hitIndex) => <VmmDataRow key={`${groupIndex}-${hitIndex}`} title={String(group.query ?? "query")} detail={String(hit.abstractText ?? hit.abstract_text ?? "")} meta={`memory=${String(hit.memoryId ?? hit.memory_id ?? "-")} · turn=${String(hit.sourceTurnId ?? hit.source_turn_id ?? "-")}`} />))}</div>;
+    return (
+      <div className="vmm-row-list">
+        {groups.flatMap((group, groupIndex) => vmmArray(group.hits).map((hit, hitIndex) => {
+          const memoryId = vmmNumber(hit.memoryId ?? hit.memory_id);
+          return (
+            <VmmDataRow
+              key={`${groupIndex}-${hitIndex}`}
+              title={String(group.query ?? "query")}
+              detail={String(hit.abstractText ?? hit.abstract_text ?? "")}
+              meta={`memory=${String(memoryId || "-")} · turn=${String(hit.sourceTurnId ?? hit.source_turn_id ?? "-")}`}
+              action={memoryId > 0 && props.onDeleteMemory ? {
+                label: "删除记忆",
+                onClick: () => props.onDeleteMemory?.(memoryId),
+              } : undefined}
+            />
+          );
+        }))}
+      </div>
+    );
   }
   if (props.result.kind === "get_turn_details") {
     const turns = vmmResultArray(props.result, "turns");
@@ -277,15 +302,39 @@ export function VmmToolResult(props: { result: VmmMemoryActionResult | null }) {
     const items = vmmResultArray(props.result, "items");
     return <div className="vmm-row-list">{items.map((item, index) => <VmmDataRow key={index} title={`memory=${String(item.memoryId ?? item.memory_id ?? "-")}`} detail={`deduped=${String(item.deduped ?? false)}`} />)}</div>;
   }
+  if (props.result.kind === "delete_memories") {
+    const response = vmmObject(props.result.response);
+    return (
+      <div className="vmm-row-list">
+        <VmmDataRow title="已删除" detail={vmmIdListText(response.deletedMemoryIds ?? response.deleted_memory_ids)} meta={`向量行 ${String(response.deletedVectorRows ?? response.deleted_vector_rows ?? 0)}`} />
+        <VmmDataRow title="未找到" detail={vmmIdListText(response.notFoundMemoryIds ?? response.not_found_memory_ids)} meta={`trace=${String(response.traceId ?? response.trace_id ?? "-")}`} />
+      </div>
+    );
+  }
   return <VmmJsonPreview title="结果" value={props.result.response} />;
 }
 
 // VmmDataRow renders one compact result row.
 // VmmDataRow 渲染单条紧凑结果行。
-function VmmDataRow(props: { title: string; detail: string; meta?: string }) {
+function VmmDataRow(props: {
+  title: string
+  detail: string
+  meta?: string
+  action?: {
+    label: string
+    onClick: () => void
+  }
+}) {
   return (
     <article className="vmm-data-row">
-      <strong>{props.title}</strong>
+      <div className="vmm-data-row-header">
+        <strong>{props.title}</strong>
+        {props.action ? (
+          <button aria-label={props.action.label} className="vmm-row-action-button" onClick={props.action.onClick} title={props.action.label} type="button">
+            <Trash2 size={14} />
+          </button>
+        ) : null}
+      </div>
       <span>{props.detail}</span>
       {props.meta ? <small>{props.meta}</small> : null}
     </article>
@@ -340,4 +389,26 @@ function vmmArray(value: unknown): Record<string, unknown>[] {
 // vmmObject 将未知值规范化为对象。
 function vmmObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+// vmmNumber normalizes unknown values into a finite number.
+// vmmNumber 将未知值规范化为有限数字。
+function vmmNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+// vmmIdListText renders one unknown id list as compact text.
+// vmmIdListText 将未知 ID 列表渲染为紧凑文本。
+function vmmIdListText(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "无";
+  }
+  return value.map(String).join("、");
 }

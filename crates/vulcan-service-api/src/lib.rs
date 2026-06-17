@@ -607,9 +607,87 @@ pub struct ContextInjectionSnapshot {
     /// Dynamic per-turn injection cards.
     /// 按轮次生效的动态注入卡片。
     pub dynamic_cards: Vec<ContextInjectionCardSummary>,
+    /// Structured active VMM profile snapshot for static memory display.
+    /// 用于静态记忆展示的结构化 active VMM 画像快照。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub static_profile: Option<VmmStaticProfileSummary>,
     /// Static persistent injection cards.
     /// 持续生效的静态注入卡片。
     pub static_cards: Vec<ContextInjectionCardSummary>,
+}
+
+/// Summarizes the current active VMM profile nodes.
+/// 汇总当前 active VMM 画像节点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmStaticProfileSummary {
+    /// Unix-millis text captured when the profile snapshot was updated.
+    /// 画像快照更新时捕获的 Unix 毫秒文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Profile sections grouped by VMM target scope.
+    /// 按 VMM 目标作用域分组的画像段落。
+    pub sections: Vec<VmmStaticProfileSectionSummary>,
+}
+
+/// Summarizes one VMM profile target section.
+/// 汇总一个 VMM 画像目标段落。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmStaticProfileSectionSummary {
+    /// Stable target key such as team, space, project, or user.
+    /// 稳定目标键，例如 team、space、project 或 user。
+    pub target: String,
+    /// Uppercase target label displayed by the panel.
+    /// 面板展示的大写目标标签。
+    pub label: String,
+    /// Date groups under this target.
+    /// 当前目标下的日期分组。
+    pub dates: Vec<VmmStaticProfileDateGroupSummary>,
+}
+
+/// Summarizes one date group inside a VMM profile section.
+/// 汇总 VMM 画像段落内的单个日期分组。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmStaticProfileDateGroupSummary {
+    /// Human-readable profile date.
+    /// 人类可读画像日期。
+    pub date: String,
+    /// Active profile nodes for this date.
+    /// 当前日期下的 active 画像节点。
+    pub nodes: Vec<VmmStaticProfileNodeSummary>,
+}
+
+/// Summarizes one active VMM profile node for UI display.
+/// 汇总单个用于 UI 展示的 active VMM 画像节点。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VmmStaticProfileNodeSummary {
+    /// Durable VMM profile node id.
+    /// 长期 VMM 画像节点标识。
+    pub id: u64,
+    /// Priority marker such as P1.
+    /// 优先级标记，例如 P1。
+    pub priority: String,
+    /// Lifetime marker such as L2.
+    /// 生命周期标记，例如 L2。
+    pub level: String,
+    /// Refresh weight marker such as W3.
+    /// 刷新权重标记，例如 W3。
+    pub refresh_weight: String,
+    /// Atomic profile content.
+    /// 原子化画像内容。
+    pub content: String,
+    /// Source kind key returned by VMM.
+    /// VMM 返回的来源类型键。
+    pub source_kind: String,
+    /// Source row id such as the originating turn id.
+    /// 来源行标识，例如来源回合标识。
+    pub source_id: u64,
+    /// Bound user/project/team/space id.
+    /// 绑定的 user/project/team/space 标识。
+    pub bind_id: u64,
 }
 
 /// Summarizes one context injection source group.
@@ -648,6 +726,34 @@ pub struct ContextInjectionItemSummary {
     /// Optional source display label.
     /// 可选来源显示标签。
     pub source_display: Option<String>,
+    /// Optional stable injection dedupe key for current-session suppression.
+    /// 用于当前会话抑制的可选稳定注入去重键。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<String>,
+    /// Optional durable VMM memory id when this item comes from a memory row.
+    /// 当条目来自长期 VMM 记忆行时对应的可选记忆标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_id: Option<u64>,
+    /// Optional source turn id when the backing dialogue can be queried.
+    /// 当背后对话可查询时对应的可选来源回合标识。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<u64>,
+    /// Optional relevance score label.
+    /// 可选相关性评分标签。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_label: Option<String>,
+    /// Whether the item can query full turn detail.
+    /// 条目是否可以查询完整回合详情。
+    #[serde(default)]
+    pub has_dialogue: bool,
+    /// Optional VMM creation datetime.
+    /// 可选 VMM 创建时间。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_datetime: Option<String>,
+    /// Optional injection update timestamp.
+    /// 可选注入更新时间戳。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 /// Summarizes context token usage for the selected session composer.

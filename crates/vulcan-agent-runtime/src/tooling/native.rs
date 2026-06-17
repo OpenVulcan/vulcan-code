@@ -34,8 +34,8 @@ use vulcan_prompt_skills::{
 };
 use vulcan_tools_manager::{VulcanToolHostResult, VulcanToolInvocationResult};
 use vulcan_vmm::{
-    GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient, VmmClient,
-    VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
+    DeleteMemoriesRequest, GetTurnDetailsRequest, SearchMemoryEventsRequest, TonicVmmClient,
+    VmmClient, VmmConfigDiagnostic, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
     WriteMemoriesRequest, WriteMemoryItem,
 };
 
@@ -260,7 +260,8 @@ pub fn build_native_tool_catalog(
         build_mcp_server_list_tool(snapshot.clone()),
         build_vmm_memory_search_tool(snapshot.clone()),
         build_vmm_turn_details_tool(snapshot.clone()),
-        build_vmm_memory_write_tool(snapshot),
+        build_vmm_memory_write_tool(snapshot.clone()),
+        build_vmm_memory_delete_tool(snapshot),
     ];
 
     let mut definition_map = BTreeMap::new();
@@ -629,6 +630,32 @@ fn build_vmm_memory_write_tool(
     )
 }
 
+/// Builds the VMM memory-delete native tool.
+/// 构建 VMM 记忆删除原生工具。
+fn build_vmm_memory_delete_tool(
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from("vmm_memory_delete"),
+        name: String::from("vmm_memory_delete"),
+        description: String::from(
+            "Delete explicit VulcanMemoryMesh memory ids for the current configured user and project. Use only when the user asked to remove a memory or a recalled memory is clearly wrong, stale, or harmful.",
+        ),
+        help_text: Some(vmm_memory_delete_usage_help_markdown().to_string()),
+        ai_visible: true,
+        available_in_plan: false,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        vmm_memory_delete_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            let snapshot = snapshot.clone();
+            Box::pin(async move { execute_vmm_memory_delete_tool(request, snapshot).await })
+        },
+    )
+}
+
 /// One typed argument payload accepted by the host-owned `shell_command` native tool.
 /// 宿主自有 `shell_command` 原生工具接受的一份强类型参数载荷。
 #[derive(Debug, Clone, Deserialize)]
@@ -715,6 +742,19 @@ struct VmmMemoryWriteToolArgs {
     /// Direct memory items to persist.
     /// 需要持久化的主动记忆项集合。
     items: Vec<VmmMemoryWriteToolItemArgs>,
+}
+
+/// One typed argument payload accepted by `vmm_memory_delete`.
+/// `vmm_memory_delete` 接受的一份强类型参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct VmmMemoryDeleteToolArgs {
+    /// Durable VMM memory ids to delete.
+    /// 需要删除的长期 VMM 记忆标识集合。
+    #[serde(rename = "memoryIds")]
+    memory_ids: Vec<u64>,
+    /// Deletion reason used for audit logs.
+    /// 用于审计日志的删除原因。
+    reason: String,
 }
 
 /// One internal execution status returned by the host-owned shell-command runner.
@@ -1041,6 +1081,38 @@ fn vmm_memory_write_args_schema() -> Value {
             }
         },
         "required": ["items"],
+        "additionalProperties": false
+    })
+}
+
+/// Returns Markdown usage guidance for the VMM memory-delete tool.
+/// 返回 VMM 删除记忆工具的 Markdown 使用说明。
+fn vmm_memory_delete_usage_help_markdown() -> &'static str {
+    r#"Use `vmm_memory_delete` only for explicit durable memory ids. Valid reasons include: the user explicitly asked to remove a memory, a recalled memory is contradicted by newer user-approved information, or the memory contains wrong/stale/harmful data.
+
+Prefer deleting by `MEMORY_ID` shown in recalled VMM context or by `memory_id` returned from `vmm_memory_search`. Do not delete memories just because they are irrelevant to the current turn. Always include a concise audit reason."#
+}
+
+/// Builds the JSON Schema advertised to the model for `vmm_memory_delete`.
+/// 为 `vmm_memory_delete` 构建对模型声明的 JSON Schema。
+fn vmm_memory_delete_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "memoryIds": {
+                "type": "array",
+                "items": { "type": "integer", "minimum": 1 },
+                "minItems": 1,
+                "maxItems": 256,
+                "description": "One or more durable VMM memory ids to delete. Use MEMORY_ID labels from recalled context or memory_id values returned by vmm_memory_search."
+            },
+            "reason": {
+                "type": "string",
+                "maxLength": 1024,
+                "description": "Concise deletion reason for audit logs."
+            }
+        },
+        "required": ["memoryIds", "reason"],
         "additionalProperties": false
     })
 }
@@ -1464,6 +1536,51 @@ fn parse_vmm_memory_write_arguments(
         }
     }
     Ok(parsed)
+}
+
+/// Parses and validates VMM memory-delete arguments.
+/// 解析并校验 VMM 记忆删除参数。
+fn parse_vmm_memory_delete_arguments(
+    arguments: Value,
+) -> Result<VmmMemoryDeleteToolArgs, NativeToolError> {
+    let mut parsed =
+        serde_json::from_value::<VmmMemoryDeleteToolArgs>(arguments).map_err(|error| {
+            NativeToolError::new(format!(
+                "Failed to parse vmm_memory_delete arguments: {error}"
+            ))
+        })?;
+    parsed.memory_ids = normalized_vmm_memory_delete_ids(parsed.memory_ids)?;
+    parsed.reason = parsed.reason.trim().to_string();
+    if parsed.reason.is_empty() {
+        return Err(NativeToolError::new(
+            "The `reason` argument for vmm_memory_delete cannot be empty.",
+        ));
+    }
+    parsed.reason = parsed.reason.chars().take(1024).collect();
+    Ok(parsed)
+}
+
+/// Normalizes memory-delete ids by removing zeroes and duplicates.
+/// 通过移除零值和重复项归一化记忆删除标识。
+fn normalized_vmm_memory_delete_ids(memory_ids: Vec<u64>) -> Result<Vec<u64>, NativeToolError> {
+    let mut normalized = Vec::new();
+    for memory_id in memory_ids {
+        if memory_id == 0 || normalized.contains(&memory_id) {
+            continue;
+        }
+        normalized.push(memory_id);
+        if normalized.len() > 256 {
+            return Err(NativeToolError::new(
+                "The `memoryIds` argument for vmm_memory_delete cannot contain more than 256 ids.",
+            ));
+        }
+    }
+    if normalized.is_empty() {
+        return Err(NativeToolError::new(
+            "The `memoryIds` argument for vmm_memory_delete must contain positive memory ids.",
+        ));
+    }
+    Ok(normalized)
 }
 
 /// Resolves the effective VMM config for one native tool invocation.
@@ -2483,6 +2600,50 @@ async fn execute_vmm_memory_write_tool(
             "deduped": item.deduped,
         })).collect::<Vec<_>>(),
     })))
+}
+
+/// Executes the host-owned `vmm_memory_delete` tool.
+/// 执行宿主自有 `vmm_memory_delete` 工具。
+async fn execute_vmm_memory_delete_tool(
+    request: NativeToolExecutionRequest,
+    snapshot: Arc<NativeToolRuntimeSnapshot>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let parsed_args = parse_vmm_memory_delete_arguments(request.arguments.clone())?;
+    let config = effective_vmm_config_for_native_request(&request, &snapshot)?;
+    let client = connect_vmm_native_client(&config).await?;
+    let response = client
+        .delete_memories(DeleteMemoriesRequest {
+            user_id: config.user_id.unwrap_or_default(),
+            project_id: config.project_id.unwrap_or_default(),
+            memory_ids: parsed_args.memory_ids,
+            reason: parsed_args.reason,
+        })
+        .await
+        .map_err(vmm_memory_delete_native_error)?;
+
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "trace_id": response.trace_id,
+        "deleted_count": response.deleted_memory_ids.len(),
+        "not_found_count": response.not_found_memory_ids.len(),
+        "deleted_vector_rows": response.deleted_vector_rows,
+        "deleted_memory_ids": response.deleted_memory_ids,
+        "not_found_memory_ids": response.not_found_memory_ids,
+    })))
+}
+
+/// Converts VMM memory-delete errors into model-facing native tool errors.
+/// 将 VMM 记忆删除错误转换为面向模型的原生工具错误。
+fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeToolError {
+    if error.grpc_code == Some(12)
+        || error.kind.eq_ignore_ascii_case("unimplemented")
+        || error.message.to_ascii_lowercase().contains("unimplemented")
+    {
+        NativeToolError::new(
+            "The connected VMM service does not support DeleteMemories. Update VulcanMemoryMesh before using vmm_memory_delete.",
+        )
+    } else {
+        NativeToolError::new(error.to_string())
+    }
 }
 
 #[cfg(test)]

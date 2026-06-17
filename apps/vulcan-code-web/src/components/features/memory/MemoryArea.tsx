@@ -71,6 +71,8 @@ export function MemoryArea(props: {
   const [writeCategory, setWriteCategory] = React.useState("1");
   const [writePriority, setWritePriority] = React.useState("2");
   const [writeMemoryLevel, setWriteMemoryLevel] = React.useState("2");
+  const [deleteMemoryIds, setDeleteMemoryIds] = React.useState("");
+  const [deleteReason, setDeleteReason] = React.useState("");
 
   React.useEffect(() => {
     setGlobalDraft(props.snapshot.globalDraft);
@@ -98,7 +100,7 @@ export function MemoryArea(props: {
         projectId: scope === "project" ? projectId : null,
         payload,
       });
-      setResult(nextResult);
+      setResult((currentResult) => vmmResultAfterAction(currentResult, nextResult, action));
       setNotice(nextResult.summary);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -162,6 +164,8 @@ export function MemoryArea(props: {
     setTurnIds,
     setUserConfirmationCode,
     setUserRef,
+    setDeleteMemoryIds,
+    setDeleteReason,
     setWriteAbstract,
     setWriteCategory,
     setWriteDetails,
@@ -172,6 +176,8 @@ export function MemoryArea(props: {
     turnIds,
     userConfirmationCode,
     userRef,
+    deleteMemoryIds,
+    deleteReason,
     writeAbstract,
     writeCategory,
     writeDetails,
@@ -234,5 +240,74 @@ export function MemoryArea(props: {
       </div>
     </section>
   )
+}
+
+// vmmResultAfterAction preserves search results when deletion removes visible rows.
+// vmmResultAfterAction 在删除记忆移除可见行时保留当前搜索结果。
+function vmmResultAfterAction(
+  currentResult: VmmMemoryActionResult | null,
+  nextResult: VmmMemoryActionResult,
+  action: string,
+): VmmMemoryActionResult {
+  if (action !== "delete_memories" || currentResult?.kind !== "search_memory_events") {
+    return nextResult;
+  }
+  const deletedIds = vmmDeletedMemoryIdSet(nextResult.response);
+  if (deletedIds.size === 0) {
+    return currentResult;
+  }
+  return {
+    ...currentResult,
+    summary: nextResult.summary,
+    response: vmmSearchResultWithoutMemoryIds(currentResult.response, deletedIds),
+  };
+}
+
+// vmmDeletedMemoryIdSet extracts deleted ids from one delete response.
+// vmmDeletedMemoryIdSet 从删除响应中提取已删除标识集合。
+function vmmDeletedMemoryIdSet(response: unknown): Set<number> {
+  const object = vmmObject(response);
+  const values = object.deletedMemoryIds ?? object.deleted_memory_ids;
+  if (!Array.isArray(values)) {
+    return new Set();
+  }
+  return new Set(values.map(vmmNumber).filter((value) => value > 0));
+}
+
+// vmmSearchResultWithoutMemoryIds removes deleted hits from one search response.
+// vmmSearchResultWithoutMemoryIds 从搜索响应中移除已删除的命中项。
+function vmmSearchResultWithoutMemoryIds(response: unknown, deletedIds: Set<number>): unknown {
+  const object = vmmObject(response);
+  const groups = Array.isArray(object.results) ? object.results : [];
+  return {
+    ...object,
+    results: groups.map((group) => {
+      const groupObject = vmmObject(group);
+      const hits = Array.isArray(groupObject.hits) ? groupObject.hits : [];
+      return {
+        ...groupObject,
+        hits: hits.filter((hit) => !deletedIds.has(vmmNumber(vmmObject(hit).memoryId ?? vmmObject(hit).memory_id))),
+      };
+    }),
+  };
+}
+
+// vmmObject normalizes unknown values into an object.
+// vmmObject 将未知值规范化为对象。
+function vmmObject(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+// vmmNumber normalizes unknown values into a finite number.
+// vmmNumber 将未知值规范化为有限数字。
+function vmmNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 

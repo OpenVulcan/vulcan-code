@@ -2,16 +2,29 @@
 //! 设置界面使用的 VMM 管理 RPC 辅助逻辑。
 
 use vulcan_vmm::{
-    ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, DeleteProjectRequest,
-    DeleteProjectResponse, DeleteUserRequest, DeleteUserResponse, EnsureProjectRequest,
-    EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
-    GetProfileNodesRequest, GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse,
-    ListProjectsResponse, ListUsersResponse, MigrateProjectRequest, MigrateProjectResponse,
-    ProfileBundleMode, ProfileTarget, ResolveProjectRequest, ResolveProjectResponse,
-    ResolveUserRequest, ResolveUserResponse, SearchMemoryEventsRequest, SearchMemoryEventsResponse,
-    TonicVmmClient, VmmClient, VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig,
-    WriteMemoriesRequest, WriteMemoriesResponse, WriteMemoryItem,
+    ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, DeleteMemoriesRequest,
+    DeleteMemoriesResponse, DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest,
+    DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest,
+    GetProfileBundleResponse, GetProfileNodesRequest, GetProfileNodesResponse,
+    GetTurnDetailsRequest, GetTurnDetailsResponse, ListProjectsResponse, ListUsersResponse,
+    MigrateProjectRequest, MigrateProjectResponse, ProfileBundleMode, ProfileTarget,
+    ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse,
+    SearchMemoryEventsRequest, SearchMemoryEventsResponse, TonicVmmClient, VmmClient,
+    VmmConfigLayer, VmmEffectiveConfig, VmmTransportConfig, WriteMemoriesRequest,
+    WriteMemoriesResponse, WriteMemoryItem,
 };
+
+/// Maximum memory ids accepted by one delete action.
+/// 单次删除动作允许接收的最大记忆标识数量。
+const MAX_DELETE_MEMORY_IDS: usize = 256;
+
+/// Maximum audit reason characters accepted by one delete action.
+/// 单次删除动作允许接收的最大审计原因字符数。
+const MAX_DELETE_MEMORY_REASON_CHARS: usize = 1024;
+
+/// Fallback reason used when a manual delete omits one.
+/// 手工删除未提供原因时使用的兜底原因。
+const DEFAULT_DELETE_MEMORY_REASON: &str = "manual memory delete requested through Vulcan Code";
 
 /// One user-triggered VMM management action.
 /// 一种由用户触发的 VMM 管理动作。
@@ -151,6 +164,16 @@ pub enum VmmWorkbenchAction {
         /// 需要主动写入的记忆项。
         item: WriteMemoryItem,
     },
+    /// Delete explicit memory ids through the AI tool equivalent.
+    /// 通过 AI 工具等价入口删除明确指定的记忆标识。
+    DeleteMemories {
+        /// Durable memory ids requested for deletion.
+        /// 请求删除的长期记忆标识集合。
+        memory_ids: Vec<u64>,
+        /// Human or AI supplied deletion reason.
+        /// 人类或 AI 提供的删除原因。
+        reason: String,
+    },
 }
 
 /// Structured outcome returned by one VMM management action.
@@ -214,6 +237,9 @@ pub enum VmmManagementOutcome {
     /// Direct-write memory tool result.
     /// 主动写入记忆工具结果。
     WriteMemories(WriteMemoriesResponse),
+    /// Memory-delete tool result.
+    /// 记忆删除工具结果。
+    DeleteMemories(DeleteMemoriesResponse),
 }
 
 impl VmmManagementOutcome {
@@ -324,6 +350,13 @@ impl VmmManagementOutcome {
             Self::WriteMemories(response) => format!(
                 "主动写入完成：items={}；trace={}。",
                 response.items.len(),
+                response.trace_id
+            ),
+            Self::DeleteMemories(response) => format!(
+                "记忆删除完成：deleted={}；not_found={}；vectors={}；trace={}。",
+                response.deleted_memory_ids.len(),
+                response.not_found_memory_ids.len(),
+                response.deleted_vector_rows,
                 response.trace_id
             ),
         }
@@ -478,6 +511,9 @@ pub async fn run_vmm_workbench_action(
         }
         VmmWorkbenchAction::WriteMemories { session_id, item } => {
             run_vmm_write_memories(&client, &effective, session_id, item).await
+        }
+        VmmWorkbenchAction::DeleteMemories { memory_ids, reason } => {
+            run_vmm_delete_memories(&client, &effective, memory_ids, reason).await
         }
     }
 }
@@ -831,4 +867,81 @@ async fn run_vmm_write_memories(
         .await
         .map_err(|error| error.to_string())?;
     Ok(VmmManagementOutcome::WriteMemories(response))
+}
+
+/// Runs the memory-delete AI-tool equivalent against the configured user/project.
+/// 针对当前配置的用户与项目执行记忆删除 AI 工具等价调用。
+async fn run_vmm_delete_memories(
+    client: &TonicVmmClient,
+    effective: &VmmEffectiveConfig,
+    memory_ids: Vec<u64>,
+    reason: String,
+) -> Result<VmmManagementOutcome, String> {
+    let user_id = effective
+        .user_id
+        .ok_or_else(|| String::from("VMM 用户 ID 为空，无法删除记忆。"))?;
+    let project_id = effective
+        .project_id
+        .ok_or_else(|| String::from("VMM 项目 ID 为空，无法删除记忆。"))?;
+    let memory_ids = normalize_delete_memory_ids(memory_ids)?;
+    let reason = normalize_delete_memory_reason(reason);
+    let response = client
+        .delete_memories(DeleteMemoriesRequest {
+            user_id,
+            project_id,
+            memory_ids,
+            reason,
+        })
+        .await
+        .map_err(format_delete_memory_error)?;
+    Ok(VmmManagementOutcome::DeleteMemories(response))
+}
+
+/// Normalizes delete-memory ids by dropping zeroes and duplicates.
+/// 通过移除零值与重复项归一化待删除记忆标识。
+fn normalize_delete_memory_ids(memory_ids: Vec<u64>) -> Result<Vec<u64>, String> {
+    let mut normalized = Vec::new();
+    for memory_id in memory_ids {
+        if memory_id == 0 || normalized.contains(&memory_id) {
+            continue;
+        }
+        normalized.push(memory_id);
+        if normalized.len() > MAX_DELETE_MEMORY_IDS {
+            return Err(format!(
+                "单次最多删除 {MAX_DELETE_MEMORY_IDS} 条记忆，请拆分后重试。"
+            ));
+        }
+    }
+    if normalized.is_empty() {
+        return Err(String::from("记忆 ID 列表不能为空。"));
+    }
+    Ok(normalized)
+}
+
+/// Normalizes delete-memory reason with a stable fallback.
+/// 使用稳定兜底文本归一化删除记忆原因。
+fn normalize_delete_memory_reason(reason: String) -> String {
+    let reason = reason.trim();
+    let reason = if reason.is_empty() {
+        DEFAULT_DELETE_MEMORY_REASON
+    } else {
+        reason
+    };
+    reason
+        .chars()
+        .take(MAX_DELETE_MEMORY_REASON_CHARS)
+        .collect()
+}
+
+/// Formats VMM delete-memory transport errors with upgrade guidance.
+/// 将 VMM 删除记忆传输错误格式化为带升级指引的错误。
+fn format_delete_memory_error(error: vulcan_vmm::VmmClientError) -> String {
+    if error.grpc_code == Some(12)
+        || error.kind.eq_ignore_ascii_case("unimplemented")
+        || error.message.to_ascii_lowercase().contains("unimplemented")
+    {
+        String::from("当前 VMM 服务版本不支持删除记忆，请更新 VulcanMemoryMesh 后重试。")
+    } else {
+        error.to_string()
+    }
 }

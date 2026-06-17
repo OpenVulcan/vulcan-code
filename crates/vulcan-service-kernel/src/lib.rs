@@ -124,9 +124,11 @@ use vulcan_service_api::{
     SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
     VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
     VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
-    WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
-    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
+    VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
+    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    WorkbenchSnapshot,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
     webui_static_root_from_candidates,
 };
@@ -2734,6 +2736,9 @@ async fn service_run_vmm_memory_action(
     state: SharedServiceBridgeState,
     request: VmmMemoryActionRequest,
 ) -> Result<VmmMemoryActionResult, String> {
+    if request.action.trim() == "suppress_context_injection_item" {
+        return service_suppress_context_injection_item(state, request).await;
+    }
     let (layer, management_user_ref, management_project_ref, session_id) =
         vmm_action_context(&state, &request)?;
     let action = parse_vmm_memory_action(&request, session_id)?;
@@ -2746,6 +2751,82 @@ async fn service_run_vmm_memory_action(
     )
     .await?;
     vmm_memory_action_result(&request.action, request_preview, outcome)
+}
+
+/// Suppresses one context-injection item only for the selected session.
+/// 仅在当前选中会话中抑制单条上下文注入内容。
+async fn service_suppress_context_injection_item(
+    state: SharedServiceBridgeState,
+    request: VmmMemoryActionRequest,
+) -> Result<VmmMemoryActionResult, String> {
+    let dedupe_key = vmm_payload_text(&request.payload, "dedupeKey");
+    let memory_id = vmm_payload_u64(&request.payload, "memoryId");
+    if dedupe_key.is_none() && memory_id.is_none() {
+        return Err(String::from("缺少需要隐藏的记忆条目标识。"));
+    }
+
+    let (controller_runtime, workspace_snapshot, session_id, changed) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("工作区尚未载入，无法隐藏动态记忆。"))?;
+        let (session_id, runtime_state) = selected_session_runtime_state_mut(workspace)
+            .ok_or_else(|| String::from("请先选择一个可用会话。"))?;
+        let mut changed = false;
+        if let Some(dedupe_key) = dedupe_key.as_deref() {
+            changed |= runtime_state
+                .context_injection_state
+                .remove_items_by_dedupe_key(Some(InjectionKind::Transient), dedupe_key);
+        }
+        if !changed && let Some(memory_id) = memory_id {
+            changed |= runtime_state
+                .context_injection_state
+                .remove_items_by_metadata_u64(
+                    Some(InjectionKind::Transient),
+                    "memory_id",
+                    memory_id,
+                );
+        }
+        if changed {
+            runtime_state.updated_at = current_unix_millis_text();
+        }
+        (controller_runtime, workspace.clone(), session_id, changed)
+    };
+
+    if changed {
+        persist_workspace_session_update(
+            Some(&state),
+            controller_runtime,
+            &workspace_snapshot,
+            session_id,
+        )
+        .await?;
+    }
+
+    Ok(VmmMemoryActionResult {
+        action: request.action,
+        summary: if changed {
+            String::from("已在当前会话中隐藏该动态记忆。")
+        } else {
+            String::from("未找到需要隐藏的动态记忆，可能已被移除。")
+        },
+        kind: String::from("suppress_context_injection_item"),
+        request: json!({
+            "dedupeKey": dedupe_key,
+            "memoryId": memory_id,
+        }),
+        response: json!({
+            "changed": changed,
+            "suppressedDedupeKey": dedupe_key,
+            "suppressedMemoryId": memory_id,
+        }),
+    })
 }
 
 /// Saves one VMM memory configuration draft and refreshes the WebUI snapshot.
@@ -8323,6 +8404,12 @@ fn parse_vmm_memory_action(
                 },
             },
         ),
+        "delete_memories" => Ok(
+            vulcan_service_runtime::vmm_management::VmmWorkbenchAction::DeleteMemories {
+                memory_ids: vmm_payload_u64_list(payload, "memoryIds")?,
+                reason: vmm_payload_text(payload, "reason").unwrap_or_default(),
+            },
+        ),
         other => Err(format!("不支持的 VMM 记忆动作：{other}")),
     }
 }
@@ -8406,6 +8493,10 @@ fn vmm_memory_action_result(
         ),
         vulcan_service_runtime::vmm_management::VmmManagementOutcome::WriteMemories(response) => (
             "write_memories",
+            serde_json::to_value(response).map_err(vmm_json_error)?,
+        ),
+        vulcan_service_runtime::vmm_management::VmmManagementOutcome::DeleteMemories(response) => (
+            "delete_memories",
             serde_json::to_value(response).map_err(vmm_json_error)?,
         ),
     };
@@ -8748,6 +8839,7 @@ fn parse_vmm_profile_target(value: &str) -> Result<vulcan_vmm::ProfileTarget, St
         "project" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetProject),
         "team" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetTeam),
         "space" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetSpace),
+        "all" => Ok(vulcan_vmm::ProfileTarget::ProfileTargetAll),
         other => Err(format!("不支持的 VMM 画像目标：{other}")),
     }
 }
@@ -8795,6 +8887,16 @@ fn vmm_payload_i32(payload: &Value, key: &str) -> Option<i32> {
         .and_then(|value| i32::try_from(value).ok())
 }
 
+/// Reads one optional u64 from an action payload.
+/// 从动作载荷读取一个可选 u64。
+fn vmm_payload_u64(payload: &Value, key: &str) -> Option<u64> {
+    payload.get(key).and_then(|value| {
+        value
+            .as_u64()
+            .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+    })
+}
+
 /// Reads a string list from an action payload.
 /// 从动作载荷读取字符串列表。
 fn vmm_payload_string_list(payload: &Value, key: &str) -> Vec<String> {
@@ -8815,13 +8917,23 @@ fn vmm_payload_string_list(payload: &Value, key: &str) -> Vec<String> {
 /// Reads a u64 list from an action payload.
 /// 从动作载荷读取 u64 列表。
 fn vmm_payload_u64_list(payload: &Value, key: &str) -> Result<Vec<u64>, String> {
-    let values = vmm_payload_string_list(payload, key);
-    values
+    if let Some(values) = payload.get(key).and_then(Value::as_array) {
+        return values
+            .iter()
+            .map(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str()?.trim().parse::<u64>().ok())
+                    .ok_or_else(|| format!("无法解析 VMM u64 id：{value}"))
+            })
+            .collect();
+    }
+    vmm_payload_string_list(payload, key)
         .into_iter()
         .map(|value| {
             value
                 .parse::<u64>()
-                .map_err(|_| format!("无法解析 VMM turn id：{value}"))
+                .map_err(|_| format!("无法解析 VMM u64 id：{value}"))
         })
         .collect()
 }
@@ -19780,16 +19892,8 @@ fn context_injection_snapshot_from_runtime_state(
         &runtime_state.context_injection_state,
         Some(InjectionKind::Transient),
     ));
+    let static_profile = static_vmm_profile_snapshot(runtime_state);
     let mut static_cards = Vec::new();
-    if let Some(profile_card) = static_vmm_profile_panel_card(
-        runtime_state
-            .vmm_profile_sync
-            .base_profile_content
-            .as_deref(),
-        runtime_state.vmm_profile_sync.updated_at.as_deref(),
-    ) {
-        static_cards.push(profile_card);
-    }
     static_cards.extend(context_injection_cards_to_summary(
         context_injection_panel_cards_for_kind(
             &runtime_state.context_injection_state,
@@ -19799,6 +19903,7 @@ fn context_injection_snapshot_from_runtime_state(
 
     Some(ContextInjectionSnapshot {
         dynamic_cards,
+        static_profile,
         static_cards,
     })
 }
@@ -19817,6 +19922,15 @@ fn context_injection_cards_to_summary(
                 .items
                 .into_iter()
                 .map(|item| ContextInjectionItemSummary {
+                    dedupe_key: item.dedupe_key,
+                    memory_id: item
+                        .memory_id
+                        .or_else(|| context_injection_memory_id_from_detail(&item.detail)),
+                    turn_id: item.turn_id,
+                    score_label: item.score_label,
+                    has_dialogue: item.has_dialogue,
+                    created_datetime: item.created_datetime,
+                    updated_at: item.updated_at,
                     content: item.content,
                     detail: item.detail,
                     turn_label: item.turn_label,
@@ -19828,35 +19942,176 @@ fn context_injection_cards_to_summary(
         .collect()
 }
 
-/// Builds the static VMM profile card aligned with the iced side panel.
-/// 构建与 iced 侧面板一致的静态 VMM 画像卡片。
-fn static_vmm_profile_panel_card(
-    content: Option<&str>,
-    updated_at: Option<&str>,
-) -> Option<ContextInjectionCardSummary> {
-    let content = content
-        .map(str::trim)
-        .filter(|content| !content.is_empty())?;
-    let mut detail_lines = Vec::new();
-    if let Some(updated_at) = updated_at.map(str::trim).filter(|value| !value.is_empty()) {
-        detail_lines.push(format!("更新时间：{updated_at}"));
+/// Builds the structured static VMM profile snapshot from active profile nodes.
+/// 根据 active 画像节点构建结构化静态 VMM 画像快照。
+fn static_vmm_profile_snapshot(
+    state: &SessionRuntimeStateEntry,
+) -> Option<VmmStaticProfileSummary> {
+    let sections = static_vmm_profile_sections(&state.vmm_profile_sync.nodes_by_id);
+    if sections.is_empty() {
+        return None;
     }
-    detail_lines.push(String::from("来源：VMM profile system hook"));
-    detail_lines.push(String::from("内容："));
-    detail_lines.push(content.to_string());
+    Some(VmmStaticProfileSummary {
+        updated_at: state.vmm_profile_sync.updated_at.clone(),
+        sections,
+    })
+}
 
-    Some(ContextInjectionCardSummary {
-        tag: String::from("vmm_profile"),
-        description: String::from(
-            "VMM 画像基点。该静态上下文由系统提示词 hook 持续复用，面板仅用于查看。",
-        ),
-        items: vec![ContextInjectionItemSummary {
-            content: compact_panel_preview(content),
-            detail: detail_lines.join("\n"),
-            turn_label: None,
-            ttl_label: String::from("静态"),
-            source_display: Some(String::from("VMM profile")),
-        }],
+/// Groups active VMM profile nodes by target and profile date.
+/// 按目标作用域和画像日期分组 active VMM 画像节点。
+fn static_vmm_profile_sections(
+    nodes_by_id: &BTreeMap<u64, vulcan_vmm::ProfileNodeEntry>,
+) -> Vec<VmmStaticProfileSectionSummary> {
+    static_vmm_profile_targets()
+        .into_iter()
+        .filter_map(|target| static_vmm_profile_section(nodes_by_id, target))
+        .collect()
+}
+
+/// Builds one static VMM profile section for a target scope.
+/// 为单个目标作用域构建一个静态 VMM 画像段落。
+fn static_vmm_profile_section(
+    nodes_by_id: &BTreeMap<u64, vulcan_vmm::ProfileNodeEntry>,
+    target: vulcan_vmm::ProfileTarget,
+) -> Option<VmmStaticProfileSectionSummary> {
+    let mut grouped: BTreeMap<String, Vec<&vulcan_vmm::ProfileNodeEntry>> = BTreeMap::new();
+    for node in nodes_by_id.values().filter(|node| node.target == target) {
+        if node.content.trim().is_empty() {
+            continue;
+        }
+        grouped
+            .entry(static_vmm_profile_date(node))
+            .or_default()
+            .push(node);
+    }
+    if grouped.is_empty() {
+        return None;
+    }
+    let dates = grouped
+        .into_iter()
+        .map(|(date, mut nodes)| {
+            nodes.sort_by_key(|node| node.profile_node_id);
+            VmmStaticProfileDateGroupSummary {
+                date,
+                nodes: nodes
+                    .into_iter()
+                    .map(static_vmm_profile_node_summary)
+                    .collect(),
+            }
+        })
+        .collect();
+    Some(VmmStaticProfileSectionSummary {
+        target: static_vmm_profile_target_key(target).to_string(),
+        label: static_vmm_profile_target_label(target).to_string(),
+        dates,
+    })
+}
+
+/// Converts one active VMM node into a WebUI profile node summary.
+/// 将单个 active VMM 节点转换为 WebUI 画像节点摘要。
+fn static_vmm_profile_node_summary(
+    node: &vulcan_vmm::ProfileNodeEntry,
+) -> VmmStaticProfileNodeSummary {
+    VmmStaticProfileNodeSummary {
+        id: node.profile_node_id,
+        priority: static_vmm_profile_marker("P", &node.priority),
+        level: static_vmm_profile_marker("L", &node.level),
+        refresh_weight: format!("W{}", node.refresh_weight),
+        content: node.content.trim().to_string(),
+        source_kind: static_vmm_profile_source_kind(node.source_kind).to_string(),
+        source_id: node.source_id,
+        bind_id: node.bind_id,
+    }
+}
+
+/// Returns VMM profile targets in stable display order.
+/// 按稳定展示顺序返回 VMM 画像目标。
+fn static_vmm_profile_targets() -> [vulcan_vmm::ProfileTarget; 4] {
+    [
+        vulcan_vmm::ProfileTarget::ProfileTargetTeam,
+        vulcan_vmm::ProfileTarget::ProfileTargetSpace,
+        vulcan_vmm::ProfileTarget::ProfileTargetProject,
+        vulcan_vmm::ProfileTarget::ProfileTargetUser,
+    ]
+}
+
+/// Returns one compact target key for WebUI state.
+/// 返回一个用于 WebUI 状态的紧凑目标键。
+fn static_vmm_profile_target_key(target: vulcan_vmm::ProfileTarget) -> &'static str {
+    match target {
+        vulcan_vmm::ProfileTarget::ProfileTargetTeam => "team",
+        vulcan_vmm::ProfileTarget::ProfileTargetSpace => "space",
+        vulcan_vmm::ProfileTarget::ProfileTargetProject => "project",
+        vulcan_vmm::ProfileTarget::ProfileTargetUser => "user",
+        vulcan_vmm::ProfileTarget::ProfileTargetAll => "all",
+        vulcan_vmm::ProfileTarget::ProfileTargetUnspecified => "unspecified",
+    }
+}
+
+/// Returns the visible target label for one VMM profile scope.
+/// 返回单个 VMM 画像作用域的可见标签。
+fn static_vmm_profile_target_label(target: vulcan_vmm::ProfileTarget) -> &'static str {
+    match target {
+        vulcan_vmm::ProfileTarget::ProfileTargetTeam => "TEAM",
+        vulcan_vmm::ProfileTarget::ProfileTargetSpace => "SPACE",
+        vulcan_vmm::ProfileTarget::ProfileTargetProject => "PROJECT",
+        vulcan_vmm::ProfileTarget::ProfileTargetUser => "USER",
+        vulcan_vmm::ProfileTarget::ProfileTargetAll => "ALL",
+        vulcan_vmm::ProfileTarget::ProfileTargetUnspecified => "UNSPECIFIED",
+    }
+}
+
+/// Normalizes a VMM profile marker such as priority or lifetime.
+/// 规范化 VMM 画像优先级或生命周期标记。
+fn static_vmm_profile_marker(prefix: &str, value: &str) -> String {
+    let value = value.trim().to_ascii_uppercase();
+    if value.is_empty() {
+        return format!("{prefix}?");
+    }
+    if value.starts_with(prefix) {
+        value
+    } else {
+        format!("{prefix}{value}")
+    }
+}
+
+/// Returns the profile date label for one VMM profile node.
+/// 返回单个 VMM 画像节点的画像日期标签。
+fn static_vmm_profile_date(node: &vulcan_vmm::ProfileNodeEntry) -> String {
+    let date = node.profile_date.trim();
+    if date.is_empty() {
+        String::from("unknown-date")
+    } else {
+        date.to_string()
+    }
+}
+
+/// Converts a VMM profile source kind into a stable API key.
+/// 将 VMM 画像来源类型转换为稳定 API 键。
+fn static_vmm_profile_source_kind(kind: vulcan_vmm::ProfileNodeSourceKind) -> &'static str {
+    match kind {
+        vulcan_vmm::ProfileNodeSourceKind::ProfileNodeSourceKindTurnExtract => "turn_extract",
+        vulcan_vmm::ProfileNodeSourceKind::ProfileNodeSourceKindManualInstruction => {
+            "manual_instruction"
+        }
+        vulcan_vmm::ProfileNodeSourceKind::ProfileNodeSourceKindSystemSeed => "system_seed",
+        vulcan_vmm::ProfileNodeSourceKind::ProfileNodeSourceKindRetainedAfterUserDelete => {
+            "retained_after_user_delete"
+        }
+        vulcan_vmm::ProfileNodeSourceKind::ProfileNodeSourceKindUnspecified => "unspecified",
+    }
+}
+
+/// Extracts a durable VMM memory id from rendered VMM panel detail text.
+/// 从已渲染的 VMM 面板详情文本中提取长期 VMM 记忆标识。
+fn context_injection_memory_id_from_detail(detail: &str) -> Option<u64> {
+    detail.lines().find_map(|line| {
+        let value = line.trim().strip_prefix("记忆 ID：")?;
+        value
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|memory_id| *memory_id > 0)
     })
 }
 
@@ -24960,9 +25215,21 @@ mod tests {
     /// 确保每个前端业务 RPC 方法都有服务内核分发分支。
     #[test]
     fn frontend_service_rpc_methods_are_dispatched_by_kernel() {
-        let frontend_source = include_str!("../../../apps/vulcan-code-web/src/main.tsx");
+        let frontend_sources = [
+            include_str!(
+                "../../../apps/vulcan-code-web/src/service/conversation-actions-service.ts"
+            ),
+            include_str!(
+                "../../../apps/vulcan-code-web/src/service/conversation-tool-detail-service.ts"
+            ),
+            include_str!("../../../apps/vulcan-code-web/src/service/memory-actions-service.ts"),
+            include_str!("../../../apps/vulcan-code-web/src/service/project-actions-service.ts"),
+            include_str!("../../../apps/vulcan-code-web/src/service/settings-actions-service.ts"),
+            include_str!("../../../apps/vulcan-code-web/src/service/skills-actions-service.ts"),
+            include_str!("../../../apps/vulcan-code-web/src/service/workbench-snapshot-service.ts"),
+        ];
         let kernel_source = include_str!("lib.rs");
-        let methods = frontend_service_rpc_methods(frontend_source);
+        let methods = frontend_service_rpc_methods(&frontend_sources);
         assert!(
             !methods.is_empty(),
             "frontend service RPC method extraction should not be empty"
@@ -24978,13 +25245,15 @@ mod tests {
 
     /// Extracts literal serviceClient.request method names from frontend source.
     /// 从前端源码中提取字面量 serviceClient.request 方法名。
-    fn frontend_service_rpc_methods(source: &str) -> BTreeSet<String> {
+    fn frontend_service_rpc_methods(sources: &[&str]) -> BTreeSet<String> {
         let mut methods = BTreeSet::new();
-        let mut remaining = source;
-        while let Some(index) = remaining.find("serviceClient.request") {
-            remaining = &remaining[index + "serviceClient.request".len()..];
-            if let Some(method) = first_double_quoted_literal(remaining) {
-                methods.insert(method);
+        for source in sources {
+            let mut remaining = *source;
+            while let Some(index) = remaining.find("serviceClient.request") {
+                remaining = &remaining[index + "serviceClient.request".len()..];
+                if let Some(method) = first_double_quoted_literal(remaining) {
+                    methods.insert(method);
+                }
             }
         }
         methods

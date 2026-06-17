@@ -819,6 +819,7 @@ fn profile_target_label(target: ProfileTarget) -> &'static str {
         ProfileTarget::ProfileTargetSpace => "SPACE",
         ProfileTarget::ProfileTargetProject => "PROJECT",
         ProfileTarget::ProfileTargetUser => "USER",
+        ProfileTarget::ProfileTargetAll => "ALL",
         ProfileTarget::ProfileTargetUnspecified => "UNSPECIFIED",
     }
 }

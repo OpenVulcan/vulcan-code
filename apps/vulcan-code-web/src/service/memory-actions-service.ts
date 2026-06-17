@@ -123,6 +123,14 @@ function previewVmmActionResponse(action: string): unknown {
       traceId: "preview-trace",
     };
   }
+  if (action === "delete_memories") {
+    return {
+      deletedMemoryIds: [1],
+      notFoundMemoryIds: [],
+      deletedVectorRows: 1,
+      traceId: "preview-delete-trace",
+    };
+  }
   return { ok: true, preview: true };
 }
 

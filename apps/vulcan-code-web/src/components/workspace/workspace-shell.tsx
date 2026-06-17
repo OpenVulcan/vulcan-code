@@ -409,6 +409,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
           loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
           loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
+          onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
         >
           {props.mainView === "skills" ? (

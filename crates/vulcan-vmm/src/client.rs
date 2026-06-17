@@ -3,14 +3,15 @@
 
 use crate::protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
-    ChatCompactResponse, DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest,
-    DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest,
-    GetProfileBundleResponse, GetProfileNodesRequest, GetProfileNodesResponse,
-    GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse, ListProjectsResponse,
-    ListUsersResponse, MigrateProjectRequest, MigrateProjectResponse, PostActionRequest,
-    PostActionResponse, PreCheckRequest, PreCheckResponse, ResolveProjectRequest,
-    ResolveProjectResponse, ResolveUserRequest, ResolveUserResponse, SearchMemoryEventsRequest,
-    SearchMemoryEventsResponse, WriteMemoriesRequest, WriteMemoriesResponse,
+    ChatCompactResponse, DeleteMemoriesRequest, DeleteMemoriesResponse, DeleteProjectRequest,
+    DeleteProjectResponse, DeleteUserRequest, DeleteUserResponse, EnsureProjectRequest,
+    EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
+    GetProfileNodesRequest, GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse,
+    HealthzResponse, ListProjectsResponse, ListUsersResponse, MigrateProjectRequest,
+    MigrateProjectResponse, PostActionRequest, PostActionResponse, PreCheckRequest,
+    PreCheckResponse, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
+    ResolveUserResponse, SearchMemoryEventsRequest, SearchMemoryEventsResponse,
+    WriteMemoriesRequest, WriteMemoriesResponse,
 };
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -180,4 +181,11 @@ pub trait VmmClient: Send + Sync {
         &self,
         request: WriteMemoriesRequest,
     ) -> Result<WriteMemoriesResponse, VmmClientError>;
+
+    /// Calls VMM DeleteMemories.
+    /// 调用 VMM DeleteMemories。
+    async fn delete_memories(
+        &self,
+        request: DeleteMemoriesRequest,
+    ) -> Result<DeleteMemoriesResponse, VmmClientError>;
 }

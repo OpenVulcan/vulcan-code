@@ -563,6 +563,31 @@ impl ContextInjectionState {
         changed
     }
 
+    /// Removes active injection items whose structured metadata contains one exact u64 field.
+    /// 移除结构化元数据包含某个精确 u64 字段的活动注入内容项。
+    pub fn remove_items_by_metadata_u64(
+        &mut self,
+        kind: Option<InjectionKind>,
+        field: &str,
+        expected: u64,
+    ) -> bool {
+        let field = field.trim();
+        if field.is_empty() || expected == 0 {
+            return false;
+        }
+        let changed = self.remove_items_matching(kind, |item| {
+            item.metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(field))
+                .and_then(Value::as_u64)
+                == Some(expected)
+        });
+        if changed {
+            self.remove_empty_groups();
+        }
+        changed
+    }
+
     /// Builds the provider-facing resolved view without mutating persisted state.
     /// 构建面向 Provider 的解析视图，同时不修改持久化状态。
     pub fn resolve_view(&self) -> ResolvedInjectionView {
@@ -621,6 +646,38 @@ impl ContextInjectionState {
                     .map(|item| InjectionPanelItem {
                         content: registry.panel_content(item),
                         detail: registry.panel_detail(item),
+                        dedupe_key: item.dedupe_key.clone(),
+                        memory_id: item
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("memory_id"))
+                            .and_then(Value::as_u64),
+                        turn_id: item
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("turn_id"))
+                            .and_then(Value::as_u64),
+                        score_label: item
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("score"))
+                            .and_then(vmm_metadata_score_value)
+                            .filter(|score| score.is_finite())
+                            .map(|score| format!("{score:.3}")),
+                        has_dialogue: item
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("has_dialogue"))
+                            .and_then(Value::as_bool)
+                            .unwrap_or_default(),
+                        created_datetime: item
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("created_datetime"))
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
+                        updated_at: (!item.updated_at.trim().is_empty())
+                            .then(|| item.updated_at.clone()),
                         turn_label: item_turn_label(item, None),
                         ttl_label: item
                             .remaining_turns
@@ -695,6 +752,14 @@ pub struct ResolvedInjectionView {
     pub fingerprint: String,
 }
 
+/// Reads a VMM relevance score from numeric or string metadata.
+/// 从数字或字符串元数据中读取 VMM 相关性评分。
+fn vmm_metadata_score_value(value: &Value) -> Option<f64> {
+    value
+        .as_f64()
+        .or_else(|| value.as_str()?.trim().parse::<f64>().ok())
+}
+
 /// One simplified side-panel card for a rendered tag.
 /// 一个渲染标签对应的简洁侧面板卡片。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -720,6 +785,27 @@ pub struct InjectionPanelItem {
     /// Detailed hover text assembled by the renderer.
     /// 由渲染器组装的悬停详情文本。
     pub detail: String,
+    /// Stable item dedupe key used for precise current-session suppression.
+    /// 用于精确执行当前会话抑制的稳定条目去重键。
+    pub dedupe_key: Option<String>,
+    /// Durable VMM memory id when the item originates from a memory row.
+    /// 当条目来源于长期记忆行时对应的 VMM 记忆标识。
+    pub memory_id: Option<u64>,
+    /// Durable source turn id when the item can be traced back to a dialogue turn.
+    /// 当条目可回查到对话回合时对应的长期来源回合标识。
+    pub turn_id: Option<u64>,
+    /// Human-readable relevance score label prepared for UI display.
+    /// 为界面展示准备的人类可读相关性评分标签。
+    pub score_label: Option<String>,
+    /// Whether the backing VMM row can be queried for full turn detail.
+    /// 背后的 VMM 行是否可查询完整回合详情。
+    pub has_dialogue: bool,
+    /// Optional original creation datetime from the VMM record.
+    /// 来自 VMM 记录的可选原始创建时间。
+    pub created_datetime: Option<String>,
+    /// Optional injection item update timestamp.
+    /// 可选注入条目更新时间戳。
+    pub updated_at: Option<String>,
     /// Optional turn-origin label shown in the panel.
     /// 面板中展示的可选回合来源标签。
     pub turn_label: Option<String>,

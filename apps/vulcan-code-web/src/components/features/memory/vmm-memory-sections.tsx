@@ -99,6 +99,12 @@ export interface VmmSectionRenderProps {
   // Turn ids input.
   // 回合标识输入。
   turnIds: string
+  // Memory ids selected for deletion.
+  // 选中用于删除的记忆标识输入。
+  deleteMemoryIds: string
+  // Audit reason used by memory delete actions.
+  // 记忆删除动作使用的审计原因。
+  deleteReason: string
   // User deletion confirmation code.
   // 用户删除确认码。
   userConfirmationCode: string
@@ -141,6 +147,8 @@ export interface VmmSectionRenderProps {
   setSearchQueries: (value: string) => void
   setSearchTopK: (value: string) => void
   setTurnIds: (value: string) => void
+  setDeleteMemoryIds: (value: string) => void
+  setDeleteReason: (value: string) => void
   setUserConfirmationCode: (value: string) => void
   setUserRef: (value: string) => void
   setWriteAbstract: (value: string) => void
@@ -220,6 +228,8 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
           <VmmTextField label="检索查询" placeholder="多条用 | 分隔" value={props.searchQueries} onChange={props.setSearchQueries} />
           <VmmTextField label="Top K" placeholder="5" value={props.searchTopK} onChange={props.setSearchTopK} />
           <VmmTextField label="Turn IDs" placeholder="用逗号或 | 分隔" value={props.turnIds} onChange={props.setTurnIds} />
+          <VmmTextField label="删除 Memory IDs" placeholder="用逗号或 | 分隔" value={props.deleteMemoryIds} onChange={props.setDeleteMemoryIds} />
+          <VmmTextField label="删除原因" placeholder="错误、过期或用户要求删除" value={props.deleteReason} onChange={props.setDeleteReason} />
           <VmmTextField label="主动写入摘要" placeholder="记忆摘要" value={props.writeAbstract} onChange={props.setWriteAbstract} />
           <VmmTextField label="主动写入详情" placeholder="完整内容" value={props.writeDetails} onChange={props.setWriteDetails} />
           <VmmTextField label="Scope" placeholder="2" value={props.writeScopeLevel} onChange={props.setWriteScopeLevel} />
@@ -231,8 +241,15 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
           <VmmActionButton busy={props.busyAction === "search_memory_events"} icon={<Search size={15} />} label="SearchMemoryEvents" onClick={() => props.onRunAction("search_memory_events", { queries: props.searchQueries, topK: props.searchTopK })} />
           <VmmActionButton busy={props.busyAction === "get_turn_details"} icon={<FileText size={15} />} label="GetTurnDetails" onClick={() => props.onRunAction("get_turn_details", { turnIds: props.turnIds })} />
           <VmmActionButton busy={props.busyAction === "write_memories"} icon={<Database size={15} />} label="WriteMemories" onClick={() => props.onRunAction("write_memories", { abstractText: props.writeAbstract, details: props.writeDetails, scopeLevel: props.writeScopeLevel, category: props.writeCategory, priority: props.writePriority, memoryLevel: props.writeMemoryLevel })} />
+          <VmmActionButton danger busy={props.busyAction === "delete_memories"} icon={<Trash2 size={15} />} label="DeleteMemories" onClick={() => props.onRunAction("delete_memories", { memoryIds: props.deleteMemoryIds, reason: props.deleteReason })} />
         </div>
-        <VmmToolResult result={props.result} />
+        <VmmToolResult
+          result={props.result}
+          onDeleteMemory={(memoryId) => props.onRunAction("delete_memories", {
+            memoryIds: [memoryId],
+            reason: props.deleteReason || "manual memory delete from memory search result",
+          })}
+        />
       </section>
     );
   }

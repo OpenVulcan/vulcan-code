@@ -1065,6 +1065,27 @@ export interface ContextInjectionItemSummary {
   // Optional source display label.
   // 可选来源显示标签。
   sourceDisplay?: string | null;
+  // Optional stable injection dedupe key.
+  // 可选稳定注入去重键。
+  dedupeKey?: string | null;
+  // Optional durable VMM memory id.
+  // 可选长期 VMM 记忆标识。
+  memoryId?: number | null;
+  // Optional source turn id.
+  // 可选来源回合标识。
+  turnId?: number | null;
+  // Optional relevance score label.
+  // 可选相关性评分标签。
+  scoreLabel?: string | null;
+  // Whether full turn detail can be queried.
+  // 是否可以查询完整回合详情。
+  hasDialogue?: boolean;
+  // Optional VMM creation datetime.
+  // 可选 VMM 创建时间。
+  createdDatetime?: string | null;
+  // Optional injection update timestamp.
+  // 可选注入更新时间戳。
+  updatedAt?: string | null;
 }
 
 // ContextInjectionCardSummary describes one context injection source group.
@@ -1081,12 +1102,80 @@ export interface ContextInjectionCardSummary {
   items: ContextInjectionItemSummary[];
 }
 
+// VmmStaticProfileNodeSummary describes one active static VMM profile node.
+// VmmStaticProfileNodeSummary 描述单个 active 静态 VMM 画像节点。
+export interface VmmStaticProfileNodeSummary {
+  // Durable VMM profile node id.
+  // 长期 VMM 画像节点标识。
+  id: number;
+  // Priority marker such as P1.
+  // 优先级标记，例如 P1。
+  priority: string;
+  // Lifetime marker such as L2.
+  // 生命周期标记，例如 L2。
+  level: string;
+  // Refresh weight marker such as W3.
+  // 刷新权重标记，例如 W3。
+  refreshWeight: string;
+  // Atomic profile content.
+  // 原子化画像内容。
+  content: string;
+  // Source kind key returned by VMM.
+  // VMM 返回的来源类型键。
+  sourceKind: string;
+  // Source row id such as the originating turn id.
+  // 来源行标识，例如来源回合标识。
+  sourceId: number;
+  // Bound user/project/team/space id.
+  // 绑定的 user/project/team/space 标识。
+  bindId: number;
+}
+
+// VmmStaticProfileDateGroupSummary describes one date bucket inside a VMM profile section.
+// VmmStaticProfileDateGroupSummary 描述 VMM 画像段落内的单个日期分组。
+export interface VmmStaticProfileDateGroupSummary {
+  // Human-readable profile date.
+  // 人类可读画像日期。
+  date: string;
+  // Active profile nodes for this date.
+  // 当前日期下的 active 画像节点。
+  nodes: VmmStaticProfileNodeSummary[];
+}
+
+// VmmStaticProfileSectionSummary describes one target-scope static profile section.
+// VmmStaticProfileSectionSummary 描述单个目标作用域的静态画像段落。
+export interface VmmStaticProfileSectionSummary {
+  // Stable target key such as team, space, project, or user.
+  // 稳定目标键，例如 team、space、project 或 user。
+  target: string;
+  // Uppercase target label displayed by the panel.
+  // 面板展示的大写目标标签。
+  label: string;
+  // Date groups under this target.
+  // 当前目标下的日期分组。
+  dates: VmmStaticProfileDateGroupSummary[];
+}
+
+// VmmStaticProfileSummary describes the current active VMM profile snapshot.
+// VmmStaticProfileSummary 描述当前 active VMM 画像快照。
+export interface VmmStaticProfileSummary {
+  // Optional update timestamp captured by the backend.
+  // 后端捕获的可选更新时间。
+  updatedAt?: string | null;
+  // Profile sections grouped by VMM target scope.
+  // 按 VMM 目标作用域分组的画像段落。
+  sections: VmmStaticProfileSectionSummary[];
+}
+
 // ContextInjectionSnapshot describes dynamic and static context injection panels.
 // ContextInjectionSnapshot 描述动态与静态上下文注入面板数据。
 export interface ContextInjectionSnapshot {
   // Dynamic per-turn injection cards.
   // 按轮次生效的动态注入卡片。
   dynamicCards: ContextInjectionCardSummary[];
+  // Structured active VMM profile snapshot for static memory display.
+  // 用于静态记忆展示的结构化 active VMM 画像快照。
+  staticProfile?: VmmStaticProfileSummary | null;
   // Static persistent injection cards.
   // 持续生效的静态注入卡片。
   staticCards: ContextInjectionCardSummary[];

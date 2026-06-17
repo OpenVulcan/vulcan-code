@@ -728,7 +728,7 @@ fn native_descriptor_to_vulcan(descriptor: &NativeToolDescriptor) -> VulcanToolD
 fn native_tool_id_is_vmm_memory_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "vmm_memory_search" | "vmm_turn_details" | "vmm_memory_write"
+        "vmm_memory_search" | "vmm_turn_details" | "vmm_memory_write" | "vmm_memory_delete"
     )
 }
 
@@ -1446,6 +1446,7 @@ mod tests {
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
             String::from("vmm_memory_write"),
+            String::from("vmm_memory_delete"),
         ];
 
         let enabled_manager = build_vulcan_tools_manager(
@@ -1476,6 +1477,7 @@ mod tests {
         assert!(enabled_ids.iter().any(|id| id == "vmm_memory_search"));
         assert!(enabled_ids.iter().any(|id| id == "vmm_turn_details"));
         assert!(enabled_ids.iter().any(|id| id == "vmm_memory_write"));
+        assert!(enabled_ids.iter().any(|id| id == "vmm_memory_delete"));
 
         let disabled_manager = build_vulcan_tools_manager(
             Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),

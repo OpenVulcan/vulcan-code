@@ -51,6 +51,10 @@ const VMM_METADATA_HAS_DIALOGUE: &str = "has_dialogue";
 /// VMM 创建时间的元数据键。
 const VMM_METADATA_CREATED_DATETIME: &str = "created_datetime";
 
+/// Metadata key for durable VMM memory id.
+/// 长期 VMM 记忆标识的元数据键。
+const VMM_METADATA_MEMORY_ID: &str = "memory_id";
+
 /// Error returned while projecting hook payload into VMM requests.
 /// 将 hook payload 投影为 VMM 请求时返回的错误。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,13 +326,16 @@ fn vmm_context_item_to_injection_item(item: &ContextItem) -> Option<InjectionIns
         VMM_METADATA_TURN_ID: item.turn_id,
         VMM_METADATA_HAS_DIALOGUE: item.has_dialogue,
         VMM_METADATA_CREATED_DATETIME: item.created_datetime,
+        VMM_METADATA_MEMORY_ID: item.memory_id,
     });
-    let turn_identity = if item.has_dialogue && item.turn_id > 0 {
+    let item_identity = if item.memory_id > 0 {
+        format!("memory:{}", item.memory_id)
+    } else if item.has_dialogue && item.turn_id > 0 {
         format!("turn:{}", item.turn_id)
     } else {
         String::from("noturn")
     };
-    let dedupe_key = format!("{VMM_PRECHECK_MEMORY_RENDERER_ID}:{turn_identity}:{text}");
+    let dedupe_key = format!("{VMM_PRECHECK_MEMORY_RENDERER_ID}:{item_identity}:{text}");
     Some(InjectionInsertItem {
         content: text,
         renderer_id: Some(String::from(VMM_PRECHECK_MEMORY_RENDERER_ID)),
@@ -350,7 +357,13 @@ fn render_vmm_precheck_memory_model(item: &InjectionStateItem) -> String {
     let created_time = vmm_metadata_created_datetime(item)
         .map(|time| format!("|TIME:{time}"))
         .unwrap_or_default();
-    format!("[{turn_label}|SOURCE:{source_score}{created_time}]{text}")
+    let memory_id = vmm_metadata_memory_id(item);
+    let memory_label = if memory_id > 0 {
+        format!("|MEMORY_ID:{memory_id}")
+    } else {
+        String::new()
+    };
+    format!("[{turn_label}{memory_label}|SOURCE:{source_score}{created_time}]{text}")
 }
 
 /// Renders one compact VMM precheck memory panel row.
@@ -374,6 +387,10 @@ fn render_vmm_precheck_memory_detail(item: &InjectionStateItem) -> String {
     }
     if let Some(created_datetime) = vmm_metadata_created_datetime(item) {
         lines.push(format!("时间：{created_datetime}"));
+    }
+    let memory_id = vmm_metadata_memory_id(item);
+    if memory_id > 0 {
+        lines.push(format!("记忆 ID：{memory_id}"));
     }
     lines.push(format!("来源：{}", format_vmm_metadata_turn_label(item)));
     lines.push(format!(
@@ -451,6 +468,16 @@ fn vmm_metadata_turn_id(item: &InjectionStateItem) -> u64 {
     item.metadata
         .as_ref()
         .and_then(|metadata| metadata.get(VMM_METADATA_TURN_ID))
+        .and_then(Value::as_u64)
+        .unwrap_or_default()
+}
+
+/// Reads structured VMM memory id from one injection item.
+/// 从注入内容项读取结构化 VMM 记忆标识。
+fn vmm_metadata_memory_id(item: &InjectionStateItem) -> u64 {
+    item.metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get(VMM_METADATA_MEMORY_ID))
         .and_then(Value::as_u64)
         .unwrap_or_default()
 }
@@ -670,6 +697,14 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(11)
         );
+        assert_eq!(
+            insert.items[0]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(VMM_METADATA_MEMORY_ID))
+                .and_then(Value::as_u64),
+            Some(0)
+        );
         assert_eq!(insert.items[1].content, "detached memory");
         assert_eq!(insert.items[0].source_display.as_deref(), Some("VMM"));
     }
@@ -685,6 +720,7 @@ mod tests {
                 turn_id: 11,
                 has_dialogue: true,
                 created_datetime: String::from("2026-05-02 14:20:00"),
+                memory_id: 137,
             }],
             ..PreCheckResponse::default()
         };
@@ -707,16 +743,15 @@ mod tests {
         let cards = state.panel_cards_with_registry(&registry);
 
         assert!(view.transient_prefix.contains("<CURRENT_TURN>"));
-        assert!(
-            view.transient_prefix.contains(
-                "[TURN_ID:11|SOURCE:0.999|TIME:2026-05-02 14:20:00]memory one second line"
-            )
-        );
+        assert!(view.transient_prefix.contains(
+            "[TURN_ID:11|MEMORY_ID:137|SOURCE:0.999|TIME:2026-05-02 14:20:00]memory one second line"
+        ));
         assert_eq!(cards[0].items[0].content, "memory one second line");
         assert!(
             cards[0].items[0]
                 .detail
                 .contains("时间：2026-05-02 14:20:00")
         );
+        assert!(cards[0].items[0].detail.contains("记忆 ID：137"));
     }
 }

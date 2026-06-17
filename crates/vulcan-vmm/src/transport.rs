@@ -6,8 +6,10 @@ use crate::config::VmmEffectiveConfig;
 use crate::grpc::vmm_service_client::VmmServiceClient;
 use crate::grpc::{
     ApplyProfileInstructionRequest as GrpcApplyProfileInstructionRequest,
-    ChatCompactRequest as GrpcChatCompactRequest, DeleteProjectRequest as GrpcDeleteProjectRequest,
-    DeleteUserRequest as GrpcDeleteUserRequest, EnsureProjectRequest as GrpcEnsureProjectRequest,
+    ChatCompactRequest as GrpcChatCompactRequest,
+    DeleteMemoriesRequest as GrpcDeleteMemoriesRequest,
+    DeleteProjectRequest as GrpcDeleteProjectRequest, DeleteUserRequest as GrpcDeleteUserRequest,
+    EnsureProjectRequest as GrpcEnsureProjectRequest,
     GetProfileBundleRequest as GrpcGetProfileBundleRequest,
     GetProfileNodesRequest as GrpcGetProfileNodesRequest,
     GetTurnDetailsRequest as GrpcGetTurnDetailsRequest,
@@ -24,15 +26,15 @@ use crate::grpc::{
 };
 use crate::protocol::{
     ApplyProfileInstructionRequest, ApplyProfileInstructionResponse, ChatCompactRequest,
-    ChatCompactResponse, ContextItem, DeleteProjectRequest, DeleteProjectResponse,
-    DeleteUserRequest, DeleteUserResponse, EnsureProjectRequest, EnsureProjectResponse,
-    GetProfileBundleRequest, GetProfileBundleResponse, GetProfileNodesRequest,
-    GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse, HealthzResponse,
-    ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult, MemorySearchHit,
-    MigrateProjectRequest, MigrateProjectResponse, PostActionRequest, PostActionResponse,
-    PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode, PreCheckRequest,
-    PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind, ProfileTarget,
-    ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
+    ChatCompactResponse, ContextItem, DeleteMemoriesRequest, DeleteMemoriesResponse,
+    DeleteProjectRequest, DeleteProjectResponse, DeleteUserRequest, DeleteUserResponse,
+    EnsureProjectRequest, EnsureProjectResponse, GetProfileBundleRequest, GetProfileBundleResponse,
+    GetProfileNodesRequest, GetProfileNodesResponse, GetTurnDetailsRequest, GetTurnDetailsResponse,
+    HealthzResponse, ListProjectsResponse, ListUsersResponse, MemorySearchGroupResult,
+    MemorySearchHit, MigrateProjectRequest, MigrateProjectResponse, PostActionRequest,
+    PostActionResponse, PostActionTimelineItem, PostActionTimelineType, PreCheckRecallMode,
+    PreCheckRequest, PreCheckResponse, ProfileBundleMode, ProfileNodeEntry, ProfileNodeSourceKind,
+    ProfileTarget, ProjectEntry, ResolveProjectRequest, ResolveProjectResponse, ResolveUserRequest,
     ResolveUserResponse, RetiredProfileNodeEntry, SearchMemoryEventsRequest,
     SearchMemoryEventsResponse, TurnDetailEntry, UserEntry, WriteMemoriesRequest,
     WriteMemoriesResponse, WriteMemoryItem, WriteMemoryResultItem,
@@ -419,6 +421,20 @@ impl VmmClient for TonicVmmClient {
             .map_err(status_error)?;
         Ok(protocol_write_memories_response(response.into_inner()))
     }
+
+    /// Calls VMM DeleteMemories.
+    /// 调用 VMM DeleteMemories。
+    async fn delete_memories(
+        &self,
+        request: DeleteMemoriesRequest,
+    ) -> Result<DeleteMemoriesResponse, VmmClientError> {
+        let mut client = self.client.clone();
+        let response = client
+            .delete_memories(self.request(grpc_delete_memories_request(request), "deletememories")?)
+            .await
+            .map_err(status_error)?;
+        Ok(protocol_delete_memories_response(response.into_inner()))
+    }
 }
 
 /// Normalizes a host:port target into a tonic endpoint URL.
@@ -607,6 +623,17 @@ fn grpc_write_memories_request(request: WriteMemoriesRequest) -> GrpcWriteMemori
     }
 }
 
+/// Converts a protocol DeleteMemories request into generated protobuf shape.
+/// 将协议 DeleteMemories 请求转换为生成的 protobuf 结构。
+fn grpc_delete_memories_request(request: DeleteMemoriesRequest) -> GrpcDeleteMemoriesRequest {
+    GrpcDeleteMemoriesRequest {
+        user_id: request.user_id,
+        project_id: request.project_id,
+        memory_ids: request.memory_ids,
+        reason: request.reason,
+    }
+}
+
 /// Converts one protocol write-memory item into generated protobuf shape.
 /// 将单条协议写记忆项转换为生成的 protobuf 结构。
 fn grpc_write_memory_item(item: WriteMemoryItem) -> GrpcWriteMemoryItem {
@@ -660,6 +687,7 @@ fn grpc_profile_target(target: ProfileTarget) -> GrpcProfileTarget {
         ProfileTarget::ProfileTargetProject => GrpcProfileTarget::Project,
         ProfileTarget::ProfileTargetTeam => GrpcProfileTarget::Team,
         ProfileTarget::ProfileTargetSpace => GrpcProfileTarget::Space,
+        ProfileTarget::ProfileTargetAll => GrpcProfileTarget::All,
     }
 }
 
@@ -671,6 +699,7 @@ fn protocol_profile_target(target: i32) -> ProfileTarget {
         GrpcProfileTarget::Project => ProfileTarget::ProfileTargetProject,
         GrpcProfileTarget::Team => ProfileTarget::ProfileTargetTeam,
         GrpcProfileTarget::Space => ProfileTarget::ProfileTargetSpace,
+        GrpcProfileTarget::All => ProfileTarget::ProfileTargetAll,
         GrpcProfileTarget::Unspecified => ProfileTarget::ProfileTargetUnspecified,
     }
 }
@@ -964,6 +993,7 @@ fn protocol_precheck_response(response: crate::grpc::PreCheckResponse) -> PreChe
                 turn_id: item.turn_id,
                 has_dialogue: item.has_dialogue,
                 created_datetime: item.created_datetime,
+                memory_id: item.memory_id,
             })
             .collect(),
         degraded: response.degraded,
@@ -1042,6 +1072,19 @@ fn protocol_write_memories_response(
                 deduped: item.deduped,
             })
             .collect(),
+        trace_id: response.trace_id,
+    }
+}
+
+/// Converts generated protobuf DeleteMemories response into protocol shape.
+/// 将生成的 protobuf DeleteMemories 响应转换为协议结构。
+fn protocol_delete_memories_response(
+    response: crate::grpc::DeleteMemoriesResponse,
+) -> DeleteMemoriesResponse {
+    DeleteMemoriesResponse {
+        deleted_memory_ids: response.deleted_memory_ids,
+        not_found_memory_ids: response.not_found_memory_ids,
+        deleted_vector_rows: response.deleted_vector_rows,
         trace_id: response.trace_id,
     }
 }
