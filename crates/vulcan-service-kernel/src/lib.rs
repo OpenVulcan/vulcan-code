@@ -20840,19 +20840,31 @@ fn ai_capabilities(
                 })
                 .collect::<Vec<_>>();
             let native = ai_capability_has_native_path(kind, model_capabilities);
-            let bridged = configuration.has_usable_targets_for_kind(kind);
+            let bridged = ai_capability_has_active_bridge_path(kind, configuration, native);
             let available = native || bridged;
+            let enabled =
+                native || (bridged && !configuration.disabled_capability_kinds.contains(&kind));
             AiCapabilitySummary {
                 kind: kind.key().to_string(),
                 label: kind.label().to_string(),
                 available,
-                enabled: available && !configuration.disabled_capability_kinds.contains(&kind),
+                enabled,
                 native,
                 bridged,
                 targets,
             }
         })
         .collect()
+}
+
+/// Returns whether one semantic AI capability should expose an active host bridge for the current model.
+/// 返回指定语义 AI 能力在当前模型下是否应暴露有效宿主桥接路径。
+fn ai_capability_has_active_bridge_path(
+    kind: AiToolKind,
+    configuration: &vulcan_provider_config::config::PersistedAiToolConfiguration,
+    native_available: bool,
+) -> bool {
+    configuration.has_usable_targets_for_kind(kind) && !native_available
 }
 
 /// Returns whether one semantic AI capability has a provider-native path for the active model snapshot.
@@ -24632,6 +24644,52 @@ mod tests {
         assert!(image_capability.native);
         assert!(!image_capability.bridged);
         assert!(image_capability.targets.is_empty());
+    }
+
+    /// Verifies configured bridge targets do not mark image understanding as bridged when native image input is active.
+    /// 验证原生图片输入启用时，已配置桥接目标不会让图片理解被标记为桥接态。
+    #[test]
+    fn ai_capabilities_marks_understand_image_native_not_bridged_for_vision_model() {
+        let configuration = test_understand_image_ai_tool_configuration();
+        let model_capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text"), String::from("image")],
+            ..ResolvedModelCapabilities::default()
+        };
+        let summaries = ai_capabilities(&configuration, Some(&model_capabilities));
+        let image_capability = summaries
+            .iter()
+            .find(|summary| summary.kind == AiToolKind::UnderstandImage.key())
+            .expect("image-understanding capability summary should exist");
+
+        assert!(image_capability.available);
+        assert!(image_capability.enabled);
+        assert!(image_capability.native);
+        assert!(!image_capability.bridged);
+        assert_eq!(image_capability.targets.len(), 1);
+    }
+
+    /// Verifies disabling the bridge does not disable native image-understanding capability summaries.
+    /// 验证关闭桥接不会禁用原生图片理解能力摘要。
+    #[test]
+    fn ai_capabilities_keeps_understand_image_enabled_when_native_bridge_disabled() {
+        let mut configuration = test_understand_image_ai_tool_configuration();
+        configuration
+            .disabled_capability_kinds
+            .insert(AiToolKind::UnderstandImage);
+        let model_capabilities = ResolvedModelCapabilities {
+            input_modalities: vec![String::from("text"), String::from("image")],
+            ..ResolvedModelCapabilities::default()
+        };
+        let summaries = ai_capabilities(&configuration, Some(&model_capabilities));
+        let image_capability = summaries
+            .iter()
+            .find(|summary| summary.kind == AiToolKind::UnderstandImage.key())
+            .expect("image-understanding capability summary should exist");
+
+        assert!(image_capability.available);
+        assert!(image_capability.enabled);
+        assert!(image_capability.native);
+        assert!(!image_capability.bridged);
     }
 
     /// Verifies image understanding reports the host bridge path when a configured target exists for a text-only model.
