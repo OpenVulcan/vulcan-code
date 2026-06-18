@@ -8,6 +8,10 @@ import {
   useConversationTimelineVirtualWindow,
   type ConversationTimelineVirtualRestoreState,
 } from "@/components/conversation/conversation-virtualization";
+import {
+  createEmptyConversationSurfaceExpandedState,
+  type ConversationSurfaceExpandedState,
+} from "@/components/conversation/conversation-layout-restore";
 import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
 import {
   ConversationDetailModal,
@@ -42,14 +46,6 @@ const CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX = 220;
 // CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX is the fallback process-group height before measurement.
 // CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX 是测量前处理过程分组使用的兜底高度。
 const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
-
-// conversationProcessCollapseMemory keeps manual process fold state for this WebUI session only.
-// conversationProcessCollapseMemory 仅在当前 WebUI 会话内保留手动处理过程折叠状态。
-const conversationProcessCollapseMemory = new Map<string, boolean>();
-
-// conversationUserPromptExpansionMemory keeps manual user prompt expansion state for this WebUI session only.
-// conversationUserPromptExpansionMemory 仅在当前 WebUI 会话内保留手动用户提示词展开状态。
-const conversationUserPromptExpansionMemory = new Set<string>();
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -96,6 +92,12 @@ export function ConversationWorkspace(props: {
   // Persists the latest measured virtualizer state for the active surface.
   // 持久保存当前界面最新测量到的虚拟列表状态。
   onVirtualizerStateChange: (surfaceId: string, state: ConversationTimelineVirtualRestoreState | null) => void;
+  // Previously captured runtime expansion state for this surface.
+  // 当前界面此前捕获的运行期展开状态。
+  initialExpandedState: ConversationSurfaceExpandedState | null;
+  // Persists process and user-prompt expansion state for this surface.
+  // 持久保存当前界面的处理过程与用户提示词展开状态。
+  onExpandedStateChange: (surfaceId: string, state: ConversationSurfaceExpandedState) => void;
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
   footer?: React.ReactNode;
@@ -131,12 +133,12 @@ export function ConversationWorkspace(props: {
   // processCollapseOverrides stores user-toggled process fold states for the current UI session.
   // processCollapseOverrides 存储当前 UI 会话中用户手动切换的处理过程折叠状态。
   const [processCollapseOverrides, setProcessCollapseOverrides] = React.useState<Map<string, boolean>>(
-    () => new Map(conversationProcessCollapseMemory),
+    () => new Map(Object.entries(props.initialExpandedState?.processCollapsedByKey ?? {})),
   );
   // userPromptExpansionOverrides mirrors WebUI-session-only user prompt expansion memory for virtualized rows.
   // userPromptExpansionOverrides 镜像仅当前 WebUI 会话有效的用户提示词展开记忆，供虚拟行复挂载使用。
   const [userPromptExpansionOverrides, setUserPromptExpansionOverrides] = React.useState<Set<string>>(
-    () => new Set(conversationUserPromptExpansionMemory),
+    () => new Set(props.initialExpandedState?.expandedUserPromptIds ?? []),
   );
   const timelineItems = React.useMemo(
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
@@ -164,23 +166,47 @@ export function ConversationWorkspace(props: {
     const surfaceId = props.conversation?.id ?? props.parentConversationId ?? "unknown";
     return `${surfaceId}:${process.id}`;
   }, [props.conversation?.id, props.parentConversationId]);
+  const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
+  const onExpandedStateChange = props.onExpandedStateChange;
+  const persistExpandedState = React.useCallback((
+    processCollapsedByKey: Map<string, boolean>,
+    expandedUserPromptIds: Set<string>,
+  ) => {
+    if (!surfaceRestoreId) {
+      return;
+    }
+    onExpandedStateChange(surfaceRestoreId, {
+      expandedUserPromptIds: Array.from(expandedUserPromptIds),
+      processCollapsedByKey: Object.fromEntries(processCollapsedByKey),
+    });
+  }, [onExpandedStateChange, surfaceRestoreId]);
   const handleProcessCollapsedChange = React.useCallback((process: ConversationProcessRenderItem, collapsed: boolean) => {
     const key = processCollapseKey(process);
-    conversationProcessCollapseMemory.set(key, collapsed);
     setProcessCollapseOverrides((current) => {
       const next = new Map(current);
       next.set(key, collapsed);
+      persistExpandedState(next, userPromptExpansionOverrides);
       return next;
     });
-  }, [processCollapseKey]);
+  }, [persistExpandedState, processCollapseKey, userPromptExpansionOverrides]);
   const handleUserPromptExpandedChange = React.useCallback((messageKey: string, expanded: boolean) => {
-    if (expanded) {
-      conversationUserPromptExpansionMemory.add(messageKey);
-    } else {
-      conversationUserPromptExpansionMemory.delete(messageKey);
-    }
-    setUserPromptExpansionOverrides(new Set(conversationUserPromptExpansionMemory));
-  }, []);
+    setUserPromptExpansionOverrides((current) => {
+      const next = new Set(current);
+      if (expanded) {
+        next.add(messageKey);
+      } else {
+        next.delete(messageKey);
+      }
+      persistExpandedState(processCollapseOverrides, next);
+      return next;
+    });
+  }, [persistExpandedState, processCollapseOverrides]);
+
+  React.useEffect(() => {
+    const nextExpandedState = props.initialExpandedState ?? createEmptyConversationSurfaceExpandedState();
+    setProcessCollapseOverrides(new Map(Object.entries(nextExpandedState.processCollapsedByKey)));
+    setUserPromptExpansionOverrides(new Set(nextExpandedState.expandedUserPromptIds));
+  }, [props.initialExpandedState, surfaceRestoreId]);
 
   React.useEffect(() => {
     if (!props.sessionRunning) {

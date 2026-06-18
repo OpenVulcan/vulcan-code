@@ -38,6 +38,9 @@ export interface AdaptiveToolPanelProps {
   // Panel content rendered when expanded or collapsed.
   // 展开或折叠时渲染的面板内容。
   panel: React.ReactNode;
+  // Called immediately before the panel switches reserve or overlay mode.
+  // 面板切换占位或浮动模式前立即调用。
+  onLayoutModeWillChange?: () => void;
   // Main content that may receive reserved inline space.
   // 可能接收内联预留空间的主内容。
   children: React.ReactNode;
@@ -58,6 +61,9 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
   // panelSize stores the measured slot size so panel content can animate between states.
   // panelSize 保存已测量的插槽尺寸，使面板内容可在状态之间动画切换。
   const [panelSize, setPanelSize] = React.useState<{ height: number; width: number } | null>(null);
+  // reservesContentRef exposes the newest reserve mode inside ResizeObserver callbacks.
+  // reservesContentRef 在 ResizeObserver 回调中暴露最新占位模式。
+  const reservesContentRef = React.useRef(reservesContent);
   // panelWidth stores the fixed panel width used by CSS variables.
   // panelWidth 保存 CSS 变量使用的固定面板宽度。
   const panelWidth = props.panelWidth ?? 176;
@@ -70,6 +76,9 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
   // inlineGap stores the space between the reserved panel and content padding.
   // inlineGap 保存预留面板与内容 padding 之间的间距。
   const inlineGap = props.inlineGap ?? 24;
+  // onLayoutModeWillChange stores the optional layout-preservation callback.
+  // onLayoutModeWillChange 保存可选的布局保持回调。
+  const onLayoutModeWillChange = props.onLayoutModeWillChange;
   // inlineOffset stores half of the reserved inline width for centered child overlays.
   // inlineOffset 保存预留内联宽度的一半，供子级居中浮层使用。
   const inlineOffset = (panelWidth + inlineGap) / 2;
@@ -83,13 +92,18 @@ export function AdaptiveToolPanel(props: AdaptiveToolPanelProps) {
     // updateReserveMode 在占位可容纳时保持内容居中。
     const updateReserveMode = () => {
       const width = element.getBoundingClientRect().width;
-      setReservesContent(width >= panelWidth + minContentWidth + reserveGap);
+      const nextReservesContent = width >= panelWidth + minContentWidth + reserveGap;
+      if (reservesContentRef.current !== nextReservesContent) {
+        onLayoutModeWillChange?.();
+        reservesContentRef.current = nextReservesContent;
+        setReservesContent(nextReservesContent);
+      }
     };
     updateReserveMode();
     const observer = new ResizeObserver(updateReserveMode);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [minContentWidth, panelWidth, reserveGap]);
+  }, [minContentWidth, onLayoutModeWillChange, panelWidth, reserveGap]);
 
   React.useEffect(() => {
     const element = panelMeasureRef.current;

@@ -15,6 +15,17 @@ export interface ConversationScrollSnapshot {
   wasAtBottom: boolean;
 }
 
+// ConversationViewportAnchorSnapshot stores one visible row anchor before layout changes.
+// ConversationViewportAnchorSnapshot 保存布局变化前的一条可见行锚点。
+export interface ConversationViewportAnchorSnapshot {
+  // Stable row key captured from the measured timeline row.
+  // 从已测量时间线行捕获的稳定行键。
+  rowKey: string;
+  // Row top offset relative to the scroll viewport top.
+  // 行顶部相对滚动视口顶部的偏移。
+  offsetTop: number;
+}
+
 // conversationDistanceFromBottom returns the scroll metric used by the sticky-footer transcript.
 // conversationDistanceFromBottom 返回粘性底部转录布局使用的滚动距离指标。
 export function conversationDistanceFromBottom(element: HTMLElement): number {
@@ -26,6 +37,47 @@ export function conversationDistanceFromBottom(element: HTMLElement): number {
 export function conversationScrollToDistanceFromBottom(element: HTMLElement, distanceFromBottom: number): void {
   const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
   element.scrollTop = Math.max(0, Math.min(maxScrollTop, element.scrollHeight - element.clientHeight - distanceFromBottom));
+}
+
+// captureConversationViewportAnchor captures the first visible virtualized timeline row.
+// captureConversationViewportAnchor 捕获第一条可见的虚拟时间线行。
+export function captureConversationViewportAnchor(element: HTMLElement): ConversationViewportAnchorSnapshot | null {
+  const viewportRect = element.getBoundingClientRect();
+  const rows = element.querySelectorAll<HTMLElement>("[data-conversation-row-key]");
+  for (const row of rows) {
+    const rowKey = row.dataset.conversationRowKey;
+    if (!rowKey) {
+      continue;
+    }
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.bottom < viewportRect.top || rowRect.top > viewportRect.bottom) {
+      continue;
+    }
+    return {
+      offsetTop: rowRect.top - viewportRect.top,
+      rowKey,
+    };
+  }
+  return null;
+}
+
+// restoreConversationViewportAnchor restores a captured row to the same visual offset.
+// restoreConversationViewportAnchor 将捕获的行恢复到相同视觉偏移。
+export function restoreConversationViewportAnchor(
+  element: HTMLElement,
+  anchor: ConversationViewportAnchorSnapshot,
+): boolean {
+  const viewportRect = element.getBoundingClientRect();
+  const rows = element.querySelectorAll<HTMLElement>("[data-conversation-row-key]");
+  for (const row of rows) {
+    if (row.dataset.conversationRowKey !== anchor.rowKey) {
+      continue;
+    }
+    const rowRect = row.getBoundingClientRect();
+    element.scrollTop += rowRect.top - viewportRect.top - anchor.offsetTop;
+    return true;
+  }
+  return false;
 }
 
 // buildConversationStreamSignature returns a compact content signature for tail-follow decisions.

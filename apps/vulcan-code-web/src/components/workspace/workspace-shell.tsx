@@ -14,6 +14,7 @@ import type {
 import {
   parseConversationBlocks,
 } from "@/components/conversation/conversation-transcript";
+import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import {
   activeSkillHeaderSummary,
   type SkillActionProps,
@@ -312,6 +313,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionTodoExpanded stores the shared adaptive menu state for the chat TODO panel.
   // sessionTodoExpanded 保存会话 TODO 共享自适应面板展开状态。
   const [sessionTodoExpanded, setSessionTodoExpanded] = React.useState(true);
+  // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
+  // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
+  const notifyConversationLayoutWillChange = React.useCallback(() => {
+    dispatchConversationLayoutWillChange();
+  }, []);
   // luaInstallDialogOpen controls the workspace LuaSkills install dialog.
   // luaInstallDialogOpen 控制工作区 LuaSkills 安装弹窗。
   const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false);
@@ -327,11 +333,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
+    notifyConversationLayoutWillChange();
     setLeftAutoCollapsed(false);
-  }, []);
+  }, [notifyConversationLayoutWillChange]);
   // handleRightPanelToggle clears automatic restore intent when the user toggles the right panel manually.
   // handleRightPanelToggle 在用户手动切换右侧面板时清除自动恢复意图。
   const handleRightPanelToggle = React.useCallback(() => {
+    notifyConversationLayoutWillChange();
     const nextOpen = !rightPanelOpen;
     if (!nextOpen) {
       setRightPanelFloating(false);
@@ -346,14 +354,22 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
     setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
     setRightPanelOpen(true);
-  }, [rightPanelOpen, sidebar.open]);
+  }, [notifyConversationLayoutWillChange, rightPanelOpen, sidebar.open]);
+
+  // handleSessionTodoExpandedChange preserves the transcript viewport before TODO panel shape changes.
+  // handleSessionTodoExpandedChange 在 TODO 面板形态变化前保留转录视口。
+  const handleSessionTodoExpandedChange = React.useCallback((expanded: boolean) => {
+    notifyConversationLayoutWillChange();
+    setSessionTodoExpanded(expanded);
+  }, [notifyConversationLayoutWillChange]);
 
   React.useEffect(() => {
     if (!hasSelectedChatConversation && rightPanelOpen) {
+      notifyConversationLayoutWillChange();
       setRightPanelOpen(false);
       setRightPanelFloating(false);
     }
-  }, [hasSelectedChatConversation, rightPanelOpen]);
+  }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, rightPanelOpen]);
 
   // runSkillHeaderAction wraps registered skill header actions with busy feedback.
   // runSkillHeaderAction 为注册的技能标题栏动作包裹忙碌反馈。
@@ -474,9 +490,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
       const mainWidth = width - leftWidth - dockedRightWidth - shellGaps;
       if (effectiveRightPanelOpen) {
+        if (rightPanelFloating !== shouldFloatRightPanel) {
+          notifyConversationLayoutWillChange();
+        }
         setRightPanelFloating(shouldFloatRightPanel);
       }
       if (mainWidth < 800 && sidebar.open) {
+        notifyConversationLayoutWillChange();
         sidebar.setOpen(false);
         setLeftAutoCollapsed(true);
         return;
@@ -489,6 +509,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
         const restoredMainWidth = width - expandedLeftWidth - restoredRightWidth - restoredShellGaps;
         if (restoredMainWidth >= 800) {
+          notifyConversationLayoutWillChange();
           sidebar.setOpen(true);
           setLeftAutoCollapsed(false);
           return;
@@ -497,7 +518,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [effectiveRightPanelOpen, leftAutoCollapsed, rightPanelFloating, sidebar]);
+  }, [effectiveRightPanelOpen, leftAutoCollapsed, notifyConversationLayoutWillChange, rightPanelFloating, sidebar]);
 
   // pageDescriptor registers page-specific title, actions, content, and adaptive side panels.
   // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
@@ -519,6 +540,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       contentClassName: "workspace-skills-content",
       contentShellClassName: "workspace-skills-content-shell",
       expanded: skillsMenuExpanded,
+      onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: (
         <FloatingSkillMenu
           activeSubArea={props.activeSkillSubArea}
@@ -545,6 +567,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       contentClassName: "workspace-skills-content workspace-memory-content",
       contentShellClassName: "workspace-skills-content-shell",
       expanded: memoryMenuExpanded,
+      onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: (
         <FloatingMemoryMenu
           activeSubArea={props.activeMemorySubArea}
@@ -582,6 +605,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCopyText={props.onCopyText}
         onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+        layoutStabilityKey={[
+          props.selectedConversationId ?? "none",
+          props.selectedDraftConversation?.id ?? "persisted",
+          sessionTodoPlan ? "todo" : "no-todo",
+          sessionTodoExpanded ? "todo-expanded" : "todo-collapsed",
+          effectiveRightPanelOpen ? "context-open" : "context-closed",
+          rightPanelFloating ? "context-floating" : "context-docked",
+          sidebar.open ? "sidebar-open" : "sidebar-collapsed",
+        ].join("|")}
         onTrace={props.onTrace}
       />
     ),
@@ -593,11 +625,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       expanded: Boolean(sessionTodoPlan) && sessionTodoExpanded,
       inlineGap: 52,
       minContentWidth: 800,
+      onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: sessionTodoPlan ? (
         <ConversationSessionTodoPanel
           expanded={sessionTodoExpanded}
           todoPlan={sessionTodoPlan}
-          onExpandedChange={setSessionTodoExpanded}
+          onExpandedChange={handleSessionTodoExpandedChange}
         />
       ) : null,
       panelWidth: 320,

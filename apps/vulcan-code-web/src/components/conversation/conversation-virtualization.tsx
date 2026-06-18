@@ -20,12 +20,26 @@ export interface ConversationTimelineVirtualWindow<TItem> {
   virtualized: boolean;
 }
 
+// ConversationTimelineVirtualRenderedWindow describes the row range restored before measurement settles.
+// ConversationTimelineVirtualRenderedWindow 描述测量稳定前用于恢复的行范围。
+export interface ConversationTimelineVirtualRenderedWindow {
+  // Stable key of the first mounted row.
+  // 第一条已挂载行的稳定键。
+  anchorKey: string;
+  // Number of mounted rows in the restored window.
+  // 恢复窗口中的已挂载行数量。
+  count: number;
+}
+
 // ConversationTimelineVirtualRestoreState stores reusable layout measurements for one transcript surface.
 // ConversationTimelineVirtualRestoreState 保存单个转录界面可复用的布局测量信息。
 export interface ConversationTimelineVirtualRestoreState {
   // Previously measured row heights keyed by stable timeline row keys.
   // 按稳定时间线行键保存的历史测量行高。
   rowHeightsByKey: Record<string, number>;
+  // Previously mounted row window restored before distance-based fallback.
+  // 基于底部距离回退前优先恢复的历史挂载行窗口。
+  renderedWindow?: ConversationTimelineVirtualRenderedWindow | null;
 }
 
 // CONVERSATION_VIRTUALIZATION_MIN_ITEMS avoids adding measurement wrappers to short transcripts.
@@ -90,14 +104,33 @@ export function useConversationTimelineVirtualWindow<TItem>(
     new Map(Object.entries(initialVirtualizerState?.rowHeightsByKey ?? {})),
   );
   const cacheScopeKeyRef = React.useRef(cacheScopeKey);
+  const restoredWindowRef = React.useRef<ConversationTimelineVirtualRenderedWindow | null>(
+    initialVirtualizerState?.renderedWindow ?? null,
+  );
+  const latestRenderedWindowRef = React.useRef<ConversationTimelineVirtualRenderedWindow | null>(
+    initialVirtualizerState?.renderedWindow ?? null,
+  );
   const pendingInitialDistanceFromBottomRef = React.useRef<number | null>(Math.max(0, initialDistanceFromBottom));
   const [measureVersion, setMeasureVersion] = React.useState(0);
   const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0, width: 0 });
   if (cacheScopeKeyRef.current !== cacheScopeKey) {
     measuredHeightsRef.current = new Map(Object.entries(initialVirtualizerState?.rowHeightsByKey ?? {}));
     cacheScopeKeyRef.current = cacheScopeKey;
+    restoredWindowRef.current = initialVirtualizerState?.renderedWindow ?? null;
+    latestRenderedWindowRef.current = initialVirtualizerState?.renderedWindow ?? null;
     pendingInitialDistanceFromBottomRef.current = Math.max(0, initialDistanceFromBottom);
   }
+  const persistVirtualizerState = React.useCallback((renderedWindow: ConversationTimelineVirtualRenderedWindow | null) => {
+    const rowHeightsByKey = Object.fromEntries(measuredHeightsRef.current);
+    if (Object.keys(rowHeightsByKey).length === 0 && !renderedWindow) {
+      onVirtualizerStateChange(cacheScopeKey, null);
+      return;
+    }
+    onVirtualizerStateChange(cacheScopeKey, {
+      renderedWindow,
+      rowHeightsByKey,
+    });
+  }, [cacheScopeKey, onVirtualizerStateChange]);
   const onScroll = React.useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
@@ -182,11 +215,12 @@ export function useConversationTimelineVirtualWindow<TItem>(
     }
     if (changed) {
       setMeasureVersion((version) => version + 1);
-      onVirtualizerStateChange(cacheScopeKey, {
-        rowHeightsByKey: Object.fromEntries(measuredHeightsRef.current),
-      });
+      if (latestRenderedWindowRef.current && !liveKeys.has(latestRenderedWindowRef.current.anchorKey)) {
+        latestRenderedWindowRef.current = null;
+      }
+      persistVirtualizerState(latestRenderedWindowRef.current);
     }
-  }, [cacheScopeKey, itemKey, items, onVirtualizerStateChange]);
+  }, [itemKey, items, persistVirtualizerState]);
 
   const onRowHeight = React.useCallback((key: string, height: number) => {
     if (!Number.isFinite(height) || height <= 0) {
@@ -223,9 +257,7 @@ export function useConversationTimelineVirtualWindow<TItem>(
       && rowBottomBefore <= scrollElement.scrollTop + 1,
     );
     measuredHeightsRef.current.set(key, rounded);
-    onVirtualizerStateChange(cacheScopeKey, {
-      rowHeightsByKey: Object.fromEntries(measuredHeightsRef.current),
-    });
+    persistVirtualizerState(latestRenderedWindowRef.current);
     setMeasureVersion((version) => version + 1);
     if (!scrollElement) {
       return;
@@ -239,7 +271,7 @@ export function useConversationTimelineVirtualWindow<TItem>(
     if (shouldPreserveViewport) {
       scrollElement.scrollTop += heightDelta;
     }
-  }, [cacheScopeKey, estimateItemHeight, itemKey, items, onVirtualizerStateChange, scrollRef]);
+  }, [estimateItemHeight, itemKey, items, persistVirtualizerState, scrollRef]);
 
   const virtualWindow = React.useMemo<ConversationTimelineVirtualWindow<TItem>>(() => {
     void measureVersion;
@@ -264,15 +296,25 @@ export function useConversationTimelineVirtualWindow<TItem>(
     const effectiveScrollTop = pendingDistanceFromBottom === null
       ? viewport.scrollTop
       : Math.max(0, totalHeight - viewport.height - pendingDistanceFromBottom);
+    const restoredWindow = pendingDistanceFromBottom === null ? null : restoredWindowRef.current;
+    const restoredAnchorIndex = restoredWindow
+      ? items.findIndex((item) => itemKey(item) === restoredWindow.anchorKey)
+      : -1;
     const windowTop = Math.max(0, effectiveScrollTop - CONVERSATION_VIRTUALIZATION_OVERSCAN_PX);
     const windowBottom = effectiveScrollTop + viewport.height + CONVERSATION_VIRTUALIZATION_OVERSCAN_PX;
     let startIndex = 0;
-    while (startIndex < items.length && offsets[startIndex] + heights[startIndex] < windowTop) {
-      startIndex += 1;
-    }
-    let endIndex = startIndex;
-    while (endIndex < items.length && offsets[endIndex] <= windowBottom) {
-      endIndex += 1;
+    let endIndex = 0;
+    if (restoredWindow && restoredAnchorIndex >= 0) {
+      startIndex = restoredAnchorIndex;
+      endIndex = Math.min(items.length, restoredAnchorIndex + Math.max(1, restoredWindow.count));
+    } else {
+      while (startIndex < items.length && offsets[startIndex] + heights[startIndex] < windowTop) {
+        startIndex += 1;
+      }
+      endIndex = startIndex;
+      while (endIndex < items.length && offsets[endIndex] <= windowBottom) {
+        endIndex += 1;
+      }
     }
     const safeStart = Math.max(0, Math.min(startIndex, items.length - 1));
     const safeEnd = Math.max(safeStart + 1, Math.min(items.length, endIndex));
@@ -286,7 +328,24 @@ export function useConversationTimelineVirtualWindow<TItem>(
       measuring: true,
       virtualized: true,
     };
-  }, [cacheScopeKey, estimateItemHeight, itemKey, items, measureVersion, viewport.height, viewport.scrollTop, viewport.width]);
+  }, [estimateItemHeight, itemKey, items, measureVersion, viewport.height, viewport.scrollTop, viewport.width]);
+  React.useEffect(() => {
+    if (!virtualWindow.virtualized || virtualWindow.items.length === 0) {
+      latestRenderedWindowRef.current = null;
+      return;
+    }
+    const firstItem = virtualWindow.items[0]?.item;
+    if (!firstItem) {
+      latestRenderedWindowRef.current = null;
+      return;
+    }
+    const renderedWindow = {
+      anchorKey: itemKey(firstItem),
+      count: virtualWindow.items.length,
+    };
+    latestRenderedWindowRef.current = renderedWindow;
+    persistVirtualizerState(renderedWindow);
+  }, [itemKey, persistVirtualizerState, virtualWindow]);
   return { window: virtualWindow, onScroll, onRowHeight };
 }
 
@@ -322,7 +381,7 @@ export function ConversationTimelineVirtualRow(props: {
     return () => observer.disconnect();
   }, [onHeight, rowKey]);
   return (
-    <div className="timeline-virtual-row" ref={elementRef}>
+    <div className="timeline-virtual-row" data-conversation-row-key={rowKey} ref={elementRef}>
       {props.children}
     </div>
   );

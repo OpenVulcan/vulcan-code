@@ -249,6 +249,7 @@ export function WorkspaceResizableBody(props: {
       expanded={panel.expanded}
       inlineGap={panel.inlineGap}
       minContentWidth={panel.minContentWidth}
+      onLayoutModeWillChange={panel.onLayoutModeWillChange}
       panel={panel.panel}
       panelWidth={panel.panelWidth}
       reserveGap={panel.reserveGap}

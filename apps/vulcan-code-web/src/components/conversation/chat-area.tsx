@@ -33,11 +33,22 @@ import {
 } from "@/components/conversation/conversation-transcript";
 import {
   buildConversationStreamSignature,
+  captureConversationViewportAnchor,
   conversationDistanceFromBottom,
   conversationScrollToDistanceFromBottom,
   conversationViewportAllowsTailFollow,
+  restoreConversationViewportAnchor,
   type ConversationScrollSnapshot,
+  type ConversationViewportAnchorSnapshot,
 } from "@/components/conversation/chat-area-scroll";
+import {
+  CONVERSATION_LAYOUT_WILL_CHANGE_EVENT,
+} from "@/components/conversation/conversation-layout-events";
+import {
+  createConversationSurfaceLayoutRestoreState,
+  type ConversationSurfaceExpandedState,
+  type ConversationSurfaceLayoutRestoreState,
+} from "@/components/conversation/conversation-layout-restore";
 import type { ConversationBlock } from "@/components/conversation/conversation-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import { cn } from "@/lib/utils";
@@ -135,6 +146,9 @@ interface ChatAreaProps {
   // Emits lightweight click diagnostics.
   // 输出轻量点击诊断信息。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
+  // Stable layout key that changes when outer shared shell geometry changes.
+  // 外层共享外壳几何布局变化时更新的稳定布局键。
+  layoutStabilityKey?: string;
 }
 
 // ChatArea renders the conversation workspace and composer.
@@ -169,12 +183,20 @@ export function ChatArea(props: ChatAreaProps) {
   // renderedSurfaceConversationIdRef tracks the surface currently represented by the shared scroll element.
   // renderedSurfaceConversationIdRef 跟踪当前共享滚动元素代表的界面。
   const renderedSurfaceConversationIdRef = React.useRef<string | null>(activeSurfaceConversationId ?? null);
-  // conversationScrollSnapshotsRef keeps scroll restoration data per parent or child surface.
-  // conversationScrollSnapshotsRef 按主会话或子代理界面保存滚动恢复数据。
-  const conversationScrollSnapshotsRef = React.useRef<Map<string, ConversationScrollSnapshot>>(new Map());
-  // conversationVirtualizerStatesRef keeps measured row heights per parent or child surface.
-  // conversationVirtualizerStatesRef 按主会话或子代理界面保存已测量行高。
-  const conversationVirtualizerStatesRef = React.useRef<Map<string, ConversationTimelineVirtualRestoreState>>(new Map());
+  // conversationSurfaceLayoutStatesRef keeps scroll, virtualizer, and expansion restore data per surface.
+  // conversationSurfaceLayoutStatesRef 按界面保存滚动、虚拟列表与展开恢复数据。
+  const conversationSurfaceLayoutStatesRef = React.useRef<Map<string, ConversationSurfaceLayoutRestoreState>>(new Map());
+  // pendingLayoutViewportRef stores the viewport anchor captured before shell geometry changes.
+  // pendingLayoutViewportRef 保存外壳几何变化前捕获的视口锚点。
+  const pendingLayoutViewportRef = React.useRef<{
+    anchor: ConversationViewportAnchorSnapshot | null;
+    distanceFromBottom: number;
+    surfaceId: string;
+    wasAtBottom: boolean;
+  } | null>(null);
+  // layoutRestoreFramesRef stores scheduled viewport correction frames.
+  // layoutRestoreFramesRef 保存已排期的视口校正帧。
+  const layoutRestoreFramesRef = React.useRef<number[]>([]);
   // scrollRestoreGuardRef prevents transient restore measurements from overwriting tail-pinned memory.
   // scrollRestoreGuardRef 防止恢复过程中的临时测量覆盖贴底记忆。
   const scrollRestoreGuardRef = React.useRef<{ surfaceId: string; wasAtBottom: boolean } | null>(null);
@@ -242,6 +264,52 @@ export function ChatArea(props: ChatAreaProps) {
     () => buildConversationStreamSignature(messages),
     [messages],
   );
+  React.useEffect(() => {
+    const liveSurfaceIds = new Set(props.workbench.conversations.map((conversation) => conversation.id));
+    const navigation = props.workbench.subagentNavigation;
+    if (navigation) {
+      if (navigation.activeConversationId) {
+        liveSurfaceIds.add(navigation.activeConversationId);
+      }
+      for (const task of navigation.tasks ?? []) {
+        liveSurfaceIds.add(task.taskId);
+      }
+    }
+    for (const surfaceId of conversationSurfaceLayoutStatesRef.current.keys()) {
+      if (!liveSurfaceIds.has(surfaceId)) {
+        conversationSurfaceLayoutStatesRef.current.delete(surfaceId);
+      }
+    }
+  }, [props.workbench.conversations, props.workbench.subagentNavigation]);
+  // readConversationSurfaceLayoutState returns the current restore state without creating one.
+  // readConversationSurfaceLayoutState 读取当前恢复状态但不主动创建。
+  const readConversationSurfaceLayoutState = React.useCallback((surfaceId: string | null): ConversationSurfaceLayoutRestoreState | null => {
+    if (!surfaceId) {
+      return null;
+    }
+    return conversationSurfaceLayoutStatesRef.current.get(surfaceId) ?? null;
+  }, []);
+  // updateConversationSurfaceLayoutState merges one restore-state change for a surface.
+  // updateConversationSurfaceLayoutState 合并单个界面的恢复状态变化。
+  const updateConversationSurfaceLayoutState = React.useCallback((
+    surfaceId: string,
+    updater: (current: ConversationSurfaceLayoutRestoreState) => ConversationSurfaceLayoutRestoreState,
+  ) => {
+    const current = conversationSurfaceLayoutStatesRef.current.get(surfaceId)
+      ?? createConversationSurfaceLayoutRestoreState();
+    conversationSurfaceLayoutStatesRef.current.set(surfaceId, {
+      ...updater(current),
+      layoutVersion: current.layoutVersion + 1,
+    });
+  }, []);
+  // writeConversationScrollSnapshot stores the current scroll snapshot inside the surface restore state.
+  // writeConversationScrollSnapshot 将当前滚动快照写入界面恢复状态。
+  const writeConversationScrollSnapshot = React.useCallback((surfaceId: string, snapshot: ConversationScrollSnapshot) => {
+    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
+      ...current,
+      scroll: snapshot,
+    }));
+  }, [updateConversationSurfaceLayoutState]);
   // rememberConversationScrollSnapshot captures the current shared scroll element before route changes.
   // rememberConversationScrollSnapshot 在路由切换前捕获当前共享滚动元素状态。
   const rememberConversationScrollSnapshot = React.useCallback(() => {
@@ -251,12 +319,12 @@ export function ChatArea(props: ChatAreaProps) {
       return;
     }
     const wasAtBottom = conversationViewportAllowsTailFollow(element);
-    conversationScrollSnapshotsRef.current.set(surfaceId, {
+    writeConversationScrollSnapshot(surfaceId, {
       distanceFromBottom: conversationDistanceFromBottom(element),
       wasAtBottom,
     });
     shouldFollowConversationTailRef.current = wasAtBottom;
-  }, [activeSurfaceConversationId]);
+  }, [activeSurfaceConversationId, writeConversationScrollSnapshot]);
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
@@ -272,7 +340,7 @@ export function ChatArea(props: ChatAreaProps) {
     const restoreGuard = scrollRestoreGuardRef.current;
     if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !shouldFollow) {
       shouldFollowConversationTailRef.current = true;
-      conversationScrollSnapshotsRef.current.set(surfaceId, {
+      writeConversationScrollSnapshot(surfaceId, {
         distanceFromBottom: 0,
         wasAtBottom: true,
       });
@@ -281,13 +349,113 @@ export function ChatArea(props: ChatAreaProps) {
     }
     shouldFollowConversationTailRef.current = shouldFollow;
     if (surfaceId) {
-      conversationScrollSnapshotsRef.current.set(surfaceId, {
+      writeConversationScrollSnapshot(surfaceId, {
         distanceFromBottom: conversationDistanceFromBottom(element),
         wasAtBottom: shouldFollow,
       });
     }
     setIsAtConversationBottom(shouldFollow);
-  }, [activeSurfaceConversationId]);
+  }, [activeSurfaceConversationId, writeConversationScrollSnapshot]);
+
+  // clearLayoutRestoreFrames cancels pending viewport correction frames.
+  // clearLayoutRestoreFrames 取消待执行的视口校正帧。
+  const clearLayoutRestoreFrames = React.useCallback(() => {
+    for (const frame of layoutRestoreFramesRef.current) {
+      window.cancelAnimationFrame(frame);
+    }
+    layoutRestoreFramesRef.current = [];
+  }, []);
+  // capturePendingConversationLayoutViewport stores the current visual anchor before layout moves.
+  // capturePendingConversationLayoutViewport 在布局移动前保存当前视觉锚点。
+  const capturePendingConversationLayoutViewport = React.useCallback(() => {
+    const element = workspaceRef.current;
+    const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    if (!element || !surfaceId || isEmptyConversation || showConversationLoadingOnly) {
+      pendingLayoutViewportRef.current = null;
+      return;
+    }
+    const wasAtBottom = conversationViewportAllowsTailFollow(element);
+    pendingLayoutViewportRef.current = {
+      anchor: captureConversationViewportAnchor(element),
+      distanceFromBottom: conversationDistanceFromBottom(element),
+      surfaceId,
+      wasAtBottom,
+    };
+    writeConversationScrollSnapshot(surfaceId, {
+      distanceFromBottom: pendingLayoutViewportRef.current.distanceFromBottom,
+      wasAtBottom,
+    });
+  }, [activeSurfaceConversationId, isEmptyConversation, showConversationLoadingOnly, writeConversationScrollSnapshot]);
+  // restorePendingConversationLayoutViewport restores the captured viewport after layout settles.
+  // restorePendingConversationLayoutViewport 在布局稳定后恢复已捕获的视口。
+  const restorePendingConversationLayoutViewport = React.useCallback(() => {
+    const snapshot = pendingLayoutViewportRef.current;
+    const element = workspaceRef.current;
+    if (!snapshot || !element || element.dataset.conversationSurfaceId !== snapshot.surfaceId) {
+      return;
+    }
+    if (snapshot.wasAtBottom) {
+      element.scrollTop = element.scrollHeight;
+    } else if (!snapshot.anchor || !restoreConversationViewportAnchor(element, snapshot.anchor)) {
+      conversationScrollToDistanceFromBottom(element, snapshot.distanceFromBottom);
+    }
+    updateConversationBottomState();
+  }, [updateConversationBottomState]);
+  // schedulePendingConversationLayoutRestore replays viewport correction across multiple layout frames.
+  // schedulePendingConversationLayoutRestore 跨多个布局帧重放视口校正。
+  const schedulePendingConversationLayoutRestore = React.useCallback(() => {
+    clearLayoutRestoreFrames();
+    const runAfterFrame = (remainingFrames: number) => {
+      const frame = window.requestAnimationFrame(() => {
+        layoutRestoreFramesRef.current = layoutRestoreFramesRef.current.filter((candidate) => candidate !== frame);
+        restorePendingConversationLayoutViewport();
+        if (remainingFrames > 0) {
+          runAfterFrame(remainingFrames - 1);
+          return;
+        }
+        pendingLayoutViewportRef.current = null;
+      });
+      layoutRestoreFramesRef.current.push(frame);
+    };
+    runAfterFrame(4);
+  }, [clearLayoutRestoreFrames, restorePendingConversationLayoutViewport]);
+
+  React.useEffect(() => () => clearLayoutRestoreFrames(), [clearLayoutRestoreFrames]);
+
+  React.useEffect(() => {
+    const handleLayoutWillChange = () => {
+      capturePendingConversationLayoutViewport();
+      schedulePendingConversationLayoutRestore();
+    };
+    window.addEventListener(CONVERSATION_LAYOUT_WILL_CHANGE_EVENT, handleLayoutWillChange);
+    return () => window.removeEventListener(CONVERSATION_LAYOUT_WILL_CHANGE_EVENT, handleLayoutWillChange);
+  }, [capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
+
+  React.useLayoutEffect(() => {
+    if (!props.layoutStabilityKey) {
+      return;
+    }
+    schedulePendingConversationLayoutRestore();
+  }, [props.layoutStabilityKey, schedulePendingConversationLayoutRestore]);
+
+  React.useLayoutEffect(() => {
+    const element = workspaceRef.current?.querySelector<HTMLElement>(".conversation-scroll-content");
+    if (!element || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    let previousWidth = element.getBoundingClientRect().width;
+    const observer = new ResizeObserver(([entry]) => {
+      const nextWidth = entry.contentRect.width;
+      if (Math.abs(nextWidth - previousWidth) < 1) {
+        return;
+      }
+      previousWidth = nextWidth;
+      capturePendingConversationLayoutViewport();
+      schedulePendingConversationLayoutRestore();
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
 
   // handleOpenSubagentPanelFromTimeline preserves the current scroll before opening a child transcript.
   // handleOpenSubagentPanelFromTimeline 在打开子代理转录前保留当前滚动位置。
@@ -338,12 +506,22 @@ export function ChatArea(props: ChatAreaProps) {
     if (!surfaceId) {
       return;
     }
-    if (!state || Object.keys(state.rowHeightsByKey).length === 0) {
-      conversationVirtualizerStatesRef.current.delete(surfaceId);
+    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
+      ...current,
+      virtualizer: state,
+    }));
+  }, [updateConversationSurfaceLayoutState]);
+  // handleExpandedStateChange stores row expansion state beside scroll and virtualizer data.
+  // handleExpandedStateChange 将行展开状态与滚动、虚拟列表数据一起保存。
+  const handleExpandedStateChange = React.useCallback((surfaceId: string, state: ConversationSurfaceExpandedState) => {
+    if (!surfaceId) {
       return;
     }
-    conversationVirtualizerStatesRef.current.set(surfaceId, state);
-  }, []);
+    updateConversationSurfaceLayoutState(surfaceId, (current) => ({
+      ...current,
+      expandedState: state,
+    }));
+  }, [updateConversationSurfaceLayoutState]);
 
   React.useLayoutEffect(() => {
     if (!props.selectedConversationId || isEmptyConversation || showConversationLoadingOnly) {
@@ -357,10 +535,10 @@ export function ChatArea(props: ChatAreaProps) {
       selectedChanged
       && previousSurfaceId
       && element
-      && !conversationScrollSnapshotsRef.current.has(previousSurfaceId)
+      && !readConversationSurfaceLayoutState(previousSurfaceId)
       && shouldFollowConversationTailRef.current
     ) {
-      conversationScrollSnapshotsRef.current.set(previousSurfaceId, {
+      writeConversationScrollSnapshot(previousSurfaceId, {
         distanceFromBottom: 0,
         wasAtBottom: true,
       });
@@ -368,7 +546,7 @@ export function ChatArea(props: ChatAreaProps) {
     selectedConversationTailRef.current = activeSurfaceConversationId;
     renderedSurfaceConversationIdRef.current = activeSurfaceConversationId ?? null;
     const savedScrollSnapshot = selectedChanged && activeSurfaceConversationId
-      ? conversationScrollSnapshotsRef.current.get(activeSurfaceConversationId)
+      ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.scroll
       : null;
     const restoreSurfaceId = activeSurfaceConversationId;
     if (selectedChanged && savedScrollSnapshot && element && restoreSurfaceId) {
@@ -446,8 +624,10 @@ export function ChatArea(props: ChatAreaProps) {
     isEmptyConversation,
     jumpConversationToBottom,
     activeSurfaceConversationId,
+    readConversationSurfaceLayoutState,
     showConversationLoadingOnly,
     updateConversationBottomState,
+    writeConversationScrollSnapshot,
     props.selectedConversationId,
   ]);
 
@@ -562,12 +742,16 @@ export function ChatArea(props: ChatAreaProps) {
         onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
         scrollRef={workspaceRef}
         initialScrollDistanceFromBottom={activeSurfaceConversationId
-          ? conversationScrollSnapshotsRef.current.get(activeSurfaceConversationId)?.distanceFromBottom ?? 0
+          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.scroll.distanceFromBottom ?? 0
           : 0}
         initialVirtualizerState={activeSurfaceConversationId
-          ? conversationVirtualizerStatesRef.current.get(activeSurfaceConversationId) ?? null
+          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.virtualizer ?? null
           : null}
         onVirtualizerStateChange={handleTimelineVirtualizerStateChange}
+        initialExpandedState={activeSurfaceConversationId
+          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.expandedState ?? null
+          : null}
+        onExpandedStateChange={handleExpandedStateChange}
         footer={null}
         suppressEmptyPlaceholder={isEmptyConversation}
         onCopyText={props.onCopyText}

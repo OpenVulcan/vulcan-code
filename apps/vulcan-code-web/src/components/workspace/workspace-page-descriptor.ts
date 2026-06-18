@@ -34,6 +34,9 @@ export interface WorkspacePagePanelDescriptor {
   // Rendered panel body, including its own expanded and collapsed controls.
   // 渲染的面板主体，包含自身展开与折叠控件。
   panel: React.ReactNode;
+  // Called before the shared adaptive panel changes layout mode.
+  // 共享自适应面板切换布局模式前调用。
+  onLayoutModeWillChange?: () => void;
 }
 
 // WorkspacePageDescriptor describes the public chrome requested by one workspace page.
