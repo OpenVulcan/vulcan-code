@@ -38,6 +38,7 @@ import type {
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types"
+import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor"
 
 // ProviderConfigurationSaveRequest describes one provider form submission.
 // ProviderConfigurationSaveRequest 描述单次 Provider 表单提交。
@@ -218,6 +219,34 @@ function FeatureShell(props: {
         description: settingsHeaderSummary.detail,
       }
     : props.activeFeature
+  // pageDescriptor registers feature-page chrome through the shared workspace contract.
+  // pageDescriptor 通过共享工作区契约注册功能页外壳信息。
+  const pageDescriptor: WorkspacePageDescriptor = {
+    content: (
+      <FeatureShellContent
+        activeArea={props.activeArea}
+        activeMemorySubArea={activeMemorySubArea}
+        capabilityTargetsDialogOpen={capabilityTargetsDialogOpen}
+        activeSkillSubArea={activeSkillSubArea}
+        activeSettingsSubArea={props.activeSettingsSubArea}
+        editingProvider={editingProvider}
+        memoryActions={props.memoryActions}
+        modelListDialogOpen={modelListDialogOpen}
+        onEditingProviderChange={setEditingProvider}
+        onCapabilityTargetsDialogOpenChange={setCapabilityTargetsDialogOpen}
+        onModelListDialogOpenChange={setModelListDialogOpen}
+        onProviderPickerOpenChange={setProviderPickerOpen}
+        providerPickerOpen={providerPickerOpen}
+        settingsActions={props.settingsActions}
+        skillActions={props.skillActions}
+        startup={props.startup}
+        workbench={props.workbench}
+      />
+    ),
+    detail: headerFeature?.description,
+    headerActions: skillHeaderAction ?? settingsHeaderAction,
+    title: headerFeature?.label ?? "工作台",
+  }
 
   return (
     <SidebarProvider className="console-shell feature-shell">
@@ -235,31 +264,12 @@ function FeatureShell(props: {
       <SidebarInset>
         <div className="feature-main-shell">
           <FeatureHeader
-            action={skillHeaderAction ?? settingsHeaderAction}
             chromeActions={props.chromeActions}
+            descriptor={pageDescriptor}
             titlebarDragRegion={props.titlebarDragRegion}
             onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-            feature={headerFeature}
           />
-          <FeatureShellContent
-            activeArea={props.activeArea}
-            activeMemorySubArea={activeMemorySubArea}
-            capabilityTargetsDialogOpen={capabilityTargetsDialogOpen}
-            activeSkillSubArea={activeSkillSubArea}
-            activeSettingsSubArea={props.activeSettingsSubArea}
-            editingProvider={editingProvider}
-            memoryActions={props.memoryActions}
-            modelListDialogOpen={modelListDialogOpen}
-            onEditingProviderChange={setEditingProvider}
-            onCapabilityTargetsDialogOpenChange={setCapabilityTargetsDialogOpen}
-            onModelListDialogOpenChange={setModelListDialogOpen}
-            onProviderPickerOpenChange={setProviderPickerOpen}
-            providerPickerOpen={providerPickerOpen}
-            settingsActions={props.settingsActions}
-            skillActions={props.skillActions}
-            startup={props.startup}
-            workbench={props.workbench}
-          />
+          {pageDescriptor.content}
         </div>
         <LuaSkillInstallDialog
           actions={props.skillActions}
@@ -274,21 +284,18 @@ function FeatureShell(props: {
 // FeatureHeader renders the inset title bar for a non-console page.
 // FeatureHeader 渲染非控制台页面的内容区标题栏。
 function FeatureHeader(props: {
-  // Optional right-side action rendered in the feature header.
-  // 渲染在功能标题栏右侧的可选操作。
-  action?: React.ReactNode
   // App-wide chrome actions rendered at the far right of the feature header.
   // 渲染在功能标题栏最右侧的应用级窗口控制区。
   chromeActions?: React.ReactNode
+  // Shared page descriptor used to render title and actions.
+  // 用于渲染标题与操作区的共享页面描述。
+  descriptor: WorkspacePageDescriptor
   // Whether shared title bar empty space should be a native drag region.
   // 共享标题栏空白区域是否作为原生拖动区域。
   titlebarDragRegion?: boolean
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void
-  // Feature metadata displayed in the header.
-  // 标题栏中展示的功能元数据。
-  feature?: FeatureAreaSummary
 }) {
   return (
     <header className="console-header">
@@ -296,12 +303,12 @@ function FeatureHeader(props: {
         <SidebarTrigger />
         <span className="console-header-separator" aria-hidden="true" />
         <div
-          className="feature-header-title-stack"
+          className="workspace-custom-header-title"
           data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
           onDoubleClick={props.onTitlebarDoubleClick}
         >
-          <h1>{props.feature?.label ?? "工作台"}</h1>
-          {props.feature?.description ? <small>{props.feature.description}</small> : null}
+          <h1>{props.descriptor.title ?? "工作台"}</h1>
+          {props.descriptor.detail ? <small>{props.descriptor.detail}</small> : null}
         </div>
         <span
           aria-hidden="true"
@@ -311,7 +318,8 @@ function FeatureHeader(props: {
         />
       </div>
       <div className="console-header-actions">
-        {props.action}
+        {props.descriptor.headerActions}
+        {props.descriptor.headerRightActions}
         {props.chromeActions}
       </div>
     </header>

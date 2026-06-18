@@ -1466,24 +1466,6 @@ button {
   gap: 12px;
 }
 
-.feature-header-title-stack {
-  min-width: 0;
-  flex: 0 1 auto;
-  display: grid;
-  gap: 2px;
-  transform: translateY(-2px);
-}
-
-.feature-header-title-stack small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .workspace-custom-header .console-header-main {
   align-self: stretch;
   align-items: center;
@@ -1491,14 +1473,16 @@ button {
 
 .workspace-custom-header-title {
   min-width: 0;
+  max-width: 100%;
   flex: 0 1 auto;
   display: flex;
   align-items: baseline;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .workspace-custom-header-title h1 {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   line-height: 18px;
 }
 
@@ -2319,6 +2303,20 @@ button {
   white-space: nowrap;
 }
 
+.settings-back-menu-row {
+  color: var(--muted-foreground);
+}
+
+.vcn-sidebar[data-collapsible="icon"] .settings-back-menu-row {
+  width: 34px;
+  justify-content: center;
+  padding: 0;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .settings-back-menu-row span {
+  display: none;
+}
+
 .project-badge-icon {
   flex: 0 0 auto;
   display: block;
@@ -2591,7 +2589,7 @@ button {
 }
 
 .conversation-session-todo-menu {
-  --workspace-skills-menu-width: var(--conversation-session-todo-width);
+  --workspace-tool-panel-menu-width: var(--conversation-session-todo-width);
   width: min(var(--conversation-session-todo-width), calc(100% - 40px));
   max-height: min(460px, calc(100% - var(--composer-dock-height, 132px) - 72px));
   overflow: auto;
@@ -2694,8 +2692,9 @@ button {
   scrollbar-gutter: stable;
 }
 
+.workspace-tool-panel-page,
 .workspace-skills-settings {
-  --workspace-skills-menu-width: 176px;
+  --workspace-tool-panel-menu-width: 176px;
   position: relative;
   min-width: 0;
   min-height: 0;
@@ -2846,14 +2845,14 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.workspace-skills-menu,
-.workspace-skills-menu-collapsed {
+.workspace-tool-panel-menu,
+.workspace-tool-panel-menu-collapsed {
   position: static;
   z-index: 12;
 }
 
-.workspace-skills-menu {
-  width: var(--workspace-skills-menu-width);
+.workspace-tool-panel-menu {
+  width: var(--workspace-tool-panel-menu-width);
   padding: 9px;
   border: 1px solid color-mix(in oklch, var(--border) 86%, transparent);
   border-radius: 14px;
@@ -2861,7 +2860,7 @@ button {
   color: var(--foreground);
 }
 
-.workspace-skills-menu-header {
+.workspace-tool-panel-menu-header {
   height: 28px;
   display: flex;
   align-items: center;
@@ -2874,7 +2873,7 @@ button {
   font-weight: 650;
 }
 
-.workspace-skills-menu-icon-button {
+.workspace-tool-panel-menu-icon-button {
   width: 24px;
   height: 24px;
   display: inline-flex;
@@ -2887,18 +2886,18 @@ button {
   cursor: pointer;
 }
 
-.workspace-skills-menu-icon-button:hover {
+.workspace-tool-panel-menu-icon-button:hover {
   background: color-mix(in oklch, var(--muted) 72%, transparent);
   color: var(--foreground);
 }
 
-.workspace-skills-menu-list {
+.workspace-tool-panel-menu-list {
   display: grid;
   gap: 4px;
   padding-top: 8px;
 }
 
-.workspace-skills-menu-row {
+.workspace-tool-panel-menu-row {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -2916,12 +2915,12 @@ button {
   text-align: left;
 }
 
-.workspace-skills-menu-row:hover,
-.workspace-skills-menu-row.active {
+.workspace-tool-panel-menu-row:hover,
+.workspace-tool-panel-menu-row.active {
   background: color-mix(in oklch, var(--muted) 76%, transparent);
 }
 
-.workspace-skills-menu-collapsed {
+.workspace-tool-panel-menu-collapsed {
   height: 32px;
   display: inline-flex;
   align-items: center;
@@ -2936,7 +2935,7 @@ button {
   font-weight: 650;
 }
 
-.workspace-skills-menu-collapsed:hover {
+.workspace-tool-panel-menu-collapsed:hover {
   background: color-mix(in oklch, var(--muted) 72%, var(--card));
 }
 

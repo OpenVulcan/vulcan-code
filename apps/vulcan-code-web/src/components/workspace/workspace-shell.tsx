@@ -1,5 +1,6 @@
 import React from "react";
 import { ChatArea } from "@/components/conversation/chat-area";
+import { ConversationSessionTodoPanel } from "@/components/conversation/session-todo-panel";
 import type {
   ConversationDetailRef,
   ToolDetailPayload,
@@ -13,9 +14,11 @@ import type {
 import {
   parseConversationBlocks,
 } from "@/components/conversation/conversation-transcript";
-import type {
-  SkillActionProps,
-  SkillSubAreaId,
+import {
+  activeSkillHeaderSummary,
+  type SkillActionProps,
+  type SkillHeaderBusyActionId,
+  type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
 import type {
   MemoryActionProps,
@@ -26,15 +29,23 @@ import {
   type ConversationMenuAction,
   type ProjectMenuAction,
 } from "@/components/project/ProjectSidebar";
+import { Button } from "@/components/ui/button";
 import {
+  FloatingSkillMenu,
+  skillSubAreaLabel,
   WorkspaceSkillsSettings,
-  type WorkspaceSkillsHeaderState,
 } from "@/components/workspace/workspace-skills-settings";
 import {
+  FloatingMemoryMenu,
+  memorySubAreaMeta,
   WorkspaceMemorySettings,
-  type WorkspaceMemoryHeaderState,
 } from "@/components/workspace/workspace-memory-settings";
 import { SidebarInset, SidebarProvider, useSidebar } from "@/components/ui/sidebar";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   WorkspaceResizableBody,
   type DraftConversationSelection,
@@ -58,6 +69,14 @@ import type {
   WorkbenchSnapshot,
 } from "@/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
+import type { WorkspacePageDescriptor } from "@/components/workspace/workspace-page-descriptor";
+import { useI18n } from "@/i18n";
+import {
+  PanelRightClose,
+  PanelRightOpen,
+  PackagePlus,
+  RefreshCw,
+} from "lucide-react";
 
 // WorkspaceMainView identifies the active main surface inside the workbench.
 // WorkspaceMainView 标识工作台内部当前激活的主内容界面。
@@ -256,6 +275,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sidebar controls the left project tree that can collapse automatically.
   // sidebar 控制可自动折叠的左侧项目树。
   const sidebar = useSidebar();
+  // t translates shared workspace chrome labels.
+  // t 翻译共享工作区外壳标签。
+  const { t } = useI18n();
   // shellRef measures the available workspace width for automatic panel collapse.
   // shellRef 测量工作台可用宽度，用于自动折叠面板。
   const shellRef = React.useRef<HTMLDivElement | null>(null);
@@ -271,20 +293,27 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
-  // skillsHeaderState stores the title projection published by the embedded skills page.
-  // skillsHeaderState 保存内嵌技能页发布的标题栏投影。
-  const [skillsHeaderState, setSkillsHeaderState] = React.useState<WorkspaceSkillsHeaderState>({
-    actions: null,
-    detail: "LuaSkills",
-    title: "技能设置",
-  });
-  // memoryHeaderState stores the title projection published by the embedded memory page.
-  // memoryHeaderState 保存内嵌记忆页发布的标题栏投影。
-  const [memoryHeaderState, setMemoryHeaderState] = React.useState<WorkspaceMemoryHeaderState>({
-    actions: null,
-    detail: "状态",
-    title: "记忆设置",
-  });
+  // skillsMenuExpanded stores the shared adaptive menu state for the skills page.
+  // skillsMenuExpanded 保存技能页共享自适应菜单展开状态。
+  const [skillsMenuExpanded, setSkillsMenuExpanded] = React.useState(true);
+  // memoryMenuExpanded stores the shared adaptive menu state for the memory page.
+  // memoryMenuExpanded 保存记忆页共享自适应菜单展开状态。
+  const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
+  // sessionTodoExpanded stores the shared adaptive menu state for the chat TODO panel.
+  // sessionTodoExpanded 保存会话 TODO 共享自适应面板展开状态。
+  const [sessionTodoExpanded, setSessionTodoExpanded] = React.useState(true);
+  // luaInstallDialogOpen controls the workspace LuaSkills install dialog.
+  // luaInstallDialogOpen 控制工作区 LuaSkills 安装弹窗。
+  const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false);
+  // skillHeaderBusyAction stores the registered skill header action currently running.
+  // skillHeaderBusyAction 保存当前正在运行的已注册技能标题栏动作。
+  const [skillHeaderBusyAction, setSkillHeaderBusyAction] = React.useState<SkillHeaderBusyActionId | null>(null);
+  // hasSelectedChatConversation is true only for an existing persisted conversation surface.
+  // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
+  const hasSelectedChatConversation = props.mainView === "chat" && !props.selectedDraftConversation && Boolean(props.selectedConversationId);
+  // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
+  // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
+  const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
   // handleLeftPanelToggle clears automatic restore intent when the user toggles the left sidebar manually.
   // handleLeftPanelToggle 在用户手动切换左侧栏时清除自动恢复意图。
   const handleLeftPanelToggle = React.useCallback(() => {
@@ -310,11 +339,109 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   }, [rightPanelOpen, sidebar.open]);
 
   React.useEffect(() => {
-    if (props.mainView !== "chat" && rightPanelOpen) {
+    if (!hasSelectedChatConversation && rightPanelOpen) {
       setRightPanelOpen(false);
       setRightPanelFloating(false);
     }
-  }, [props.mainView, rightPanelOpen]);
+  }, [hasSelectedChatConversation, rightPanelOpen]);
+
+  // runSkillHeaderAction wraps registered skill header actions with busy feedback.
+  // runSkillHeaderAction 为注册的技能标题栏动作包裹忙碌反馈。
+  const runSkillHeaderAction = React.useCallback(async (actionId: SkillHeaderBusyActionId, action: () => Promise<void>) => {
+    setSkillHeaderBusyAction(actionId);
+    const startedAt = window.performance.now();
+    try {
+      await action();
+    } finally {
+      const remainingMs = 450 - (window.performance.now() - startedAt);
+      if (remainingMs > 0) {
+        await new Promise((resolve) => {
+          window.setTimeout(resolve, remainingMs);
+        });
+      }
+      setSkillHeaderBusyAction(null);
+    }
+  }, []);
+
+  // sessionTodoPlan stores the selected conversation TODO payload when it should be visible.
+  // sessionTodoPlan 保存需要展示时当前会话的 TODO 载荷。
+  const sessionTodoPlan = hasSelectedChatConversation && props.workbench.sessionTodoPlan?.plan.length
+    ? props.workbench.sessionTodoPlan
+    : null;
+  // rightPanelLabel describes the page-registered context panel toggle action.
+  // rightPanelLabel 描述页面注册的上下文面板切换动作。
+  const rightPanelLabel = effectiveRightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
+  // contextPanelToggleAction is registered by chat pages instead of being hardcoded in the header.
+  // contextPanelToggleAction 由会话页注册，而不是硬编码在标题栏组件中。
+  const contextPanelToggleAction = (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          aria-label={rightPanelLabel}
+          aria-pressed={effectiveRightPanelOpen}
+          className="icon-button"
+          onClick={handleRightPanelToggle}
+          size="icon-sm"
+          type="button"
+          variant={effectiveRightPanelOpen ? "secondary" : "ghost"}
+        >
+          {effectiveRightPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
+    </Tooltip>
+  );
+  // skillHeaderSummary stores the active skills page title detail for descriptor generation.
+  // skillHeaderSummary 保存当前技能页 descriptor 使用的标题详情。
+  const skillHeaderSummary = activeSkillHeaderSummary(props.activeSkillSubArea, props.workbench, t);
+  // skillHeaderActions stores the registered actions for the active skills sub page.
+  // skillHeaderActions 保存当前技能子页面注册的标题栏动作。
+  const skillHeaderActions = React.useMemo(() => {
+    if (props.activeSkillSubArea === "lua") {
+      return (
+        <div className="feature-header-actions workspace-skills-header-actions">
+          <button
+            className="skill-action-button secondary"
+            disabled={skillHeaderBusyAction !== null}
+            onClick={() => void runSkillHeaderAction("lua-refresh", props.skillActions.onRefreshLuaSkills)}
+            type="button"
+          >
+            <RefreshCw className={skillHeaderBusyAction === "lua-refresh" ? "spin" : undefined} size={15} />
+            <span>{skillHeaderBusyAction === "lua-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+          </button>
+          <button className="skill-action-button" onClick={() => setLuaInstallDialogOpen(true)} type="button">
+            <PackagePlus size={15} />
+            <span>{t("skills.action.installLua")}</span>
+          </button>
+        </div>
+      );
+    }
+    return (
+      <div className="feature-header-actions workspace-skills-header-actions">
+        <button
+          className="skill-action-button secondary"
+          disabled={skillHeaderBusyAction !== null}
+          onClick={() => void runSkillHeaderAction("agent-refresh", props.skillActions.onRefreshAgentSkills)}
+          type="button"
+        >
+          <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
+          <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
+        </button>
+        <button
+          className="skill-action-button secondary"
+          disabled={skillHeaderBusyAction !== null}
+          onClick={() => void runSkillHeaderAction("agent-sync", props.skillActions.onInstallSystemAgentSkills)}
+          type="button"
+        >
+          <PackagePlus className={skillHeaderBusyAction === "agent-sync" ? "spin" : undefined} size={15} />
+          <span>{skillHeaderBusyAction === "agent-sync" ? t("skills.action.syncing") : t("skills.action.syncSystem")}</span>
+        </button>
+      </div>
+    );
+  }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);
+  // memoryHeaderMeta stores the active memory page title detail for descriptor generation.
+  // memoryHeaderMeta 保存当前记忆页 descriptor 使用的标题详情。
+  const memoryHeaderMeta = memorySubAreaMeta(props.activeMemorySubArea, props.workbench);
 
   React.useEffect(() => {
     const element = shellRef.current;
@@ -332,11 +459,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       const handleWidth = 9;
       const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
       const dockedPanelFits = width - leftWidth - preferredRightWidth - handleWidth >= 800;
-      const shouldFloatRightPanel = rightPanelOpen && !dockedPanelFits;
-      const dockedRightWidth = rightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
-      const shellGaps = rightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+      const shouldFloatRightPanel = effectiveRightPanelOpen && !dockedPanelFits;
+      const dockedRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
+      const shellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
       const mainWidth = width - leftWidth - dockedRightWidth - shellGaps;
-      if (rightPanelOpen) {
+      if (effectiveRightPanelOpen) {
         setRightPanelFloating(shouldFloatRightPanel);
       }
       if (mainWidth < 800 && sidebar.open) {
@@ -348,8 +475,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         return;
       }
       if (leftAutoCollapsed && !sidebar.open) {
-        const restoredRightWidth = rightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
-        const restoredShellGaps = rightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
+        const restoredRightWidth = effectiveRightPanelOpen && !shouldFloatRightPanel ? preferredRightWidth : 0;
+        const restoredShellGaps = effectiveRightPanelOpen && !shouldFloatRightPanel ? handleWidth : 0;
         const restoredMainWidth = width - expandedLeftWidth - restoredRightWidth - restoredShellGaps;
         if (restoredMainWidth >= 800) {
           sidebar.setOpen(true);
@@ -360,7 +487,114 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [leftAutoCollapsed, rightPanelFloating, rightPanelOpen, sidebar]);
+  }, [effectiveRightPanelOpen, leftAutoCollapsed, rightPanelFloating, sidebar]);
+
+  // pageDescriptor registers page-specific title, actions, content, and adaptive side panels.
+  // pageDescriptor 注册页面专用标题、按钮、内容与自适应侧边面板。
+  const pageDescriptor: WorkspacePageDescriptor = props.mainView === "skills" ? {
+    content: (
+      <WorkspaceSkillsSettings
+        activeSubArea={props.activeSkillSubArea}
+        luaInstallDialogOpen={luaInstallDialogOpen}
+        onLuaInstallDialogOpenChange={setLuaInstallDialogOpen}
+        skillActions={props.skillActions}
+        workbench={props.workbench}
+      />
+    ),
+    detail: `${skillSubAreaLabel(props.activeSkillSubArea)} · ${skillHeaderSummary.detail}`,
+    headerActions: skillHeaderActions,
+    title: "技能设置",
+    toolPanels: [{
+      className: "workspace-tool-panel-page workspace-skills-settings",
+      contentClassName: "workspace-skills-content",
+      contentShellClassName: "workspace-skills-content-shell",
+      expanded: skillsMenuExpanded,
+      panel: (
+        <FloatingSkillMenu
+          activeSubArea={props.activeSkillSubArea}
+          expanded={skillsMenuExpanded}
+          onExpandedChange={setSkillsMenuExpanded}
+          onSelectSubArea={props.onSelectSkillSubArea}
+        />
+      ),
+      side: "left",
+    }],
+  } : props.mainView === "memory" ? {
+    content: (
+      <WorkspaceMemorySettings
+        activeSubArea={props.activeMemorySubArea}
+        memoryActions={props.memoryActions}
+        workbench={props.workbench}
+      />
+    ),
+    detail: `${memoryHeaderMeta.label} · ${memoryHeaderMeta.detail}`,
+    headerActions: null,
+    title: "记忆设置",
+    toolPanels: [{
+      className: "workspace-tool-panel-page workspace-skills-settings workspace-memory-settings",
+      contentClassName: "workspace-skills-content workspace-memory-content",
+      contentShellClassName: "workspace-skills-content-shell",
+      expanded: memoryMenuExpanded,
+      panel: (
+        <FloatingMemoryMenu
+          activeSubArea={props.activeMemorySubArea}
+          expanded={memoryMenuExpanded}
+          onExpandedChange={setMemoryMenuExpanded}
+          onSelectSubArea={props.onSelectMemorySubArea}
+          workbench={props.workbench}
+        />
+      ),
+      side: "left",
+    }],
+  } : {
+    content: (
+      <ChatArea
+        startup={props.startup}
+        workbench={props.workbench}
+        selectedDraftConversation={props.selectedDraftConversation}
+        selectedConversationId={props.selectedConversationId}
+        loadingConversationId={props.loadingConversationId}
+        conversationLoadError={props.conversationLoadError}
+        onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
+        onSlashCommand={props.onSlashCommand}
+        onSubmitPrompt={props.onSubmitPrompt}
+        onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
+        onStopConversationRun={props.onStopConversationRun}
+        onOpenSubagentPanel={props.onOpenSubagentPanel}
+        onCloseSubagentPanel={props.onCloseSubagentPanel}
+        onStopSubagentTask={props.onStopSubagentTask}
+        onEditPendingPrompt={props.onEditPendingPrompt}
+        onInsertPendingPrompt={props.onInsertPendingPrompt}
+        onRemovePendingPrompt={props.onRemovePendingPrompt}
+        onReorderPendingPrompts={props.onReorderPendingPrompts}
+        onStageAttachmentBytes={props.onStageAttachmentBytes}
+        onCopyText={props.onCopyText}
+        onLoadToolDetail={props.onLoadToolDetail}
+        resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+        onTrace={props.onTrace}
+      />
+    ),
+    headerRightActions: hasSelectedChatConversation ? contextPanelToggleAction : undefined,
+    toolPanels: [{
+      className: "conversation-session-tool-adaptive-panel",
+      contentClassName: "conversation-session-tool-content",
+      contentShellClassName: "conversation-session-tool-content-shell",
+      expanded: Boolean(sessionTodoPlan) && sessionTodoExpanded,
+      inlineGap: 52,
+      minContentWidth: 800,
+      panel: sessionTodoPlan ? (
+        <ConversationSessionTodoPanel
+          expanded={sessionTodoExpanded}
+          todoPlan={sessionTodoPlan}
+          onExpandedChange={setSessionTodoExpanded}
+        />
+      ) : null,
+      panelWidth: 320,
+      reserveGap: 72,
+      side: "right",
+    }],
+  };
 
   return (
     <div className="workspace-panel-shell" ref={shellRef}>
@@ -385,20 +619,21 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       />
       <SidebarInset className="workspace-inset">
         <WorkspaceResizableBody
-          rightPanelFloating={rightPanelFloating}
-          rightPanelOpen={rightPanelOpen}
+          rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
+          rightPanelOpen={effectiveRightPanelOpen}
           startup={props.startup}
           workbench={props.workbench}
           selectedDraftConversation={props.selectedDraftConversation}
           selectedConversation={props.selectedConversation}
           selectedConversationId={props.selectedConversationId}
-          headerActions={props.mainView === "skills" ? skillsHeaderState.actions : props.mainView === "memory" ? memoryHeaderState.actions : undefined}
+          headerActions={pageDescriptor.headerActions}
           chromeActions={props.chromeActions}
           titlebarDragRegion={props.titlebarDragRegion}
           onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-          headerDetail={props.mainView === "skills" ? skillsHeaderState.detail : props.mainView === "memory" ? memoryHeaderState.detail : undefined}
-          headerTitle={props.mainView === "skills" ? skillsHeaderState.title : props.mainView === "memory" ? memoryHeaderState.title : undefined}
-          hideRightPanelToggle={props.mainView !== "chat"}
+          headerDetail={pageDescriptor.detail}
+          headerTitle={pageDescriptor.title}
+          headerRightActions={pageDescriptor.headerRightActions}
+          toolPanels={pageDescriptor.toolPanels}
           onToggleLeftPanel={handleLeftPanelToggle}
           onToggleRightPanel={handleRightPanelToggle}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -412,50 +647,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
         >
-          {props.mainView === "skills" ? (
-            <WorkspaceSkillsSettings
-              activeSubArea={props.activeSkillSubArea}
-              onActiveSubAreaChange={props.onSelectSkillSubArea}
-              onHeaderStateChange={setSkillsHeaderState}
-              skillActions={props.skillActions}
-              workbench={props.workbench}
-            />
-          ) : props.mainView === "memory" ? (
-            <WorkspaceMemorySettings
-              activeSubArea={props.activeMemorySubArea}
-              onActiveSubAreaChange={props.onSelectMemorySubArea}
-              onHeaderStateChange={setMemoryHeaderState}
-              memoryActions={props.memoryActions}
-              workbench={props.workbench}
-            />
-          ) : (
-            <ChatArea
-              startup={props.startup}
-              workbench={props.workbench}
-              selectedDraftConversation={props.selectedDraftConversation}
-              selectedConversationId={props.selectedConversationId}
-              loadingConversationId={props.loadingConversationId}
-              conversationLoadError={props.conversationLoadError}
-              onSelectWorkbenchModel={props.onSelectWorkbenchModel}
-              onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
-              onSlashCommand={props.onSlashCommand}
-              onSubmitPrompt={props.onSubmitPrompt}
-              onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
-              onStopConversationRun={props.onStopConversationRun}
-              onOpenSubagentPanel={props.onOpenSubagentPanel}
-              onCloseSubagentPanel={props.onCloseSubagentPanel}
-              onStopSubagentTask={props.onStopSubagentTask}
-              onEditPendingPrompt={props.onEditPendingPrompt}
-              onInsertPendingPrompt={props.onInsertPendingPrompt}
-              onRemovePendingPrompt={props.onRemovePendingPrompt}
-              onReorderPendingPrompts={props.onReorderPendingPrompts}
-              onStageAttachmentBytes={props.onStageAttachmentBytes}
-              onCopyText={props.onCopyText}
-              onLoadToolDetail={props.onLoadToolDetail}
-              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-              onTrace={props.onTrace}
-            />
-          )}
+          {pageDescriptor.content}
         </WorkspaceResizableBody>
         {props.footer ? (
           <div className="workspace-statusbar-host">

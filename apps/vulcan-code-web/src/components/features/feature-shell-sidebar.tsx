@@ -5,6 +5,7 @@ import {
   ChevronDown,
   Hammer,
   PanelTopOpen,
+  Undo2,
   Settings,
 } from "lucide-react"
 
@@ -86,6 +87,7 @@ function FeatureSidebar(props: {
         {props.activeArea === "settings" ? (
           <SettingsSidebarMenu
             activeSettingsSubArea={props.activeSettingsSubArea}
+            onBackToWorkspace={() => props.onSelectArea("chat")}
             onSelectSettingsSubArea={props.onSelectSettingsSubArea}
           />
         ) : (
@@ -190,6 +192,9 @@ function SettingsSidebarMenu(props: {
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
+  // Returns from settings to the main workspace.
+  // 从设置页返回主工作区。
+  onBackToWorkspace: () => void
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
@@ -200,6 +205,16 @@ function SettingsSidebarMenu(props: {
   return (
     <SidebarGroup className="settings-tree-section">
       <SidebarMenu className="settings-tree-list">
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            className="settings-back-menu-row"
+            onClick={props.onBackToWorkspace}
+            tooltip="返回工作区"
+          >
+            <Undo2 size={15} />
+            <span>返回工作区</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         {groups.map((group) => (
           <SettingsSidebarGroupRow
             activeSettingsSubArea={props.activeSettingsSubArea}

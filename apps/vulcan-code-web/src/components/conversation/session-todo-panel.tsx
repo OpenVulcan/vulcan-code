@@ -31,7 +31,7 @@ export function ConversationSessionTodoPanel(props: {
     return (
       <button
         aria-label="展开会话 TODO"
-        className="workspace-skills-menu-collapsed conversation-session-todo-collapsed"
+        className="workspace-tool-panel-menu-collapsed conversation-session-todo-collapsed"
         onClick={() => props.onExpandedChange(true)}
         title="展开会话 TODO"
         type="button"
@@ -45,8 +45,8 @@ export function ConversationSessionTodoPanel(props: {
   }
 
   return (
-    <aside className="workspace-skills-menu conversation-session-todo-menu" aria-label="会话 TODO 菜单">
-      <div className="workspace-skills-menu-header conversation-session-todo-header">
+    <aside className="workspace-tool-panel-menu conversation-session-todo-menu" aria-label="会话 TODO 菜单">
+      <div className="workspace-tool-panel-menu-header conversation-session-todo-header">
         <span className="conversation-session-todo-title">
           <ListChecks size={15} />
           TODO
@@ -55,7 +55,7 @@ export function ConversationSessionTodoPanel(props: {
           <strong>{props.todoPlan.completedCount}/{props.todoPlan.totalCount}</strong>
           <button
             aria-label="折叠会话 TODO"
-            className="workspace-skills-menu-icon-button"
+            className="workspace-tool-panel-menu-icon-button"
             onClick={() => props.onExpandedChange(false)}
             title="折叠会话 TODO"
             type="button"
@@ -67,7 +67,7 @@ export function ConversationSessionTodoPanel(props: {
       {props.todoPlan.explanation ? (
         <p className="conversation-session-todo-explanation">{props.todoPlan.explanation}</p>
       ) : null}
-      <div className="workspace-skills-menu-list conversation-session-todo-list">
+      <div className="workspace-tool-panel-menu-list conversation-session-todo-list">
         {props.todoPlan.plan.map((item, index) => (
           <ConversationSessionTodoRow item={item} key={`${index}-${item.status}-${item.step}`} />
         ))}
@@ -84,7 +84,7 @@ function ConversationSessionTodoRow(props: {
   item: SessionTodoPlanItemSummary;
 }) {
   return (
-    <div className={cn("workspace-skills-menu-row conversation-session-todo-row", `status-${props.item.status}`)}>
+    <div className={cn("workspace-tool-panel-menu-row conversation-session-todo-row", `status-${props.item.status}`)}>
       {conversationSessionTodoStatusIcon(props.item.status)}
       <span>{props.item.step}</span>
     </div>

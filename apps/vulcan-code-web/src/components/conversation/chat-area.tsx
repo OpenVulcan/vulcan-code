@@ -15,8 +15,6 @@ import {
 } from "@/components/conversation/conversation-chrome";
 import type { ConversationTimelineVirtualRestoreState } from "@/components/conversation/conversation-virtualization";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
-import { ConversationSessionTodoPanel } from "@/components/conversation/session-todo-panel";
-import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import type {
   ConversationDetailRef,
   ToolDetailPayload,
@@ -163,9 +161,6 @@ export function ChatArea(props: ChatAreaProps) {
   // thinkingOverlayEnabled controls whether streaming thinking uses the floating surface or inline transcript.
   // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
   const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
-  // sessionTodoExpanded controls the in-conversation TODO tool panel expansion.
-  // sessionTodoExpanded 控制会话内 TODO 工具面板的展开状态。
-  const [sessionTodoExpanded, setSessionTodoExpanded] = React.useState(false);
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
@@ -241,11 +236,6 @@ export function ChatArea(props: ChatAreaProps) {
     ? null
     : conversationRuntimeCue(surfaceConversation, renderItems, t);
   const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
-  // sessionTodoPlan stores the main conversation TODO panel payload when the model has published one.
-  // sessionTodoPlan 保存模型已发布时主会话 TODO 面板使用的载荷。
-  const sessionTodoPlan = props.workbench.sessionTodoPlan?.plan.length
-    ? props.workbench.sessionTodoPlan
-    : null;
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -596,31 +586,6 @@ export function ChatArea(props: ChatAreaProps) {
       {composerDock}
     </>
   );
-  // conversationSurface lets the shared adaptive panel handle inline-vs-overlay layout for TODO.
-  // conversationSurface 让共享自适应面板负责 TODO 的占位与浮动布局。
-  const conversationSurface = sessionTodoPlan ? (
-    <AdaptiveToolPanel
-      className="conversation-session-tool-adaptive-panel"
-      contentClassName="conversation-session-tool-content"
-      contentShellClassName="conversation-session-tool-content-shell"
-      expanded={sessionTodoExpanded}
-      inlineGap={52}
-      minContentWidth={800}
-      panel={(
-        <ConversationSessionTodoPanel
-          expanded={sessionTodoExpanded}
-          todoPlan={sessionTodoPlan}
-          onExpandedChange={setSessionTodoExpanded}
-        />
-      )}
-      panelWidth={320}
-      reserveGap={72}
-      side="right"
-    >
-      {conversationSurfaceContent}
-    </AdaptiveToolPanel>
-  ) : conversationSurfaceContent;
-
   return (
     <div
       className={cn(
@@ -633,7 +598,7 @@ export function ChatArea(props: ChatAreaProps) {
       {showConversationLoadingOnly ? (
         <ConversationLoadingCenter />
       ) : (
-        conversationSurface
+        conversationSurfaceContent
       )}
     </div>
   );

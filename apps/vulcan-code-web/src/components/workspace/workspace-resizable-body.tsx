@@ -4,13 +4,8 @@ import {
   WorkspaceContextPanel,
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
-import { Button } from "@/components/ui/button";
+import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type {
@@ -18,10 +13,7 @@ import type {
   StartupSnapshot,
   WorkbenchSnapshot,
 } from "@/types";
-import {
-  PanelRightClose,
-  PanelRightOpen,
-} from "lucide-react";
+import type { WorkspacePagePanelDescriptor } from "@/components/workspace/workspace-page-descriptor";
 
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS matches the CSS slide animation duration.
 // WORKSPACE_CONTEXT_PANEL_TRANSITION_MS 对齐 CSS 右侧面板滑动动画时长。
@@ -80,24 +72,27 @@ export function WorkspaceResizableBody(props: {
   // Optional title overriding the conversation header title.
   // 覆盖会话标题栏标题的可选标题。
   headerTitle?: string;
-  // Optional detail line shown below the override header title.
-  // 显示在覆盖标题下方的可选详情行。
+  // Optional detail text shown inline after the override header title.
+  // 显示在覆盖标题后方的可选行内详情。
   headerDetail?: string;
   // Optional action cluster rendered on the override header right side.
   // 渲染在覆盖标题右侧的可选操作区。
   headerActions?: React.ReactNode;
+  // Optional right-edge header actions registered by the active page.
+  // 当前页面注册的可选标题栏右侧动作。
+  headerRightActions?: React.ReactNode;
   // App-wide chrome actions rendered at the far right of the shared header.
   // 渲染在共享标题栏最右侧的应用级窗口控制区。
   chromeActions?: React.ReactNode;
+  // Optional page-registered adaptive panels rendered by the shared body shell.
+  // 由共享主体外壳渲染的可选页面注册自适应面板列表。
+  toolPanels?: WorkspacePagePanelDescriptor[];
   // Whether shared title bar empty space should be a native drag region.
   // 共享标题栏空白区域是否作为原生拖动区域。
   titlebarDragRegion?: boolean;
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
-  // Whether the right panel toggle should be hidden for the current main view.
-  // 当前主视图是否隐藏右侧面板切换按钮。
-  hideRightPanelToggle?: boolean;
   // Toggles the right context panel.
   // 切换右侧上下文面板。
   onToggleRightPanel: () => void;
@@ -237,6 +232,32 @@ export function WorkspaceResizableBody(props: {
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerUp, { once: true });
   }, [dockedPanelOpen, dockedPanelWidth]);
+  // mainContent keeps the body content shape identical with or without a side panel.
+  // mainContent 保持有无侧边面板时主体内容结构一致。
+  const mainContent = (
+    <section className="workspace-main-shell">
+      {props.children}
+    </section>
+  );
+  // renderedMainContent lets registered page panels share one adaptive layout implementation.
+  // renderedMainContent 让页面注册面板共用同一套自适应布局实现。
+  const renderedMainContent = (props.toolPanels ?? []).reduceRight<React.ReactNode>((content, panel) => (
+    <AdaptiveToolPanel
+      className={panel.className}
+      contentClassName={panel.contentClassName}
+      contentShellClassName={panel.contentShellClassName}
+      expanded={panel.expanded}
+      inlineGap={panel.inlineGap}
+      minContentWidth={panel.minContentWidth}
+      panel={panel.panel}
+      panelWidth={panel.panelWidth}
+      reserveGap={panel.reserveGap}
+      side={panel.side}
+    >
+      {content}
+    </AdaptiveToolPanel>
+  ), mainContent);
+
   return (
     <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
       <ConsoleHeader
@@ -245,15 +266,13 @@ export function WorkspaceResizableBody(props: {
         conversation={props.selectedConversation}
         detail={props.headerDetail}
         headerActions={props.headerActions}
+        headerRightActions={props.headerRightActions}
         chromeActions={props.chromeActions}
         titlebarDragRegion={props.titlebarDragRegion}
         onTitlebarDoubleClick={props.onTitlebarDoubleClick}
-        hideRightPanelToggle={props.hideRightPanelToggle}
-        rightPanelOpen={props.rightPanelOpen}
         subagentNavigation={props.workbench.subagentNavigation}
         title={props.headerTitle}
         onToggleLeftPanel={props.onToggleLeftPanel}
-        onToggleRightPanel={props.onToggleRightPanel}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
         onCloseSubagentPanel={props.onCloseSubagentPanel}
         onStopSubagentTask={props.onStopSubagentTask}
@@ -261,9 +280,7 @@ export function WorkspaceResizableBody(props: {
       />
       <div className="workspace-resizable-body" style={dockedPanelMounted ? dockedLayoutStyle : undefined}>
         <div className="workspace-main-panel">
-          <section className="workspace-main-shell">
-            {props.children}
-          </section>
+          {renderedMainContent}
         </div>
         {dockedPanelMounted ? (
           <>
@@ -323,6 +340,9 @@ function ConsoleHeader(props: {
   // Optional override actions used by embedded workspace views.
   // 内嵌工作台视图使用的可选覆盖操作区。
   headerActions?: React.ReactNode;
+  // Optional right-edge actions registered by the active workspace page.
+  // 当前工作区页面注册的可选右侧操作区。
+  headerRightActions?: React.ReactNode;
   // App-wide chrome actions rendered at the far right of the shared header.
   // 渲染在共享标题栏最右侧的应用级窗口控制区。
   chromeActions?: React.ReactNode;
@@ -332,24 +352,15 @@ function ConsoleHeader(props: {
   // Handles title bar double-click maximize or restore behavior.
   // 处理标题栏双击最大化或还原行为。
   onTitlebarDoubleClick?: (event: React.MouseEvent<HTMLElement>) => void;
-  // Whether to hide the conversation right-panel toggle.
-  // 是否隐藏会话右侧面板切换按钮。
-  hideRightPanelToggle?: boolean;
   // Current draft conversation selection.
   // 当前草稿会话选择。
   draftConversation: DraftConversationSelection | null;
-  // Whether the right context panel is visible.
-  // 右侧上下文面板是否可见。
-  rightPanelOpen: boolean;
   // Current subagent navigation snapshot.
   // 当前子代理导航快照。
   subagentNavigation?: WorkbenchSnapshot["subagentNavigation"];
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
-  // Toggles the right context panel.
-  // 切换右侧上下文面板。
-  onToggleRightPanel: () => void;
   // Opens one backend-routed subagent surface.
   // 打开单个由后端路由的子代理界面。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -363,12 +374,9 @@ function ConsoleHeader(props: {
   // 从子代理控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
 }) {
-  // t translates stable console chrome labels.
-  // t 翻译稳定的控制台外壳标签。
+  // t translates stable console title fallbacks.
+  // t 翻译稳定的控制台标题回退文案。
   const { t } = useI18n();
-  // rightPanelLabel describes the current right panel toggle action.
-  // rightPanelLabel 描述当前右侧面板切换动作。
-  const rightPanelLabel = props.rightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
   // headerTitle chooses an embedded view title before falling back to conversation naming.
   // headerTitle 优先使用内嵌视图标题，否则回退到会话命名。
   const headerTitle = props.title ?? (props.draftConversation ? t("console.newConversation") : props.conversation?.title ?? t("console.title"));
@@ -378,23 +386,14 @@ function ConsoleHeader(props: {
       <div className="console-header-main">
         <SidebarTrigger onClick={props.onToggleLeftPanel} />
         <span className="console-header-separator" aria-hidden="true" />
-        {props.detail ? (
-          <div
-            className="workspace-custom-header-title"
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.onTitlebarDoubleClick}
-          >
-            <h1>{headerTitle}</h1>
-            <small>{props.detail}</small>
-          </div>
-        ) : (
-          <h1
-            data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
-            onDoubleClick={props.onTitlebarDoubleClick}
-          >
-            {headerTitle}
-          </h1>
-        )}
+        <div
+          className="workspace-custom-header-title"
+          data-tauri-drag-region={props.titlebarDragRegion ? "" : undefined}
+          onDoubleClick={props.onTitlebarDoubleClick}
+        >
+          <h1>{headerTitle}</h1>
+          {props.detail ? <small>{props.detail}</small> : null}
+        </div>
         {!props.title ? (
           <SubagentNavigationMenu
             navigation={props.subagentNavigation}
@@ -413,24 +412,7 @@ function ConsoleHeader(props: {
       </div>
       <div className="console-header-actions">
         {props.headerActions}
-        {!props.hideRightPanelToggle ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label={rightPanelLabel}
-                aria-pressed={props.rightPanelOpen}
-                className="icon-button"
-                onClick={props.onToggleRightPanel}
-                size="icon-sm"
-                type="button"
-                variant={props.rightPanelOpen ? "secondary" : "ghost"}
-              >
-                {props.rightPanelOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">{rightPanelLabel}</TooltipContent>
-          </Tooltip>
-        ) : null}
+        {props.headerRightActions}
         {props.chromeActions}
       </div>
     </header>
