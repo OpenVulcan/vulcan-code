@@ -2707,6 +2707,14 @@ button {
   animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
+.conversation-session-todo-menu.conversation-session-tool-surface {
+  animation: conversation-session-tool-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.conversation-session-tool-collapsed.conversation-session-tool-surface {
+  animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
 @keyframes conversation-session-tool-expand-in {
   from {
     opacity: 0.28;
@@ -3193,13 +3201,13 @@ button {
 
 .conversation-session-tool-adaptive-panel .adaptive-tool-panel-slot {
   overflow: visible;
+  transition:
+    width 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .conversation-session-tool-adaptive-panel:has(.conversation-session-tool-transitioning) .adaptive-tool-panel-slot {
   overflow: hidden;
-  transition:
-    width 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .conversation-session-tool-adaptive-panel.is-expanded .adaptive-tool-panel-slot-inner {
