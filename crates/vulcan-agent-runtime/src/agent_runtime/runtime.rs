@@ -18,6 +18,7 @@ use crate::mcp::{
     configured_mcp_runtime_access,
 };
 use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
+use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::{Value, json};
@@ -702,7 +703,7 @@ fn resolve_agent_native_tools(
             }
         } else {
             warnings.push(format!(
-                "代理 `{}` 引用了不存在的工具策略 `{}`，因此不会暴露任何原生工具。",
+                "代理 `{}` 引用了不存在的工具策略 `{}`，因此不会暴露该策略下的受限原生工具，仅保留通用原生工具。",
                 definition.name, policy_id
             ));
             Vec::new()
@@ -721,7 +722,28 @@ fn resolve_agent_native_tools(
         }
         is_available
     });
+    append_universal_native_tools(&mut names, available_native_tool_ids);
     names
+}
+
+/// Appends native tools that must remain globally available outside regular policy limits.
+/// 追加必须在普通策略限制之外保持全局可用的原生工具。
+///
+/// # Parameters
+/// 参数
+/// `names` is the resolved native tool list that will be exposed to one agent.
+/// `names` 是即将暴露给单个代理的已解析原生工具列表。
+/// `available_native_tool_ids` is the registered native tool id set.
+/// `available_native_tool_ids` 是已注册的原生工具标识集合。
+fn append_universal_native_tools(
+    names: &mut Vec<String>,
+    available_native_tool_ids: &BTreeSet<String>,
+) {
+    if available_native_tool_ids.contains(UPDATE_PLAN_TOOL_ID)
+        && !names.iter().any(|name| name == UPDATE_PLAN_TOOL_ID)
+    {
+        names.push(String::from(UPDATE_PLAN_TOOL_ID));
+    }
 }
 
 /// Resolves the MCP runtime tool allowlist visible to one agent definition.
@@ -829,16 +851,17 @@ mod tests {
     };
     use crate::mcp::configured_mcp_runtime_access;
     use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
+    use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
     use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
     use std::collections::{BTreeMap, BTreeSet};
     use vulcan_vmm::VmmConfigLayer;
 
-    /// Verifies that referencing one missing tool policy blocks native-tool exposure instead of silently falling back to a full-open default.
-    /// 验证当代理引用缺失的工具策略时，原生工具暴露会被阻断，而不是静默退回到完全放开的默认行为。
+    /// Verifies that referencing one missing tool policy still exposes universal native tools without falling back to a full-open default.
+    /// 验证当代理引用缺失的工具策略时仍会暴露通用原生工具，但不会静默退回到完全放开的默认行为。
     #[test]
-    fn missing_tool_policy_blocks_native_tool_resolution() {
+    fn missing_tool_policy_keeps_only_universal_native_tool_resolution() {
         let definition = RuntimeAgentDefinition {
             id: String::from("agent-a"),
             name: String::from("Agent A"),
@@ -857,8 +880,11 @@ mod tests {
             max_turns: None,
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
         };
-        let available_native_tool_ids =
-            BTreeSet::from([String::from("shell_command"), String::from("shell_session")]);
+        let available_native_tool_ids = BTreeSet::from([
+            String::from("shell_command"),
+            String::from("shell_session"),
+            String::from(UPDATE_PLAN_TOOL_ID),
+        ]);
         let mut warnings = Vec::new();
 
         let resolved = resolve_agent_native_tools(
@@ -868,9 +894,54 @@ mod tests {
             &mut warnings,
         );
 
-        assert!(resolved.is_empty());
+        assert_eq!(resolved, vec![String::from(UPDATE_PLAN_TOOL_ID)]);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("不会暴露任何原生工具"));
+        assert!(warnings[0].contains("仅保留通用原生工具"));
+    }
+
+    /// Verifies universal native tools are appended even when an agent uses an explicit restricted tool list.
+    /// 验证代理使用显式受限工具列表时仍会追加通用原生工具。
+    #[test]
+    fn explicit_native_tool_list_keeps_universal_update_plan_tool() {
+        let definition = RuntimeAgentDefinition {
+            id: String::from("agent-a"),
+            name: String::from("Agent A"),
+            kind: RuntimeAgentKind::Worker,
+            description: String::from("worker"),
+            system_prompt: String::new(),
+            skill_ids: Vec::new(),
+            native_tools: vec![String::from("shell_command")],
+            mcp_tools: Vec::new(),
+            delegates: Vec::new(),
+            tool_policy: None,
+            routes: Vec::new(),
+            fallback_delegate: None,
+            model: None,
+            temperature: None,
+            max_turns: None,
+            runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
+        };
+        let available_native_tool_ids = BTreeSet::from([
+            String::from("shell_command"),
+            String::from(UPDATE_PLAN_TOOL_ID),
+        ]);
+        let mut warnings = Vec::new();
+
+        let resolved = resolve_agent_native_tools(
+            &definition,
+            &BTreeMap::<String, RuntimeToolPolicyDefinition>::new(),
+            &available_native_tool_ids,
+            &mut warnings,
+        );
+
+        assert_eq!(
+            resolved,
+            vec![
+                String::from("shell_command"),
+                String::from(UPDATE_PLAN_TOOL_ID)
+            ]
+        );
+        assert!(warnings.is_empty());
     }
 
     /// Verifies runtime agent definitions become TaskSession profiles without TaskRuntime re-reading private configuration.
@@ -923,6 +994,7 @@ mod tests {
         let available_native_tool_ids = BTreeSet::from([
             String::from("shell_command"),
             String::from("vulcan_file_list"),
+            String::from(UPDATE_PLAN_TOOL_ID),
         ]);
         let mcp_runtime_access =
             configured_mcp_runtime_access(&ProviderConfigurationFile::default());
@@ -960,7 +1032,10 @@ mod tests {
         );
         assert_eq!(
             profile.tool_exposure.allowed_tools,
-            vec![String::from("shell_command")]
+            vec![
+                String::from("shell_command"),
+                String::from(UPDATE_PLAN_TOOL_ID)
+            ]
         );
         let resolved_temperature = profile.extra["temperature"].as_f64().unwrap_or_default();
         assert!((resolved_temperature - 0.3).abs() < 0.000001);

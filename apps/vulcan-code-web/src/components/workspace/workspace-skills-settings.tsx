@@ -1,8 +1,5 @@
 import * as React from "react";
 import {
-  cn,
-} from "@/lib/utils";
-import {
   Bot,
   Hammer,
   Maximize2,
@@ -18,6 +15,7 @@ import {
   type SkillHeaderBusyActionId,
   type SkillSubAreaId,
 } from "@/components/features/skills/SkillsArea";
+import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
 import { useI18n } from "@/i18n";
 import type { WorkbenchSnapshot } from "@/types";
 
@@ -67,12 +65,6 @@ export function WorkspaceSkillsSettings(props: {
   // menuExpanded stores whether the floating skill menu shows every row.
   // menuExpanded 保存浮动技能菜单是否显示完整行。
   const [menuExpanded, setMenuExpanded] = React.useState(true);
-  // rootRef measures the available width for menu-aware centering.
-  // rootRef 测量菜单感知居中所需的可用宽度。
-  const rootRef = React.useRef<HTMLElement | null>(null);
-  // menuOffsetsContent stores whether the expanded menu can reserve layout width.
-  // menuOffsetsContent 保存展开菜单是否可以预留布局宽度。
-  const [menuOffsetsContent, setMenuOffsetsContent] = React.useState(false);
   // luaInstallDialogOpen controls the embedded LuaSkills install dialog.
   // luaInstallDialogOpen 控制内嵌 LuaSkills 安装弹窗。
   const [luaInstallDialogOpen, setLuaInstallDialogOpen] = React.useState(false);
@@ -158,53 +150,33 @@ export function WorkspaceSkillsSettings(props: {
     });
   }, [activeLabel, headerActions, headerSummary.detail, onHeaderStateChange]);
 
-  React.useEffect(() => {
-    const element = rootRef.current;
-    if (!element || typeof ResizeObserver === "undefined") {
-      return;
-    }
-    // updateMenuOffsetMode keeps the content centered globally when menu reservation would overlap.
-    // updateMenuOffsetMode 在菜单预留会产生覆盖时保持内容全局居中。
-    const updateMenuOffsetMode = () => {
-      const width = element.getBoundingClientRect().width;
-      setMenuOffsetsContent(width >= 176 + 800 + 48);
-    };
-    updateMenuOffsetMode();
-    const observer = new ResizeObserver(updateMenuOffsetMode);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-
   return (
-    <section
-      className={cn(
-        "workspace-skills-settings",
-        menuExpanded ? "menu-expanded" : "menu-collapsed",
-        menuExpanded && menuOffsetsContent ? "menu-offset" : "menu-overlay",
+    <AdaptiveToolPanel
+      className="workspace-skills-settings"
+      contentClassName="workspace-skills-content"
+      contentShellClassName="workspace-skills-content-shell"
+      expanded={menuExpanded}
+      panel={(
+        <FloatingSkillMenu
+          activeSubArea={activeSubArea}
+          expanded={menuExpanded}
+          onExpandedChange={setMenuExpanded}
+          onSelectSubArea={onActiveSubAreaChange}
+        />
       )}
-      ref={rootRef}
+      side="left"
     >
-      <FloatingSkillMenu
-        activeSubArea={activeSubArea}
-        expanded={menuExpanded}
-        onExpandedChange={setMenuExpanded}
-        onSelectSubArea={onActiveSubAreaChange}
+      <SkillsArea
+        activeTab={activeSubArea}
+        skillActions={skillActions}
+        workbench={workbench}
       />
-      <div className="workspace-skills-content-shell">
-        <div className="workspace-skills-content">
-          <SkillsArea
-            activeTab={activeSubArea}
-            skillActions={skillActions}
-            workbench={workbench}
-          />
-        </div>
-      </div>
       <LuaSkillInstallDialog
         actions={skillActions}
         open={luaInstallDialogOpen}
         onOpenChange={setLuaInstallDialogOpen}
       />
-    </section>
+    </AdaptiveToolPanel>
   );
 }
 

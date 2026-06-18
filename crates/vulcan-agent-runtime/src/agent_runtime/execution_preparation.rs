@@ -11,6 +11,7 @@ use crate::conversation_protocol::collect_host_visible_attachments;
 use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeToolBinding;
 use crate::provider_config::{AiToolKind, PersistedAiToolConfiguration, ProviderConfigurationFile};
+use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use crate::workspace_path::normalize_workspace_path_text;
 use luaskills::RuntimeEntryDescriptor;
@@ -634,6 +635,9 @@ fn filter_native_tool_ids(
     tool_ids
         .into_iter()
         .filter(|tool_id| {
+            if native_tool_id_is_universal(tool_id) {
+                return true;
+            }
             if tool_selector_matches(&selectors.global_disabled, &[tool_id.as_str()]) {
                 return false;
             }
@@ -789,6 +793,9 @@ fn vulcan_tool_descriptor_is_visible(
     source: VulcanToolSourceKind,
     selectors: &ToolExposureSelectorState,
 ) -> bool {
+    if source == VulcanToolSourceKind::Native && native_tool_id_is_universal(id) {
+        return true;
+    }
     if tool_selector_matches(&selectors.global_disabled, &[id, name, description]) {
         return false;
     }
@@ -807,6 +814,22 @@ fn vulcan_tool_descriptor_is_visible(
                 && (id == LUASKILL_HELP_TOOL_NAME || id == CALL_LUASKILL_TOOL_NAME)
         }
     }
+}
+
+/// Returns whether one native tool is exposed universally outside regular tool filters.
+/// 返回单个原生工具是否在普通工具过滤之外全局暴露。
+///
+/// # Parameters
+/// 参数
+/// `tool_id` is the stable native tool identifier.
+/// `tool_id` 是稳定的原生工具标识。
+///
+/// # Returns
+/// 返回值
+/// `true` when the tool should bypass request-scoped filtering.
+/// 当工具应绕过请求级过滤时返回 `true`。
+fn native_tool_id_is_universal(tool_id: &str) -> bool {
+    tool_id == UPDATE_PLAN_TOOL_ID
 }
 
 /// Returns whether one AI capability kind matches any user selector.
@@ -946,6 +969,7 @@ mod tests {
         AiToolKind, PersistedAiToolConfiguration, PersistedProviderEntry, PersistedProviderOptions,
         ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
     };
+    use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -1029,11 +1053,32 @@ mod tests {
                 String::from("shell_command"),
                 String::from("vulcan_file_read"),
                 String::from("vmm_memory_write"),
+                String::from(UPDATE_PLAN_TOOL_ID),
             ],
             &selectors,
         );
 
-        assert_eq!(filtered, vec!["shell_command"]);
+        assert_eq!(filtered, vec!["shell_command", UPDATE_PLAN_TOOL_ID]);
+    }
+
+    /// Verifies request-scoped selectors cannot hide the universal update_plan native tool.
+    /// 验证请求级选择器无法隐藏通用 update_plan 原生工具。
+    #[test]
+    fn execution_tool_exposure_keeps_universal_update_plan_tool() {
+        let snapshot = ToolExposureSnapshot {
+            allowed_tools: vec![String::from("shell_command")],
+            disabled_tools: vec![String::from(UPDATE_PLAN_TOOL_ID)],
+            ..ToolExposureSnapshot::default()
+        };
+        let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
+
+        assert!(vulcan_tool_descriptor_is_visible(
+            UPDATE_PLAN_TOOL_ID,
+            UPDATE_PLAN_TOOL_ID,
+            "Updates the task plan.",
+            VulcanToolSourceKind::Native,
+            &selectors,
+        ));
     }
 
     /// Verifies LuaSkills JSON overrides filter direct and implicit entries without TaskRuntime-side cloning.

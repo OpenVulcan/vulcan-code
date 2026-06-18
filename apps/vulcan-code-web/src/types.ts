@@ -1306,6 +1306,37 @@ export interface PendingQuestionOptionSummary {
   description: string;
 }
 
+// SessionTodoPlanSummary describes the current model-authored session TODO plan.
+// SessionTodoPlanSummary 描述当前模型编写的会话 TODO 计划。
+export interface SessionTodoPlanSummary {
+  // Optional explanation attached to the latest plan update.
+  // 最近一次计划更新附带的可选说明。
+  explanation?: string | null;
+  // Ordered TODO items shown in the session tool panel.
+  // 会话工具面板中展示的有序 TODO 条目。
+  plan: SessionTodoPlanItemSummary[];
+  // Completed item count.
+  // 已完成条目数量。
+  completedCount: number;
+  // Total item count.
+  // 条目总数量。
+  totalCount: number;
+  // Unix-millis update timestamp text.
+  // Unix 毫秒格式的更新时间文本。
+  updatedAt?: string | null;
+}
+
+// SessionTodoPlanItemSummary describes one TODO item for WebUI rendering.
+// SessionTodoPlanItemSummary 描述供 WebUI 渲染的单个 TODO 条目。
+export interface SessionTodoPlanItemSummary {
+  // Human-readable step text supplied by the model.
+  // 模型提供的人类可读步骤文本。
+  step: string;
+  // Stable status key: pending, in_progress, or completed.
+  // 稳定状态键：pending、in_progress 或 completed。
+  status: "pending" | "in_progress" | "completed";
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -1387,6 +1418,9 @@ export interface WorkbenchSnapshot {
   // Oldest pending ask-tool request waiting for a user reply.
   // 当前等待用户回复的最早 ask 工具请求。
   pendingQuestion?: PendingQuestionSnapshot | null;
+  // Current session TODO plan shown in the conversation tool panel.
+  // 当前会话工具面板展示的会话 TODO 计划。
+  sessionTodoPlan?: SessionTodoPlanSummary | null;
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

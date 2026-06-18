@@ -39,6 +39,10 @@ use vulcan_vmm::{
     WriteMemoriesRequest, WriteMemoryItem,
 };
 
+/// Stable identifier for the universal session TODO update tool.
+/// 通用会话 TODO 更新工具的稳定标识。
+pub const UPDATE_PLAN_TOOL_ID: &str = "update_plan";
+
 /// One lightweight descriptor for a registered native tool.
 /// 单个已注册原生工具的轻量描述。
 #[derive(Debug, Clone)]
@@ -254,6 +258,7 @@ pub fn build_native_tool_catalog(
         build_workspace_describe_tool(snapshot.clone()),
         build_agent_list_tool(snapshot.clone(), config),
         build_skill_list_tool(snapshot.clone(), config),
+        build_update_plan_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone()),
         build_shell_session_tool(command_session_runtime, shell_support),
@@ -447,6 +452,185 @@ fn build_skill_list_tool(
                 })))
             })
         },
+    )
+}
+
+/// Builds the AI-visible session TODO plan update tool.
+/// 构建 AI 可见的会话 TODO 计划更新工具。
+fn build_update_plan_tool() -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from(UPDATE_PLAN_TOOL_ID),
+        name: String::from(UPDATE_PLAN_TOOL_ID),
+        description: String::from(
+            "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.",
+        ),
+        help_text: None,
+        ai_visible: true,
+        available_in_plan: true,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        update_plan_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            Box::pin(async move { execute_update_plan_tool(request).await })
+        },
+    )
+}
+
+/// One parsed step status accepted by the `update_plan` tool.
+/// `update_plan` 工具接受的单个已解析步骤状态。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum UpdatePlanStepStatusArg {
+    /// The step has not started yet.
+    /// 该步骤尚未开始。
+    Pending,
+    /// The step is currently being worked on.
+    /// 该步骤正在进行中。
+    InProgress,
+    /// The step has been completed.
+    /// 该步骤已经完成。
+    Completed,
+}
+
+impl UpdatePlanStepStatusArg {
+    /// Returns the stable public status key.
+    /// 返回稳定的公开状态键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The Codex-compatible snake_case status string.
+    /// 与 Codex 兼容的 snake_case 状态字符串。
+    fn as_key(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+/// One parsed plan item accepted by the `update_plan` tool.
+/// `update_plan` 工具接受的单个已解析计划项。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatePlanItemArg {
+    /// Task step text.
+    /// 任务步骤文本。
+    step: String,
+    /// Step status.
+    /// 步骤状态。
+    status: UpdatePlanStepStatusArg,
+}
+
+/// Parsed argument payload accepted by the `update_plan` tool.
+/// `update_plan` 工具接受的已解析参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UpdatePlanArgs {
+    /// Optional explanation for this plan update.
+    /// 本次计划更新的可选说明。
+    explanation: Option<String>,
+    /// The list of steps.
+    /// 步骤列表。
+    plan: Vec<UpdatePlanItemArg>,
+}
+
+/// Builds the Codex-compatible JSON Schema for `update_plan`.
+/// 构建与 Codex 兼容的 `update_plan` JSON Schema。
+///
+/// # Returns
+/// 返回值
+/// The model-facing argument schema for the plan update tool.
+/// 面向模型的计划更新工具参数结构。
+fn update_plan_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "explanation": {
+                "type": "string",
+                "description": "Optional explanation for this plan update."
+            },
+            "plan": {
+                "type": "array",
+                "description": "The list of steps",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step": {
+                            "type": "string",
+                            "description": "Task step text.",
+                            "minLength": 1
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Step status.",
+                            "enum": ["pending", "in_progress", "completed"]
+                        }
+                    },
+                    "required": ["step", "status"],
+                    "additionalProperties": false
+                }
+            }
+        },
+        "required": ["plan"],
+        "additionalProperties": false
+    })
+}
+
+/// Executes one `update_plan` request and returns a host projection payload.
+/// 执行单次 `update_plan` 请求并返回宿主投影载荷。
+///
+/// # Parameters
+/// 参数
+/// `request` carries the raw model-supplied tool arguments.
+/// `request` 携带模型提供的原始工具参数。
+///
+/// # Returns
+/// 返回值
+/// A Codex-compatible model response plus a Vulcan host result for session projection.
+/// 与 Codex 兼容的模型响应以及用于会话投影的 Vulcan 宿主结果。
+async fn execute_update_plan_tool(
+    request: NativeToolExecutionRequest,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let args: UpdatePlanArgs = serde_json::from_value(request.arguments).map_err(|error| {
+        NativeToolError::new(format!("failed to parse function arguments: {error}"))
+    })?;
+    let in_progress_count = args
+        .plan
+        .iter()
+        .filter(|item| matches!(item.status, UpdatePlanStepStatusArg::InProgress))
+        .count();
+    if in_progress_count > 1 {
+        return Err(NativeToolError::new(
+            "At most one plan item can be in_progress at a time.",
+        ));
+    }
+    let mut plan = Vec::with_capacity(args.plan.len());
+    for item in &args.plan {
+        // Trim here so the host projection never accepts a plan that the WebUI persistence layer would later discard.
+        // 此处进行裁剪，避免宿主投影接受后又被 WebUI 持久化层丢弃。
+        let step = item.step.trim();
+        if step.is_empty() {
+            return Err(NativeToolError::new(
+                "Plan item step cannot be empty after trimming.",
+            ));
+        }
+        plan.push(json!({
+            "step": step,
+            "status": item.status.as_key(),
+        }));
+    }
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(String::from("Plan updated")))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("todo_plan"),
+                payload: json!({
+                    "explanation": args.explanation,
+                    "plan": plan,
+                }),
+            }),
     )
 }
 
@@ -2651,7 +2835,7 @@ mod tests {
     use super::{
         NativeToolExecutionRequest, build_agent_list_tool, build_mcp_server_list_tool,
         build_shell_command_tool, build_shell_session_tool, build_skill_list_tool,
-        build_workspace_describe_tool, effective_start_append_newline,
+        build_update_plan_tool, build_workspace_describe_tool, effective_start_append_newline,
         resolve_session_shell_behavior, resolve_shell_command_launcher,
         resolve_shell_command_working_directory, shell_command_args_schema,
         shell_session_args_schema, shell_specific_newline,
@@ -2714,6 +2898,93 @@ mod tests {
         } else {
             String::from("while true; do sleep 0.1; done")
         }
+    }
+
+    /// Builds one native-tool execution request with only arguments varied.
+    /// 构建一条仅变更参数的原生工具执行请求。
+    fn test_native_request(arguments: serde_json::Value) -> NativeToolExecutionRequest {
+        NativeToolExecutionRequest {
+            arguments,
+            session_id: None,
+            workspace_root: None,
+            spill_root: None,
+            enabled_prompt_skill_names: Vec::new(),
+            prompt_skill_user_root: None,
+            project_vmm: VmmConfigLayer::default(),
+            session_vmm: VmmConfigLayer::default(),
+        }
+    }
+
+    /// Verifies update_plan returns the Codex-compatible model text and a host TODO payload.
+    /// 验证 update_plan 返回与 Codex 兼容的模型文本以及宿主 TODO 载荷。
+    #[tokio::test]
+    async fn update_plan_tool_returns_todo_host_payload() {
+        let tool = build_update_plan_tool();
+        let result = tool
+            .invoke(test_native_request(json!({
+                "explanation": "next pass",
+                "plan": [
+                    { "step": "Read source", "status": "completed" },
+                    { "step": "Wire UI", "status": "in_progress" },
+                    { "step": "Verify", "status": "pending" }
+                ]
+            })))
+            .await
+            .expect("update_plan should execute");
+        let host_result = result.host_result.expect("host result");
+
+        assert_eq!(result.model_output, json!("Plan updated"));
+        assert_eq!(host_result.kind, "todo_plan");
+        assert_eq!(host_result.payload["explanation"], "next pass");
+        assert_eq!(host_result.payload["plan"][1]["status"], "in_progress");
+    }
+
+    /// Verifies update_plan rejects multiple in-progress items.
+    /// 验证 update_plan 会拒绝多个进行中条目。
+    #[tokio::test]
+    async fn update_plan_tool_rejects_multiple_in_progress_items() {
+        let tool = build_update_plan_tool();
+        let error = tool
+            .invoke(test_native_request(json!({
+                "plan": [
+                    { "step": "A", "status": "in_progress" },
+                    { "step": "B", "status": "in_progress" }
+                ]
+            })))
+            .await
+            .expect_err("update_plan should reject duplicate in-progress items");
+
+        assert!(
+            error
+                .message
+                .contains("At most one plan item can be in_progress")
+        );
+    }
+
+    /// Verifies update_plan stays visible in Plan mode because it is a universal task-state tool.
+    /// 验证 update_plan 作为通用任务状态工具会在 Plan 模式保持可见。
+    #[test]
+    fn update_plan_tool_stays_visible_in_plan_mode() {
+        let tool = build_update_plan_tool();
+        assert!(tool.descriptor.ai_visible);
+        assert!(tool.descriptor.available_in_plan);
+    }
+
+    /// Verifies update_plan rejects blank step text before emitting host projection data.
+    /// 验证 update_plan 会在发出宿主投影数据前拒绝空白步骤文本。
+    #[tokio::test]
+    async fn update_plan_tool_rejects_blank_step_text() {
+        let tool = build_update_plan_tool();
+        let error = tool
+            .invoke(test_native_request(json!({
+                "plan": [
+                    { "step": "   ", "status": "pending" }
+                ]
+            })))
+            .await
+            .expect_err("update_plan should reject blank step text");
+
+        assert!(error.message.contains("step cannot be empty"));
     }
 
     /// Verifies that the agent registry tool exposes extended runtime fields for diagnostics and future delegate orchestration.

@@ -1842,6 +1842,17 @@ button {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .adaptive-tool-panel-content-shell,
+  .adaptive-tool-panel-slot,
+  .conversation-scroll-content,
+  .streaming-thinking-overlay,
+  .composer-dock,
+  .empty-conversation-prompt {
+    transition: none;
+  }
+}
+
 .context-panel-shell {
   min-width: 0;
   min-height: 0;
@@ -2550,9 +2561,107 @@ button {
 }
 
 .chat-grid {
+  --conversation-session-todo-width: 320px;
+  container-type: inline-size;
   display: block;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
+}
+
+.conversation-session-todo-collapsed {
+  max-width: min(220px, calc(100% - 40px));
+}
+
+.conversation-session-todo-collapsed span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-todo-collapsed strong,
+.conversation-session-todo-header-actions strong {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.conversation-session-todo-collapsed svg {
+  flex: 0 0 auto;
+}
+
+.conversation-session-todo-menu {
+  --workspace-skills-menu-width: var(--conversation-session-todo-width);
+  width: min(var(--conversation-session-todo-width), calc(100% - 40px));
+  max-height: min(460px, calc(100% - var(--composer-dock-height, 132px) - 72px));
+  overflow: auto;
+}
+
+.conversation-session-todo-header {
+  height: auto;
+  min-height: 28px;
+}
+
+.conversation-session-todo-title {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+}
+
+.conversation-session-todo-title svg,
+.conversation-session-todo-row svg {
+  flex: 0 0 auto;
+}
+
+.conversation-session-todo-header-actions {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.conversation-session-todo-explanation {
+  margin: 8px 3px 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.conversation-session-todo-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  height: auto;
+  min-height: 32px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  line-height: 1.35;
+  cursor: default;
+}
+
+.conversation-session-todo-row svg {
+  margin-top: 1px;
+  color: var(--muted-foreground);
+}
+
+.conversation-session-todo-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.conversation-session-todo-row.status-in_progress svg,
+.conversation-session-todo-row.status-completed svg {
+  color: oklch(0.62 0.16 150);
+}
+
+.conversation-session-todo-row.status-completed span {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
 }
 
 .two-columns {
@@ -2627,6 +2736,105 @@ button {
   scrollbar-gutter: auto;
 }
 
+.adaptive-tool-panel {
+  --adaptive-tool-panel-width: 176px;
+  --adaptive-tool-panel-inline-gap: 24px;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.adaptive-tool-panel-content-shell {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 14px;
+  overflow: auto;
+  transition:
+    padding-left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    padding-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.adaptive-tool-panel-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.adaptive-tool-panel-slot {
+  position: absolute;
+  top: 14px;
+  z-index: 12;
+  display: flex;
+  align-items: flex-start;
+  overflow: hidden;
+  transition:
+    width 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.adaptive-tool-panel-slot-inner {
+  flex: 0 0 auto;
+  width: max-content;
+  max-width: calc(100vw - 40px);
+}
+
+.adaptive-tool-panel.side-left .adaptive-tool-panel-slot {
+  left: 14px;
+  justify-content: flex-start;
+}
+
+.adaptive-tool-panel.side-right .adaptive-tool-panel-slot {
+  right: 14px;
+  justify-content: flex-end;
+}
+
+.adaptive-tool-panel.side-left.is-expanded.is-inline .adaptive-tool-panel-content-shell {
+  padding-left: calc(var(--adaptive-tool-panel-width) + var(--adaptive-tool-panel-inline-gap));
+}
+
+.adaptive-tool-panel.side-right.is-expanded.is-inline .adaptive-tool-panel-content-shell {
+  padding-right: calc(var(--adaptive-tool-panel-width) + var(--adaptive-tool-panel-inline-gap));
+}
+
+.adaptive-tool-panel.is-overlay .adaptive-tool-panel-content-shell,
+.adaptive-tool-panel.is-collapsed .adaptive-tool-panel-content-shell {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.conversation-session-tool-adaptive-panel .conversation-session-tool-content-shell,
+.conversation-session-tool-adaptive-panel.is-overlay .conversation-session-tool-content-shell,
+.conversation-session-tool-adaptive-panel.is-collapsed .conversation-session-tool-content-shell {
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 0;
+  overflow: hidden;
+}
+
+.conversation-session-tool-adaptive-panel {
+  --conversation-inline-offset: 0px;
+}
+
+.conversation-session-tool-adaptive-panel.side-right.is-expanded.is-inline {
+  --conversation-inline-offset: var(--adaptive-tool-panel-inline-offset);
+}
+
+.conversation-session-tool-adaptive-panel.side-right.is-expanded.is-inline .conversation-session-tool-content-shell {
+  padding-right: 0;
+}
+
+.conversation-session-tool-adaptive-panel .conversation-session-tool-content {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  flex: 1 1 auto;
+}
+
 .workspace-skills-content .skill-card-list {
   width: 100%;
   box-sizing: border-box;
@@ -2638,20 +2846,9 @@ button {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.workspace-skills-settings.menu-expanded.menu-offset .workspace-skills-content-shell {
-  padding-left: calc(var(--workspace-skills-menu-width) + 24px);
-}
-
-.workspace-skills-settings.menu-expanded.menu-overlay .workspace-skills-content-shell,
-.workspace-skills-settings.menu-collapsed .workspace-skills-content-shell {
-  padding-left: 14px;
-}
-
 .workspace-skills-menu,
 .workspace-skills-menu-collapsed {
-  position: absolute;
-  top: 14px;
-  left: 14px;
+  position: static;
   z-index: 12;
 }
 
@@ -3651,9 +3848,13 @@ button {
   min-width: 0;
   width: min(100%, 800px);
   min-height: 100%;
-  margin-inline: auto;
+  margin-left: max(0px, calc((100% - 800px) / 2 - var(--conversation-inline-offset, 0px)));
+  margin-right: auto;
   display: flex;
   flex-direction: column;
+  transition:
+    margin-left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    margin-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .conversation-footer {
@@ -3693,7 +3894,7 @@ button {
 
 .streaming-thinking-overlay {
   position: absolute;
-  left: 50%;
+  left: calc(50% - var(--conversation-inline-offset, 0px));
   bottom: calc(var(--composer-dock-height, 132px) + 28px);
   z-index: 4;
   width: min(760px, calc(100% - 64px));
@@ -3710,6 +3911,7 @@ button {
   pointer-events: auto;
   opacity: 1;
   transition:
+    left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     opacity 500ms ease,
     transform 500ms ease;
 }
@@ -3799,7 +4001,7 @@ button {
 
 .composer-dock {
   position: absolute;
-  right: max(16px, calc((100% - 800px) / 2));
+  right: max(16px, calc((100% - 800px) / 2 + var(--conversation-inline-offset, 0px)));
   bottom: 16px;
   z-index: 5;
   width: 800px;
@@ -3811,6 +4013,7 @@ button {
   gap: 10px;
   pointer-events: none;
   transition:
+    right 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     bottom 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
     transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
   will-change: bottom, transform;
@@ -4778,7 +4981,7 @@ button {
   justify-items: center;
   pointer-events: none;
   opacity: 1;
-  transform: translateY(0);
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(0);
   transition:
     opacity 360ms ease,
     transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -4786,7 +4989,7 @@ button {
 
 .empty-conversation-prompt.leaving {
   opacity: 0;
-  transform: translateY(-16px);
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px))) translateY(-16px);
 }
 
 .empty-conversation-prompt h2 {

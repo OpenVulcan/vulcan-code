@@ -120,15 +120,15 @@ use vulcan_service_api::{
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
     RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
-    SettingSectionSummary, StartupSnapshot, StartupStepSnapshot, StartupStepStatus,
-    SubagentNavigationSnapshot, SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary,
-    VmmConfigSaveRequest, VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
-    VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
-    VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
-    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
-    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot,
+    SessionTodoPlanItemSummary, SessionTodoPlanSummary, SettingSectionSummary, StartupSnapshot,
+    StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
+    ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmEffectiveSummary,
+    VmmManagementSectionSummary, VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot,
+    VmmProjectScopeSummary, VmmRuntimeSummary, VmmStaticProfileDateGroupSummary,
+    VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary, VmmStaticProfileSummary,
+    WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot,
     webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
     webui_static_root_from_candidates,
 };
@@ -154,7 +154,8 @@ use vulcan_workbench_model::{
     SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SessionAddonNamespace,
     SessionAddonState, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionRunPhase, SessionRuntimeControls, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTurnStatsStatus,
+    SessionState, SessionSummary, SessionTitleSource, SessionTodoPlanItem,
+    SessionTodoPlanItemStatus, SessionTodoPlanState, SessionTurnStatsStatus,
     SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
     apply_pending_prompt_panel_drop_target, attach_tool_display_state_to_metadata,
     build_session_record_message_id, build_stopped_task_session_metadata,
@@ -7615,6 +7616,11 @@ fn session_addon_state_from_workspace_snapshot(
                     .as_ref()
                     .unwrap_or(default_ai_tool_configuration);
                 let _ = addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
+            }
+            SessionAddonNamespace::TodoPlan => {
+                if !runtime_state.todo_plan.is_empty() {
+                    let _ = addon_state.set_todo_plan(&runtime_state.todo_plan, updated_at.clone());
+                }
             }
             _ => {}
         }
@@ -15758,24 +15764,129 @@ fn append_runtime_event_projection(
     ) {
         return Ok(());
     }
-    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
-        let now = current_unix_millis_text();
-        let runtime_state = workspace
-            .session_runtime_state
-            .entry(session_id)
-            .or_insert_with(|| SessionRuntimeStateEntry {
-                updated_at: now.clone(),
-                ..SessionRuntimeStateEntry::default()
-            });
-        if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event) {
-            workspace.session_messages.insert(
-                session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
-            );
-            workspace.hydrated_session_ids.insert(session_id);
-        }
+    let mut changed_todo_plan: Option<SessionTodoPlanState> = None;
+    let workspace_snapshot =
+        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+            let now = current_unix_millis_text();
+            let runtime_state = workspace
+                .session_runtime_state
+                .entry(session_id)
+                .or_insert_with(|| SessionRuntimeStateEntry {
+                    updated_at: now.clone(),
+                    ..SessionRuntimeStateEntry::default()
+                });
+            if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event) {
+                workspace.session_messages.insert(
+                    session_id,
+                    conversation_state_to_session_messages(&runtime_state.conversation_state),
+                );
+                workspace.hydrated_session_ids.insert(session_id);
+            }
+            if let Some(todo_plan) = todo_plan_state_from_tool_finished_event(event, &now)
+                && runtime_state.todo_plan != todo_plan
+            {
+                runtime_state.todo_plan = todo_plan.clone();
+                runtime_state.updated_at = now;
+                changed_todo_plan = Some(todo_plan);
+            }
+        })?;
+    if let Some(todo_plan) = changed_todo_plan {
+        let controller_runtime = controller_runtime_from_state(state)?;
+        let updated_at = todo_plan
+            .updated_at
+            .clone()
+            .unwrap_or_else(current_unix_millis_text);
+        let mut addon_state = SessionAddonState::new(session_id);
+        let _ = addon_state.set_todo_plan(&todo_plan, updated_at);
+        spawn_workspace_session_addon_state_persist_task(
+            app.clone(),
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            addon_state,
+            vec![SessionAddonNamespace::TodoPlan],
+            Some(String::from("update_plan_tool")),
+        );
+    }
+    Ok(())
+}
+
+/// Builds session TODO state from one completed `update_plan` tool event.
+/// 从单条已完成的 `update_plan` 工具事件构建会话 TODO 状态。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event emitted after a tool call finishes.
+/// `event` 是工具调用结束后发出的运行时事件。
+/// `updated_at` is the timestamp assigned to the projected plan.
+/// `updated_at` 是分配给投影计划的时间戳。
+///
+/// # Returns
+/// 返回值
+/// The parsed TODO plan when the event carries a matching host result.
+/// 当事件携带匹配的宿主结果时返回已解析 TODO 计划。
+fn todo_plan_state_from_tool_finished_event(
+    event: &RuntimeEvent,
+    updated_at: &str,
+) -> Option<SessionTodoPlanState> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return None;
+    }
+    let payload = event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("host_result"))
+        .and_then(|host_result| {
+            (host_result.get("kind").and_then(Value::as_str) == Some("todo_plan"))
+                .then(|| host_result.get("payload"))
+                .flatten()
+        })?;
+    let plan = payload
+        .get("plan")
+        .and_then(Value::as_array)?
+        .iter()
+        .map(todo_plan_item_from_value)
+        .collect::<Option<Vec<_>>>()?;
+    let explanation = payload
+        .get("explanation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Some(SessionTodoPlanState {
+        explanation,
+        plan,
+        updated_at: Some(updated_at.to_string()),
     })
-    .map(|_| ())
+}
+
+/// Parses one host-result JSON value into a session TODO item.
+/// 将单个宿主结果 JSON 值解析为会话 TODO 条目。
+///
+/// # Parameters
+/// 参数
+/// `value` is one raw plan item emitted by the native tool.
+/// `value` 是原生工具发出的单个原始计划项。
+///
+/// # Returns
+/// 返回值
+/// The parsed plan item when both step and status are valid.
+/// 当步骤与状态均有效时返回已解析计划项。
+fn todo_plan_item_from_value(value: &Value) -> Option<SessionTodoPlanItem> {
+    let step = value
+        .get("step")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let status = match value.get("status").and_then(Value::as_str)? {
+        "pending" => SessionTodoPlanItemStatus::Pending,
+        "in_progress" => SessionTodoPlanItemStatus::InProgress,
+        "completed" => SessionTodoPlanItemStatus::Completed,
+        _ => return None,
+    };
+    Some(SessionTodoPlanItem { step, status })
 }
 
 /// Acknowledges that one runtime event has been projected into the emitted WebUI snapshot.
@@ -19795,6 +19906,7 @@ fn workbench_from_runtime(
             })
             .unwrap_or_default(),
         pending_question,
+        session_todo_plan: session_todo_plan_summary_from_runtime_state(selected_runtime_state),
         memories: memories(workspace),
         vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
         command_sessions: command_sessions(controller),
@@ -19844,6 +19956,67 @@ fn pending_prompt_summary_from_panel_entry(
             PendingPromptPanelEntryState::Inserted => String::from("inserted"),
         },
         created_at: entry.created_at.clone(),
+    }
+}
+
+/// Projects session TODO state into the WebUI snapshot.
+/// 将会话 TODO 状态投影到 WebUI 快照。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the selected session runtime state when available.
+/// `runtime_state` 是可用时的当前选中会话运行态。
+///
+/// # Returns
+/// 返回值
+/// A TODO plan summary when the selected session has visible plan content.
+/// 当前选中会话存在可见计划内容时返回 TODO 计划摘要。
+fn session_todo_plan_summary_from_runtime_state(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> Option<SessionTodoPlanSummary> {
+    let todo_plan = &runtime_state?.todo_plan;
+    if todo_plan.is_empty() || todo_plan.plan.is_empty() {
+        return None;
+    }
+    let plan = todo_plan
+        .plan
+        .iter()
+        .map(|item| SessionTodoPlanItemSummary {
+            step: item.step.clone(),
+            status: session_todo_plan_item_status_key(item.status).to_string(),
+        })
+        .collect::<Vec<_>>();
+    let completed_count = todo_plan
+        .plan
+        .iter()
+        .filter(|item| item.status == SessionTodoPlanItemStatus::Completed)
+        .count();
+    Some(SessionTodoPlanSummary {
+        explanation: todo_plan.explanation.clone(),
+        total_count: plan.len(),
+        completed_count,
+        plan,
+        updated_at: todo_plan.updated_at.clone(),
+    })
+}
+
+/// Returns the stable WebUI key for one TODO item status.
+/// 返回单个 TODO 条目状态的稳定 WebUI 键。
+///
+/// # Parameters
+/// 参数
+/// `status` is the internal TODO item lifecycle status.
+/// `status` 是内部 TODO 条目生命周期状态。
+///
+/// # Returns
+/// 返回值
+/// The snake_case status key consumed by WebUI.
+/// WebUI 消费的 snake_case 状态键。
+fn session_todo_plan_item_status_key(status: SessionTodoPlanItemStatus) -> &'static str {
+    match status {
+        SessionTodoPlanItemStatus::Pending => "pending",
+        SessionTodoPlanItemStatus::InProgress => "in_progress",
+        SessionTodoPlanItemStatus::Completed => "completed",
     }
 }
 
@@ -20640,6 +20813,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
         pending_question: None,
+        session_todo_plan: None,
         memories: Vec::new(),
         vmm_memory: VmmMemorySnapshot::default(),
         command_sessions: Vec::new(),
@@ -24878,6 +25052,99 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use vulcan_agent_runtime::provider_capabilities::ResolvedAiToolCapability;
     use vulcan_provider_config::config::AiToolPolicy;
+
+    /// Verifies todo_plan host results are projected into session runtime TODO state.
+    /// 验证 todo_plan 宿主结果会投影为会话运行态 TODO 状态。
+    #[test]
+    fn todo_plan_state_from_tool_finished_event_parses_host_result() {
+        let event = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "update_plan finished",
+            "Plan updated",
+        )
+        .with_metadata(Some(json!({
+            "tool_name": "update_plan",
+            "tool_call_id": "call-todo",
+            "host_result": {
+                "kind": "todo_plan",
+                "payload": {
+                    "explanation": "同步会话计划",
+                    "plan": [
+                        { "step": "阅读参考实现", "status": "completed" },
+                        { "step": "接入右侧面板", "status": "in_progress" },
+                        { "step": "补充验证", "status": "pending" }
+                    ]
+                }
+            }
+        })));
+
+        let state = todo_plan_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z")
+            .expect("todo host result should parse");
+
+        assert_eq!(state.explanation.as_deref(), Some("同步会话计划"));
+        assert_eq!(state.updated_at.as_deref(), Some("2026-06-17T00:00:00Z"));
+        assert_eq!(state.plan.len(), 3);
+        assert_eq!(state.plan[0].status, SessionTodoPlanItemStatus::Completed);
+        assert_eq!(state.plan[1].status, SessionTodoPlanItemStatus::InProgress);
+        assert_eq!(state.plan[2].status, SessionTodoPlanItemStatus::Pending);
+    }
+
+    /// Verifies malformed todo_plan host results are rejected as a whole.
+    /// 验证格式错误的 todo_plan 宿主结果会整体拒绝。
+    #[test]
+    fn todo_plan_state_from_tool_finished_event_rejects_invalid_items() {
+        let event = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "update_plan finished",
+            "Plan updated",
+        )
+        .with_metadata(Some(json!({
+            "host_result": {
+                "kind": "todo_plan",
+                "payload": {
+                    "plan": [
+                        { "step": "有效条目", "status": "completed" },
+                        { "step": "", "status": "pending" }
+                    ]
+                }
+            }
+        })));
+
+        assert!(todo_plan_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z").is_none());
+    }
+
+    /// Verifies WebUI TODO summaries preserve status keys and completed counts.
+    /// 验证 WebUI TODO 摘要会保留状态键与完成数量。
+    #[test]
+    fn session_todo_plan_summary_counts_completed_items() {
+        let runtime_state = SessionRuntimeStateEntry {
+            todo_plan: SessionTodoPlanState {
+                explanation: Some(String::from("审核修复")),
+                plan: vec![
+                    SessionTodoPlanItem {
+                        step: String::from("完成菜单接入"),
+                        status: SessionTodoPlanItemStatus::Completed,
+                    },
+                    SessionTodoPlanItem {
+                        step: String::from("补充测试"),
+                        status: SessionTodoPlanItemStatus::InProgress,
+                    },
+                ],
+                updated_at: Some(String::from("2026-06-17T00:00:00Z")),
+            },
+            ..SessionRuntimeStateEntry::default()
+        };
+
+        let summary = session_todo_plan_summary_from_runtime_state(Some(&runtime_state))
+            .expect("summary should exist");
+
+        assert_eq!(summary.explanation.as_deref(), Some("审核修复"));
+        assert_eq!(summary.total_count, 2);
+        assert_eq!(summary.completed_count, 1);
+        assert_eq!(summary.plan[0].status, "completed");
+        assert_eq!(summary.plan[1].status, "in_progress");
+        assert_eq!(summary.updated_at.as_deref(), Some("2026-06-17T00:00:00Z"));
+    }
 
     /// Verifies image understanding remains available through the native model path when no host target is configured.
     /// 验证未配置宿主目标时，图片理解仍会通过模型原生路径显示为可用。

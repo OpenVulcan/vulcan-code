@@ -227,6 +227,10 @@ pub struct WorkbenchSnapshot {
     /// 当前等待用户输入的最早 ask 工具问题。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<PendingQuestionSnapshot>,
+    /// Current session TODO plan shown in the conversation tool panel.
+    /// 当前会话工具面板展示的会话 TODO 计划。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_todo_plan: Option<SessionTodoPlanSummary>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -465,6 +469,44 @@ pub struct PendingQuestionOptionSummary {
     /// Helper text explaining the choice.
     /// 解释该选项的辅助说明。
     pub description: String,
+}
+
+/// Describes the current model-authored TODO plan for one selected session.
+/// 描述当前选中会话的模型编写 TODO 计划。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodoPlanSummary {
+    /// Optional explanation attached to the latest plan update.
+    /// 最近一次计划更新附带的可选说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    /// Ordered TODO items shown in the session tool panel.
+    /// 会话工具面板中展示的有序 TODO 条目。
+    #[serde(default)]
+    pub plan: Vec<SessionTodoPlanItemSummary>,
+    /// Completed item count.
+    /// 已完成条目数量。
+    pub completed_count: usize,
+    /// Total item count.
+    /// 条目总数量。
+    pub total_count: usize,
+    /// Unix-millis update timestamp text.
+    /// Unix 毫秒格式的更新时间文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+/// Describes one TODO plan item for WebUI rendering.
+/// 描述供 WebUI 渲染的单个 TODO 计划条目。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodoPlanItemSummary {
+    /// Human-readable step text supplied by the model.
+    /// 模型提供的人类可读步骤文本。
+    pub step: String,
+    /// Stable status key: pending, in_progress, or completed.
+    /// 稳定状态键：pending、in_progress 或 completed。
+    pub status: String,
 }
 
 /// Describes the subagent navigation surface for one selected parent conversation.

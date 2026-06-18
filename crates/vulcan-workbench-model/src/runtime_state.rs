@@ -27,6 +27,67 @@ fn session_conversation_state_is_empty(state: &SessionConversationState) -> bool
 /// 可见队列或内部队列中允许保留的最大待发送提示词数量。
 pub const PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
 
+/// One stable status value used by the session TODO plan.
+/// 会话 TODO 计划使用的单个稳定状态值。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionTodoPlanItemStatus {
+    /// The step has not started yet.
+    /// 该步骤尚未开始。
+    Pending,
+    /// The step is currently being worked on.
+    /// 该步骤正在进行中。
+    InProgress,
+    /// The step has been completed.
+    /// 该步骤已经完成。
+    Completed,
+}
+
+/// One TODO plan step retained for the current session.
+/// 为当前会话保留的单个 TODO 计划步骤。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodoPlanItem {
+    /// Human-readable step text supplied by the model.
+    /// 模型提供的人类可读步骤文本。
+    pub step: String,
+    /// Current lifecycle status for the step.
+    /// 当前步骤的生命周期状态。
+    pub status: SessionTodoPlanItemStatus,
+}
+
+/// Session-scoped TODO plan persisted outside the visible transcript.
+/// 在可见转录之外持久化的会话级 TODO 计划。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionTodoPlanState {
+    /// Optional model-authored explanation for the latest plan update.
+    /// 最近一次计划更新的可选模型说明。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+    /// Ordered plan steps supplied by the model.
+    /// 模型提供的有序计划步骤。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plan: Vec<SessionTodoPlanItem>,
+    /// Unix-millis text capturing when the plan was last updated.
+    /// 捕获计划最近更新时间的 Unix 毫秒文本。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+}
+
+impl SessionTodoPlanState {
+    /// Returns whether the plan has no user-facing payload.
+    /// 返回该计划是否没有任何面向用户的有效载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when no explanation, steps, or update time is stored.
+    /// 当没有说明、步骤或更新时间时返回 `true`。
+    pub fn is_empty(&self) -> bool {
+        self.explanation.is_none() && self.plan.is_empty() && self.updated_at.is_none()
+    }
+}
+
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1786,6 +1847,10 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
+    /// Session-level TODO plan shown in the conversation tool panel.
+    /// 在会话工具面板中展示的会话级 TODO 计划。
+    #[serde(default, skip_serializing_if = "SessionTodoPlanState::is_empty")]
+    pub todo_plan: SessionTodoPlanState,
     /// Pending VMM PostAction writebacks retained for FIFO replay.
     /// 为 FIFO 重放保留的待处理 VMM PostAction 写回队列。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

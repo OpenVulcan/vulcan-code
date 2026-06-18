@@ -1659,6 +1659,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .as_deref()
             .and_then(parse_vmm_config_layer_from_json)
             .unwrap_or_default(),
+        todo_plan: Default::default(),
         vmm_writeback_outbox: row
             .vmm_writeback_outbox_json
             .as_deref()

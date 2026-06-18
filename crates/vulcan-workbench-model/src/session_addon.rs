@@ -8,7 +8,7 @@ use vulcan_provider_config::config::{
     OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration, ReasoningEffortLevel,
 };
 
-use crate::{SessionId, SessionRuntimeStateEntry};
+use crate::{SessionId, SessionRuntimeStateEntry, SessionTodoPlanState};
 
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
@@ -40,6 +40,9 @@ pub enum SessionAddonNamespace {
     /// Session-level VMM state and memory settings.
     /// 会话级 VMM 状态与记忆设置。
     Vmm,
+    /// Session-level TODO plan updated by the model-facing plan tool.
+    /// 由模型可见计划工具更新的会话级 TODO 计划。
+    TodoPlan,
     /// Session composer and pending prompt UI state.
     /// 会话输入框与待发送提示词界面状态。
     Composer,
@@ -68,6 +71,7 @@ impl SessionAddonNamespace {
             Self::PromptSkills => "prompt_skills",
             Self::ContextInjection => "context_injection",
             Self::Vmm => "vmm",
+            Self::TodoPlan => "todo_plan",
             Self::Composer => "composer",
             Self::RequestPreview => "request_preview",
             Self::ContextAnchor => "context_anchor",
@@ -265,6 +269,14 @@ impl SessionAddonState {
             );
         }
 
+        if !runtime_state.todo_plan.is_empty() {
+            let _ = state.set_typed_namespace(
+                SessionAddonNamespace::TodoPlan,
+                &runtime_state.todo_plan,
+                updated_at.clone(),
+            );
+        }
+
         if let Some(preview) = runtime_state
             .last_provider_request_preview_markdown
             .as_ref()
@@ -317,6 +329,9 @@ impl SessionAddonState {
         }
         if let Some(vmm) = self.typed_namespace(SessionAddonNamespace::Vmm) {
             runtime_state.vmm = vmm;
+        }
+        if let Some(todo_plan) = self.todo_plan() {
+            runtime_state.todo_plan = todo_plan;
         }
         if let Some(preview) = self.typed_namespace(SessionAddonNamespace::RequestPreview) {
             runtime_state.last_provider_request_preview_markdown = Some(preview);
@@ -489,6 +504,35 @@ impl SessionAddonState {
     /// 存在且有效时返回反序列化后的工作模式。
     pub fn work_mode(&self) -> Option<SessionWorkMode> {
         self.typed_namespace(SessionAddonNamespace::WorkMode)
+    }
+
+    /// Reads the session TODO plan from the addon namespace.
+    /// 从附属状态命名空间读取会话 TODO 计划。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The deserialized TODO plan when present and valid.
+    /// 存在且有效时返回反序列化后的 TODO 计划。
+    pub fn todo_plan(&self) -> Option<SessionTodoPlanState> {
+        self.typed_namespace(SessionAddonNamespace::TodoPlan)
+    }
+
+    /// Writes the session TODO plan namespace.
+    /// 写入会话 TODO 计划命名空间。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `todo_plan` is the latest session-scoped TODO state.
+    /// `todo_plan` 是最新的会话级 TODO 状态。
+    /// `updated_at` is the timestamp applied when changed.
+    /// `updated_at` 是变化时应用的时间戳。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when the namespace changed.
+    /// 当命名空间发生变化时返回 `true`。
+    pub fn set_todo_plan(&mut self, todo_plan: &SessionTodoPlanState, updated_at: String) -> bool {
+        self.set_typed_namespace(SessionAddonNamespace::TodoPlan, todo_plan, updated_at)
     }
 
     /// Writes work mode to the addon namespace.
