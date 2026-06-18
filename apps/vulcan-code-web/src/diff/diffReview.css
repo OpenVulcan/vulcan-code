@@ -89,6 +89,11 @@
   font-weight: 600;
 }
 
+.diff-panel-title-row .diff-stat {
+  font-size: 12px;
+  line-height: 1.2;
+}
+
 .diff-stat.added {
   color: #238636;
 }
