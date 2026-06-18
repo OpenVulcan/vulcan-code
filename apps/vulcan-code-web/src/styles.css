@@ -714,7 +714,26 @@ button {
 
 .workspace-sidebar-feature-button {
   --workspace-sidebar-feature-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
-  margin-top: 2px;
+  height: 30px;
+  max-height: 30px;
+  min-height: 30px;
+  margin-top: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  font-weight: 400;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+
+.workspace-sidebar-feature-button > svg {
+  flex: 0 0 auto;
+}
+
+.workspace-sidebar-feature-label {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .workspace-sidebar-feature-button.active,
@@ -728,6 +747,14 @@ button {
   min-height: 42px;
   gap: 8px;
   padding: 6px;
+}
+
+.sidebar-brand-static {
+  display: flex;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  user-select: none;
 }
 
 .sidebar-brand-button .sidebar-brand-mark,
@@ -761,6 +788,28 @@ button {
   flex: 0 0 auto;
   margin-left: auto;
   color: var(--muted-foreground);
+}
+
+.sidebar-brand-settings-button {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.sidebar-brand-settings-button:hover,
+.sidebar-brand-settings-button:focus-visible {
+  background: var(--sidebar-accent);
+  color: var(--sidebar-accent-foreground);
+  outline: none;
 }
 
 .sidebar-profile-menu {
@@ -838,6 +887,10 @@ button {
   display: none;
 }
 
+.vcn-sidebar[data-collapsible="icon"] .sidebar-brand-settings-button {
+  display: none;
+}
+
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button.project-folder-active {
   background: color-mix(in oklch, var(--sidebar-accent) 72%, var(--foreground) 8%);
@@ -863,6 +916,21 @@ button {
   background: var(--workspace-sidebar-feature-active-bg);
   box-shadow: none;
   color: var(--sidebar-accent-foreground);
+}
+
+.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  max-height: 34px;
+  min-height: 34px;
+  margin-inline: 0;
+  padding: 2px;
+}
+
+.vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button > svg {
+  width: 30px;
+  height: 30px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item {

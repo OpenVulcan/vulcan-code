@@ -282,7 +282,7 @@ export function ProjectSidebar(props: {
               tooltip={t("area.skills")}
             >
               <Hammer size={16} />
-              <span className="vcn-sidebar-label strong">{t("area.skills")}</span>
+              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.skills")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
           <SidebarMenuItem>
@@ -293,7 +293,7 @@ export function ProjectSidebar(props: {
               tooltip={t("area.memory")}
             >
               <BrainCircuit size={16} />
-              <span className="vcn-sidebar-label strong">{t("area.memory")}</span>
+              <span className="vcn-sidebar-label workspace-sidebar-feature-label">{t("area.memory")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
