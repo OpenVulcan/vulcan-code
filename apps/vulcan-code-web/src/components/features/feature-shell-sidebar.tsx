@@ -73,13 +73,14 @@ function FeatureSidebar(props: {
 }) {
   const { t } = useI18n()
   const feature = primaryFeatureAreas(t).find((area) => area.id === props.activeArea)
+  const headerLabel = props.activeArea === "settings" ? "系统设置" : feature?.label ?? "工作台"
 
   return (
     <Sidebar collapsible="icon" variant="inset">
       <SidebarHeader>
         <SidebarBrandMenu
           activeArea={props.activeArea}
-          currentLabel={feature?.label ?? "工作台"}
+          currentLabel={headerLabel}
           onSelectArea={props.onSelectArea}
         />
       </SidebarHeader>
@@ -207,12 +208,12 @@ function SettingsSidebarMenu(props: {
       <SidebarMenu className="settings-tree-list">
         <SidebarMenuItem>
           <SidebarMenuButton
-            className="settings-back-menu-row"
+            className="workspace-sidebar-feature-button settings-back-menu-row"
             onClick={props.onBackToWorkspace}
-            tooltip="返回工作区"
+            tooltip="返回工作台"
           >
-            <Undo2 size={15} />
-            <span>返回工作区</span>
+            <Undo2 size={16} />
+            <span className="vcn-sidebar-label workspace-sidebar-feature-label">返回工作台</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         {groups.map((group) => (
@@ -245,57 +246,67 @@ function SettingsSidebarGroupRow(props: {
   // 当前侧栏展开或折叠状态。
   sidebarState: ReturnType<typeof useSidebar>["state"]
 }) {
-  const groupActive = props.group.items.some((item) => item.id === props.activeSettingsSubArea)
+  // isSidebarCollapsed selects hover flyout behavior without replacing the row structure.
+  // isSidebarCollapsed 在不替换行结构的情况下选择悬浮菜单行为。
+  const isSidebarCollapsed = props.sidebarState === "collapsed"
+  // settingsFolderButton keeps one stable category trigger for expanded and collapsed animation.
+  // settingsFolderButton 为展开与折叠动画保留同一个稳定的目录触发入口。
+  const settingsFolderButton = (
+    <SidebarMenuButton
+      aria-expanded={isSidebarCollapsed ? undefined : "true"}
+      aria-label={isSidebarCollapsed ? props.group.label : undefined}
+      className={`project-folder-button settings-folder-button ${isSidebarCollapsed ? "collapsed-project-button settings-collapsed-button" : ""}`}
+      onClick={(event) => {
+        if (isSidebarCollapsed) {
+          event.preventDefault()
+          return
+        }
+        const firstItem = props.group.items[0]
+        if (firstItem) {
+          props.onSelectSettingsSubArea(firstItem.id)
+        }
+      }}
+      tooltip={props.group.label}
+    >
+      {props.group.icon}
+      <span className="vcn-sidebar-label project-folder-label">
+        <strong>{props.group.label}</strong>
+      </span>
+      <span className="project-folder-arrow" aria-hidden="true">
+        <ChevronDown size={14} />
+      </span>
+    </SidebarMenuButton>
+  )
+
   return (
     <SidebarMenuItem className="project-tree-item settings-tree-item">
-      {props.sidebarState === "collapsed" ? (
-        <CollapsedSettingsGroupMenu
-          activeSettingsSubArea={props.activeSettingsSubArea}
-          group={props.group}
-          groupActive={groupActive}
-          onSelectSettingsSubArea={props.onSelectSettingsSubArea}
-        />
-      ) : (
-        <>
-          <div className="project-folder-row settings-folder-row">
+      <div className="project-folder-row settings-folder-row">
+        {isSidebarCollapsed ? (
+          <CollapsedSettingsGroupMenu
+            activeSettingsSubArea={props.activeSettingsSubArea}
+            group={props.group}
+            onSelectSettingsSubArea={props.onSelectSettingsSubArea}
+          >
+            {settingsFolderButton}
+          </CollapsedSettingsGroupMenu>
+        ) : settingsFolderButton}
+      </div>
+      <SidebarMenu className="project-conversation-list settings-subarea-list">
+        {props.group.items.map((area) => (
+          <SidebarMenuItem key={area.id}>
             <SidebarMenuButton
-              aria-expanded="true"
-              className={`project-folder-button settings-folder-button ${groupActive ? "project-folder-active" : ""}`}
-              onClick={() => {
-                const firstItem = props.group.items[0]
-                if (firstItem) {
-                  props.onSelectSettingsSubArea(firstItem.id)
-                }
-              }}
-              tooltip={props.group.label}
+              active={props.activeSettingsSubArea === area.id}
+              className="conversation-tree-button settings-subarea-button"
+              onClick={() => props.onSelectSettingsSubArea(area.id)}
+              tooltip={area.label}
             >
-              {props.group.icon}
-              <span className="vcn-sidebar-label project-folder-label">
-                <strong>{props.group.label}</strong>
-              </span>
-              <span className="project-folder-arrow" aria-hidden="true">
-                <ChevronDown size={14} />
+              <span className="vcn-sidebar-label conversation-tree-label">
+                <strong>{area.label}</strong>
               </span>
             </SidebarMenuButton>
-          </div>
-          <SidebarMenu className="project-conversation-list settings-subarea-list">
-            {props.group.items.map((area) => (
-              <SidebarMenuItem key={area.id}>
-                <SidebarMenuButton
-                  active={props.activeSettingsSubArea === area.id}
-                  className="conversation-tree-button settings-subarea-button"
-                  onClick={() => props.onSelectSettingsSubArea(area.id)}
-                  tooltip={area.label}
-                >
-                  <span className="vcn-sidebar-label conversation-tree-label">
-                    <strong>{area.label}</strong>
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
-          </SidebarMenu>
-        </>
-      )}
+          </SidebarMenuItem>
+        ))}
+      </SidebarMenu>
     </SidebarMenuItem>
   )
 }
@@ -303,15 +314,15 @@ function SettingsSidebarGroupRow(props: {
 // CollapsedSettingsGroupMenu renders one settings category hover menu while the sidebar is collapsed.
 // CollapsedSettingsGroupMenu 在侧栏折叠时渲染单个设置分类的悬停菜单。
 function CollapsedSettingsGroupMenu(props: {
+  // Trigger row reused from the expanded settings category.
+  // 复用展开设置目录入口的触发行。
+  children: React.ReactNode
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
   // Settings category group.
   // 设置分类分组。
   group: SettingsSubAreaGroup
-  // Whether this group contains the active page.
-  // 当前分组是否包含活动页面。
-  groupActive: boolean
   // Updates the selected settings sub page.
   // 更新设置二级页面选择。
   onSelectSettingsSubArea: (area: SettingsSubAreaId) => void
@@ -352,16 +363,7 @@ function CollapsedSettingsGroupMenu(props: {
         onMouseLeave={scheduleClose}
         ref={anchorRef}
       >
-        <SidebarMenuButton
-          aria-label={props.group.label}
-          className={`project-folder-button collapsed-project-button settings-collapsed-button ${props.groupActive ? "project-folder-active" : ""}`}
-          onClick={(event) => event.preventDefault()}
-        >
-          {props.group.icon}
-          <span className="vcn-sidebar-label project-folder-label">
-            <strong>{props.group.label}</strong>
-          </span>
-        </SidebarMenuButton>
+        {props.children}
       </div>
       {flyoutOpen && flyoutPosition ? (
         <div

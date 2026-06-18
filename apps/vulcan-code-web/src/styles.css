@@ -161,6 +161,7 @@ button {
   flex: 0 0 24px;
   font-size: 14px;
   line-height: 1;
+  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
 .brand strong {
@@ -583,11 +584,13 @@ button {
   flex-direction: column;
   gap: 8px;
   padding: 10px;
+  transition: padding 180ms ease;
 }
 
 .vcn-sidebar-footer {
   flex: 0 0 auto;
   padding: 8px 10px 10px;
+  transition: padding 180ms ease;
 }
 
 .vcn-sidebar-content {
@@ -605,6 +608,7 @@ button {
 
 .vcn-sidebar-group-label {
   height: 28px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -612,7 +616,7 @@ button {
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 600;
-  transition: opacity 180ms ease, margin 180ms ease;
+  transition: height 180ms ease, opacity 180ms ease, padding 180ms ease, transform 180ms ease;
 }
 
 .project-group-label {
@@ -626,6 +630,11 @@ button {
   gap: 8px;
 }
 
+.project-group-label-main > svg,
+.project-add-button {
+  transition: opacity 160ms ease, transform 180ms ease, width 180ms ease, height 180ms ease;
+}
+
 .project-add-button {
   width: 24px;
   height: 24px;
@@ -637,7 +646,11 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-group-label {
-  display: none;
+  height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  transform: translateX(-4px);
   pointer-events: none;
 }
 
@@ -648,7 +661,9 @@ button {
 
 .vcn-sidebar[data-collapsible="icon"] .project-group-label-text,
 .vcn-sidebar[data-collapsible="icon"] .project-add-button {
-  display: none;
+  width: 0;
+  opacity: 0;
+  transform: translateX(-4px);
 }
 
 .vcn-sidebar-menu {
@@ -692,7 +707,7 @@ button {
   color: inherit;
   padding: 8px;
   text-align: left;
-  transition: background 120ms ease, border-color 120ms ease, padding 180ms ease;
+  transition: width 180ms ease, min-height 180ms ease, height 180ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease, gap 180ms ease, padding 180ms ease;
 }
 
 .vcn-sidebar-menu-button:hover,
@@ -721,11 +736,12 @@ button {
   padding-top: 0;
   padding-bottom: 0;
   font-weight: 400;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+  transition: width 180ms ease, min-width 180ms ease, height 180ms ease, max-height 180ms ease, min-height 180ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease, padding 180ms ease;
 }
 
 .workspace-sidebar-feature-button > svg {
   flex: 0 0 auto;
+  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
 .workspace-sidebar-feature-label {
@@ -747,6 +763,7 @@ button {
   min-height: 42px;
   gap: 8px;
   padding: 6px;
+  transition: width 180ms ease, height 180ms ease, max-height 180ms ease, min-height 180ms ease, gap 180ms ease, padding 180ms ease;
 }
 
 .sidebar-brand-static {
@@ -771,6 +788,7 @@ button {
   font-size: 15px;
   font-weight: 800;
   line-height: 1;
+  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
 .sidebar-user-avatar {
@@ -803,6 +821,7 @@ button {
   background: transparent;
   color: var(--muted-foreground);
   cursor: pointer;
+  transition: width 180ms ease, height 180ms ease, opacity 160ms ease, transform 180ms ease, background 120ms ease, color 120ms ease;
 }
 
 .sidebar-brand-settings-button:hover,
@@ -858,13 +877,12 @@ button {
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button {
   width: 34px;
   min-height: 34px;
-  justify-content: center;
+  justify-content: flex-start;
   padding: 7px;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-header,
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-footer {
-  align-items: center;
   padding-right: 6px;
   padding-left: 6px;
 }
@@ -888,7 +906,12 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .sidebar-brand-settings-button {
-  display: none;
+  width: 0;
+  height: 0;
+  margin-left: 0;
+  opacity: 0;
+  transform: translateX(-4px) scale(0.84);
+  pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-button.active,
@@ -931,6 +954,7 @@ button {
 .vcn-sidebar[data-collapsible="icon"] .workspace-sidebar-feature-button > svg {
   width: 30px;
   height: 30px;
+  transform: translateX(0) scale(1);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-static-item {
@@ -966,7 +990,7 @@ button {
   cursor: pointer;
   opacity: 1;
   transform: translateY(-50%);
-  transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+  transition: width 180ms ease, height 180ms ease, opacity 120ms ease, transform 180ms ease, background 120ms ease, color 120ms ease;
 }
 
 .vcn-sidebar-menu-action.show-on-hover {
@@ -995,8 +1019,13 @@ button {
 
 .vcn-sidebar-label {
   min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
   display: grid;
   gap: 2px;
+  opacity: 1;
+  transform: translateX(0);
+  transition: max-width 180ms ease, opacity 160ms ease, transform 180ms ease;
 }
 
 .vcn-sidebar-label.strong,
@@ -1020,7 +1049,7 @@ button {
 .project-tree-item {
   display: grid;
   gap: 2px;
-  transition: transform 150ms cubic-bezier(0.2, 0, 0.2, 1);
+  transition: width 180ms ease, margin 180ms ease, transform 150ms cubic-bezier(0.2, 0, 0.2, 1);
 }
 
 .project-tree-item.drag-source {
@@ -1030,6 +1059,7 @@ button {
 .project-folder-row {
   position: relative;
   cursor: grab;
+  transition: width 180ms ease, transform 180ms ease;
   user-select: none;
 }
 
@@ -1058,6 +1088,14 @@ button {
   padding-top: 0;
   padding-right: 58px;
   padding-bottom: 0;
+  transition: width 180ms ease, min-width 180ms ease, height 180ms ease, max-height 180ms ease, min-height 180ms ease, background 120ms ease, border-color 120ms ease, color 120ms ease, padding 180ms ease;
+}
+
+.project-folder-button > svg,
+.project-folder-button .project-badge-icon,
+.project-folder-button .project-iconify-icon {
+  flex: 0 0 auto;
+  transition: width 180ms ease, height 180ms ease, transform 180ms ease;
 }
 
 .project-folder-button.project-folder-active {
@@ -1098,12 +1136,14 @@ button {
   justify-content: center;
   color: var(--muted-foreground);
   transform: translateY(-50%);
+  transition: opacity 160ms ease, transform 180ms ease;
   pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button {
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
   gap: 0;
   padding: 2px;
 }
@@ -1121,18 +1161,20 @@ button {
   min-height: 34px;
   margin-inline: 0;
   padding: 2px;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button > svg {
   width: 30px;
   height: 30px;
+  transform: translateX(0) scale(1);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-folder-button .conversation-tree-project-icon,
-.vcn-sidebar[data-collapsible="icon"] .project-folder-button .project-badge-icon {
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button .project-badge-icon,
+.vcn-sidebar[data-collapsible="icon"] .project-folder-button .project-iconify-icon {
   width: 30px;
   height: 30px;
+  transform: translateX(0) scale(1);
 }
 
 .vcn-sidebar[data-collapsible="icon"] .pinned-tree-list > .vcn-sidebar-menu-item {
@@ -1162,12 +1204,19 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .conversation-tree-trailing {
-  display: none;
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-create-conversation,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-arrow {
-  display: none;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  transform: translateY(-50%) scale(0.84);
+  pointer-events: none;
 }
 
 .collapsed-project-button {
@@ -1252,6 +1301,11 @@ button {
 
 .project-conversation-list {
   gap: 1px;
+  max-height: 360px;
+  opacity: 1;
+  overflow: hidden;
+  transform: translateY(0);
+  transition: max-height 180ms ease, opacity 160ms ease, transform 180ms ease;
 }
 
 .pinned-tree-list {
@@ -1484,15 +1538,25 @@ button {
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-label {
-  display: none;
+  max-width: 0;
+  opacity: 0;
+  transform: translateX(-6px);
+  pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .vcn-sidebar-menu-action {
-  display: none;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .vcn-sidebar[data-collapsible="icon"] .project-conversation-list {
-  display: none;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transform: translateY(-4px);
+  pointer-events: none;
 }
 
 .vcn-sidebar-inset {
@@ -2373,16 +2437,6 @@ button {
 
 .settings-back-menu-row {
   color: var(--muted-foreground);
-}
-
-.vcn-sidebar[data-collapsible="icon"] .settings-back-menu-row {
-  width: 34px;
-  justify-content: center;
-  padding: 0;
-}
-
-.vcn-sidebar[data-collapsible="icon"] .settings-back-menu-row span {
-  display: none;
 }
 
 .project-badge-icon {
@@ -5573,9 +5627,8 @@ button {
   cursor: default;
 }
 
-.vcn-sidebar[data-collapsible="icon"] .settings-collapsed-button > svg {
-  width: 22px;
-  height: 22px;
+.vcn-sidebar[data-collapsible="icon"] .settings-tree-list {
+  gap: 3px;
 }
 
 .settings-collapsed-flyout .collapsed-project-flyout-item {

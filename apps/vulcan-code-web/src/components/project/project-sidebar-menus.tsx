@@ -25,21 +25,19 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { SidebarMenuButton } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
-import { ProjectIcon } from "./project-icons";
 import type { ConversationMenuAction, ProjectMenuAction } from "./project-sidebar-types";
 
 // CollapsedProjectMenu renders project actions as a hover flyout while the sidebar is collapsed.
 // CollapsedProjectMenu 在侧栏折叠时以悬停浮层展示项目操作。
 export function CollapsedProjectMenu(props: {
+  // Trigger row reused from the expanded project entry.
+  // 复用展开项目入口的触发行。
+  children: React.ReactNode;
   // Project that owns the collapsed entry.
   // 折叠入口所属项目。
   project: ProjectSummary;
-  // Whether the selected conversation belongs to this project.
-  // 当前选中会话是否归属于该项目。
-  hasSelectedConversation: boolean;
   // Conversations shown below the create command.
   // 显示在新建命令下方的会话列表。
   conversations: ConversationSummary[];
@@ -126,19 +124,7 @@ export function CollapsedProjectMenu(props: {
         onMouseLeave={scheduleClose}
         ref={anchorRef}
       >
-        <SidebarMenuButton
-          aria-label={`${props.project.name} 会话菜单`}
-          className={cn(
-            "project-folder-button collapsed-project-button",
-            props.hasSelectedConversation && "project-folder-active",
-          )}
-          onClick={(event) => event.preventDefault()}
-        >
-          <ProjectIcon project={props.project} size={16} />
-          <span className="vcn-sidebar-label project-folder-label">
-            <strong>{props.project.name}</strong>
-          </span>
-        </SidebarMenuButton>
+        {props.children}
       </div>
       {flyoutOpen && flyoutPosition ? (
         <div

@@ -83,60 +83,80 @@ export function SortableProjectRow(props: {
   const visibleConversations = hasConversationOverflow && !props.isConversationListExpanded
     ? props.conversations.slice(0, conversationPreviewLimit)
     : props.conversations;
+  const isSidebarCollapsed = props.sidebarState === "collapsed";
   const conversationOverflowLabel = props.isConversationListExpanded
     ? props.locale === "zh-CN" ? "折叠显示" : "Collapse"
     : props.locale === "zh-CN" ? "展开显示" : "Show more";
+  const projectFolderButton = (
+    <SidebarMenuButton
+      aria-expanded={isSidebarCollapsed ? undefined : props.isOpen}
+      aria-label={isSidebarCollapsed ? `${props.project.name} 会话菜单` : undefined}
+      className={cn(
+        "project-folder-button",
+        isSidebarCollapsed && "collapsed-project-button",
+        isSidebarCollapsed && props.hasSelectedConversation && "project-folder-active",
+      )}
+      onClick={(event) => {
+        if (isSidebarCollapsed) {
+          event.preventDefault();
+          return;
+        }
+        props.onToggleOpen(props.project.id);
+      }}
+      tooltip={`${props.project.name}\n${props.project.path}`}
+    >
+      <ProjectIcon isOpen={props.isOpen && !isSidebarCollapsed} project={props.project} size={16} />
+      <span className="vcn-sidebar-label project-folder-label">
+        <strong>{props.project.name}</strong>
+        {showOriginalFolderName ? <small>{folderName}</small> : null}
+      </span>
+      <span className="project-folder-arrow" aria-hidden="true">
+        {props.isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+      </span>
+    </SidebarMenuButton>
+  );
   return (
     <SidebarMenuItem
       className={cn("project-tree-item", sortable.isDragging && "drag-source")}
       ref={sortable.setNodeRef}
       style={sortable.sortableStyle}
     >
-      {props.sidebarState === "collapsed" ? (
-        <CollapsedProjectMenu
-          conversations={props.conversations}
-          onCreateConversation={props.onCreateConversation}
-          onSelectConversation={props.onSelectConversation}
-          project={props.project}
-          hasSelectedConversation={props.hasSelectedConversation}
-          selectedConversationId={props.selectedConversationId}
-        />
-      ) : (
-        <div className={cn("project-folder-row", sortable.isDragging && "drag-source-row")} {...sortable.attributes} {...sortable.listeners}>
-          <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
-            <SidebarMenuButton
-              aria-expanded={props.isOpen}
-              className="project-folder-button"
-              onClick={() => props.onToggleOpen(props.project.id)}
-              tooltip={`${props.project.name}\n${props.project.path}`}
-            >
-              <ProjectIcon isOpen={props.isOpen} project={props.project} size={16} />
-              <span className="vcn-sidebar-label project-folder-label">
-                <strong>{props.project.name}</strong>
-                {showOriginalFolderName ? <small>{folderName}</small> : null}
-              </span>
-              <span className="project-folder-arrow" aria-hidden="true">
-                {props.isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              </span>
-            </SidebarMenuButton>
-          </ProjectContextMenu>
-          <SidebarMenuAction
-            aria-label={`在 ${props.project.name} 中创建新会话`}
-            className="project-create-conversation"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onCreateConversation(props.project);
-            }}
-            data-project-row-action
-            showOnHover
-            title="新建会话"
-            type="button"
+      <div
+        className={cn("project-folder-row", sortable.isDragging && "drag-source-row")}
+        {...(isSidebarCollapsed ? {} : sortable.attributes)}
+        {...(isSidebarCollapsed ? {} : sortable.listeners)}
+      >
+        {isSidebarCollapsed ? (
+          <CollapsedProjectMenu
+            conversations={props.conversations}
+            onCreateConversation={props.onCreateConversation}
+            onSelectConversation={props.onSelectConversation}
+            project={props.project}
+            selectedConversationId={props.selectedConversationId}
           >
-            <SquarePen size={13} />
-          </SidebarMenuAction>
-        </div>
-      )}
-      {props.isOpen && props.sidebarState !== "collapsed" ? (
+            {projectFolderButton}
+          </CollapsedProjectMenu>
+        ) : (
+          <ProjectContextMenu project={props.project} onAction={props.onProjectMenuAction}>
+            {projectFolderButton}
+          </ProjectContextMenu>
+        )}
+        <SidebarMenuAction
+          aria-label={`在 ${props.project.name} 中创建新会话`}
+          className="project-create-conversation"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onCreateConversation(props.project);
+          }}
+          data-project-row-action
+          showOnHover
+          title="新建会话"
+          type="button"
+        >
+          <SquarePen size={13} />
+        </SidebarMenuAction>
+      </div>
+      {props.isOpen ? (
         <SidebarMenu className="project-conversation-list">
           {props.conversations.length > 0 ? (
             <>
