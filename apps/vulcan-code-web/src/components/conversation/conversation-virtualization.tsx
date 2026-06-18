@@ -50,6 +50,14 @@ const CONVERSATION_VIRTUALIZATION_MIN_ITEMS = 80;
 // CONVERSATION_VIRTUALIZATION_OVERSCAN_PX 让视口附近的转录行保持挂载。
 const CONVERSATION_VIRTUALIZATION_OVERSCAN_PX = 1200;
 
+// CONVERSATION_USER_SCROLL_SUPPRESS_MS keeps row measurement corrections from fighting active wheel input.
+// CONVERSATION_USER_SCROLL_SUPPRESS_MS 防止行高测量修正在用户滚轮输入期间抢夺滚动位置。
+const CONVERSATION_USER_SCROLL_SUPPRESS_MS = 700;
+
+// ConversationTimelineUserScrollDirection describes the latest user-driven scroll direction.
+// ConversationTimelineUserScrollDirection 描述最近一次用户驱动滚动的方向。
+export type ConversationTimelineUserScrollDirection = "up" | "down" | "unknown";
+
 // conversationDistanceFromBottom returns the scroll metric used by virtual transcript restoration.
 // conversationDistanceFromBottom 返回虚拟转录恢复使用的底部距离指标。
 function conversationDistanceFromBottom(element: HTMLElement): number {
@@ -93,6 +101,9 @@ export function useConversationTimelineVirtualWindow<TItem>(
   // Current virtual window projection.
   // 当前虚拟窗口投影。
   window: ConversationTimelineVirtualWindow<TItem>;
+  // Cancels pending initial viewport restoration when the user starts scrolling manually.
+  // 当用户开始手动滚动时取消待执行的初始视口恢复。
+  cancelPendingScrollRestore: (direction?: ConversationTimelineUserScrollDirection) => void;
   // Refreshes viewport metrics after a scroll event.
   // 滚动事件后刷新视口指标。
   onScroll: () => void;
@@ -111,6 +122,14 @@ export function useConversationTimelineVirtualWindow<TItem>(
     initialVirtualizerState?.renderedWindow ?? null,
   );
   const pendingInitialDistanceFromBottomRef = React.useRef<number | null>(Math.max(0, initialDistanceFromBottom));
+  const userScrollIntentRef = React.useRef<{
+    // Latest user-driven scroll direction.
+    // 最近一次用户驱动滚动的方向。
+    direction: ConversationTimelineUserScrollDirection;
+    // Timestamp until which row-height corrections should respect active user input.
+    // 行高修正需要尊重用户主动输入的截止时间戳。
+    untilMs: number;
+  } | null>(null);
   const [measureVersion, setMeasureVersion] = React.useState(0);
   const [viewport, setViewport] = React.useState({ scrollTop: 0, height: 0, width: 0 });
   if (cacheScopeKeyRef.current !== cacheScopeKey) {
@@ -142,6 +161,15 @@ export function useConversationTimelineVirtualWindow<TItem>(
       width: element.clientWidth,
     });
   }, [scrollRef]);
+  const cancelPendingScrollRestore = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
+    if (pendingInitialDistanceFromBottomRef.current !== null) {
+      pendingInitialDistanceFromBottomRef.current = null;
+    }
+    userScrollIntentRef.current = {
+      direction,
+      untilMs: Date.now() + CONVERSATION_USER_SCROLL_SUPPRESS_MS,
+    };
+  }, []);
 
   React.useLayoutEffect(() => {
     onScroll();
@@ -232,10 +260,11 @@ export function useConversationTimelineVirtualWindow<TItem>(
       return;
     }
     const scrollElement = scrollRef.current;
-    const heightDelta = current == null ? 0 : rounded - current;
     const measuredHeights = measuredHeightsRef.current;
     const rowIndex = items.findIndex((item) => itemKey(item) === key);
     const rowItem = rowIndex < 0 ? null : items[rowIndex] ?? null;
+    const estimated = rowItem ? estimateItemHeight(rowItem) : rounded;
+    const heightDelta = rounded - (current ?? estimated);
     const rowTopBefore = rowIndex < 0
       ? null
       : items.slice(0, rowIndex).reduce((sum, item) => (
@@ -243,13 +272,19 @@ export function useConversationTimelineVirtualWindow<TItem>(
       ), 0);
     const rowBottomBefore = rowTopBefore == null
       ? null
-      : rowTopBefore + (current ?? (rowItem ? estimateItemHeight(rowItem) : 0));
+      : rowTopBefore + (current ?? estimated);
     const distanceFromBottom = scrollElement
       ? conversationDistanceFromBottom(scrollElement)
       : Number.POSITIVE_INFINITY;
     const wasNearBottom = scrollElement
       ? distanceFromBottom <= 24 || (heightDelta > 0 && distanceFromBottom - heightDelta <= 24)
       : false;
+    const userScrollIntent = userScrollIntentRef.current;
+    const isUserScrollingUp = Boolean(
+      userScrollIntent
+      && userScrollIntent.direction === "up"
+      && Date.now() <= userScrollIntent.untilMs,
+    );
     const shouldPreserveViewport = Boolean(
       scrollElement
       && heightDelta !== 0
@@ -262,7 +297,7 @@ export function useConversationTimelineVirtualWindow<TItem>(
     if (!scrollElement) {
       return;
     }
-    if (wasNearBottom) {
+    if (wasNearBottom && !isUserScrollingUp) {
       window.requestAnimationFrame(() => {
         scrollElement.scrollTop = scrollElement.scrollHeight;
       });
@@ -346,7 +381,7 @@ export function useConversationTimelineVirtualWindow<TItem>(
     latestRenderedWindowRef.current = renderedWindow;
     persistVirtualizerState(renderedWindow);
   }, [itemKey, persistVirtualizerState, virtualWindow]);
-  return { window: virtualWindow, onScroll, onRowHeight };
+  return { window: virtualWindow, cancelPendingScrollRestore, onScroll, onRowHeight };
 }
 
 // ConversationTimelineVirtualRow measures one mounted timeline entry for the virtual window.

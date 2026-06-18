@@ -6,6 +6,7 @@ import {
 import {
   ConversationTimelineVirtualRow,
   useConversationTimelineVirtualWindow,
+  type ConversationTimelineUserScrollDirection,
   type ConversationTimelineVirtualRestoreState,
 } from "@/components/conversation/conversation-virtualization";
 import {
@@ -77,6 +78,9 @@ export function ConversationWorkspace(props: {
   // Called when scroll position changes.
   // 滚动位置变化时调用。
   onScrollStateChange: () => void;
+  // Called before user-driven scrolling mutates the transcript viewport.
+  // 用户驱动滚动改变转录视口前调用。
+  onUserScrollStart: (direction?: ConversationTimelineUserScrollDirection) => void;
   // Opens a routed subagent panel.
   // 打开已路由的子代理面板。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -220,6 +224,26 @@ export function ConversationWorkspace(props: {
     timelineVirtualizer.onScroll();
     props.onScrollStateChange();
   }, [props, timelineVirtualizer]);
+  // handleConversationUserScrollStart cancels automatic viewport correction before real user scroll input.
+  // handleConversationUserScrollStart 在真实用户滚动输入前取消自动视口校正。
+  const handleConversationUserScrollStart = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
+    timelineVirtualizer.cancelPendingScrollRestore(direction);
+    props.onUserScrollStart(direction);
+  }, [props, timelineVirtualizer]);
+  // handleConversationWheel records the wheel direction before the scroll event changes viewport metrics.
+  // handleConversationWheel 在滚动事件改变视口指标前记录滚轮方向。
+  const handleConversationWheel = React.useCallback((event: React.WheelEvent<HTMLElement>) => {
+    handleConversationUserScrollStart(event.deltaY < 0 ? "up" : "down");
+  }, [handleConversationUserScrollStart]);
+  // handleConversationPointerDown only treats scrollbar-gutter presses as scroll intent.
+  // handleConversationPointerDown 只将滚动条边缘按下视为滚动意图。
+  const handleConversationPointerDown = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (event.clientX < rect.right - 20) {
+      return;
+    }
+    handleConversationUserScrollStart("unknown");
+  }, [handleConversationUserScrollStart]);
 
   const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => timelineItem.kind === "item" ? (
     <ConversationRenderItemView
@@ -269,7 +293,10 @@ export function ConversationWorkspace(props: {
       <section
         className="conversation-panel"
         data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
+        onPointerDown={handleConversationPointerDown}
         onScroll={handleConversationScroll}
+        onTouchStart={() => handleConversationUserScrollStart("unknown")}
+        onWheel={handleConversationWheel}
         ref={props.scrollRef}
       >
         <div className="conversation-scroll-content">

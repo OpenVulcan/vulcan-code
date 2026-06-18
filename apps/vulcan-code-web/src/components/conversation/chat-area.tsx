@@ -13,7 +13,10 @@ import {
   ConversationLoadingCenter,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
-import type { ConversationTimelineVirtualRestoreState } from "@/components/conversation/conversation-virtualization";
+import type {
+  ConversationTimelineUserScrollDirection,
+  ConversationTimelineVirtualRestoreState,
+} from "@/components/conversation/conversation-virtualization";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
 import type {
   ConversationDetailRef,
@@ -66,6 +69,10 @@ import type {
 // THINKING_OVERLAY_STORAGE_KEY persists the WebUI-only thinking display preference.
 // THINKING_OVERLAY_STORAGE_KEY 持久化仅 WebUI 使用的思考展示偏好。
 const THINKING_OVERLAY_STORAGE_KEY = "vulcan-webui-thinking-overlay-enabled";
+
+// CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS prevents near-bottom auto-follow from fighting slow upward scrolling.
+// CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS 防止近底部自动跟随抢夺慢速向上滚动。
+const CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS = 900;
 
 // ChatAreaProps contains the state and service edges needed by the conversation surface.
 // ChatAreaProps 包含会话展示面所需的状态与服务边界。
@@ -163,6 +170,9 @@ export function ChatArea(props: ChatAreaProps) {
   // shouldFollowConversationTailRef remembers the pre-update tail-follow decision across streaming renders.
   // shouldFollowConversationTailRef 在流式渲染之间记住更新前是否应追随尾部。
   const shouldFollowConversationTailRef = React.useRef(true);
+  // upwardScrollTailSuppressUntilRef records when user upward scroll should override near-bottom tail following.
+  // upwardScrollTailSuppressUntilRef 记录用户向上滚动应覆盖近底部尾随的截止时间。
+  const upwardScrollTailSuppressUntilRef = React.useRef(0);
   // selectedConversationTailRef tracks conversation switches so opening a session can jump directly to the bottom.
   // selectedConversationTailRef 跟踪会话切换，使打开会话时可直接跳到底部。
   const selectedConversationTailRef = React.useRef<string | null>(null);
@@ -326,6 +336,33 @@ export function ChatArea(props: ChatAreaProps) {
     shouldFollowConversationTailRef.current = wasAtBottom;
   }, [activeSurfaceConversationId, writeConversationScrollSnapshot]);
 
+  // clearLayoutRestoreFrames cancels pending viewport correction frames.
+  // clearLayoutRestoreFrames 取消待执行的视口校正帧。
+  const clearLayoutRestoreFrames = React.useCallback(() => {
+    for (const frame of layoutRestoreFramesRef.current) {
+      window.cancelAnimationFrame(frame);
+    }
+    layoutRestoreFramesRef.current = [];
+  }, []);
+
+  // handleConversationUserScrollStart lets user intent cancel pending automatic viewport correction.
+  // handleConversationUserScrollStart 让用户滚动意图取消待执行的自动视口校正。
+  const handleConversationUserScrollStart = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
+    const element = workspaceRef.current;
+    const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    if (direction === "up") {
+      upwardScrollTailSuppressUntilRef.current = Date.now() + CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS;
+    } else if (direction === "down") {
+      upwardScrollTailSuppressUntilRef.current = 0;
+    }
+    clearLayoutRestoreFrames();
+    pendingLayoutViewportRef.current = null;
+    if (surfaceId && scrollRestoreGuardRef.current?.surfaceId === surfaceId) {
+      scrollRestoreGuardRef.current = null;
+    }
+    shouldFollowConversationTailRef.current = false;
+  }, [activeSurfaceConversationId, clearLayoutRestoreFrames]);
+
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
   // updateConversationBottomState 根据时间线滚动位置刷新底部跳转按钮状态。
   const updateConversationBottomState = React.useCallback(() => {
@@ -335,10 +372,11 @@ export function ChatArea(props: ChatAreaProps) {
       setIsAtConversationBottom(true);
       return;
     }
-    const shouldFollow = conversationViewportAllowsTailFollow(element);
+    const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
+    const shouldFollow = !suppressNearBottomFollow && conversationViewportAllowsTailFollow(element);
     const surfaceId = element.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
     const restoreGuard = scrollRestoreGuardRef.current;
-    if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !shouldFollow) {
+    if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !suppressNearBottomFollow && !shouldFollow) {
       shouldFollowConversationTailRef.current = true;
       writeConversationScrollSnapshot(surfaceId, {
         distanceFromBottom: 0,
@@ -357,14 +395,6 @@ export function ChatArea(props: ChatAreaProps) {
     setIsAtConversationBottom(shouldFollow);
   }, [activeSurfaceConversationId, writeConversationScrollSnapshot]);
 
-  // clearLayoutRestoreFrames cancels pending viewport correction frames.
-  // clearLayoutRestoreFrames 取消待执行的视口校正帧。
-  const clearLayoutRestoreFrames = React.useCallback(() => {
-    for (const frame of layoutRestoreFramesRef.current) {
-      window.cancelAnimationFrame(frame);
-    }
-    layoutRestoreFramesRef.current = [];
-  }, []);
   // capturePendingConversationLayoutViewport stores the current visual anchor before layout moves.
   // capturePendingConversationLayoutViewport 在布局移动前保存当前视觉锚点。
   const capturePendingConversationLayoutViewport = React.useCallback(() => {
@@ -585,10 +615,11 @@ export function ChatArea(props: ChatAreaProps) {
       };
     }
 
+    const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
     const shouldFollowTail = selectedChanged
       || !element
       || shouldFollowConversationTailRef.current
-      || conversationViewportAllowsTailFollow(element);
+      || (!suppressNearBottomFollow && conversationViewportAllowsTailFollow(element));
     if (!shouldFollowTail) {
       updateConversationBottomState();
       return;
@@ -739,6 +770,7 @@ export function ChatArea(props: ChatAreaProps) {
         parentConversationId={activeSurfaceConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
         onScrollStateChange={updateConversationBottomState}
+        onUserScrollStart={handleConversationUserScrollStart}
         onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
         scrollRef={workspaceRef}
         initialScrollDistanceFromBottom={activeSurfaceConversationId
