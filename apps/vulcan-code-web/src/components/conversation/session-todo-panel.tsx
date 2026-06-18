@@ -14,6 +14,14 @@ import {
 import { cn } from "@/lib/utils";
 import type { SessionTodoPlanItemSummary, SessionTodoPlanSummary } from "@/types";
 
+// Conversation session tool morph animation duration in milliseconds.
+// 会话工具形态切换动画的毫秒时长。
+const CONVERSATION_SESSION_TOOL_TRANSITION_MS = 320;
+
+// ConversationSessionToolTransitionPhase describes the active morph animation direction.
+// ConversationSessionToolTransitionPhase 描述当前形态切换动画方向。
+type ConversationSessionToolTransitionPhase = "collapsing" | "expanding" | null;
+
 // ConversationSessionReviewSummary describes compact Git review state shown beside session progress.
 // ConversationSessionReviewSummary 描述与会话进程并列展示的紧凑 Git 审查状态。
 export interface ConversationSessionReviewSummary {
@@ -52,19 +60,69 @@ export function ConversationSessionTodoPanel(props: {
 }) {
   const hasReviewSummary = Boolean(props.reviewSummary?.branchName);
   const hasTodoPlan = Boolean(props.todoPlan?.plan.length);
+  // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
+  // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
+  const [renderExpanded, setRenderExpanded] = React.useState(props.expanded);
+  const [transitionPhase, setTransitionPhase] = React.useState<ConversationSessionToolTransitionPhase>(null);
+  const previousExpandedRef = React.useRef(props.expanded);
+  const transitionTimerRef = React.useRef<number | null>(null);
+
+  // finishTransitionLater clears the morph marker after the current animation duration.
+  // finishTransitionLater 在当前动画时长结束后清理形态切换标记。
+  const finishTransitionLater = React.useCallback(() => {
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
+    transitionTimerRef.current = window.setTimeout(() => {
+      transitionTimerRef.current = null;
+      setTransitionPhase(null);
+    }, CONVERSATION_SESSION_TOOL_TRANSITION_MS);
+  }, []);
+
+  React.useEffect(() => {
+    if (previousExpandedRef.current === props.expanded) {
+      return;
+    }
+    previousExpandedRef.current = props.expanded;
+    setRenderExpanded(props.expanded);
+    setTransitionPhase(props.expanded ? "expanding" : "collapsing");
+    finishTransitionLater();
+  }, [finishTransitionLater, props.expanded]);
+
+  React.useEffect(() => () => {
+    if (transitionTimerRef.current !== null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
+  }, []);
+
+  // requestExpandedChange starts the morph immediately from the click frame.
+  // requestExpandedChange 从点击当帧立即启动形态切换。
+  const requestExpandedChange = React.useCallback((expanded: boolean) => {
+    previousExpandedRef.current = expanded;
+    setRenderExpanded(expanded);
+    setTransitionPhase(expanded ? "expanding" : "collapsing");
+    props.onExpandedChange(expanded);
+    finishTransitionLater();
+  }, [finishTransitionLater, props]);
+
+  const transitionClassName = transitionPhase
+    ? `conversation-session-tool-transitioning is-${transitionPhase}`
+    : null;
+
   if (!hasReviewSummary && !hasTodoPlan) {
     return null;
   }
 
-  if (!props.expanded) {
+  if (!renderExpanded) {
     return (
       <button
         aria-label="展开会话工具"
         className={cn(
-          "workspace-tool-panel-menu-collapsed conversation-session-todo-collapsed conversation-session-tool-collapsed",
+          "workspace-tool-panel-menu-collapsed conversation-session-todo-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
           hasReviewSummary && hasTodoPlan && "has-progress",
+          transitionClassName,
         )}
-        onClick={() => props.onExpandedChange(true)}
+        onClick={() => requestExpandedChange(true)}
         title="展开会话工具"
         type="button"
       >
@@ -88,18 +146,24 @@ export function ConversationSessionTodoPanel(props: {
   }
 
   return (
-    <aside className="workspace-tool-panel-menu conversation-session-todo-menu" aria-label="会话工具菜单">
+    <aside
+      className={cn(
+        "workspace-tool-panel-menu conversation-session-todo-menu conversation-session-tool-surface",
+        transitionClassName,
+      )}
+      aria-label="会话工具菜单"
+    >
       {props.reviewSummary ? (
         <ConversationSessionReviewSection
           reviewSummary={props.reviewSummary}
-          onCollapse={() => props.onExpandedChange(false)}
+          onCollapse={() => requestExpandedChange(false)}
           onOpenReviewChanges={props.onOpenReviewChanges}
         />
       ) : null}
       {props.todoPlan ? (
         <ConversationSessionProgressSection
           todoPlan={props.todoPlan}
-          onCollapse={props.reviewSummary ? undefined : () => props.onExpandedChange(false)}
+          onCollapse={props.reviewSummary ? undefined : () => requestExpandedChange(false)}
         />
       ) : null}
     </aside>

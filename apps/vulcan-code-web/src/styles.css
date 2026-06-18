@@ -2694,6 +2694,51 @@ button {
   max-width: min(260px, calc(100vw - 40px));
 }
 
+.conversation-session-tool-surface {
+  transform-origin: top right;
+  will-change: opacity, transform;
+}
+
+.conversation-session-tool-transitioning.is-expanding {
+  animation: conversation-session-tool-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.conversation-session-tool-transitioning.is-collapsing {
+  animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes conversation-session-tool-expand-in {
+  from {
+    opacity: 0.28;
+    transform: translateY(-2px) scale(0.72);
+  }
+
+  62% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes conversation-session-tool-collapse-in {
+  from {
+    opacity: 0.36;
+    transform: translateY(-2px) scale(1.18);
+  }
+
+  66% {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .conversation-session-tool-collapsed {
   position: relative;
   display: inline-grid;
@@ -3148,6 +3193,13 @@ button {
 
 .conversation-session-tool-adaptive-panel .adaptive-tool-panel-slot {
   overflow: visible;
+}
+
+.conversation-session-tool-adaptive-panel:has(.conversation-session-tool-transitioning) .adaptive-tool-panel-slot {
+  overflow: hidden;
+  transition:
+    width 320ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 .conversation-session-tool-adaptive-panel.is-expanded .adaptive-tool-panel-slot-inner {
