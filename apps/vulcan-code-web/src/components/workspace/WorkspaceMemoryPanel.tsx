@@ -298,7 +298,7 @@ function VmmStaticProfileView(props: {
           </div>
           {section.dates.map((date) => (
             <div className="vmm-static-profile-date-group" key={`${section.target}-${date.date}`}>
-              <div className="vmm-static-profile-date">{date.date}</div>
+              <div className="vmm-static-profile-date">{formatVmmMemoryDateLabel(date.date)}</div>
               <div className="vmm-static-profile-node-list">
                 {date.nodes.map((node) => (
                   <article className="vmm-static-profile-node" key={node.id}>
@@ -730,8 +730,52 @@ function contextInjectionDateLabel(item: ContextInjectionItemSummary): string | 
   if (!source) {
     return null;
   }
-  const match = source.match(/\d{4}-\d{2}-\d{2}/u);
-  return match?.[0] ?? source.slice(0, 10);
+  return formatVmmMemoryDateLabel(source);
+}
+
+// formatVmmMemoryDateLabel renders VMM date strings and Unix timestamps as readable local time.
+// formatVmmMemoryDateLabel 将 VMM 日期字符串与 Unix 时间戳渲染为可读本地时间。
+function formatVmmMemoryDateLabel(source: string): string {
+  const normalized = source.trim();
+  if (!normalized) {
+    return source;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(normalized)) {
+    return normalized;
+  }
+  const timestampMs = vmmMemoryTimestampMillis(normalized);
+  if (timestampMs !== null) {
+    return formatVmmMemoryDateTime(new Date(timestampMs));
+  }
+  const parsedMs = Date.parse(normalized);
+  if (Number.isFinite(parsedMs)) {
+    return formatVmmMemoryDateTime(new Date(parsedMs));
+  }
+  const match = normalized.match(/\d{4}-\d{2}-\d{2}/u);
+  return match?.[0] ?? normalized;
+}
+
+// vmmMemoryTimestampMillis normalizes second-level and millisecond-level Unix timestamps.
+// vmmMemoryTimestampMillis 归一化秒级与毫秒级 Unix 时间戳。
+function vmmMemoryTimestampMillis(source: string): number | null {
+  if (!/^\d{10,13}$/u.test(source)) {
+    return null;
+  }
+  const value = Number.parseInt(source, 10);
+  if (!Number.isFinite(value) || value <= 0) {
+    return null;
+  }
+  return source.length <= 10 ? value * 1000 : value;
+}
+
+// formatVmmMemoryDateTime formats one valid Date without locale-dependent punctuation.
+// formatVmmMemoryDateTime 用稳定格式渲染一个有效日期，避免依赖区域标点。
+function formatVmmMemoryDateTime(date: Date): string {
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // contextInjectionDeleteKey builds one local pending key for delete operations.
