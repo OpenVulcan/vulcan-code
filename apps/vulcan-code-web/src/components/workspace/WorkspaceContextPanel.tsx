@@ -31,6 +31,10 @@ const LazyWorkspaceReviewPanelHost = React.lazy(async () => {
   return { default: module.WorkspaceReviewPanelHost };
 });
 
+// WorkspaceContextPanelTab identifies one registered right context panel page.
+// WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
+export type WorkspaceContextPanelTab = "review" | "memory";
+
 // WorkspaceDraftConversationSelection carries a local draft conversation route.
 // WorkspaceDraftConversationSelection 承载本地草稿会话路由。
 export interface WorkspaceDraftConversationSelection {
@@ -68,6 +72,15 @@ export interface WorkspaceContextPanelProps {
   // Whether the panel is rendered as a floating overlay.
   // 面板是否以浮动覆盖层方式渲染。
   floating?: boolean;
+  // Active tab restored by the shared workspace shell.
+  // 由共享工作区外壳恢复的当前标签页。
+  activeTab: WorkspaceContextPanelTab;
+  // Updates the remembered active tab.
+  // 更新记忆中的当前标签页。
+  onActiveTabChange: (tab: WorkspaceContextPanelTab) => void;
+  // Monotonic request id used to focus the review tab on uncommitted changes.
+  // 用于让审核标签页聚焦未提交变更的单调请求标识。
+  reviewFocusRequest: number;
   // Closes the right context panel.
   // 关闭右侧上下文面板。
   onClose?: () => void;
@@ -118,7 +131,11 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
 
   return (
     <aside className={cn("context-panel-shell", props.floating && "floating")}>
-      <Tabs className="context-tabs" defaultValue="review">
+      <Tabs
+        className="context-tabs"
+        value={props.activeTab}
+        onValueChange={(value) => props.onActiveTabChange(value as WorkspaceContextPanelTab)}
+      >
         <div className="context-panel-header">
           <TabsList className="context-tabs-list">
             <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
@@ -132,6 +149,7 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               parseConversationBlocks={props.parseConversationBlocks}
+              reviewFocusRequest={props.reviewFocusRequest}
               selectedConversationId={props.selectedConversationId}
               selectedDraftConversation={props.selectedDraftConversation}
               workbench={props.workbench}

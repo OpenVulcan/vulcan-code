@@ -2,6 +2,7 @@ import React from "react";
 import { SubagentNavigationMenu } from "@/components/conversation/conversation-chrome";
 import {
   WorkspaceContextPanel,
+  type WorkspaceContextPanelTab,
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
@@ -51,6 +52,15 @@ export function WorkspaceResizableBody(props: {
   // Whether the right context panel floats over the main area.
   // 右侧上下文面板是否浮动覆盖主区域。
   rightPanelFloating: boolean;
+  // Active right context panel tab remembered across collapse and expand.
+  // 跨折叠与展开记忆的右侧上下文面板当前标签页。
+  contextPanelActiveTab: WorkspaceContextPanelTab;
+  // Updates the remembered right context panel tab.
+  // 更新记忆中的右侧上下文面板标签页。
+  onContextPanelActiveTabChange: (tab: WorkspaceContextPanelTab) => void;
+  // Monotonic request id used to focus the review panel on uncommitted changes.
+  // 用于让审核面板聚焦未提交变更的单调请求标识。
+  reviewFocusRequest: number;
   // Startup snapshot forwarded to layout-bound panels.
   // 转发给布局相关面板的启动快照。
   startup: StartupSnapshot;
@@ -304,10 +314,13 @@ export function WorkspaceResizableBody(props: {
             id="workspaceContext"
           >
             <WorkspaceContextPanel
+              activeTab={props.contextPanelActiveTab}
               floating={rightPanelTransition.floating}
+              reviewFocusRequest={props.reviewFocusRequest}
               selectedDraftConversation={props.selectedDraftConversation}
               selectedConversationId={props.selectedConversationId}
               workbench={props.workbench}
+              onActiveTabChange={props.onContextPanelActiveTabChange}
               onClose={props.onToggleRightPanel}
               onCopyRawDiff={props.onCopyRawDiff}
               onRunVmmAction={props.onRunVmmAction}

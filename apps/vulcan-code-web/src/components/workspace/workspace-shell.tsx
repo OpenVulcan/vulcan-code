@@ -1,6 +1,9 @@
 import React from "react";
 import { ChatArea } from "@/components/conversation/chat-area";
-import { ConversationSessionTodoPanel } from "@/components/conversation/session-todo-panel";
+import {
+  ConversationSessionTodoPanel,
+  type ConversationSessionReviewSummary,
+} from "@/components/conversation/session-todo-panel";
 import type {
   ConversationDetailRef,
   ToolDetailPayload,
@@ -51,6 +54,7 @@ import {
   WorkspaceResizableBody,
   type DraftConversationSelection,
 } from "@/components/workspace/workspace-resizable-body";
+import type { WorkspaceContextPanelTab } from "@/components/workspace/WorkspaceContextPanel";
 import type {
   DiffReviewSelection,
   WorkspaceDiffFileDetailRequest,
@@ -301,6 +305,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // rightPanelFloating stores whether the right panel overlays instead of resizing the chat area.
   // rightPanelFloating 保存右侧面板是否以浮动方式覆盖而不是压缩会话区。
   const [rightPanelFloating, setRightPanelFloating] = React.useState(false);
+  // contextPanelActiveTab remembers the last right context page across collapse and expansion.
+  // contextPanelActiveTab 跨折叠与展开记忆最近使用的右侧上下文页面。
+  const [contextPanelActiveTab, setContextPanelActiveTab] = React.useState<WorkspaceContextPanelTab>("review");
+  // reviewFocusRequest increments whenever chat tools ask the review panel to show uncommitted changes.
+  // reviewFocusRequest 在会话工具要求审核面板显示未提交变更时递增。
+  const [reviewFocusRequest, setReviewFocusRequest] = React.useState(0);
   // leftAutoCollapsed records automatic left-sidebar collapse caused by width pressure.
   // leftAutoCollapsed 记录宽度压力导致的左侧栏自动折叠。
   const [leftAutoCollapsed, setLeftAutoCollapsed] = React.useState(false);
@@ -313,6 +323,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionTodoExpanded stores the shared adaptive menu state for the chat TODO panel.
   // sessionTodoExpanded 保存会话 TODO 共享自适应面板展开状态。
   const [sessionTodoExpanded, setSessionTodoExpanded] = React.useState(true);
+  // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
+  // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
+  const [sessionReviewSummary, setSessionReviewSummary] = React.useState<ConversationSessionReviewSummary | null>(null);
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -327,6 +340,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // hasSelectedChatConversation is true only for an existing persisted conversation surface.
   // hasSelectedChatConversation 仅在当前界面是已存在的持久化会话时为真。
   const hasSelectedChatConversation = props.mainView === "chat" && !props.selectedDraftConversation && Boolean(props.selectedConversationId);
+  // selectedChatProject resolves the selected persisted conversation project for Git review summaries.
+  // selectedChatProject 解析当前持久化会话所属项目以加载 Git 审查摘要。
+  const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
+    ? props.workbench.projects.find((project) => project.id === props.selectedConversation?.projectId) ?? null
+    : null;
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
   // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
   const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
@@ -355,6 +373,25 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
     setRightPanelOpen(true);
   }, [notifyConversationLayoutWillChange, rightPanelOpen, sidebar.open]);
+
+  // handleOpenReviewChanges opens the right panel and focuses the live uncommitted review source.
+  // handleOpenReviewChanges 打开右侧面板并聚焦实时未提交审核来源。
+  const handleOpenReviewChanges = React.useCallback(() => {
+    if (!hasSelectedChatConversation) {
+      return;
+    }
+    notifyConversationLayoutWillChange();
+    setContextPanelActiveTab("review");
+    setReviewFocusRequest((current) => current + 1);
+    const width = shellRef.current?.getBoundingClientRect().width ?? 0;
+    const expandedLeftWidth = 288;
+    const collapsedLeftWidth = 46;
+    const preferredRightWidth = 480;
+    const handleWidth = 9;
+    const leftWidth = sidebar.open ? expandedLeftWidth : collapsedLeftWidth;
+    setRightPanelFloating(width > 0 && width - leftWidth - preferredRightWidth - handleWidth < 800);
+    setRightPanelOpen(true);
+  }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, sidebar.open]);
 
   // handleSessionTodoExpandedChange preserves the transcript viewport before TODO panel shape changes.
   // handleSessionTodoExpandedChange 在 TODO 面板形态变化前保留转录视口。
@@ -394,6 +431,67 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sessionTodoPlan = hasSelectedChatConversation && props.workbench.sessionTodoPlan?.plan.length
     ? props.workbench.sessionTodoPlan
     : null;
+  // sessionToolPanelVisible opens the floating chat tool panel when either Git or progress exists.
+  // sessionToolPanelVisible 在存在 Git 信息或进程信息时打开会话浮动工具面板。
+  const sessionToolPanelVisible = hasSelectedChatConversation && Boolean(sessionTodoPlan || sessionReviewSummary?.branchName);
+
+  React.useEffect(() => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
+      setSessionReviewSummary(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const loadSessionReviewSummary = async () => {
+      const [unstagedResult, stagedResult] = await Promise.allSettled([
+        props.onLoadWorkspaceDiffSnapshot(
+          selectedChatProject.path,
+          selectedChatProject.id,
+          props.selectedConversationId,
+          { mode: "unstaged" },
+        ),
+        props.onLoadWorkspaceDiffSnapshot(
+          selectedChatProject.path,
+          selectedChatProject.id,
+          props.selectedConversationId,
+          { mode: "staged" },
+        ),
+      ]);
+      if (cancelled) {
+        return;
+      }
+      const snapshots = [unstagedResult, stagedResult]
+        .filter((result): result is PromiseFulfilledResult<WorkspaceDiffSnapshotResponse> => result.status === "fulfilled")
+        .map((result) => result.value);
+      const primarySnapshot = snapshots[0] ?? null;
+      const branchName = primarySnapshot?.currentBranch ?? null;
+      if (!branchName) {
+        setSessionReviewSummary(null);
+        return;
+      }
+      setSessionReviewSummary({
+        additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
+        branchName,
+        changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
+        deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
+      });
+    };
+    void loadSessionReviewSummary().catch(() => {
+      if (!cancelled) {
+        setSessionReviewSummary(null);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    hasSelectedChatConversation,
+    props.onLoadWorkspaceDiffSnapshot,
+    props.selectedConversationId,
+    props.workbench.messages.length,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
   // rightPanelLabel describes the page-registered context panel toggle action.
   // rightPanelLabel 描述页面注册的上下文面板切换动作。
   const rightPanelLabel = effectiveRightPanelOpen ? t("contextPanel.close") : t("contextPanel.open");
@@ -609,6 +707,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           props.selectedConversationId ?? "none",
           props.selectedDraftConversation?.id ?? "persisted",
           sessionTodoPlan ? "todo" : "no-todo",
+          sessionReviewSummary?.branchName ? "review-summary" : "no-review-summary",
           sessionTodoExpanded ? "todo-expanded" : "todo-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",
           rightPanelFloating ? "context-floating" : "context-docked",
@@ -622,15 +721,17 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       className: "conversation-session-tool-adaptive-panel",
       contentClassName: "conversation-session-tool-content",
       contentShellClassName: "conversation-session-tool-content-shell",
-      expanded: Boolean(sessionTodoPlan) && sessionTodoExpanded,
+      expanded: sessionToolPanelVisible && sessionTodoExpanded,
       inlineGap: 52,
       minContentWidth: 800,
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
-      panel: sessionTodoPlan ? (
+      panel: sessionToolPanelVisible ? (
         <ConversationSessionTodoPanel
           expanded={sessionTodoExpanded}
+          reviewSummary={sessionReviewSummary}
           todoPlan={sessionTodoPlan}
           onExpandedChange={handleSessionTodoExpandedChange}
+          onOpenReviewChanges={handleOpenReviewChanges}
         />
       ) : null,
       panelWidth: 320,
@@ -664,6 +765,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         <WorkspaceResizableBody
           rightPanelFloating={hasSelectedChatConversation && rightPanelFloating}
           rightPanelOpen={effectiveRightPanelOpen}
+          contextPanelActiveTab={contextPanelActiveTab}
+          onContextPanelActiveTabChange={setContextPanelActiveTab}
+          reviewFocusRequest={reviewFocusRequest}
           startup={props.startup}
           workbench={props.workbench}
           selectedDraftConversation={props.selectedDraftConversation}

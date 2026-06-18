@@ -157,6 +157,15 @@
   white-space: nowrap;
 }
 
+.diff-branch-trigger-readonly {
+  cursor: default;
+  background: transparent;
+}
+
+.diff-branch-trigger-readonly:hover {
+  background: transparent;
+}
+
 .diff-mode-menu {
   min-width: 150px;
   width: 150px;

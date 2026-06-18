@@ -88,6 +88,9 @@ export function WorkspaceReviewPanelHost(props: {
   // Workbench snapshot carrying selected-session side-panel projections.
   // 携带当前选中会话侧面板投影的工作台快照。
   workbench: WorkbenchSnapshot;
+  // Monotonic request id used to focus the live uncommitted review source.
+  // 用于聚焦实时未提交审核来源的单调请求标识。
+  reviewFocusRequest: number;
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
@@ -224,6 +227,9 @@ export function WorkspaceReviewPanelHost(props: {
   // workspaceDetailAttemptedRef records file details already attempted for this snapshot.
   // workspaceDetailAttemptedRef 记录当前快照中已经尝试加载过详情的文件。
   const workspaceDetailAttemptedRef = React.useRef(new Set<string>());
+  // handledReviewFocusRequestRef stores the latest external focus request already applied.
+  // handledReviewFocusRequestRef 保存已经应用的最近一次外部聚焦请求。
+  const handledReviewFocusRequestRef = React.useRef(0);
   const activeWorkspaceReviewSnapshot = workspaceReviewSurfaceId === activeSurfaceId
     && workspaceReviewPath === workspacePath
     && workspaceReviewKey === diffReviewSelectionKey
@@ -431,6 +437,14 @@ export function WorkspaceReviewPanelHost(props: {
     workspaceDetailAttemptedRef.current.clear();
     void handleRefreshWorkspaceDiff(selection);
   }, [activeSurfaceId, handleRefreshWorkspaceDiff, workspacePath]);
+
+  React.useEffect(() => {
+    if (props.reviewFocusRequest <= 0 || handledReviewFocusRequestRef.current === props.reviewFocusRequest) {
+      return;
+    }
+    handledReviewFocusRequestRef.current = props.reviewFocusRequest;
+    handleDiffReviewSelectionChange(DEFAULT_WORKSPACE_REVIEW_SELECTION);
+  }, [handleDiffReviewSelectionChange, props.reviewFocusRequest]);
 
   React.useEffect(() => {
     if (lastWorkspaceReviewVisibleSurfaceId !== activeSurfaceId) {

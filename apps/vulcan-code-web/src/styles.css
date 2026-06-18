@@ -2689,13 +2689,96 @@ button {
 }
 
 .conversation-session-todo-collapsed {
-  max-width: min(220px, calc(100% - 40px));
+  width: fit-content;
+  min-width: 0;
+  max-width: min(260px, calc(100vw - 40px));
 }
 
-.conversation-session-todo-collapsed span {
+.conversation-session-tool-collapsed {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: max-content 0;
+  align-items: center;
+  justify-content: flex-start;
+  column-gap: 0;
+  width: fit-content;
+  height: 32px;
+  min-height: 32px;
+  padding-top: 0;
+  padding-right: 10px;
+  padding-bottom: 0;
+  padding-left: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  transition:
+    grid-template-columns 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    column-gap 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 120ms ease;
+}
+
+.conversation-session-tool-collapsed.has-progress {
+  display: grid;
+  grid-template-columns: max-content 0;
+  row-gap: 2px;
+  column-gap: 0;
+  height: auto;
+  min-height: 44px;
+  padding-top: 4px;
+  padding-right: 10px;
+  padding-bottom: 4px;
+  padding-left: 10px;
+}
+
+.conversation-session-tool-collapsed-row {
+  grid-column: 1;
+  min-width: max-content;
+  width: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 17px;
+}
+
+.conversation-session-tool-expand-hint {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: end;
+  align-self: center;
+  width: 0;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  pointer-events: none;
+  opacity: 0;
+  transform: scale(0.92);
+  transition:
+    width 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity 120ms ease,
+    transform 120ms ease;
+  transition-delay: 0ms;
+}
+
+.conversation-session-tool-collapsed.has-progress .conversation-session-tool-expand-hint {
+  grid-row: 1 / span 2;
+}
+
+.conversation-session-tool-collapsed:hover .conversation-session-tool-expand-hint,
+.conversation-session-tool-collapsed:focus-visible .conversation-session-tool-expand-hint {
+  width: 14px;
+  opacity: 1;
+  transform: scale(1);
+  transition-delay: 45ms;
+}
+
+.conversation-session-tool-collapsed:hover,
+.conversation-session-tool-collapsed:focus-visible {
+  grid-template-columns: max-content 14px;
+  column-gap: 6px;
+}
+
+.conversation-session-tool-collapsed-row > span {
+  min-width: max-content;
+  overflow: visible;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -2704,6 +2787,7 @@ button {
   flex: 0 0 auto;
   color: var(--muted-foreground);
   font-size: 12px;
+  font-weight: 400;
 }
 
 .conversation-session-todo-collapsed svg {
@@ -2712,7 +2796,8 @@ button {
 
 .conversation-session-todo-menu {
   --workspace-tool-panel-menu-width: var(--conversation-session-todo-width);
-  width: min(var(--conversation-session-todo-width), calc(100% - 40px));
+  position: relative;
+  width: min(var(--conversation-session-todo-width), calc(100vw - 40px));
   max-height: min(460px, calc(100% - var(--composer-dock-height, 132px) - 72px));
   overflow: auto;
 }
@@ -2742,11 +2827,113 @@ button {
   gap: 6px;
 }
 
-.conversation-session-todo-explanation {
-  margin: 8px 3px 0;
+.conversation-session-tool-section {
+  margin-top: 3px;
+}
+
+.conversation-session-review-section {
+  margin-top: 0;
+}
+
+.conversation-session-tool-section + .conversation-session-tool-section {
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.conversation-session-tool-section-title {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 24px;
+  padding: 0 3px;
   color: var(--muted-foreground);
   font-size: 12px;
-  line-height: 1.45;
+  font-weight: 600;
+  line-height: 1.2;
+  user-select: none;
+}
+
+.conversation-session-tool-section-title.with-action {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.conversation-session-tool-section-title-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 24px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-tool-section-title strong {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-review-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  height: 22px;
+  cursor: default;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-review-row svg {
+  color: var(--muted-foreground);
+}
+
+.conversation-session-review-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-review-row strong {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 6px;
+  flex: 0 0 auto;
+  color: inherit;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta span {
+  min-width: auto;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.conversation-session-review-delta .added {
+  color: #238636;
+}
+
+.conversation-session-review-delta .removed {
+  color: #da3633;
+}
+
+.conversation-session-todo-explanation {
+  margin: 2px 3px 1px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 
@@ -2757,11 +2944,12 @@ button {
   gap: 8px;
   align-items: start;
   height: auto;
-  min-height: 32px;
-  padding-top: 7px;
-  padding-bottom: 7px;
-  line-height: 1.35;
+  min-height: 22px;
+  padding: 2px 9px;
+  font-size: 12px;
+  line-height: 1.2;
   cursor: default;
+  font-weight: 400;
 }
 
 .conversation-session-todo-row svg {
@@ -2771,6 +2959,8 @@ button {
 
 .conversation-session-todo-row span {
   min-width: 0;
+  display: block;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -2956,6 +3146,15 @@ button {
   flex: 1 1 auto;
 }
 
+.conversation-session-tool-adaptive-panel .adaptive-tool-panel-slot {
+  overflow: visible;
+}
+
+.conversation-session-tool-adaptive-panel.is-expanded .adaptive-tool-panel-slot-inner {
+  width: min(var(--adaptive-tool-panel-width), calc(100vw - 40px));
+  max-width: min(var(--adaptive-tool-panel-width), calc(100vw - 40px));
+}
+
 .workspace-skills-content .skill-card-list {
   width: 100%;
   box-sizing: border-box;
@@ -3059,6 +3258,66 @@ button {
 
 .workspace-tool-panel-menu-collapsed:hover {
   background: color-mix(in oklch, var(--muted) 72%, var(--card));
+}
+
+.conversation-session-tool-collapsed.workspace-tool-panel-menu-collapsed {
+  display: inline-grid;
+  grid-template-columns: max-content 0;
+  align-items: center;
+  justify-content: flex-start;
+  column-gap: 0;
+  width: fit-content;
+  min-width: 0;
+  max-width: min(260px, calc(100vw - 40px));
+  height: 32px;
+  min-height: 32px;
+  border-radius: 14px;
+  padding-top: 0;
+  padding-right: 10px;
+  padding-bottom: 0;
+  padding-left: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  transition:
+    grid-template-columns 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    column-gap 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    background-color 120ms ease;
+}
+
+.conversation-session-tool-collapsed.has-progress.workspace-tool-panel-menu-collapsed {
+  display: grid;
+  grid-template-columns: max-content 0;
+  row-gap: 2px;
+  column-gap: 0;
+  height: auto;
+  min-height: 44px;
+  padding-top: 4px;
+  padding-right: 10px;
+  padding-bottom: 4px;
+  padding-left: 10px;
+}
+
+.conversation-session-tool-collapsed.workspace-tool-panel-menu-collapsed:hover,
+.conversation-session-tool-collapsed.workspace-tool-panel-menu-collapsed:focus-visible {
+  grid-template-columns: max-content 14px;
+  column-gap: 6px;
+}
+
+.conversation-session-review-row.workspace-tool-panel-menu-row,
+.conversation-session-todo-row.workspace-tool-panel-menu-row {
+  cursor: default;
+  font-weight: 400;
+}
+
+.conversation-session-review-list.workspace-tool-panel-menu-list {
+  padding-top: 0;
+}
+
+.conversation-session-review-row.workspace-tool-panel-menu-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  width: 100%;
+  height: 28px;
 }
 
 .workspace-skills-header-actions {
@@ -3969,13 +4228,14 @@ button {
   min-width: 0;
   width: min(100%, 800px);
   min-height: 100%;
-  margin-left: max(0px, calc((100% - 800px) / 2 - var(--conversation-inline-offset, 0px)));
   margin-right: auto;
+  margin-left: auto;
   display: flex;
   flex-direction: column;
+  transform: translateX(calc(-1 * var(--conversation-inline-offset, 0px)));
   transition:
-    margin-left 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    margin-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
 }
 
 .conversation-footer {
@@ -4122,7 +4382,8 @@ button {
 
 .composer-dock {
   position: absolute;
-  right: max(16px, calc((100% - 800px) / 2 + var(--conversation-inline-offset, 0px)));
+  left: 50%;
+  right: auto;
   bottom: 16px;
   z-index: 5;
   width: 800px;
@@ -4133,10 +4394,10 @@ button {
   align-items: center;
   gap: 10px;
   pointer-events: none;
+  transform: translateX(calc(-50% - var(--conversation-inline-offset, 0px)));
   transition:
-    right 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
     bottom 360ms cubic-bezier(0.2, 0.8, 0.2, 1),
-    transform 360ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
   will-change: bottom, transform;
 }
 

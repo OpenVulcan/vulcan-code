@@ -31,6 +31,20 @@ const DIFF_REVIEW_MODE_LABELS: Record<DiffReviewMode, string> = {
   branch: "分支",
 };
 
+// BranchSelectorOption stores one deduplicated branch menu option.
+// BranchSelectorOption 保存单个去重后的分支菜单选项。
+interface BranchSelectorOption {
+  // Original branch summary used by Git requests.
+  // Git 请求使用的原始分支摘要。
+  branch: DiffBranchSummary;
+  // Compact branch label displayed to the user.
+  // 展示给用户的紧凑分支标签。
+  label: string;
+  // Searchable text containing both compact and original labels.
+  // 同时包含紧凑标签与原始标签的可搜索文本。
+  searchText: string;
+}
+
 // DiffPanelToolbar renders the diff source selector and aggregate actions.
 // DiffPanelToolbar 渲染 diff 来源选择器与聚合操作。
 export function DiffPanelToolbar(props: {
@@ -114,11 +128,10 @@ export function DiffPanelToolbar(props: {
         </div>
         {props.selection.mode === "branch" ? (
           <div className="diff-branch-compare-row">
-            <BranchSelector
+            <BranchReadOnlyDisplay
               branches={props.snapshot.branches ?? []}
               fallbackLabel={baseBranch || "当前分支"}
               value={baseBranch}
-              onChange={(branch) => props.onSelectionChange?.({ ...props.selection, baseBranch: branch || null })}
             />
             <span className="diff-branch-arrow">→</span>
             <BranchSelector
@@ -427,6 +440,29 @@ function DiffModeMenu(props: {
   );
 }
 
+// BranchReadOnlyDisplay renders the immutable left side of branch comparisons.
+// BranchReadOnlyDisplay 渲染分支对比中不可修改的左侧分支。
+function BranchReadOnlyDisplay(props: {
+  // Branches available for display disambiguation.
+  // 用于展示消歧的可用分支列表。
+  branches: DiffBranchSummary[];
+  // Currently selected branch name.
+  // 当前选中的分支名称。
+  value: string;
+  // Fallback label used before metadata is available.
+  // 元数据可用前使用的回退标签。
+  fallbackLabel: string;
+}) {
+  const label = props.value
+    ? branchDisplayName(props.value, props.branches)
+    : props.fallbackLabel;
+  return (
+    <span className="diff-branch-trigger diff-branch-trigger-readonly" title={props.value || props.fallbackLabel}>
+      <span>{label}</span>
+    </span>
+  );
+}
+
 // BranchSelector renders one searchable branch dropdown.
 // BranchSelector 渲染单个可搜索分支下拉框。
 function BranchSelector(props: {
@@ -444,14 +480,18 @@ function BranchSelector(props: {
   onChange: (branch: string) => void;
 }) {
   const [query, setQuery] = React.useState("");
+  const branchOptions = React.useMemo(
+    () => buildBranchSelectorOptions(props.branches, props.value),
+    [props.branches, props.value],
+  );
   const filteredBranches = React.useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
-      return props.branches;
+      return branchOptions;
     }
-    return props.branches.filter((branch) => branch.name.toLowerCase().includes(normalizedQuery));
-  }, [props.branches, query]);
-  const label = props.value || props.fallbackLabel;
+    return branchOptions.filter((option) => option.searchText.includes(normalizedQuery));
+  }, [branchOptions, query]);
+  const label = props.value ? branchDisplayName(props.value, props.branches) : props.fallbackLabel;
   return (
     <DropdownMenu onOpenChange={(open) => {
       if (!open) {
@@ -475,15 +515,15 @@ function BranchSelector(props: {
           />
         </div>
         <div className="diff-branch-menu-label">分支</div>
-        {filteredBranches.length ? filteredBranches.map((branch) => (
+        {filteredBranches.length ? filteredBranches.map((option) => (
           <DropdownMenuItem
             className="diff-branch-menu-item"
-            key={branch.name}
-            onSelect={() => props.onChange(branch.name)}
+            key={option.branch.name}
+            onSelect={() => props.onChange(option.branch.name)}
           >
             <GitBranch size={13} />
-            <span>{branch.name}</span>
-            {props.value === branch.name ? <Check size={14} /> : null}
+            <span>{option.label}</span>
+            {branchNamesEquivalent(props.value, option.branch.name) ? <Check size={14} /> : null}
           </DropdownMenuItem>
         )) : (
           <DropdownMenuItem disabled>没有匹配分支</DropdownMenuItem>
@@ -491,6 +531,90 @@ function BranchSelector(props: {
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+// buildBranchSelectorOptions hides duplicate origin-tracking branches behind one display label.
+// buildBranchSelectorOptions 将重复的 origin 跟踪分支折叠为一个展示标签。
+function buildBranchSelectorOptions(branches: DiffBranchSummary[], selectedValue: string): BranchSelectorOption[] {
+  const byLabel = new Map<string, BranchSelectorOption>();
+  for (const branch of branches) {
+    const label = branchDisplayName(branch.name, branches);
+    const key = label.toLowerCase();
+    const option = {
+      branch,
+      label,
+      searchText: `${label} ${branch.name}`.toLowerCase(),
+    };
+    const existing = byLabel.get(key);
+    if (!existing || branchOptionRank(branch, selectedValue) < branchOptionRank(existing.branch, selectedValue)) {
+      byLabel.set(key, option);
+    }
+  }
+  if (selectedValue && !Array.from(byLabel.values()).some((option) => branchNamesEquivalent(option.branch.name, selectedValue))) {
+    const branch = { current: false, name: selectedValue, remote: false };
+    const label = branchDisplayName(selectedValue, branches);
+    byLabel.set(label.toLowerCase(), {
+      branch,
+      label,
+      searchText: `${label} ${selectedValue}`.toLowerCase(),
+    });
+  }
+  return Array.from(byLabel.values());
+}
+
+// branchOptionRank picks the most useful branch when compact labels collide.
+// branchOptionRank 在紧凑标签冲突时选择更适合展示的分支。
+function branchOptionRank(branch: DiffBranchSummary, selectedValue: string): number {
+  if (branchNamesEquivalent(branch.name, selectedValue)) {
+    return 0;
+  }
+  if (branch.current) {
+    return 1;
+  }
+  if (!branch.remote) {
+    return 2;
+  }
+  if (branchShortName(branch.name).startsWith("origin/")) {
+    return 3;
+  }
+  return 4;
+}
+
+// branchDisplayName returns a compact label while preserving non-origin remote ambiguity.
+// branchDisplayName 返回紧凑标签，同时保留非 origin 远端歧义。
+function branchDisplayName(name: string, branches: DiffBranchSummary[]): string {
+  const shortName = branchShortName(name);
+  if (!shortName.startsWith("origin/")) {
+    return shortName;
+  }
+  const localName = shortName.slice("origin/".length);
+  const hasLocalTwin = branches.some((branch) => !branch.remote && branchShortName(branch.name) === localName);
+  const hasOtherRemoteTwin = branches.some((branch) => {
+    const candidate = branchShortName(branch.name);
+    return branch.remote && !candidate.startsWith("origin/") && candidate.endsWith(`/${localName}`);
+  });
+  return hasOtherRemoteTwin && !hasLocalTwin ? shortName : localName;
+}
+
+// branchShortName removes Git ref prefixes while keeping remote names when they matter.
+// branchShortName 移除 Git ref 前缀，同时在必要时保留远端名称。
+function branchShortName(name: string): string {
+  return name
+    .replace(/^refs\/heads\//, "")
+    .replace(/^refs\/remotes\//, "");
+}
+
+// branchNamesEquivalent treats local and origin tracking names as the same display branch.
+// branchNamesEquivalent 将本地分支与 origin 跟踪分支视为相同展示分支。
+function branchNamesEquivalent(left: string, right: string): boolean {
+  return branchCanonicalName(left) === branchCanonicalName(right);
+}
+
+// branchCanonicalName normalizes local and origin-prefixed branch names for comparison.
+// branchCanonicalName 规整本地与 origin 前缀分支名称以便比较。
+function branchCanonicalName(name: string): string {
+  const shortName = branchShortName(name);
+  return shortName.startsWith("origin/") ? shortName.slice("origin/".length) : shortName;
 }
 
 // selectedDiffCommit resolves the currently selected commit summary.
