@@ -7,6 +7,8 @@ import {
 } from "@/components/ui/tabs";
 import type {
   DiffReviewSelection,
+  WorkspaceGitFileActionRequest,
+  WorkspaceGitFileActionResult,
   WorkspaceDiffFileDetailRequest,
   WorkspaceDiffFileDetailResponse,
   WorkspaceDiffSearchRequest,
@@ -120,6 +122,14 @@ export interface WorkspaceContextPanelProps {
     request: DiffReviewSelection,
     search: WorkspaceDiffSearchRequest,
   ) => Promise<WorkspaceDiffSearchResponse>;
+  // Runs one file-level Git action for the current workspace review.
+  // 为当前工作区审核执行一次文件级 Git 操作。
+  runWorkspaceGitFileAction: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    request: WorkspaceGitFileActionRequest,
+  ) => Promise<WorkspaceGitFileActionResult>;
 }
 
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
@@ -149,6 +159,7 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               parseConversationBlocks={props.parseConversationBlocks}
+              runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
               reviewFocusRequest={props.reviewFocusRequest}
               selectedConversationId={props.selectedConversationId}
               selectedDraftConversation={props.selectedDraftConversation}

@@ -57,6 +57,8 @@ import {
 import type { WorkspaceContextPanelTab } from "@/components/workspace/WorkspaceContextPanel";
 import type {
   DiffReviewSelection,
+  WorkspaceGitFileActionRequest,
+  WorkspaceGitFileActionResult,
   WorkspaceDiffFileDetailRequest,
   WorkspaceDiffFileDetailResponse,
   WorkspaceDiffSearchRequest,
@@ -249,6 +251,14 @@ interface WorkspaceShellProps {
     selection: DiffReviewSelection,
     search: WorkspaceDiffSearchRequest,
   ) => Promise<WorkspaceDiffSearchResponse>;
+  // Runs one file-level Git action for the workspace review panel.
+  // 为工作区审核面板执行一次文件级 Git 操作。
+  onRunWorkspaceGitFileAction: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    request: WorkspaceGitFileActionRequest,
+  ) => Promise<WorkspaceGitFileActionResult>;
   // Stages one browser-provided attachment through the service.
   // 通过服务暂存一个浏览器提供的附件。
   onStageAttachmentBytes: (
@@ -791,6 +801,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
           loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
           loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
+          runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
         >

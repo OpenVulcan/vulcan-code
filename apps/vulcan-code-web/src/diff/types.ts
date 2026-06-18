@@ -6,6 +6,16 @@ export type DiffPanelSource = "workspace" | "turn" | "change_set" | "message";
 // DiffReviewMode 标识审核面板当前选择的 Git 对比来源。
 export type DiffReviewMode = "unstaged" | "staged" | "commit" | "branch";
 
+// WorkspaceGitFileActionKind identifies file-level Git mutations exposed by the review panel.
+// WorkspaceGitFileActionKind 标识审核面板暴露的文件级 Git 变更操作。
+export type WorkspaceGitFileActionKind =
+  | "stageAll"
+  | "restoreAll"
+  | "stageFile"
+  | "restoreFile"
+  | "unstageAll"
+  | "unstageFile";
+
 // DiffViewMode identifies the visual layout used for rendered file hunks.
 // DiffViewMode 标识文件 hunk 渲染使用的视觉布局。
 export type DiffViewMode = "unified" | "split";
@@ -363,6 +373,48 @@ export interface WorkspaceDiffFileDetailRequest {
   // Optional target direction for hunk context expansion.
   // hunk 上下文展开使用的可选目标方向。
   hunkExpansionDirection?: DiffHunkExpansionDirection;
+}
+
+// WorkspaceGitFileActionFile mirrors one selected diff file sent to the backend.
+// WorkspaceGitFileActionFile 对应发送给后端的单个已选 diff 文件。
+export interface WorkspaceGitFileActionFile {
+  // Previous file path from the active diff snapshot.
+  // 当前 diff 快照中的旧文件路径。
+  oldPath: string;
+  // Current file path from the active diff snapshot.
+  // 当前 diff 快照中的当前文件路径。
+  newPath: string;
+  // File-level change status from the active diff snapshot.
+  // 当前 diff 快照中的文件级变更状态。
+  status: DiffFileStatus;
+}
+
+// WorkspaceGitFileActionRequest describes one file-level Git mutation request.
+// WorkspaceGitFileActionRequest 描述一次文件级 Git 变更请求。
+export interface WorkspaceGitFileActionRequest {
+  // Action to execute against the worktree or index.
+  // 要对工作区或索引执行的操作。
+  action: WorkspaceGitFileActionKind;
+  // Optional files used by file-scoped actions.
+  // 文件级操作使用的可选文件列表。
+  files?: WorkspaceGitFileActionFile[];
+}
+
+// WorkspaceGitFileActionResult mirrors the backend Git mutation result.
+// WorkspaceGitFileActionResult 对应后端 Git 变更操作结果。
+export interface WorkspaceGitFileActionResult {
+  // Repository root used for the Git command.
+  // Git 命令使用的仓库根目录。
+  repositoryRoot: string;
+  // Executed action name.
+  // 已执行的操作名称。
+  action: WorkspaceGitFileActionKind;
+  // Number of pathspecs affected by the operation.
+  // 本次操作影响的路径规格数量。
+  affectedPathCount: number;
+  // User-facing operation summary.
+  // 面向用户的操作摘要。
+  summary: string;
 }
 
 // WorkspaceDiffFileDetailResponse mirrors the backend payload for one file diff.

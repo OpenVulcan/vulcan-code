@@ -5,6 +5,8 @@ import type {
 } from "@/types";
 import type {
   DiffReviewSelection,
+  WorkspaceGitFileActionRequest,
+  WorkspaceGitFileActionResult,
   WorkspaceDiffFileDetailRequest,
   WorkspaceDiffFileDetailResponse,
   WorkspaceDiffSearchRequest,
@@ -113,6 +115,30 @@ export async function loadWorkspaceDiffSearch(
     conversationId,
     request,
     search,
+  });
+}
+
+// runWorkspaceGitFileAction executes a file-level Git mutation for one workspace.
+// runWorkspaceGitFileAction 为单个工作区执行一次文件级 Git 变更操作。
+export async function runWorkspaceGitFileAction(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  request: WorkspaceGitFileActionRequest,
+): Promise<WorkspaceGitFileActionResult> {
+  if (!hasServiceRuntime()) {
+    return {
+      repositoryRoot: workspacePath,
+      action: request.action,
+      affectedPathCount: request.files?.length ?? 0,
+      summary: "浏览器预览模式不会修改 Git 暂存区。",
+    };
+  }
+  return serviceClient.request<WorkspaceGitFileActionResult>("workspace.git.fileAction", {
+    workspacePath,
+    projectId,
+    conversationId,
+    request,
   });
 }
 

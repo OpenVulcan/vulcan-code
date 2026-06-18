@@ -154,6 +154,7 @@ import {
   loadWorkspaceDiffFileDetail,
   loadWorkspaceDiffSearch,
   loadWorkspaceDiffSnapshot,
+  runWorkspaceGitFileAction,
 } from "@/service/workbench-snapshot-service";
 import { shellClient } from "@/service/webui-service-runtime";
 import { localMediaSourceUrl } from "@/resources/localMedia";
@@ -1522,6 +1523,7 @@ export function WorkbenchLayout(props: {
             onLoadWorkspaceDiffFileDetail={loadWorkspaceDiffFileDetail}
             onLoadWorkspaceDiffSearch={loadWorkspaceDiffSearch}
             onLoadWorkspaceDiffSnapshot={loadWorkspaceDiffSnapshot}
+            onRunWorkspaceGitFileAction={runWorkspaceGitFileAction}
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}
             onLoadToolDetail={loadCachedConversationToolDetail}

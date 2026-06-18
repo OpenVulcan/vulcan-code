@@ -20,6 +20,9 @@ import type {
   DiffHunkExpansionRequest,
   DiffPanelSnapshot,
   DiffReviewSelection,
+  WorkspaceGitFileActionKind,
+  WorkspaceGitFileActionRequest,
+  WorkspaceGitFileActionResult,
   WorkspaceDiffFileDetailRequest,
   WorkspaceDiffFileDetailResponse,
   WorkspaceDiffSearchRequest,
@@ -124,6 +127,14 @@ export function WorkspaceReviewPanelHost(props: {
     request: DiffReviewSelection,
     search: WorkspaceDiffSearchRequest,
   ) => Promise<WorkspaceDiffSearchResponse>;
+  // Runs one file-level Git action and returns the backend operation summary.
+  // 执行一次文件级 Git 操作并返回后端操作摘要。
+  runWorkspaceGitFileAction: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    request: WorkspaceGitFileActionRequest,
+  ) => Promise<WorkspaceGitFileActionResult>;
 }) {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
@@ -200,6 +211,9 @@ export function WorkspaceReviewPanelHost(props: {
   const [workspaceReviewError, setWorkspaceReviewError] = React.useState<string | null>(
     () => initialReviewPanelCache?.error ?? null,
   );
+  // workspaceGitActionPending tracks one in-flight Git mutation from the review panel.
+  // workspaceGitActionPending 跟踪审核面板发起的一次进行中的 Git 变更操作。
+  const [workspaceGitActionPending, setWorkspaceGitActionPending] = React.useState(false);
   // conversationReviewSnapshot stores the asynchronously parsed conversation diff snapshot.
   // conversationReviewSnapshot 保存异步解析后的会话 diff 快照。
   const [conversationReviewSnapshot, setConversationReviewSnapshot] = React.useState<DiffPanelSnapshot | null>(null);
@@ -425,6 +439,54 @@ export function WorkspaceReviewPanelHost(props: {
     workspaceProjectId,
   ]);
 
+  // handleWorkspaceGitFileAction executes a Git mutation and refreshes the active review snapshot.
+  // handleWorkspaceGitFileAction 执行一次 Git 变更操作并刷新当前审核快照。
+  const handleWorkspaceGitFileAction = React.useCallback(async (
+    action: WorkspaceGitFileActionKind,
+    file?: DiffFile | null,
+  ) => {
+    if (workspaceGitActionPending) {
+      return;
+    }
+    if (!workspacePath) {
+      toast.error("当前会话没有关联项目路径，无法执行 Git 操作。");
+      return;
+    }
+    const files = file ? [{
+      oldPath: file.oldPath,
+      newPath: file.newPath,
+      status: file.status,
+    }] : [];
+    setWorkspaceGitActionPending(true);
+    try {
+      const result = await props.runWorkspaceGitFileAction(
+        workspacePath,
+        workspaceProjectId,
+        activeSurfaceId,
+        { action, files },
+      );
+      toast.success(result.summary);
+      setWorkspaceReviewSnapshot(null);
+      setWorkspaceReviewKey(null);
+      workspaceDetailPendingRef.current.clear();
+      workspaceDetailAttemptedRef.current.clear();
+      await handleRefreshWorkspaceDiff(diffReviewSelection);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(`Git 操作失败：${message}`);
+    } finally {
+      setWorkspaceGitActionPending(false);
+    }
+  }, [
+    activeSurfaceId,
+    diffReviewSelection,
+    handleRefreshWorkspaceDiff,
+    props,
+    workspaceGitActionPending,
+    workspacePath,
+    workspaceProjectId,
+  ]);
+
   // handleDiffReviewSelectionChange applies a new Git review source and refreshes it.
   // handleDiffReviewSelectionChange 应用新的 Git 审核来源并刷新。
   const handleDiffReviewSelectionChange = React.useCallback((selection: DiffReviewSelection) => {
@@ -550,6 +612,8 @@ export function WorkspaceReviewPanelHost(props: {
       onLoadFileDetail={activeWorkspaceReviewSnapshot ? handleLoadWorkspaceDiffFileDetail : undefined}
       onSearchWorkspaceDiff={activeWorkspaceReviewSnapshot ? handleSearchWorkspaceDiff : undefined}
       onCopyRaw={props.onCopyRawDiff}
+      gitFileActionPending={workspaceGitActionPending}
+      onGitFileAction={activeWorkspaceReviewSnapshot ? handleWorkspaceGitFileAction : undefined}
       onRefresh={handleRefreshWorkspaceDiff}
       onSelectionChange={handleDiffReviewSelectionChange}
     />

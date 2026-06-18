@@ -1053,6 +1053,80 @@ struct WebuiWorkspaceDiffSearchFileMatch {
     first_line_kind: Option<String>,
 }
 
+/// WebUI workspace Git file action request.
+/// WebUI 工作区 Git 文件级操作请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceGitFileActionRequest {
+    /// File action to execute against the Git index or worktree.
+    /// 要对 Git 索引或工作区执行的文件操作。
+    action: WebuiWorkspaceGitFileAction,
+    /// Files targeted by file-scoped actions.
+    /// 文件级操作的目标文件列表。
+    #[serde(default)]
+    files: Vec<WebuiWorkspaceGitFileActionFile>,
+}
+
+/// WebUI workspace Git file action kind.
+/// WebUI 工作区 Git 文件级操作类型。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum WebuiWorkspaceGitFileAction {
+    /// Stage every worktree change, including untracked files.
+    /// 暂存全部工作区变更，包括未跟踪文件。
+    StageAll,
+    /// Discard every unstaged worktree change and remove untracked files.
+    /// 丢弃全部未暂存工作区变更并移除未跟踪文件。
+    RestoreAll,
+    /// Stage the provided file paths.
+    /// 暂存传入的文件路径。
+    StageFile,
+    /// Discard the provided unstaged file paths.
+    /// 丢弃传入文件路径的未暂存变更。
+    RestoreFile,
+    /// Unstage every indexed change.
+    /// 取消暂存全部索引变更。
+    UnstageAll,
+    /// Unstage the provided file paths.
+    /// 取消暂存传入的文件路径。
+    UnstageFile,
+}
+
+/// WebUI workspace Git file action target.
+/// WebUI 工作区 Git 文件级操作目标。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceGitFileActionFile {
+    /// Previous file path from the current diff summary.
+    /// 当前 diff 摘要中的旧文件路径。
+    old_path: String,
+    /// Current file path from the current diff summary.
+    /// 当前 diff 摘要中的新文件路径。
+    new_path: String,
+    /// File-level status from the current diff summary.
+    /// 当前 diff 摘要中的文件级状态。
+    status: String,
+}
+
+/// WebUI workspace Git file action result.
+/// WebUI 工作区 Git 文件级操作结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WebuiWorkspaceGitFileActionResult {
+    /// Repository root used by the Git operation.
+    /// Git 操作使用的仓库根目录。
+    repository_root: String,
+    /// Executed action name.
+    /// 已执行的操作名称。
+    action: String,
+    /// Number of file pathspecs passed to Git.
+    /// 传递给 Git 的文件路径规格数量。
+    affected_path_count: usize,
+    /// User-facing operation summary.
+    /// 面向用户的操作摘要。
+    summary: String,
+}
+
 /// WebUI Git diff request options.
 /// WebUI Git diff 请求选项。
 #[derive(Debug, Clone, Deserialize)]
@@ -1763,6 +1837,16 @@ async fn dispatch_service_rpc(
             )
             .await,
         ),
+        "workspace.git.fileAction" | "service_workspace_git_file_action" => rpc_json_result(
+            service_workspace_git_file_action(
+                state,
+                rpc_optional_param(&params, "workspacePath")?,
+                rpc_optional_param(&params, "projectId")?,
+                rpc_optional_param(&params, "conversationId")?,
+                rpc_required_param(&params, "request")?,
+            )
+            .await,
+        ),
         "service_refresh_luaskills_catalog" => {
             rpc_json_result(service_refresh_luaskills_catalog(state).await)
         }
@@ -2442,6 +2526,28 @@ async fn service_workspace_diff_search(
     })
     .await
     .map_err(|error| format!("workspace diff search task failed: {error}"))?
+}
+
+/// Executes one file-level Git action for a WebUI workspace.
+/// 为 WebUI 工作区执行单个文件级 Git 操作。
+async fn service_workspace_git_file_action(
+    state: SharedServiceBridgeState,
+    workspace_path: Option<String>,
+    project_id: Option<String>,
+    conversation_id: Option<String>,
+    request: WebuiWorkspaceGitFileActionRequest,
+) -> Result<WebuiWorkspaceGitFileActionResult, String> {
+    let resolved_workspace_path = webui_diff_workspace_path_from_state(
+        &state,
+        project_id.as_deref(),
+        conversation_id.as_deref(),
+        workspace_path.as_deref(),
+    )?;
+    spawn_service_blocking_task(move || {
+        run_webui_workspace_git_file_action(&resolved_workspace_path, request)
+    })
+    .await
+    .map_err(|error| format!("workspace Git file action task failed: {error}"))?
 }
 
 /// Resolves the workspace path for a WebUI diff request from backend-owned state first.
@@ -23082,6 +23188,232 @@ fn resolve_webui_git_repository_root(workspace_path: &Path) -> Result<Option<Pat
     fs::canonicalize(&root)
         .map(Some)
         .map_err(|error| format!("failed to resolve git repository root `{root}`: {error}"))
+}
+
+/// Executes one WebUI file-level Git operation inside a resolved repository.
+/// 在解析后的仓库中执行单个 WebUI 文件级 Git 操作。
+fn run_webui_workspace_git_file_action(
+    workspace_path: &str,
+    request: WebuiWorkspaceGitFileActionRequest,
+) -> Result<WebuiWorkspaceGitFileActionResult, String> {
+    let requested_path = PathBuf::from(workspace_path.trim());
+    let workspace_path = if requested_path.as_os_str().is_empty() {
+        workspace_root()
+    } else {
+        requested_path
+    };
+    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
+        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
+    })?;
+    let Some(repository_root) = resolve_webui_git_repository_root(&workspace_path)? else {
+        return Err(String::from(
+            "当前工作区不是 Git 仓库，无法执行 Git 文件操作。",
+        ));
+    };
+    let affected_path_count = match request.action {
+        WebuiWorkspaceGitFileAction::StageAll => {
+            run_webui_git_action_command(&repository_root, &["add", "-A", "--", "."])?;
+            0
+        }
+        WebuiWorkspaceGitFileAction::RestoreAll => {
+            run_webui_git_action_command(&repository_root, &["restore", "--worktree", "--", "."])?;
+            run_webui_git_action_command(&repository_root, &["clean", "-fd", "--", "."])?;
+            0
+        }
+        WebuiWorkspaceGitFileAction::StageFile => {
+            let pathspecs = webui_git_file_action_pathspecs(&request.files)?;
+            run_webui_git_file_action_command(&repository_root, &["add", "--"], &pathspecs)?;
+            pathspecs.len()
+        }
+        WebuiWorkspaceGitFileAction::RestoreFile => {
+            let pathspecs = webui_git_file_action_pathspecs(&request.files)?;
+            run_webui_restore_file_action(&repository_root, &request.files, &pathspecs)?;
+            pathspecs.len()
+        }
+        WebuiWorkspaceGitFileAction::UnstageAll => {
+            run_webui_git_action_command(&repository_root, &["restore", "--staged", "--", "."])?;
+            0
+        }
+        WebuiWorkspaceGitFileAction::UnstageFile => {
+            let pathspecs = webui_git_file_action_pathspecs(&request.files)?;
+            run_webui_git_file_action_command(
+                &repository_root,
+                &["restore", "--staged", "--"],
+                &pathspecs,
+            )?;
+            pathspecs.len()
+        }
+    };
+    clear_webui_diff_search_caches();
+    Ok(WebuiWorkspaceGitFileActionResult {
+        repository_root: normalized_workspace_path_text_from_path(&repository_root),
+        action: webui_git_file_action_name(request.action).to_string(),
+        affected_path_count,
+        summary: webui_git_file_action_summary(request.action, affected_path_count),
+    })
+}
+
+/// Executes a repository-wide Git action and reports failures with context.
+/// 执行仓库级 Git 操作并带上下文报告失败。
+fn run_webui_git_action_command(repository_root: &Path, args: &[&str]) -> Result<(), String> {
+    let output = run_webui_git_command(repository_root, args)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format_webui_git_error("git file action", &output))
+}
+
+/// Executes one file-scoped Git action after appending safe pathspecs.
+/// 追加安全路径规格后执行单个文件级 Git 操作。
+fn run_webui_git_file_action_command(
+    repository_root: &Path,
+    prefix_args: &[&str],
+    pathspecs: &[String],
+) -> Result<(), String> {
+    if pathspecs.is_empty() {
+        return Err(String::from("请选择需要操作的文件。"));
+    }
+    let mut args = prefix_args
+        .iter()
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>();
+    args.extend(pathspecs.iter().cloned());
+    let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+    run_webui_git_action_command(repository_root, &arg_refs)
+}
+
+/// Discards file-scoped unstaged changes while removing untracked new files.
+/// 丢弃文件级未暂存变更，并移除未跟踪的新文件。
+fn run_webui_restore_file_action(
+    repository_root: &Path,
+    files: &[WebuiWorkspaceGitFileActionFile],
+    pathspecs: &[String],
+) -> Result<(), String> {
+    if pathspecs.is_empty() {
+        return Err(String::from("请选择需要还原的文件。"));
+    }
+    let mut tracked_pathspecs = BTreeSet::new();
+    let mut untracked_pathspecs = BTreeSet::new();
+    for file in files {
+        let target_set = if file.status.trim() == "added" {
+            &mut untracked_pathspecs
+        } else {
+            &mut tracked_pathspecs
+        };
+        for pathspec in webui_git_file_action_file_pathspecs(file)? {
+            target_set.insert(pathspec);
+        }
+    }
+    let tracked = tracked_pathspecs.into_iter().collect::<Vec<_>>();
+    if !tracked.is_empty() {
+        run_webui_git_file_action_command(
+            repository_root,
+            &["restore", "--worktree", "--"],
+            &tracked,
+        )?;
+    }
+    let untracked = untracked_pathspecs.into_iter().collect::<Vec<_>>();
+    if !untracked.is_empty() {
+        run_webui_git_file_action_command(repository_root, &["clean", "-f", "--"], &untracked)?;
+    }
+    Ok(())
+}
+
+/// Builds safe Git pathspecs for a batch of WebUI file action targets.
+/// 为一批 WebUI 文件操作目标构建安全 Git 路径规格。
+fn webui_git_file_action_pathspecs(
+    files: &[WebuiWorkspaceGitFileActionFile],
+) -> Result<Vec<String>, String> {
+    let mut pathspecs = BTreeSet::new();
+    for file in files {
+        for pathspec in webui_git_file_action_file_pathspecs(file)? {
+            pathspecs.insert(pathspec);
+        }
+    }
+    Ok(pathspecs.into_iter().collect())
+}
+
+/// Builds safe Git pathspecs for one WebUI file action target.
+/// 为单个 WebUI 文件操作目标构建安全 Git 路径规格。
+fn webui_git_file_action_file_pathspecs(
+    file: &WebuiWorkspaceGitFileActionFile,
+) -> Result<Vec<String>, String> {
+    let old_path = normalized_webui_git_action_pathspec(file.old_path.trim())?;
+    let new_path = normalized_webui_git_action_pathspec(file.new_path.trim())?;
+    let mut pathspecs = Vec::new();
+    match file.status.trim() {
+        "deleted" => {
+            if let Some(pathspec) = old_path {
+                pathspecs.push(pathspec);
+            }
+        }
+        "renamed" => {
+            if let Some(pathspec) = old_path {
+                pathspecs.push(pathspec);
+            }
+            if let Some(pathspec) = new_path {
+                pathspecs.push(pathspec);
+            }
+        }
+        _ => {
+            if let Some(pathspec) = new_path.or(old_path) {
+                pathspecs.push(pathspec);
+            }
+        }
+    }
+    if pathspecs.is_empty() {
+        return Err(String::from("文件路径无效，无法执行 Git 文件操作。"));
+    }
+    Ok(pathspecs)
+}
+
+/// Normalizes an optional WebUI Git action pathspec.
+/// 规范化可选的 WebUI Git 操作路径规格。
+fn normalized_webui_git_action_pathspec(pathspec: &str) -> Result<Option<String>, String> {
+    if pathspec.is_empty() || pathspec == "/dev/null" {
+        return Ok(None);
+    }
+    ensure_webui_git_pathspec_text(pathspec)?;
+    Ok(Some(pathspec.replace('\\', "/")))
+}
+
+/// Clears short-lived diff search caches after mutating Git state.
+/// 在修改 Git 状态后清理短生命周期 diff 搜索缓存。
+fn clear_webui_diff_search_caches() {
+    if let Ok(mut cache) = webui_diff_search_cache().lock() {
+        cache.clear();
+    }
+    if let Ok(mut cache) = webui_diff_search_input_cache().lock() {
+        cache.clear();
+    }
+}
+
+/// Returns the stable action name used in WebUI Git action results.
+/// 返回 WebUI Git 操作结果使用的稳定操作名称。
+fn webui_git_file_action_name(action: WebuiWorkspaceGitFileAction) -> &'static str {
+    match action {
+        WebuiWorkspaceGitFileAction::StageAll => "stageAll",
+        WebuiWorkspaceGitFileAction::RestoreAll => "restoreAll",
+        WebuiWorkspaceGitFileAction::StageFile => "stageFile",
+        WebuiWorkspaceGitFileAction::RestoreFile => "restoreFile",
+        WebuiWorkspaceGitFileAction::UnstageAll => "unstageAll",
+        WebuiWorkspaceGitFileAction::UnstageFile => "unstageFile",
+    }
+}
+
+/// Builds a compact user-facing summary for one completed Git file action.
+/// 为已完成的 Git 文件操作构建紧凑的用户摘要。
+fn webui_git_file_action_summary(action: WebuiWorkspaceGitFileAction, path_count: usize) -> String {
+    match action {
+        WebuiWorkspaceGitFileAction::StageAll => String::from("已暂存全部变更。"),
+        WebuiWorkspaceGitFileAction::RestoreAll => String::from("已还原全部未暂存变更。"),
+        WebuiWorkspaceGitFileAction::StageFile => format!("已暂存 {path_count} 个文件路径。"),
+        WebuiWorkspaceGitFileAction::RestoreFile => {
+            format!("已还原 {path_count} 个文件路径的未暂存变更。")
+        }
+        WebuiWorkspaceGitFileAction::UnstageAll => String::from("已取消全部暂存。"),
+        WebuiWorkspaceGitFileAction::UnstageFile => format!("已取消暂存 {path_count} 个文件路径。"),
+    }
 }
 
 /// Loads unstaged tracked changes as one unified diff.

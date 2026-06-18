@@ -136,6 +136,9 @@ export function WorkspaceResizableBody(props: {
   // Loads compact backend file-level search hits for the right context panel.
   // 为右侧上下文面板载入紧凑的后端文件级搜索命中。
   loadWorkspaceDiffSearch: WorkspaceContextPanelProps["loadWorkspaceDiffSearch"];
+  // Runs one file-level Git action for the right context panel.
+  // 为右侧上下文面板执行一次文件级 Git 操作。
+  runWorkspaceGitFileAction: WorkspaceContextPanelProps["runWorkspaceGitFileAction"];
   // Emits WebUI click traces from nested console controls.
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
@@ -328,6 +331,7 @@ export function WorkspaceResizableBody(props: {
               loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
+              runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
             />
           </div>
         ) : null}

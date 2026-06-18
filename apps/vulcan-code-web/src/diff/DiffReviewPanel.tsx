@@ -1,8 +1,14 @@
 import React from "react";
-import { ChevronDown, ChevronRight, FileText, FileWarning, Folder, ListCollapse, ListTree, Search, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, FileText, FileWarning, Folder, ListCollapse, ListTree, MoreHorizontal, Plus, RefreshCw, RotateCcw, Search, Undo2 } from "lucide-react";
 
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "./diff-file-card";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { openProjectDirectoryPath } from "@/service/project-actions-service";
 import {
   DIFF_SEARCH_DETAIL_PREFETCH_CONTEXT_LINES,
@@ -19,6 +25,7 @@ import type {
   DiffRenderPreferences,
   DiffReviewSelection,
   DiffViewMode,
+  WorkspaceGitFileActionKind,
   WorkspaceDiffSearchFileMatch,
   WorkspaceDiffSearchResponse,
 } from "./types";
@@ -174,6 +181,12 @@ export function DiffReviewPanel(props: {
   // Optional backend compact diff search loader for summary-only hydration.
   // 用于摘要文件水合的可选后端紧凑 diff 搜索加载器。
   onSearchWorkspaceDiff?: (query: string, limit?: number) => Promise<WorkspaceDiffSearchResponse | null>;
+  // Whether a Git file action is currently running.
+  // 是否有 Git 文件操作正在运行。
+  gitFileActionPending?: boolean;
+  // Optional file-level Git action dispatcher for live workspace diffs.
+  // 用于实时工作区 diff 的可选文件级 Git 操作派发器。
+  onGitFileAction?: (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => void | Promise<void>;
 }) {
   const fileListRef = React.useRef<HTMLDivElement | null>(null);
   const summarySearchRequestSeqRef = React.useRef(0);
@@ -270,6 +283,9 @@ export function DiffReviewPanel(props: {
   // refreshBusy merges parent loading and the local refresh lock for button state.
   // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
   const refreshBusy = Boolean(props.loading || refreshPending);
+  // shouldShowGitFileActions limits mutating buttons to live worktree and index views.
+  // shouldShowGitFileActions 将变更按钮限制在实时工作区和索引视图中。
+  const shouldShowGitFileActions = Boolean(props.onGitFileAction && (selection.mode === "unstaged" || selection.mode === "staged"));
   const searchActive = searchQuery.trim().length > 0;
   const backendSearchPrefetchCandidates = React.useMemo<readonly DiffSearchDetailPrefetchCandidate[]>(
     () => searchScopeSnapshot && searchActive && !searchPending
@@ -589,7 +605,7 @@ export function DiffReviewPanel(props: {
   }
 
   return (
-    <section className="diff-review-panel">
+    <section className={`diff-review-panel${shouldShowGitFileActions ? " has-floating-actions" : ""}`}>
       <DiffPanelToolbar
         loading={refreshBusy}
         selection={selection}
@@ -695,7 +711,130 @@ export function DiffReviewPanel(props: {
           )}
         </div>
       </div>
+      {shouldShowGitFileActions && props.onGitFileAction ? (
+        <DiffReviewFloatingGitActions
+          busy={Boolean(props.gitFileActionPending || props.loading)}
+          mode={selection.mode}
+          selectedFile={selectedDiffFile}
+          onAction={props.onGitFileAction}
+        />
+      ) : null}
     </section>
+  );
+}
+
+// DiffReviewFloatingGitActionsProps describes the bottom floating Git action bar.
+// DiffReviewFloatingGitActionsProps 描述底部浮动 Git 操作条。
+interface DiffReviewFloatingGitActionsProps {
+  // Current review mode that decides the available Git actions.
+  // 决定可用 Git 操作的当前审核模式。
+  mode: DiffReviewSelection["mode"];
+  // Current selected diff file for file-scoped actions.
+  // 文件级操作使用的当前选中 diff 文件。
+  selectedFile: DiffFile | null;
+  // Whether buttons should be temporarily disabled.
+  // 按钮是否应临时禁用。
+  busy: boolean;
+  // Dispatches one Git action to the owning workspace host.
+  // 向所属工作区宿主派发一次 Git 操作。
+  onAction: (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => void | Promise<void>;
+}
+
+// DiffReviewFloatingGitActions renders file-level Git actions over the review panel bottom edge.
+// DiffReviewFloatingGitActions 在审核面板底部边缘渲染文件级 Git 操作。
+function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActionsProps) {
+  const selectedFileDisabled = props.busy || !props.selectedFile;
+  const runAction = (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => {
+    if (props.busy) {
+      return;
+    }
+    void props.onAction(action, file);
+  };
+  if (props.mode === "staged") {
+    return (
+      <div className="diff-review-floating-actions">
+        <button
+          className="diff-review-floating-action-button"
+          disabled={props.busy}
+          onClick={() => runAction("unstageAll")}
+          type="button"
+        >
+          <Undo2 size={14} />
+          <span>取消全部暂存</span>
+        </button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              aria-label="更多暂存操作"
+              className="diff-review-floating-action-button icon-only"
+              disabled={props.busy}
+              type="button"
+            >
+              <MoreHorizontal size={15} />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="center" className="diff-floating-action-menu" side="top" sideOffset={8}>
+            <DropdownMenuItem
+              disabled={selectedFileDisabled}
+              onSelect={() => runAction("unstageFile", props.selectedFile)}
+            >
+              <Undo2 size={14} />
+              <span>取消当前文件暂存</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  }
+  return (
+    <div className="diff-review-floating-actions">
+      <button
+        className="diff-review-floating-action-button"
+        disabled={props.busy}
+        onClick={() => runAction("restoreAll")}
+        type="button"
+      >
+        <RotateCcw size={14} />
+        <span>还原全部</span>
+      </button>
+      <button
+        className="diff-review-floating-action-button"
+        disabled={props.busy}
+        onClick={() => runAction("stageAll")}
+        type="button"
+      >
+        <Plus size={14} />
+        <span>暂存全部</span>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            aria-label="更多暂存操作"
+            className="diff-review-floating-action-button icon-only"
+            disabled={props.busy}
+            type="button"
+          >
+            <MoreHorizontal size={15} />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="center" className="diff-floating-action-menu" side="top" sideOffset={8}>
+          <DropdownMenuItem
+            disabled={selectedFileDisabled}
+            onSelect={() => runAction("stageFile", props.selectedFile)}
+          >
+            <Plus size={14} />
+            <span>暂存此文件</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={selectedFileDisabled}
+            onSelect={() => runAction("restoreFile", props.selectedFile)}
+          >
+            <RotateCcw size={14} />
+            <span>还原此文件</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }
 
