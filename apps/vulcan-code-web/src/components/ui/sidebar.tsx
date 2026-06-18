@@ -42,18 +42,36 @@ function SidebarProvider({
   children,
   className,
   defaultOpen = true,
+  open,
+  onOpenChange,
   ...props
 }: React.ComponentProps<"div"> & {
   // Initial open state for the sidebar.
   // 侧栏初始展开状态。
   defaultOpen?: boolean
+  // Controlled open state shared across remounted sidebar shells.
+  // 跨重新挂载侧栏外壳共享的受控展开状态。
+  open?: boolean
+  // Controlled open-state change handler.
+  // 受控展开状态变更处理器。
+  onOpenChange?: (open: boolean) => void
 }) {
-  const [open, setOpen] = React.useState(defaultOpen)
-  const toggleSidebar = React.useCallback(() => setOpen((current) => !current), [])
-  const state = open ? "expanded" : "collapsed"
+  // uncontrolledOpen preserves the original standalone provider behavior.
+  // uncontrolledOpen 保留原始独立 Provider 行为。
+  const [uncontrolledOpen, setUncontrolledOpen] = React.useState(defaultOpen)
+  const isControlled = typeof open === "boolean"
+  const currentOpen = isControlled ? open : uncontrolledOpen
+  const setOpen = React.useCallback((nextOpen: boolean) => {
+    if (!isControlled) {
+      setUncontrolledOpen(nextOpen)
+    }
+    onOpenChange?.(nextOpen)
+  }, [isControlled, onOpenChange])
+  const toggleSidebar = React.useCallback(() => setOpen(!currentOpen), [currentOpen, setOpen])
+  const state = currentOpen ? "expanded" : "collapsed"
   const value = React.useMemo<SidebarContextValue>(
-    () => ({ state, open, setOpen, toggleSidebar }),
-    [open, state, toggleSidebar],
+    () => ({ state, open: currentOpen, setOpen, toggleSidebar }),
+    [currentOpen, setOpen, state, toggleSidebar],
   )
 
   return (

@@ -278,6 +278,9 @@ export function WorkbenchLayout(props: {
   // activeArea stores the currently selected feature area.
   // activeArea 保存当前选中的功能区域。
   const [activeArea, setActiveArea] = React.useState<MainAreaId>("chat");
+  // navigationSidebarOpen preserves sidebar collapse state across workspace and settings shells.
+  // navigationSidebarOpen 在工作台与设置外壳之间保留侧栏折叠状态。
+  const [navigationSidebarOpen, setNavigationSidebarOpen] = React.useState(true);
   // workspaceMainView stores the selected main surface inside the workbench.
   // workspaceMainView 保存工作台内部当前选中的主内容界面。
   const [workspaceMainView, setWorkspaceMainView] = React.useState<WorkspaceMainView>("chat");
@@ -1475,6 +1478,8 @@ export function WorkbenchLayout(props: {
             activeSkillSubArea={activeWorkbenchSkillSubArea}
             activeMemorySubArea={activeWorkbenchMemorySubArea}
             mainView={workspaceMainView}
+            sidebarOpen={navigationSidebarOpen}
+            onSidebarOpenChange={setNavigationSidebarOpen}
             selectedDraftConversation={selectedDraftConversation}
             selectedConversation={selectedConversation}
             selectedConversationId={selectedConversationId}
@@ -1534,6 +1539,8 @@ export function WorkbenchLayout(props: {
           <ExtractedFeatureShell
             activeArea={activeArea}
             activeFeature={activeFeature}
+            sidebarOpen={navigationSidebarOpen}
+            onSidebarOpenChange={setNavigationSidebarOpen}
             activeSettingsSubArea={activeSettingsSubArea}
             onSelectSettingsSubArea={setActiveSettingsSubArea}
             onSelectArea={handleSelectTopFeatureArea}

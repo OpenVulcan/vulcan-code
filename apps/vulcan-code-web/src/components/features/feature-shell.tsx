@@ -54,6 +54,12 @@ function FeatureShell(props: {
   // Active top-level feature metadata.
   // 当前顶层功能元数据。
   activeFeature?: FeatureAreaSummary
+  // Shared navigation sidebar open state.
+  // 共享导航侧栏展开状态。
+  sidebarOpen: boolean
+  // Updates the shared navigation sidebar open state.
+  // 更新共享导航侧栏展开状态。
+  onSidebarOpenChange: (open: boolean) => void
   // Selected settings sub page.
   // 当前设置二级页面。
   activeSettingsSubArea: SettingsSubAreaId
@@ -249,7 +255,11 @@ function FeatureShell(props: {
   }
 
   return (
-    <SidebarProvider className="console-shell feature-shell">
+    <SidebarProvider
+      className="console-shell feature-shell"
+      open={props.sidebarOpen}
+      onOpenChange={props.onSidebarOpenChange}
+    >
       <FeatureSidebar
         activeArea={props.activeArea}
         activeMemorySubArea={activeMemorySubArea}

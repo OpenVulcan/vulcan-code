@@ -94,6 +94,12 @@ interface WorkspaceShellProps {
   // Active main surface inside the workbench.
   // 工作台内部当前激活的主内容界面。
   mainView: WorkspaceMainView;
+  // Shared navigation sidebar open state.
+  // 共享导航侧栏展开状态。
+  sidebarOpen: boolean;
+  // Updates the shared navigation sidebar open state.
+  // 更新共享导航侧栏展开状态。
+  onSidebarOpenChange: (open: boolean) => void;
   // Selected embedded skills sub page.
   // 当前选中的内嵌技能子页面。
   activeSkillSubArea: SkillSubAreaId;
@@ -263,7 +269,11 @@ interface WorkspaceShellProps {
 // WorkspaceShell 渲染类似 shadcn dashboard 的融合侧栏与 inset 控制台区域。
 export function WorkspaceShell(props: WorkspaceShellProps) {
   return (
-    <SidebarProvider className="console-shell">
+    <SidebarProvider
+      className="console-shell"
+      open={props.sidebarOpen}
+      onOpenChange={props.onSidebarOpenChange}
+    >
       <WorkspaceShellContent {...props} />
     </SidebarProvider>
   );
