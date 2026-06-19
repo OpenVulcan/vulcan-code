@@ -18,7 +18,9 @@ use crate::mcp::{
     configured_mcp_runtime_access,
 };
 use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
-use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
+use crate::tooling::native::{
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+};
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
 use serde_json::{Value, json};
@@ -739,10 +741,16 @@ fn append_universal_native_tools(
     names: &mut Vec<String>,
     available_native_tool_ids: &BTreeSet<String>,
 ) {
-    if available_native_tool_ids.contains(UPDATE_PLAN_TOOL_ID)
-        && !names.iter().any(|name| name == UPDATE_PLAN_TOOL_ID)
-    {
-        names.push(String::from(UPDATE_PLAN_TOOL_ID));
+    for tool_id in [
+        UPDATE_PLAN_TOOL_ID,
+        GET_GOAL_TOOL_ID,
+        CREATE_GOAL_TOOL_ID,
+        UPDATE_GOAL_TOOL_ID,
+    ] {
+        if available_native_tool_ids.contains(tool_id) && !names.iter().any(|name| name == tool_id)
+        {
+            names.push(String::from(tool_id));
+        }
     }
 }
 
@@ -851,7 +859,9 @@ mod tests {
     };
     use crate::mcp::configured_mcp_runtime_access;
     use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
-    use crate::tooling::native::UPDATE_PLAN_TOOL_ID;
+    use crate::tooling::native::{
+        CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+    };
     use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
@@ -881,8 +891,11 @@ mod tests {
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
         };
         let available_native_tool_ids = BTreeSet::from([
+            String::from(CREATE_GOAL_TOOL_ID),
+            String::from(GET_GOAL_TOOL_ID),
             String::from("shell_command"),
             String::from("shell_session"),
+            String::from(UPDATE_GOAL_TOOL_ID),
             String::from(UPDATE_PLAN_TOOL_ID),
         ]);
         let mut warnings = Vec::new();
@@ -894,7 +907,15 @@ mod tests {
             &mut warnings,
         );
 
-        assert_eq!(resolved, vec![String::from(UPDATE_PLAN_TOOL_ID)]);
+        assert_eq!(
+            resolved,
+            vec![
+                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(GET_GOAL_TOOL_ID),
+                String::from(CREATE_GOAL_TOOL_ID),
+                String::from(UPDATE_GOAL_TOOL_ID),
+            ]
+        );
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("仅保留通用原生工具"));
     }
@@ -902,7 +923,7 @@ mod tests {
     /// Verifies universal native tools are appended even when an agent uses an explicit restricted tool list.
     /// 验证代理使用显式受限工具列表时仍会追加通用原生工具。
     #[test]
-    fn explicit_native_tool_list_keeps_universal_update_plan_tool() {
+    fn explicit_native_tool_list_keeps_universal_goal_and_update_plan_tools() {
         let definition = RuntimeAgentDefinition {
             id: String::from("agent-a"),
             name: String::from("Agent A"),
@@ -922,7 +943,10 @@ mod tests {
             runtime_policy: vulcan_session_core::ExecutionRuntimePolicyRequest::default(),
         };
         let available_native_tool_ids = BTreeSet::from([
+            String::from(CREATE_GOAL_TOOL_ID),
+            String::from(GET_GOAL_TOOL_ID),
             String::from("shell_command"),
+            String::from(UPDATE_GOAL_TOOL_ID),
             String::from(UPDATE_PLAN_TOOL_ID),
         ]);
         let mut warnings = Vec::new();
@@ -938,7 +962,10 @@ mod tests {
             resolved,
             vec![
                 String::from("shell_command"),
-                String::from(UPDATE_PLAN_TOOL_ID)
+                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(GET_GOAL_TOOL_ID),
+                String::from(CREATE_GOAL_TOOL_ID),
+                String::from(UPDATE_GOAL_TOOL_ID)
             ]
         );
         assert!(warnings.is_empty());

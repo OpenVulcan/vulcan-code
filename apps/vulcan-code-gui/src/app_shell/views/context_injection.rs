@@ -206,6 +206,13 @@ fn static_vmm_profile_panel_card(
         items: vec![InjectionPanelItem {
             content: compact_panel_preview(content),
             detail: static_vmm_profile_detail(content, updated_at),
+            dedupe_key: None,
+            memory_id: None,
+            turn_id: None,
+            score_label: None,
+            has_dialogue: false,
+            created_datetime: None,
+            updated_at: updated_at.map(str::to_string),
             turn_label: None,
             ttl_label: String::from("静态"),
             source_display: Some(String::from("VMM profile")),

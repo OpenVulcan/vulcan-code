@@ -393,9 +393,11 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
                 crate::conversation_protocol::conversation_state_from_session_messages(messages);
         }
     }
+    let append_canonical_user_message =
+        input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record =
         input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
-    if input.append_canonical_user_message && append_visible_user_prompt_record {
+    if append_canonical_user_message && append_visible_user_prompt_record {
         append_shared_user_prompt_record_with_attachments(
             runtime_state,
             input.session_id,
@@ -403,7 +405,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             &sanitized_prompt,
             input.attachments.clone(),
         );
-    } else if input.append_canonical_user_message {
+    } else if append_canonical_user_message {
         append_user_text_message(
             &mut runtime_state.conversation_state,
             format!("session-{}-protocol-user-{now}", input.session_id),
@@ -474,6 +476,8 @@ fn prompt_turn_boundary_events(
 ) -> Vec<SessionBoundaryEvent> {
     let thread_id = SessionNodeId::from(input.session_id);
     let timestamp_ms = unix_millis_text_to_u64(now);
+    let append_canonical_user_message =
+        input.append_canonical_user_message && input.source.persists_canonical_user_message();
     let append_visible_user_prompt_record =
         input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
     let user_input_visibility = if append_visible_user_prompt_record {
@@ -512,7 +516,7 @@ fn prompt_turn_boundary_events(
         "prompt": prompt,
         "attachments": attachments,
         "source": input.source,
-        "canonical": input.append_canonical_user_message,
+        "canonical": append_canonical_user_message,
     }));
     vec![turn_started, user_input]
 }
@@ -689,6 +693,8 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         session_vmm: runtime_state.vmm.clone(),
         boundary_events: input.start.boundary_events.clone(),
         runtime_system_updates: Vec::new(),
+        controller_runtime: None,
+        session_goal_context: None,
     };
     Ok(SharedPromptTurnContinuation {
         request,
@@ -1023,6 +1029,7 @@ mod tests {
         )
         .expect("mailbox prompt should start");
 
+        assert!(runtime_state.conversation_state.messages.is_empty());
         assert!(runtime_state.conversation_state.records.is_empty());
         assert_eq!(
             start.boundary_events[1].visibility,
@@ -1031,6 +1038,56 @@ mod tests {
         assert_eq!(
             start.boundary_events[1].payload["source"],
             serde_json::json!("session_mailbox")
+        );
+        assert_eq!(
+            start.boundary_events[1].payload["canonical"],
+            serde_json::json!(false)
+        );
+    }
+
+    /// Verifies goal continuation turns never persist hidden prompts as reopen-visible user text.
+    /// 验证目标续跑回合绝不会把隐藏提示持久化成重开后可见的用户文本。
+    #[test]
+    fn goal_continuation_begin_never_persists_user_message() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let mut hook_runtime = ConversationHookRuntime::new();
+        let start = begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id: SessionId::from_u128(904),
+                session_title: "主会话",
+                workspace_path: "D:/workspace",
+                prompt_entry_id: String::from("goal-entry"),
+                prompt: "Continue working toward the active thread goal.",
+                attachments: Vec::new(),
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::GoalContinuation,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: Some(String::from("project-a")),
+                prior_session_messages: None,
+            },
+        )
+        .expect("goal continuation prompt should start");
+
+        assert!(runtime_state.conversation_state.messages.is_empty());
+        assert!(runtime_state.conversation_state.records.is_empty());
+        assert_eq!(
+            start.boundary_events[1].visibility,
+            SessionEventVisibility::Hidden
+        );
+        assert_eq!(
+            start.boundary_events[1].payload["source"],
+            serde_json::json!("goal_continuation")
+        );
+        assert_eq!(
+            start.boundary_events[1].payload["canonical"],
+            serde_json::json!(false)
         );
     }
 }

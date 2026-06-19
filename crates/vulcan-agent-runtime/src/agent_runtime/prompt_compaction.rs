@@ -319,6 +319,8 @@ fn build_prompt_compaction_launch_request(
         session_vmm: Default::default(),
         boundary_events: Vec::new(),
         runtime_system_updates: Vec::new(),
+        controller_runtime: None,
+        session_goal_context: None,
     }
 }
 

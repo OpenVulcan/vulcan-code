@@ -28,6 +28,7 @@ import type {
   PendingPromptSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
+  SessionGoalSummary,
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
@@ -62,6 +63,9 @@ export function ComposerDock(props: {
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts: PendingPromptSummary[];
+  // Current persisted goal for the selected conversation.
+  // 当前选中会话的持久化目标。
+  sessionGoal: SessionGoalSummary | null;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -95,6 +99,18 @@ export function ComposerDock(props: {
   // onSaveAiCapabilityConfiguration persists one session-scoped capability draft.
   // onSaveAiCapabilityConfiguration 持久化单个会话级能力草稿。
   onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
+  // onSaveSessionGoal persists one user-authored session goal.
+  // onSaveSessionGoal 持久化单个用户编写的会话目标。
+  onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // onResumeSessionGoal resumes one stopped session goal with a fresh budget stage.
+  // onResumeSessionGoal 使用新的预算阶段继续单个已停止会话目标。
+  onResumeSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // onClearSessionGoal clears the current session goal.
+  // onClearSessionGoal 清理当前会话目标。
+  onClearSessionGoal: () => Promise<boolean>;
+  // onUpdateSessionGoalStatus updates the current session goal lifecycle status.
+  // onUpdateSessionGoalStatus 更新当前会话目标生命周期状态。
+  onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -186,6 +202,7 @@ export function ComposerDock(props: {
         contextUsage={props.contextUsage}
         slashCommands={props.slashCommands}
         pendingPrompts={props.pendingPrompts}
+        sessionGoal={props.sessionGoal}
         isConversationRunning={props.isConversationRunning}
         thinkingOverlayEnabled={props.thinkingOverlayEnabled}
         providers={props.providers}
@@ -194,6 +211,10 @@ export function ComposerDock(props: {
         onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
         onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
+        onSaveSessionGoal={props.onSaveSessionGoal}
+        onResumeSessionGoal={props.onResumeSessionGoal}
+        onClearSessionGoal={props.onClearSessionGoal}
+        onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}

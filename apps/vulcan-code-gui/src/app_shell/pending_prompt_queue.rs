@@ -1509,6 +1509,7 @@ impl VulcanWorkbench {
                 }
             }
             PendingSessionPromptSource::SessionMailbox => String::from("正在处理会话回流结果。"),
+            PendingSessionPromptSource::GoalContinuation => String::from("正在继续处理目标。"),
         };
         self.begin_session_run_from_prompt_entry(session_id, session_title, prompt_entry)
     }

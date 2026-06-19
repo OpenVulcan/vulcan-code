@@ -56,6 +56,7 @@ use vulcan_tools_manager::{
     VulcanPlanToolPolicy, VulcanToolCandidate, VulcanToolDescriptor, VulcanToolHostResult,
     VulcanToolInvocationResult, VulcanToolSourceKind, VulcanToolsManager,
 };
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 /// Shared description suffix that explains how generated-media tools expose export controls and follow-up file paths to the model.
 /// 生成媒体工具共享的描述后缀，用于向模型说明导出控制项以及可复用的后续文件路径。
@@ -101,6 +102,7 @@ pub fn build_vulcan_tools_manager(
     native_catalog: NativeToolCatalog,
     luaskills_runtime: Option<LuaSkillsRuntimeHandle>,
     workspace_root: Option<PathBuf>,
+    controller_runtime: Option<ControllerRuntimeHandle>,
     conversation_attachments: Vec<ConversationAttachment>,
     candidate_native_tool_ids: Vec<String>,
     candidate_luaskills_tools: Vec<RuntimeEntryDescriptor>,
@@ -144,6 +146,7 @@ pub fn build_vulcan_tools_manager(
         let catalog = native_catalog.clone();
         let tool_id = definition.descriptor.id.clone();
         let workspace_root_for_context = workspace_root.clone();
+        let controller_runtime_for_context = controller_runtime.clone();
         let enabled_prompt_skill_names_for_context = enabled_prompt_skill_names.clone();
         let prompt_skill_user_root_for_context = prompt_skill_user_root.clone();
         let project_vmm_for_context = project_vmm.clone();
@@ -157,6 +160,7 @@ pub fn build_vulcan_tools_manager(
                 let catalog = catalog.clone();
                 let tool_id = tool_id.clone();
                 let workspace_root = workspace_root_for_context.clone();
+                let controller_runtime = controller_runtime_for_context.clone();
                 let prompt_skill_user_root = prompt_skill_user_root_for_context.clone();
                 let enabled_prompt_skill_names = enabled_prompt_skill_names_for_context.clone();
                 let project_vmm = project_vmm_for_context.clone();
@@ -174,6 +178,7 @@ pub fn build_vulcan_tools_manager(
                                     project_temp_maintenance::ensure_project_temp_dir(path).ok()
                                 }),
                                 workspace_root,
+                                controller_runtime,
                                 enabled_prompt_skill_names,
                                 prompt_skill_user_root,
                                 project_vmm,
@@ -1455,6 +1460,7 @@ mod tests {
             native_catalog.clone(),
             None,
             None,
+            None,
             Vec::new(),
             base_ids.clone(),
             Vec::new(),
@@ -1483,6 +1489,7 @@ mod tests {
             Arc::new(crate::agent_runtime::task_runtime::TaskRuntime::new()),
             Arc::new(crate::agent_runtime::question_runtime::QuestionRuntime::new()),
             native_catalog,
+            None,
             None,
             None,
             Vec::new(),

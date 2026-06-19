@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Send, Square } from "lucide-react";
+import { Brain, Edit3, PauseCircle, PlayCircle, Send, Square, Target, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -40,6 +40,13 @@ import { composerAttachmentMedia } from "@/components/composer/composer-attachme
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -52,6 +59,7 @@ import type {
   PendingPromptSummary,
   ProviderSummary,
   ReasoningSelectionSummary,
+  SessionGoalSummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -106,6 +114,9 @@ export function ComposerPanel(props: {
   // Visible pending prompts retained for the selected conversation.
   // 当前选中会话保留的可见待发送提示词。
   pendingPrompts: PendingPromptSummary[];
+  // Current persisted goal for the selected conversation.
+  // 当前选中会话的持久化目标。
+  sessionGoal: SessionGoalSummary | null;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -130,6 +141,18 @@ export function ComposerPanel(props: {
   // Persists one session-scoped AI capability configuration draft.
   // 持久化单个会话级 AI 能力配置草稿。
   onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
+  // Persists one user-authored session goal.
+  // 持久化单个用户编写的会话目标。
+  onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Resumes one stopped session goal with a fresh budget stage.
+  // 使用新的预算阶段继续单个已停止会话目标。
+  onResumeSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Clears the current user-authored session goal.
+  // 清理当前用户编写的会话目标。
+  onClearSessionGoal: () => Promise<boolean>;
+  // Updates the current session goal lifecycle status.
+  // 更新当前会话目标生命周期状态。
+  onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -233,6 +256,24 @@ export function ComposerPanel(props: {
   // isComposerRunning stores the local send/stop preview state.
   // isComposerRunning 保存输入区发送/停止的本地预览状态。
   const [isComposerRunning, setIsComposerRunning] = React.useState(false);
+  // goalDialogOpen controls the user-facing session goal editor.
+  // goalDialogOpen 控制面向用户的会话目标编辑器。
+  const [goalDialogOpen, setGoalDialogOpen] = React.useState(false);
+  // goalDialogMode distinguishes ordinary edits from budget-stage resumes.
+  // goalDialogMode 区分普通编辑与预算阶段继续。
+  const [goalDialogMode, setGoalDialogMode] = React.useState<"edit" | "resume">("edit");
+  // goalObjectiveDraft stores the editable goal objective.
+  // goalObjectiveDraft 保存可编辑的目标文本。
+  const [goalObjectiveDraft, setGoalObjectiveDraft] = React.useState("");
+  // goalTokenBudgetDraft stores the optional token budget as input text.
+  // goalTokenBudgetDraft 以输入文本保存可选 token 预算。
+  const [goalTokenBudgetDraft, setGoalTokenBudgetDraft] = React.useState("");
+  // goalSaving stores whether a goal mutation is currently in flight.
+  // goalSaving 保存当前是否存在飞行中的目标修改。
+  const [goalSaving, setGoalSaving] = React.useState(false);
+  // visibleSessionGoal hides completed goals from the composer-level control strip.
+  // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
+  const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
   // availableModelChoices flattens provider data into selectable workbench models.
   // availableModelChoices 将 Provider 数据扁平化为可选择的工作台模型。
   const availableModelChoices = React.useMemo(
@@ -488,6 +529,100 @@ export function ComposerPanel(props: {
     return true;
   }, [props]);
 
+  // openGoalDialog seeds the goal editor from the current persisted goal.
+  // openGoalDialog 使用当前持久化目标初始化目标编辑器。
+  const openGoalDialog = React.useCallback(() => {
+    setGoalDialogMode("edit");
+    setGoalObjectiveDraft(visibleSessionGoal?.objective ?? "");
+    setGoalTokenBudgetDraft(visibleSessionGoal?.tokenBudget ? String(visibleSessionGoal.tokenBudget) : "");
+    setGoalDialogOpen(true);
+  }, [visibleSessionGoal]);
+
+  // openGoalResumeDialog seeds the next-stage goal editor from the stopped goal.
+  // openGoalResumeDialog 使用已停止目标初始化下一阶段目标编辑器。
+  const openGoalResumeDialog = React.useCallback(() => {
+    if (!visibleSessionGoal) {
+      return;
+    }
+    setGoalDialogMode("resume");
+    setGoalObjectiveDraft(visibleSessionGoal.objective);
+    setGoalTokenBudgetDraft(visibleSessionGoal.tokenBudget ? String(visibleSessionGoal.tokenBudget) : "");
+    setGoalDialogOpen(true);
+  }, [visibleSessionGoal]);
+
+  // handleGoalSave persists the current goal dialog draft.
+  // handleGoalSave 持久化当前目标弹窗草稿。
+  const handleGoalSave = React.useCallback(async () => {
+    const objective = goalObjectiveDraft.trim();
+    const tokenBudgetText = goalTokenBudgetDraft.trim();
+    const tokenBudget = tokenBudgetText ? Number(tokenBudgetText) : null;
+    if (!objective) {
+      toast.error("目标内容不能为空。");
+      return;
+    }
+    if (tokenBudget !== null && (!Number.isInteger(tokenBudget) || tokenBudget <= 0)) {
+      toast.error("Token 预算必须是正整数。");
+      return;
+    }
+    setGoalSaving(true);
+    try {
+      const shouldSubmitCreatedGoal = !visibleSessionGoal && !props.isConversationRunning && !isComposerRunning;
+      const saved = goalDialogMode === "resume"
+        ? await props.onResumeSessionGoal(objective, tokenBudget)
+        : await props.onSaveSessionGoal(objective, tokenBudget);
+      if (saved) {
+        setGoalDialogOpen(false);
+        if (goalDialogMode === "edit" && shouldSubmitCreatedGoal) {
+          setIsComposerRunning(true);
+          try {
+            const sent = await props.onSubmitPrompt({
+              prompt: objective,
+              attachments: [],
+              executionMode,
+              reasoningEffort,
+              disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
+              disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
+              aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
+            });
+            if (!sent) {
+              setDraftInput((current) => current || objective);
+            }
+          } finally {
+            setIsComposerRunning(false);
+          }
+        }
+      }
+    } finally {
+      setGoalSaving(false);
+    }
+  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, reasoningEffort, visibleSessionGoal]);
+
+  // handleGoalStatusToggle pauses or resumes the current goal.
+  // handleGoalStatusToggle 暂停或恢复当前目标。
+  const handleGoalStatusToggle = React.useCallback(async () => {
+    if (!visibleSessionGoal) {
+      return;
+    }
+    const nextStatus = visibleSessionGoal.status === "paused" ? "active" : "paused";
+    setGoalSaving(true);
+    try {
+      await props.onUpdateSessionGoalStatus(nextStatus);
+    } finally {
+      setGoalSaving(false);
+    }
+  }, [props, visibleSessionGoal]);
+
+  // handleGoalClear clears the current goal after a direct user action.
+  // handleGoalClear 在用户直接操作后清理当前目标。
+  const handleGoalClear = React.useCallback(async () => {
+    setGoalSaving(true);
+    try {
+      await props.onClearSessionGoal();
+    } finally {
+      setGoalSaving(false);
+    }
+  }, [props]);
+
   // handleModelChoiceChange applies one model choice locally and through the shared backend.
   // handleModelChoiceChange 在本地与共享后端应用单个模型选择。
   const handleModelChoiceChange = React.useCallback(async (choice: ModelPickerChoice) => {
@@ -583,6 +718,16 @@ export function ComposerPanel(props: {
           onReorder={(entryIds, draggedEntryId, targetEntryId) => void props.onReorderPendingPrompts(entryIds, draggedEntryId, targetEntryId)}
         />
       ) : null}
+      {visibleSessionGoal ? (
+        <ComposerGoalStrip
+          disabled={goalSaving}
+          goal={visibleSessionGoal}
+          onClear={() => void handleGoalClear()}
+          onEdit={openGoalDialog}
+          onResume={openGoalResumeDialog}
+          onToggleStatus={() => void handleGoalStatusToggle()}
+        />
+      ) : null}
       <section
         className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
         onDragLeave={() => setIsAttachmentDragOver(false)}
@@ -645,6 +790,7 @@ export function ComposerPanel(props: {
               thinkingOverlayEnabled={props.thinkingOverlayEnabled}
               onPick={openAttachmentPicker}
               onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
+              onOpenGoal={openGoalDialog}
             />
             <ComposerSelectControl
               ariaLabel={t("composer.aria.mode")}
@@ -723,6 +869,110 @@ export function ComposerPanel(props: {
           <GeneratedMediaPlayerWindow attachment={composerMediaPlayer} onClose={() => setComposerMediaPlayer(null)} />
         ) : null}
       </section>
+      <Dialog open={goalDialogOpen} onOpenChange={setGoalDialogOpen}>
+        <DialogContent className="composer-goal-dialog">
+          <DialogHeader>
+            <DialogTitle>{goalDialogMode === "resume" ? "继续任务" : "编辑目标"}</DialogTitle>
+          </DialogHeader>
+          <div className="composer-goal-dialog-body">
+            <Textarea
+              aria-label="目标内容"
+              className="composer-goal-objective-input"
+              onChange={(event) => setGoalObjectiveDraft(event.currentTarget.value)}
+              placeholder="输入当前会话要持续推进的目标"
+              value={goalObjectiveDraft}
+            />
+            <input
+              aria-label="Token 预算"
+              className="composer-goal-budget-input"
+              inputMode="numeric"
+              onChange={(event) => setGoalTokenBudgetDraft(event.currentTarget.value.replace(/[^\d]/g, ""))}
+              placeholder="Token 预算（可选）"
+              value={goalTokenBudgetDraft}
+            />
+          </div>
+          <DialogFooter>
+            <Button disabled={goalSaving} onClick={() => setGoalDialogOpen(false)} type="button" variant="secondary">
+              取消
+            </Button>
+            <Button disabled={goalSaving} onClick={() => void handleGoalSave()} type="button">
+              {goalDialogMode === "resume" ? "继续任务" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
+}
+
+// ComposerGoalStrip renders the current session goal above the prompt input.
+// ComposerGoalStrip 在提示词输入框上方渲染当前会话目标。
+function ComposerGoalStrip(props: {
+  // Current persisted goal.
+  // 当前持久化目标。
+  goal: SessionGoalSummary;
+  // Whether goal actions are temporarily disabled.
+  // 目标操作是否临时禁用。
+  disabled: boolean;
+  // Opens the goal editor.
+  // 打开目标编辑器。
+  onEdit: () => void;
+  // Opens the stopped-goal resume editor.
+  // 打开已停止目标的继续编辑器。
+  onResume: () => void;
+  // Pauses or resumes the goal.
+  // 暂停或恢复目标。
+  onToggleStatus: () => void;
+  // Clears the goal.
+  // 清理目标。
+  onClear: () => void;
+}) {
+  const usageTokens = props.goal.usageTokens ?? props.goal.tokensUsed;
+  const budgetText = props.goal.tokenBudget
+    ? `${usageTokens}/${props.goal.tokenBudget} tokens`
+    : `${usageTokens} tokens`;
+  const usageTooltip = [
+    `API 次数：${props.goal.apiCallCount ?? 0}`,
+    `工具调用：${props.goal.toolCallCount ?? 0}`,
+    `用量：${usageTokens} tokens`,
+    `输入：${props.goal.inputTokens ?? 0}`,
+    `缓存：${props.goal.cachedInputTokens ?? 0}`,
+    `输出：${props.goal.outputTokens ?? 0}`,
+    `总量：${props.goal.totalTokens ?? 0}`,
+  ].join("\n");
+  return (
+    <div className="composer-goal-strip">
+      <Target size={15} />
+      <span className="composer-goal-strip-status">{composerGoalStatusLabel(props.goal.status)}</span>
+      <span className="composer-goal-strip-objective">{props.goal.objective}</span>
+      <span className="composer-goal-strip-budget" title={usageTooltip}>{budgetText}</span>
+      <Button aria-label="编辑目标" className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onEdit} size="icon-sm" type="button" variant="ghost">
+        <Edit3 size={14} />
+      </Button>
+      {props.goal.status === "budget_limited" ? (
+        <Button aria-label="继续任务" className="composer-goal-strip-button text" disabled={props.disabled} onClick={props.onResume} type="button" variant="ghost">
+          <PlayCircle size={14} />
+          <span>继续任务</span>
+        </Button>
+      ) : (
+        <Button aria-label={props.goal.status === "paused" ? "恢复目标" : "暂停目标"} className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onToggleStatus} size="icon-sm" type="button" variant="ghost">
+          {props.goal.status === "paused" ? <PlayCircle size={14} /> : <PauseCircle size={14} />}
+        </Button>
+      )}
+      <Button aria-label="清理目标" className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
+        <Trash2 size={14} />
+      </Button>
+    </div>
+  );
+}
+
+// composerGoalStatusLabel returns a compact Chinese status label for one goal status.
+// composerGoalStatusLabel 返回单个目标状态的紧凑中文标签。
+function composerGoalStatusLabel(status: SessionGoalSummary["status"]): string {
+  if (status === "active") return "进行中的目标";
+  if (status === "paused") return "已暂停的目标";
+  if (status === "blocked") return "受阻的目标";
+  if (status === "usage_limited") return "受限的目标";
+  if (status === "budget_limited") return "预算用尽";
+  return "已完成的目标";
 }

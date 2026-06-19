@@ -14,6 +14,9 @@ pub enum ActiveTurnKind {
     /// Mailbox-triggered provider turn.
     /// mailbox 触发的 Provider 回合。
     MailboxTriggered,
+    /// Hidden provider turn triggered by an active goal while the session is idle.
+    /// 会话空闲时由活跃目标触发的隐藏 Provider 回合。
+    GoalContinuation,
     /// Context compaction turn.
     /// 上下文压缩回合。
     ContextCompaction,

@@ -30,6 +30,7 @@ use vulcan_session_boundary::{
 use vulcan_session_core::SessionNodeId;
 use vulcan_vmm::VmmConfigLayer;
 
+mod goal_store;
 mod persistence;
 mod segmented_session_store;
 mod session_addon_store;
@@ -49,6 +50,10 @@ use self::segmented_session_store::{
     state_document_from_runtime_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
+pub use goal_store::{
+    GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, ThreadGoal, ThreadGoalStatus,
+    VulcanGoalStore,
+};
 pub use persistence::{
     archive_project_sessions, archive_project_with_sessions, archive_single_session,
     archive_single_session_for_project, permanently_delete_archived_project,

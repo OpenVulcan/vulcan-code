@@ -1337,6 +1337,59 @@ export interface SessionTodoPlanItemSummary {
   status: "pending" | "in_progress" | "completed";
 }
 
+// SessionGoalSummary describes the current persisted session goal.
+// SessionGoalSummary 描述当前持久化的会话目标。
+export interface SessionGoalSummary {
+  // Session identifier that owns the goal.
+  // 拥有该目标的会话标识。
+  sessionId: string;
+  // Stable goal version identifier.
+  // 稳定目标版本标识。
+  goalId: string;
+  // Human-authored objective text.
+  // 用户编写的目标文本。
+  objective: string;
+  // Stable status key copied from the backend goal state.
+  // 从后端目标状态复制的稳定状态键。
+  status: "active" | "paused" | "blocked" | "usage_limited" | "budget_limited" | "complete";
+  // Optional explicit token budget.
+  // 可选显式 token 预算。
+  tokenBudget?: number | null;
+  // Accounted token usage for this goal.
+  // 当前目标已记账的 token 用量。
+  tokensUsed: number;
+  // Live usage total shown in the composer strip.
+  // 输入区目标条展示的实时用量总数。
+  usageTokens: number;
+  // Provider API call count observed for the current goal turn.
+  // 当前目标轮次观测到的 Provider API 调用次数。
+  apiCallCount: number;
+  // Tool call count observed for the current goal turn.
+  // 当前目标轮次观测到的工具调用次数。
+  toolCallCount: number;
+  // Input tokens observed for the current goal turn.
+  // 当前目标轮次观测到的输入 Token 数。
+  inputTokens: number;
+  // Cache-hit input tokens observed for the current goal turn.
+  // 当前目标轮次观测到的缓存命中输入 Token 数。
+  cachedInputTokens: number;
+  // Output tokens observed for the current goal turn.
+  // 当前目标轮次观测到的输出 Token 数。
+  outputTokens: number;
+  // Total provider tokens observed for the current goal turn.
+  // 当前目标轮次观测到的 Provider 总 Token 数。
+  totalTokens: number;
+  // Accounted wall-clock time in seconds.
+  // 当前目标已记账的墙钟时间秒数。
+  timeUsedSeconds: number;
+  // Creation timestamp in Unix epoch milliseconds.
+  // 创建时间的 Unix 纪元毫秒值。
+  createdAtMs: number;
+  // Last update timestamp in Unix epoch milliseconds.
+  // 最近更新时间的 Unix 纪元毫秒值。
+  updatedAtMs: number;
+}
+
 // WorkbenchSnapshot describes the first WebUI workbench state.
 // WorkbenchSnapshot 描述第一版 WebUI 工作台状态。
 export interface WorkbenchSnapshot {
@@ -1421,6 +1474,9 @@ export interface WorkbenchSnapshot {
   // Current session TODO plan shown in the conversation tool panel.
   // 当前会话工具面板展示的会话 TODO 计划。
   sessionTodoPlan?: SessionTodoPlanSummary | null;
+  // Current session goal shown above the conversation composer.
+  // 当前会话输入区上方展示的会话目标。
+  sessionGoal?: SessionGoalSummary | null;
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

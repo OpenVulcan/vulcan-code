@@ -20,8 +20,8 @@ use vulcan_hooks::SystemPromptHookBlock;
 use vulcan_prompt_composer::{
     AgentPromptSnapshot, EnvironmentContextSnapshot, ModelDescriptor, ProjectPromptFileCache,
     ProjectPromptSnapshot, ProjectRulesFileCache, ProjectRulesSnapshot, PromptAssemblyInput,
-    PromptAssemblyMode, PromptAssemblyOutput, ProviderPromptSnapshot, ToolCatalogSnapshot,
-    ToolDescriptor, build_context_compaction_developer_segment,
+    PromptAssemblyMode, PromptAssemblyOutput, ProviderPromptSnapshot, TaskGoalSnapshot,
+    ToolCatalogSnapshot, ToolDescriptor, build_context_compaction_developer_segment,
 };
 
 /// Process-wide project-rules source cache shared by provider runtime requests.
@@ -154,7 +154,7 @@ fn build_runtime_prompt_assembly_input(
         ),
         project_rules: load_workspace_project_rules_snapshot(&preparation.workspace_path),
         environment_context: Some(environment_context),
-        task_goal: None,
+        task_goal: build_session_goal_snapshot(preparation),
         tool_catalog: ToolCatalogSnapshot::new(
             preparation
                 .tool_descriptors
@@ -185,6 +185,16 @@ fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> V
             vec![build_context_compaction_developer_segment()]
         }
     }
+}
+
+/// Builds the optional session-goal prompt snapshot for the current request.
+/// 为当前请求构建可选的会话目标提示词快照。
+fn build_session_goal_snapshot(preparation: &ExecutionPreparation) -> Option<TaskGoalSnapshot> {
+    let text = preparation.session_goal_context.as_deref()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(TaskGoalSnapshot::new(text.to_string()))
 }
 
 /// Builds the fallback provider prompt used when no resource file is available.
@@ -849,6 +859,7 @@ mod tests {
             session_vmm: Default::default(),
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
+            session_goal_context: None,
         }
     }
 

@@ -133,6 +133,8 @@ impl VulcanWorkbench {
             session_vmm,
             boundary_events: Vec::new(),
             runtime_system_updates,
+            controller_runtime: None,
+            session_goal_context: None,
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

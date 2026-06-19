@@ -30,6 +30,7 @@ use vulcan_session_boundary::{
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
+use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 /// Minimal execution request captured from the current GUI state.
 /// 从当前 GUI 状态捕获的最小执行请求。
@@ -108,6 +109,12 @@ pub struct ExecutionPreparationRequest {
     /// Chronological runtime system updates loaded from `runtime.jsonl` for provider-visible lowering.
     /// 从 `runtime.jsonl` 加载并用于 Provider 可见转换的时间顺序 runtime system update。
     pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
+    /// Optional controller runtime used by host-owned tools that need durable workspace state.
+    /// 需要持久工作区状态的宿主工具使用的可选控制器运行时。
+    pub controller_runtime: Option<ControllerRuntimeHandle>,
+    /// Optional rendered session-goal context injected through the task-goal prompt node.
+    /// 通过任务目标提示词节点注入的可选会话目标上下文。
+    pub session_goal_context: Option<String>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -286,6 +293,9 @@ pub struct ExecutionPreparation {
     /// Chronological runtime system updates loaded from `runtime.jsonl` for provider-visible lowering.
     /// 从 `runtime.jsonl` 加载并用于 Provider 可见转换的时间顺序 runtime system update。
     pub runtime_system_updates: Vec<RuntimeSystemUpdateEvent>,
+    /// Optional rendered session-goal context injected through the task-goal prompt node.
+    /// 通过任务目标提示词节点注入的可选会话目标上下文。
+    pub session_goal_context: Option<String>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.

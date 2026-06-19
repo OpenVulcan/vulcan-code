@@ -102,6 +102,9 @@ pub enum PendingSessionPromptSource {
     /// Host-created session mailbox input that returns completed runtime work to the parent model.
     /// 宿主创建的会话 mailbox 输入，用于将已完成运行时工作回流给父级模型。
     SessionMailbox,
+    /// Host-created hidden continuation that advances an active session goal while the thread is idle.
+    /// 宿主创建的隐藏续跑输入，用于在线程空闲时推进活跃会话目标。
+    GoalContinuation,
 }
 
 impl PendingSessionPromptSource {
@@ -114,6 +117,12 @@ impl PendingSessionPromptSource {
     /// 对应应重置父级轮次界面的用户提示词时返回 `true`。
     pub fn starts_user_parent_turn(self) -> bool {
         matches!(self, Self::UserFollowup | Self::UserInterrupt)
+    }
+
+    /// Returns whether this source should be persisted as canonical user-authored conversation text.
+    /// 返回该来源是否应作为用户编写的规范会话文本持久化。
+    pub fn persists_canonical_user_message(self) -> bool {
+        self.starts_user_parent_turn()
     }
 
     /// Returns whether this source should run user-prompt precheck hooks.

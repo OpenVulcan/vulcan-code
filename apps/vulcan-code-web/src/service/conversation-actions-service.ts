@@ -70,6 +70,74 @@ export async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
   return serviceClient.request<WorkbenchSnapshot>("service_stop_conversation_run");
 }
 
+// saveSessionGoal persists a user-authored goal for the current conversation.
+// saveSessionGoal 为当前会话持久化用户编写的目标。
+export async function saveSessionGoal(
+  conversationId: string | null,
+  objective: string,
+  tokenBudget?: number | null,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_session_goal", {
+    request: {
+      conversationId,
+      objective,
+      tokenBudget: tokenBudget ?? null,
+    },
+  });
+}
+
+// resumeSessionGoal resumes a stopped goal as a fresh budget stage.
+// resumeSessionGoal 将已停止目标恢复为新的预算阶段。
+export async function resumeSessionGoal(
+  conversationId: string | null,
+  objective: string,
+  tokenBudget?: number | null,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_resume_session_goal", {
+    request: {
+      conversationId,
+      objective,
+      tokenBudget: tokenBudget ?? null,
+    },
+  });
+}
+
+// clearSessionGoal removes the persisted goal for the current conversation.
+// clearSessionGoal 移除当前会话的持久化目标。
+export async function clearSessionGoal(conversationId: string | null): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_clear_session_goal", {
+    request: {
+      conversationId,
+    },
+  });
+}
+
+// updateSessionGoalStatus updates the persisted lifecycle status for the current conversation goal.
+// updateSessionGoalStatus 更新当前会话目标的持久化生命周期状态。
+export async function updateSessionGoalStatus(
+  conversationId: string | null,
+  status: string,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_update_session_goal_status", {
+    request: {
+      conversationId,
+      status,
+    },
+  });
+}
+
 // compactSelectedConversationContext starts backend context compaction for the selected conversation.
 // compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
 export async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {

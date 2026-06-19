@@ -4691,6 +4691,92 @@ button {
   background: color-mix(in oklch, var(--muted) 64%, transparent);
 }
 
+.composer-goal-strip {
+  width: 90%;
+  min-height: 36px;
+  align-self: center;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: -10px;
+  padding: 7px 10px 9px;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  background: color-mix(in oklch, var(--card) 98%, var(--muted));
+  color: var(--muted-foreground);
+  pointer-events: auto;
+}
+
+.composer-goal-strip-status {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.composer-goal-strip-objective {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-goal-strip-budget {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.composer-goal-strip-button {
+  color: var(--muted-foreground);
+}
+
+.composer-goal-strip-button.text {
+  width: auto;
+  padding: 0 6px;
+  gap: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.composer-goal-strip-button:hover {
+  color: var(--foreground);
+}
+
+.composer-goal-dialog {
+  max-width: 420px;
+}
+
+.composer-goal-dialog-body {
+  display: grid;
+  gap: 10px;
+}
+
+.composer-goal-objective-input {
+  min-height: 160px;
+  resize: vertical;
+}
+
+.composer-goal-budget-input {
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 13px;
+  outline: none;
+}
+
+.composer-goal-budget-input:focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--ring) 20%, transparent);
+}
+
 .composer-attachment-input {
   display: none;
 }

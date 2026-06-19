@@ -110,6 +110,18 @@ interface ChatAreaProps {
   // Persists one session-scoped AI capability draft.
   // 持久化单个会话级 AI 能力草稿。
   onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
+  // Persists one user-authored session goal.
+  // 持久化单个用户编写的会话目标。
+  onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Resumes one stopped session goal with a fresh budget stage.
+  // 使用新的预算阶段继续单个已停止会话目标。
+  onResumeSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Clears the current user-authored session goal.
+  // 清理当前用户编写的会话目标。
+  onClearSessionGoal: () => Promise<boolean>;
+  // Updates the current session goal lifecycle status.
+  // 更新当前会话目标生命周期状态。
+  onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;
@@ -732,6 +744,10 @@ export function ChatArea(props: ChatAreaProps) {
       onComposerDockHeightChange={handleComposerDockHeightChange}
       onSubmitPrompt={props.onSubmitPrompt}
       onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
+      onSaveSessionGoal={props.onSaveSessionGoal}
+      onResumeSessionGoal={props.onResumeSessionGoal}
+      onClearSessionGoal={props.onClearSessionGoal}
+      onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
       onStopConversationRun={props.onStopConversationRun}
       onStageAttachmentBytes={props.onStageAttachmentBytes}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -741,6 +757,7 @@ export function ChatArea(props: ChatAreaProps) {
       isConversationRunning={isConversationRunning}
       thinkingOverlayEnabled={thinkingOverlayEnabled}
       reasoningSelection={props.workbench.reasoningSelection ?? null}
+      sessionGoal={isEmptyConversation ? null : props.workbench.sessionGoal ?? null}
       runtimeCue={isEmptyConversation ? null : runtimeCue}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
       onEditPendingPrompt={props.onEditPendingPrompt}

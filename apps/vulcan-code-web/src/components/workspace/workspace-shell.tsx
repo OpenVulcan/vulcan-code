@@ -200,6 +200,18 @@ interface WorkspaceShellProps {
   // Persists one session-scoped AI capability draft.
   // 持久化单个会话级 AI 能力草稿。
   onSaveAiCapabilityConfiguration: (request: ComposerAiCapabilityConfigurationSave) => Promise<boolean>;
+  // Persists one user-authored session goal.
+  // 持久化单个用户编写的会话目标。
+  onSaveSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Resumes one stopped session goal with a fresh budget stage.
+  // 使用新的预算阶段继续单个已停止会话目标。
+  onResumeSessionGoal: (objective: string, tokenBudget?: number | null) => Promise<boolean>;
+  // Clears the current user-authored session goal.
+  // 清理当前用户编写的会话目标。
+  onClearSessionGoal: () => Promise<boolean>;
+  // Updates the current session goal lifecycle status.
+  // 更新当前会话目标生命周期状态。
+  onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;
@@ -701,6 +713,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
         onSaveAiCapabilityConfiguration={props.onSaveAiCapabilityConfiguration}
+        onSaveSessionGoal={props.onSaveSessionGoal}
+        onResumeSessionGoal={props.onResumeSessionGoal}
+        onClearSessionGoal={props.onClearSessionGoal}
+        onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
         onStopConversationRun={props.onStopConversationRun}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
         onCloseSubagentPanel={props.onCloseSubagentPanel}
@@ -717,6 +733,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           props.selectedConversationId ?? "none",
           props.selectedDraftConversation?.id ?? "persisted",
           sessionTodoPlan ? "todo" : "no-todo",
+          props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
           sessionReviewSummary?.branchName ? "review-summary" : "no-review-summary",
           sessionTodoExpanded ? "todo-expanded" : "todo-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",

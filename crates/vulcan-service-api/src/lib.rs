@@ -231,6 +231,10 @@ pub struct WorkbenchSnapshot {
     /// 当前会话工具面板展示的会话 TODO 计划。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_todo_plan: Option<SessionTodoPlanSummary>,
+    /// Current session goal shown above the composer when present.
+    /// 当前会话存在时显示在输入区上方的会话目标。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_goal: Option<SessionGoalSummary>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -507,6 +511,62 @@ pub struct SessionTodoPlanItemSummary {
     /// Stable status key: pending, in_progress, or completed.
     /// 稳定状态键：pending、in_progress 或 completed。
     pub status: String,
+}
+
+/// Describes the current long-running goal for one selected session.
+/// 描述当前选中会话的长生命周期目标。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionGoalSummary {
+    /// Stable session identifier that owns this goal.
+    /// 拥有该目标的稳定会话标识。
+    pub session_id: String,
+    /// Stable goal version identifier used for stale update protection.
+    /// 用于过期更新保护的稳定目标版本标识。
+    pub goal_id: String,
+    /// Human-readable goal objective.
+    /// 人类可读的目标内容。
+    pub objective: String,
+    /// Stable status key: active, paused, blocked, usage_limited, budget_limited, or complete.
+    /// 稳定状态键：active、paused、blocked、usage_limited、budget_limited 或 complete。
+    pub status: String,
+    /// Optional explicit token budget.
+    /// 可选的显式 token 预算。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<i64>,
+    /// Accounted token usage.
+    /// 已记账 token 用量。
+    pub tokens_used: i64,
+    /// Live usage total displayed by the composer strip.
+    /// 输入区目标条展示的实时用量总数。
+    pub usage_tokens: i64,
+    /// Provider API calls observed for the current goal turn.
+    /// 当前目标轮次观测到的 Provider API 调用次数。
+    pub api_call_count: usize,
+    /// Tool calls observed for the current goal turn.
+    /// 当前目标轮次观测到的工具调用次数。
+    pub tool_call_count: usize,
+    /// Input tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的输入 Token 数。
+    pub input_tokens: i64,
+    /// Cache-hit input tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的缓存命中输入 Token 数。
+    pub cached_input_tokens: i64,
+    /// Output tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的输出 Token 数。
+    pub output_tokens: i64,
+    /// Total provider tokens observed for the current goal turn.
+    /// 当前目标轮次观测到的 Provider 总 Token 数。
+    pub total_tokens: i64,
+    /// Accounted wall-clock usage in seconds.
+    /// 已记账墙钟用量秒数。
+    pub time_used_seconds: i64,
+    /// Creation timestamp in Unix epoch milliseconds.
+    /// Unix 纪元毫秒格式的创建时间。
+    pub created_at_ms: i64,
+    /// Last update timestamp in Unix epoch milliseconds.
+    /// Unix 纪元毫秒格式的最近更新时间。
+    pub updated_at_ms: i64,
 }
 
 /// Describes the subagent navigation surface for one selected parent conversation.

@@ -7,6 +7,7 @@ import {
   Music2,
   Paperclip,
   Plus,
+  Target,
   Video,
   X,
 } from "lucide-react";
@@ -46,6 +47,9 @@ export function ComposerAttachmentMenu(props: {
   // Updates the thinking display preference from the plus menu.
   // 从加号菜单更新思考展示偏好。
   onThinkingOverlayEnabledChange: (enabled: boolean) => void;
+  // Opens the session goal editor from the plus menu.
+  // 从加号菜单打开会话目标编辑器。
+  onOpenGoal: () => void;
 }) {
   const menuCapabilities = props.capabilities.filter((capability) => ["image", "video", "audio", "pdf"].includes(capability.kind));
   return (
@@ -108,6 +112,10 @@ export function ComposerAttachmentMenu(props: {
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <DropdownMenuItem onSelect={props.onOpenGoal}>
+          <Target size={15} />
+          <span>目标</span>
+        </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

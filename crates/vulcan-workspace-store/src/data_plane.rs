@@ -27,7 +27,7 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Shared schema version stored in the application metadata table.
 /// 存储在应用元数据表中的共享结构版本号。
-pub const APP_SCHEMA_VERSION: i64 = 9;
+pub const APP_SCHEMA_VERSION: i64 = 10;
 
 /// Long-lived controller handle kept by the GUI after startup succeeds.
 /// 启动成功后由图形界面持有的长生命周期控制器句柄。
@@ -304,6 +304,33 @@ ON workspace_session_index(project_id, archived, sort_order ASC, updated_at DESC
 "#,
     )
     .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE TABLE IF NOT EXISTS thread_goals (
+    thread_id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL,
+    token_budget INTEGER,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    time_used_seconds INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+"#,
+    )
+    .await?;
+    ensure_optional_schema_statement(
+        client,
+        sqlite_binding_id,
+        r#"
+CREATE INDEX IF NOT EXISTS idx_thread_goals_status
+ON thread_goals(status, updated_at_ms DESC);
+"#,
+    )
+    .await?;
     Ok(())
 }
 
@@ -442,6 +469,21 @@ CREATE TABLE IF NOT EXISTS workspace_session_index (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_session_index_project
 ON workspace_session_index(project_id, archived, sort_order ASC, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS thread_goals (
+    thread_id TEXT PRIMARY KEY,
+    goal_id TEXT NOT NULL,
+    objective TEXT NOT NULL,
+    status TEXT NOT NULL,
+    token_budget INTEGER,
+    tokens_used INTEGER NOT NULL DEFAULT 0,
+    time_used_seconds INTEGER NOT NULL DEFAULT 0,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_thread_goals_status
+ON thread_goals(status, updated_at_ms DESC);
 "#,
         schema_version = APP_SCHEMA_VERSION,
     )
