@@ -32,7 +32,6 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { DEFAULT_WORKSPACE_FILE_FILTERS } from "@/service/workbench-snapshot-service";
@@ -57,6 +56,10 @@ const workspaceFilesPanelCacheLimit = 12;
 // workspaceFilesPanelCache 在右侧栏卸载期间保留文件面板状态。
 const workspaceFilesPanelCache = new Map<string, WorkspaceFilesPanelCacheEntry>();
 
+// workspaceFileFilterStorageKey stores the global persisted file filter preference key.
+// workspaceFileFilterStorageKey 保存全局持久化文件过滤偏好的键名。
+const workspaceFileFilterStorageKey = "vulcan.workspace.files.filters.v1";
+
 // WorkspaceFilesPanelCacheEntry stores one right file panel state snapshot.
 // WorkspaceFilesPanelCacheEntry 保存单个右侧文件面板状态快照。
 interface WorkspaceFilesPanelCacheEntry {
@@ -66,12 +69,15 @@ interface WorkspaceFilesPanelCacheEntry {
   // Selected file absolute path.
   // 已选中文件的绝对路径。
   selectedPath: string | null;
+  // Selected file entry snapshot used when its parent directory is not loaded yet.
+  // 已选中文件条目快照，用于其父目录尚未加载时恢复预览。
+  selectedEntry: WorkspaceFileEntrySummary | null;
   // Active filter text.
   // 当前过滤文本。
   filterText: string;
-  // Active file tree filters.
-  // 当前文件树过滤器。
-  filters: WorkspaceFileFilterOptions;
+  // Whether the directory drawer was pinned open.
+  // 目录抽屉是否被固定展开。
+  drawerPinnedOpen: boolean;
   // Cached directory listings keyed by absolute directory path.
   // 按绝对目录路径缓存的目录列表。
   directories: [string, WorkspaceFileDirectoryListing][];
@@ -80,6 +86,9 @@ interface WorkspaceFilesPanelCacheEntry {
 // WorkspaceFilesPanelHost owns workspace file tree and preview state for the right context panel.
 // WorkspaceFilesPanelHost 持有右侧上下文面板的工作区文件树与预览状态。
 export function WorkspaceFilesPanelHost(props: {
+  // Unique dynamic context tab instance id.
+  // 唯一动态上下文页签实例标识。
+  instanceId: string;
   // Current draft conversation selection when the selected route is not persisted yet.
   // 当前路由尚未持久化时对应的草稿会话选择。
   selectedDraftConversation: WorkspaceReviewDraftConversation | null;
@@ -113,6 +122,9 @@ export function WorkspaceFilesPanelHost(props: {
   // Copies text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制文本。
   onCopyText: (text: string) => void;
+  // Updates the parent dynamic tab title.
+  // 更新父级动态页签标题。
+  onTitleChange: (title: string) => void;
 }) {
   // activeSurfaceId stores the conversation or subagent surface represented by this panel.
   // activeSurfaceId 保存当前面板代表的会话或子代理界面标识。
@@ -132,8 +144,8 @@ export function WorkspaceFilesPanelHost(props: {
   // cacheKey stores the cache bucket for this visible conversation surface.
   // cacheKey 保存当前可见会话界面的缓存桶。
   const cacheKey = React.useMemo(
-    () => workspaceFilesPanelCacheKey(activeSurfaceId, workspacePath),
-    [activeSurfaceId, workspacePath],
+    () => workspaceFilesPanelCacheKey(activeSurfaceId, workspacePath, props.instanceId),
+    [activeSurfaceId, props.instanceId, workspacePath],
   );
   // initialCache restores state from a previously collapsed panel.
   // initialCache 从先前折叠的面板恢复状态。
@@ -141,14 +153,22 @@ export function WorkspaceFilesPanelHost(props: {
   // filters stores the active backend file tree filtering options.
   // filters 保存当前后端文件树过滤选项。
   const [filters, setFilters] = React.useState<WorkspaceFileFilterOptions>(() => (
-    initialCache?.filters ?? DEFAULT_WORKSPACE_FILE_FILTERS
+    readPersistedWorkspaceFileFilters()
   ));
+  // listingFilters stores tree filters with media always visible in the directory tree.
+  // listingFilters 保存目录树过滤器，并始终让媒体文件在目录树中可见。
+  const listingFilters = React.useMemo(
+    () => workspaceFileListingFilters(filters),
+    [filters.ignoreDotNames, filters.ignoreHidden, filters.useGitignore, filters.useIgnoreFiles],
+  );
   // filterText stores the local file tree filter query.
   // filterText 保存本地文件树过滤查询。
   const [filterText, setFilterText] = React.useState(() => initialCache?.filterText ?? "");
   // fileTreeDrawerPinnedOpen stores the shared drawer pin state for the file tab.
   // fileTreeDrawerPinnedOpen 保存文件标签页共享抽屉的固定展开状态。
-  const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(true);
+  const [fileTreeDrawerPinnedOpen, setFileTreeDrawerPinnedOpen] = React.useState(() => (
+    initialCache?.drawerPinnedOpen ?? !initialCache?.selectedPath
+  ));
   // expandedPaths stores absolute directory paths expanded in the tree.
   // expandedPaths 保存文件树中已展开的绝对目录路径。
   const [expandedPaths, setExpandedPaths] = React.useState<Set<string>>(
@@ -165,6 +185,11 @@ export function WorkspaceFilesPanelHost(props: {
   // selectedPath stores the current selected file path.
   // selectedPath 保存当前选中文件路径。
   const [selectedPath, setSelectedPath] = React.useState<string | null>(() => initialCache?.selectedPath ?? null);
+  // selectedEntrySnapshot stores the latest selected file row outside the loaded tree.
+  // selectedEntrySnapshot 在已加载目录树之外保存最近选中的文件行。
+  const [selectedEntrySnapshot, setSelectedEntrySnapshot] = React.useState<WorkspaceFileEntrySummary | null>(
+    () => initialCache?.selectedEntry ?? null,
+  );
   // preview stores the latest loaded file preview response.
   // preview 保存最近加载的文件预览响应。
   const [preview, setPreview] = React.useState<WorkspaceFileReadResponse | null>(null);
@@ -174,12 +199,21 @@ export function WorkspaceFilesPanelHost(props: {
   // previewError stores the latest file preview error.
   // previewError 保存最近一次文件预览错误。
   const [previewError, setPreviewError] = React.useState<string | null>(null);
+  // mediaPermissionEntry stores the selected media file waiting for display consent.
+  // mediaPermissionEntry 保存正在等待展示许可的已选中媒体文件。
+  const [mediaPermissionEntry, setMediaPermissionEntry] = React.useState<WorkspaceFileEntrySummary | null>(null);
   // panelError stores the latest directory loading error.
   // panelError 保存最近一次目录加载错误。
   const [panelError, setPanelError] = React.useState<string | null>(null);
-  // filtersKey stores a stable string used to refresh the root after filter changes.
-  // filtersKey 保存过滤变化后刷新根目录使用的稳定字符串。
-  const filtersKey = React.useMemo(() => JSON.stringify(filters), [filters]);
+  // listingFiltersKey stores a stable string used to refresh the root after tree filter changes.
+  // listingFiltersKey 保存目录树过滤变化后刷新根目录使用的稳定字符串。
+  const listingFiltersKey = React.useMemo(() => JSON.stringify(listingFilters), [listingFilters]);
+  // loadedInitialDirectoryRef separates first directory hydration from user filter changes.
+  // loadedInitialDirectoryRef 区分首次目录水合与用户过滤规则变化。
+  const loadedInitialDirectoryRef = React.useRef(false);
+  // skipNextDirectoryResetRef prevents cache hydration from looking like a user filter change.
+  // skipNextDirectoryResetRef 防止缓存水合被误判为用户过滤规则变化。
+  const skipNextDirectoryResetRef = React.useRef(false);
 
   // loadDirectory fetches one directory and merges it into the directory cache.
   // loadDirectory 获取单个目录并合并到目录缓存。
@@ -196,7 +230,7 @@ export function WorkspaceFilesPanelHost(props: {
         workspaceProjectId,
         props.selectedConversationId,
         directoryPath,
-        filters,
+        listingFilters,
       );
       setDirectories((current) => {
         const next = new Map(current);
@@ -215,40 +249,55 @@ export function WorkspaceFilesPanelHost(props: {
         return next;
       });
     }
-  }, [filters, props.loadWorkspaceFileDirectory, props.selectedConversationId, workspacePath, workspaceProjectId]);
-
-  React.useEffect(() => {
-    setDirectories(new Map());
-    setPreview(null);
-    setPreviewError(null);
-    setPanelError(null);
-    setSelectedPath(null);
-    void loadDirectory(null);
-  }, [filtersKey, loadDirectory, workspacePath]);
+  }, [listingFilters, props.loadWorkspaceFileDirectory, props.selectedConversationId, workspacePath, workspaceProjectId]);
 
   React.useEffect(() => {
     const nextCache = workspaceFilesPanelCache.get(cacheKey) ?? null;
-    setFilters(nextCache?.filters ?? DEFAULT_WORKSPACE_FILE_FILTERS);
+    loadedInitialDirectoryRef.current = false;
+    skipNextDirectoryResetRef.current = true;
+    setFilters(readPersistedWorkspaceFileFilters());
     setFilterText(nextCache?.filterText ?? "");
     setExpandedPaths(new Set(nextCache?.expandedPaths ?? []));
     setDirectories(new Map(nextCache?.directories ?? []));
     setSelectedPath(nextCache?.selectedPath ?? null);
+    setSelectedEntrySnapshot(nextCache?.selectedEntry ?? null);
+    setFileTreeDrawerPinnedOpen(nextCache?.drawerPinnedOpen ?? !nextCache?.selectedPath);
     setPreview(null);
     setPreviewError(null);
+    setMediaPermissionEntry(null);
     setPanelError(null);
   }, [cacheKey]);
 
   React.useEffect(() => {
+    if (!loadedInitialDirectoryRef.current || skipNextDirectoryResetRef.current) {
+      loadedInitialDirectoryRef.current = true;
+      skipNextDirectoryResetRef.current = false;
+      void loadDirectory(null);
+      return;
+    }
+    setDirectories(new Map());
+    setPreview(null);
+    setPreviewError(null);
+    setMediaPermissionEntry(null);
+    setPanelError(null);
+    setSelectedPath(null);
+    setSelectedEntrySnapshot(null);
+    props.onTitleChange("打开文件");
+    void loadDirectory(null);
+  }, [listingFiltersKey, loadDirectory, props.onTitleChange, workspacePath]);
+
+  React.useEffect(() => {
     const cacheEntry: WorkspaceFilesPanelCacheEntry = {
       directories: Array.from(directories.entries()),
+      drawerPinnedOpen: fileTreeDrawerPinnedOpen,
       expandedPaths: Array.from(expandedPaths),
       filterText,
-      filters,
+      selectedEntry: selectedEntrySnapshot,
       selectedPath,
     };
     workspaceFilesPanelCache.set(cacheKey, cacheEntry);
     trimWorkspaceFilesPanelCache();
-  }, [cacheKey, directories, expandedPaths, filterText, filters, selectedPath]);
+  }, [cacheKey, directories, expandedPaths, fileTreeDrawerPinnedOpen, filterText, selectedEntrySnapshot, selectedPath]);
 
   // rootListing stores the currently loaded root directory listing.
   // rootListing 保存当前已加载的根目录列表。
@@ -256,8 +305,8 @@ export function WorkspaceFilesPanelHost(props: {
   // selectedEntry stores the selected file row from the loaded tree.
   // selectedEntry 从已加载树中保存当前选中文件行。
   const selectedEntry = React.useMemo(
-    () => selectedPath ? findWorkspaceFileEntry(directories, selectedPath) : null,
-    [directories, selectedPath],
+    () => selectedPath ? findWorkspaceFileEntry(directories, selectedPath) ?? selectedEntrySnapshot : null,
+    [directories, selectedEntrySnapshot, selectedPath],
   );
   // fileTree stores the project listing in the shared review-tree node format.
   // fileTree 以共享审核目录树节点格式保存项目文件列表。
@@ -278,15 +327,22 @@ export function WorkspaceFilesPanelHost(props: {
     }
   }, [directories, loadDirectory]);
 
-  // selectFile loads a preview for one file row.
-  // selectFile 为单个文件行加载预览。
-  const selectFile = React.useCallback(async (entry: WorkspaceFileEntrySummary) => {
-    if (!workspacePath || entry.isDirectory) {
+  // loadFilePreview loads the preview payload for one already selected file.
+  // loadFilePreview 为一个已选中文件加载预览载荷。
+  const loadFilePreview = React.useCallback(async (
+    // File entry to preview.
+    // 需要预览的文件条目。
+    entry: WorkspaceFileEntrySummary,
+    // Filters used by the backend preview permission check.
+    // 后端预览权限检查使用的过滤器。
+    previewFilters: WorkspaceFileFilterOptions,
+  ) => {
+    if (!workspacePath) {
       return;
     }
-    setSelectedPath(entry.path);
     setPreview(null);
     setPreviewError(null);
+    setMediaPermissionEntry(null);
     setPreviewLoading(true);
     try {
       const response = await props.loadWorkspaceFilePreview(
@@ -294,15 +350,58 @@ export function WorkspaceFilesPanelHost(props: {
         workspaceProjectId,
         props.selectedConversationId,
         entry.path,
-        filters,
+        previewFilters,
       );
       setPreview(response);
     } catch (error) {
-      setPreviewError(error instanceof Error ? error.message : String(error));
+      setPreviewError(workspaceFilePreviewErrorMessage(error, entry));
     } finally {
       setPreviewLoading(false);
     }
-  }, [filters, props.loadWorkspaceFilePreview, props.selectedConversationId, workspacePath, workspaceProjectId]);
+  }, [props.loadWorkspaceFilePreview, props.selectedConversationId, workspacePath, workspaceProjectId]);
+
+  React.useEffect(() => {
+    // Restored file tabs must reload their previous preview even before the tree is reopened.
+    // 恢复的文件页签必须在目录树重新展开前重新加载上次预览。
+    if (!selectedEntry || selectedEntry.isDirectory || preview || previewLoading || previewError || mediaPermissionEntry) {
+      return;
+    }
+    if (workspaceFileEntryNeedsMediaPermission(selectedEntry, filters)) {
+      setMediaPermissionEntry(selectedEntry);
+      return;
+    }
+    void loadFilePreview(selectedEntry, filters);
+  }, [filters, loadFilePreview, mediaPermissionEntry, preview, previewError, previewLoading, selectedEntry]);
+
+  // selectFile loads a preview for one file row.
+  // selectFile 为单个文件行加载预览。
+  const selectFile = React.useCallback(async (entry: WorkspaceFileEntrySummary) => {
+    if (!workspacePath || entry.isDirectory) {
+      return;
+    }
+    setSelectedPath(entry.path);
+    setSelectedEntrySnapshot(entry);
+    props.onTitleChange(entry.name || workspaceFileNameFromPath(entry.relativePath || entry.path));
+    if (workspaceFileEntryNeedsMediaPermission(entry, filters)) {
+      setPreview(null);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      setMediaPermissionEntry(entry);
+      return;
+    }
+    await loadFilePreview(entry, filters);
+  }, [filters, loadFilePreview, props.onTitleChange, workspacePath]);
+
+  // allowMediaPreview grants one media kind and immediately opens the selected media file.
+  // allowMediaPreview 授权单个媒体类型并立即打开已选中的媒体文件。
+  const allowMediaPreview = React.useCallback((entry: WorkspaceFileEntrySummary) => {
+    // nextFilters stores the persisted media display preference after consent.
+    // nextFilters 保存授权后的持久化媒体展示偏好。
+    const nextFilters = workspaceFileFiltersWithMediaPermission(filters, entry.kind);
+    persistWorkspaceFileFilters(nextFilters);
+    setFilters(nextFilters);
+    void loadFilePreview(entry, nextFilters);
+  }, [filters, loadFilePreview]);
 
   // copyFileContent loads and copies one code file's textual preview content.
   // copyFileContent 加载并复制单个代码文件的文本预览内容。
@@ -328,17 +427,26 @@ export function WorkspaceFilesPanelHost(props: {
   // updateFilter toggles one backend file tree filter field.
   // updateFilter 切换单个后端文件树过滤字段。
   const updateFilter = React.useCallback((key: keyof WorkspaceFileFilterOptions, value: boolean) => {
-    setFilters((current) => ({ ...current, [key]: value }));
+    setFilters((current) => {
+      // next stores the updated global filter preference.
+      // next 保存更新后的全局过滤偏好。
+      const next = { ...current, [key]: value };
+      persistWorkspaceFileFilters(next);
+      return next;
+    });
   }, []);
   // closePreviewAndShowTree clears the file preview and reopens the shared directory drawer.
   // closePreviewAndShowTree 清空文件预览并重新打开共享目录抽屉。
   const closePreviewAndShowTree = React.useCallback(() => {
     setSelectedPath(null);
+    setSelectedEntrySnapshot(null);
     setPreview(null);
     setPreviewError(null);
+    setMediaPermissionEntry(null);
     setPreviewLoading(false);
     setFileTreeDrawerPinnedOpen(true);
-  }, []);
+    props.onTitleChange("打开文件");
+  }, [props.onTitleChange]);
 
   if (!workspacePath) {
     return (
@@ -393,8 +501,11 @@ export function WorkspaceFilesPanelHost(props: {
           entry={selectedEntry}
           error={previewError}
           loading={previewLoading}
+          missingPath={selectedPath && !selectedEntry ? selectedPath : null}
           preview={preview}
+          mediaPermissionEntry={mediaPermissionEntry}
           resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+          onAllowMediaPreview={allowMediaPreview}
           onClosePreview={closePreviewAndShowTree}
         />
       </div>
@@ -444,20 +555,6 @@ function WorkspaceFilesFilterMenu(props: {
           onCheckedChange={(value) => props.onFilterChange("useGitignore", Boolean(value))}
         >
           使用 .gitignore 规则
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuLabel>媒体显示</DropdownMenuLabel>
-        <DropdownMenuCheckboxItem
-          checked={props.filters.allowImages}
-          onCheckedChange={(value) => props.onFilterChange("allowImages", Boolean(value))}
-        >
-          允许图片显示
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={props.filters.allowVideos}
-          onCheckedChange={(value) => props.onFilterChange("allowVideos", Boolean(value))}
-        >
-          允许视频显示
         </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -511,9 +608,15 @@ function WorkspaceFilePreview(props: {
   // Selected file entry.
   // 当前选中文件条目。
   entry: WorkspaceFileEntrySummary | null;
+  // Selected file path when its entry can no longer be resolved.
+  // 无法再解析已选中文件条目时的选中文件路径。
+  missingPath: string | null;
   // Loaded preview response.
   // 已加载预览响应。
   preview: WorkspaceFileReadResponse | null;
+  // Selected media file waiting for display permission.
+  // 等待展示许可的已选中媒体文件。
+  mediaPermissionEntry: WorkspaceFileEntrySummary | null;
   // Whether a preview request is running.
   // 预览请求是否正在运行。
   loading: boolean;
@@ -523,11 +626,21 @@ function WorkspaceFilePreview(props: {
   // Resolves media file paths into renderable URLs.
   // 将媒体文件路径解析为可渲染 URL。
   resolveMediaSourceUrl: (path: string) => string;
+  // Grants media display permission and opens the selected media file.
+  // 授权媒体展示并打开已选中的媒体文件。
+  onAllowMediaPreview: (entry: WorkspaceFileEntrySummary) => void;
   // Closes the current preview and opens the directory drawer.
   // 关闭当前预览并打开目录抽屉。
   onClosePreview: () => void;
 }) {
   if (!props.entry) {
+    if (props.missingPath) {
+      return (
+        <WorkspaceMissingFilePreview
+          missingPath={props.missingPath}
+        />
+      );
+    }
     return (
       <div className="workspace-file-preview empty">
         <FileText size={24} />
@@ -541,6 +654,14 @@ function WorkspaceFilePreview(props: {
   }
   if (props.error) {
     return <div className="workspace-file-preview empty error">{props.error}</div>;
+  }
+  if (props.mediaPermissionEntry && props.entry.path === props.mediaPermissionEntry.path) {
+    return (
+      <WorkspaceMediaPermissionPrompt
+        entry={props.mediaPermissionEntry}
+        onAllowMediaPreview={props.onAllowMediaPreview}
+      />
+    );
   }
   if (!props.preview) {
     return <div className="workspace-file-preview empty">暂无预览内容。</div>;
@@ -565,6 +686,47 @@ function WorkspaceFilePreview(props: {
     <div className="workspace-file-preview code">
       <WorkspaceFilePreviewHeader preview={props.preview} onClosePreview={props.onClosePreview} />
       <WorkspaceHighlightedCodePreview preview={props.preview} />
+    </div>
+  );
+}
+
+// WorkspaceMissingFilePreview renders a moved-or-deleted selected file notice.
+// WorkspaceMissingFilePreview 渲染已选中文件被移动或删除的提示。
+function WorkspaceMissingFilePreview(props: {
+  // Previously selected file path that no longer resolves in the tree.
+  // 先前选中但已无法在目录树中解析的文件路径。
+  missingPath: string;
+}) {
+  return (
+    <div className="workspace-file-preview empty error">
+      <FileText size={24} />
+      <strong>文件已被删除或移动</strong>
+      <span>{props.missingPath}</span>
+    </div>
+  );
+}
+
+// WorkspaceMediaPermissionPrompt asks before enabling image or video previews.
+// WorkspaceMediaPermissionPrompt 在启用图片或视频预览前请求确认。
+function WorkspaceMediaPermissionPrompt(props: {
+  // Selected media entry waiting for consent.
+  // 等待授权的已选中媒体条目。
+  entry: WorkspaceFileEntrySummary;
+  // Grants media display permission and opens the selected media file.
+  // 授权媒体展示并打开已选中的媒体文件。
+  onAllowMediaPreview: (entry: WorkspaceFileEntrySummary) => void;
+}) {
+  // mediaLabel stores the localized media kind name.
+  // mediaLabel 保存本地化媒体类型名称。
+  const mediaLabel = props.entry.kind === "video" ? "视频" : "图片";
+  return (
+    <div className="workspace-file-preview empty media-permission">
+      <FileText size={24} />
+      <strong>{mediaLabel}文件不允许展示</strong>
+      <span>是否允许展示当前{mediaLabel}文件？允许后同类文件会直接预览。</span>
+      <Button size="sm" type="button" onClick={() => props.onAllowMediaPreview(props.entry)}>
+        允许显示{mediaLabel}
+      </Button>
     </div>
   );
 }
@@ -901,8 +1063,150 @@ function rootWorkspaceFileListing(
 
 // workspaceFilesPanelCacheKey builds a stable cache key for one visible file panel surface.
 // workspaceFilesPanelCacheKey 为单个可见文件面板界面构建稳定缓存键。
-function workspaceFilesPanelCacheKey(surfaceId: string | null, workspacePath: string | null): string {
-  return `${surfaceId ?? "none"}:${workspacePath ?? "none"}`;
+function workspaceFilesPanelCacheKey(
+  // Conversation or subagent surface id.
+  // 会话或子代理界面标识。
+  surfaceId: string | null,
+  // Workspace root path.
+  // 工作区根路径。
+  workspacePath: string | null,
+  // Dynamic file tab instance id.
+  // 动态文件页签实例标识。
+  instanceId: string,
+): string {
+  return `${surfaceId ?? "none"}:${workspacePath ?? "none"}:${instanceId}`;
+}
+
+// workspaceFileListingFilters keeps media files visible while preserving real tree filters.
+// workspaceFileListingFilters 保持媒体文件在目录树中可见，同时保留真实目录过滤条件。
+function workspaceFileListingFilters(
+  // Current file filter preferences.
+  // 当前文件过滤偏好。
+  filters: WorkspaceFileFilterOptions,
+): WorkspaceFileFilterOptions {
+  return {
+    ...filters,
+    allowImages: true,
+    allowVideos: true,
+  };
+}
+
+// workspaceFileEntryNeedsMediaPermission returns whether a selected media file needs consent.
+// workspaceFileEntryNeedsMediaPermission 返回已选中媒体文件是否需要展示授权。
+function workspaceFileEntryNeedsMediaPermission(
+  // Selected file entry.
+  // 已选中文件条目。
+  entry: WorkspaceFileEntrySummary,
+  // Current file filter preferences.
+  // 当前文件过滤偏好。
+  filters: WorkspaceFileFilterOptions,
+): boolean {
+  return (entry.kind === "image" && !filters.allowImages)
+    || (entry.kind === "video" && !filters.allowVideos);
+}
+
+// workspaceFileFiltersWithMediaPermission enables the selected media kind.
+// workspaceFileFiltersWithMediaPermission 启用已选中的媒体类型。
+function workspaceFileFiltersWithMediaPermission(
+  // Current file filter preferences.
+  // 当前文件过滤偏好。
+  filters: WorkspaceFileFilterOptions,
+  // Selected entry kind.
+  // 已选中条目的类型。
+  kind: WorkspaceFileEntrySummary["kind"],
+): WorkspaceFileFilterOptions {
+  if (kind === "image") {
+    return { ...filters, allowImages: true };
+  }
+  if (kind === "video") {
+    return { ...filters, allowVideos: true };
+  }
+  return filters;
+}
+
+// workspaceFilePreviewErrorMessage converts backend preview failures into user-facing text.
+// workspaceFilePreviewErrorMessage 将后端预览失败转换为面向用户的提示文本。
+function workspaceFilePreviewErrorMessage(
+  // Preview load error from the service edge.
+  // 来自服务边界的预览加载错误。
+  error: unknown,
+  // File entry that was being previewed.
+  // 正在预览的文件条目。
+  entry: WorkspaceFileEntrySummary,
+): string {
+  // message stores the raw backend or runtime error text.
+  // message 保存后端或运行时返回的原始错误文本。
+  const message = error instanceof Error ? error.message : String(error);
+  // normalizedMessage stores a lowercase copy used for portable missing-file detection.
+  // normalizedMessage 保存小写副本，用于跨平台判断文件缺失。
+  const normalizedMessage = message.toLowerCase();
+  if (
+    message.includes("读取文件元数据失败")
+    || message.includes("系统找不到指定的文件")
+    || normalizedMessage.includes("no such file")
+    || normalizedMessage.includes("not found")
+    || normalizedMessage.includes("cannot find")
+  ) {
+    return `文件已被删除或移动，无法预览：${entry.relativePath || entry.path}`;
+  }
+  return message;
+}
+
+// readPersistedWorkspaceFileFilters reads global file filter preferences from localStorage.
+// readPersistedWorkspaceFileFilters 从 localStorage 读取全局文件过滤偏好。
+function readPersistedWorkspaceFileFilters(): WorkspaceFileFilterOptions {
+  if (typeof window === "undefined") {
+    return DEFAULT_WORKSPACE_FILE_FILTERS;
+  }
+  try {
+    // rawValue stores the serialized filter preference payload.
+    // rawValue 保存序列化后的过滤偏好载荷。
+    const rawValue = window.localStorage.getItem(workspaceFileFilterStorageKey);
+    if (!rawValue) {
+      return DEFAULT_WORKSPACE_FILE_FILTERS;
+    }
+    // parsedValue stores the untrusted localStorage payload.
+    // parsedValue 保存来自 localStorage 的未可信载荷。
+    const parsedValue = JSON.parse(rawValue) as Partial<WorkspaceFileFilterOptions>;
+    return normalizeWorkspaceFileFilters(parsedValue);
+  } catch {
+    return DEFAULT_WORKSPACE_FILE_FILTERS;
+  }
+}
+
+// persistWorkspaceFileFilters writes global file filter preferences to localStorage.
+// persistWorkspaceFileFilters 将全局文件过滤偏好写入 localStorage。
+function persistWorkspaceFileFilters(
+  // Filter preferences to persist.
+  // 需要持久化的过滤偏好。
+  filters: WorkspaceFileFilterOptions,
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(workspaceFileFilterStorageKey, JSON.stringify(normalizeWorkspaceFileFilters(filters)));
+  } catch {
+    // Ignore storage failures so file browsing still works in restricted WebViews.
+    // 忽略存储失败，确保受限 WebView 中仍可继续浏览文件。
+  }
+}
+
+// normalizeWorkspaceFileFilters merges untrusted filter payloads with current defaults.
+// normalizeWorkspaceFileFilters 将未可信过滤载荷与当前默认值合并。
+function normalizeWorkspaceFileFilters(
+  // Partial persisted filter preferences.
+  // 部分持久化过滤偏好。
+  filters: Partial<WorkspaceFileFilterOptions>,
+): WorkspaceFileFilterOptions {
+  return {
+    allowImages: typeof filters.allowImages === "boolean" ? filters.allowImages : DEFAULT_WORKSPACE_FILE_FILTERS.allowImages,
+    allowVideos: typeof filters.allowVideos === "boolean" ? filters.allowVideos : DEFAULT_WORKSPACE_FILE_FILTERS.allowVideos,
+    ignoreDotNames: typeof filters.ignoreDotNames === "boolean" ? filters.ignoreDotNames : DEFAULT_WORKSPACE_FILE_FILTERS.ignoreDotNames,
+    ignoreHidden: typeof filters.ignoreHidden === "boolean" ? filters.ignoreHidden : DEFAULT_WORKSPACE_FILE_FILTERS.ignoreHidden,
+    useGitignore: typeof filters.useGitignore === "boolean" ? filters.useGitignore : DEFAULT_WORKSPACE_FILE_FILTERS.useGitignore,
+    useIgnoreFiles: typeof filters.useIgnoreFiles === "boolean" ? filters.useIgnoreFiles : DEFAULT_WORKSPACE_FILE_FILTERS.useIgnoreFiles,
+  };
 }
 
 // trimWorkspaceFilesPanelCache trims old panel cache entries after new writes.
@@ -915,4 +1219,31 @@ function trimWorkspaceFilesPanelCache() {
     }
     workspaceFilesPanelCache.delete(firstKey);
   }
+}
+
+// forgetWorkspaceFilesPanelCacheInstance removes runtime cache for a closed file tab.
+// forgetWorkspaceFilesPanelCacheInstance 移除已关闭文件页签的运行期缓存。
+export function forgetWorkspaceFilesPanelCacheInstance(
+  // Dynamic file tab instance id.
+  // 动态文件页签实例标识。
+  instanceId: string,
+): void {
+  for (const key of Array.from(workspaceFilesPanelCache.keys())) {
+    if (key.endsWith(`:${instanceId}`)) {
+      workspaceFilesPanelCache.delete(key);
+    }
+  }
+}
+
+// workspaceFileNameFromPath extracts a display file name from a path string.
+// workspaceFileNameFromPath 从路径字符串中提取展示文件名。
+function workspaceFileNameFromPath(
+  // Relative or absolute file path.
+  // 相对或绝对文件路径。
+  path: string,
+): string {
+  // normalizedPath stores slash-normalized path text.
+  // normalizedPath 保存斜杠规整后的路径文本。
+  const normalizedPath = path.replace(/\\/g, "/");
+  return normalizedPath.split("/").filter(Boolean).pop() ?? "打开文件";
 }

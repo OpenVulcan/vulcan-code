@@ -1,5 +1,5 @@
 import React from "react";
-import { BrainCircuit, Database, Search, Trash2 } from "lucide-react";
+import { Brain, BrainCircuit, Database, Search, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -154,8 +154,14 @@ export function WorkspaceMemoryPanel(props: {
   return (
     <Tabs className="context-injection-tabs" defaultValue="dynamic">
       <TabsList className="context-injection-tabs-list">
-        <TabsTrigger value="dynamic">{t("contextPanel.dynamic")}</TabsTrigger>
-        <TabsTrigger value="static">{t("contextPanel.static")}</TabsTrigger>
+        <TabsTrigger value="dynamic">
+          <BrainCircuit className="context-injection-tab-icon left-brain" size={13} />
+          <span>{t("contextPanel.dynamic")}</span>
+        </TabsTrigger>
+        <TabsTrigger value="static">
+          <Brain className="context-injection-tab-icon right-brain" size={13} />
+          <span>{t("contextPanel.static")}</span>
+        </TabsTrigger>
       </TabsList>
       <TabsContent className="context-injection-tab-content" value="dynamic">
         <ContextInjectionCardList

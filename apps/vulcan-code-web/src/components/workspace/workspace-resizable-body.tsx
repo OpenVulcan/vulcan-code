@@ -2,7 +2,8 @@ import React from "react";
 import { SubagentNavigationMenu } from "@/components/conversation/conversation-chrome";
 import {
   WorkspaceContextPanel,
-  type WorkspaceContextPanelTab,
+  type WorkspaceContextTabItem,
+  type WorkspaceContextTabKind,
   type WorkspaceContextPanelProps,
 } from "@/components/workspace/WorkspaceContextPanel";
 import { AdaptiveToolPanel } from "@/components/workspace/adaptive-tool-panel";
@@ -52,12 +53,12 @@ export function WorkspaceResizableBody(props: {
   // Whether the right context panel floats over the main area.
   // 右侧上下文面板是否浮动覆盖主区域。
   rightPanelFloating: boolean;
-  // Active right context panel tab remembered across collapse and expand.
-  // 跨折叠与展开记忆的右侧上下文面板当前标签页。
-  contextPanelActiveTab: WorkspaceContextPanelTab;
-  // Updates the remembered right context panel tab.
-  // 更新记忆中的右侧上下文面板标签页。
-  onContextPanelActiveTabChange: (tab: WorkspaceContextPanelTab) => void;
+  // Opened right context panel tabs.
+  // 已打开的右侧上下文面板页签。
+  contextPanelTabs: WorkspaceContextTabItem[];
+  // Active right context panel tab id.
+  // 当前活动的右侧上下文面板页签标识。
+  contextPanelActiveTabId: string | null;
   // Monotonic request id used to focus the review panel on uncommitted changes.
   // 用于让审核面板聚焦未提交变更的单调请求标识。
   reviewFocusRequest: number;
@@ -106,6 +107,18 @@ export function WorkspaceResizableBody(props: {
   // Toggles the right context panel.
   // 切换右侧上下文面板。
   onToggleRightPanel: () => void;
+  // Opens or focuses one right context tab kind.
+  // 打开或聚焦一个右侧上下文页签类型。
+  onOpenContextTab: (kind: WorkspaceContextTabKind) => void;
+  // Closes one right context tab.
+  // 关闭一个右侧上下文页签。
+  onCloseContextTab: (tabId: string) => void;
+  // Activates one right context tab.
+  // 激活一个右侧上下文页签。
+  onActivateContextTab: (tabId: string) => void;
+  // Updates a file context tab title.
+  // 更新文件上下文页签标题。
+  onFileContextTabTitleChange: (tabId: string, title: string) => void;
   // Records a manual left sidebar toggle.
   // 记录一次手动左侧栏切换。
   onToggleLeftPanel: () => void;
@@ -329,16 +342,20 @@ export function WorkspaceResizableBody(props: {
             id="workspaceContext"
           >
             <WorkspaceContextPanel
-              activeTab={props.contextPanelActiveTab}
+              activeTabId={props.contextPanelActiveTabId}
               floating={rightPanelTransition.floating}
               reviewFocusRequest={props.reviewFocusRequest}
               selectedDraftConversation={props.selectedDraftConversation}
               selectedConversationId={props.selectedConversationId}
+              tabs={props.contextPanelTabs}
               workbench={props.workbench}
-              onActiveTabChange={props.onContextPanelActiveTabChange}
+              onActivateContextTab={props.onActivateContextTab}
+              onCloseContextTab={props.onCloseContextTab}
               onClose={props.onToggleRightPanel}
               onCopyRawDiff={props.onCopyRawDiff}
               onCopyText={props.onCopyText}
+              onFileTabTitleChange={props.onFileContextTabTitleChange}
+              onOpenContextTab={props.onOpenContextTab}
               onRunVmmAction={props.onRunVmmAction}
               parseConversationBlocks={props.parseConversationBlocks}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}

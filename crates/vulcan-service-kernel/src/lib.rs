@@ -7052,8 +7052,7 @@ fn workspace_file_entry_summary(
     };
     let visible_kind = match kind {
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Code => true,
-        WorkspaceFileEntryKind::Image => filters.allow_images,
-        WorkspaceFileEntryKind::Video => filters.allow_videos,
+        WorkspaceFileEntryKind::Image | WorkspaceFileEntryKind::Video => true,
         WorkspaceFileEntryKind::Other => false,
     };
     if !visible_kind {

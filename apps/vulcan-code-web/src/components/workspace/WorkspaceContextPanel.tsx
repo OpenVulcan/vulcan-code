@@ -1,10 +1,21 @@
 import React from "react";
 import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+  Brain,
+  ChevronsDown,
+  Folder,
+  GitPullRequest,
+  Plus,
+  Search,
+  X,
+} from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type {
   DiffReviewSelection,
   WorkspaceGitFileActionRequest,
@@ -15,7 +26,6 @@ import type {
   WorkspaceDiffSearchResponse,
   WorkspaceDiffSnapshotResponse,
 } from "@/diff/types";
-import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
 import type {
@@ -46,6 +56,41 @@ const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
 export type WorkspaceContextPanelTab = "review" | "memory" | "files";
+
+// WorkspaceContextTabKind identifies one dynamic right context tab type.
+// WorkspaceContextTabKind 标识一个动态右侧上下文页签类型。
+export type WorkspaceContextTabKind = WorkspaceContextPanelTab;
+
+// WorkspaceContextTabItem describes one opened right context tab.
+// WorkspaceContextTabItem 描述一个已打开的右侧上下文页签。
+export interface WorkspaceContextTabItem {
+  // Stable tab id for React keys and activation.
+  // 用于 React key 与激活状态的稳定页签标识。
+  id: string;
+  // Registered content kind rendered by this tab.
+  // 该页签渲染的已注册内容类型。
+  kind: WorkspaceContextTabKind;
+  // Visible tab title.
+  // 可见页签标题。
+  title: string;
+  // Optional selected file name for file tabs.
+  // 文件页签可选的已选中文件名。
+  selectedFileName?: string | null;
+  // Creation timestamp used for stable ordering diagnostics.
+  // 用于稳定排序诊断的创建时间戳。
+  createdAt: number;
+}
+
+// WorkspaceContextTabState stores the opened right context tab workspace.
+// WorkspaceContextTabState 保存已打开的右侧上下文页签工作区。
+export interface WorkspaceContextTabState {
+  // Opened tabs in visual order.
+  // 按视觉顺序排列的已打开页签。
+  tabs: WorkspaceContextTabItem[];
+  // Active tab id, or null when no tab is opened.
+  // 当前活动页签标识；没有页签时为空。
+  activeTabId: string | null;
+}
 
 // WorkspaceDraftConversationSelection carries a local draft conversation route.
 // WorkspaceDraftConversationSelection 承载本地草稿会话路由。
@@ -84,12 +129,24 @@ export interface WorkspaceContextPanelProps {
   // Whether the panel is rendered as a floating overlay.
   // 面板是否以浮动覆盖层方式渲染。
   floating?: boolean;
-  // Active tab restored by the shared workspace shell.
-  // 由共享工作区外壳恢复的当前标签页。
-  activeTab: WorkspaceContextPanelTab;
-  // Updates the remembered active tab.
-  // 更新记忆中的当前标签页。
-  onActiveTabChange: (tab: WorkspaceContextPanelTab) => void;
+  // Opened dynamic context tabs.
+  // 已打开的动态上下文页签。
+  tabs: WorkspaceContextTabItem[];
+  // Active dynamic context tab id.
+  // 当前活动的动态上下文页签标识。
+  activeTabId: string | null;
+  // Opens or focuses one context tab kind.
+  // 打开或聚焦一个上下文页签类型。
+  onOpenContextTab: (kind: WorkspaceContextTabKind) => void;
+  // Closes one opened context tab.
+  // 关闭一个已打开的上下文页签。
+  onCloseContextTab: (tabId: string) => void;
+  // Activates one opened context tab.
+  // 激活一个已打开的上下文页签。
+  onActivateContextTab: (tabId: string) => void;
+  // Updates one file tab title after file selection changes.
+  // 文件选择变化后更新单个文件页签标题。
+  onFileTabTitleChange: (tabId: string, title: string) => void;
   // Monotonic request id used to focus the review tab on uncommitted changes.
   // 用于让审核标签页聚焦未提交变更的单调请求标识。
   reviewFocusRequest: number;
@@ -166,66 +223,434 @@ export interface WorkspaceContextPanelProps {
   ) => Promise<WorkspaceFileReadResponse>;
 }
 
-// WorkspaceContextPanel renders review and memory tabs for the right context rail.
-// WorkspaceContextPanel 渲染右侧上下文栏中的审核与记忆标签页。
+// WorkspaceContextPanel renders the dynamic right context tab workspace.
+// WorkspaceContextPanel 渲染动态右侧上下文页签工作区。
 export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
-  // t translates the right context panel shell labels.
-  // t 翻译右侧上下文面板外壳标签。
-  const { t } = useI18n();
+  // activeTab stores the currently visible opened tab.
+  // activeTab 保存当前可见的已打开页签。
+  const activeTab = React.useMemo(
+    () => props.tabs.find((tab) => tab.id === props.activeTabId) ?? props.tabs[0] ?? null,
+    [props.activeTabId, props.tabs],
+  );
+  // tabRefs stores DOM nodes for quick scroll-to-tab navigation.
+  // tabRefs 保存用于快速滚动定位页签的 DOM 节点。
+  const tabRefs = React.useRef(new Map<string, HTMLDivElement>());
+
+  React.useEffect(() => {
+    if (!activeTab) {
+      return;
+    }
+    tabRefs.current.get(activeTab.id)?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  }, [activeTab]);
 
   return (
     <aside className={cn("context-panel-shell", props.floating && "floating")}>
-      <Tabs
-        className="context-tabs"
-        value={props.activeTab}
-        onValueChange={(value) => props.onActiveTabChange(value as WorkspaceContextPanelTab)}
-      >
-        <div className="context-panel-header">
-          <TabsList className="context-tabs-list">
-            <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
-            <TabsTrigger value="memory">{t("contextPanel.memory")}</TabsTrigger>
-            <TabsTrigger value="files">{t("contextPanel.files")}</TabsTrigger>
-          </TabsList>
-        </div>
-        <TabsContent className="context-tab-content review-tab-content" value="review">
-          <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
-            <LazyWorkspaceReviewPanelHost
-              loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
-              loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
-              loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
-              parseConversationBlocks={props.parseConversationBlocks}
-              runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
-              reviewFocusRequest={props.reviewFocusRequest}
-              selectedConversationId={props.selectedConversationId}
-              selectedDraftConversation={props.selectedDraftConversation}
-              workbench={props.workbench}
-              onCopyRawDiff={props.onCopyRawDiff}
-            />
-          </React.Suspense>
-        </TabsContent>
-        <TabsContent className="context-tab-content" value="memory">
-          <WorkspaceMemoryPanel
-            selectedProjectId={selectedContextProjectId(props)}
-            snapshot={props.workbench.contextInjection ?? null}
-            onRunVmmAction={props.onRunVmmAction}
+      {activeTab ? (
+        <div className="context-dynamic-workspace">
+          <WorkspaceContextTabBar
+            activeTabId={activeTab.id}
+            tabs={props.tabs}
+            tabRefs={tabRefs}
+            onActivateTab={props.onActivateContextTab}
+            onCloseTab={(tab) => {
+              if (tab.kind === "files") {
+                void import("@/components/workspace/WorkspaceFilesPanelHost")
+                  .then((module) => module.forgetWorkspaceFilesPanelCacheInstance(tab.id));
+              }
+              props.onCloseContextTab(tab.id);
+            }}
+            onOpenTab={props.onOpenContextTab}
           />
-        </TabsContent>
-        <TabsContent className="context-tab-content files-tab-content" value="files">
-          <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
-            <LazyWorkspaceFilesPanelHost
-              loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
-              loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}
-              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-              selectedConversationId={props.selectedConversationId}
-              selectedDraftConversation={props.selectedDraftConversation}
-              workbench={props.workbench}
-              onCopyText={props.onCopyText}
-            />
-          </React.Suspense>
-        </TabsContent>
-      </Tabs>
+          <WorkspaceContextTabContent
+            activeTab={activeTab}
+            props={props}
+          />
+        </div>
+      ) : (
+        <WorkspaceContextLauncher onOpenTab={props.onOpenContextTab} />
+      )}
     </aside>
   );
+}
+
+// WorkspaceContextTabBar renders opened tabs plus switcher and add menus.
+// WorkspaceContextTabBar 渲染已打开页签以及切换与新增菜单。
+function WorkspaceContextTabBar(props: {
+  // Opened tabs in visual order.
+  // 按视觉顺序排列的已打开页签。
+  tabs: WorkspaceContextTabItem[];
+  // Active tab id.
+  // 当前活动页签标识。
+  activeTabId: string;
+  // DOM refs used by menu navigation.
+  // 菜单导航使用的 DOM 引用。
+  tabRefs: React.MutableRefObject<Map<string, HTMLDivElement>>;
+  // Activates one tab.
+  // 激活单个页签。
+  onActivateTab: (tabId: string) => void;
+  // Closes one tab.
+  // 关闭单个页签。
+  onCloseTab: (tab: WorkspaceContextTabItem) => void;
+  // Opens one tab kind.
+  // 打开单个页签类型。
+  onOpenTab: (kind: WorkspaceContextTabKind) => void;
+}) {
+  return (
+    <div className="context-dynamic-tabbar">
+      {props.tabs.length > 1 ? (
+        <WorkspaceContextTabSwitcher
+          activeTabId={props.activeTabId}
+          tabs={props.tabs}
+          onActivateTab={props.onActivateTab}
+        />
+      ) : null}
+      <WorkspaceContextAddMenu onOpenTab={props.onOpenTab} />
+      <div className="context-dynamic-tab-strip" role="tablist">
+        {props.tabs.map((tab) => (
+          <WorkspaceContextTabButton
+            active={tab.id === props.activeTabId}
+            key={tab.id}
+            tab={tab}
+            tabRef={(element) => {
+              if (element) {
+                props.tabRefs.current.set(tab.id, element);
+              } else {
+                props.tabRefs.current.delete(tab.id);
+              }
+            }}
+            onActivateTab={props.onActivateTab}
+            onCloseTab={props.onCloseTab}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// WorkspaceContextTabButton renders one dynamic tab with hover close affordance.
+// WorkspaceContextTabButton 渲染一个带悬停关闭入口的动态页签。
+function WorkspaceContextTabButton(props: {
+  // Opened tab represented by this button.
+  // 当前按钮代表的已打开页签。
+  tab: WorkspaceContextTabItem;
+  // Whether this tab is active.
+  // 当前页签是否处于活动状态。
+  active: boolean;
+  // Ref callback used for scroll positioning.
+  // 用于滚动定位的引用回调。
+  tabRef: (element: HTMLDivElement | null) => void;
+  // Activates one tab.
+  // 激活单个页签。
+  onActivateTab: (tabId: string) => void;
+  // Closes one tab.
+  // 关闭单个页签。
+  onCloseTab: (tab: WorkspaceContextTabItem) => void;
+}) {
+  return (
+    <div
+      className={cn("context-dynamic-tab", props.active && "active")}
+      ref={props.tabRef}
+      role="presentation"
+    >
+      <span className="context-dynamic-tab-icon">{workspaceContextTabIcon(props.tab.kind, 14)}</span>
+      <button
+        aria-label={`关闭${props.tab.title}`}
+        className="context-dynamic-tab-close"
+        onClick={(event) => {
+          event.stopPropagation();
+          props.onCloseTab(props.tab);
+        }}
+        type="button"
+      >
+        <X size={13} />
+      </button>
+      <button
+        aria-selected={props.active}
+        className="context-dynamic-tab-label"
+        onClick={() => props.onActivateTab(props.tab.id)}
+        role="tab"
+        title={props.tab.title}
+        type="button"
+      >
+        <span>{props.tab.title}</span>
+      </button>
+    </div>
+  );
+}
+
+// WorkspaceContextTabSwitcher renders a searchable list of opened tabs.
+// WorkspaceContextTabSwitcher 渲染可搜索的已打开页签列表。
+function WorkspaceContextTabSwitcher(props: {
+  // Opened tabs shown in the menu.
+  // 菜单中展示的已打开页签。
+  tabs: WorkspaceContextTabItem[];
+  // Active tab id.
+  // 当前活动页签标识。
+  activeTabId: string;
+  // Activates one tab.
+  // 激活单个页签。
+  onActivateTab: (tabId: string) => void;
+}) {
+  // query stores the local tab filter text.
+  // query 保存本地页签筛选文本。
+  const [query, setQuery] = React.useState("");
+  // visibleTabs stores the menu rows after local filtering.
+  // visibleTabs 保存本地过滤后的菜单行。
+  const visibleTabs = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase();
+    if (!normalized) {
+      return props.tabs;
+    }
+    return props.tabs.filter((tab) => tab.title.toLowerCase().includes(normalized));
+  }, [props.tabs, query]);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button aria-label="切换右侧页签" className="context-dynamic-icon-button" type="button">
+          <ChevronsDown size={15} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="context-dynamic-tabs-menu">
+        <label className="context-dynamic-tabs-menu-search">
+          <Search size={13} />
+          <input
+            aria-label="搜索标签页"
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            onKeyDown={(event) => event.stopPropagation()}
+            placeholder="搜索标签页..."
+            value={query}
+          />
+          {query ? (
+            <button
+              aria-label="清空标签页搜索"
+              className="context-dynamic-tabs-menu-search-clear"
+              onClick={() => setQuery("")}
+              type="button"
+            >
+              <X size={12} />
+            </button>
+          ) : null}
+        </label>
+        <DropdownMenuLabel>打开的标签页</DropdownMenuLabel>
+        {visibleTabs.map((tab) => (
+          <DropdownMenuItem
+            className={cn("context-dynamic-tabs-menu-item", tab.id === props.activeTabId && "active")}
+            key={tab.id}
+            onClick={() => props.onActivateTab(tab.id)}
+          >
+            {workspaceContextTabIcon(tab.kind, 14)}
+            <span>{tab.title}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// WorkspaceContextAddMenu renders the fixed plus menu for opening more tabs.
+// WorkspaceContextAddMenu 渲染用于打开更多页签的固定加号菜单。
+function WorkspaceContextAddMenu(props: {
+  // Opens one tab kind.
+  // 打开单个页签类型。
+  onOpenTab: (kind: WorkspaceContextTabKind) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button aria-label="打开右侧页面" className="context-dynamic-icon-button add" type="button">
+          <Plus size={15} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="context-dynamic-add-menu">
+        <DropdownMenuLabel>打开页面</DropdownMenuLabel>
+        <WorkspaceContextOpenMenuItem kind="files" onOpenTab={props.onOpenTab} />
+        <DropdownMenuSeparator />
+        <WorkspaceContextOpenMenuItem kind="review" onOpenTab={props.onOpenTab} />
+        <WorkspaceContextOpenMenuItem kind="memory" onOpenTab={props.onOpenTab} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+// WorkspaceContextOpenMenuItem renders one entry that opens a context tab kind.
+// WorkspaceContextOpenMenuItem 渲染一个打开上下文页签类型的入口。
+function WorkspaceContextOpenMenuItem(props: {
+  // Context tab kind opened by this row.
+  // 当前行打开的上下文页签类型。
+  kind: WorkspaceContextTabKind;
+  // Opens one tab kind.
+  // 打开单个页签类型。
+  onOpenTab: (kind: WorkspaceContextTabKind) => void;
+}) {
+  return (
+    <DropdownMenuItem onClick={() => props.onOpenTab(props.kind)}>
+      {workspaceContextTabIcon(props.kind, 14)}
+      <span>{workspaceContextTabDefaultTitle(props.kind)}</span>
+    </DropdownMenuItem>
+  );
+}
+
+// WorkspaceContextLauncher renders the empty right-panel entry cards.
+// WorkspaceContextLauncher 渲染右侧面板空状态入口卡片。
+function WorkspaceContextLauncher(props: {
+  // Opens one tab kind.
+  // 打开单个页签类型。
+  onOpenTab: (kind: WorkspaceContextTabKind) => void;
+}) {
+  return (
+    <div className="context-launcher">
+      <WorkspaceContextLauncherCard
+        description="浏览项目文件"
+        kind="files"
+        shortcut="Ctrl+P"
+        title="文件"
+        onOpenTab={props.onOpenTab}
+      />
+      <WorkspaceContextLauncherCard
+        description="查看代码更改"
+        kind="review"
+        shortcut="Ctrl+Shift+G"
+        title="审查"
+        onOpenTab={props.onOpenTab}
+      />
+      <WorkspaceContextLauncherCard
+        description="查看会话记忆"
+        kind="memory"
+        title="记忆"
+        onOpenTab={props.onOpenTab}
+      />
+    </div>
+  );
+}
+
+// WorkspaceContextLauncherCard renders one empty-panel action card.
+// WorkspaceContextLauncherCard 渲染一个空面板操作卡片。
+function WorkspaceContextLauncherCard(props: {
+  // Context tab kind opened by this card.
+  // 当前卡片打开的上下文页签类型。
+  kind: WorkspaceContextTabKind;
+  // Visible title.
+  // 可见标题。
+  title: string;
+  // Secondary description.
+  // 次级说明。
+  description: string;
+  // Optional shortcut hint.
+  // 可选快捷键提示。
+  shortcut?: string;
+  // Opens one tab kind.
+  // 打开单个页签类型。
+  onOpenTab: (kind: WorkspaceContextTabKind) => void;
+}) {
+  return (
+    <button className="context-launcher-card" onClick={() => props.onOpenTab(props.kind)} type="button">
+      {workspaceContextTabIcon(props.kind, 22)}
+      <strong>{props.title}</strong>
+      <span>{props.description}</span>
+      {props.shortcut ? <kbd>{props.shortcut}</kbd> : null}
+    </button>
+  );
+}
+
+// WorkspaceContextTabContent renders the active dynamic tab content.
+// WorkspaceContextTabContent 渲染当前活动动态页签内容。
+function WorkspaceContextTabContent(args: {
+  // Active opened tab.
+  // 当前活动的已打开页签。
+  activeTab: WorkspaceContextTabItem;
+  // Parent panel props forwarded to content hosts.
+  // 转发给内容宿主的父面板属性。
+  props: WorkspaceContextPanelProps;
+}) {
+  // activeTabId stores the current file tab id for stable callbacks.
+  // activeTabId 保存当前文件页签标识以稳定回调。
+  const activeTabId = args.activeTab.id;
+  // onFileTabTitleChange stores the parent title update callback.
+  // onFileTabTitleChange 保存父级标题更新回调。
+  const onFileTabTitleChange = args.props.onFileTabTitleChange;
+  // handleFileTabTitleChange keeps file tab title updates stable across parent renders.
+  // handleFileTabTitleChange 保持文件页签标题更新在父级重渲染间稳定。
+  const handleFileTabTitleChange = React.useCallback((title: string) => {
+    onFileTabTitleChange(activeTabId, title);
+  }, [activeTabId, onFileTabTitleChange]);
+
+  if (args.activeTab.kind === "review") {
+    return (
+      <div className="context-tab-content review-tab-content">
+        <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
+          <LazyWorkspaceReviewPanelHost
+            loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}
+            loadWorkspaceDiffSearch={args.props.loadWorkspaceDiffSearch}
+            loadWorkspaceDiffSnapshot={args.props.loadWorkspaceDiffSnapshot}
+            parseConversationBlocks={args.props.parseConversationBlocks}
+            runWorkspaceGitFileAction={args.props.runWorkspaceGitFileAction}
+            reviewFocusRequest={args.props.reviewFocusRequest}
+            selectedConversationId={args.props.selectedConversationId}
+            selectedDraftConversation={args.props.selectedDraftConversation}
+            workbench={args.props.workbench}
+            onCopyRawDiff={args.props.onCopyRawDiff}
+          />
+        </React.Suspense>
+      </div>
+    );
+  }
+  if (args.activeTab.kind === "memory") {
+    return (
+      <div className="context-tab-content memory-tab-content">
+        <WorkspaceMemoryPanel
+          selectedProjectId={selectedContextProjectId(args.props)}
+          snapshot={args.props.workbench.contextInjection ?? null}
+          onRunVmmAction={args.props.onRunVmmAction}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="context-tab-content files-tab-content">
+      <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
+        <LazyWorkspaceFilesPanelHost
+          instanceId={args.activeTab.id}
+          key={args.activeTab.id}
+          loadWorkspaceFileDirectory={args.props.loadWorkspaceFileDirectory}
+          loadWorkspaceFilePreview={args.props.loadWorkspaceFilePreview}
+          resolveMediaSourceUrl={args.props.resolveMediaSourceUrl}
+          selectedConversationId={args.props.selectedConversationId}
+          selectedDraftConversation={args.props.selectedDraftConversation}
+          workbench={args.props.workbench}
+          onCopyText={args.props.onCopyText}
+          onTitleChange={handleFileTabTitleChange}
+        />
+      </React.Suspense>
+    </div>
+  );
+}
+
+// workspaceContextTabIcon returns the icon used for one tab kind.
+// workspaceContextTabIcon 返回单个页签类型使用的图标。
+function workspaceContextTabIcon(kind: WorkspaceContextTabKind, size: number): React.ReactNode {
+  if (kind === "files") {
+    return <Folder size={size} />;
+  }
+  if (kind === "memory") {
+    return <Brain size={size} />;
+  }
+  return <GitPullRequest size={size} />;
+}
+
+// workspaceContextTabDefaultTitle returns the initial title for one tab kind.
+// workspaceContextTabDefaultTitle 返回单个页签类型的初始标题。
+export function workspaceContextTabDefaultTitle(kind: WorkspaceContextTabKind): string {
+  if (kind === "files") {
+    return "打开文件";
+  }
+  if (kind === "memory") {
+    return "记忆";
+  }
+  return "审查";
 }
 
 // selectedContextProjectId resolves the current project id for project-scoped VMM actions.

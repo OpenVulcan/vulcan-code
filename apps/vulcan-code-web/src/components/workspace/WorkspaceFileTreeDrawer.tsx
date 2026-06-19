@@ -276,7 +276,7 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
         {drawerOpen ? <ChevronRight size={14} /> : <ChevronLeftIcon />}
       </button>
       <div className="diff-file-tree-panel">
-        <label className="diff-file-tree-filter">
+        <div className="diff-file-tree-filter">
           <Search size={14} />
           <input
             aria-label="筛选文件"
@@ -305,7 +305,7 @@ export function WorkspaceFileTreeDrawer<RowFile>(props: {
             </button>
             {props.extraFilterActions}
           </span>
-        </label>
+        </div>
         <div className="diff-file-tree-list">
           {props.tree.children.length ? props.tree.children.map((node) => (
             <WorkspaceFileTreeNodeView

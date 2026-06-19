@@ -1156,11 +1156,11 @@ pub struct WorkspaceFileFilterOptions {
     /// Whether Git ignore sources are applied while listing the tree.
     /// 列出文件树时是否应用 Git ignore 来源。
     pub use_gitignore: bool,
-    /// Whether image files are included and previewable.
-    /// 是否包含并允许预览图片文件。
+    /// Whether image files may be previewed after selection.
+    /// 选中后是否允许预览图片文件。
     pub allow_images: bool,
-    /// Whether video files are included and previewable.
-    /// 是否包含并允许预览视频文件。
+    /// Whether video files may be previewed after selection.
+    /// 选中后是否允许预览视频文件。
     pub allow_videos: bool,
 }
 
