@@ -18,7 +18,10 @@ export function projectConversationTimelineItems(
   let currentTurn: {
     // User item that starts the current turn.
     // 当前轮次的起始用户项。
-    userItem: ConversationRenderItem;
+    userItem: ConversationRenderItem | null;
+    // Item used as the timestamp and identity anchor for system-started turns.
+    // 用作系统发起回合时间戳与标识锚点的条目。
+    anchorItem: ConversationRenderItem;
     // Assistant or system process rows collected before the final answer.
     // 最终回答之前收集到的助手或系统过程行。
     bodyItems: ConversationRenderItem[];
@@ -34,7 +37,9 @@ export function projectConversationTimelineItems(
     if (!currentTurn) {
       return;
     }
-    timeline.push({ kind: "item", item: currentTurn.userItem });
+    if (currentTurn.userItem) {
+      timeline.push({ kind: "item", item: currentTurn.userItem });
+    }
     const stats = currentTurn.statsItem?.blocks[0]?.rawMetadata;
     const statsStatus = turnStatsStatus(stats);
     const stopped = statsStatus === "stopped";
@@ -43,8 +48,9 @@ export function projectConversationTimelineItems(
     const bodyItems = [...currentTurn.bodyItems];
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
     const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
-    const shouldDefaultCollapse = Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(currentTurn.userItem.id);
-    const startedAtMs = conversationMessageUnixMillis(currentTurn.userItem.sourceMessage ?? currentTurn.userItem.userMessage);
+    const turnUserItem = currentTurn.userItem;
+    const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
+    const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);
     const terminalMessageMs = conversationMessageUnixMillis(finalItem?.sourceMessage ?? currentTurn.statsItem?.sourceMessage);
     const projectedDurationMs = startedAtMs && terminalMessageMs
       ? Math.max(0, terminalMessageMs - startedAtMs)
@@ -56,7 +62,7 @@ export function projectConversationTimelineItems(
       timeline.push({
         kind: "process",
         process: {
-          id: `process-${currentTurn.userItem.id}`,
+          id: `process-${currentTurn.anchorItem.id}`,
           items: processItems,
           guidanceItems: currentTurn.guidanceItems,
           collapsible: Boolean(finalItem) && !running && !stopped,
@@ -81,13 +87,23 @@ export function projectConversationTimelineItems(
     if (item.role === "user") {
       if (!currentTurn || currentTurn.statsItem) {
         flushTurn(false);
-        currentTurn = { userItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
+        currentTurn = { userItem: item, anchorItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
         continue;
       }
       currentTurn.guidanceItems.push(item);
       continue;
     }
     if (!currentTurn) {
+      if (timelineCanStartImplicitProcessTurn(timeline, item, conversationRunning)) {
+        currentTurn = {
+          userItem: null,
+          anchorItem: item,
+          bodyItems: [item],
+          guidanceItems: [],
+          statsItem: null,
+        };
+        continue;
+      }
       timeline.push({ kind: "item", item });
       continue;
     }
@@ -101,6 +117,35 @@ export function projectConversationTimelineItems(
 
   flushTurn(conversationRunning || Boolean(conversation && conversation.status.trim().toLowerCase() === "running"));
   return timeline;
+}
+
+// timelineCanStartImplicitProcessTurn detects host-started turns after a prior terminal stats row.
+// timelineCanStartImplicitProcessTurn 检测前一轮统计结束后由宿主发起的新回合。
+function timelineCanStartImplicitProcessTurn(
+  timeline: ConversationTimelineItem[],
+  item: ConversationRenderItem,
+  conversationRunning: boolean,
+): boolean {
+  if (item.role === "user" || isTurnStatsRenderItem(item)) {
+    return false;
+  }
+  const previousItem = lastTimelineRenderItem(timeline);
+  if (previousItem && isTurnStatsRenderItem(previousItem)) {
+    return true;
+  }
+  return conversationRunning && timeline.length === 0;
+}
+
+// lastTimelineRenderItem returns the latest concrete transcript item already emitted.
+// lastTimelineRenderItem 返回已经输出的最后一条具体转录项。
+function lastTimelineRenderItem(timeline: ConversationTimelineItem[]): ConversationRenderItem | null {
+  for (let index = timeline.length - 1; index >= 0; index -= 1) {
+    const entry = timeline[index];
+    if (entry?.kind === "item") {
+      return entry.item;
+    }
+  }
+  return null;
 }
 
 // conversationMessageUnixMillis parses the optional Unix-millis timestamp carried by one message.

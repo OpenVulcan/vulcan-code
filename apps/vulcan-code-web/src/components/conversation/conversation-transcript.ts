@@ -214,4 +214,3 @@ function toolBlockOrder(kind: ConversationBlockKind): number {
   if (kind === "tool-result" || kind === "diff") return 2;
   return 3;
 }
-
