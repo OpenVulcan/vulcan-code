@@ -73,6 +73,9 @@ import type {
   PendingPromptSummary,
   ProjectSummary,
   StartupSnapshot,
+  WorkspaceFileDirectoryListing,
+  WorkspaceFileFilterOptions,
+  WorkspaceFileReadResponse,
   WorkbenchSnapshot,
 } from "@/types";
 import type { WorkspaceDiffFileDetailLoadOptions } from "@/service/workbench-snapshot-service";
@@ -271,6 +274,24 @@ interface WorkspaceShellProps {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Loads one lazy workspace file directory.
+  // 加载单个懒加载工作区文件目录。
+  onLoadWorkspaceFileDirectory: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    directoryPath: string | null,
+    filters: WorkspaceFileFilterOptions,
+  ) => Promise<WorkspaceFileDirectoryListing>;
+  // Loads one workspace file preview response.
+  // 加载单个工作区文件预览响应。
+  onLoadWorkspaceFilePreview: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    filePath: string,
+    filters: WorkspaceFileFilterOptions,
+  ) => Promise<WorkspaceFileReadResponse>;
   // Stages one browser-provided attachment through the service.
   // 通过服务暂存一个浏览器提供的附件。
   onStageAttachmentBytes: (
@@ -814,10 +835,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onCloseSubagentPanel={props.onCloseSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
+          onCopyText={(text) => void props.onCopyText(text)}
           parseConversationBlocks={parseConversationBlocks}
+          resolveMediaSourceUrl={props.resolveMediaSourceUrl}
           loadWorkspaceDiffFileDetail={props.onLoadWorkspaceDiffFileDetail}
           loadWorkspaceDiffSearch={props.onLoadWorkspaceDiffSearch}
           loadWorkspaceDiffSnapshot={props.onLoadWorkspaceDiffSnapshot}
+          loadWorkspaceFileDirectory={props.onLoadWorkspaceFileDirectory}
+          loadWorkspaceFilePreview={props.onLoadWorkspaceFilePreview}
           runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}

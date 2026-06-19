@@ -2021,6 +2021,12 @@ button {
   overflow: hidden;
 }
 
+.context-tab-content.files-tab-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+
 .context-empty-state {
   min-height: 180px;
   display: grid;
@@ -2046,6 +2052,190 @@ button {
   color: var(--muted-foreground);
   font-size: 13px;
   text-align: center;
+}
+
+.workspace-files-panel {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--background);
+}
+
+.workspace-files-panel.empty {
+  display: grid;
+  place-items: center;
+}
+
+.workspace-files-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.workspace-files-body.has-selection {
+  padding-right: 11px;
+}
+
+.workspace-file-row-menu-trigger {
+  opacity: 0;
+}
+
+.diff-file-tree-row:hover .workspace-file-row-menu-trigger,
+.workspace-file-row-menu-trigger[aria-expanded="true"] {
+  opacity: 1;
+}
+
+.workspace-files-panel-notice {
+  position: absolute;
+  top: 46px;
+  left: 18px;
+  z-index: 430;
+  max-width: calc(100% - 36px);
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  box-shadow: 0 10px 24px color-mix(in oklab, var(--foreground) 10%, transparent);
+}
+
+.workspace-files-panel-notice.error {
+  color: var(--destructive);
+}
+
+.workspace-file-preview {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: auto;
+}
+
+.workspace-file-preview.empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  padding: 18px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 13px;
+}
+
+.workspace-file-preview.empty strong {
+  color: var(--foreground);
+}
+
+.workspace-file-preview.empty.error {
+  color: var(--destructive);
+}
+
+.workspace-file-preview.code {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-file-preview-header {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--background) 46%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: left;
+  box-shadow: 0 1px 0 color-mix(in oklab, var(--background) 35%, transparent) inset;
+  -webkit-backdrop-filter: blur(22px) saturate(1.45);
+  backdrop-filter: blur(22px) saturate(1.45);
+  cursor: pointer;
+}
+
+.workspace-file-preview-header:hover {
+  background: color-mix(in oklab, var(--background) 62%, transparent);
+  color: var(--foreground);
+}
+
+.workspace-file-preview-format-icon {
+  flex: 0 0 auto;
+}
+
+.workspace-file-preview-title-text {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-file-preview-code-lines {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 0 0 18px;
+  overflow: auto;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.workspace-file-preview-code-row {
+  display: grid;
+  grid-template-columns: minmax(3.5ch, auto) minmax(0, 1fr);
+  min-width: max-content;
+  padding-right: 12px;
+}
+
+.workspace-file-preview-code-gutter {
+  position: sticky;
+  left: 0;
+  padding: 0 10px;
+  border-right: 1px solid color-mix(in oklab, var(--border) 70%, transparent);
+  background: color-mix(in oklab, var(--background) 96%, transparent);
+  color: var(--muted-foreground);
+  text-align: right;
+  user-select: none;
+}
+
+.workspace-file-preview-code-content {
+  padding-left: 10px;
+  color: var(--foreground);
+}
+
+.workspace-file-preview.media {
+  display: grid;
+  place-items: center;
+  padding: 12px;
+  background: color-mix(in oklab, var(--muted) 28%, var(--background));
+}
+
+.workspace-file-preview.media img,
+.workspace-file-preview.media video {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  object-fit: contain;
 }
 
 .context-empty-state span {

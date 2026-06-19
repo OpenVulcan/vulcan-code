@@ -662,8 +662,24 @@
 }
 
 .diff-file-tree-row.file {
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   padding: 0 6px 0 calc(22px + var(--diff-tree-depth) * 10px);
+}
+
+.diff-file-tree-file-main {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 .diff-file-tree-row:hover,

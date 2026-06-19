@@ -1,6 +1,9 @@
 import type {
   ConversationMessage,
   StartupSnapshot,
+  WorkspaceFileDirectoryListing,
+  WorkspaceFileFilterOptions,
+  WorkspaceFileReadResponse,
   WorkbenchSnapshot,
 } from "@/types";
 import type {
@@ -35,6 +38,17 @@ export interface WorkspaceDiffFileDetailLoadOptions {
   // signal 在调用方超时或卸载时中止后端详情请求。
   signal?: AbortSignal;
 }
+
+// DEFAULT_WORKSPACE_FILE_FILTERS mirrors the backend's safe file tree defaults.
+// DEFAULT_WORKSPACE_FILE_FILTERS 对齐后端的安全文件树默认值。
+export const DEFAULT_WORKSPACE_FILE_FILTERS: WorkspaceFileFilterOptions = {
+  ignoreHidden: true,
+  ignoreDotNames: true,
+  useIgnoreFiles: true,
+  useGitignore: true,
+  allowImages: false,
+  allowVideos: false,
+};
 
 // loadStartupSnapshot loads startup state from the local service or fallback data.
 // loadStartupSnapshot 从本地服务或回退数据加载启动状态。
@@ -142,6 +156,48 @@ export async function runWorkspaceGitFileAction(
   });
 }
 
+// loadWorkspaceFileDirectory loads one lazy workspace file tree directory.
+// loadWorkspaceFileDirectory 加载单个懒加载工作区文件树目录。
+export async function loadWorkspaceFileDirectory(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  directoryPath: string | null,
+  filters: WorkspaceFileFilterOptions,
+): Promise<WorkspaceFileDirectoryListing> {
+  if (!hasServiceRuntime()) {
+    return loadBrowserFallbackWorkspaceFileDirectory(workspacePath, directoryPath, filters);
+  }
+  return serviceClient.request<WorkspaceFileDirectoryListing>("workspace.files.list", {
+    workspacePath,
+    projectId,
+    conversationId,
+    directoryPath,
+    filters,
+  });
+}
+
+// loadWorkspaceFilePreview loads one workspace file preview payload.
+// loadWorkspaceFilePreview 加载单个工作区文件预览载荷。
+export async function loadWorkspaceFilePreview(
+  workspacePath: string,
+  projectId: string | null,
+  conversationId: string | null,
+  filePath: string,
+  filters: WorkspaceFileFilterOptions,
+): Promise<WorkspaceFileReadResponse> {
+  if (!hasServiceRuntime()) {
+    return loadBrowserFallbackWorkspaceFilePreview(workspacePath, filePath, filters);
+  }
+  return serviceClient.request<WorkspaceFileReadResponse>("workspace.files.read", {
+    workspacePath,
+    projectId,
+    conversationId,
+    filePath,
+    filters,
+  });
+}
+
 // loadConversationMessages loads one conversation body from the local service.
 // loadConversationMessages 从本地服务加载单个会话正文。
 export async function loadConversationMessages(sessionId: string): Promise<ConversationMessage[]> {
@@ -149,4 +205,94 @@ export async function loadConversationMessages(sessionId: string): Promise<Conve
     return loadBrowserFallbackConversationMessages(sessionId);
   }
   return serviceClient.request<ConversationMessage[]>("service_session_messages", { sessionId });
+}
+
+// loadBrowserFallbackWorkspaceFileDirectory returns a compact demo tree for browser-only previews.
+// loadBrowserFallbackWorkspaceFileDirectory 为仅浏览器预览返回紧凑演示树。
+function loadBrowserFallbackWorkspaceFileDirectory(
+  workspacePath: string,
+  directoryPath: string | null,
+  filters: WorkspaceFileFilterOptions,
+): WorkspaceFileDirectoryListing {
+  const rootPath = workspacePath || "/preview";
+  const path = directoryPath || rootPath;
+  const relativePath = path === rootPath ? "" : path.replace(`${rootPath}/`, "");
+  const entries = relativePath
+    ? [
+        {
+          name: "example.ts",
+          path: `${path}/example.ts`,
+          relativePath: `${relativePath}/example.ts`,
+          kind: "code" as const,
+          isDirectory: false,
+          extension: "ts",
+          mimeType: "text/plain",
+          sizeBytes: 128,
+          modifiedAt: null,
+          hidden: false,
+          hasChildren: false,
+        },
+      ]
+    : [
+        {
+          name: "src",
+          path: `${rootPath}/src`,
+          relativePath: "src",
+          kind: "directory" as const,
+          isDirectory: true,
+          extension: null,
+          mimeType: null,
+          sizeBytes: null,
+          modifiedAt: null,
+          hidden: false,
+          hasChildren: true,
+        },
+        {
+          name: "README.md",
+          path: `${rootPath}/README.md`,
+          relativePath: "README.md",
+          kind: "code" as const,
+          isDirectory: false,
+          extension: "md",
+          mimeType: "text/markdown",
+          sizeBytes: 256,
+          modifiedAt: null,
+          hidden: false,
+          hasChildren: false,
+        },
+      ];
+  return {
+    workspacePath: rootPath,
+    path,
+    relativePath,
+    parentPath: relativePath ? rootPath : null,
+    entries,
+    filters,
+    truncated: false,
+    entryCount: entries.length,
+    notice: "浏览器预览模式使用静态文件树示例。",
+  };
+}
+
+// loadBrowserFallbackWorkspaceFilePreview returns a static code preview for browser-only previews.
+// loadBrowserFallbackWorkspaceFilePreview 为仅浏览器预览返回静态代码预览。
+function loadBrowserFallbackWorkspaceFilePreview(
+  workspacePath: string,
+  filePath: string,
+  _filters: WorkspaceFileFilterOptions,
+): WorkspaceFileReadResponse {
+  const rootPath = workspacePath || "/preview";
+  const relativePath = filePath.replace(`${rootPath}/`, "");
+  return {
+    workspacePath: rootPath,
+    path: filePath,
+    relativePath,
+    kind: "code",
+    mimeType: "text/plain",
+    sizeBytes: 64,
+    content: `// Browser preview file\n// 浏览器预览文件\n${relativePath || "README.md"}\n`,
+    encoding: "utf-8",
+    lineCount: 3,
+    truncated: false,
+  };
 }

@@ -121,6 +121,12 @@ export function WorkspaceResizableBody(props: {
   // Copies raw diff text from the right context panel.
   // 从右侧上下文面板复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
+  // Copies plain text from the right context panel.
+  // 从右侧上下文面板复制普通文本。
+  onCopyText: WorkspaceContextPanelProps["onCopyText"];
+  // Resolves local media paths from the right context panel.
+  // 为右侧上下文面板解析本地媒体路径。
+  resolveMediaSourceUrl: WorkspaceContextPanelProps["resolveMediaSourceUrl"];
   // Runs one VMM memory action for the right context panel.
   // 为右侧上下文面板执行单个 VMM 记忆动作。
   onRunVmmAction: WorkspaceContextPanelProps["onRunVmmAction"];
@@ -139,6 +145,12 @@ export function WorkspaceResizableBody(props: {
   // Runs one file-level Git action for the right context panel.
   // 为右侧上下文面板执行一次文件级 Git 操作。
   runWorkspaceGitFileAction: WorkspaceContextPanelProps["runWorkspaceGitFileAction"];
+  // Loads one lazy workspace file directory for the right context panel.
+  // 为右侧上下文面板加载单个懒加载工作区文件目录。
+  loadWorkspaceFileDirectory: WorkspaceContextPanelProps["loadWorkspaceFileDirectory"];
+  // Loads one workspace file preview for the right context panel.
+  // 为右侧上下文面板加载单个工作区文件预览。
+  loadWorkspaceFilePreview: WorkspaceContextPanelProps["loadWorkspaceFilePreview"];
   // Emits WebUI click traces from nested console controls.
   // 从嵌套控制台控件发出 WebUI 点击追踪。
   onTrace: (action: string, detail?: Record<string, unknown>) => void;
@@ -326,8 +338,12 @@ export function WorkspaceResizableBody(props: {
               onActiveTabChange={props.onContextPanelActiveTabChange}
               onClose={props.onToggleRightPanel}
               onCopyRawDiff={props.onCopyRawDiff}
+              onCopyText={props.onCopyText}
               onRunVmmAction={props.onRunVmmAction}
               parseConversationBlocks={props.parseConversationBlocks}
+              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+              loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
+              loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}
               loadWorkspaceDiffFileDetail={props.loadWorkspaceDiffFileDetail}
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}

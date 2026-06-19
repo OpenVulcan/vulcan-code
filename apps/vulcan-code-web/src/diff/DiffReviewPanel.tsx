@@ -1,5 +1,5 @@
 import React from "react";
-import { ChevronDown, ChevronRight, FileText, FileWarning, Folder, ListCollapse, ListTree, MoreHorizontal, Plus, RefreshCw, RotateCcw, Search, Undo2 } from "lucide-react";
+import { FileText, MoreHorizontal, Plus, RefreshCw, RotateCcw, Undo2 } from "lucide-react";
 
 import { DiffFileCard, DiffFileHeader, useDiffScrollState } from "./diff-file-card";
 import { DiffPanelToolbar } from "./diff-review-toolbar";
@@ -35,6 +35,12 @@ import {
   type DiffSearchMatch,
 } from "./diff-search";
 import { useDiffSearchIndex } from "./diff-search-worker-client";
+import {
+  WorkspaceDefaultFileIcon,
+  WorkspaceFileTreeDrawer,
+  WorkspaceFileTreeStats,
+  type WorkspaceFileTreeNode,
+} from "@/components/workspace/WorkspaceFileTreeDrawer";
 import {
   EMPTY_DIFF_FILE_VIRTUAL_LAYOUT,
   buildDiffFileVirtualLayout,
@@ -280,6 +286,12 @@ export function DiffReviewPanel(props: {
   // shouldShowFileTree limits the navigation drawer to multi-file diffs.
   // shouldShowFileTree 将导航目录限制在多文件 diff 场景。
   const shouldShowFileTree = renderedFileCount > 1;
+  // renderedFileTree stores the review directory tree passed to the shared drawer.
+  // renderedFileTree 保存传递给共享抽屉的审核目录树。
+  const renderedFileTree = React.useMemo(
+    () => renderedSnapshot && shouldShowFileTree ? buildDiffFileTree(renderedSnapshot.files, fileTreeFilter) : null,
+    [fileTreeFilter, renderedSnapshot, shouldShowFileTree],
+  );
   // refreshBusy merges parent loading and the local refresh lock for button state.
   // refreshBusy 合并父级加载态与本地刷新锁，用于按钮状态。
   const refreshBusy = Boolean(props.loading || refreshPending);
@@ -631,13 +643,24 @@ export function DiffReviewPanel(props: {
         viewMode={viewMode}
       />
       <div className={`diff-review-body${selectedDiffFile ? " has-selection" : " directory-only"}`}>
-        {renderedSnapshot && shouldShowFileTree ? (
-          <DiffFileTreeDrawer
+        {renderedFileTree ? (
+          <WorkspaceFileTreeDrawer
             activeFileKey={effectiveExpandedFileKey}
-            files={renderedSnapshot.files}
+            collapseOnSelect
+            emptyLabel="没有匹配的文件"
+            fileIconClassName={(node) => node.file?.status ?? "modified"}
+            fileKey={(file) => file.key}
+            fileTitle={(file, node) => diffRevealRelativePath(file) ?? node.name}
             filter={fileTreeFilter}
             lockedOpen={!selectedDiffFile}
             pinnedOpen={fileTreeDrawerPinnedOpen}
+            renderFileIcon={(node) => (
+              <WorkspaceDefaultFileIcon name={node.name} warning={Boolean(node.file?.tooLargeToDisplay)} />
+            )}
+            renderFileTrailing={(node) => (
+              <WorkspaceFileTreeStats additions={node.additions ?? 0} deletions={node.deletions ?? 0} />
+            )}
+            tree={renderedFileTree}
             onFilterChange={setFileTreeFilter}
             onPinnedOpenChange={setFileTreeDrawerPinnedOpen}
             onSelectFile={handleFileTreeSelect}
@@ -840,312 +863,16 @@ function DiffReviewFloatingGitActions(props: DiffReviewFloatingGitActionsProps) 
 
 // DiffFileTreeNode stores one directory or file entry in the review tree.
 // DiffFileTreeNode 保存审核目录树中的单个目录或文件节点。
-interface DiffFileTreeNode {
-  // Stable tree path used for React keys and directory toggles.
-  // 用于 React key 与目录展开状态的稳定树路径。
-  path: string;
-  // Display name for the current path segment.
-  // 当前路径片段的展示名称。
-  name: string;
+interface DiffFileTreeNode extends WorkspaceFileTreeNode<DiffFile> {
   // Child directories and files sorted for display.
   // 排序后用于展示的子目录与文件。
   children: DiffFileTreeNode[];
-  // File payload when this node is a leaf.
-  // 当前节点为叶子文件时对应的文件数据。
-  file?: DiffFile;
   // Aggregated added-line count for this node.
   // 当前节点聚合后的新增行数。
   additions: number;
   // Aggregated deleted-line count for this node.
   // 当前节点聚合后的删除行数。
   deletions: number;
-}
-
-// DiffFileTreeDrawer renders the collapsible file-directory navigation drawer.
-// DiffFileTreeDrawer 渲染可收起的文件目录导航抽屉。
-function DiffFileTreeDrawer(props: {
-  // Files available in the current rendered snapshot.
-  // 当前渲染快照中可用的文件列表。
-  files: readonly DiffFile[];
-  // Current selected file key.
-  // 当前选中的文件 key。
-  activeFileKey: string | null;
-  // File tree filter text.
-  // 文件目录树筛选文本。
-  filter: string;
-  // Whether the drawer must stay open because no file is selected.
-  // 是否因未选择文件而必须保持目录抽屉展开。
-  lockedOpen: boolean;
-  // Whether the drawer is explicitly pinned open by the user.
-  // 目录抽屉是否被用户显式固定展开。
-  pinnedOpen: boolean;
-  // Called when the filter text changes.
-  // 筛选文本变化时调用。
-  onFilterChange: (filter: string) => void;
-  // Called when the pinned drawer open state changes.
-  // 目录抽屉固定展开状态变化时调用。
-  onPinnedOpenChange: (open: boolean) => void;
-  // Called when a file node is selected.
-  // 选择文件节点时调用。
-  onSelectFile: (file: DiffFile) => void;
-}) {
-  const tree = React.useMemo(() => buildDiffFileTree(props.files, props.filter), [props.files, props.filter]);
-  const defaultOpenDirectoryPaths = React.useMemo(() => defaultDiffTreeOpenDirectoryPaths(tree), [tree]);
-  const [openDirectoryPaths, setOpenDirectoryPaths] = React.useState<ReadonlySet<string>>(defaultOpenDirectoryPaths);
-  const [hoverOpen, setHoverOpen] = React.useState(false);
-  const [suppressHoverOpen, setSuppressHoverOpen] = React.useState(false);
-  const hoverOpenTimeoutRef = React.useRef<number | null>(null);
-  const hoverCloseTimeoutRef = React.useRef<number | null>(null);
-  const drawerOpen = props.lockedOpen || props.pinnedOpen || hoverOpen;
-  const clearHoverOpenTimeout = React.useCallback(() => {
-    if (hoverOpenTimeoutRef.current != null) {
-      window.clearTimeout(hoverOpenTimeoutRef.current);
-      hoverOpenTimeoutRef.current = null;
-    }
-  }, []);
-  const clearHoverCloseTimeout = React.useCallback(() => {
-    if (hoverCloseTimeoutRef.current != null) {
-      window.clearTimeout(hoverCloseTimeoutRef.current);
-      hoverCloseTimeoutRef.current = null;
-    }
-  }, []);
-  React.useEffect(() => {
-    setOpenDirectoryPaths(defaultOpenDirectoryPaths);
-  }, [defaultOpenDirectoryPaths]);
-  React.useEffect(() => {
-    if (props.lockedOpen) {
-      clearHoverOpenTimeout();
-      clearHoverCloseTimeout();
-      setHoverOpen(false);
-      setSuppressHoverOpen(false);
-    }
-  }, [clearHoverCloseTimeout, clearHoverOpenTimeout, props.lockedOpen]);
-  React.useEffect(() => {
-    return () => {
-      clearHoverOpenTimeout();
-      clearHoverCloseTimeout();
-    };
-  }, [clearHoverCloseTimeout, clearHoverOpenTimeout]);
-  const toggleDirectory = React.useCallback((path: string) => {
-    setOpenDirectoryPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
-  }, []);
-  // expandAllDirectories opens every visible directory in the filtered tree.
-  // expandAllDirectories 展开当前筛选目录树里的全部可见目录。
-  const expandAllDirectories = React.useCallback(() => {
-    setOpenDirectoryPaths(defaultOpenDirectoryPaths);
-  }, [defaultOpenDirectoryPaths]);
-  // collapseAllDirectories closes every directory in the filtered tree.
-  // collapseAllDirectories 折叠当前筛选目录树里的全部目录。
-  const collapseAllDirectories = React.useCallback(() => {
-    setOpenDirectoryPaths(new Set<string>());
-  }, []);
-  const handleDrawerMouseEnter = React.useCallback((event: React.MouseEvent<HTMLElement>) => {
-    clearHoverCloseTimeout();
-    if (props.lockedOpen || suppressHoverOpen) {
-      return;
-    }
-    if ((event.buttons & 1) === 1) {
-      clearHoverOpenTimeout();
-      setSuppressHoverOpen(true);
-      return;
-    }
-    clearHoverOpenTimeout();
-    hoverOpenTimeoutRef.current = window.setTimeout(() => {
-      hoverOpenTimeoutRef.current = null;
-      setHoverOpen(true);
-    }, DIFF_FILE_TREE_HOVER_DELAY_MS);
-  }, [clearHoverCloseTimeout, clearHoverOpenTimeout, props.lockedOpen, suppressHoverOpen]);
-  const handleDrawerMouseLeave = React.useCallback(() => {
-    clearHoverOpenTimeout();
-    setSuppressHoverOpen(false);
-    hoverCloseTimeoutRef.current = window.setTimeout(() => {
-      hoverCloseTimeoutRef.current = null;
-      setHoverOpen(false);
-    }, DIFF_FILE_TREE_HOVER_DELAY_MS);
-  }, [clearHoverOpenTimeout]);
-  const handleDrawerToggle = React.useCallback(() => {
-    if (props.lockedOpen) {
-      return;
-    }
-    clearHoverOpenTimeout();
-    clearHoverCloseTimeout();
-    if (drawerOpen) {
-      props.onPinnedOpenChange(false);
-      setHoverOpen(false);
-      setSuppressHoverOpen(true);
-      return;
-    }
-    props.onPinnedOpenChange(true);
-    setSuppressHoverOpen(false);
-  }, [clearHoverCloseTimeout, clearHoverOpenTimeout, drawerOpen, props]);
-  return (
-    <aside
-      className={`diff-file-tree-drawer${drawerOpen ? " open" : " collapsed"}${props.lockedOpen ? " locked-open" : ""}`}
-      onMouseEnter={handleDrawerMouseEnter}
-      onMouseLeave={handleDrawerMouseLeave}
-    >
-      <button
-        aria-label={drawerOpen ? "收起文件目录" : "展开文件目录"}
-        className="diff-file-tree-handle"
-        onClick={handleDrawerToggle}
-        type="button"
-      >
-        {drawerOpen ? <ChevronRight size={14} /> : <ChevronLeftIcon />}
-      </button>
-      <div className="diff-file-tree-panel">
-        <label className="diff-file-tree-filter">
-          <Search size={14} />
-          <input
-            aria-label="筛选文件"
-            onChange={(event) => props.onFilterChange(event.currentTarget.value)}
-            placeholder="筛选文件..."
-            value={props.filter}
-          />
-          <span className="diff-file-tree-filter-actions">
-            <button
-              aria-label="全部展开"
-              disabled={defaultOpenDirectoryPaths.size === 0}
-              onClick={expandAllDirectories}
-              title="全部展开"
-              type="button"
-            >
-              <ListTree size={13} />
-            </button>
-            <button
-              aria-label="全部折叠"
-              disabled={defaultOpenDirectoryPaths.size === 0}
-              onClick={collapseAllDirectories}
-              title="全部折叠"
-              type="button"
-            >
-              <ListCollapse size={13} />
-            </button>
-          </span>
-        </label>
-        <div className="diff-file-tree-list">
-          {tree.children.length ? tree.children.map((node) => (
-            <DiffFileTreeNodeView
-              activeFileKey={props.activeFileKey}
-              depth={0}
-              key={node.path}
-              node={node}
-              onSelectFile={props.onSelectFile}
-              onToggleDirectory={toggleDirectory}
-              openDirectoryPaths={openDirectoryPaths}
-            />
-          )) : (
-            <div className="diff-file-tree-empty">没有匹配的文件</div>
-          )}
-        </div>
-      </div>
-    </aside>
-  );
-}
-
-// DiffFileTreeNodeView renders one recursive directory-tree row.
-// DiffFileTreeNodeView 渲染目录树中的一个递归节点行。
-function DiffFileTreeNodeView(props: {
-  // Tree node to render.
-  // 需要渲染的树节点。
-  node: DiffFileTreeNode;
-  // Current tree nesting depth.
-  // 当前目录树嵌套深度。
-  depth: number;
-  // Current selected file key.
-  // 当前选中的文件 key。
-  activeFileKey: string | null;
-  // Open directory path set.
-  // 已展开目录路径集合。
-  openDirectoryPaths: ReadonlySet<string>;
-  // Directory toggle handler.
-  // 目录展开切换处理器。
-  onToggleDirectory: (path: string) => void;
-  // File selection handler.
-  // 文件选择处理器。
-  onSelectFile: (file: DiffFile) => void;
-}) {
-  const isDirectory = !props.node.file;
-  const isOpen = isDirectory && props.openDirectoryPaths.has(props.node.path);
-  const isActive = props.node.file?.key === props.activeFileKey;
-  const rowStyle = { "--diff-tree-depth": props.depth } as React.CSSProperties;
-  if (isDirectory) {
-    return (
-      <div className="diff-file-tree-node directory">
-        <button
-          className="diff-file-tree-row directory"
-          onClick={() => props.onToggleDirectory(props.node.path)}
-          style={rowStyle}
-          type="button"
-        >
-          {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <Folder size={14} />
-          <span className="diff-file-tree-name">{props.node.name}</span>
-        </button>
-        {isOpen ? props.node.children.map((child) => (
-          <DiffFileTreeNodeView
-            activeFileKey={props.activeFileKey}
-            depth={props.depth + 1}
-            key={child.path}
-            node={child}
-            onSelectFile={props.onSelectFile}
-            onToggleDirectory={props.onToggleDirectory}
-            openDirectoryPaths={props.openDirectoryPaths}
-          />
-        )) : null}
-      </div>
-    );
-  }
-  return (
-    <button
-      className={`diff-file-tree-row file${isActive ? " active" : ""}`}
-      onClick={() => props.node.file ? props.onSelectFile(props.node.file) : undefined}
-      style={rowStyle}
-      title={props.node.file ? diffRevealRelativePath(props.node.file) ?? props.node.name : props.node.name}
-      type="button"
-    >
-      <span className={`diff-file-tree-file-icon ${props.node.file?.status ?? "modified"}`}>
-        {props.node.file?.tooLargeToDisplay ? <FileWarning size={14} /> : diffFileTreeExtensionLabel(props.node.name)}
-      </span>
-      <span className="diff-file-tree-name">{props.node.name}</span>
-      <DiffTreeStats additions={props.node.additions} deletions={props.node.deletions} />
-    </button>
-  );
-}
-
-// DiffTreeStats renders compact added/deleted counters.
-// DiffTreeStats 渲染紧凑的新增/删除计数。
-function DiffTreeStats(props: {
-  // Aggregated added-line count.
-  // 聚合新增行数。
-  additions: number;
-  // Aggregated deleted-line count.
-  // 聚合删除行数。
-  deletions: number;
-}) {
-  return (
-    <span className="diff-file-tree-stats">
-      {props.additions ? <span className="added">{`+${props.additions}`}</span> : null}
-      {props.deletions ? <span className="removed">{`-${props.deletions}`}</span> : null}
-    </span>
-  );
-}
-
-// ChevronLeftIcon provides a small local icon for the collapsed drawer handle.
-// ChevronLeftIcon 为收起目录把手提供一个小型本地图标。
-function ChevronLeftIcon() {
-  return (
-    <svg aria-hidden="true" fill="none" height="14" viewBox="0 0 14 14" width="14">
-      <path d="M8.75 3.5 5.25 7l3.5 3.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-    </svg>
-  );
 }
 
 // buildDiffFileTree builds a filtered directory tree and aggregates line-change counters.
@@ -1303,48 +1030,6 @@ function compareDiffFileTreeNodes(
   return left.name.localeCompare(right.name, undefined, { numeric: true, sensitivity: "base" });
 }
 
-// defaultDiffTreeOpenDirectoryPaths returns the initial expanded directory set.
-// defaultDiffTreeOpenDirectoryPaths 返回目录树初始展开目录集合。
-function defaultDiffTreeOpenDirectoryPaths(
-  // Tree root to inspect.
-  // 需要检查的目录树根节点。
-  root: DiffFileTreeNode,
-): ReadonlySet<string> {
-  const openPaths = new Set<string>();
-  collectDefaultDiffTreeOpenDirectoryPaths(root, openPaths);
-  return openPaths;
-}
-
-// collectDefaultDiffTreeOpenDirectoryPaths expands all visible directories for fast scanning.
-// collectDefaultDiffTreeOpenDirectoryPaths 展开所有可见目录，方便快速浏览。
-function collectDefaultDiffTreeOpenDirectoryPaths(
-  // Current tree node.
-  // 当前目录树节点。
-  node: DiffFileTreeNode,
-  // Mutable set receiving directory paths.
-  // 接收目录路径的可变集合。
-  openPaths: Set<string>,
-): void {
-  for (const child of node.children) {
-    if (child.file) {
-      continue;
-    }
-    openPaths.add(child.path);
-    collectDefaultDiffTreeOpenDirectoryPaths(child, openPaths);
-  }
-}
-
-// diffFileTreeExtensionLabel returns a compact file-type label for the tree icon slot.
-// diffFileTreeExtensionLabel 返回目录树图标位使用的紧凑文件类型标签。
-function diffFileTreeExtensionLabel(
-  // File name displayed by the tree row.
-  // 目录树行展示的文件名。
-  name: string,
-): string {
-  const extension = name.includes(".") ? name.split(".").pop()?.trim() : "";
-  return extension ? extension.slice(0, 3).toUpperCase() : "•";
-}
-
 // DiffSummarySearchState stores the compact backend file-hit search state.
 // DiffSummarySearchState 保存紧凑后端文件命中搜索状态。
 interface DiffSummarySearchState {
@@ -1460,10 +1145,6 @@ const EMPTY_DIFF_SUMMARY_SEARCH_STATE: DiffSummarySearchState = Object.freeze({
   scannedLines: 0,
   error: null,
 });
-
-// DIFF_FILE_TREE_HOVER_DELAY_MS delays drawer hover changes to avoid accidental drag-triggered opens.
-// DIFF_FILE_TREE_HOVER_DELAY_MS 延迟目录抽屉 hover 状态变化，避免拖拽时误触展开。
-const DIFF_FILE_TREE_HOVER_DELAY_MS = 500;
 
 // EMPTY_DIFF_DETAIL_HYDRATION_REQUESTS keeps inactive hydration effects reference-stable.
 // EMPTY_DIFF_DETAIL_HYDRATION_REQUESTS 保持未激活水合 effect 的请求列表引用稳定。

@@ -273,6 +273,138 @@ export interface ProjectDirectoryListing {
   notice?: string | null;
 }
 
+// WorkspaceFileEntryKind describes the file families rendered by the workspace file panel.
+// WorkspaceFileEntryKind 描述工作区文件面板渲染的文件类别。
+export type WorkspaceFileEntryKind = "directory" | "code" | "image" | "video" | "other";
+
+// WorkspaceFileFilterOptions stores the active workspace file tree filters.
+// WorkspaceFileFilterOptions 保存当前工作区文件树过滤器。
+export interface WorkspaceFileFilterOptions {
+  // Whether platform-hidden entries are filtered out.
+  // 是否过滤平台隐藏条目。
+  ignoreHidden: boolean;
+  // Whether dot-prefixed entries are filtered out.
+  // 是否过滤点开头条目。
+  ignoreDotNames: boolean;
+  // Whether `.ignore` files are applied.
+  // 是否应用 `.ignore` 文件。
+  useIgnoreFiles: boolean;
+  // Whether `.gitignore` and Git ignore sources are applied.
+  // 是否应用 `.gitignore` 与 Git 忽略来源。
+  useGitignore: boolean;
+  // Whether image files are included.
+  // 是否包含图片文件。
+  allowImages: boolean;
+  // Whether video files are included.
+  // 是否包含视频文件。
+  allowVideos: boolean;
+}
+
+// WorkspaceFileEntrySummary describes one file tree row returned by the service.
+// WorkspaceFileEntrySummary 描述服务返回的单个文件树行。
+export interface WorkspaceFileEntrySummary {
+  // Display file or directory name.
+  // 文件或目录显示名称。
+  name: string;
+  // Absolute path on the service host.
+  // 服务宿主上的绝对路径。
+  path: string;
+  // Workspace-root-relative path.
+  // 工作区根相对路径。
+  relativePath: string;
+  // Entry kind used by the preview renderer.
+  // 预览渲染器使用的条目类别。
+  kind: WorkspaceFileEntryKind;
+  // Whether the row is a directory.
+  // 当前行是否为目录。
+  isDirectory: boolean;
+  // Optional lowercase extension.
+  // 可选小写扩展名。
+  extension?: string | null;
+  // Optional MIME type for preview.
+  // 用于预览的可选 MIME 类型。
+  mimeType?: string | null;
+  // Optional file size in bytes.
+  // 可选文件字节大小。
+  sizeBytes?: number | null;
+  // Optional modified timestamp in Unix milliseconds text.
+  // 可选 Unix 毫秒文本修改时间。
+  modifiedAt?: string | null;
+  // Whether the row is hidden by platform or naming rules.
+  // 当前行是否被平台或命名规则视为隐藏。
+  hidden: boolean;
+  // Whether a directory may have children.
+  // 目录是否可能存在子项。
+  hasChildren: boolean;
+}
+
+// WorkspaceFileDirectoryListing describes one lazy directory listing response.
+// WorkspaceFileDirectoryListing 描述一次懒加载目录列表响应。
+export interface WorkspaceFileDirectoryListing {
+  // Absolute workspace root path.
+  // 工作区根绝对路径。
+  workspacePath: string;
+  // Current absolute directory path.
+  // 当前目录绝对路径。
+  path: string;
+  // Current relative directory path.
+  // 当前目录相对路径。
+  relativePath: string;
+  // Optional parent path inside the workspace.
+  // 工作区内的可选父路径。
+  parentPath?: string | null;
+  // Child entries returned by the service.
+  // 服务返回的子条目。
+  entries: WorkspaceFileEntrySummary[];
+  // Backend-applied filters.
+  // 后端实际应用的过滤器。
+  filters: WorkspaceFileFilterOptions;
+  // Whether the response was truncated.
+  // 响应是否被截断。
+  truncated: boolean;
+  // Number of returned entries.
+  // 返回条目数量。
+  entryCount: number;
+  // Optional human-readable notice.
+  // 可选人类可读提示。
+  notice?: string | null;
+}
+
+// WorkspaceFileReadResponse describes one workspace file preview response.
+// WorkspaceFileReadResponse 描述单个工作区文件预览响应。
+export interface WorkspaceFileReadResponse {
+  // Absolute workspace root path.
+  // 工作区根绝对路径。
+  workspacePath: string;
+  // Absolute file path.
+  // 文件绝对路径。
+  path: string;
+  // Workspace-root-relative file path.
+  // 工作区根相对文件路径。
+  relativePath: string;
+  // Preview kind.
+  // 预览类别。
+  kind: WorkspaceFileEntryKind;
+  // Optional MIME type.
+  // 可选 MIME 类型。
+  mimeType?: string | null;
+  // File size in bytes.
+  // 文件字节大小。
+  sizeBytes: number;
+  // UTF-8 content for code files.
+  // 代码文件的 UTF-8 内容。
+  content?: string | null;
+  // Encoding label for textual content.
+  // 文本内容编码标签。
+  encoding?: string | null;
+  // Optional returned line count.
+  // 可选返回行数。
+  lineCount?: number | null;
+  // Whether returned text is truncated.
+  // 返回文本是否已截断。
+  truncated: boolean;
+}
+
 // ConversationSummary describes one conversation shown in the sidebar.
 // ConversationSummary 描述侧栏中展示的单个会话。
 export interface ConversationSummary {

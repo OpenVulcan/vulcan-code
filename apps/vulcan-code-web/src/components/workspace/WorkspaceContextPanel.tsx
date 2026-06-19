@@ -23,6 +23,9 @@ import type {
   VmmMemoryActionRequest,
   VmmMemoryActionResult,
   WorkbenchSnapshot,
+  WorkspaceFileDirectoryListing,
+  WorkspaceFileFilterOptions,
+  WorkspaceFileReadResponse,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
 
@@ -33,9 +36,16 @@ const LazyWorkspaceReviewPanelHost = React.lazy(async () => {
   return { default: module.WorkspaceReviewPanelHost };
 });
 
+// LazyWorkspaceFilesPanelHost loads the filesystem browser only when the context rail renders it.
+// LazyWorkspaceFilesPanelHost 仅在上下文栏渲染文件页时加载文件系统浏览器。
+const LazyWorkspaceFilesPanelHost = React.lazy(async () => {
+  const module = await import("@/components/workspace/WorkspaceFilesPanelHost");
+  return { default: module.WorkspaceFilesPanelHost };
+});
+
 // WorkspaceContextPanelTab identifies one registered right context panel page.
 // WorkspaceContextPanelTab 标识一个已注册的右侧上下文面板页面。
-export type WorkspaceContextPanelTab = "review" | "memory";
+export type WorkspaceContextPanelTab = "review" | "memory" | "files";
 
 // WorkspaceDraftConversationSelection carries a local draft conversation route.
 // WorkspaceDraftConversationSelection 承载本地草稿会话路由。
@@ -89,6 +99,12 @@ export interface WorkspaceContextPanelProps {
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
+  // Copies plain text using the host-aware clipboard implementation.
+  // 使用宿主感知的剪贴板实现复制普通文本。
+  onCopyText: (text: string) => void;
+  // Resolves one local media path into a WebUI-renderable URL.
+  // 将单个本地媒体路径解析为 WebUI 可渲染 URL。
+  resolveMediaSourceUrl: (path: string) => string;
   // Runs one VMM memory management action.
   // 执行单个 VMM 记忆管理动作。
   onRunVmmAction: (request: VmmMemoryActionRequest) => Promise<VmmMemoryActionResult>;
@@ -130,6 +146,24 @@ export interface WorkspaceContextPanelProps {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Loads one lazy workspace file directory.
+  // 加载单个懒加载工作区文件目录。
+  loadWorkspaceFileDirectory: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    directoryPath: string | null,
+    filters: WorkspaceFileFilterOptions,
+  ) => Promise<WorkspaceFileDirectoryListing>;
+  // Loads one workspace file preview response.
+  // 加载单个工作区文件预览响应。
+  loadWorkspaceFilePreview: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+    filePath: string,
+    filters: WorkspaceFileFilterOptions,
+  ) => Promise<WorkspaceFileReadResponse>;
 }
 
 // WorkspaceContextPanel renders review and memory tabs for the right context rail.
@@ -150,6 +184,7 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
           <TabsList className="context-tabs-list">
             <TabsTrigger value="review">{t("contextPanel.review")}</TabsTrigger>
             <TabsTrigger value="memory">{t("contextPanel.memory")}</TabsTrigger>
+            <TabsTrigger value="files">{t("contextPanel.files")}</TabsTrigger>
           </TabsList>
         </div>
         <TabsContent className="context-tab-content review-tab-content" value="review">
@@ -175,6 +210,19 @@ export function WorkspaceContextPanel(props: WorkspaceContextPanelProps) {
             onRunVmmAction={props.onRunVmmAction}
           />
         </TabsContent>
+        <TabsContent className="context-tab-content files-tab-content" value="files">
+          <React.Suspense fallback={<WorkspaceFilesPanelLoading />}>
+            <LazyWorkspaceFilesPanelHost
+              loadWorkspaceFileDirectory={props.loadWorkspaceFileDirectory}
+              loadWorkspaceFilePreview={props.loadWorkspaceFilePreview}
+              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+              selectedConversationId={props.selectedConversationId}
+              selectedDraftConversation={props.selectedDraftConversation}
+              workbench={props.workbench}
+              onCopyText={props.onCopyText}
+            />
+          </React.Suspense>
+        </TabsContent>
       </Tabs>
     </aside>
   );
@@ -198,6 +246,16 @@ function WorkspaceReviewPanelLoading() {
   return (
     <div className="context-panel-loading-state">
       <span>正在加载审核面板。</span>
+    </div>
+  );
+}
+
+// WorkspaceFilesPanelLoading renders while the file panel chunk is loading.
+// WorkspaceFilesPanelLoading 渲染文件面板 chunk 加载期间的轻量状态。
+function WorkspaceFilesPanelLoading() {
+  return (
+    <div className="context-panel-loading-state">
+      <span>正在加载文件面板。</span>
     </div>
   );
 }

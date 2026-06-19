@@ -1117,6 +1117,179 @@ pub struct ProjectDirectoryListing {
     pub notice: Option<String>,
 }
 
+/// Describes one workspace file entry category returned to the WebUI file panel.
+/// 描述返回给 WebUI 文件面板的单个工作区文件条目类别。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkspaceFileEntryKind {
+    /// Directory entry that can be expanded lazily.
+    /// 可懒加载展开的目录条目。
+    Directory,
+    /// Text or source-code file that can be previewed as UTF-8 content.
+    /// 可作为 UTF-8 内容预览的文本或源代码文件。
+    Code,
+    /// Image file that can be displayed through the local media route.
+    /// 可通过本地媒体路由显示的图片文件。
+    Image,
+    /// Video file that can be displayed through the local media route.
+    /// 可通过本地媒体路由显示的视频文件。
+    Video,
+    /// Other file type that is not previewed by the first workspace file panel.
+    /// 首版工作区文件面板不预览的其他文件类型。
+    Other,
+}
+
+/// Stores the active workspace file tree filtering options.
+/// 保存当前工作区文件树过滤选项。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileFilterOptions {
+    /// Whether platform-hidden files and folders are filtered out.
+    /// 是否过滤平台隐藏文件与文件夹。
+    pub ignore_hidden: bool,
+    /// Whether dot-prefixed file and folder names are filtered out.
+    /// 是否过滤以点开头的文件与文件夹名称。
+    pub ignore_dot_names: bool,
+    /// Whether `.ignore` files are applied while listing the tree.
+    /// 列出文件树时是否应用 `.ignore` 文件。
+    pub use_ignore_files: bool,
+    /// Whether Git ignore sources are applied while listing the tree.
+    /// 列出文件树时是否应用 Git ignore 来源。
+    pub use_gitignore: bool,
+    /// Whether image files are included and previewable.
+    /// 是否包含并允许预览图片文件。
+    pub allow_images: bool,
+    /// Whether video files are included and previewable.
+    /// 是否包含并允许预览视频文件。
+    pub allow_videos: bool,
+}
+
+impl Default for WorkspaceFileFilterOptions {
+    /// Builds the default safe workspace file tree filtering options.
+    /// 构建默认安全的工作区文件树过滤选项。
+    fn default() -> Self {
+        Self {
+            ignore_hidden: true,
+            ignore_dot_names: true,
+            use_ignore_files: true,
+            use_gitignore: true,
+            allow_images: false,
+            allow_videos: false,
+        }
+    }
+}
+
+/// Summarizes one file or directory row returned to the WebUI workspace file panel.
+/// 汇总一条返回给 WebUI 工作区文件面板的文件或目录行。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileEntrySummary {
+    /// Display name of the file or directory.
+    /// 文件或目录显示名称。
+    pub name: String,
+    /// Absolute path on the service host.
+    /// 服务宿主上的绝对路径。
+    pub path: String,
+    /// Workspace-root-relative path using forward slashes.
+    /// 使用正斜杠的工作区根相对路径。
+    pub relative_path: String,
+    /// Entry category used by the WebUI to pick icons and preview behavior.
+    /// WebUI 用于选择图标与预览行为的条目类别。
+    pub kind: WorkspaceFileEntryKind,
+    /// Whether the row is a directory.
+    /// 当前行是否为目录。
+    pub is_directory: bool,
+    /// Lowercase file extension when present.
+    /// 存在时的小写文件扩展名。
+    pub extension: Option<String>,
+    /// Best-effort MIME type used by media previews.
+    /// 媒体预览使用的尽力推断 MIME 类型。
+    pub mime_type: Option<String>,
+    /// File size in bytes when available.
+    /// 可用时的文件字节大小。
+    pub size_bytes: Option<u64>,
+    /// Last modified Unix timestamp in milliseconds when available.
+    /// 可用时的 Unix 毫秒级最后修改时间戳。
+    pub modified_at: Option<String>,
+    /// Whether the entry matched a platform-hidden or dot-name rule.
+    /// 条目是否命中平台隐藏或点名称规则。
+    pub hidden: bool,
+    /// Whether a directory may contain children after filtering.
+    /// 目录在过滤后是否可能包含子项。
+    pub has_children: bool,
+}
+
+/// Describes one lazily loaded workspace file directory listing.
+/// 描述一次懒加载的工作区文件目录列表。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileDirectoryListing {
+    /// Absolute workspace root path used for the listing.
+    /// 本次列表使用的工作区根绝对路径。
+    pub workspace_path: String,
+    /// Absolute current directory path.
+    /// 当前目录绝对路径。
+    pub path: String,
+    /// Workspace-root-relative current directory path.
+    /// 当前目录相对工作区根的路径。
+    pub relative_path: String,
+    /// Optional absolute parent directory path inside the same workspace.
+    /// 同一工作区内的可选父目录绝对路径。
+    pub parent_path: Option<String>,
+    /// Child rows returned for the current directory.
+    /// 当前目录返回的子行。
+    pub entries: Vec<WorkspaceFileEntrySummary>,
+    /// Filtering options applied by the backend.
+    /// 后端实际应用的过滤选项。
+    pub filters: WorkspaceFileFilterOptions,
+    /// Whether the result was truncated by the backend listing limit.
+    /// 结果是否因后端列表上限被截断。
+    pub truncated: bool,
+    /// Number of entries returned after filtering and truncation.
+    /// 过滤与截断后返回的条目数量。
+    pub entry_count: usize,
+    /// Optional human-readable notice for partial or bounded results.
+    /// 局部或受限结果的人类可读提示。
+    pub notice: Option<String>,
+}
+
+/// Describes one workspace file preview response.
+/// 描述单个工作区文件预览响应。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceFileReadResponse {
+    /// Absolute workspace root path used for the read.
+    /// 本次读取使用的工作区根绝对路径。
+    pub workspace_path: String,
+    /// Absolute file path on the service host.
+    /// 服务宿主上的文件绝对路径。
+    pub path: String,
+    /// Workspace-root-relative file path using forward slashes.
+    /// 使用正斜杠的工作区根相对文件路径。
+    pub relative_path: String,
+    /// File category used by the WebUI preview renderer.
+    /// WebUI 预览渲染器使用的文件类别。
+    pub kind: WorkspaceFileEntryKind,
+    /// Best-effort MIME type for the file.
+    /// 文件的尽力推断 MIME 类型。
+    pub mime_type: Option<String>,
+    /// File size in bytes.
+    /// 文件字节大小。
+    pub size_bytes: u64,
+    /// UTF-8 code content for code files.
+    /// 代码文件的 UTF-8 内容。
+    pub content: Option<String>,
+    /// Encoding label for textual content.
+    /// 文本内容的编码标签。
+    pub encoding: Option<String>,
+    /// Number of lines in the returned content when textual content is present.
+    /// 返回文本内容存在时的行数。
+    pub line_count: Option<usize>,
+    /// Whether textual content was truncated by the backend read limit.
+    /// 文本内容是否因后端读取上限被截断。
+    pub truncated: bool,
+}
+
 /// Summarizes one conversation in the WebUI sidebar.
 /// 汇总 WebUI 侧栏中的单个会话。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]

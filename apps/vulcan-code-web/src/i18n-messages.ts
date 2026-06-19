@@ -29,6 +29,7 @@ export type TranslationKey =
   | "contextPanel.close"
   | "contextPanel.review"
   | "contextPanel.memory"
+  | "contextPanel.files"
   | "contextPanel.dynamic"
   | "contextPanel.static"
   | "contextPanel.reviewEmpty"
@@ -212,6 +213,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "contextPanel.close": "关闭右侧面板",
     "contextPanel.review": "审核",
     "contextPanel.memory": "记忆",
+    "contextPanel.files": "文件",
     "contextPanel.dynamic": "动态",
     "contextPanel.static": "静态",
     "contextPanel.reviewEmpty": "Git Diff 审核面板待接入",
@@ -392,6 +394,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "contextPanel.close": "Close right panel",
     "contextPanel.review": "Review",
     "contextPanel.memory": "Memory",
+    "contextPanel.files": "Files",
     "contextPanel.dynamic": "Dynamic",
     "contextPanel.static": "Static",
     "contextPanel.reviewEmpty": "Git Diff review panel is pending",
