@@ -33,6 +33,7 @@ pub(crate) fn prepare_host_tool_runtime_context(
     tools_manager: VulcanToolsManager,
     resolved_tools: &[ResolvedToolDefinition],
     session_id: SessionId,
+    execution_mode: &str,
     task_runtime: Arc<TaskRuntime>,
 ) -> PreparedHostToolRuntimeContext {
     let tools_manager = Arc::new(tools_manager);
@@ -42,6 +43,7 @@ pub(crate) fn prepare_host_tool_runtime_context(
             Arc::clone(&tools_manager),
             resolved_tools,
             session_id,
+            execution_mode,
         )),
         task_runtime,
         provider_tool_definitions: resolved_tools

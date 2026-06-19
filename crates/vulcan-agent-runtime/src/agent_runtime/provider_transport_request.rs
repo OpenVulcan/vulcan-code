@@ -41,6 +41,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Stable model identifier used by the target provider transport.
     /// 目标 Provider 传输层使用的稳定模型标识。
     pub(crate) model_id: String,
+    /// Execution mode label carried to invocation-time tool guards.
+    /// 传递给调用期工具守卫的执行模式标签。
+    pub(crate) execution_mode: String,
     /// Exact system preamble that should be visible to the outgoing provider request.
     /// 需要暴露给出站 Provider 请求的精确系统前导提示词。
     pub(crate) system_preamble: String,
@@ -103,6 +106,7 @@ pub(crate) fn build_provider_transport_execution_request(
     api_key: String,
     base_url: Option<&str>,
     model_id: &str,
+    execution_mode: &str,
     system_preamble: &str,
     prompt: &str,
     request_history: Vec<CoreConversationMessage>,
@@ -129,6 +133,7 @@ pub(crate) fn build_provider_transport_execution_request(
         api_key,
         base_url: base_url.map(ToString::to_string),
         model_id: model_id.to_string(),
+        execution_mode: execution_mode.to_string(),
         system_preamble: system_preamble.to_string(),
         prompt: prompt.to_string(),
         request_history,

@@ -29,6 +29,7 @@ import type {
   ProviderSummary,
   ReasoningSelectionSummary,
   SessionGoalSummary,
+  SessionPlanModeSummary,
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
@@ -111,6 +112,9 @@ export function ComposerDock(props: {
   // onUpdateSessionGoalStatus updates the current session goal lifecycle status.
   // onUpdateSessionGoalStatus 更新当前会话目标生命周期状态。
   onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
+  // onSetSessionPlanMode persists the current session Plan-mode toggle.
+  // onSetSessionPlanMode 持久化当前会话计划模式开关。
+  onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
   // onStopConversationRun stops the selected backend conversation stream.
   // onStopConversationRun 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -145,6 +149,9 @@ export function ComposerDock(props: {
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
+  // Current session Plan mode state.
+  // 当前会话计划模式状态。
+  sessionPlanMode: SessionPlanModeSummary | null;
   // runtimeCue shows the current session in-progress activity near the composer.
   // runtimeCue 在输入区附近显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
@@ -215,6 +222,7 @@ export function ComposerDock(props: {
         onResumeSessionGoal={props.onResumeSessionGoal}
         onClearSessionGoal={props.onClearSessionGoal}
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
+        onSetSessionPlanMode={props.onSetSessionPlanMode}
         onStopConversationRun={props.onStopConversationRun}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -225,6 +233,7 @@ export function ComposerDock(props: {
         onReorderPendingPrompts={props.onReorderPendingPrompts}
         onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
         reasoningSelection={props.reasoningSelection}
+        sessionPlanMode={props.sessionPlanMode}
       />
     </div>
   );

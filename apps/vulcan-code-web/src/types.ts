@@ -1469,6 +1469,34 @@ export interface SessionTodoPlanItemSummary {
   status: "pending" | "in_progress" | "completed";
 }
 
+// SessionPlanModeSummary describes the current session Plan mode state.
+// SessionPlanModeSummary 描述当前会话的计划模式状态。
+export interface SessionPlanModeSummary {
+  // Stable execution mode key such as build or plan.
+  // 稳定执行模式键，例如 build 或 plan。
+  executionMode: string;
+  // Whether Plan mode steering has already been injected for this activation.
+  // 当前计划模式激活期间是否已经注入过计划模式引导。
+  promptInjected: boolean;
+  // Latest generated plan artifact, if one exists.
+  // 最近生成的计划产物，如果存在。
+  artifact?: SessionPlanArtifactSummary | null;
+}
+
+// SessionPlanArtifactSummary describes one generated Plan artifact.
+// SessionPlanArtifactSummary 描述单个已生成的计划产物。
+export interface SessionPlanArtifactSummary {
+  // Human-readable plan name supplied by the model.
+  // 模型提供的人类可读计划名称。
+  name: string;
+  // Absolute filesystem path of the generated Markdown plan file.
+  // 生成的 Markdown 计划文件绝对路径。
+  path: string;
+  // Unix-millis update timestamp text.
+  // Unix 毫秒格式的更新时间文本。
+  updatedAt: string;
+}
+
 // SessionGoalSummary describes the current persisted session goal.
 // SessionGoalSummary 描述当前持久化的会话目标。
 export interface SessionGoalSummary {
@@ -1609,6 +1637,9 @@ export interface WorkbenchSnapshot {
   // Current session goal shown above the conversation composer.
   // 当前会话输入区上方展示的会话目标。
   sessionGoal?: SessionGoalSummary | null;
+  // Current session Plan mode state shown in the composer controls.
+  // 当前会话输入区控制项展示的计划模式状态。
+  sessionPlanMode?: SessionPlanModeSummary | null;
   // VMM memory summaries.
   // VMM 记忆摘要。
   memories: MemorySummary[];

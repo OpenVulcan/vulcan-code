@@ -90,6 +90,7 @@ import {
   replyPendingQuestion,
   resumeSessionGoal,
   saveSessionGoal,
+  setSessionPlanMode,
   stageComposerAttachmentBytes,
   saveSessionAiCapabilityConfiguration,
   stopConversationRun,
@@ -982,6 +983,29 @@ export function WorkbenchLayout(props: {
     }
   }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
 
+  // handleSetSessionPlanMode persists the current conversation Plan-mode toggle.
+  // handleSetSessionPlanMode 持久化当前会话的计划模式开关。
+  const handleSetSessionPlanMode = React.useCallback(async (enabled: boolean): Promise<boolean> => {
+    const activeConversationId = selectedDraftConversation ? null : selectedConversation?.id ?? null;
+    if (!activeConversationId) {
+      toast.error("请先创建或选择一个会话，再切换计划模式。");
+      return false;
+    }
+    try {
+      const snapshot = await setSessionPlanMode(activeConversationId, enabled);
+      if (!snapshot) {
+        toast.info("浏览器预览模式下无法切换计划模式。");
+        return false;
+      }
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      toast.success(enabled ? "计划模式已开启。" : "计划模式已关闭。");
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, [mergeWorkbenchWithLocalCaches, selectedConversation, selectedDraftConversation]);
+
   // handleEditPendingPrompt restores one queued prompt back into the active composer.
   // handleEditPendingPrompt 将单条排队提示词恢复到当前输入区。
   const handleEditPendingPrompt = React.useCallback(async (entryId: string): Promise<PendingPromptSummary | null> => {
@@ -1613,6 +1637,7 @@ export function WorkbenchLayout(props: {
             onResumeSessionGoal={handleResumeSessionGoal}
             onClearSessionGoal={handleClearSessionGoal}
             onUpdateSessionGoalStatus={handleUpdateSessionGoalStatus}
+            onSetSessionPlanMode={handleSetSessionPlanMode}
             onStopConversationRun={handleStopConversationRun}
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onCloseSubagentPanel={handleCloseSubagentPanel}

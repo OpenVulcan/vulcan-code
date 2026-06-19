@@ -539,6 +539,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         };
         let snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("anthropic"),

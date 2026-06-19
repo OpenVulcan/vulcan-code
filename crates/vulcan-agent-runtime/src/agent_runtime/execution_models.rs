@@ -115,6 +115,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional rendered session-goal context injected through the task-goal prompt node.
     /// 通过任务目标提示词节点注入的可选会话目标上下文。
     pub session_goal_context: Option<String>,
+    /// Optional Plan-mode developer guidance injected for the current session activation.
+    /// 为当前会话计划模式激活注入的可选开发者引导。
+    pub session_plan_context: Option<String>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -296,6 +299,9 @@ pub struct ExecutionPreparation {
     /// Optional rendered session-goal context injected through the task-goal prompt node.
     /// 通过任务目标提示词节点注入的可选会话目标上下文。
     pub session_goal_context: Option<String>,
+    /// Optional Plan-mode developer guidance injected for the current session activation.
+    /// 为当前会话计划模式激活注入的可选开发者引导。
+    pub session_plan_context: Option<String>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.

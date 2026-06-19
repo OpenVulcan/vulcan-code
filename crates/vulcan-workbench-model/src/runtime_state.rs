@@ -88,6 +88,70 @@ impl SessionTodoPlanState {
     }
 }
 
+/// Session-scoped Plan mode state retained outside the visible transcript.
+/// 保留在可见转录之外的会话级计划模式状态。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanModeState {
+    /// Whether the Plan mode steering prompt has been injected for this activation.
+    /// 当前计划模式激活期间是否已经注入过计划模式引导提示。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub prompt_injected: bool,
+    /// Whether the next Build request should receive one Plan-exit notice.
+    /// 下一次 Build 请求是否需要接收一次计划模式退出提示。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending_execution_notice: bool,
+    /// Latest tool-produced plan artifact, if one exists.
+    /// 最近一次由工具生成的计划产物，如果存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<SessionPlanArtifactState>,
+}
+
+impl SessionPlanModeState {
+    /// Returns whether the Plan mode state has no user-facing payload.
+    /// 返回计划模式状态是否没有任何面向用户的有效载荷。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` when no prompt marker, exit notice, or plan artifact is stored.
+    /// 未保存提示标记、退出提示或计划产物时返回 `true`。
+    pub fn is_empty(&self) -> bool {
+        !self.prompt_injected && !self.pending_execution_notice && self.artifact.is_none()
+    }
+}
+
+/// One Plan mode artifact produced by the model-facing submit_plan tool.
+/// 由模型可见 submit_plan 工具生成的单个计划模式产物。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanArtifactState {
+    /// Human-readable plan name supplied by the model.
+    /// 模型提供的人类可读计划名称。
+    pub name: String,
+    /// Absolute filesystem path of the generated Markdown plan file.
+    /// 生成的 Markdown 计划文件绝对路径。
+    pub path: String,
+    /// Unix-millis text capturing when the artifact was written.
+    /// 捕获产物写入时间的 Unix 毫秒文本。
+    pub updated_at: String,
+}
+
+/// Returns whether one boolean is false for serde skip helpers.
+/// 为 serde 跳过辅助函数判断单个布尔值是否为 false。
+///
+/// # Parameters
+/// 参数
+/// `value` is the boolean reference to inspect.
+/// `value` 是需要检查的布尔引用。
+///
+/// # Returns
+/// 返回值
+/// `true` when the referenced boolean is false.
+/// 当引用的布尔值为 false 时返回 `true`。
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1860,6 +1924,10 @@ pub struct SessionRuntimeStateEntry {
     /// 在会话工具面板中展示的会话级 TODO 计划。
     #[serde(default, skip_serializing_if = "SessionTodoPlanState::is_empty")]
     pub todo_plan: SessionTodoPlanState,
+    /// Session-level Plan mode marker and latest generated plan artifact.
+    /// 会话级计划模式标记与最近生成的计划产物。
+    #[serde(default, skip_serializing_if = "SessionPlanModeState::is_empty")]
+    pub plan_mode: SessionPlanModeState,
     /// Pending VMM PostAction writebacks retained for FIFO replay.
     /// 为 FIFO 重放保留的待处理 VMM PostAction 写回队列。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

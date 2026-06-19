@@ -24,6 +24,8 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::fs as tokio_fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
 use tokio::time::{Duration, timeout};
@@ -42,12 +44,17 @@ use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{
         GoalAccountingMode, GoalUpdate, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
+        load_session_hydration_snapshot,
     },
 };
 
 /// Stable identifier for the universal session TODO update tool.
 /// 通用会话 TODO 更新工具的稳定标识。
 pub const UPDATE_PLAN_TOOL_ID: &str = "update_plan";
+
+/// Stable identifier for the Plan-mode plan artifact submission tool.
+/// 计划模式计划产物提交工具的稳定标识。
+pub const SUBMIT_PLAN_TOOL_ID: &str = "submit_plan";
 
 /// Stable identifier for the current-thread goal read tool.
 /// 当前线程目标读取工具的稳定标识。
@@ -80,8 +87,8 @@ pub struct NativeToolDescriptor {
     /// Whether the tool should be directly visible to AI agents.
     /// 当前工具是否应直接对 AI 代理可见。
     pub ai_visible: bool,
-    /// Whether the tool may remain visible in Plan mode.
-    /// 当前工具是否允许在 Plan 模式继续可见。
+    /// Whether the tool may execute while Plan mode is active.
+    /// 当前工具是否允许在计划模式激活时执行。
     pub available_in_plan: bool,
 }
 
@@ -280,6 +287,7 @@ pub fn build_native_tool_catalog(
         build_agent_list_tool(snapshot.clone(), config),
         build_skill_list_tool(snapshot.clone(), config),
         build_update_plan_tool(),
+        build_submit_plan_tool(),
         build_get_goal_tool(),
         build_create_goal_tool(),
         build_update_goal_tool(),
@@ -490,7 +498,7 @@ fn build_update_plan_tool() -> Arc<NativeToolDefinition> {
         ),
         help_text: None,
         ai_visible: true,
-        available_in_plan: true,
+        available_in_plan: false,
     };
 
     build_native_tool_definition(
@@ -658,6 +666,424 @@ async fn execute_update_plan_tool(
     )
 }
 
+/// Hidden marker proving a Markdown plan was created by the submit_plan tool.
+/// 证明 Markdown 计划由 submit_plan 工具创建的隐藏标记。
+const SUBMIT_PLAN_MARKER: &str = "<!-- generated-by: vulcan-submit-plan -->";
+
+/// Parsed argument payload accepted by the `submit_plan` tool.
+/// `submit_plan` 工具接受的已解析参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SubmitPlanArgs {
+    /// Human-readable plan name used for the generated filename.
+    /// 用于生成文件名的人类可读计划名称。
+    name: String,
+    /// Complete Markdown plan content to write.
+    /// 需要写入的完整 Markdown 计划内容。
+    content: String,
+    /// Optional target directory under the workspace root.
+    /// 工作区根目录下的可选目标目录。
+    directory: Option<String>,
+    /// Whether to replace a previous tool-created plan file.
+    /// 是否替换此前由工具创建的计划文件。
+    replace: Option<bool>,
+    /// Exact previous plan path required when replacing.
+    /// 替换时必需的此前计划完整路径。
+    path: Option<String>,
+}
+
+/// Builds the Plan-mode plan artifact submission tool.
+/// 构建计划模式计划产物提交工具。
+fn build_submit_plan_tool() -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from(SUBMIT_PLAN_TOOL_ID),
+        name: String::from(SUBMIT_PLAN_TOOL_ID),
+        description: String::from(
+            "Submit a complete Plan-mode Markdown plan artifact. Use this only in Plan mode after the implementation plan is ready. For revisions, set replace=true and pass the exact path returned by the previous submit_plan call.",
+        ),
+        help_text: None,
+        ai_visible: true,
+        available_in_plan: true,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        submit_plan_args_schema(),
+        move |request: NativeToolExecutionRequest| {
+            Box::pin(async move { execute_submit_plan_tool(request).await })
+        },
+    )
+}
+
+/// Builds the JSON Schema for `submit_plan`.
+/// 构建 `submit_plan` 的 JSON Schema。
+///
+/// # Returns
+/// 返回值
+/// The model-facing argument schema for plan artifact submission.
+/// 面向模型的计划产物提交参数结构。
+fn submit_plan_args_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Short human-readable plan name used for the generated filename.",
+                "minLength": 1
+            },
+            "content": {
+                "type": "string",
+                "description": "Complete self-contained Markdown plan content.",
+                "minLength": 1
+            },
+            "directory": {
+                "type": "string",
+                "description": "Optional target directory under the current workspace root. Defaults to docs/plan."
+            },
+            "replace": {
+                "type": "boolean",
+                "description": "Set true only when replacing an existing tool-created plan artifact."
+            },
+            "path": {
+                "type": "string",
+                "description": "Exact previous plan file path returned by submit_plan. Required when replace=true."
+            }
+        },
+        "required": ["name", "content"],
+        "additionalProperties": false
+    })
+}
+
+/// Executes one `submit_plan` request and writes the Markdown artifact.
+/// 执行单次 `submit_plan` 请求并写入 Markdown 产物。
+///
+/// # Parameters
+/// 参数
+/// `request` carries raw model arguments and the workspace root.
+/// `request` 携带模型原始参数与工作区根目录。
+///
+/// # Returns
+/// 返回值
+/// A model response and host projection pointing at the generated plan artifact.
+/// 返回模型响应以及指向已生成计划产物的宿主投影。
+async fn execute_submit_plan_tool(
+    request: NativeToolExecutionRequest,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let args: SubmitPlanArgs =
+        serde_json::from_value(request.arguments.clone()).map_err(|error| {
+            NativeToolError::new(format!("failed to parse function arguments: {error}"))
+        })?;
+    let name = args.name.trim();
+    let content = args.content.trim();
+    if name.is_empty() {
+        return Err(NativeToolError::new("Plan name cannot be empty."));
+    }
+    if content.is_empty() {
+        return Err(NativeToolError::new("Plan content cannot be empty."));
+    }
+    let workspace_root = request
+        .workspace_root
+        .as_deref()
+        .ok_or_else(|| NativeToolError::new("submit_plan requires a workspace root."))?;
+    let workspace_root = canonicalize_existing_path(workspace_root).await?;
+    let replace = args.replace.unwrap_or(false);
+    let target_path = if replace {
+        let path = args
+            .path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| NativeToolError::new("replace=true requires the original plan path."))?;
+        let path = PathBuf::from(path);
+        ensure_workspace_child_path(&workspace_root, &path).await?;
+        let existing = tokio_fs::read_to_string(&path).await.map_err(|error| {
+            NativeToolError::new(format!("failed to read original plan: {error}"))
+        })?;
+        if !existing.contains(SUBMIT_PLAN_MARKER) {
+            return Err(NativeToolError::new(
+                "Refusing to replace a file that was not created by submit_plan.",
+            ));
+        }
+        ensure_recorded_submit_plan_artifact(&request, &workspace_root, &path).await?;
+        path
+    } else {
+        if args
+            .path
+            .as_deref()
+            .is_some_and(|path| !path.trim().is_empty())
+        {
+            return Err(NativeToolError::new(
+                "Pass path only with replace=true; new plans choose a fresh filename automatically.",
+            ));
+        }
+        let directory = args
+            .directory
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("docs/plan");
+        let directory_path = resolve_new_plan_directory(&workspace_root, directory).await?;
+        tokio_fs::create_dir_all(&directory_path)
+            .await
+            .map_err(|error| {
+                NativeToolError::new(format!("failed to create plan directory: {error}"))
+            })?;
+        unique_plan_path(&directory_path, name).await?
+    };
+    let plan_text = format!("{SUBMIT_PLAN_MARKER}\n\n{content}\n");
+    tokio_fs::write(&target_path, plan_text)
+        .await
+        .map_err(|error| NativeToolError::new(format!("failed to write plan file: {error}")))?;
+    let path_text = target_path.display().to_string();
+    let updated_at = unix_millis_now().to_string();
+    Ok(VulcanToolInvocationResult::from_model_output(json!({
+        "path": path_text,
+        "name": name,
+        "message": "Plan artifact saved."
+    }))
+    .with_host_result(VulcanToolHostResult {
+        kind: String::from("plan_artifact"),
+        payload: json!({
+            "name": name,
+            "path": path_text,
+            "updatedAt": updated_at,
+        }),
+    }))
+}
+
+/// Returns the current Unix epoch milliseconds.
+/// 返回当前 Unix 纪元毫秒数。
+///
+/// # Returns
+/// 返回值
+/// The current timestamp in milliseconds, or zero if the system clock is before epoch.
+/// 当前毫秒时间戳；如果系统时间早于纪元则返回零。
+fn unix_millis_now() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+/// Canonicalizes an existing path and converts failures into native-tool errors.
+/// 规范化已存在路径，并将失败转换为原生工具错误。
+///
+/// # Parameters
+/// 参数
+/// `path` is the filesystem path to canonicalize.
+/// `path` 是需要规范化的文件系统路径。
+///
+/// # Returns
+/// 返回值
+/// The canonical absolute path.
+/// 规范化后的绝对路径。
+async fn canonicalize_existing_path(path: &Path) -> Result<PathBuf, NativeToolError> {
+    tokio_fs::canonicalize(path)
+        .await
+        .map_err(|error| NativeToolError::new(format!("failed to resolve path: {error}")))
+}
+
+/// Ensures a target path remains inside the workspace root.
+/// 确保目标路径仍位于工作区根目录内。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` is the canonical workspace root.
+/// `workspace_root` 是规范化后的工作区根目录。
+/// `path` is the target path to validate.
+/// `path` 是需要校验的目标路径。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the path is accepted.
+/// 路径通过校验时返回 `Ok(())`。
+async fn ensure_workspace_child_path(
+    workspace_root: &Path,
+    path: &Path,
+) -> Result<(), NativeToolError> {
+    let candidate = if path.exists() {
+        canonicalize_existing_path(path).await?
+    } else {
+        let parent = path
+            .parent()
+            .ok_or_else(|| NativeToolError::new("target path has no parent directory."))?;
+        let canonical_parent = canonicalize_existing_path(parent).await?;
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| NativeToolError::new("target path has no filename."))?;
+        canonical_parent.join(file_name)
+    };
+    if !candidate.starts_with(workspace_root) {
+        return Err(NativeToolError::new(
+            "Plan path must stay inside the current workspace.",
+        ));
+    }
+    Ok(())
+}
+
+/// Ensures a replacement target matches the current session's recorded Plan artifact.
+/// 确保替换目标匹配当前会话已记录的计划产物。
+///
+/// # Parameters
+/// 参数
+/// `request` carries the current session and controller handles.
+/// `request` 携带当前会话和控制器句柄。
+/// `workspace_root` is the canonical workspace root.
+/// `workspace_root` 是规范化后的工作区根目录。
+/// `target_path` is the replacement target requested by the model.
+/// `target_path` 是模型请求替换的目标路径。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when the target is the exact recorded artifact path.
+/// 当目标就是已记录产物路径时返回 `Ok(())`。
+async fn ensure_recorded_submit_plan_artifact(
+    request: &NativeToolExecutionRequest,
+    workspace_root: &Path,
+    target_path: &Path,
+) -> Result<(), NativeToolError> {
+    let session_id = request.session_id.ok_or_else(|| {
+        NativeToolError::new(
+            "replace=true requires a current session with a recorded plan artifact.",
+        )
+    })?;
+    let controller_runtime = request.controller_runtime.clone().ok_or_else(|| {
+        NativeToolError::new(
+            "replace=true requires a current session with a recorded plan artifact.",
+        )
+    })?;
+    let snapshot = load_session_hydration_snapshot(controller_runtime, session_id, 1)
+        .await
+        .map_err(|error| {
+            NativeToolError::new(format!("failed to load session plan state: {error}"))
+        })?;
+    let recorded_path = snapshot
+        .runtime_state
+        .and_then(|state| state.plan_mode.artifact)
+        .map(|artifact| artifact.path)
+        .filter(|path| !path.trim().is_empty())
+        .ok_or_else(|| {
+            NativeToolError::new("replace=true requires a plan artifact recorded by submit_plan.")
+        })?;
+    let recorded_path = PathBuf::from(recorded_path);
+    ensure_workspace_child_path(workspace_root, &recorded_path).await?;
+    let recorded_path = canonicalize_existing_path(&recorded_path).await?;
+    let target_path = canonicalize_existing_path(target_path).await?;
+    if recorded_path != target_path {
+        return Err(NativeToolError::new(
+            "replace=true can only replace the current session's recorded submit_plan artifact path.",
+        ));
+    }
+    Ok(())
+}
+
+/// Resolves a new plan directory while keeping it inside the workspace root.
+/// 解析新的计划目录，并确保其位于工作区根目录内。
+///
+/// # Parameters
+/// 参数
+/// `workspace_root` is the canonical workspace root.
+/// `workspace_root` 是规范化后的工作区根目录。
+/// `directory` is the model-supplied relative or absolute directory.
+/// `directory` 是模型提供的相对或绝对目录。
+///
+/// # Returns
+/// 返回值
+/// A workspace-contained directory path that may not exist yet.
+/// 一个位于工作区内且可能尚不存在的目录路径。
+async fn resolve_new_plan_directory(
+    workspace_root: &Path,
+    directory: &str,
+) -> Result<PathBuf, NativeToolError> {
+    let requested = PathBuf::from(directory);
+    if requested
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(NativeToolError::new(
+            "Plan directory cannot contain parent-directory components.",
+        ));
+    }
+    if requested.is_absolute() {
+        let parent = requested
+            .parent()
+            .ok_or_else(|| NativeToolError::new("plan directory has no parent."))?;
+        let canonical_parent = canonicalize_existing_path(parent).await?;
+        let file_name = requested
+            .file_name()
+            .ok_or_else(|| NativeToolError::new("plan directory has no final component."))?;
+        let resolved = canonical_parent.join(file_name);
+        if !resolved.starts_with(workspace_root) {
+            return Err(NativeToolError::new(
+                "Plan directory must stay inside the current workspace.",
+            ));
+        }
+        return Ok(resolved);
+    }
+    Ok(workspace_root.join(requested))
+}
+
+/// Builds a unique Markdown path for a new plan artifact.
+/// 为新的计划产物构建唯一 Markdown 路径。
+///
+/// # Parameters
+/// 参数
+/// `directory` is the already-created target directory.
+/// `directory` 是已经创建的目标目录。
+/// `name` is the human-readable plan name.
+/// `name` 是人类可读计划名称。
+///
+/// # Returns
+/// 返回值
+/// A non-existing Markdown path.
+/// 一个尚不存在的 Markdown 路径。
+async fn unique_plan_path(directory: &Path, name: &str) -> Result<PathBuf, NativeToolError> {
+    let base = slugify_plan_name(name);
+    for suffix in 0..1000 {
+        let filename = if suffix == 0 {
+            format!("{base}.md")
+        } else {
+            format!("{base}_{suffix}.md")
+        };
+        let path = directory.join(filename);
+        if tokio_fs::metadata(&path).await.is_err() {
+            return Ok(path);
+        }
+    }
+    Err(NativeToolError::new(
+        "failed to allocate a unique plan filename after 1000 attempts.",
+    ))
+}
+
+/// Converts one human-readable plan name into a conservative filename stem.
+/// 将单个人类可读计划名称转换为保守文件名主体。
+///
+/// # Parameters
+/// 参数
+/// `name` is the model-supplied plan name.
+/// `name` 是模型提供的计划名称。
+///
+/// # Returns
+/// 返回值
+/// A lowercase ASCII filename stem.
+/// 小写 ASCII 文件名主体。
+fn slugify_plan_name(name: &str) -> String {
+    let mut slug = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let slug = slug.trim_matches('-');
+    if slug.is_empty() {
+        String::from("plan")
+    } else {
+        slug.chars().take(80).collect()
+    }
+}
+
 /// Maximum accepted objective length copied from Codex thread-goal validation.
 /// 从 Codex 线程目标校验复制的目标文本最大长度。
 const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
@@ -757,7 +1183,7 @@ fn build_get_goal_tool() -> Arc<NativeToolDefinition> {
         ),
         help_text: None,
         ai_visible: true,
-        available_in_plan: true,
+        available_in_plan: false,
     };
 
     build_native_tool_definition(
@@ -783,7 +1209,7 @@ fn build_create_goal_tool() -> Arc<NativeToolDefinition> {
         ),
         help_text: None,
         ai_visible: true,
-        available_in_plan: true,
+        available_in_plan: false,
     };
 
     build_native_tool_definition(
@@ -806,7 +1232,7 @@ fn build_update_goal_tool() -> Arc<NativeToolDefinition> {
         ),
         help_text: None,
         ai_visible: true,
-        available_in_plan: true,
+        available_in_plan: false,
     };
 
     build_native_tool_definition(
@@ -3456,12 +3882,13 @@ fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeTo
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeToolExecutionRequest, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
-        build_mcp_server_list_tool, build_shell_command_tool, build_shell_session_tool,
-        build_skill_list_tool, build_update_plan_tool, build_workspace_describe_tool,
-        effective_start_append_newline, goal_response_value, resolve_session_shell_behavior,
-        resolve_shell_command_launcher, resolve_shell_command_working_directory,
-        shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
+        NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, ThreadGoal, ThreadGoalStatus,
+        build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
+        build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
+        build_update_plan_tool, build_workspace_describe_tool, effective_start_append_newline,
+        goal_response_value, resolve_session_shell_behavior, resolve_shell_command_launcher,
+        resolve_shell_command_working_directory, shell_command_args_schema,
+        shell_session_args_schema, shell_specific_newline,
         validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
     };
     use crate::agent_runtime::config::{
@@ -3474,8 +3901,9 @@ mod tests {
     };
     use serde_json::json;
     use std::collections::BTreeMap;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use tokio::fs as tokio_fs;
     use uuid::Uuid;
     use vulcan_vmm::VmmConfigLayer;
 
@@ -3539,6 +3967,18 @@ mod tests {
         }
     }
 
+    /// Builds one native-tool execution request with a workspace root.
+    /// 构建一条带工作区根目录的原生工具执行请求。
+    fn test_native_request_with_workspace(
+        arguments: serde_json::Value,
+        workspace_root: PathBuf,
+    ) -> NativeToolExecutionRequest {
+        NativeToolExecutionRequest {
+            workspace_root: Some(workspace_root),
+            ..test_native_request(arguments)
+        }
+    }
+
     /// Verifies update_plan returns the Codex-compatible model text and a host TODO payload.
     /// 验证 update_plan 返回与 Codex 兼容的模型文本以及宿主 TODO 载荷。
     #[tokio::test]
@@ -3585,13 +4025,13 @@ mod tests {
         );
     }
 
-    /// Verifies update_plan stays visible in Plan mode because it is a universal task-state tool.
-    /// 验证 update_plan 作为通用任务状态工具会在 Plan 模式保持可见。
+    /// Verifies update_plan stays AI-visible but is not allowed to execute in Plan mode.
+    /// 验证 update_plan 保持 AI 可见，但不允许在计划模式中执行。
     #[test]
-    fn update_plan_tool_stays_visible_in_plan_mode() {
+    fn update_plan_tool_is_visible_but_blocked_in_plan_mode() {
         let tool = build_update_plan_tool();
         assert!(tool.descriptor.ai_visible);
-        assert!(tool.descriptor.available_in_plan);
+        assert!(!tool.descriptor.available_in_plan);
     }
 
     /// Verifies update_plan rejects blank step text before emitting host projection data.
@@ -3609,6 +4049,101 @@ mod tests {
             .expect_err("update_plan should reject blank step text");
 
         assert!(error.message.contains("step cannot be empty"));
+    }
+
+    /// Verifies submit_plan writes a marked Markdown file and returns a host artifact payload.
+    /// 验证 submit_plan 会写入带标记的 Markdown 文件并返回宿主产物载荷。
+    #[tokio::test]
+    async fn submit_plan_tool_writes_marked_plan_artifact() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("vulcan-submit-plan-{}", Uuid::new_v4()));
+        tokio_fs::create_dir_all(&workspace_root)
+            .await
+            .expect("workspace directory");
+        let tool = build_submit_plan_tool();
+        let result = tool
+            .invoke(test_native_request_with_workspace(
+                json!({
+                    "name": "Plan Mode Test",
+                    "content": "# Plan\n\n- Step one"
+                }),
+                workspace_root.clone(),
+            ))
+            .await
+            .expect("submit_plan should execute");
+        let host_result = result.host_result.expect("host result");
+        let path = host_result.payload["path"].as_str().expect("path");
+        let content = tokio_fs::read_to_string(path).await.expect("plan content");
+
+        assert_eq!(host_result.kind, "plan_artifact");
+        assert!(content.contains(SUBMIT_PLAN_MARKER));
+        assert!(content.contains("# Plan"));
+
+        let _ = tokio_fs::remove_dir_all(workspace_root).await;
+    }
+
+    /// Verifies submit_plan refuses to replace files that it did not create.
+    /// 验证 submit_plan 会拒绝替换非工具创建的文件。
+    #[tokio::test]
+    async fn submit_plan_tool_rejects_unmarked_replace_target() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("vulcan-submit-plan-{}", Uuid::new_v4()));
+        tokio_fs::create_dir_all(&workspace_root)
+            .await
+            .expect("workspace directory");
+        let target = workspace_root.join("manual.md");
+        tokio_fs::write(&target, "# Manual\n")
+            .await
+            .expect("manual plan");
+        let tool = build_submit_plan_tool();
+        let error = tool
+            .invoke(test_native_request_with_workspace(
+                json!({
+                    "name": "Manual",
+                    "content": "# Replacement",
+                    "replace": true,
+                    "path": target.display().to_string()
+                }),
+                workspace_root.clone(),
+            ))
+            .await
+            .expect_err("submit_plan should reject unmarked replacement");
+
+        assert!(error.message.contains("not created by submit_plan"));
+
+        let _ = tokio_fs::remove_dir_all(workspace_root).await;
+    }
+
+    /// Verifies submit_plan replacement requires a current session artifact record.
+    /// 验证 submit_plan 替换必须存在当前会话产物记录。
+    #[tokio::test]
+    async fn submit_plan_tool_rejects_unrecorded_replace_target() {
+        let workspace_root =
+            std::env::temp_dir().join(format!("vulcan-submit-plan-{}", Uuid::new_v4()));
+        tokio_fs::create_dir_all(&workspace_root)
+            .await
+            .expect("workspace directory");
+        let target = workspace_root.join("generated.md");
+        tokio_fs::write(&target, format!("{SUBMIT_PLAN_MARKER}\n\n# Plan\n"))
+            .await
+            .expect("tool plan");
+        let tool = build_submit_plan_tool();
+        let error = tool
+            .invoke(test_native_request_with_workspace(
+                json!({
+                    "name": "Generated",
+                    "content": "# Replacement",
+                    "replace": true,
+                    "path": target.display().to_string()
+                }),
+                workspace_root.clone(),
+            ))
+            .await
+            .expect_err("submit_plan should reject unrecorded replacement");
+
+        assert!(error.message.contains("recorded plan artifact"));
+
+        let _ = tokio_fs::remove_dir_all(workspace_root).await;
     }
 
     /// Verifies completed goals return the Codex-compatible structured usage-report instruction.

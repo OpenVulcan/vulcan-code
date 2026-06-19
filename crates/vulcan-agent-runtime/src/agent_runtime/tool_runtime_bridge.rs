@@ -33,6 +33,9 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// GUI session identifier attached to every host-managed tool invocation.
     /// 附着到每一次宿主管理工具调用上的图形界面会话标识。
     session_id: SessionId,
+    /// Execution mode label used by invocation-time Plan-mode guards.
+    /// 调用期计划模式守卫使用的执行模式标签。
+    execution_mode: String,
 }
 
 /// Metadata key used to connect one runtime-event projection to its tool-execution barrier.
@@ -70,6 +73,7 @@ impl VulcanManagedToolRuntimeBridge {
         manager: Arc<VulcanToolsManager>,
         definitions: &[ResolvedToolDefinition],
         session_id: SessionId,
+        execution_mode: impl Into<String>,
     ) -> Self {
         let definitions_by_id = definitions
             .iter()
@@ -81,6 +85,7 @@ impl VulcanManagedToolRuntimeBridge {
             manager,
             definitions_by_id,
             session_id,
+            execution_mode: execution_mode.into(),
         }
     }
 
@@ -92,7 +97,12 @@ impl VulcanManagedToolRuntimeBridge {
         args: Value,
     ) -> Result<VulcanToolInvocationResult, String> {
         self.manager
-            .invoke_tool(definition, args, Some(self.session_id.to_string()))
+            .invoke_tool(
+                definition,
+                args,
+                Some(self.session_id.to_string()),
+                &self.execution_mode,
+            )
             .await
     }
 
@@ -359,7 +369,7 @@ mod tests {
                     "required": ["query"]
                 }),
                 ai_visible: true,
-                plan_policy: VulcanPlanToolPolicy::Visible,
+                plan_policy: VulcanPlanToolPolicy::Hidden,
                 invoke: Arc::new(|_args, _session_id| {
                     Box::pin(async move {
                         Err(String::from("LuaSkills 工具解析失败：演示错误"))
@@ -566,8 +576,12 @@ mod tests {
     #[test]
     fn managed_tool_runtime_bridge_executes_core_tool_request() {
         let (manager, definitions) = build_demo_manager();
-        let runtime_bridge =
-            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let runtime_bridge = VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Build",
+        );
         let request = ToolInvocationRequest {
             tool_call_id: String::from("call-1"),
             tool_name: String::from("demo_tool"),
@@ -599,8 +613,12 @@ mod tests {
     #[test]
     fn managed_tool_runtime_bridge_converts_tool_failures_into_error_results() {
         let (manager, definitions) = build_demo_manager();
-        let runtime_bridge =
-            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let runtime_bridge = VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Build",
+        );
         let request = ToolInvocationRequest {
             tool_call_id: String::from("call-error-1"),
             tool_name: String::from("failing_tool"),
@@ -639,13 +657,55 @@ mod tests {
         );
     }
 
+    /// Verifies Plan mode blocks disallowed tools at the shared bridge instead of hiding them from the provider request.
+    /// 验证 Plan 模式会在共享桥接层拦截不允许的工具，而不是从 Provider 请求中隐藏它们。
+    #[test]
+    fn managed_tool_runtime_bridge_blocks_disallowed_plan_tool_invocation() {
+        let (manager, definitions) = build_demo_manager();
+        assert!(
+            definitions
+                .iter()
+                .any(|definition| { definition.descriptor.name == "failing_tool" })
+        );
+        let runtime_bridge = VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Plan",
+        );
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("call-plan-blocked-1"),
+            tool_name: String::from("failing_tool"),
+            arguments: json!({ "query": "README" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime
+            .block_on(runtime_bridge.execute_tool(&request))
+            .expect("plan-blocked tool should return model-visible guidance");
+
+        assert_eq!(result.tool_call_id, "call-plan-blocked-1");
+        assert_eq!(result.tool_name, "failing_tool");
+        assert!(!result.is_error);
+        assert!(result.model_output.contains("Plan Mode is active"));
+        assert!(!result.model_output.contains("演示错误"));
+        assert_eq!(result.host_result, None);
+    }
+
     /// Verifies the host-owned `vulcan-core` loop can execute through the shared GUI tool bridge and preserve host metadata in canonical records.
     /// 验证宿主自有的 `vulcan-core` 循环能够经由共享 GUI 工具桥接执行，并在规范记录中保留宿主元数据。
     #[test]
     fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
         let (manager, definitions) = build_demo_manager();
-        let runtime_bridge =
-            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let runtime_bridge = VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Build",
+        );
         let provider = MockControllerProviderAdapter::new(vec![
             ProviderTurnResponse {
                 assistant_text: String::new(),
@@ -723,8 +783,12 @@ mod tests {
     #[test]
     fn managed_tool_runtime_bridge_keeps_controller_loop_alive_after_tool_failure() {
         let (manager, definitions) = build_demo_manager();
-        let runtime_bridge =
-            VulcanManagedToolRuntimeBridge::new(Arc::new(manager), &definitions, Uuid::nil());
+        let runtime_bridge = VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Build",
+        );
         let provider = MockControllerProviderAdapter::new(vec![
             ProviderTurnResponse {
                 assistant_text: String::new(),
@@ -807,6 +871,7 @@ mod tests {
             Arc::new(manager),
             &definitions,
             Uuid::nil(),
+            "Build",
         ));
         let (sender, mut receiver): (
             ProviderLiveDeltaSender,
@@ -867,6 +932,7 @@ mod tests {
             Arc::new(manager),
             &definitions,
             Uuid::nil(),
+            "Build",
         ));
         let (sender, mut receiver): (
             ProviderLiveDeltaSender,
@@ -916,6 +982,7 @@ mod tests {
             Arc::new(manager),
             &definitions,
             Uuid::nil(),
+            "Build",
         ));
         let (sender, mut receiver): (
             ProviderLiveDeltaSender,

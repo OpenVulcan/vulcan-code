@@ -135,6 +135,7 @@ impl VulcanWorkbench {
             runtime_system_updates,
             controller_runtime: None,
             session_goal_context: None,
+            session_plan_context: None,
         };
 
         let agent_profile_catalog = self.agent_profile_catalog.clone();

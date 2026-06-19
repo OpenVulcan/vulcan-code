@@ -12,7 +12,8 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeToolBinding;
 use crate::provider_config::{AiToolKind, PersistedAiToolConfiguration, ProviderConfigurationFile};
 use crate::tooling::native::{
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, SUBMIT_PLAN_TOOL_ID, UPDATE_GOAL_TOOL_ID,
+    UPDATE_PLAN_TOOL_ID,
 };
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use crate::workspace_path::normalize_workspace_path_text;
@@ -198,6 +199,9 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         session_vmm.clone(),
     );
     let mut resolved_tools = tools_manager.resolve_for_execution_mode(&request.execution_mode);
+    if !request.execution_mode.eq_ignore_ascii_case("plan") {
+        remove_resolved_tool(&mut resolved_tools, SUBMIT_PLAN_TOOL_ID);
+    }
     filter_resolved_tool_set_by_tool_exposure(&mut resolved_tools, &tool_exposure);
     let prompt_skill_tool_available = request.prompt_purpose.supports_user_turn_tooling()
         && render_prompt_skills_instructions(&prompt_skills).is_some();
@@ -304,6 +308,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         boundary_events: request.boundary_events.clone(),
         runtime_system_updates: request.runtime_system_updates.clone(),
         session_goal_context: request.session_goal_context.clone(),
+        session_plan_context: request.session_plan_context.clone(),
     };
     let tool_snapshot = PreparedToolSnapshot {
         tools_manager,
@@ -989,8 +994,8 @@ mod tests {
     };
     use vulcan_tools_luaskills_call::CALL_LUASKILL_TOOL_NAME;
     use vulcan_tools_manager::{
-        ResolvedToolDefinition, ResolvedToolSet, VulcanToolDescriptor, VulcanToolInvocationResult,
-        VulcanToolSourceKind,
+        ResolvedToolDefinition, ResolvedToolSet, VulcanPlanToolPolicy, VulcanToolDescriptor,
+        VulcanToolInvocationResult, VulcanToolSourceKind,
     };
     use vulcan_vmm::VmmConfigLayer;
 
@@ -1337,6 +1342,7 @@ mod tests {
                 source,
             },
             parameters_schema: json!({ "type": "object" }),
+            plan_policy: VulcanPlanToolPolicy::Visible,
             invoke: Arc::new(|_, _| {
                 Box::pin(async { Ok(VulcanToolInvocationResult::from_model_output(json!({}))) })
             }),
@@ -1376,6 +1382,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
             session_goal_context: None,
+            session_plan_context: None,
         }
     }
 }

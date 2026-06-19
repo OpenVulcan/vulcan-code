@@ -122,6 +122,9 @@ interface ChatAreaProps {
   // Updates the current session goal lifecycle status.
   // 更新当前会话目标生命周期状态。
   onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
+  // Persists the current session Plan-mode toggle.
+  // 持久化当前会话计划模式开关。
+  onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
   // Stops the currently running conversation.
   // 停止当前运行中的会话。
   onStopConversationRun: () => Promise<boolean>;
@@ -748,6 +751,7 @@ export function ChatArea(props: ChatAreaProps) {
       onResumeSessionGoal={props.onResumeSessionGoal}
       onClearSessionGoal={props.onClearSessionGoal}
       onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
+      onSetSessionPlanMode={props.onSetSessionPlanMode}
       onStopConversationRun={props.onStopConversationRun}
       onStageAttachmentBytes={props.onStageAttachmentBytes}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -758,6 +762,7 @@ export function ChatArea(props: ChatAreaProps) {
       thinkingOverlayEnabled={thinkingOverlayEnabled}
       reasoningSelection={props.workbench.reasoningSelection ?? null}
       sessionGoal={isEmptyConversation ? null : props.workbench.sessionGoal ?? null}
+      sessionPlanMode={isEmptyConversation ? null : props.workbench.sessionPlanMode ?? null}
       runtimeCue={isEmptyConversation ? null : runtimeCue}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}
       onEditPendingPrompt={props.onEditPendingPrompt}

@@ -433,6 +433,9 @@ interface WorkspaceShellProps {
   // Updates the current session goal lifecycle status.
   // 更新当前会话目标生命周期状态。
   onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
+  // Persists the current session Plan-mode toggle.
+  // 持久化当前会话计划模式开关。
+  onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
   // Stops the selected conversation run.
   // 停止当前选中会话运行。
   onStopConversationRun: () => Promise<boolean>;
@@ -1018,6 +1021,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onResumeSessionGoal={props.onResumeSessionGoal}
         onClearSessionGoal={props.onClearSessionGoal}
         onUpdateSessionGoalStatus={props.onUpdateSessionGoalStatus}
+        onSetSessionPlanMode={props.onSetSessionPlanMode}
         onStopConversationRun={props.onStopConversationRun}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
         onCloseSubagentPanel={props.onCloseSubagentPanel}

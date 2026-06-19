@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   FileText,
   Image as ImageIcon,
+  ListChecks,
   Music2,
   Paperclip,
   Plus,
@@ -15,6 +16,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSub,
@@ -41,12 +43,18 @@ export function ComposerAttachmentMenu(props: {
   // Whether streaming thinking currently uses the floating thinking surface.
   // 当前流式思考是否使用浮动思考面板。
   thinkingOverlayEnabled: boolean;
+  // Whether session Plan mode is currently enabled.
+  // 当前会话计划模式是否已启用。
+  planModeEnabled: boolean;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
   // Updates the thinking display preference from the plus menu.
   // 从加号菜单更新思考展示偏好。
   onThinkingOverlayEnabledChange: (enabled: boolean) => void;
+  // Updates the session Plan mode from the plus menu.
+  // 从加号菜单更新会话计划模式。
+  onPlanModeChange: (enabled: boolean) => void;
   // Opens the session goal editor from the plus menu.
   // 从加号菜单打开会话目标编辑器。
   onOpenGoal: () => void;
@@ -112,6 +120,14 @@ export function ComposerAttachmentMenu(props: {
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
+        <DropdownMenuCheckboxItem
+          checked={props.planModeEnabled}
+          onCheckedChange={(checked) => props.onPlanModeChange(Boolean(checked))}
+          onSelect={(event) => event.preventDefault()}
+        >
+          <ListChecks size={15} />
+          <span>计划模式</span>
+        </DropdownMenuCheckboxItem>
         <DropdownMenuItem onSelect={props.onOpenGoal}>
           <Target size={15} />
           <span>目标</span>

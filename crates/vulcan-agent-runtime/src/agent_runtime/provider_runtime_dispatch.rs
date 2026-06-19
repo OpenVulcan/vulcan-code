@@ -195,6 +195,7 @@ fn execute_provider_prompt_stream_with_capture_mode(
         api_key,
         base_url,
         model_id,
+        &preparation.execution_mode,
         system_preamble,
         prompt,
         request_history,

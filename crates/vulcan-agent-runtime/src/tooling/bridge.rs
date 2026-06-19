@@ -983,8 +983,8 @@ fn mcp_tool_binding_to_vulcan(tool: &McpRuntimeToolBinding) -> VulcanToolDescrip
     }
 }
 
-/// Converts one native-tool Plan availability flag into the standalone manager Plan policy.
-/// 将单条原生工具的 Plan 可用标记转换为独立管理器的 Plan 策略。
+/// Converts one native-tool Plan execution flag into the standalone manager Plan policy.
+/// 将单条原生工具的 Plan 执行许可标记转换为独立管理器的 Plan 策略。
 fn native_plan_policy(descriptor: &NativeToolDescriptor) -> VulcanPlanToolPolicy {
     if descriptor.available_in_plan {
         VulcanPlanToolPolicy::Visible

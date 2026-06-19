@@ -17,12 +17,14 @@ use crate::provider_config::{ProviderApiFamily, ProviderRuntimeKind};
 pub(crate) fn execute_provider_transport_stream(
     request: ProviderTransportExecutionRequest,
 ) -> ProviderDeltaStream {
+    let execution_mode = request.execution_mode.clone();
     match request.api_family {
         ProviderApiFamily::OpenAiResponses => execute_openai_responses_stream(
             &request.provider_id,
             &request.api_key,
             request.base_url.as_deref(),
             &request.model_id,
+            &execution_mode,
             &request.system_preamble,
             &request.prompt,
             request.request_history,
@@ -46,6 +48,7 @@ pub(crate) fn execute_provider_transport_stream(
                 &request.api_key,
                 request.base_url.as_deref(),
                 &request.model_id,
+                &execution_mode,
                 &request.system_preamble,
                 &request.prompt,
                 request.request_history,
@@ -68,6 +71,7 @@ pub(crate) fn execute_provider_transport_stream(
                 &request.provider_id,
                 &request.api_key,
                 &request.model_id,
+                &execution_mode,
                 &request.system_preamble,
                 &request.prompt,
                 request.request_history,
@@ -92,6 +96,7 @@ pub(crate) fn execute_provider_transport_stream(
                 &request.api_key,
                 request.base_url.as_deref(),
                 &request.model_id,
+                &execution_mode,
                 &request.system_preamble,
                 &request.prompt,
                 request.request_history,
@@ -116,6 +121,7 @@ pub(crate) fn execute_provider_transport_stream(
             &request.api_key,
             request.base_url.as_deref(),
             &request.model_id,
+            &execution_mode,
             &request.system_preamble,
             &request.prompt,
             request.request_history,
@@ -138,6 +144,7 @@ pub(crate) fn execute_provider_transport_stream(
             &request.api_key,
             request.base_url.as_deref(),
             &request.model_id,
+            &execution_mode,
             &request.system_preamble,
             &request.prompt,
             request.request_history,
@@ -160,6 +167,7 @@ pub(crate) fn execute_provider_transport_stream(
             &request.api_key,
             request.base_url.as_deref(),
             &request.model_id,
+            &execution_mode,
             &request.system_preamble,
             &request.prompt,
             request.request_history,

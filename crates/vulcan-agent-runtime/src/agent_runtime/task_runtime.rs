@@ -5942,6 +5942,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             controller_runtime: None,
             session_goal_context: None,
+            session_plan_context: None,
         }
     }
 

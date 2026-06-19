@@ -235,6 +235,10 @@ pub struct WorkbenchSnapshot {
     /// 当前会话存在时显示在输入区上方的会话目标。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_goal: Option<SessionGoalSummary>,
+    /// Current session Plan mode state shown in the composer controls.
+    /// 当前会话输入区控制项展示的计划模式状态。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_plan_mode: Option<SessionPlanModeSummary>,
     /// Memory summaries shown in the VMM area.
     /// VMM 区域展示的记忆摘要。
     pub memories: Vec<MemorySummary>,
@@ -511,6 +515,39 @@ pub struct SessionTodoPlanItemSummary {
     /// Stable status key: pending, in_progress, or completed.
     /// 稳定状态键：pending、in_progress 或 completed。
     pub status: String,
+}
+
+/// Describes the current session Plan mode state for WebUI rendering.
+/// 描述供 WebUI 渲染的当前会话计划模式状态。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanModeSummary {
+    /// Stable execution mode key such as `build` or `plan`.
+    /// 稳定执行模式键，例如 `build` 或 `plan`。
+    pub execution_mode: String,
+    /// Whether Plan mode steering has already been injected for this activation.
+    /// 当前计划模式激活期间是否已经注入过计划模式引导。
+    pub prompt_injected: bool,
+    /// Latest generated plan artifact, if one exists.
+    /// 最近生成的计划产物，如果存在。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<SessionPlanArtifactSummary>,
+}
+
+/// Describes one generated Plan mode artifact for WebUI rendering.
+/// 描述供 WebUI 渲染的单个计划模式产物。
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionPlanArtifactSummary {
+    /// Human-readable plan name supplied by the model.
+    /// 模型提供的人类可读计划名称。
+    pub name: String,
+    /// Absolute filesystem path of the generated Markdown plan file.
+    /// 生成的 Markdown 计划文件绝对路径。
+    pub path: String,
+    /// Unix-millis text capturing when the artifact was written.
+    /// 捕获产物写入时间的 Unix 毫秒文本。
+    pub updated_at: String,
 }
 
 /// Describes the current long-running goal for one selected session.

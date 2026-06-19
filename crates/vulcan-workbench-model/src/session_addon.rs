@@ -8,7 +8,7 @@ use vulcan_provider_config::config::{
     OpenRouterEndpointRouteSelection, PersistedAiToolConfiguration, ReasoningEffortLevel,
 };
 
-use crate::{SessionId, SessionRuntimeStateEntry, SessionTodoPlanState};
+use crate::{SessionId, SessionPlanModeState, SessionRuntimeStateEntry, SessionTodoPlanState};
 
 /// Current schema version for the durable session addon document.
 /// 当前持久化会话附属状态文档的结构版本。
@@ -677,6 +677,10 @@ pub struct SessionWorkMode {
     /// Stable work mode key such as `build` or `plan`.
     /// 稳定工作模式键，例如 `build` 或 `plan`。
     pub execution_mode: String,
+    /// Session-scoped Plan mode marker and latest generated artifact.
+    /// 会话级计划模式标记与最近生成的计划产物。
+    #[serde(default, skip_serializing_if = "SessionPlanModeState::is_empty")]
+    pub plan_mode: SessionPlanModeState,
 }
 
 impl SessionWorkMode {
@@ -699,6 +703,7 @@ impl SessionWorkMode {
             .filter(|mode| !mode.trim().is_empty())
             .map(|mode| Self {
                 execution_mode: mode.clone(),
+                plan_mode: runtime_state.plan_mode.clone(),
             })
     }
 
@@ -711,6 +716,7 @@ impl SessionWorkMode {
     /// `runtime_state` 是要更新的旧运行态。
     pub fn apply_to_runtime_state(&self, runtime_state: &mut SessionRuntimeStateEntry) {
         runtime_state.active_work_mode = Some(self.execution_mode.clone());
+        runtime_state.plan_mode = self.plan_mode.clone();
     }
 }
 

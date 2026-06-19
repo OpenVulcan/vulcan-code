@@ -130,6 +130,9 @@ fn build_runtime_prompt_assembly_input(
     ));
     let mut custom_developer_segments =
         build_prompt_purpose_developer_segments(preparation.prompt_purpose);
+    if let Some(segment) = preparation.session_plan_context.clone() {
+        custom_developer_segments.push(segment);
+    }
     if let Some(segment) = preparation.prompt_skill_developer_segment.clone() {
         custom_developer_segments.push(segment);
     }
@@ -860,6 +863,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         }
     }
 

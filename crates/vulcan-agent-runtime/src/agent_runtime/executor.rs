@@ -44,7 +44,7 @@ mod tests {
         ProviderRequestToolSchema as CoreProviderRequestToolSchema,
     };
     use vulcan_tools_manager::{
-        ResolvedToolDefinition, VulcanToolDescriptor, VulcanToolSourceKind,
+        ResolvedToolDefinition, VulcanPlanToolPolicy, VulcanToolDescriptor, VulcanToolSourceKind,
     };
 
     /// Resolves the host-visible tool-call identifier used by transcript cards and tool-result correlation.
@@ -151,6 +151,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -298,6 +299,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -343,6 +345,7 @@ mod tests {
                 },
                 "required": ["path"]
             }),
+            plan_policy: VulcanPlanToolPolicy::Visible,
             invoke: std::sync::Arc::new(|_, _| unreachable!("test preview does not invoke tools")),
         }];
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -643,6 +646,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -724,6 +728,7 @@ mod tests {
             boundary_events: Vec::new(),
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
+            session_plan_context: None,
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

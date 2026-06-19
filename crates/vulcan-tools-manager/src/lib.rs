@@ -18,8 +18,8 @@ pub enum VulcanToolMode {
     /// Normal implementation mode with the full coding tool surface.
     /// 拥有完整编码工具面的常规实现模式。
     Build,
-    /// Planning mode with a conservative read-only and analysis-biased tool surface.
-    /// 采用保守只读与分析偏向工具面的规划模式。
+    /// Planning mode with a stable tool surface and invocation-time mutation guards.
+    /// 使用稳定工具面并在调用期执行变更守卫的规划模式。
     Plan,
 }
 
@@ -74,18 +74,18 @@ pub struct VulcanToolDescriptor {
     pub source: VulcanToolSourceKind,
 }
 
-/// Stable Plan-mode visibility policy attached to one candidate tool.
-/// 附着在单个候选工具上的稳定 Plan 模式可见性策略。
+/// Stable Plan-mode execution policy attached to one candidate tool.
+/// 附着在单个候选工具上的稳定 Plan 模式执行策略。
 #[derive(Debug, Clone)]
 pub enum VulcanPlanToolPolicy {
-    /// The tool is never exposed in Plan mode.
-    /// 当前工具在 Plan 模式中永不暴露。
+    /// The tool is blocked when invoked in Plan mode.
+    /// 当前工具在 Plan 模式中调用时会被拦截。
     Hidden,
-    /// The tool remains directly visible in Plan mode.
-    /// 当前工具在 Plan 模式中继续直接可见。
+    /// The tool may execute in Plan mode.
+    /// 当前工具允许在 Plan 模式中执行。
     Visible,
-    /// The tool is visible in Plan mode only when the provided text matches one read-only heuristic keyword.
-    /// 当前工具仅在给定文本命中只读启发式关键字时才在 Plan 模式中可见。
+    /// The tool may execute in Plan mode only when the provided text matches one read-only heuristic keyword.
+    /// 当前工具仅在给定文本命中只读启发式关键字时才允许在 Plan 模式中执行。
     HeuristicText(String),
 }
 
@@ -141,8 +141,8 @@ pub type VulcanToolInvokeFuture =
 pub type VulcanToolInvokeHandler =
     Arc<dyn Fn(Value, Option<String>) -> VulcanToolInvokeFuture + Send + Sync>;
 
-/// One candidate tool surface item provided by the host before mode-based filtering.
-/// 宿主在模式过滤前提供的单个候选工具面条目。
+/// One candidate tool surface item provided by the host before public exposure projection.
+/// 宿主在公开暴露投影前提供的单个候选工具面条目。
 #[derive(Clone)]
 pub struct VulcanToolCandidate {
     /// Unified host-facing descriptor.
@@ -154,8 +154,8 @@ pub struct VulcanToolCandidate {
     /// Whether the current tool should be directly visible to AI in Build mode.
     /// 当前工具在 Build 模式下是否应直接对 AI 可见。
     pub ai_visible: bool,
-    /// Plan-mode visibility policy used during mode-based filtering.
-    /// 模式过滤过程中使用的 Plan 模式可见性策略。
+    /// Plan-mode execution policy used during invocation-time blocking.
+    /// 调用期拦截过程中使用的 Plan 模式执行策略。
     pub plan_policy: VulcanPlanToolPolicy,
     /// Final host-owned invocation closure used for dispatch.
     /// 用于调度的最终宿主自有调用闭包。
@@ -172,6 +172,9 @@ pub struct ResolvedToolDefinition {
     /// JSON Schema describing the tool arguments that will be passed to rig.
     /// 描述将被传给 rig 的工具参数 JSON Schema。
     pub parameters_schema: Value,
+    /// Plan-mode execution policy preserved for invocation-time blocking.
+    /// 为调用期拦截保留的 Plan 模式执行策略。
+    pub plan_policy: VulcanPlanToolPolicy,
     /// Final host-owned invocation closure used for dispatch.
     /// 用于调度的最终宿主自有调用闭包。
     pub invoke: VulcanToolInvokeHandler,
@@ -189,8 +192,8 @@ impl std::fmt::Debug for ResolvedToolDefinition {
     }
 }
 
-/// Final resolved tool set for one execution turn after mode-based filtering.
-/// 单轮执行在模式过滤之后得到的最终解析工具集合。
+/// Final resolved tool set for one execution turn after public exposure projection.
+/// 单轮执行在公开暴露投影之后得到的最终解析工具集合。
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedToolSet {
     /// Unified AI-visible tool descriptors after source aggregation and mode filtering.
@@ -373,8 +376,8 @@ pub fn normalize_provider_tool_parameters_schema(schema: &mut Value) {
     }
 }
 
-/// Host-owned unified tool manager that normalises descriptors, filters the AI tool surface by mode, and dispatches resolved tool calls.
-/// 负责标准化工具描述、按模式过滤 AI 工具面并调度已解析工具调用的宿主自有统一工具管理器。
+/// Host-owned unified tool manager that normalises descriptors, keeps the AI tool surface stable, and dispatches resolved tool calls.
+/// 负责标准化工具描述、保持 AI 工具面稳定并调度已解析工具调用的宿主自有统一工具管理器。
 #[derive(Clone, Default)]
 pub struct VulcanToolsManager {
     /// Candidate tools aggregated from host-owned native, LuaSkills, MCP, or future expert sources.
@@ -393,20 +396,20 @@ impl VulcanToolsManager {
 
     /// Resolves the final AI-visible tool set for one execution-mode label.
     /// 为单条执行模式标签解析最终 AI 可见工具集合。
-    pub fn resolve_for_execution_mode(&self, execution_mode_label: &str) -> ResolvedToolSet {
-        let mode = VulcanToolMode::from_execution_mode_label(execution_mode_label);
+    pub fn resolve_for_execution_mode(&self, _execution_mode_label: &str) -> ResolvedToolSet {
         let mut descriptors = Vec::new();
         let mut definitions = Vec::new();
 
         for candidate in self
             .candidates
             .iter()
-            .filter(|candidate| tool_is_visible(candidate, mode))
+            .filter(|candidate| candidate.ai_visible)
         {
             descriptors.push(candidate.descriptor.clone());
             definitions.push(ResolvedToolDefinition {
                 descriptor: candidate.descriptor.clone(),
                 parameters_schema: candidate.parameters_schema.clone(),
+                plan_policy: candidate.plan_policy.clone(),
                 invoke: candidate.invoke.clone(),
             });
         }
@@ -424,7 +427,16 @@ impl VulcanToolsManager {
         tool: &ResolvedToolDefinition,
         args: Value,
         session_id: Option<String>,
+        execution_mode_label: &str,
     ) -> Result<VulcanToolInvocationResult, String> {
+        let mode = VulcanToolMode::from_execution_mode_label(execution_mode_label);
+        if matches!(mode, VulcanToolMode::Plan) && !tool_is_allowed_in_plan(tool) {
+            return Ok(VulcanToolInvocationResult::from_model_output(
+                Value::String(String::from(
+                    "Plan Mode is active. This tool call is not allowed because it may mutate workspace, repository, Git, or external state. Continue by refining the plan and wait for the user to leave Plan Mode before implementing changes.",
+                )),
+            ));
+        }
         (tool.invoke)(args, session_id).await
     }
 }
@@ -1262,30 +1274,27 @@ fn truncate_public_tool_name_base(base_name: &str, reserved_suffix_len: usize) -
     }
 }
 
-/// Returns whether one candidate tool should remain visible to AI in the current execution mode.
-/// 返回单个候选工具在当前执行模式下是否应继续对 AI 可见。
-fn tool_is_visible(candidate: &VulcanToolCandidate, mode: VulcanToolMode) -> bool {
-    if !candidate.ai_visible {
-        return false;
-    }
-
-    match mode {
-        VulcanToolMode::Build => true,
-        VulcanToolMode::Plan => match &candidate.plan_policy {
-            VulcanPlanToolPolicy::Hidden => false,
-            VulcanPlanToolPolicy::Visible => true,
-            VulcanPlanToolPolicy::HeuristicText(text) => DEFAULT_PLAN_READ_ONLY_KEYWORDS
+/// Returns whether one resolved tool may execute while Plan mode is active.
+/// 返回单个已解析工具在计划模式激活时是否允许执行。
+fn tool_is_allowed_in_plan(tool: &ResolvedToolDefinition) -> bool {
+    match &tool.plan_policy {
+        VulcanPlanToolPolicy::Hidden => false,
+        VulcanPlanToolPolicy::Visible => true,
+        VulcanPlanToolPolicy::HeuristicText(text) => {
+            let text = text.to_ascii_lowercase();
+            DEFAULT_PLAN_READ_ONLY_KEYWORDS
                 .iter()
-                .any(|keyword| text.to_ascii_lowercase().contains(keyword)),
-        },
+                .any(|keyword| text.contains(keyword))
+        }
     }
 }
 
-/// Shared read-only heuristic keywords used during the first-stage Plan-mode filter.
-/// 第一阶段 Plan 模式过滤使用的共享只读启发式关键字集合。
+/// Shared read-only heuristic keywords used by the Plan-mode execution guard.
+/// Plan 模式执行守卫使用的共享只读启发式关键字集合。
 const DEFAULT_PLAN_READ_ONLY_KEYWORDS: &[&str] = &[
     "read",
     "list",
+    "rg",
     "grep",
     "search",
     "find",
@@ -1408,10 +1417,10 @@ mod tests {
         );
     }
 
-    /// Verifies mode filtering runs after public-name normalization without losing the normalized descriptor.
-    /// 验证模式过滤会在公开名称归一化之后运行，并且不会丢失归一化后的描述。
+    /// Verifies Plan mode keeps the provider-visible tool surface stable after public-name normalization.
+    /// 验证 Plan 模式会在公开名称归一化后保持 Provider 可见工具面稳定。
     #[test]
-    fn manager_filters_plan_mode_after_public_name_normalization() {
+    fn manager_keeps_plan_mode_tool_surface_stable_after_public_name_normalization() {
         let manager = VulcanToolsManager::new(vec![
             test_candidate(
                 "read-file",
@@ -1431,8 +1440,26 @@ mod tests {
         );
         assert_eq!(
             resolved_names(manager.resolve_for_execution_mode("Plan")),
-            vec!["read_file"]
+            vec!["read_file", "write_file"]
         );
+    }
+
+    /// Verifies ripgrep-style rg tools are treated as Plan-mode read-only exploration.
+    /// 验证 rg 风格工具会在计划模式中被视为只读探索工具。
+    #[test]
+    fn manager_allows_rg_heuristic_tool_in_plan_mode() {
+        let manager = VulcanToolsManager::new(vec![test_candidate(
+            "codekit-rg",
+            VulcanToolSourceKind::LuaSkills,
+            VulcanPlanToolPolicy::HeuristicText(String::from("rg")),
+        )]);
+        let resolved = manager.resolve_for_execution_mode("Plan");
+        let tool = resolved
+            .definitions
+            .first()
+            .expect("resolved rg tool should exist");
+
+        assert!(super::tool_is_allowed_in_plan(tool));
     }
 
     /// Verifies OpenRouter Gemini-family models select the compact Gemini projection even on an OpenAI-compatible wire API.

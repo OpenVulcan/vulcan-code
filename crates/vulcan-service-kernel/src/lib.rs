@@ -122,19 +122,19 @@ use vulcan_service_api::{
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
     RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
-    SessionGoalSummary, SessionTodoPlanItemSummary, SessionTodoPlanSummary, SettingSectionSummary,
-    StartupSnapshot, StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot,
-    SubagentTaskSummary, ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
-    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
-    VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
-    VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
-    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER,
-    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
-    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
-    WorkbenchSnapshot, WorkspaceFileDirectoryListing, WorkspaceFileEntryKind,
-    WorkspaceFileEntrySummary, WorkspaceFileFilterOptions, WorkspaceFileReadResponse,
-    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
-    webui_static_root_from_candidates,
+    SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
+    SessionTodoPlanItemSummary, SessionTodoPlanSummary, SettingSectionSummary, StartupSnapshot,
+    StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
+    ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmEffectiveSummary,
+    VmmManagementSectionSummary, VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot,
+    VmmProjectScopeSummary, VmmRuntimeSummary, VmmStaticProfileDateGroupSummary,
+    VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary, VmmStaticProfileSummary,
+    WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
+    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
+    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceFileDirectoryListing,
+    WorkspaceFileEntryKind, WorkspaceFileEntrySummary, WorkspaceFileFilterOptions,
+    WorkspaceFileReadResponse, webui_service_discovery_snapshot_with_status,
+    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -157,13 +157,13 @@ use vulcan_workbench_model::{
     PendingPromptRuntimeOptions, PendingSessionPromptEntry, PendingSessionPromptSource,
     SUBAGENT_TASK_STOPPED_SUMMARY_TEXT, SelectedSubagentTaskPanel, SessionAddonNamespace,
     SessionAddonState, SessionId, SessionMessageEntry, SessionMessageKind,
-    SessionMessageRecordKind, SessionRunPhase, SessionRuntimeControls, SessionRuntimeStateEntry,
-    SessionState, SessionSummary, SessionTitleSource, SessionTodoPlanItem,
-    SessionTodoPlanItemStatus, SessionTodoPlanState, SessionTurnStats, SessionTurnStatsStatus,
-    SubagentTaskPanelState, SubagentTaskRunState, TaskProjectSummary,
-    apply_pending_prompt_panel_drop_target, attach_tool_display_state_to_metadata,
-    build_session_record_message_id, build_stopped_task_session_metadata,
-    clear_internal_pending_prompt_queue_and_restore_panel,
+    SessionMessageRecordKind, SessionPlanArtifactState, SessionPlanModeState, SessionRunPhase,
+    SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
+    SessionTitleSource, SessionTodoPlanItem, SessionTodoPlanItemStatus, SessionTodoPlanState,
+    SessionTurnStats, SessionTurnStatsStatus, SessionWorkMode, SubagentTaskPanelState,
+    SubagentTaskRunState, TaskProjectSummary, apply_pending_prompt_panel_drop_target,
+    attach_tool_display_state_to_metadata, build_session_record_message_id,
+    build_stopped_task_session_metadata, clear_internal_pending_prompt_queue_and_restore_panel,
     collect_running_subagent_task_states_for_tree, enqueue_pending_prompt_internal_queue_entry,
     find_task_session_tool_message_id_for_payload, merge_subagent_task_panel_cache,
     merge_tool_display_metadata, next_pending_prompt_dispatch_source,
@@ -434,6 +434,19 @@ struct SessionGoalStatusUpdateRequest {
     /// Next status key accepted by the user-facing controls.
     /// 用户界面控件接受的下一状态键。
     status: String,
+}
+
+/// Session Plan mode update request sent by the WebUI composer controls.
+/// WebUI 输入区控制项发送的会话计划模式更新请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionPlanModeUpdateRequest {
+    /// Conversation id whose Plan mode state should change.
+    /// 需要更新计划模式状态的会话标识。
+    conversation_id: Option<String>,
+    /// Whether Plan mode should be enabled for the selected session.
+    /// 是否为当前会话启用计划模式。
+    enabled: bool,
 }
 
 /// AI capability target binding submitted by the WebUI settings page.
@@ -2070,6 +2083,10 @@ async fn dispatch_service_rpc(
         ),
         "service_update_session_goal_status" => rpc_json_result(
             service_update_session_goal_status(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
+        "service_set_session_plan_mode" => rpc_json_result(
+            service_set_session_plan_mode(app, state, rpc_required_param(&params, "request")?)
                 .await,
         ),
         "service_compact_selected_conversation_context" => {
@@ -4037,6 +4054,20 @@ async fn service_submit_conversation_prompt(
         parse_ai_capability_target_selectors(disabled_ai_capability_target_selectors);
     let ai_capability_target_order_overrides =
         parse_ai_capability_target_order_overrides(ai_capability_target_order_overrides)?;
+    let effective_execution_mode = execution_mode.unwrap_or_else(|| String::from("build"));
+    if effective_execution_mode.eq_ignore_ascii_case("plan") {
+        ensure_session_can_enter_plan_mode(&controller_runtime, session_id).await?;
+        let updated_at = current_unix_millis_text();
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: updated_at.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        runtime_state.active_work_mode = Some(String::from("plan"));
+        runtime_state.updated_at = updated_at;
+    }
     webui_trace(
         "submit_prompt_runtime_options_ready",
         format!(
@@ -4080,7 +4111,7 @@ async fn service_submit_conversation_prompt(
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
                 source: PendingSessionPromptSource::UserFollowup,
-                execution_mode: execution_mode.unwrap_or_else(|| String::from("build")),
+                execution_mode: effective_execution_mode,
                 reasoning_effort: reasoning_effort.as_deref().and_then(parse_reasoning_effort),
                 disabled_ai_capability_kinds,
                 disabled_ai_capability_target_selectors,
@@ -4546,6 +4577,7 @@ async fn service_save_session_goal(
     validate_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
     ensure_regular_session_exists(&state, session_id, "保存目标")?;
+    ensure_session_not_in_plan_mode_for_goal(&state, session_id)?;
     let objective = request.objective.trim().to_string();
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
     let existing_goal = goal_store
@@ -4659,6 +4691,7 @@ async fn service_resume_session_goal(
     validate_session_goal_objective(&request.objective)?;
     validate_session_goal_budget(request.token_budget)?;
     ensure_regular_session_exists(&state, session_id, "继续目标")?;
+    ensure_session_not_in_plan_mode_for_goal(&state, session_id)?;
     let objective = request.objective.trim().to_string();
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
     let existing_goal = goal_store
@@ -6282,6 +6315,111 @@ async fn service_save_session_ai_capability_configuration(
     current_workbench_snapshot_from_state(&state)
 }
 
+/// Updates the selected session Plan mode state through the WebUI API.
+/// 通过 WebUI API 更新当前会话的计划模式状态。
+///
+/// # Parameters
+/// 参数
+/// `app` emits addon-change notifications after persistence.
+/// `app` 在持久化后发出附属状态变更通知。
+/// `state` owns the retained workbench snapshot.
+/// `state` 持有保留的工作台快照。
+/// `request` carries the target conversation and desired Plan enablement.
+/// `request` 携带目标会话与期望的计划模式启停状态。
+///
+/// # Returns
+/// 返回值
+/// The refreshed workbench snapshot after the Plan mode state changes.
+/// 计划模式状态变化后的刷新工作台快照。
+async fn service_set_session_plan_mode(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: SessionPlanModeUpdateRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let session_id = request
+        .conversation_id
+        .as_deref()
+        .and_then(parse_session_id)
+        .ok_or_else(|| String::from("当前草稿会话尚未创建，暂时不能切换计划模式。"))?;
+    let (controller_runtime, workspace_snapshot, existing_plan_mode) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+        if !workspace_snapshot_contains_regular_session(workspace_snapshot, session_id) {
+            return Err(format!("未找到要切换计划模式的会话：{session_id}"));
+        }
+        let existing_plan_mode = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .map(|runtime_state| runtime_state.plan_mode.clone())
+            .unwrap_or_default();
+        (
+            controller_runtime,
+            workspace_snapshot.clone(),
+            existing_plan_mode,
+        )
+    };
+    let updated_at = current_unix_millis_text();
+    let mut next_plan_mode = existing_plan_mode;
+    if request.enabled {
+        ensure_session_can_enter_plan_mode(&controller_runtime, session_id).await?;
+        next_plan_mode.pending_execution_notice = false;
+    }
+    if !request.enabled {
+        next_plan_mode.pending_execution_notice = next_plan_mode.prompt_injected;
+        next_plan_mode.prompt_injected = false;
+    }
+    let work_mode = SessionWorkMode {
+        execution_mode: if request.enabled {
+            String::from("plan")
+        } else {
+            String::from("build")
+        },
+        plan_mode: next_plan_mode.clone(),
+    };
+    let mut addon_state = SessionAddonState::new(session_id);
+    let _ = addon_state.set_work_mode(&work_mode, updated_at.clone());
+    invalidate_webui_session_addon_persist_version(
+        &state,
+        session_id,
+        SessionAddonNamespace::WorkMode,
+    )?;
+    let addon_persist_lock = webui_workspace_persist_lock();
+    let _addon_persist_guard = addon_persist_lock.lock().await;
+    let persisted_addon_state = persist_workspace_session_addon_state_update(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        addon_state,
+    )
+    .await?;
+    with_workspace_mutation_preserving_subagent_navigation(&app, &state, |workspace| {
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: updated_at.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        work_mode.apply_to_runtime_state(runtime_state);
+        runtime_state.updated_at = updated_at.clone();
+    })?;
+    emit_session_addon_changed_event(
+        &app,
+        session_id,
+        &[SessionAddonNamespace::WorkMode],
+        persisted_addon_state.revision,
+        latest_session_addon_updated_at(&persisted_addon_state),
+    );
+    current_workbench_snapshot_from_state(&state)
+}
+
 /// Builds one context-window-scoped model notice for session AI capability changes.
 /// 为会话 AI 能力变化构建一条仅在当前上下文窗口内生效的模型通知。
 ///
@@ -6883,9 +7021,9 @@ async fn service_workspace_files_read(
             &metadata,
             WorkspaceFileEntryKind::Video,
         )),
-        WorkspaceFileEntryKind::Image | WorkspaceFileEntryKind::Video => Err(String::from(
-            "当前过滤规则未允许预览该媒体文件。",
-        )),
+        WorkspaceFileEntryKind::Image | WorkspaceFileEntryKind::Video => {
+            Err(String::from("当前过滤规则未允许预览该媒体文件。"))
+        }
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Other => {
             Err(String::from("当前文件类型不支持预览。"))
         }
@@ -7038,8 +7176,7 @@ fn workspace_file_entry_summary(
     let name = canonical.file_name()?.to_string_lossy().to_string();
     let is_dot_hidden = workspace_file_name_is_dot_hidden(&name);
     let is_platform_hidden = workspace_file_is_platform_hidden(&canonical, &metadata);
-    if (filters.ignore_dot_names && is_dot_hidden)
-        || (filters.ignore_hidden && is_platform_hidden)
+    if (filters.ignore_dot_names && is_dot_hidden) || (filters.ignore_hidden && is_platform_hidden)
     {
         return None;
     }
@@ -7161,7 +7298,8 @@ fn workspace_file_read_code_response(
             normalized_workspace_path_text_from_path(file)
         )
     })?;
-    let mut bytes = Vec::with_capacity(WORKSPACE_FILE_READ_LIMIT_BYTES.min(metadata.len() as usize));
+    let mut bytes =
+        Vec::with_capacity(WORKSPACE_FILE_READ_LIMIT_BYTES.min(metadata.len() as usize));
     Read::by_ref(&mut handle)
         .take((WORKSPACE_FILE_READ_LIMIT_BYTES + 1) as u64)
         .read_to_end(&mut bytes)
@@ -7325,8 +7463,7 @@ fn workspace_file_extension(path: &Path) -> Option<String> {
 fn workspace_file_extension_is_code(extension: &str) -> bool {
     matches!(
         extension,
-        "rs"
-            | "ts"
+        "rs" | "ts"
             | "tsx"
             | "js"
             | "jsx"
@@ -12906,6 +13043,8 @@ fn continue_webui_prompt_turn_after_precheck_from_state(
     let mut request = continuation.request;
     request.controller_runtime = Some(controller_runtime.clone());
     request.session_goal_context = session_goal_context_for_prompt_from_state(state, session_id)?;
+    request.session_plan_context =
+        session_plan_context_for_prompt_from_state(app, state, controller_runtime, session_id)?;
     request.task_session_store_root = owning_project_id_for_session(
         &workspace_snapshot,
         session_id,
@@ -17469,6 +17608,7 @@ fn append_runtime_event_projection(
         }
     }
     let mut changed_todo_plan: Option<SessionTodoPlanState> = None;
+    let mut changed_plan_mode: Option<SessionPlanModeState> = None;
     let workspace_snapshot =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
             let now = current_unix_millis_text();
@@ -17490,8 +17630,17 @@ fn append_runtime_event_projection(
                 && runtime_state.todo_plan != todo_plan
             {
                 runtime_state.todo_plan = todo_plan.clone();
-                runtime_state.updated_at = now;
+                runtime_state.updated_at = now.clone();
                 changed_todo_plan = Some(todo_plan);
+            }
+            if let Some(artifact) = plan_artifact_state_from_tool_finished_event(event) {
+                let mut plan_mode = runtime_state.plan_mode.clone();
+                plan_mode.artifact = Some(artifact);
+                if runtime_state.plan_mode != plan_mode {
+                    runtime_state.plan_mode = plan_mode.clone();
+                    runtime_state.updated_at = now.clone();
+                    changed_plan_mode = Some(plan_mode);
+                }
             }
         })?;
     if let Some(todo_plan) = changed_todo_plan {
@@ -17506,11 +17655,37 @@ fn append_runtime_event_projection(
             app.clone(),
             state.clone(),
             controller_runtime,
-            workspace_snapshot,
+            workspace_snapshot.clone(),
             session_id,
             addon_state,
             vec![SessionAddonNamespace::TodoPlan],
             Some(String::from("update_plan_tool")),
+        );
+    }
+    if let Some(plan_mode) = changed_plan_mode {
+        let controller_runtime = controller_runtime_from_state(state)?;
+        let updated_at = plan_mode
+            .artifact
+            .as_ref()
+            .map(|artifact| artifact.updated_at.clone())
+            .unwrap_or_else(current_unix_millis_text);
+        let mut addon_state = SessionAddonState::new(session_id);
+        let _ = addon_state.set_work_mode(
+            &SessionWorkMode {
+                execution_mode: String::from("plan"),
+                plan_mode,
+            },
+            updated_at,
+        );
+        spawn_workspace_session_addon_state_persist_task(
+            app.clone(),
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            addon_state,
+            vec![SessionAddonNamespace::WorkMode],
+            Some(String::from("submit_plan_tool")),
         );
     }
     Ok(())
@@ -17999,6 +18174,226 @@ fn session_goal_context_for_prompt_from_state(
         .and_then(render_session_goal_context_for_prompt))
 }
 
+/// Builds the current Plan-mode developer segment and marks the first activation as injected.
+/// 构建当前计划模式开发者提示段，并在首次激活时标记为已注入。
+///
+/// # Parameters
+/// 参数
+/// `app` emits addon updates if the marker changes.
+/// `app` 在标记变化时发出附属状态更新。
+/// `state` owns the retained workspace snapshot.
+/// `state` 持有保留的工作区快照。
+/// `controller_runtime` persists the updated addon namespace.
+/// `controller_runtime` 持久化更新后的附属命名空间。
+/// `session_id` identifies the session being prepared.
+/// `session_id` 标识正在准备的会话。
+///
+/// # Returns
+/// 返回值
+/// The Plan-mode developer segment whenever the session is currently in Plan mode.
+/// 会话当前处于计划模式时返回计划模式开发者提示段。
+fn session_plan_context_for_prompt_from_state(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<Option<String>, String> {
+    let updated_at = current_unix_millis_text();
+    let mut context: Option<String> = None;
+    let mut next_plan_mode: Option<SessionPlanModeState> = None;
+    let mut next_execution_mode = String::from("build");
+    let workspace_snapshot =
+        with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+            let Some(runtime_state) = workspace.session_runtime_state.get_mut(&session_id) else {
+                return;
+            };
+            let is_plan = runtime_state
+                .active_work_mode
+                .as_deref()
+                .is_some_and(|mode| mode.eq_ignore_ascii_case("plan"));
+            if !is_plan {
+                if runtime_state.plan_mode.pending_execution_notice {
+                    runtime_state.plan_mode.pending_execution_notice = false;
+                    runtime_state.updated_at = updated_at.clone();
+                    next_plan_mode = Some(runtime_state.plan_mode.clone());
+                    next_execution_mode = String::from("build");
+                    context = Some(render_plan_mode_exit_developer_context());
+                }
+                return;
+            }
+            next_execution_mode = String::from("plan");
+            context = Some(render_plan_mode_developer_context());
+            if runtime_state.plan_mode.pending_execution_notice {
+                runtime_state.plan_mode.pending_execution_notice = false;
+                runtime_state.updated_at = updated_at.clone();
+                next_plan_mode = Some(runtime_state.plan_mode.clone());
+            }
+            if runtime_state.plan_mode.prompt_injected {
+                return;
+            }
+            runtime_state.plan_mode.prompt_injected = true;
+            runtime_state.updated_at = updated_at.clone();
+            next_plan_mode = Some(runtime_state.plan_mode.clone());
+            next_execution_mode = String::from("plan");
+        })?;
+    let Some(plan_mode) = next_plan_mode else {
+        return Ok(context);
+    };
+    let mut addon_state = SessionAddonState::new(session_id);
+    let _ = addon_state.set_work_mode(
+        &SessionWorkMode {
+            execution_mode: next_execution_mode,
+            plan_mode,
+        },
+        updated_at,
+    );
+    spawn_workspace_session_addon_state_persist_task(
+        app.clone(),
+        state.clone(),
+        controller_runtime.clone(),
+        workspace_snapshot,
+        session_id,
+        addon_state,
+        vec![SessionAddonNamespace::WorkMode],
+        Some(String::from("plan_mode_prompt_injected")),
+    );
+    Ok(context)
+}
+
+/// Renders the Plan-mode developer guidance attached to each active Plan request.
+/// 渲染附加到每次活跃计划模式请求的开发者引导。
+///
+/// # Returns
+/// 返回值
+/// English model-facing Plan-mode guidance adapted for Vulcan.
+/// 面向模型的英文 Vulcan 计划模式引导。
+fn render_plan_mode_developer_context() -> String {
+    String::from(
+        r#"# Plan Mode (Conversational)
+
+You are in Plan Mode for this request. Work in three phases and chat your way to a decision-complete plan before finalizing it. A strong plan is detailed enough that another engineer or agent can implement it immediately without making additional product or architecture decisions.
+
+## Mode Rules (Strict)
+
+Plan Mode remains active for the current request until the host explicitly sends a non-plan request. User intent, imperative language, or phrases such as "start", "fix", "implement", or "do it" do not end Plan Mode.
+
+If the user asks for execution while this request is still in Plan Mode, treat it as a request to plan the execution, not to perform it.
+
+## Plan Mode vs. Progress Tools
+
+Plan Mode is a collaboration mode for producing a decision-complete plan. It is not a checklist or progress state.
+
+The `update_plan` tool, when present, is a progress/TODO tool. It does not enter or exit Plan Mode. Do not use `update_plan` while in Plan Mode. If you try to use it in Plan Mode, the host may reject the call.
+
+## Plan Artifact Tool
+
+When the `submit_plan` tool is available, use it as the official way to finalize a Plan Mode request. The tool saves the complete plan as a Markdown artifact and returns the final path.
+
+Call `submit_plan` only when the plan is decision complete. Provide a short stable name and the full Markdown plan content. If you are revising a previously submitted plan, pass the original returned path, set `replace` to true, and provide the full replacement content. Do not submit partial patches or append-only updates.
+
+After `submit_plan` succeeds, briefly tell the user that the plan was saved. Do not repeat the entire plan in assistant text unless the tool is unavailable.
+
+## Execution vs. Mutation in Plan Mode
+
+You may explore and execute non-mutating actions that improve the plan. You must not perform mutating actions.
+
+Allowed non-mutating actions include:
+
+* Reading or searching files, configs, schemas, types, manifests, and docs.
+* Static analysis, inspection, and repository exploration.
+* Dry-run style commands when they do not edit repo-tracked files.
+* Tests, builds, or checks that may write to caches or build artifacts, as long as they do not edit repo-tracked files.
+
+Not allowed mutating actions include:
+
+* Editing, creating, deleting, moving, or writing files.
+* Applying patches.
+* Running formatters or linters that rewrite files.
+* Running migrations, code generation, or scripts that update repo-tracked files.
+* Staging, unstaging, reverting, committing, pushing, or otherwise changing Git state.
+* Calling tools whose purpose is to perform the implementation instead of refining the plan.
+
+When in doubt, if an action would reasonably be described as "doing the work" rather than "planning the work", do not do it.
+
+The host may still expose the normal tool schema in Plan Mode to preserve request stability. Tool visibility does not mean mutation is allowed. If you call a mutating tool in Plan Mode, the host may reject the call and ask you to continue planning.
+
+## Phase 1 - Ground in the Environment
+
+Begin by grounding yourself in the actual environment. Resolve unknowns by discovering facts before asking the user. Perform at least one targeted non-mutating exploration pass when a local repository or relevant environment is available.
+
+Use searches, file reads, manifests, configs, schemas, types, and existing implementation entry points to understand the current shape. Ask the user only after reasonable non-mutating exploration cannot answer a meaningful ambiguity.
+
+Exception: you may ask before exploring only when the prompt itself contains an obvious contradiction or a preference question that cannot be discovered from the environment.
+
+## Phase 2 - Intent Chat
+
+Keep clarifying until you can state the goal, success criteria, audience, in-scope and out-of-scope boundaries, constraints, current state, and important preferences or tradeoffs.
+
+Prefer questions over guessing when a high-impact ambiguity remains.
+
+## Phase 3 - Implementation Chat
+
+Once intent is stable, refine the implementation shape until the plan is decision complete. Cover the approach, interfaces, data flow, edge cases, failure modes, testing, acceptance criteria, compatibility constraints, and migration needs when relevant.
+
+## Asking Questions
+
+Ask only questions that materially change the plan, confirm an important assumption, or choose between meaningful tradeoffs.
+
+Prefer using the available structured question tool when it is registered. In this environment, that tool may be named `ask`. If no structured question tool is available or the question cannot be expressed cleanly through it, ask directly in plain text.
+
+Do not ask questions that can be answered by non-mutating exploration.
+
+## Two Kinds of Unknowns
+
+Treat discoverable facts and preferences differently.
+
+Discoverable facts are repository or system truth. Explore first. Ask only if multiple plausible candidates remain, nothing relevant can be found, or the ambiguity is actually product intent.
+
+Preferences and tradeoffs are not discoverable. Ask early when they materially affect the plan. If the user does not answer and a reasonable default exists, proceed with that default and record it as an assumption in the final plan.
+
+## Finalization Rule
+
+Only finalize the plan when it is decision complete and leaves no implementation decisions unresolved.
+
+If `submit_plan` is available, finalize by calling `submit_plan` with the complete Markdown plan. Treat `<proposed_plan>` as a fallback only when the plan artifact tool is unavailable.
+
+When presenting the official plan without `submit_plan`, wrap it in exactly one `<proposed_plan>` block:
+
+1. Put the opening tag on its own line.
+2. Start the plan content on the next line.
+3. Put the closing tag on its own line.
+4. Use Markdown inside the block.
+5. Keep the tags exactly as `<proposed_plan>` and `</proposed_plan>`.
+
+The final plan should be concise by default and include:
+
+* A clear title.
+* A brief summary.
+* Key implementation changes or additions to public APIs, interfaces, or types.
+* Test cases and acceptance scenarios.
+* Explicit assumptions and defaults chosen where needed.
+
+Prefer grouped implementation bullets by subsystem or behavior over file-by-file inventories. Mention files only when needed to disambiguate a non-obvious change. Avoid excessive detail unless it is needed to prevent implementation mistakes.
+
+Do not ask "should I proceed?" in the final plan. The user can leave Plan Mode or request implementation after the plan artifact is submitted.
+
+Only produce at most one `<proposed_plan>` block per request. If the user asks for revisions after a prior `<proposed_plan>`, the new `<proposed_plan>` must be a complete replacement."#,
+    )
+}
+
+/// Renders the one-shot developer notice used after leaving Plan mode.
+/// 渲染离开计划模式后使用的一次性开发者提示。
+///
+/// # Returns
+/// 返回值
+/// English model-facing guidance that normal execution has resumed.
+/// 面向模型的英文提示，说明已恢复常规执行。
+fn render_plan_mode_exit_developer_context() -> String {
+    String::from(
+        "Plan Mode has ended. You are now in execution mode. The previous Plan-mode mutation restrictions no longer apply; respond to the current user request using the normal execution workflow.",
+    )
+}
+
 /// Renders one goal summary into the active prompt-goal template.
 /// 将单个目标摘要渲染进当前提示词目标模板。
 fn render_session_goal_context_for_prompt(goal: &SessionGoalSummary) -> Option<String> {
@@ -18359,6 +18754,71 @@ fn ensure_regular_session_exists(
     }
 }
 
+/// Ensures Plan mode is not entered while an unfinished goal exists.
+/// 确认存在未完成目标时不会进入计划模式。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` reads the persisted goal store.
+/// `controller_runtime` 读取持久化目标存储。
+/// `session_id` is the target session id.
+/// `session_id` 是目标会话标识。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when Plan mode may be enabled.
+/// 允许启用计划模式时返回 `Ok(())`。
+async fn ensure_session_can_enter_plan_mode(
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let goal_store = VulcanGoalStore::new(controller_runtime.clone());
+    let existing_goal = goal_store
+        .get_thread_goal(session_id)
+        .await
+        .map_err(|error| format!("读取当前目标失败：{error}"))?;
+    if existing_goal
+        .as_ref()
+        .is_some_and(|goal| goal.status != ThreadGoalStatus::Complete)
+    {
+        return Err(String::from("计划模式与目标模式不能同时开启。"));
+    }
+    Ok(())
+}
+
+/// Ensures a goal cannot be created or resumed while Plan mode is active.
+/// 确认计划模式激活时不能创建或继续目标。
+///
+/// # Parameters
+/// 参数
+/// `state` owns the retained runtime state snapshot.
+/// `state` 持有保留的运行态快照。
+/// `session_id` is the target session id.
+/// `session_id` 是目标会话标识。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` when goal mutation is allowed.
+/// 允许修改目标时返回 `Ok(())`。
+fn ensure_session_not_in_plan_mode_for_goal(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let is_plan = guard
+        .workspace_snapshot
+        .as_ref()
+        .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+        .and_then(|runtime_state| runtime_state.active_work_mode.as_deref())
+        .is_some_and(|mode| mode.eq_ignore_ascii_case("plan"));
+    if is_plan {
+        return Err(String::from("计划模式与目标模式不能同时开启。"));
+    }
+    Ok(())
+}
+
 /// Validates one user-facing session goal objective.
 /// 校验单个面向用户的会话目标文本。
 ///
@@ -18613,6 +19073,58 @@ fn todo_plan_item_from_value(value: &Value) -> Option<SessionTodoPlanItem> {
         _ => return None,
     };
     Some(SessionTodoPlanItem { step, status })
+}
+
+/// Builds a Plan artifact state from one completed submit_plan tool event.
+/// 从单条已完成 submit_plan 工具事件构建计划产物状态。
+///
+/// # Parameters
+/// 参数
+/// `event` is the runtime event emitted after a tool call finishes.
+/// `event` 是工具调用结束后发出的运行时事件。
+///
+/// # Returns
+/// 返回值
+/// The parsed plan artifact when the event carries a valid host payload.
+/// 当事件携带有效宿主载荷时返回解析后的计划产物。
+fn plan_artifact_state_from_tool_finished_event(
+    event: &RuntimeEvent,
+) -> Option<SessionPlanArtifactState> {
+    if event.kind != RuntimeEventKind::ToolFinished {
+        return None;
+    }
+    let payload = event
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("host_result"))
+        .and_then(|host_result| {
+            (host_result.get("kind").and_then(Value::as_str) == Some("plan_artifact"))
+                .then(|| host_result.get("payload"))
+                .flatten()
+        })?;
+    let name = payload
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let path = payload
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    let updated_at = payload
+        .get("updatedAt")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?
+        .to_string();
+    Some(SessionPlanArtifactState {
+        name,
+        path,
+        updated_at,
+    })
 }
 
 /// Acknowledges that one runtime event has been projected into the emitted WebUI snapshot.
@@ -22650,6 +23162,7 @@ fn workbench_from_runtime(
         session_goal: session_goal_summaries
             .get(&workspace.selected_session)
             .cloned(),
+        session_plan_mode: session_plan_mode_summary_from_runtime_state(selected_runtime_state),
         memories: memories(workspace),
         vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
         command_sessions: command_sessions(controller),
@@ -22741,6 +23254,65 @@ fn session_todo_plan_summary_from_runtime_state(
         plan,
         updated_at: todo_plan.updated_at.clone(),
     })
+}
+
+/// Converts selected-session Plan mode runtime state into a WebUI summary.
+/// 将当前选中会话的计划模式运行态转换为 WebUI 摘要。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the optional selected-session runtime entry.
+/// `runtime_state` 是可选的当前选中会话运行态条目。
+///
+/// # Returns
+/// 返回值
+/// The Plan mode summary when the selected session is in Plan mode or has a plan artifact.
+/// 当选中会话处于计划模式或拥有计划产物时返回计划模式摘要。
+fn session_plan_mode_summary_from_runtime_state(
+    runtime_state: Option<&SessionRuntimeStateEntry>,
+) -> Option<SessionPlanModeSummary> {
+    let runtime_state = runtime_state?;
+    let execution_mode = runtime_state
+        .active_work_mode
+        .as_deref()
+        .unwrap_or("build")
+        .trim()
+        .to_string();
+    let is_plan = execution_mode.eq_ignore_ascii_case("plan");
+    if !is_plan && runtime_state.plan_mode.is_empty() {
+        return None;
+    }
+    Some(SessionPlanModeSummary {
+        execution_mode,
+        prompt_injected: runtime_state.plan_mode.prompt_injected,
+        artifact: runtime_state
+            .plan_mode
+            .artifact
+            .as_ref()
+            .map(session_plan_artifact_summary_from_state),
+    })
+}
+
+/// Converts one persisted Plan artifact state into a WebUI summary.
+/// 将单个持久化计划产物状态转换为 WebUI 摘要。
+///
+/// # Parameters
+/// 参数
+/// `artifact` is the persisted artifact payload.
+/// `artifact` 是持久化的产物载荷。
+///
+/// # Returns
+/// 返回值
+/// A WebUI-facing artifact summary with stable field names.
+/// 字段名称稳定的 WebUI 产物摘要。
+fn session_plan_artifact_summary_from_state(
+    artifact: &SessionPlanArtifactState,
+) -> SessionPlanArtifactSummary {
+    SessionPlanArtifactSummary {
+        name: artifact.name.clone(),
+        path: artifact.path.clone(),
+        updated_at: artifact.updated_at.clone(),
+    }
 }
 
 /// Returns the stable WebUI key for one TODO item status.
@@ -23558,6 +24130,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         pending_question: None,
         session_todo_plan: None,
         session_goal: None,
+        session_plan_mode: None,
         memories: Vec::new(),
         vmm_memory: VmmMemorySnapshot::default(),
         command_sessions: Vec::new(),
@@ -31547,12 +32120,8 @@ mod tests {
     fn workspace_file_child_path_rejects_outside_root() {
         let root = test_workspace_file_temp_dir("root");
         let outside = test_workspace_file_temp_dir("outside");
-        let error = workspace_file_canonical_child_path(
-            &root,
-            outside.to_str(),
-            "文件路径",
-        )
-        .expect_err("outside path should be rejected");
+        let error = workspace_file_canonical_child_path(&root, outside.to_str(), "文件路径")
+            .expect_err("outside path should be rejected");
 
         assert!(error.contains("越出工作区"));
         let _ = std::fs::remove_dir_all(root);
@@ -31568,8 +32137,12 @@ mod tests {
         std::fs::write(&hidden_file, "fn main() {}\n").expect("write hidden file");
 
         assert!(
-            workspace_file_entry_summary(&root, &hidden_file, &WorkspaceFileFilterOptions::default())
-                .is_none()
+            workspace_file_entry_summary(
+                &root,
+                &hidden_file,
+                &WorkspaceFileFilterOptions::default()
+            )
+            .is_none()
         );
         let mut filters = WorkspaceFileFilterOptions::default();
         filters.ignore_dot_names = false;

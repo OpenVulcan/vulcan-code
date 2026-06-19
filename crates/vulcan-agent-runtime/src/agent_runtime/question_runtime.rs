@@ -341,7 +341,7 @@ pub fn build_question_tool_candidate(
         },
         parameters_schema: question_tool_args_schema(),
         ai_visible: true,
-        plan_policy: VulcanPlanToolPolicy::Hidden,
+        plan_policy: VulcanPlanToolPolicy::Visible,
         invoke: Arc::new(move |args, session_id| {
             let question_runtime = Arc::clone(&question_runtime);
             let tool_name = tool_name.clone();
@@ -517,6 +517,18 @@ fn build_question_invocation_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verifies ask stays executable in Plan mode because planning depends on user decisions.
+    /// 验证 ask 在计划模式下保持可执行，因为计划协作依赖用户决策。
+    #[test]
+    fn question_tool_is_allowed_in_plan_mode() {
+        let candidate = build_question_tool_candidate(Arc::new(QuestionRuntime::new()), "ask");
+
+        assert!(matches!(
+            candidate.plan_policy,
+            VulcanPlanToolPolicy::Visible
+        ));
+    }
 
     /// Verifies one pending question request can suspend the tool flow and later resume successfully with structured answers.
     /// 验证单条待回答问题请求能够挂起工具流程，并在稍后以结构化答案成功恢复。

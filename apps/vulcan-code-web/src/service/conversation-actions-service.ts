@@ -138,6 +138,23 @@ export async function updateSessionGoalStatus(
   });
 }
 
+// setSessionPlanMode persists the selected conversation Plan mode state.
+// setSessionPlanMode 持久化当前选中会话的计划模式状态。
+export async function setSessionPlanMode(
+  conversationId: string | null,
+  enabled: boolean,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_set_session_plan_mode", {
+    request: {
+      conversationId,
+      enabled,
+    },
+  });
+}
+
 // compactSelectedConversationContext starts backend context compaction for the selected conversation.
 // compactSelectedConversationContext 为当前选中会话启动后端上下文压缩。
 export async function compactSelectedConversationContext(): Promise<WorkbenchSnapshot | null> {

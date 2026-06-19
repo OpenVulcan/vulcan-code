@@ -5197,6 +5197,43 @@ button {
   color: var(--foreground);
 }
 
+.composer-plan-artifact-strip {
+  width: min(760px, calc(100vw - 96px));
+  margin: 0 auto 6px;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.composer-plan-artifact-title {
+  color: var(--foreground);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.composer-plan-artifact-name {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+
+.composer-plan-artifact-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .composer-goal-dialog {
   max-width: 420px;
 }
@@ -5356,6 +5393,46 @@ button {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.composer-plan-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 9px;
+  background: color-mix(in srgb, var(--muted) 78%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, padding 160ms ease;
+}
+
+.composer-plan-mode-chip:hover,
+.composer-plan-mode-chip:focus-visible {
+  background: color-mix(in srgb, var(--muted) 92%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.composer-plan-mode-icon,
+.composer-plan-mode-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.composer-plan-mode-close {
+  width: 16px;
+  height: 16px;
+  margin-right: -3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .composer-toolbar-right {

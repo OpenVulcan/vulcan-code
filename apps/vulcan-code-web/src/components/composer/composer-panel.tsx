@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Edit3, PauseCircle, PlayCircle, Send, Square, Target, Trash2 } from "lucide-react";
+import { Brain, Edit3, ListChecks, PauseCircle, PlayCircle, Send, Square, Target, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -60,6 +60,7 @@ import type {
   ProviderSummary,
   ReasoningSelectionSummary,
   SessionGoalSummary,
+  SessionPlanModeSummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -117,6 +118,9 @@ export function ComposerPanel(props: {
   // Current persisted goal for the selected conversation.
   // 当前选中会话的持久化目标。
   sessionGoal: SessionGoalSummary | null;
+  // Current persisted Plan mode state for the selected conversation.
+  // 当前选中会话的持久化计划模式状态。
+  sessionPlanMode: SessionPlanModeSummary | null;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -153,6 +157,9 @@ export function ComposerPanel(props: {
   // Updates the current session goal lifecycle status.
   // 更新当前会话目标生命周期状态。
   onUpdateSessionGoalStatus: (status: string) => Promise<boolean>;
+  // Persists the current session Plan-mode toggle.
+  // 持久化当前会话计划模式开关。
+  onSetSessionPlanMode: (enabled: boolean) => Promise<boolean>;
   // Stops the selected backend conversation stream.
   // 停止当前选中的后端会话流。
   onStopConversationRun: () => Promise<boolean>;
@@ -238,6 +245,9 @@ export function ComposerPanel(props: {
   // executionMode stores the local preview execution-mode selection.
   // executionMode 保存本地预览用的执行模式选择。
   const [executionMode, setExecutionMode] = React.useState("build");
+  // draftPlanModeEnabled stores Plan mode before a draft conversation is materialized.
+  // draftPlanModeEnabled 保存草稿会话实体化之前的计划模式状态。
+  const [draftPlanModeEnabled, setDraftPlanModeEnabled] = React.useState(false);
   // modelChoice stores the selected provider/model key shown by the shared model picker.
   // modelChoice 保存共享模型筛选器展示的 provider/model 选择键。
   const [modelChoice, setModelChoice] = React.useState("");
@@ -274,6 +284,12 @@ export function ComposerPanel(props: {
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
   const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
+  // planModeEnabled follows the backend-persisted session Plan mode state.
+  // planModeEnabled 跟随后端持久化的会话计划模式状态。
+  const planModeEnabled = props.sessionPlanMode?.executionMode?.toLowerCase() === "plan" || (!props.conversationId && draftPlanModeEnabled);
+  // visiblePlanArtifact exposes the latest generated plan file near the composer.
+  // visiblePlanArtifact 在输入区附近展示最近生成的计划文件。
+  const visiblePlanArtifact = props.sessionPlanMode?.artifact ?? null;
   // availableModelChoices flattens provider data into selectable workbench models.
   // availableModelChoices 将 Provider 数据扁平化为可选择的工作台模型。
   const availableModelChoices = React.useMemo(
@@ -307,12 +323,15 @@ export function ComposerPanel(props: {
     setDisabledAiCapabilityTargetSelectors(defaultDisabledAiCapabilityTargetSelectors(props.aiCapabilities));
     setAiCapabilityTargetOrder(defaultAiCapabilityTargetOrder(props.aiCapabilities));
   }, [capabilitySignature]);
-  // executionModeOptions mirrors iced ExecutionMode::ALL using current language labels.
-  // executionModeOptions 使用当前语言标签对齐 iced 的 ExecutionMode::ALL。
-  const executionModeOptions = React.useMemo<ComposerSelectOption[]>(() => [
-    { value: "build", label: t("composer.mode.execute") },
-    { value: "plan", label: t("composer.mode.plan") },
-  ], [t]);
+  React.useEffect(() => {
+    setExecutionMode(planModeEnabled ? "plan" : "build");
+  }, [planModeEnabled]);
+
+  React.useEffect(() => {
+    if (props.conversationId) {
+      setDraftPlanModeEnabled(false);
+    }
+  }, [props.conversationId]);
   // fallbackReasoningEffortOptions is only used when no backend selector view is available.
   // fallbackReasoningEffortOptions 仅在没有后端选择器视图时使用。
   const fallbackReasoningEffortOptions = React.useMemo<ComposerSelectOption[]>(() => [
@@ -531,12 +550,42 @@ export function ComposerPanel(props: {
 
   // openGoalDialog seeds the goal editor from the current persisted goal.
   // openGoalDialog 使用当前持久化目标初始化目标编辑器。
-  const openGoalDialog = React.useCallback(() => {
+  const openGoalDialog = React.useCallback(async () => {
+    if (planModeEnabled) {
+      if (!props.conversationId) {
+        setDraftPlanModeEnabled(false);
+        setExecutionMode("build");
+      } else {
+        const disabled = await props.onSetSessionPlanMode(false);
+        if (!disabled) {
+          return;
+        }
+      }
+    }
     setGoalDialogMode("edit");
     setGoalObjectiveDraft(visibleSessionGoal?.objective ?? "");
     setGoalTokenBudgetDraft(visibleSessionGoal?.tokenBudget ? String(visibleSessionGoal.tokenBudget) : "");
     setGoalDialogOpen(true);
-  }, [visibleSessionGoal]);
+  }, [planModeEnabled, props, visibleSessionGoal]);
+
+  // handlePlanModeChange toggles session Plan mode through the persisted service API.
+  // handlePlanModeChange 通过持久化服务 API 切换会话计划模式。
+  const handlePlanModeChange = React.useCallback(async (enabled: boolean) => {
+    if (enabled && visibleSessionGoal) {
+      toast.error("计划模式与目标模式不能同时开启。");
+      return false;
+    }
+    if (!props.conversationId) {
+      setDraftPlanModeEnabled(enabled);
+      setExecutionMode(enabled ? "plan" : "build");
+      return true;
+    }
+    const saved = await props.onSetSessionPlanMode(enabled);
+    if (saved) {
+      setExecutionMode(enabled ? "plan" : "build");
+    }
+    return saved;
+  }, [props, visibleSessionGoal]);
 
   // openGoalResumeDialog seeds the next-stage goal editor from the stopped goal.
   // openGoalResumeDialog 使用已停止目标初始化下一阶段目标编辑器。
@@ -649,8 +698,8 @@ export function ComposerPanel(props: {
   // toggleExecutionMode switches between build and plan without leaving the composer focus flow.
   // toggleExecutionMode 在不离开输入区焦点流的情况下切换构建与计划模式。
   const toggleExecutionMode = React.useCallback(() => {
-    setExecutionMode((current) => current === "plan" ? "build" : "plan");
-  }, []);
+    void handlePlanModeChange(!planModeEnabled);
+  }, [handlePlanModeChange, planModeEnabled]);
 
   // handleComposerContainerKeyDown captures Shift+Tab as the work-mode shortcut.
   // handleComposerContainerKeyDown 将 Shift+Tab 捕获为工作模式快捷键。
@@ -723,9 +772,15 @@ export function ComposerPanel(props: {
           disabled={goalSaving}
           goal={visibleSessionGoal}
           onClear={() => void handleGoalClear()}
-          onEdit={openGoalDialog}
+          onEdit={() => void openGoalDialog()}
           onResume={openGoalResumeDialog}
           onToggleStatus={() => void handleGoalStatusToggle()}
+        />
+      ) : null}
+      {visiblePlanArtifact ? (
+        <ComposerPlanArtifactStrip
+          name={visiblePlanArtifact.name}
+          path={visiblePlanArtifact.path}
         />
       ) : null}
       <section
@@ -788,26 +843,18 @@ export function ComposerPanel(props: {
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
               thinkingOverlayEnabled={props.thinkingOverlayEnabled}
+              planModeEnabled={planModeEnabled}
               onPick={openAttachmentPicker}
               onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
-              onOpenGoal={openGoalDialog}
+              onOpenGoal={() => void openGoalDialog()}
+              onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
             />
-            <ComposerSelectControl
-              ariaLabel={t("composer.aria.mode")}
-              className="mode no-indicator"
-              fallbackLabel={t("composer.selectFallback")}
-              onValueChange={setExecutionMode}
-              options={executionModeOptions}
-              tooltip={(
-                <>
-                  <strong>工作模式</strong>
-                  <span>Shift+Tab 切换</span>
-                  <span>构建：计划执行、完整工具</span>
-                  <span>计划：编辑前先出计划</span>
-                </>
-              )}
-              value={executionMode}
-            />
+            {planModeEnabled ? (
+              <ComposerPlanModeChip
+                artifactName={props.sessionPlanMode?.artifact?.name ?? null}
+                onClose={() => void handlePlanModeChange(false)}
+              />
+            ) : null}
             <ModelPickerControl
               ariaLabel={t("composer.aria.model")}
               fallbackLabel={t("composer.selectFallback")}
@@ -962,6 +1009,49 @@ function ComposerGoalStrip(props: {
       <Button aria-label="清理目标" className="composer-goal-strip-button" disabled={props.disabled} onClick={props.onClear} size="icon-sm" type="button" variant="ghost">
         <Trash2 size={14} />
       </Button>
+    </div>
+  );
+}
+
+// ComposerPlanModeChip renders the active Plan mode capsule in the toolbar.
+// ComposerPlanModeChip 在工具栏渲染已开启计划模式的胶囊。
+function ComposerPlanModeChip(props: {
+  // Optional latest plan artifact name.
+  // 可选的最近计划产物名称。
+  artifactName: string | null;
+  // Closes Plan mode.
+  // 关闭计划模式。
+  onClose: () => void;
+}) {
+  return (
+    <button className="composer-plan-mode-chip" onClick={props.onClose} title={props.artifactName ?? "计划模式"} type="button">
+      <span className="composer-plan-mode-icon">
+        <ListChecks size={14} />
+      </span>
+      <span>计划</span>
+      <span className="composer-plan-mode-close">
+        <X size={12} />
+      </span>
+    </button>
+  );
+}
+
+// ComposerPlanArtifactStrip renders the latest generated plan file above the composer.
+// ComposerPlanArtifactStrip 在输入区上方渲染最近生成的计划文件。
+function ComposerPlanArtifactStrip(props: {
+  // Human-readable plan name.
+  // 人类可读的计划名称。
+  name: string;
+  // Absolute plan file path.
+  // 计划文件绝对路径。
+  path: string;
+}) {
+  return (
+    <div className="composer-plan-artifact-strip">
+      <ListChecks size={15} />
+      <span className="composer-plan-artifact-title">计划已保存</span>
+      <span className="composer-plan-artifact-name">{props.name}</span>
+      <span className="composer-plan-artifact-path" title={props.path}>{props.path}</span>
     </div>
   );
 }
