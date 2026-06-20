@@ -19,6 +19,8 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
+import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
+import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
   conversationMessageUnixMillis,
   formatFullConversationTimestamp,
@@ -71,6 +73,18 @@ export function ConversationProcessGroup(props: {
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
+  // Currently pending Plan artifact, when user confirmation is required.
+  // 需要用户确认时的当前待处理计划产物。
+  pendingPlanArtifact?: ConversationPlanArtifact | null;
+  // Executes one pending Plan artifact.
+  // 执行单个待确认计划产物。
+  onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Sends a suggestion for one pending Plan artifact.
+  // 为单个待确认计划产物发送补充建议。
+  onPlanArtifactSuggest?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Cancels one pending Plan artifact.
+  // 取消单个待确认计划产物。
+  onPlanArtifactCancel?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -144,6 +158,10 @@ export function ConversationProcessGroup(props: {
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
+            pendingPlanArtifact={props.pendingPlanArtifact}
+            onPlanArtifactExecute={props.onPlanArtifactExecute}
+            onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+            onPlanArtifactCancel={props.onPlanArtifactCancel}
             onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
             resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -169,6 +187,10 @@ export function ConversationProcessGroup(props: {
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
+            pendingPlanArtifact={props.pendingPlanArtifact}
+            onPlanArtifactExecute={props.onPlanArtifactExecute}
+            onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+            onPlanArtifactCancel={props.onPlanArtifactCancel}
             onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
             resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -221,6 +243,18 @@ export function ConversationRenderItemView(props: {
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
+  // Currently pending Plan artifact, when user confirmation is required.
+  // 需要用户确认时的当前待处理计划产物。
+  pendingPlanArtifact?: ConversationPlanArtifact | null;
+  // Executes one pending Plan artifact.
+  // 执行单个待确认计划产物。
+  onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Sends a suggestion for one pending Plan artifact.
+  // 为单个待确认计划产物发送补充建议。
+  onPlanArtifactSuggest?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Cancels one pending Plan artifact.
+  // 取消单个待确认计划产物。
+  onPlanArtifactCancel?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -383,6 +417,11 @@ export function ConversationRenderItemView(props: {
           onOpenDetail={props.onOpenDetail}
           onOpenMedia={props.onOpenMedia}
           onOpenSubagentPanel={props.onOpenSubagentPanel}
+          pendingPlanArtifact={props.pendingPlanArtifact}
+          onCopyText={props.onCopyText}
+          onPlanArtifactExecute={props.onPlanArtifactExecute}
+          onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+          onPlanArtifactCancel={props.onPlanArtifactCancel}
           onLoadToolDetail={props.onLoadToolDetail}
           onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
           onTrace={props.onTrace}

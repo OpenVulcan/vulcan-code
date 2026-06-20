@@ -23,6 +23,10 @@ import {
 } from "@/components/conversation/conversation-blocks";
 import { ToolExecutionBlock } from "@/components/conversation/conversation-tool-execution";
 import {
+  PlanArtifactBlock,
+  type PlanArtifactActionPayload,
+} from "@/components/conversation/conversation-plan-artifact";
+import {
   blockTitle,
   isContextCompactionBlock,
   isMergeableToolBlock,
@@ -30,6 +34,7 @@ import {
 import type {
   ConversationBlock,
   ConversationBlockKind,
+  ConversationPlanArtifact,
 } from "@/components/conversation/conversation-model";
 
 // ConversationBlocksView dispatches parsed blocks to their visual renderer.
@@ -59,6 +64,21 @@ export function ConversationBlocksView(props: {
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
+  // Currently pending Plan artifact, when user confirmation is required.
+  // 需要用户确认时的当前待处理计划产物。
+  pendingPlanArtifact?: ConversationPlanArtifact | null;
+  // Copies transcript text using the shell-provided clipboard path.
+  // 使用外壳提供的剪贴板路径复制转录文本。
+  onCopyText: (text: string) => Promise<void> | void;
+  // Executes one pending Plan artifact.
+  // 执行单个待确认计划产物。
+  onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Sends a suggestion for one pending Plan artifact.
+  // 为单个待确认计划产物发送补充建议。
+  onPlanArtifactSuggest?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Cancels one pending Plan artifact.
+  // 取消单个待确认计划产物。
+  onPlanArtifactCancel?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -127,6 +147,11 @@ export function ConversationBlocksView(props: {
       onOpenSubagentPanel={props.onOpenSubagentPanel}
       onLoadToolDetail={props.onLoadToolDetail}
       onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+      onCopyText={props.onCopyText}
+      pendingPlanArtifact={props.pendingPlanArtifact}
+      onPlanArtifactExecute={props.onPlanArtifactExecute}
+      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+      onPlanArtifactCancel={props.onPlanArtifactCancel}
       onTrace={props.onTrace}
     />
   );
@@ -156,6 +181,21 @@ function SpecialConversationBlock(props: {
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
+  // Currently pending Plan artifact, when user confirmation is required.
+  // 需要用户确认时的当前待处理计划产物。
+  pendingPlanArtifact?: ConversationPlanArtifact | null;
+  // Copies transcript text using the shell-provided clipboard path.
+  // 使用外壳提供的剪贴板路径复制转录文本。
+  onCopyText: (text: string) => Promise<void> | void;
+  // Executes one pending Plan artifact.
+  // 执行单个待确认计划产物。
+  onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Sends a suggestion for one pending Plan artifact.
+  // 为单个待确认计划产物发送补充建议。
+  onPlanArtifactSuggest?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Cancels one pending Plan artifact.
+  // 取消单个待确认计划产物。
+  onPlanArtifactCancel?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
@@ -174,6 +214,20 @@ function SpecialConversationBlock(props: {
 }) {
   if (props.block.kind === "turn-stats") {
     return <TurnStatsBlock block={props.block} />;
+  }
+  if (props.block.kind === "plan-artifact" && props.block.planArtifact) {
+    const pending = planArtifactsMatch(props.block.planArtifact, props.pendingPlanArtifact);
+    return (
+      <PlanArtifactBlock
+        artifact={props.block.planArtifact}
+        disabled={props.sessionRunning}
+        pending={pending}
+        onCancel={props.onPlanArtifactCancel ?? (() => undefined)}
+        onCopyText={props.onCopyText}
+        onExecute={props.onPlanArtifactExecute ?? (() => undefined)}
+        onSuggest={props.onPlanArtifactSuggest ?? (() => undefined)}
+      />
+    );
   }
 
   if (isMergeableToolBlock(props.block)) {
@@ -237,6 +291,21 @@ function SpecialConversationBlock(props: {
       {canOpen ? <Maximize2 size={15} /> : null}
     </button>
   );
+}
+
+// planArtifactsMatch decides whether one transcript Plan card owns the current pending decision.
+// planArtifactsMatch 判断单个转录计划卡是否承载当前待处理决策。
+function planArtifactsMatch(
+  artifact: ConversationPlanArtifact,
+  pendingArtifact: ConversationPlanArtifact | null | undefined,
+): boolean {
+  if (!pendingArtifact) {
+    return false;
+  }
+  if (artifact.path && artifact.updatedAt && artifact.path === pendingArtifact.path && artifact.updatedAt === pendingArtifact.updatedAt) {
+    return true;
+  }
+  return artifact.name === pendingArtifact.name && artifact.content.trim() === pendingArtifact.content.trim();
 }
 
 // detailEligibleBlockKinds lists block types that should open a dedicated detail modal.

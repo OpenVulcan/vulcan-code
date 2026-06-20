@@ -15,6 +15,7 @@ export function projectConversationTimelineItems(
   const timeline: ConversationTimelineItem[] = [];
   const turnStartUserIds = conversationTurnStartUserIds(renderItems);
   const turnStartIdsWithLaterTurn = new Set(turnStartUserIds.slice(0, -1));
+  const latestPlanArtifactItemId = latestPlanArtifactRenderItemId(renderItems);
   let currentTurn: {
     // User item that starts the current turn.
     // 当前轮次的起始用户项。
@@ -45,7 +46,8 @@ export function projectConversationTimelineItems(
     const stopped = statsStatus === "stopped";
     const terminal = Boolean(currentTurn.statsItem);
     const running = forceRunning && !terminal;
-    const bodyItems = [...currentTurn.bodyItems];
+    const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems, latestPlanArtifactItemId);
+    const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
     const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
     const turnUserItem = currentTurn.userItem;
@@ -79,6 +81,11 @@ export function projectConversationTimelineItems(
     }
     if (currentTurn.statsItem) {
       timeline.push({ kind: "item", item: currentTurn.statsItem });
+    }
+    if (!running) {
+      for (const item of planArtifactItems) {
+        timeline.push({ kind: "item", item });
+      }
     }
     currentTurn = null;
   };
@@ -237,6 +244,29 @@ function conversationTurnStartUserIds(renderItems: ConversationRenderItem[]): st
 // isTurnStatsRenderItem 返回单条投影行是否为终态轮次统计行。
 function isTurnStatsRenderItem(item: ConversationRenderItem): boolean {
   return item.blocks.some((block) => block.kind === "turn-stats");
+}
+
+// isPlanArtifactRenderItem returns whether one projected row is a submitted Plan artifact card.
+// isPlanArtifactRenderItem 返回单条投影行是否为已提交计划产物卡。
+function isPlanArtifactRenderItem(item: ConversationRenderItem): boolean {
+  return item.blocks.some((block) => block.kind === "plan-artifact");
+}
+
+// latestPlanArtifactRenderItems keeps only the final submitted Plan card from one turn.
+// latestPlanArtifactRenderItems 仅保留单个回合中最后提交的计划卡。
+function latestPlanArtifactRenderItems(
+  items: ConversationRenderItem[],
+  latestPlanArtifactItemId: string | null,
+): ConversationRenderItem[] {
+  const planArtifactItems = items.filter((item) => item.id === latestPlanArtifactItemId && isPlanArtifactRenderItem(item));
+  const latest = planArtifactItems.at(-1);
+  return latest ? [latest] : [];
+}
+
+// latestPlanArtifactRenderItemId returns the newest submitted Plan card id for the whole conversation.
+// latestPlanArtifactRenderItemId 返回整个会话中最新提交的计划卡标识。
+function latestPlanArtifactRenderItemId(items: ConversationRenderItem[]): string | null {
+  return [...items].reverse().find(isPlanArtifactRenderItem)?.id ?? null;
 }
 
 // popFinalAssistantItem removes and returns the final assistant markdown row when present.

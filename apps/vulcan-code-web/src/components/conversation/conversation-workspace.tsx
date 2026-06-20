@@ -25,6 +25,8 @@ import {
   ConversationRenderItemView,
   renderItemHiddenByThinkingOverlay,
 } from "@/components/conversation/conversation-render-items";
+import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
+import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
   latestThinkingBlockIdAfterLastUser,
   projectConversationTimelineItems,
@@ -111,6 +113,18 @@ export function ConversationWorkspace(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Currently pending Plan artifact, when user confirmation is required.
+  // 需要用户确认时的当前待处理计划产物。
+  pendingPlanArtifact?: ConversationPlanArtifact | null;
+  // Executes one pending Plan artifact.
+  // 执行单个待确认计划产物。
+  onPlanArtifactExecute?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Sends a suggestion for one pending Plan artifact.
+  // 为单个待确认计划产物发送补充建议。
+  onPlanArtifactSuggest?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
+  // Cancels one pending Plan artifact.
+  // 取消单个待确认计划产物。
+  onPlanArtifactCancel?: (payload: PlanArtifactActionPayload) => Promise<void> | void;
   // Loads one hidden tool-detail record.
   // 加载单条隐藏工具详情记录。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -257,6 +271,10 @@ export function ConversationWorkspace(props: {
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
+      pendingPlanArtifact={props.pendingPlanArtifact}
+      onPlanArtifactExecute={props.onPlanArtifactExecute}
+      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+      onPlanArtifactCancel={props.onPlanArtifactCancel}
       onUserPromptExpandedChange={handleUserPromptExpandedChange}
       resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -279,6 +297,10 @@ export function ConversationWorkspace(props: {
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
+      pendingPlanArtifact={props.pendingPlanArtifact}
+      onPlanArtifactExecute={props.onPlanArtifactExecute}
+      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+      onPlanArtifactCancel={props.onPlanArtifactCancel}
       onUserPromptExpandedChange={handleUserPromptExpandedChange}
       resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}

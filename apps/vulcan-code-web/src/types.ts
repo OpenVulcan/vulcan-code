@@ -1492,6 +1492,9 @@ export interface SessionPlanArtifactSummary {
   // Absolute filesystem path of the generated Markdown plan file.
   // 生成的 Markdown 计划文件绝对路径。
   path: string;
+  // Full Markdown plan content captured at submit time.
+  // 提交时捕获的完整 Markdown 计划内容。
+  content?: string | null;
   // Unix-millis update timestamp text.
   // Unix 毫秒格式的更新时间文本。
   updatedAt: string;

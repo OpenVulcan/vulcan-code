@@ -6375,6 +6375,7 @@ async fn service_set_session_plan_mode(
         next_plan_mode.pending_execution_notice = next_plan_mode.prompt_injected;
         next_plan_mode.prompt_injected = false;
     }
+    next_plan_mode.artifact = None;
     let work_mode = SessionWorkMode {
         execution_mode: if request.enabled {
             String::from("plan")
@@ -10911,6 +10912,9 @@ fn session_has_blocking_system_prompt_work(
     let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
         return has_active_run;
     };
+    if session_has_pending_plan_artifact(workspace_snapshot, session_id) {
+        return true;
+    }
     let dispatch_context = webui_pending_prompt_dispatch_context(
         workspace_snapshot,
         provider_configuration,
@@ -10926,6 +10930,31 @@ fn session_has_blocking_system_prompt_work(
             has_precheck_progress,
         },
     )
+}
+
+/// Returns whether the session has a submitted Plan artifact awaiting user confirmation.
+/// 返回会话是否存在等待用户确认的已提交计划产物。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` contains retained session runtime state.
+/// `workspace_snapshot` 包含保留的会话运行态。
+/// `session_id` identifies the session to inspect.
+/// `session_id` 标识需要检查的会话。
+///
+/// # Returns
+/// 返回值
+/// `true` when a Plan artifact is still pending a user decision.
+/// 当计划产物仍在等待用户决策时返回 `true`。
+fn session_has_pending_plan_artifact(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> bool {
+    workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .and_then(|runtime_state| runtime_state.plan_mode.artifact.as_ref())
+        .is_some()
 }
 
 /// Returns whether WebUI has a concrete precheck turn in progress.
@@ -14612,6 +14641,7 @@ async fn maybe_start_webui_mailbox_turn_if_ready(
         has_active_run,
         has_active_kernel_turn,
         has_trigger_mailbox,
+        has_pending_plan_artifact,
         preserved_workspace_run_state,
         retained_workspace_snapshot,
     ) = {
@@ -14628,6 +14658,10 @@ async fn maybe_start_webui_mailbox_turn_if_ready(
             .session_runtime_kernels
             .get(&session_id)
             .is_some_and(|kernel| kernel.input_queue().has_trigger_turn_mailbox_items());
+        let has_pending_plan_artifact = guard
+            .workspace_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id));
         // Reuses the retained session context for mailbox-triggered follow-up turns to avoid disk reloads after child completion.
         // 对 mailbox 触发的后续回合复用保留会话上下文，避免子代理完成后重新从磁盘加载。
         let retained_workspace_snapshot = guard.workspace_snapshot.as_ref().and_then(|snapshot| {
@@ -14638,6 +14672,7 @@ async fn maybe_start_webui_mailbox_turn_if_ready(
             webui_session_has_active_run(&guard, session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
             has_trigger_mailbox,
+            has_pending_plan_artifact,
             preserved_workspace_run_state,
             retained_workspace_snapshot,
         )
@@ -14650,10 +14685,11 @@ async fn maybe_start_webui_mailbox_turn_if_ready(
     webui_trace(
         "mailbox_turn_prepare_check",
         format!(
-            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_trigger_mailbox={has_trigger_mailbox}"
+            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_trigger_mailbox={has_trigger_mailbox} has_pending_plan_artifact={has_pending_plan_artifact}"
         ),
     );
-    if has_active_run || has_active_kernel_turn || !has_trigger_mailbox {
+    if has_active_run || has_active_kernel_turn || !has_trigger_mailbox || has_pending_plan_artifact
+    {
         return Ok(false);
     }
     let Some(prompt_text) = webui_session_mailbox_input_from_kernel(state, session_id, None)?
@@ -14792,6 +14828,7 @@ async fn maybe_start_session_goal_continuation_if_idle(
         has_active_run,
         has_active_kernel_turn,
         has_pending_prompt,
+        has_pending_plan_artifact,
         preserved_workspace_run_state,
         retained_workspace_snapshot,
     ) = {
@@ -14812,6 +14849,10 @@ async fn maybe_start_session_goal_continuation_if_idle(
                 !runtime_state.ui_state.pending_prompt_queue.is_empty()
                     || !runtime_state.ui_state.pending_prompt_panel_queue.is_empty()
             });
+        let has_pending_plan_artifact = guard
+            .workspace_snapshot
+            .as_ref()
+            .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id));
         let retained_workspace_snapshot = guard.workspace_snapshot.as_ref().and_then(|snapshot| {
             retained_submission_snapshot_has_session_context(snapshot, session_id)
                 .then(|| snapshot.clone())
@@ -14820,6 +14861,7 @@ async fn maybe_start_session_goal_continuation_if_idle(
             webui_session_has_active_run(&guard, session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
             has_pending_prompt,
+            has_pending_plan_artifact,
             preserved_workspace_run_state,
             retained_workspace_snapshot,
         )
@@ -14832,10 +14874,10 @@ async fn maybe_start_session_goal_continuation_if_idle(
     webui_trace(
         "goal_continuation_prepare_check",
         format!(
-            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_pending_prompt={has_pending_prompt}"
+            "session={session_id} has_active_run={has_active_run} has_active_kernel_turn={has_active_kernel_turn} has_pending_prompt={has_pending_prompt} has_pending_plan_artifact={has_pending_plan_artifact}"
         ),
     );
-    if has_active_run || has_active_kernel_turn || has_pending_prompt {
+    if has_active_run || has_active_kernel_turn || has_pending_prompt || has_pending_plan_artifact {
         return Ok(false);
     }
     let goal_store = VulcanGoalStore::new(controller_runtime.clone());
@@ -15631,6 +15673,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
         has_active_stream_task,
         has_active_kernel_turn,
         has_active_session_run,
+        has_pending_plan_artifact,
     ) = {
         let guard = state
             .lock()
@@ -15644,6 +15687,10 @@ async fn maybe_prepare_next_webui_pending_prompt(
             guard.active_stream_tasks.contains_key(&session_id),
             webui_session_kernel_has_active_turn(&guard, session_id),
             webui_session_has_active_run(&guard, session_id),
+            guard
+                .workspace_snapshot
+                .as_ref()
+                .is_some_and(|snapshot| session_has_pending_plan_artifact(snapshot, session_id)),
         )
     };
     let dispatch_context = webui_pending_prompt_dispatch_context(
@@ -15671,9 +15718,16 @@ async fn maybe_prepare_next_webui_pending_prompt(
     webui_trace(
         "pending_prompt_prepare_check",
         format!(
-            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_running_subagents=false priority_override={priority_override} internal_queue_len={internal_queue_len} visible_queue_len={visible_queue_len} run_phase={run_phase:?} allow_from_stopped_phase={allow_from_stopped_phase}"
+            "session={session_id} has_active_stream_task={has_active_stream_task} has_active_kernel_turn={has_active_kernel_turn} has_running_subagents=false priority_override={priority_override} internal_queue_len={internal_queue_len} visible_queue_len={visible_queue_len} run_phase={run_phase:?} allow_from_stopped_phase={allow_from_stopped_phase} has_pending_plan_artifact={has_pending_plan_artifact}"
         ),
     );
+    if has_pending_plan_artifact {
+        webui_trace(
+            "pending_prompt_prepare_waiting_for_plan_decision",
+            format!("session={session_id}"),
+        );
+        return Ok(false);
+    }
     let Some(next_source) = workspace_snapshot
         .session_runtime_state
         .get(&session_id)
@@ -19120,9 +19174,15 @@ fn plan_artifact_state_from_tool_finished_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())?
         .to_string();
+    let content = payload
+        .get("content")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .filter(|value| !value.trim().is_empty());
     Some(SessionPlanArtifactState {
         name,
         path,
+        content,
         updated_at,
     })
 }
@@ -23311,6 +23371,7 @@ fn session_plan_artifact_summary_from_state(
     SessionPlanArtifactSummary {
         name: artifact.name.clone(),
         path: artifact.path.clone(),
+        content: artifact.content.clone(),
         updated_at: artifact.updated_at.clone(),
     }
 }

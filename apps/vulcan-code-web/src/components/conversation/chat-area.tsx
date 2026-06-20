@@ -18,6 +18,7 @@ import type {
   ConversationTimelineVirtualRestoreState,
 } from "@/components/conversation/conversation-virtualization";
 import { ConversationWorkspace } from "@/components/conversation/conversation-workspace";
+import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type {
   ConversationDetailRef,
   ToolDetailPayload,
@@ -52,7 +53,11 @@ import {
   type ConversationSurfaceExpandedState,
   type ConversationSurfaceLayoutRestoreState,
 } from "@/components/conversation/conversation-layout-restore";
-import type { ConversationBlock } from "@/components/conversation/conversation-model";
+import type {
+  ConversationBlock,
+  ConversationPlanArtifact,
+  ConversationRenderItem,
+} from "@/components/conversation/conversation-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
@@ -283,6 +288,27 @@ export function ChatArea(props: ChatAreaProps) {
     ? null
     : conversationRuntimeCue(surfaceConversation, renderItems, t);
   const isConversationRunning = conversationIsRunning(selectedConversation) || hasRunningSubagents;
+  // pendingPlanArtifact tracks the current submit_plan artifact that still requires a user decision.
+  // pendingPlanArtifact 跟踪当前仍需要用户决策的 submit_plan 计划产物。
+  const pendingPlanArtifact = React.useMemo(() => {
+    const artifact = !activeSubagentTask && !isEmptyConversation
+      ? props.workbench.sessionPlanMode?.artifact ?? null
+      : null;
+    if (!artifact) {
+      return null;
+    }
+    const fallbackArtifact = latestSubmittedPlanArtifact(renderItems, artifact.name);
+    const content = artifact.content?.trim() ? artifact.content : fallbackArtifact?.content;
+    if (!content?.trim()) {
+      return null;
+    }
+    return {
+      name: artifact.name,
+      path: artifact.path,
+      content,
+      updatedAt: artifact.updatedAt,
+    };
+  }, [activeSubagentTask, isEmptyConversation, props.workbench.sessionPlanMode?.artifact, renderItems]);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -728,9 +754,78 @@ export function ChatArea(props: ChatAreaProps) {
     return () => window.clearTimeout(timeout);
   }, [emptyPromptVisible, isEmptyConversation]);
 
+  // handlePlanArtifactExecute confirms a submitted Plan and sends it as a build prompt.
+  // handlePlanArtifactExecute 确认已提交计划，并将其作为构建提示词发送。
+  const handlePlanArtifactExecute = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    const artifact = pendingPlanArtifact && pendingPlanArtifact.content.trim() === payload.artifact.content.trim()
+      ? pendingPlanArtifact
+      : payload.artifact;
+    const disabled = await props.onSetSessionPlanMode(false);
+    if (!disabled) {
+      return;
+    }
+    const promptParts = [
+      "执行已保存的计划。",
+      `计划文件：${displayPlanArtifactPath(artifact.path)}`,
+    ];
+    if (payload.note?.trim()) {
+      promptParts.push("", "补充执行信息：", payload.note.trim());
+    }
+    promptParts.push("", "计划内容：", artifact.content.trim());
+    await props.onSubmitPrompt({
+      prompt: promptParts.join("\n"),
+      attachments: [],
+      executionMode: "build",
+      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? "x-high",
+      disabledAiCapabilityKinds: [],
+      disabledAiCapabilityTargetSelectors: [],
+      aiCapabilityTargetOrderOverrides: {},
+    });
+  }, [pendingPlanArtifact, props]);
+
+  // handlePlanArtifactSuggest keeps Plan mode active and asks the model to revise the submitted Plan.
+  // handlePlanArtifactSuggest 保持计划模式开启，并要求模型修订已提交计划。
+  const handlePlanArtifactSuggest = React.useCallback(async (payload: PlanArtifactActionPayload) => {
+    const artifact = pendingPlanArtifact && pendingPlanArtifact.content.trim() === payload.artifact.content.trim()
+      ? pendingPlanArtifact
+      : payload.artifact;
+    const enabled = await props.onSetSessionPlanMode(true);
+    if (!enabled) {
+      return;
+    }
+    const promptParts = [
+      "请根据以下补充建议修订刚刚提交的计划，并在计划完整后重新调用 submit_plan。",
+      `原计划文件：${displayPlanArtifactPath(artifact.path)}`,
+      "",
+      "补充建议：",
+      payload.note?.trim() ?? "",
+    ];
+    await props.onSubmitPrompt({
+      prompt: promptParts.join("\n"),
+      attachments: [],
+      executionMode: "plan",
+      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? "x-high",
+      disabledAiCapabilityKinds: [],
+      disabledAiCapabilityTargetSelectors: [],
+      aiCapabilityTargetOrderOverrides: {},
+    });
+  }, [pendingPlanArtifact, props]);
+
+  // handlePlanArtifactCancel pauses the pending Plan decision while keeping Plan mode enabled.
+  // handlePlanArtifactCancel 暂停待确认计划决策，同时保持计划模式开启。
+  const handlePlanArtifactCancel = React.useCallback(async () => {
+    await props.onSetSessionPlanMode(true);
+  }, [props]);
+
+  React.useEffect(() => {
+    if (pendingPlanArtifact) {
+      setComposerDockHeight(0);
+    }
+  }, [pendingPlanArtifact]);
+
   // composerDock stays as a floating layer outside the transcript scroll flow.
   // composerDock 作为转录滚动流之外的浮动层保持挂载。
-  const composerDock = (
+  const composerDock = pendingPlanArtifact ? null : (
     <ComposerDock
       aiCapabilities={props.workbench.aiCapabilities ?? []}
       defaultAiCapabilities={props.workbench.defaultAiCapabilities ?? []}
@@ -791,6 +886,10 @@ export function ChatArea(props: ChatAreaProps) {
         error={props.conversationLoadError}
         parentConversationId={activeSurfaceConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
+        pendingPlanArtifact={pendingPlanArtifact}
+        onPlanArtifactExecute={handlePlanArtifactExecute}
+        onPlanArtifactSuggest={handlePlanArtifactSuggest}
+        onPlanArtifactCancel={handlePlanArtifactCancel}
         onScrollStateChange={updateConversationBottomState}
         onUserScrollStart={handleConversationUserScrollStart}
         onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
@@ -840,6 +939,38 @@ export function ChatArea(props: ChatAreaProps) {
       )}
     </div>
   );
+}
+
+// latestSubmittedPlanArtifact finds the newest submitted Plan block in the current transcript.
+// latestSubmittedPlanArtifact 在当前转录中查找最新提交的计划块。
+function latestSubmittedPlanArtifact(
+  renderItems: ConversationRenderItem[],
+  name: string,
+): ConversationPlanArtifact | null {
+  for (const item of [...renderItems].reverse()) {
+    for (const block of [...item.blocks].reverse()) {
+      const artifact = block.planArtifact;
+      if (artifact && artifact.name === name && artifact.content.trim()) {
+        return artifact;
+      }
+    }
+  }
+  return null;
+}
+
+// displayPlanArtifactPath removes Windows extended-path prefixes from model-visible prompt text.
+// displayPlanArtifactPath 从模型可见提示文本中移除 Windows 扩展路径前缀。
+function displayPlanArtifactPath(path: string): string {
+  const trimmed = path.trim();
+  const extendedUncPrefix = "\\\\?\\UNC\\";
+  const extendedPathPrefix = "\\\\?\\";
+  if (trimmed.toLowerCase().startsWith(extendedUncPrefix.toLowerCase())) {
+    return `\\\\${trimmed.slice(extendedUncPrefix.length)}`;
+  }
+  if (trimmed.startsWith(extendedPathPrefix)) {
+    return trimmed.slice(extendedPathPrefix.length);
+  }
+  return trimmed;
 }
 
 // initialThinkingOverlayEnabled returns the persisted thinking display preference.

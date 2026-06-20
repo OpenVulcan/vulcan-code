@@ -1,7 +1,10 @@
 import type { ConversationMessage } from "@/types";
 import { blockTitle } from "@/components/conversation/conversation-classifiers";
 import { generatedMediaAttachmentsFromMetadata } from "@/components/conversation/conversation-generated-media";
-import { metadataString } from "@/components/conversation/conversation-metadata";
+import {
+  metadataString,
+  metadataValue,
+} from "@/components/conversation/conversation-metadata";
 import type {
   ConversationBlock,
   ConversationBlockKind,
@@ -45,7 +48,27 @@ export function parseConversationBlocks(message: ConversationMessage): Conversat
     if (structuredKindLooksLikeToolBlock(structuredKind) && !structuredMessageHasToolEvidence(message, attributes)) {
       return [conversationMarkdownBlock(message.id, 0, message.body)];
     }
-    return [conversationSpecialBlock(message.id, 0, structuredKind, message.body, attributes, message.metadata)];
+    const primaryBlock = conversationSpecialBlock(message.id, 0, structuredKind, message.body, attributes, message.metadata);
+    const planArtifact = planArtifactAttributesFromMetadata(message.metadata);
+    if (!planArtifact || structuredKind === "plan-artifact") {
+      return [primaryBlock];
+    }
+    return [
+      primaryBlock,
+      conversationSpecialBlock(
+        message.id,
+        1,
+        "plan-artifact",
+        planArtifact.content,
+        {
+          plan_name: planArtifact.name,
+          plan_path: planArtifact.path,
+          plan_content: planArtifact.content,
+          plan_updated_at: planArtifact.updatedAt,
+        },
+        message.metadata,
+      ),
+    ];
   }
 
   const source = message.body.replace(/\r\n/g, "\n");
@@ -60,9 +83,11 @@ export function parseConversationBlocks(message: ConversationMessage): Conversat
 // structuredMessageBlockKind maps service-provided record kinds to WebUI block kinds.
 // structuredMessageBlockKind 将服务提供的记录类型映射到 WebUI 块类型。
 function structuredMessageBlockKind(message: ConversationMessage): ConversationBlockKind | null {
-  if (message.recordKind === "tool-call-output") return "tool-call";
+  if (message.recordKind === "tool-call-output") {
+    return "tool-call";
+  }
   if (message.recordKind === "tool-result-output") {
-    const hostKind = metadataString(message.metadata, ["kind", "host_result.kind", "hostResult.kind"]);
+    const hostKind = metadataString(message.metadata, ["host_result.kind", "hostResult.kind", "kind"]);
     if (hostKind === "command_session") return "command";
     if (hostKind === "change_set") return "diff";
     return "tool-result";
@@ -126,6 +151,13 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
     "payload.commandSessionId",
   ]);
   const taskSessionId = taskSessionIdFromToolMetadata(message.metadata);
+  const planArtifact = planArtifactAttributesFromMetadata(message.metadata);
+  if (planArtifact) {
+    attributes.plan_name = planArtifact.name;
+    attributes.plan_path = planArtifact.path;
+    attributes.plan_content = planArtifact.content;
+    attributes.plan_updated_at = planArtifact.updatedAt;
+  }
   const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
       "tool_display_state",
       "toolDisplayState",
@@ -398,6 +430,12 @@ function conversationSpecialBlock(
   const title = attributes.title ?? blockTitle(kind, toolName);
   const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
   const toolEvidence = conversationBlockHasToolEvidence(kind, attributes, rawMetadata);
+  const planArtifact = kind === "plan-artifact" ? {
+    name: attributes.plan_name ?? title,
+    path: attributes.plan_path ?? "",
+    content: attributes.plan_content ?? body.trim(),
+    updatedAt: attributes.plan_updated_at ?? "",
+  } : undefined;
   const compactionSectionId = metadataString(rawMetadata, ["context_compaction_section_id"]);
   const compactionRole = metadataString(rawMetadata, ["context_compaction_role"]);
   const compactionState = metadataString(rawMetadata, ["context_compaction_state"]);
@@ -426,7 +464,85 @@ function conversationSpecialBlock(
     compactionState: compactionState ?? undefined,
     compactionTrigger: compactionTrigger ?? undefined,
     compactionBudgetNote: compactionBudgetNote ?? undefined,
+    planArtifact,
   };
+}
+
+// planArtifactAttributesFromMetadata extracts the submit_plan payload from tool-result metadata.
+// planArtifactAttributesFromMetadata 从工具结果元数据中提取 submit_plan 载荷。
+function planArtifactAttributesFromMetadata(metadata: unknown): { name: string; path: string; content: string; updatedAt: string } | null {
+  const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
+  if (hostKind === "plan_artifact") {
+    const payload = metadataValue(metadata, ["host_result.payload", "hostResult.payload", "payload"]);
+    return planArtifactAttributesFromPayload(payload);
+  }
+  const toolName = metadataString(metadata, ["tool_name", "toolName", "host_result.payload.tool_name", "hostResult.payload.toolName"]);
+  if (toolName !== "submit_plan") {
+    return null;
+  }
+  if (!submitPlanFallbackLooksSuccessful(metadata)) {
+    return null;
+  }
+  const payload = metadataValue(metadata, ["arguments", "args", "input"]);
+  const detailRecordId = metadataString(metadata, [
+    "result.detail_ref.record_id",
+    "result.detailRef.recordId",
+    "result.record_id",
+    "result.recordId",
+  ]) ?? "";
+  const artifact = planArtifactAttributesFromPayload(payload);
+  return artifact ? { ...artifact, updatedAt: artifact.updatedAt || detailRecordId } : null;
+}
+
+// submitPlanFallbackLooksSuccessful rejects failed submit_plan calls before using their arguments as a Plan card.
+// submitPlanFallbackLooksSuccessful 在使用 submit_plan 参数生成计划卡前排除失败调用。
+function submitPlanFallbackLooksSuccessful(metadata: unknown): boolean {
+  const status = metadataString(metadata, [
+    "status",
+    "result.status",
+    "tool_display_state",
+    "toolDisplayState",
+    "host_result.status",
+    "hostResult.status",
+  ])?.toLowerCase();
+  if (status && ["failed", "failure", "error", "errored", "stopped"].includes(status)) {
+    return false;
+  }
+  const resultText = metadataString(metadata, [
+    "result.model_output",
+    "result.modelOutput",
+    "model_output",
+    "modelOutput",
+    "output",
+    "result.output",
+    "result.message",
+    "message",
+    "summary",
+  ])?.toLowerCase() ?? "";
+  return !/tool [`']?submit_plan[`']? failed|submit_plan failed|reason:|failed\.|error/.test(resultText);
+}
+
+// planArtifactAttributesFromPayload extracts one submitted Plan from a host payload-like object.
+// planArtifactAttributesFromPayload 从类宿主载荷对象中提取单个已提交计划。
+function planArtifactAttributesFromPayload(payload: unknown): { name: string; path: string; content: string; updatedAt: string } | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const object = payload as Record<string, unknown>;
+  const name = stringFromUnknown(object.name) ?? "计划";
+  const path = stringFromUnknown(object.path) ?? "";
+  const content = stringFromUnknown(object.content) ?? "";
+  const updatedAt = stringFromUnknown(object.updatedAt ?? object.updated_at) ?? "";
+  if (!content.trim()) {
+    return null;
+  }
+  return { name, path, content, updatedAt };
+}
+
+// stringFromUnknown returns one non-empty string from a JSON-ish value.
+// stringFromUnknown 从类 JSON 值中返回一条非空字符串。
+function stringFromUnknown(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 // compactTextPreview returns one short single-line preview for cards and modal headers.

@@ -545,6 +545,10 @@ pub struct SessionPlanArtifactSummary {
     /// Absolute filesystem path of the generated Markdown plan file.
     /// 生成的 Markdown 计划文件绝对路径。
     pub path: String,
+    /// Full Markdown plan content captured at submit time.
+    /// 提交时捕获的完整 Markdown 计划内容。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
     /// Unix-millis text capturing when the artifact was written.
     /// 捕获产物写入时间的 Unix 毫秒文本。
     pub updated_at: String,

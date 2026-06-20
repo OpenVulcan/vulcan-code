@@ -44,7 +44,6 @@ use vulcan_workspace_store::{
     data_plane::ControllerRuntimeHandle,
     workspace_store::{
         GoalAccountingMode, GoalUpdate, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
-        load_session_hydration_snapshot,
     },
 };
 
@@ -804,7 +803,6 @@ async fn execute_submit_plan_tool(
                 "Refusing to replace a file that was not created by submit_plan.",
             ));
         }
-        ensure_recorded_submit_plan_artifact(&request, &workspace_root, &path).await?;
         path
     } else {
         if args
@@ -834,7 +832,7 @@ async fn execute_submit_plan_tool(
     tokio_fs::write(&target_path, plan_text)
         .await
         .map_err(|error| NativeToolError::new(format!("failed to write plan file: {error}")))?;
-    let path_text = target_path.display().to_string();
+    let path_text = display_submit_plan_path(&target_path);
     let updated_at = unix_millis_now().to_string();
     Ok(VulcanToolInvocationResult::from_model_output(json!({
         "path": path_text,
@@ -846,9 +844,53 @@ async fn execute_submit_plan_tool(
         payload: json!({
             "name": name,
             "path": path_text,
+            "content": content,
             "updatedAt": updated_at,
         }),
     }))
+}
+
+/// Formats a submitted Plan path for model-visible and UI-visible tool feedback.
+/// 将已提交计划路径格式化为模型可见与界面可见的工具反馈文本。
+///
+/// # Parameters
+/// 参数
+/// `path` is the actual filesystem path used for writing the artifact.
+/// `path` 是实际用于写入计划产物的文件系统路径。
+///
+/// # Returns
+/// 返回值
+/// A display path with Windows extended-path prefixes removed.
+/// 返回移除 Windows 扩展路径前缀后的展示路径。
+fn display_submit_plan_path(path: &Path) -> String {
+    normalize_windows_extended_path_text(&path.display().to_string())
+}
+
+/// Removes Windows extended-path prefixes from a path display string.
+/// 从路径展示字符串中移除 Windows 扩展路径前缀。
+///
+/// # Parameters
+/// 参数
+/// `path_text` is a model-visible path string.
+/// `path_text` 是模型可见的路径字符串。
+///
+/// # Returns
+/// 返回值
+/// The same path without `\\?\` or `\\?\UNC\` prefixes.
+/// 返回移除 `\\?\` 或 `\\?\UNC\` 前缀后的路径。
+fn normalize_windows_extended_path_text(path_text: &str) -> String {
+    const EXTENDED_UNC_PREFIX: &str = "\\\\?\\UNC\\";
+    const EXTENDED_PATH_PREFIX: &str = "\\\\?\\";
+    if path_text
+        .get(..EXTENDED_UNC_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(EXTENDED_UNC_PREFIX))
+    {
+        return format!("\\\\{}", &path_text[EXTENDED_UNC_PREFIX.len()..]);
+    }
+    if let Some(stripped) = path_text.strip_prefix(EXTENDED_PATH_PREFIX) {
+        return stripped.to_string();
+    }
+    path_text.to_string()
 }
 
 /// Returns the current Unix epoch milliseconds.
@@ -916,62 +958,6 @@ async fn ensure_workspace_child_path(
     if !candidate.starts_with(workspace_root) {
         return Err(NativeToolError::new(
             "Plan path must stay inside the current workspace.",
-        ));
-    }
-    Ok(())
-}
-
-/// Ensures a replacement target matches the current session's recorded Plan artifact.
-/// 确保替换目标匹配当前会话已记录的计划产物。
-///
-/// # Parameters
-/// 参数
-/// `request` carries the current session and controller handles.
-/// `request` 携带当前会话和控制器句柄。
-/// `workspace_root` is the canonical workspace root.
-/// `workspace_root` 是规范化后的工作区根目录。
-/// `target_path` is the replacement target requested by the model.
-/// `target_path` 是模型请求替换的目标路径。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when the target is the exact recorded artifact path.
-/// 当目标就是已记录产物路径时返回 `Ok(())`。
-async fn ensure_recorded_submit_plan_artifact(
-    request: &NativeToolExecutionRequest,
-    workspace_root: &Path,
-    target_path: &Path,
-) -> Result<(), NativeToolError> {
-    let session_id = request.session_id.ok_or_else(|| {
-        NativeToolError::new(
-            "replace=true requires a current session with a recorded plan artifact.",
-        )
-    })?;
-    let controller_runtime = request.controller_runtime.clone().ok_or_else(|| {
-        NativeToolError::new(
-            "replace=true requires a current session with a recorded plan artifact.",
-        )
-    })?;
-    let snapshot = load_session_hydration_snapshot(controller_runtime, session_id, 1)
-        .await
-        .map_err(|error| {
-            NativeToolError::new(format!("failed to load session plan state: {error}"))
-        })?;
-    let recorded_path = snapshot
-        .runtime_state
-        .and_then(|state| state.plan_mode.artifact)
-        .map(|artifact| artifact.path)
-        .filter(|path| !path.trim().is_empty())
-        .ok_or_else(|| {
-            NativeToolError::new("replace=true requires a plan artifact recorded by submit_plan.")
-        })?;
-    let recorded_path = PathBuf::from(recorded_path);
-    ensure_workspace_child_path(workspace_root, &recorded_path).await?;
-    let recorded_path = canonicalize_existing_path(&recorded_path).await?;
-    let target_path = canonicalize_existing_path(target_path).await?;
-    if recorded_path != target_path {
-        return Err(NativeToolError::new(
-            "replace=true can only replace the current session's recorded submit_plan artifact path.",
         ));
     }
     Ok(())
@@ -3886,9 +3872,9 @@ mod tests {
         build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
         build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
         build_update_plan_tool, build_workspace_describe_tool, effective_start_append_newline,
-        goal_response_value, resolve_session_shell_behavior, resolve_shell_command_launcher,
-        resolve_shell_command_working_directory, shell_command_args_schema,
-        shell_session_args_schema, shell_specific_newline,
+        goal_response_value, normalize_windows_extended_path_text, resolve_session_shell_behavior,
+        resolve_shell_command_launcher, resolve_shell_command_working_directory,
+        shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
         validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
     };
     use crate::agent_runtime::config::{
@@ -4076,6 +4062,10 @@ mod tests {
         let content = tokio_fs::read_to_string(path).await.expect("plan content");
 
         assert_eq!(host_result.kind, "plan_artifact");
+        assert_eq!(
+            host_result.payload["content"].as_str(),
+            Some("# Plan\n\n- Step one")
+        );
         assert!(content.contains(SUBMIT_PLAN_MARKER));
         assert!(content.contains("# Plan"));
 
@@ -4114,10 +4104,10 @@ mod tests {
         let _ = tokio_fs::remove_dir_all(workspace_root).await;
     }
 
-    /// Verifies submit_plan replacement requires a current session artifact record.
-    /// 验证 submit_plan 替换必须存在当前会话产物记录。
+    /// Verifies submit_plan replacement accepts marked artifacts without an in-memory session record.
+    /// 验证 submit_plan 替换允许没有内存会话记录但带工具标记的产物。
     #[tokio::test]
-    async fn submit_plan_tool_rejects_unrecorded_replace_target() {
+    async fn submit_plan_tool_replaces_marked_target_without_session_record() {
         let workspace_root =
             std::env::temp_dir().join(format!("vulcan-submit-plan-{}", Uuid::new_v4()));
         tokio_fs::create_dir_all(&workspace_root)
@@ -4128,7 +4118,7 @@ mod tests {
             .await
             .expect("tool plan");
         let tool = build_submit_plan_tool();
-        let error = tool
+        let result = tool
             .invoke(test_native_request_with_workspace(
                 json!({
                     "name": "Generated",
@@ -4139,11 +4129,33 @@ mod tests {
                 workspace_root.clone(),
             ))
             .await
-            .expect_err("submit_plan should reject unrecorded replacement");
+            .expect("submit_plan should replace a marked target");
+        let host_result = result.host_result.expect("host result");
+        let replaced = tokio_fs::read_to_string(&target)
+            .await
+            .expect("replacement content");
+        let expected_path = target.display().to_string();
 
-        assert!(error.message.contains("recorded plan artifact"));
+        assert_eq!(host_result.kind, "plan_artifact");
+        assert_eq!(host_result.payload["path"].as_str(), Some(expected_path.as_str()));
+        assert!(replaced.contains(SUBMIT_PLAN_MARKER));
+        assert!(replaced.contains("# Replacement"));
 
         let _ = tokio_fs::remove_dir_all(workspace_root).await;
+    }
+
+    /// Verifies submit_plan feedback paths hide Windows extended-path prefixes.
+    /// 验证 submit_plan 反馈路径会隐藏 Windows 扩展路径前缀。
+    #[test]
+    fn submit_plan_feedback_path_hides_windows_extended_prefix() {
+        assert_eq!(
+            normalize_windows_extended_path_text("\\\\?\\D:\\openvulcan\\test-project\\docs\\plan\\mock.md"),
+            "D:\\openvulcan\\test-project\\docs\\plan\\mock.md"
+        );
+        assert_eq!(
+            normalize_windows_extended_path_text("\\\\?\\UNC\\server\\share\\mock.md"),
+            "\\\\server\\share\\mock.md"
+        );
     }
 
     /// Verifies completed goals return the Codex-compatible structured usage-report instruction.

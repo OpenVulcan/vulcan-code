@@ -84,8 +84,10 @@ export function buildStatusbarRuntimeActivities(
   }
   const normalized = normalizedSessionRunPhase(conversation.runPhase);
   const conversationRunning = conversationIsRunning(conversation);
-  const activeToolItems = projectedItems.filter((item) => item.blocks.some(isMergeableToolBlock)
-    && toolExecutionDisplayState(item.blocks, conversationRunning) === "running");
+  const activeToolItems = projectedItems.filter((item) => {
+    const toolBlocks = item.blocks.filter(isMergeableToolBlock);
+    return toolBlocks.length > 0 && toolExecutionDisplayState(toolBlocks, conversationRunning) === "running";
+  });
   const hasRunningSubagents = subagentNavigation?.tasks?.some((task) => task.isRunning) ?? false;
   if (!conversationRunning && !hasRunningSubagents && activeToolItems.length === 0) {
     return [];

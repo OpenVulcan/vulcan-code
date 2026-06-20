@@ -3,7 +3,24 @@ import type { ConversationMessage } from "@/types";
 
 // ConversationBlockKind describes one WebUI-renderable conversation block family.
 // ConversationBlockKind 描述 WebUI 可渲染的单个会话块族。
-export type ConversationBlockKind = "markdown" | "tool-call" | "tool-result" | "command" | "diff" | "thinking" | "notice" | "turn-stats";
+export type ConversationBlockKind = "markdown" | "tool-call" | "tool-result" | "command" | "diff" | "thinking" | "notice" | "turn-stats" | "plan-artifact";
+
+// ConversationPlanArtifact describes one submitted Plan artifact embedded in a turn.
+// ConversationPlanArtifact 描述嵌入单个回合中的已提交计划产物。
+export interface ConversationPlanArtifact {
+  // Human-readable plan name supplied to submit_plan.
+  // 提交给 submit_plan 的人类可读计划名称。
+  name: string;
+  // Absolute plan file path returned by submit_plan.
+  // submit_plan 返回的绝对计划文件路径。
+  path: string;
+  // Full Markdown content captured from submit_plan.
+  // 从 submit_plan 捕获的完整 Markdown 内容。
+  content: string;
+  // Stable updated-at marker returned by submit_plan.
+  // submit_plan 返回的稳定更新时间标记。
+  updatedAt: string;
+}
 
 // ConversationRenderItemKind describes the projected transcript item family.
 // ConversationRenderItemKind 描述投影后的转录展示项族。
@@ -69,6 +86,9 @@ export interface ConversationBlock {
   // Optional context-compaction budget note.
   // 可选上下文压缩预算摘要。
   compactionBudgetNote?: string;
+  // Optional submitted Plan artifact rendered as a transcript card.
+  // 可选已提交计划产物，用作转录卡片渲染。
+  planArtifact?: ConversationPlanArtifact;
 }
 
 // RuntimeCue describes the compact running-state badge shown above the composer.

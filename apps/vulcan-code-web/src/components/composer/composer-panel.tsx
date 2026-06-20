@@ -287,9 +287,6 @@ export function ComposerPanel(props: {
   // planModeEnabled follows the backend-persisted session Plan mode state.
   // planModeEnabled 跟随后端持久化的会话计划模式状态。
   const planModeEnabled = props.sessionPlanMode?.executionMode?.toLowerCase() === "plan" || (!props.conversationId && draftPlanModeEnabled);
-  // visiblePlanArtifact exposes the latest generated plan file near the composer.
-  // visiblePlanArtifact 在输入区附近展示最近生成的计划文件。
-  const visiblePlanArtifact = props.sessionPlanMode?.artifact ?? null;
   // availableModelChoices flattens provider data into selectable workbench models.
   // availableModelChoices 将 Provider 数据扁平化为可选择的工作台模型。
   const availableModelChoices = React.useMemo(
@@ -777,12 +774,6 @@ export function ComposerPanel(props: {
           onToggleStatus={() => void handleGoalStatusToggle()}
         />
       ) : null}
-      {visiblePlanArtifact ? (
-        <ComposerPlanArtifactStrip
-          name={visiblePlanArtifact.name}
-          path={visiblePlanArtifact.path}
-        />
-      ) : null}
       <section
         className={cn("composer-panel", isAttachmentDragOver && "attachment-drag-over")}
         onDragLeave={() => setIsAttachmentDragOver(false)}
@@ -1033,26 +1024,6 @@ function ComposerPlanModeChip(props: {
         <X size={12} />
       </span>
     </button>
-  );
-}
-
-// ComposerPlanArtifactStrip renders the latest generated plan file above the composer.
-// ComposerPlanArtifactStrip 在输入区上方渲染最近生成的计划文件。
-function ComposerPlanArtifactStrip(props: {
-  // Human-readable plan name.
-  // 人类可读的计划名称。
-  name: string;
-  // Absolute plan file path.
-  // 计划文件绝对路径。
-  path: string;
-}) {
-  return (
-    <div className="composer-plan-artifact-strip">
-      <ListChecks size={15} />
-      <span className="composer-plan-artifact-title">计划已保存</span>
-      <span className="composer-plan-artifact-name">{props.name}</span>
-      <span className="composer-plan-artifact-path" title={props.path}>{props.path}</span>
-    </div>
   );
 }
 

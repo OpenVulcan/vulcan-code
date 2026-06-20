@@ -1,4 +1,5 @@
 import type { ConversationBlock, ConversationBlockKind } from "@/components/conversation/conversation-model";
+import type { ToolExecutionConversationBlock } from "@/components/conversation/conversation-tool-execution-types";
 
 // isContextCompactionBlock detects host-provided context-compaction status rows.
 // isContextCompactionBlock 检测宿主提供的上下文压缩状态行。
@@ -8,7 +9,7 @@ export function isContextCompactionBlock(block: ConversationBlock): boolean {
 
 // isMergeableToolBlock returns whether a block belongs to one tool execution row.
 // isMergeableToolBlock 返回某个块是否属于同一工具执行行。
-export function isMergeableToolBlock(block: ConversationBlock): boolean {
+export function isMergeableToolBlock(block: ConversationBlock): block is ToolExecutionConversationBlock {
   if (block.kind === "tool-call" || block.kind === "tool-result" || block.kind === "command") {
     return blockHasToolExecutionEvidence(block);
   }
@@ -24,6 +25,7 @@ export function blockTitle(kind: ConversationBlockKind, toolName?: string): stri
   if (kind === "diff") return "Git Diff";
   if (kind === "thinking") return "思考过程";
   if (kind === "turn-stats") return "Turn Stats";
+  if (kind === "plan-artifact") return "计划";
   if (kind === "notice") return "运行提示";
   return "Markdown";
 }
