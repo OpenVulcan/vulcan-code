@@ -771,7 +771,6 @@ export function ChatArea(props: ChatAreaProps) {
     if (payload.note?.trim()) {
       promptParts.push("", "补充执行信息：", payload.note.trim());
     }
-    promptParts.push("", "计划内容：", artifact.content.trim());
     await props.onSubmitPrompt({
       prompt: promptParts.join("\n"),
       attachments: [],

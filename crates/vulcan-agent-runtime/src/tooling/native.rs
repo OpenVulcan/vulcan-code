@@ -15,6 +15,7 @@ use crate::tooling::command_session_runtime::{
 };
 use crate::tooling::output_decode::decode_shell_output_bytes;
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
+use crate::workspace_path::normalized_workspace_path_text_from_path;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -268,7 +269,7 @@ pub fn build_native_tool_catalog(
 ) -> NativeToolCatalog {
     let snapshot = NativeToolRuntimeSnapshot {
         workspace_directory: std::env::current_dir()
-            .map(|path| path.display().to_string())
+            .map(|path| normalized_workspace_path_text_from_path(&path))
             .unwrap_or_else(|_| String::from(".")),
         active_model: config.active_model.clone(),
         agent_count: config.agents.len(),
@@ -863,34 +864,7 @@ async fn execute_submit_plan_tool(
 /// A display path with Windows extended-path prefixes removed.
 /// 返回移除 Windows 扩展路径前缀后的展示路径。
 fn display_submit_plan_path(path: &Path) -> String {
-    normalize_windows_extended_path_text(&path.display().to_string())
-}
-
-/// Removes Windows extended-path prefixes from a path display string.
-/// 从路径展示字符串中移除 Windows 扩展路径前缀。
-///
-/// # Parameters
-/// 参数
-/// `path_text` is a model-visible path string.
-/// `path_text` 是模型可见的路径字符串。
-///
-/// # Returns
-/// 返回值
-/// The same path without `\\?\` or `\\?\UNC\` prefixes.
-/// 返回移除 `\\?\` 或 `\\?\UNC\` 前缀后的路径。
-fn normalize_windows_extended_path_text(path_text: &str) -> String {
-    const EXTENDED_UNC_PREFIX: &str = "\\\\?\\UNC\\";
-    const EXTENDED_PATH_PREFIX: &str = "\\\\?\\";
-    if path_text
-        .get(..EXTENDED_UNC_PREFIX.len())
-        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(EXTENDED_UNC_PREFIX))
-    {
-        return format!("\\\\{}", &path_text[EXTENDED_UNC_PREFIX.len()..]);
-    }
-    if let Some(stripped) = path_text.strip_prefix(EXTENDED_PATH_PREFIX) {
-        return stripped.to_string();
-    }
-    path_text.to_string()
+    normalized_workspace_path_text_from_path(path)
 }
 
 /// Returns the current Unix epoch milliseconds.
@@ -2579,7 +2553,10 @@ fn build_shell_session_summary_render_input(
         lines.push(format!("Launcher shell: {}", snapshot.launcher_shell_label));
     }
     lines.extend([
-        format!("Working directory: {}", snapshot.cwd.display()),
+        format!(
+            "Working directory: {}",
+            normalized_workspace_path_text_from_path(&snapshot.cwd)
+        ),
         format!("Status: {}", snapshot.status.as_str()),
         format!("Stdout bytes: {}", snapshot.stdout_bytes),
         format!("Stderr bytes: {}", snapshot.stderr_bytes),
@@ -3116,7 +3093,10 @@ fn build_shell_command_text_render_input(
     let mut lines = vec![
         format!("Command: {}", parsed_args.command),
         format!("Shell: {}", execution_report.shell_label),
-        format!("Working directory: {}", execution_report.cwd.display()),
+        format!(
+            "Working directory: {}",
+            normalized_workspace_path_text_from_path(&execution_report.cwd)
+        ),
         format!("Status: {}", execution_report.status.as_str()),
         format!("Duration: {} ms", execution_report.duration_ms),
     ];
@@ -3193,7 +3173,7 @@ fn build_shell_command_host_payload(
     json!({
         "session_id": session_id.map(|value| value.to_string()),
         "command": parsed_args.command,
-        "cwd": execution_report.cwd.display().to_string(),
+        "cwd": normalized_workspace_path_text_from_path(&execution_report.cwd),
         "shell": execution_report.shell_label,
         "status": execution_report.status.as_str(),
         "exit_code": execution_report.exit_code,
@@ -3218,7 +3198,7 @@ fn build_shell_session_host_payload(
         "owner_session_id": snapshot.owner_session_id.to_string(),
         "command_session_id": snapshot.command_session_id.to_string(),
         "command": snapshot.command.clone(),
-        "cwd": snapshot.cwd.display().to_string(),
+        "cwd": normalized_workspace_path_text_from_path(&snapshot.cwd),
         "shell": snapshot.shell_label.clone(),
         "launcher_shell": snapshot.launcher_shell_label.clone(),
         "status": snapshot.status.as_str(),
@@ -3872,7 +3852,7 @@ mod tests {
         build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
         build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
         build_update_plan_tool, build_workspace_describe_tool, effective_start_append_newline,
-        goal_response_value, normalize_windows_extended_path_text, resolve_session_shell_behavior,
+        display_submit_plan_path, goal_response_value, resolve_session_shell_behavior,
         resolve_shell_command_launcher, resolve_shell_command_working_directory,
         shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
         validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
@@ -4149,11 +4129,11 @@ mod tests {
     #[test]
     fn submit_plan_feedback_path_hides_windows_extended_prefix() {
         assert_eq!(
-            normalize_windows_extended_path_text("\\\\?\\D:\\openvulcan\\test-project\\docs\\plan\\mock.md"),
+            display_submit_plan_path(Path::new("\\\\?\\D:\\openvulcan\\test-project\\docs\\plan\\mock.md")),
             "D:\\openvulcan\\test-project\\docs\\plan\\mock.md"
         );
         assert_eq!(
-            normalize_windows_extended_path_text("\\\\?\\UNC\\server\\share\\mock.md"),
+            display_submit_plan_path(Path::new("\\\\?\\UNC\\server\\share\\mock.md")),
             "\\\\server\\share\\mock.md"
         );
     }

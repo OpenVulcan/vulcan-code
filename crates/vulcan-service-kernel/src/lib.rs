@@ -2685,7 +2685,7 @@ fn webui_diff_workspace_path_from_state(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
-            .unwrap_or_else(|| workspace_root().display().to_string()));
+            .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())));
     };
     let resolved_project_id = project_id
         .map(str::trim)
@@ -2710,7 +2710,7 @@ fn webui_diff_workspace_path_from_state(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-        .unwrap_or_else(|| workspace_root().display().to_string()))
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())))
 }
 
 /// Runs a LuaSkills management operation on a blocking worker and returns its result.
@@ -3562,7 +3562,7 @@ fn composer_attachment_workspace_path(
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
     let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
-        return Ok(workspace_root().display().to_string());
+        return Ok(normalized_workspace_path_text_from_path(&workspace_root()));
     };
     let owner_project_id = conversation_id
         .and_then(parse_session_id)
@@ -3577,14 +3577,14 @@ fn composer_attachment_workspace_path(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let Some(owner_project_id) = owner_project_id else {
-        return Ok(workspace_root().display().to_string());
+        return Ok(normalized_workspace_path_text_from_path(&workspace_root()));
     };
     Ok(workspace_snapshot
         .task_projects
         .iter()
         .find(|project| project.id == owner_project_id)
         .map(|project| project.path.clone())
-        .unwrap_or_else(|| workspace_root().display().to_string()))
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root())))
 }
 
 /// Stages local paths for a resolved workspace path and converts them to service DTOs.
@@ -11514,7 +11514,7 @@ fn workspace_path_for_session(
                 .find(|project| project.id == project_id)
         })
         .map(|project| project.path.clone())
-        .unwrap_or_else(|| workspace_root().display().to_string())
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()))
 }
 
 /// Builds one compact single-line preview used by the pending prompt queue strip.
@@ -16828,7 +16828,7 @@ fn spawn_webui_context_compaction_task(
     let workspace_path = workspace_snapshot
         .as_ref()
         .map(|workspace| workspace_path_for_session(workspace, session_id))
-        .unwrap_or_else(|| workspace_root().display().to_string());
+        .unwrap_or_else(|| normalized_workspace_path_text_from_path(&workspace_root()));
     let ai_tool_configuration = workspace_snapshot
         .as_ref()
         .map(|workspace| {
@@ -22352,7 +22352,7 @@ fn run_service_bootstrap(
 ) -> Result<(), ServiceBootstrapError> {
     let mut logs = vec![format!(
         "[webui-service] workspace root: {}",
-        workspace_root().display()
+        normalized_workspace_path_text_from_path(&workspace_root())
     )];
     let controller_configuration =
         vulcan_provider_config::config::load_controller_configuration_file().map_err(|error| {
@@ -22887,7 +22887,7 @@ fn update_service_failure(
         ),
         format!(
             "[webui-service] workspace root: {}",
-            workspace_root().display()
+            normalized_workspace_path_text_from_path(&workspace_root())
         ),
     ];
     let startup = startup_snapshot_with_phase(
@@ -24149,7 +24149,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         projects: vec![ProjectSummary {
             id: String::from("current-workspace"),
             name: String::from("vulcan-code"),
-            path: workspace_root.display().to_string(),
+            path: normalized_workspace_path_text_from_path(&workspace_root),
             pinned: false,
             icon_pack: None,
             icon_key: None,
@@ -24281,8 +24281,8 @@ fn lua_skills_catalog_summary(
     provider_configuration: &ProviderConfigurationFile,
 ) -> LuaSkillsCatalogSummary {
     LuaSkillsCatalogSummary {
-        runtime_root: catalog.runtime_root.display().to_string(),
-        system_lua_lib: catalog.system_lua_lib_dir.display().to_string(),
+        runtime_root: normalized_workspace_path_text_from_path(&catalog.runtime_root),
+        system_lua_lib: normalized_workspace_path_text_from_path(&catalog.system_lua_lib_dir),
         entry_count: catalog.entry_count,
         notice: if catalog.runtime_root.as_os_str().is_empty() {
             String::from("LuaSkills 技能目录尚未载入。")
@@ -24301,7 +24301,7 @@ fn lua_skills_catalog_summary(
                 display_name: skill.display_name.clone(),
                 version: skill.version.clone(),
                 root_name: skill.root_name.clone(),
-                skill_dir: skill.skill_dir.display().to_string(),
+                skill_dir: normalized_workspace_path_text_from_path(&skill.skill_dir),
                 enabled: skill.enabled,
                 disabled_reason: skill.disabled_reason.clone(),
                 managed: skill.managed,
@@ -24345,8 +24345,8 @@ fn agent_skills_catalog_summary(
     let global_enabled = provider_configuration.prompt_skills.enabled;
     AgentSkillsCatalogSummary {
         global_enabled,
-        system_root: catalog.system_root.display().to_string(),
-        user_root: catalog.user_root.display().to_string(),
+        system_root: normalized_workspace_path_text_from_path(&catalog.system_root),
+        user_root: normalized_workspace_path_text_from_path(&catalog.user_root),
         notice: format!(
             "系统技能 {}，用户技能 {}，加载警告 {}。",
             catalog
@@ -24370,7 +24370,7 @@ fn agent_skills_catalog_summary(
             .errors
             .iter()
             .map(|error| AgentSkillLoadIssueSummary {
-                path: error.path.display().to_string(),
+                path: normalized_workspace_path_text_from_path(&error.path),
                 message: error.message.clone(),
             })
             .collect(),
@@ -24397,8 +24397,8 @@ fn agent_skill_summary(
         description: prompt_skill_short_description(skill).to_string(),
         scope: skill.scope.zh_label().to_string(),
         enabled: global_enabled && local_enabled,
-        skill_file: skill.skill_file.display().to_string(),
-        base_dir: skill.base_dir.display().to_string(),
+        skill_file: normalized_workspace_path_text_from_path(&skill.skill_file),
+        base_dir: normalized_workspace_path_text_from_path(&skill.base_dir),
         icon_path: prompt_skill_icon_path(skill),
         body: skill.body.trim().to_string(),
     }
@@ -24435,7 +24435,7 @@ fn prompt_skill_icon_path(skill: &vulcan_prompt_skills::PromptSkill) -> Option<S
         .and_then(|interface| interface.icon_small.as_ref())
         .map(|path| skill.base_dir.join(path))
         .filter(|path| path.is_file())
-        .map(|path| path.display().to_string())
+        .map(|path| normalized_workspace_path_text_from_path(&path))
 }
 
 /// Returns a stable key for one persisted LuaSkills tool registration state.
