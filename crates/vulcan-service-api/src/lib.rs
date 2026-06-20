@@ -1407,6 +1407,10 @@ pub struct ConversationMessage {
     /// 从转录元数据投影出的结构化用户附件。
     #[serde(default)]
     pub attachments: Vec<ComposerAttachmentSummary>,
+    /// Whether this user prompt can be safely edited and replayed by the backend.
+    /// 后端判定该用户提示词是否可以安全编辑并重新执行。
+    #[serde(default)]
+    pub editable_user_prompt: bool,
 }
 
 /// Carries one ordered partial workbench update that avoids resending the full snapshot.
@@ -1694,6 +1698,95 @@ pub struct ProviderModelSummary {
     /// 可选推理档位配置 JSON 文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_profile_json: Option<String>,
+    /// Whether this provider/model pair exposes backend-managed secondary routes.
+    /// 该 Provider/模型组合是否暴露由后端管理的二级路由。
+    #[serde(default)]
+    pub supports_secondary_routes: bool,
+    /// Active backend-managed secondary route, when one is selected.
+    /// 当前已选中的后端二级路由。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_route: Option<ProviderModelSecondaryRouteSummary>,
+}
+
+/// Summarizes one backend-managed secondary route for a concrete provider/model pair.
+/// 汇总某个具体 Provider/模型组合下的一条后端二级路由。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelSecondaryRouteSummary {
+    /// Stable owning provider identifier.
+    /// 稳定所属 Provider 标识。
+    pub provider_id: String,
+    /// Stable owning model identifier.
+    /// 稳定所属模型标识。
+    pub model_id: String,
+    /// Stable route identifier forwarded to the provider request.
+    /// 转发到 Provider 请求中的稳定路由标识。
+    pub route_id: String,
+    /// Compatibility alias for providers that call the route id a tag.
+    /// 兼容将路由标识称为 tag 的 Provider。
+    pub tag: String,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    pub provider_name: String,
+    /// Human-readable endpoint name.
+    /// 人类可读的端点名称。
+    pub endpoint_name: String,
+    /// Compact label rendered in picker triggers.
+    /// 渲染在选择器触发器中的紧凑标签。
+    pub label: String,
+    /// Secondary detail line rendered in route lists.
+    /// 渲染在路由列表中的二级详情文本。
+    pub subtitle: String,
+    /// Whether this route is the active persisted selection.
+    /// 该路由是否为当前已持久化选择。
+    #[serde(default)]
+    pub active: bool,
+}
+
+/// Selects one backend-managed secondary route for a concrete provider/model pair.
+/// 为某个具体 Provider/模型组合选择一条后端二级路由。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderModelSecondaryRouteSelection {
+    /// Stable route identifier forwarded to the provider request.
+    /// 转发到 Provider 请求中的稳定路由标识。
+    pub route_id: String,
+    /// Compatibility alias for providers that call the route id a tag.
+    /// 兼容将路由标识称为 tag 的 Provider。
+    #[serde(default)]
+    pub tag: String,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    #[serde(default)]
+    pub provider_name: String,
+    /// Human-readable endpoint name.
+    /// 人类可读的端点名称。
+    #[serde(default)]
+    pub endpoint_name: String,
+}
+
+/// Draft data used by the WebUI user-prompt edit dialog.
+/// WebUI 用户提示词编辑弹窗使用的草稿数据。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UserPromptEditDraftSummary {
+    /// Stable conversation identifier.
+    /// 稳定会话标识。
+    pub conversation_id: String,
+    /// Stable user prompt message identifier.
+    /// 稳定用户提示词消息标识。
+    pub message_id: String,
+    /// Editable prompt text.
+    /// 可编辑提示词文本。
+    pub prompt: String,
+    /// Attachments that will be replayed with the edited prompt.
+    /// 将随编辑后提示词重新执行的附件。
+    #[serde(default)]
+    pub attachments: Vec<ComposerAttachmentSummary>,
+    /// Whether the owning conversation is currently running.
+    /// 所属会话当前是否正在运行。
+    #[serde(default)]
+    pub running: bool,
 }
 
 /// Summarizes one editable provider configuration field.

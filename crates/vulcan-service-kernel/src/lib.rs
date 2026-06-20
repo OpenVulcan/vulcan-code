@@ -90,8 +90,8 @@ use vulcan_agent_runtime::{
     },
 };
 use vulcan_context::{
-    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
-    append_record_body_delta,
+    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationPayload,
+    SessionConversationRecord, append_record, append_record_body_delta,
 };
 use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
 use vulcan_context_injection::{
@@ -119,22 +119,24 @@ use vulcan_service_api::{
     LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary,
     MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
     PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
-    ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary, ProviderModelSummary,
+    ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
+    ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
     RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
     SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
     SessionTodoPlanItemSummary, SessionTodoPlanSummary, SettingSectionSummary, StartupSnapshot,
     StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
-    ToolCallSummary, VmmConfigDraftSummary, VmmConfigSaveRequest, VmmEffectiveSummary,
-    VmmManagementSectionSummary, VmmMemoryActionRequest, VmmMemoryActionResult, VmmMemorySnapshot,
-    VmmProjectScopeSummary, VmmRuntimeSummary, VmmStaticProfileDateGroupSummary,
-    VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary, VmmStaticProfileSummary,
-    WEBUI_REDACTED_SECRET_PLACEHOLDER, WEBUI_SERVICE_DISCOVERY_STATUS_FAILED,
-    WEBUI_SERVICE_DISCOVERY_STATUS_READY, WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV,
-    WorkbenchDelta, WorkbenchDeltaEnvelope, WorkbenchSnapshot, WorkspaceFileDirectoryListing,
-    WorkspaceFileEntryKind, WorkspaceFileEntrySummary, WorkspaceFileFilterOptions,
-    WorkspaceFileReadResponse, webui_service_discovery_snapshot_with_status,
-    webui_service_starting_discovery_snapshot, webui_static_root_from_candidates,
+    ToolCallSummary, UserPromptEditDraftSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
+    VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
+    VmmMemoryActionResult, VmmMemorySnapshot, VmmProjectScopeSummary, VmmRuntimeSummary,
+    VmmStaticProfileDateGroupSummary, VmmStaticProfileNodeSummary, VmmStaticProfileSectionSummary,
+    VmmStaticProfileSummary, WEBUI_REDACTED_SECRET_PLACEHOLDER,
+    WEBUI_SERVICE_DISCOVERY_STATUS_FAILED, WEBUI_SERVICE_DISCOVERY_STATUS_READY,
+    WEBUI_SERVICE_PORT_ENV, WEBUI_STATIC_DIR_ENV, WorkbenchDelta, WorkbenchDeltaEnvelope,
+    WorkbenchSnapshot, WorkspaceFileDirectoryListing, WorkspaceFileEntryKind,
+    WorkspaceFileEntrySummary, WorkspaceFileFilterOptions, WorkspaceFileReadResponse,
+    webui_service_discovery_snapshot_with_status, webui_service_starting_discovery_snapshot,
+    webui_static_root_from_candidates,
 };
 use vulcan_service_host::{
     SharedWebuiServiceDiscoverySnapshot, WebuiServiceHttpConfig, WebuiServiceRpcDispatcher,
@@ -300,6 +302,46 @@ struct ProviderModelOverrideSaveRequest {
     /// Optional reasoning profile JSON override.
     /// 可选推理档位配置 JSON 覆盖值。
     reasoning_profile_json: Option<String>,
+}
+
+/// Provider/model secondary route selection request sent by the WebUI composer.
+/// WebUI 输入区发送的 Provider/模型二级路由选择请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelSecondaryRouteRequest {
+    /// Stable provider identifier.
+    /// 稳定 Provider 标识。
+    provider_id: String,
+    /// Stable model identifier.
+    /// 稳定模型标识。
+    model_id: String,
+    /// Optional route selection; `None` clears the route back to Auto.
+    /// 可选路由选择；`None` 表示清除为 Auto。
+    route: Option<ProviderModelSecondaryRouteSelection>,
+}
+
+/// User prompt edit submit request sent by the WebUI transcript action.
+/// WebUI 转录操作发送的用户提示词编辑提交请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UserPromptEditSubmitRequest {
+    /// Conversation id that owns the user prompt.
+    /// 拥有该用户提示词的会话标识。
+    conversation_id: String,
+    /// Stable user prompt message id.
+    /// 稳定用户提示词消息标识。
+    message_id: String,
+    /// Replacement prompt text.
+    /// 替换后的提示词文本。
+    prompt: String,
+    /// Attachments replayed with the edited prompt.
+    /// 随编辑后提示词重放的附件。
+    #[serde(default)]
+    attachments: Vec<ComposerAttachmentSummary>,
+    /// Whether the backend may stop an active run before editing.
+    /// 后端是否可以先停止当前运行再执行编辑。
+    #[serde(default)]
+    stop_running: bool,
 }
 
 /// Shared AI capability vendor save request sent by the WebUI settings page.
@@ -1647,6 +1689,72 @@ fn active_kernel_session_ids(state: &ServiceBridgeState) -> BTreeSet<SessionId> 
         .collect()
 }
 
+/// Returns whether one WebUI session is idle enough for destructive user-prompt editing.
+/// 返回单个 WebUI 会话是否空闲到足以执行破坏性用户提示词编辑。
+fn webui_session_allows_user_prompt_editing(
+    state: &mut ServiceBridgeState,
+    session_id: SessionId,
+) -> bool {
+    if state.active_stream_tasks.contains_key(&session_id)
+        || webui_session_kernel_has_active_turn(state, session_id)
+        || webui_session_has_active_run(state, session_id)
+    {
+        return false;
+    }
+    let Some(workspace_snapshot) = state.workspace_snapshot.clone() else {
+        return false;
+    };
+    if !workspace_surface_allows_user_prompt_editing(&workspace_snapshot, session_id, None) {
+        return false;
+    }
+    running_webui_subagent_task_states_for_tree_from_live_cache(state, session_id).is_empty()
+}
+
+/// Returns whether one workspace surface is visibly idle for user-prompt editing.
+/// 返回单个工作区表面从可见状态看是否空闲到允许用户提示词编辑。
+fn workspace_surface_allows_user_prompt_editing(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    subagent_navigation: Option<&SubagentNavigationSnapshot>,
+) -> bool {
+    if session_id == SessionId::nil() {
+        return false;
+    }
+    if workspace_snapshot
+        .sessions
+        .iter()
+        .chain(workspace_snapshot.archived_sessions.iter())
+        .find(|session| session.id == session_id)
+        .is_none_or(|session| session.status == SessionState::Running)
+    {
+        return false;
+    }
+    if workspace_snapshot
+        .session_run_phases
+        .get(&session_id)
+        .is_some_and(|phase| *phase == SessionRunPhase::Preparing)
+    {
+        return false;
+    }
+    if workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .is_some_and(runtime_state_has_pending_prompt_work)
+    {
+        return false;
+    }
+    !subagent_navigation
+        .is_some_and(|navigation| navigation.tasks.iter().any(|task| task.is_running))
+}
+
+/// Returns whether one runtime state has queued or internal prompt work.
+/// 返回单个运行态是否存在排队或内部提示词工作。
+fn runtime_state_has_pending_prompt_work(runtime_state: &SessionRuntimeStateEntry) -> bool {
+    !runtime_state.ui_state.pending_prompt_queue.is_empty()
+        || !runtime_state.ui_state.pending_prompt_panel_queue.is_empty()
+        || runtime_state.active_precheck_turn_id.is_some()
+}
+
 /// Returns the owning session id for one execution stream event.
 /// 返回单个执行流事件所属的会话标识。
 ///
@@ -2073,6 +2181,18 @@ async fn dispatch_service_rpc(
         "service_stop_conversation_run" => {
             rpc_json_result(service_stop_conversation_run(app, state).await)
         }
+        "service_get_user_prompt_edit_draft" => rpc_json_result(
+            service_get_user_prompt_edit_draft(
+                state,
+                rpc_required_param(&params, "conversationId")?,
+                rpc_required_param(&params, "messageId")?,
+            )
+            .await,
+        ),
+        "service_submit_user_prompt_edit" => rpc_json_result(
+            service_submit_user_prompt_edit(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
         "service_save_session_goal" => rpc_json_result(
             service_save_session_goal(app, state, rpc_required_param(&params, "request")?).await,
         ),
@@ -2181,6 +2301,22 @@ async fn dispatch_service_rpc(
                 state,
                 rpc_required_param(&params, "providerId")?,
                 rpc_required_param(&params, "modelId")?,
+            )
+            .await,
+        ),
+        "service_list_workbench_model_secondary_routes" => rpc_json_result(
+            service_list_workbench_model_secondary_routes(
+                state,
+                rpc_required_param(&params, "providerId")?,
+                rpc_required_param(&params, "modelId")?,
+            )
+            .await,
+        ),
+        "service_select_workbench_model_secondary_route" => rpc_json_result(
+            service_select_workbench_model_secondary_route(
+                app,
+                state,
+                rpc_required_param(&params, "request")?,
             )
             .await,
         ),
@@ -3164,6 +3300,272 @@ fn service_reject_pending_question(
     store_and_emit_pending_question_workbench_snapshot(&app, &state)
 }
 
+/// Loads one backend-validated draft for a user prompt edit dialog.
+/// 加载一份供用户提示词编辑弹窗使用的后端校验草稿。
+async fn service_get_user_prompt_edit_draft(
+    state: SharedServiceBridgeState,
+    conversation_id: String,
+    message_id: String,
+) -> Result<UserPromptEditDraftSummary, String> {
+    let session_id = parse_session_id(&conversation_id)
+        .ok_or_else(|| format!("无效会话标识：{conversation_id}"))?;
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
+        return Err(String::from(
+            "当前会话仍有运行中或排队中的任务，暂时无法编辑历史输入。",
+        ));
+    }
+    let workspace = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
+    let runtime_state = workspace
+        .session_runtime_state
+        .get(&session_id)
+        .ok_or_else(|| String::from("当前会话运行态尚未载入，无法安全编辑。"))?;
+    let target = resolve_user_prompt_edit_target(runtime_state, &message_id)?;
+    validate_user_prompt_edit_tail(runtime_state, target.record_index)?;
+    Ok(UserPromptEditDraftSummary {
+        conversation_id,
+        message_id,
+        prompt: target.prompt,
+        attachments: target
+            .attachments
+            .iter()
+            .map(composer_attachment_summary_from_core)
+            .collect(),
+        running: false,
+    })
+}
+
+/// Submits one user prompt edit by rolling back the tail and immediately replaying the edited prompt.
+/// 通过回滚尾部并立即重放编辑后提示词来提交一次用户提示词编辑。
+async fn service_submit_user_prompt_edit(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: UserPromptEditSubmitRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    if request.stop_running {
+        return Err(String::from("历史输入编辑仅允许在会话完全空闲时执行。"));
+    }
+    let session_id = parse_session_id(&request.conversation_id)
+        .ok_or_else(|| format!("无效会话标识：{}", request.conversation_id))?;
+    let _validated_attachments = request
+        .attachments
+        .clone()
+        .into_iter()
+        .map(composer_attachment_summary_to_core)
+        .collect::<Result<Vec<_>, _>>()?;
+    let (controller_runtime, rollback_workspace_snapshot) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?;
+        if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
+            return Err(String::from(
+                "当前会话已产生运行中、排队中或子代理任务，无法安全回滚编辑。",
+            ));
+        }
+        let workspace = guard
+            .workspace_snapshot
+            .as_mut()
+            .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
+        let runtime_state = workspace
+            .session_runtime_state
+            .get_mut(&session_id)
+            .ok_or_else(|| String::from("当前会话运行态尚未载入，无法安全编辑。"))?;
+        let target = resolve_user_prompt_edit_target(runtime_state, &request.message_id)?;
+        validate_user_prompt_edit_tail(runtime_state, target.record_index)?;
+        rollback_runtime_state_to_user_prompt(
+            runtime_state,
+            target.record_index,
+            target.message_index,
+        );
+        let projected_messages =
+            conversation_state_to_session_messages(&runtime_state.conversation_state);
+        workspace
+            .session_messages
+            .insert(session_id, projected_messages.clone());
+        workspace.hydrated_session_ids.insert(session_id);
+        workspace
+            .session_run_phases
+            .insert(session_id, SessionRunPhase::Ready);
+        if let Some(session) = workspace
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Completed;
+            session.focus = String::from("已回滚到编辑后的用户输入，正在重新执行。");
+            session.last_updated_label = String::from("刚刚");
+            session.updated_at = current_unix_millis_text();
+        }
+        let selected_conversation_id = session_id.to_string();
+        guard.workbench.messages = conversation_messages_from_session(
+            &selected_conversation_id,
+            projected_messages.as_slice(),
+            false,
+        );
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench = workbench_with_live_pending_question(&guard);
+        let rollback_workspace_snapshot = guard
+            .workspace_snapshot
+            .clone()
+            .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
+        (controller_runtime, rollback_workspace_snapshot)
+    };
+    persist_workspace_session_update(
+        Some(&state),
+        controller_runtime,
+        &rollback_workspace_snapshot,
+        session_id,
+    )
+    .await?;
+    service_submit_conversation_prompt(
+        app,
+        state,
+        None,
+        Some(request.conversation_id),
+        request.prompt,
+        None,
+        Some(String::from("build")),
+        None,
+        Some(request.attachments),
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+/// Resolved target data for one safe user prompt edit.
+/// 单次安全用户提示词编辑解析出的目标数据。
+#[derive(Debug, Clone)]
+struct UserPromptEditTarget {
+    /// Index of the visible user record in the canonical record stream.
+    /// 可见用户记录在规范记录流中的索引。
+    record_index: usize,
+    /// Index of the corresponding protocol message in the canonical message window.
+    /// 对应协议消息在规范消息窗口中的索引。
+    message_index: usize,
+    /// Current prompt text.
+    /// 当前提示词文本。
+    prompt: String,
+    /// Current prompt attachments.
+    /// 当前提示词附件。
+    attachments: Vec<ConversationAttachment>,
+}
+
+/// Resolves one visible user prompt record to its canonical protocol message.
+/// 将单条可见用户提示词记录解析到对应的规范协议消息。
+fn resolve_user_prompt_edit_target(
+    runtime_state: &SessionRuntimeStateEntry,
+    message_id: &str,
+) -> Result<UserPromptEditTarget, String> {
+    let record_index = runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .position(|record| {
+            record.id == message_id
+                && record.visible
+                && record.kind == SessionMessageKind::User
+                && record.record_kind == SessionMessageRecordKind::Transcript
+        })
+        .ok_or_else(|| String::from("未找到可编辑的用户输入记录。"))?;
+    let message_index = runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)
+        .ok_or_else(|| String::from("该用户输入无法与协议消息安全对应。"))?;
+    let SessionConversationPayload::UserText { text, attachments } =
+        &runtime_state.conversation_state.messages[message_index].payload
+    else {
+        return Err(String::from("该记录对应的协议消息不是用户输入。"));
+    };
+    Ok(UserPromptEditTarget {
+        record_index,
+        message_index,
+        prompt: text.clone(),
+        attachments: attachments.clone(),
+    })
+}
+
+/// Validates that no later record blocks editing of an earlier user prompt.
+/// 校验后续记录没有阻断更早用户提示词编辑。
+fn validate_user_prompt_edit_tail(
+    runtime_state: &SessionRuntimeStateEntry,
+    record_index: usize,
+) -> Result<(), String> {
+    for record in runtime_state
+        .conversation_state
+        .records
+        .iter()
+        .skip(record_index + 1)
+    {
+        if record.record_kind == SessionMessageRecordKind::CompactionSummary {
+            return Err(String::from(
+                "该输入之后已经发生上下文压缩，无法安全回滚编辑。",
+            ));
+        }
+        if record
+            .metadata
+            .as_ref()
+            .is_some_and(metadata_has_applied_change_set)
+        {
+            return Err(String::from(
+                "该输入之后已产生实际文件变更，无法安全回滚编辑。",
+            ));
+        }
+        if record
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
+        {
+            return Err(String::from(
+                "该输入之后已产生子代理任务，无法确认其文件影响范围，不能安全回滚编辑。",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Rolls one runtime state back to just before the selected user prompt.
+/// 将单个运行态回滚到选中用户提示词之前。
+fn rollback_runtime_state_to_user_prompt(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    record_index: usize,
+    message_index: usize,
+) {
+    runtime_state
+        .conversation_state
+        .records
+        .truncate(record_index);
+    runtime_state
+        .conversation_state
+        .messages
+        .truncate(message_index);
+    runtime_state.conversation_state.continuation = Default::default();
+    runtime_state.context_start_message_id = None;
+    runtime_state.last_compaction_id = None;
+    runtime_state.live_context_budget_fingerprint = None;
+    runtime_state.live_context_assembly_fingerprint = None;
+    runtime_state.anchor_context_budget_fingerprint = None;
+    runtime_state.anchor_context_assembly_fingerprint = None;
+    runtime_state.last_provider_request_preview_markdown = None;
+    runtime_state.tool_call_record_ids.clear();
+    runtime_state.last_provider_usage = None;
+    runtime_state.last_successful_provider_usage = None;
+    runtime_state.last_safe_provider_request_count = None;
+    runtime_state.active_precheck_turn_id = None;
+    runtime_state.updated_at = current_unix_millis_text();
+}
+
 /// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.
 /// 仅重建保留工作台快照上的 ask 弹窗投影并发送事件。
 fn store_and_emit_pending_question_workbench_snapshot(
@@ -3259,9 +3661,16 @@ async fn service_session_messages(
             messages.as_mut_slice(),
             None,
         )?;
+        let allow_user_prompt_editing = {
+            let mut guard = state
+                .lock()
+                .map_err(|error| format!("failed to lock service state: {error}"))?;
+            webui_session_allows_user_prompt_editing(&mut guard, parsed_session_id)
+        };
         return Ok(conversation_messages_from_session(
             &session_id,
             messages.as_slice(),
+            allow_user_prompt_editing,
         ));
     }
     let mut transcript_page =
@@ -3291,6 +3700,7 @@ async fn service_session_messages(
     Ok(conversation_messages_from_session(
         &session_id,
         transcript_page.messages.as_slice(),
+        false,
     ))
 }
 
@@ -5648,6 +6058,516 @@ async fn service_select_workbench_model(
 
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Lists backend-managed secondary routes for one workbench provider/model pair.
+/// 列出单个工作台 Provider/模型组合的后端二级路由。
+async fn service_list_workbench_model_secondary_routes(
+    state: SharedServiceBridgeState,
+    provider_id: String,
+    model_id: String,
+) -> Result<Vec<ProviderModelSecondaryRouteSummary>, String> {
+    let provider_id = provider_id.trim().to_string();
+    let model_id = model_id.trim().to_string();
+    if provider_id != "openrouter" {
+        return Ok(Vec::new());
+    }
+    let provider_configuration = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+            .provider_configuration
+            .clone()
+    };
+    ensure_provider_model_enabled(&provider_configuration, &provider_id, &model_id)?;
+    let active_route =
+        provider_config::openrouter_endpoint_route_for_model(&provider_configuration, &model_id);
+    let api_key = provider_configuration
+        .provider
+        .get("openrouter")
+        .map(|entry| entry.options.resolved_api_key())
+        .transpose()?
+        .flatten();
+    let choices = fetch_openrouter_secondary_route_choices(model_id.clone(), api_key).await?;
+    Ok(choices
+        .into_iter()
+        .map(|choice| {
+            let active = active_route
+                .as_ref()
+                .is_some_and(|selection| selection.tag == choice.tag);
+            choice.into_summary(&provider_id, &model_id, active)
+        })
+        .collect())
+}
+
+/// Persists or clears one backend-managed secondary route for the active WebUI workbench model.
+/// 为当前 WebUI 工作台模型持久化或清除一条后端二级路由。
+async fn service_select_workbench_model_secondary_route(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: ProviderModelSecondaryRouteRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let provider_id = request.provider_id.trim().to_string();
+    let model_id = request.model_id.trim().to_string();
+    if provider_id != "openrouter" {
+        return Err(String::from("当前只有 OpenRouter 支持二级供应商选择。"));
+    }
+    let selection = request.route.map(openrouter_route_selection_from_service);
+    let (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+        workbench,
+        default_ai_tool_configuration,
+    ) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let controller_runtime = guard.controller_runtime.clone();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        ensure_provider_model_enabled(
+            &agent_runtime.provider_configuration,
+            &provider_id,
+            &model_id,
+        )?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        provider_config::set_openrouter_endpoint_route_for_model(
+            &mut next_configuration,
+            &model_id,
+            selection.clone(),
+        );
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存 OpenRouter 二级供应商失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        let persist_session_id = guard.workspace_snapshot.as_mut().and_then(|workspace| {
+            selected_session_runtime_state_mut(workspace).map(|(session_id, runtime_state)| {
+                if runtime_state.active_provider_id.as_deref() == Some("openrouter")
+                    && runtime_state.active_model_id.as_deref() == Some(model_id.as_str())
+                {
+                    runtime_state.active_openrouter_endpoint_route = selection.clone();
+                    runtime_state.updated_at = current_unix_millis_text();
+                }
+                session_id
+            })
+        });
+        refresh_workbench_runtime_controls_locked(
+            &mut guard,
+            &next_configuration,
+            &ai_tool_configuration,
+        );
+        (
+            controller_runtime,
+            persist_session_id,
+            guard.workspace_snapshot.clone(),
+            guard.workbench.clone(),
+            ai_tool_configuration,
+        )
+    };
+    if let (Some(controller_runtime), Some(session_id), Some(workspace_snapshot)) = (
+        controller_runtime,
+        persist_session_id,
+        persist_workspace_snapshot,
+    ) {
+        if let Some(addon_state) = session_addon_state_from_workspace_snapshot(
+            &workspace_snapshot,
+            session_id,
+            &default_ai_tool_configuration,
+            &[SessionAddonNamespace::RuntimeControls],
+        ) {
+            spawn_workspace_session_addon_state_persist_task(
+                app.clone(),
+                state.clone(),
+                controller_runtime,
+                workspace_snapshot,
+                session_id,
+                addon_state,
+                vec![SessionAddonNamespace::RuntimeControls],
+                Some(String::from("openrouter_endpoint_route")),
+            );
+        }
+    }
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
+/// Ensures one provider/model pair is currently visible in the effective model list.
+/// 确认单个 Provider/模型组合当前位于有效模型列表中。
+fn ensure_provider_model_enabled(
+    provider_configuration: &ProviderConfigurationFile,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<(), String> {
+    let has_model = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .any(|choice| choice.id == model_id);
+    if has_model {
+        Ok(())
+    } else {
+        Err(format!(
+            "模型 `{model_id}` 不在 `{provider_id}` 的已启用模型列表中。"
+        ))
+    }
+}
+
+/// Converts a service secondary-route selection into the persisted OpenRouter route type.
+/// 将 service 二级路由选择转换为持久化 OpenRouter 路由类型。
+fn openrouter_route_selection_from_service(
+    selection: ProviderModelSecondaryRouteSelection,
+) -> provider_config::OpenRouterEndpointRouteSelection {
+    let tag = if selection.tag.trim().is_empty() {
+        selection.route_id.trim().to_string()
+    } else {
+        selection.tag.trim().to_string()
+    };
+    provider_config::OpenRouterEndpointRouteSelection {
+        tag,
+        provider_name: selection.provider_name.trim().to_string(),
+        endpoint_name: selection.endpoint_name.trim().to_string(),
+    }
+}
+
+/// Projects a persisted OpenRouter route into the service secondary-route summary.
+/// 将持久化 OpenRouter 路由投影为 service 二级路由摘要。
+fn provider_secondary_route_summary_from_openrouter_selection(
+    provider_id: &str,
+    model_id: &str,
+    selection: provider_config::OpenRouterEndpointRouteSelection,
+    active: bool,
+) -> ProviderModelSecondaryRouteSummary {
+    let label = selection.display_label();
+    ProviderModelSecondaryRouteSummary {
+        provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        route_id: selection.tag.clone(),
+        tag: selection.tag,
+        provider_name: selection.provider_name.clone(),
+        endpoint_name: selection.endpoint_name.clone(),
+        subtitle: if selection.endpoint_name.trim().is_empty() {
+            String::from("已选择")
+        } else {
+            selection.endpoint_name
+        },
+        label,
+        active,
+    }
+}
+
+/// Minimal OpenRouter endpoint catalog response used by the WebUI secondary-route service.
+/// WebUI 二级路由服务使用的最小 OpenRouter 端点目录响应。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointsResponse {
+    /// Response payload body containing endpoint rows.
+    /// 包含端点行的响应载荷主体。
+    data: OpenRouterModelEndpointsData,
+}
+
+/// Minimal OpenRouter endpoint catalog payload.
+/// 最小 OpenRouter 端点目录载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointsData {
+    /// Endpoint rows available for the requested model.
+    /// 目标模型可用的端点行。
+    #[serde(default)]
+    endpoints: Vec<OpenRouterModelEndpointRecord>,
+}
+
+/// Minimal OpenRouter endpoint record.
+/// 最小 OpenRouter 端点记录。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterModelEndpointRecord {
+    /// Stable endpoint tag forwarded to `provider.order`.
+    /// 转发到 `provider.order` 的稳定端点标签。
+    tag: Option<String>,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    provider_name: Option<String>,
+    /// Human-readable endpoint name.
+    /// 人类可读的端点名称。
+    name: Option<String>,
+    /// Optional recent latency summary.
+    /// 可选近期延迟摘要。
+    latency_last_30m: Option<Value>,
+    /// Optional recent uptime summary.
+    /// 可选近期可用性摘要。
+    uptime_last_30m: Option<Value>,
+    /// Optional recent throughput summary.
+    /// 可选近期吞吐速度摘要。
+    throughput_last_30m: Option<Value>,
+    /// Optional pricing payload returned by OpenRouter.
+    /// OpenRouter 返回的可选价格载荷。
+    pricing: Option<OpenRouterEndpointPricingRecord>,
+}
+
+/// Minimal OpenRouter endpoint pricing payload.
+/// 最小 OpenRouter 端点价格载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct OpenRouterEndpointPricingRecord {
+    /// Optional prompt price string.
+    /// 可选输入价格字符串。
+    prompt: Option<String>,
+    /// Optional completion price string.
+    /// 可选输出价格字符串。
+    completion: Option<String>,
+    /// Optional cache-read price string.
+    /// 可选缓存读取价格字符串。
+    input_cache_read: Option<String>,
+}
+
+/// Service-local OpenRouter endpoint choice before projection.
+/// 投影前的 service 本地 OpenRouter 端点选项。
+#[derive(Debug, Clone)]
+struct OpenRouterSecondaryRouteChoice {
+    /// Stable endpoint tag forwarded to OpenRouter.
+    /// 转发到 OpenRouter 的稳定端点标签。
+    tag: String,
+    /// Human-readable upstream provider name.
+    /// 人类可读的上游供应商名称。
+    provider_name: String,
+    /// Human-readable endpoint name.
+    /// 人类可读的端点名称。
+    endpoint_name: String,
+    /// Optional prompt price in USD per token.
+    /// 可选输入侧每 token 美元价格。
+    prompt_price_per_token_usd: Option<f64>,
+    /// Optional completion price in USD per token.
+    /// 可选输出侧每 token 美元价格。
+    completion_price_per_token_usd: Option<f64>,
+    /// Optional cache-read price in USD per token.
+    /// 可选缓存读取每 token 美元价格。
+    cache_read_price_per_token_usd: Option<f64>,
+    /// Optional latency in milliseconds.
+    /// 可选延迟毫秒数。
+    latency_last_30m_ms: Option<f64>,
+    /// Optional uptime percentage.
+    /// 可选可用性百分比。
+    uptime_last_30m_percent: Option<f64>,
+    /// Optional throughput in tokens per second.
+    /// 可选每秒 token 吞吐速度。
+    throughput_last_30m_tps: Option<f64>,
+}
+
+impl OpenRouterSecondaryRouteChoice {
+    /// Converts this choice into one WebUI route summary.
+    /// 将当前选项转换为 WebUI 路由摘要。
+    fn into_summary(
+        self,
+        provider_id: &str,
+        model_id: &str,
+        active: bool,
+    ) -> ProviderModelSecondaryRouteSummary {
+        let label = if self.provider_name.trim().is_empty() {
+            self.tag.clone()
+        } else {
+            self.provider_name.clone()
+        };
+        let subtitle = openrouter_secondary_route_subtitle(&self);
+        ProviderModelSecondaryRouteSummary {
+            provider_id: provider_id.to_string(),
+            model_id: model_id.to_string(),
+            route_id: self.tag.clone(),
+            tag: self.tag,
+            subtitle,
+            provider_name: self.provider_name,
+            endpoint_name: self.endpoint_name,
+            label,
+            active,
+        }
+    }
+}
+
+/// Loads the OpenRouter endpoint catalog for one exact model identifier.
+/// 加载某个精确模型标识对应的 OpenRouter 端点目录。
+async fn fetch_openrouter_secondary_route_choices(
+    model_id: String,
+    api_key: Option<String>,
+) -> Result<Vec<OpenRouterSecondaryRouteChoice>, String> {
+    let url = format!("https://openrouter.ai/api/v1/models/{model_id}/endpoints");
+    let client = reqwest::Client::new();
+    let mut request = client.get(url.clone());
+    if let Some(api_key) = api_key.as_deref().filter(|value| !value.trim().is_empty()) {
+        request = request.bearer_auth(api_key.trim());
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| format!("请求 OpenRouter 二级供应商目录失败：{error}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "请求 OpenRouter 二级供应商目录失败：HTTP {}",
+            response.status()
+        ));
+    }
+    let payload = response
+        .json::<OpenRouterModelEndpointsResponse>()
+        .await
+        .map_err(|error| format!("解析 OpenRouter 二级供应商目录失败：{error}"))?;
+    let mut choices = payload
+        .data
+        .endpoints
+        .into_iter()
+        .filter_map(openrouter_endpoint_record_to_secondary_route_choice)
+        .collect::<Vec<_>>();
+    choices.sort_by(|left, right| {
+        left.provider_name
+            .cmp(&right.provider_name)
+            .then_with(|| left.tag.cmp(&right.tag))
+    });
+    choices.dedup_by(|left, right| left.tag == right.tag);
+    Ok(choices)
+}
+
+/// Converts one raw OpenRouter endpoint record into a route choice.
+/// 将单条原始 OpenRouter 端点记录转换为路由选项。
+fn openrouter_endpoint_record_to_secondary_route_choice(
+    record: OpenRouterModelEndpointRecord,
+) -> Option<OpenRouterSecondaryRouteChoice> {
+    let tag = record.tag?.trim().to_string();
+    if tag.is_empty() {
+        return None;
+    }
+    let provider_name = record
+        .provider_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(tag.as_str())
+        .to_string();
+    let endpoint_name = record
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(provider_name.as_str())
+        .to_string();
+    Some(OpenRouterSecondaryRouteChoice {
+        tag,
+        provider_name,
+        endpoint_name,
+        prompt_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.prompt.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        completion_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.completion.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        cache_read_price_per_token_usd: record
+            .pricing
+            .as_ref()
+            .and_then(|pricing| pricing.input_cache_read.as_deref())
+            .and_then(parse_openrouter_f64_text),
+        latency_last_30m_ms: openrouter_value_as_f64(record.latency_last_30m.as_ref()),
+        uptime_last_30m_percent: openrouter_value_as_f64(record.uptime_last_30m.as_ref()),
+        throughput_last_30m_tps: openrouter_value_as_f64(record.throughput_last_30m.as_ref()),
+    })
+}
+
+/// Builds the compact secondary line for one OpenRouter endpoint choice.
+/// 为单个 OpenRouter 端点选项构建紧凑二级说明。
+fn openrouter_secondary_route_subtitle(choice: &OpenRouterSecondaryRouteChoice) -> String {
+    let mut parts = Vec::new();
+    if let Some(prompt_price) =
+        format_openrouter_price_per_mtokens(choice.prompt_price_per_token_usd)
+    {
+        parts.push(format!("输入 {prompt_price}"));
+    }
+    if let Some(completion_price) =
+        format_openrouter_price_per_mtokens(choice.completion_price_per_token_usd)
+    {
+        parts.push(format!("输出 {completion_price}"));
+    }
+    if let Some(cache_read_price) =
+        format_openrouter_price_per_mtokens(choice.cache_read_price_per_token_usd)
+    {
+        parts.push(format!("缓存 {cache_read_price}"));
+    }
+    if let Some(latency) = format_openrouter_latency_ms(choice.latency_last_30m_ms) {
+        parts.push(format!("延迟 {latency}"));
+    }
+    if let Some(throughput) =
+        format_openrouter_throughput_tokens_per_second(choice.throughput_last_30m_tps)
+    {
+        parts.push(format!("速度 {throughput}"));
+    }
+    if let Some(uptime) = format_openrouter_percentage(choice.uptime_last_30m_percent) {
+        parts.push(format!("可用性 {uptime}"));
+    }
+    if parts.is_empty() {
+        choice.endpoint_name.clone()
+    } else {
+        parts.join(" · ")
+    }
+}
+
+/// Parses one OpenRouter numeric text field into a floating-point value.
+/// 将单个 OpenRouter 数值文本字段解析为浮点数值。
+fn parse_openrouter_f64_text(value: &str) -> Option<f64> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        trimmed.parse::<f64>().ok()
+    }
+}
+
+/// Extracts one JSON numeric leaf into a floating-point value when possible.
+/// 在可能的情况下，将单个 JSON 数值叶子提取为浮点数值。
+fn openrouter_value_as_f64(value: Option<&Value>) -> Option<f64> {
+    match value {
+        Some(Value::Number(number)) => number.as_f64(),
+        Some(Value::String(text)) => parse_openrouter_f64_text(text),
+        Some(Value::Object(object)) => object
+            .get("p50")
+            .and_then(|percentile| openrouter_value_as_f64(Some(percentile))),
+        _ => None,
+    }
+}
+
+/// Formats one USD-per-token OpenRouter price as USD per million tokens.
+/// 将 OpenRouter 每 token 美元价格格式化为每百万 token 美元价格。
+fn format_openrouter_price_per_mtokens(value: Option<f64>) -> Option<String> {
+    let price = value?;
+    if !price.is_finite() {
+        return None;
+    }
+    Some(format!("${:.3}/MTokens", price * 1_000_000.0))
+}
+
+/// Formats one OpenRouter latency value.
+/// 格式化单个 OpenRouter 延迟值。
+fn format_openrouter_latency_ms(value: Option<f64>) -> Option<String> {
+    let latency = value?;
+    latency.is_finite().then(|| format!("{latency:.0}ms"))
+}
+
+/// Formats one OpenRouter throughput value.
+/// 格式化单个 OpenRouter 吞吐值。
+fn format_openrouter_throughput_tokens_per_second(value: Option<f64>) -> Option<String> {
+    let throughput = value?;
+    throughput
+        .is_finite()
+        .then(|| format!("{throughput:.0} tok/s"))
+}
+
+/// Formats one OpenRouter percentage value.
+/// 格式化单个 OpenRouter 百分比值。
+fn format_openrouter_percentage(value: Option<f64>) -> Option<String> {
+    let percentage = value?;
+    percentage.is_finite().then(|| format!("{percentage:.1}%"))
 }
 
 /// Persists the active workbench reasoning effort through the shared provider configuration.
@@ -16161,7 +17081,7 @@ fn build_subagent_display_route_workbench_snapshot_locked(
     workbench.messages = active_conversation_id
         .as_deref()
         .map(|conversation_id| {
-            conversation_messages_from_session(conversation_id, surface_messages.as_slice())
+            conversation_messages_from_session(conversation_id, surface_messages.as_slice(), false)
         })
         .unwrap_or_default();
     workbench.subagent_navigation = subagent_navigation;
@@ -16814,6 +17734,7 @@ fn conversation_message_from_session_entry(
         body: message.body.clone(),
         metadata: message.metadata.clone(),
         attachments: composer_message_attachments_from_metadata(message.metadata.as_ref()),
+        editable_user_prompt: false,
     }
 }
 
@@ -23087,7 +24008,16 @@ fn workbench_from_runtime(
         .or(selected_conversation_id.as_deref());
     let messages = active_conversation_id
         .map(|conversation_id| {
-            conversation_messages_from_session(conversation_id, surface_messages)
+            let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
+                workspace,
+                workspace.selected_session,
+                subagent_navigation.as_ref(),
+            );
+            conversation_messages_from_session(
+                conversation_id,
+                surface_messages,
+                allow_user_prompt_editing,
+            )
         })
         .unwrap_or_default();
     let selected_runtime_state = workspace
@@ -24051,7 +24981,13 @@ fn provider_usage_label(usage: &vulcan_core::types::ProviderUsageSnapshot) -> St
 fn conversation_messages_from_session(
     conversation_id: &str,
     messages: &[SessionMessageEntry],
+    allow_user_prompt_editing: bool,
 ) -> Vec<ConversationMessage> {
+    let editable_user_prompt_ids = if allow_user_prompt_editing {
+        editable_user_prompt_message_ids_from_entries(messages)
+    } else {
+        BTreeSet::new()
+    };
     messages
         .iter()
         .filter(|message| message.is_visible_to_user())
@@ -24065,8 +25001,72 @@ fn conversation_messages_from_session(
                         | SessionMessageRecordKind::CompactionStatus
                 )
         })
-        .map(|message| conversation_message_from_session_entry(conversation_id, message))
+        .map(|message| {
+            let mut projected = conversation_message_from_session_entry(conversation_id, message);
+            projected.editable_user_prompt = editable_user_prompt_ids.contains(&message.id);
+            projected
+        })
         .collect()
+}
+
+/// Computes visible user prompt ids that have no later successful compaction or applied change-set blocker.
+/// 计算后续没有成功压缩或已应用 change_set 阻断的可见用户提示词标识。
+fn editable_user_prompt_message_ids_from_entries(
+    messages: &[SessionMessageEntry],
+) -> BTreeSet<String> {
+    let mut result = BTreeSet::new();
+    for (index, message) in messages.iter().enumerate() {
+        if message.kind != SessionMessageKind::User
+            || message.record_kind != SessionMessageRecordKind::Transcript
+            || !message.visible
+            || message.id.trim().is_empty()
+        {
+            continue;
+        }
+        if messages[index + 1..]
+            .iter()
+            .any(session_entry_blocks_user_prompt_edit)
+        {
+            continue;
+        }
+        result.insert(message.id.clone());
+    }
+    result
+}
+
+/// Returns whether one later transcript entry makes earlier user-prompt editing unsafe.
+/// 返回单条后续转录项是否会让更早的用户提示词编辑不安全。
+fn session_entry_blocks_user_prompt_edit(message: &SessionMessageEntry) -> bool {
+    message.record_kind == SessionMessageRecordKind::CompactionSummary
+        || message
+            .metadata
+            .as_ref()
+            .is_some_and(metadata_has_applied_change_set)
+        || message
+            .metadata
+            .as_ref()
+            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
+}
+
+/// Returns whether transcript metadata contains an applied canonical `change_set` host result.
+/// 返回转录 metadata 是否包含已应用的 canonical `change_set` 宿主结果。
+fn metadata_has_applied_change_set(metadata: &Value) -> bool {
+    let nested = metadata
+        .get("host_result")
+        .or_else(|| metadata.get("hostResult"))
+        .filter(|host_result| {
+            host_result
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind == "change_set")
+        });
+    let flattened =
+        (metadata.get("kind").and_then(Value::as_str) == Some("change_set")).then_some(metadata);
+    nested
+        .or(flattened)
+        .and_then(|host_result| host_result.get("payload").or(Some(host_result)))
+        .and_then(|payload| payload.get("mode").and_then(Value::as_str))
+        .is_some_and(|mode| mode == "applied")
 }
 
 /// Extracts composer attachments from durable transcript metadata.
@@ -24555,9 +25555,25 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
                                     && active_model_id == &catalog_model_id
                             },
                         );
+                        let secondary_route = (definition.id == "openrouter")
+                            .then(|| {
+                                provider_config::openrouter_endpoint_route_for_model(
+                                    provider_configuration,
+                                    &catalog_model_id,
+                                )
+                            })
+                            .flatten()
+                            .map(|selection| {
+                                provider_secondary_route_summary_from_openrouter_selection(
+                                    &definition.id,
+                                    &catalog_model_id,
+                                    selection,
+                                    active,
+                                )
+                            });
                         ProviderModelSummary {
                             enabled: configured && enabled_ids.contains(&catalog_model_id),
-                            id: catalog_model_id,
+                            id: catalog_model_id.clone(),
                             name: model_choice.name,
                             active,
                             status: model_choice.status,
@@ -24570,6 +25586,8 @@ fn providers(provider_configuration: &ProviderConfigurationFile) -> Vec<Provider
                             input_modalities: model_choice.input_modalities,
                             output_modalities: model_choice.output_modalities,
                             reasoning_profile_json,
+                            supports_secondary_routes: definition.id == "openrouter",
+                            secondary_route,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -28702,6 +29720,107 @@ mod tests {
         assert_eq!(state.plan[0].status, SessionTodoPlanItemStatus::Completed);
         assert_eq!(state.plan[1].status, SessionTodoPlanItemStatus::InProgress);
         assert_eq!(state.plan[2].status, SessionTodoPlanItemStatus::Pending);
+    }
+
+    /// Verifies user-prompt edit gating blocks applied file changes and child TaskSession cards.
+    /// 验证用户输入编辑门禁会阻断已应用文件变更与子代理 TaskSession 卡片。
+    #[test]
+    fn user_prompt_edit_gate_blocks_applied_changes_and_task_sessions() {
+        let first_user = SessionMessageEntry::new(SessionMessageKind::User, "", "first")
+            .with_runtime_metadata("user-1", "1780000000000");
+        let mut applied_change = SessionMessageEntry::new(
+            SessionMessageKind::Assistant,
+            "调用 vulcan_file_edit 工具",
+            "applied",
+        )
+        .with_runtime_metadata("tool-change", "1780000000001");
+        applied_change.record_kind = SessionMessageRecordKind::ToolResultOutput;
+        applied_change.metadata = Some(json!({
+            "host_result": {
+                "kind": "change_set",
+                "payload": {
+                    "mode": "applied"
+                }
+            }
+        }));
+        let second_user = SessionMessageEntry::new(SessionMessageKind::User, "", "second")
+            .with_runtime_metadata("user-2", "1780000000002");
+        let task_message = test_spawn_agent_tool_message(
+            SessionId::new_v4(),
+            "completed",
+            SessionMessageRecordKind::ToolResultOutput,
+        );
+        let third_user = SessionMessageEntry::new(SessionMessageKind::User, "", "third")
+            .with_runtime_metadata("user-3", "1780000000003");
+
+        let ids = editable_user_prompt_message_ids_from_entries(&[
+            first_user,
+            applied_change,
+            second_user,
+            task_message,
+            third_user,
+        ]);
+
+        assert!(!ids.contains("user-1"));
+        assert!(!ids.contains("user-2"));
+        assert!(ids.contains("user-3"));
+    }
+
+    /// Verifies preview-only change sets do not block user-prompt editing.
+    /// 验证仅预览的变更集不会阻断用户输入编辑。
+    #[test]
+    fn user_prompt_edit_gate_allows_preview_only_change_sets() {
+        let user = SessionMessageEntry::new(SessionMessageKind::User, "", "first")
+            .with_runtime_metadata("user-preview", "1780000000000");
+        let mut preview_change = SessionMessageEntry::new(
+            SessionMessageKind::Assistant,
+            "调用 vulcan_file_edit 工具",
+            "preview",
+        )
+        .with_runtime_metadata("tool-preview", "1780000000001");
+        preview_change.record_kind = SessionMessageRecordKind::ToolResultOutput;
+        preview_change.metadata = Some(json!({
+            "host_result": {
+                "kind": "change_set",
+                "payload": {
+                    "mode": "preview"
+                }
+            }
+        }));
+
+        let ids = editable_user_prompt_message_ids_from_entries(&[user, preview_change]);
+
+        assert!(ids.contains("user-preview"));
+    }
+
+    /// Verifies OpenRouter endpoint records are normalized into secondary route choices.
+    /// 验证 OpenRouter endpoint 原始记录会被归一化为二级路由选项。
+    #[test]
+    fn openrouter_endpoint_record_normalizes_secondary_route_choice() {
+        let choice =
+            openrouter_endpoint_record_to_secondary_route_choice(OpenRouterModelEndpointRecord {
+                tag: Some(String::from("anthropic")),
+                provider_name: Some(String::from("Anthropic")),
+                name: Some(String::from("Claude direct")),
+                latency_last_30m: Some(json!(123.4)),
+                uptime_last_30m: Some(json!(99.8)),
+                throughput_last_30m: Some(json!("42.5")),
+                pricing: Some(OpenRouterEndpointPricingRecord {
+                    prompt: Some(String::from("0.000003")),
+                    completion: Some(String::from("0.000015")),
+                    input_cache_read: Some(String::from("0.0000003")),
+                }),
+            })
+            .expect("endpoint should become a route choice");
+
+        assert_eq!(choice.tag, "anthropic");
+        assert_eq!(choice.provider_name, "Anthropic");
+        assert_eq!(choice.endpoint_name, "Claude direct");
+        let subtitle = openrouter_secondary_route_subtitle(&choice);
+        assert!(subtitle.contains("输入 $3.000/MTokens"));
+        assert!(subtitle.contains("123ms"));
+        assert!(subtitle.contains("99.8%"));
+        assert!(subtitle.contains("42 tok/s"));
     }
 
     /// Verifies malformed todo_plan host results are rejected as a whole.

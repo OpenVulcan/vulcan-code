@@ -464,6 +464,9 @@ export interface ConversationMessage {
   // Structured user attachments projected from transcript metadata.
   // 从转录元数据投影出的结构化用户附件。
   attachments?: ComposerAttachmentSummary[];
+  // Whether the backend allows editing and replaying this user prompt.
+  // 后端是否允许编辑并重新执行该用户提示词。
+  editableUserPrompt?: boolean;
 }
 
 // AppendMessageBodyDelta appends streamed text to one visible conversation message.
@@ -881,6 +884,81 @@ export interface ProviderModelSummary {
   // Optional reasoning profile JSON text.
   // 可选推理档位配置 JSON 文本。
   reasoningProfileJson?: string | null;
+  // Whether this provider/model pair supports backend-managed secondary routes.
+  // 该 Provider/模型组合是否支持后端管理的二级路由。
+  supportsSecondaryRoutes?: boolean;
+  // Active secondary route when one has been selected.
+  // 已选择时的当前二级路由。
+  secondaryRoute?: ProviderModelSecondaryRouteSummary | null;
+}
+
+// ProviderModelSecondaryRouteSummary describes one provider/model secondary route.
+// ProviderModelSecondaryRouteSummary 描述单个 Provider/模型二级路由。
+export interface ProviderModelSecondaryRouteSummary {
+  // Stable owning provider identifier.
+  // 稳定所属 Provider 标识。
+  providerId: string;
+  // Stable owning model identifier.
+  // 稳定所属模型标识。
+  modelId: string;
+  // Stable route identifier.
+  // 稳定路由标识。
+  routeId: string;
+  // Provider-specific tag alias.
+  // Provider 专属 tag 别名。
+  tag: string;
+  // Upstream provider name.
+  // 上游供应商名称。
+  providerName: string;
+  // Endpoint display name.
+  // 端点显示名称。
+  endpointName: string;
+  // Compact display label.
+  // 紧凑显示标签。
+  label: string;
+  // Secondary detail text.
+  // 二级详情文本。
+  subtitle: string;
+  // Whether this route is active.
+  // 该路由是否激活。
+  active?: boolean;
+}
+
+// ProviderModelSecondaryRouteSelection selects one provider/model secondary route.
+// ProviderModelSecondaryRouteSelection 选择单个 Provider/模型二级路由。
+export interface ProviderModelSecondaryRouteSelection {
+  // Stable route identifier.
+  // 稳定路由标识。
+  routeId: string;
+  // Provider-specific tag alias.
+  // Provider 专属 tag 别名。
+  tag?: string;
+  // Upstream provider name.
+  // 上游供应商名称。
+  providerName?: string;
+  // Endpoint display name.
+  // 端点显示名称。
+  endpointName?: string;
+}
+
+// UserPromptEditDraftSummary carries one backend-validated edit draft.
+// UserPromptEditDraftSummary 承载单个后端校验后的编辑草稿。
+export interface UserPromptEditDraftSummary {
+  // Stable conversation identifier.
+  // 稳定会话标识。
+  conversationId: string;
+  // Stable user prompt message identifier.
+  // 稳定用户提示词消息标识。
+  messageId: string;
+  // Editable prompt text.
+  // 可编辑提示词文本。
+  prompt: string;
+  // Attachments that will be replayed with the edited prompt.
+  // 将随编辑后提示词重新执行的附件。
+  attachments?: ComposerAttachmentSummary[];
+  // Whether the owning conversation is currently running.
+  // 所属会话是否正在运行。
+  running?: boolean;
 }
 
 // ProviderFieldSummary describes one editable provider field.

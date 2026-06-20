@@ -27,6 +27,8 @@ import type {
   ContextUsageSnapshot,
   PendingPromptSummary,
   ProviderSummary,
+  ProviderModelSecondaryRouteSelection,
+  ProviderModelSecondaryRouteSummary,
   ReasoningSelectionSummary,
   SessionGoalSummary,
   SessionPlanModeSummary,
@@ -85,6 +87,19 @@ export function ComposerDock(props: {
   // onSelectWorkbenchModel persists a selected workbench model.
   // onSelectWorkbenchModel 持久化选中的工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // onListWorkbenchModelSecondaryRoutes loads secondary route choices.
+  // onListWorkbenchModelSecondaryRoutes 加载二级路由选项。
+  onListWorkbenchModelSecondaryRoutes: (
+    providerId: string,
+    modelId: string,
+  ) => Promise<ProviderModelSecondaryRouteSummary[]>;
+  // onSelectWorkbenchModelSecondaryRoute persists a selected secondary route.
+  // onSelectWorkbenchModelSecondaryRoute 持久化选中的二级路由。
+  onSelectWorkbenchModelSecondaryRoute: (
+    providerId: string,
+    modelId: string,
+    route: ProviderModelSecondaryRouteSelection | null,
+  ) => Promise<boolean>;
   // onSelectWorkbenchReasoningEffort persists a selected reasoning effort.
   // onSelectWorkbenchReasoningEffort 持久化选中的思考档位。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
@@ -214,6 +229,8 @@ export function ComposerDock(props: {
         thinkingOverlayEnabled={props.thinkingOverlayEnabled}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
+        onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}

@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Clock3,
   Copy,
+  Pencil,
 } from "lucide-react";
 
 import {
@@ -70,6 +71,9 @@ export function ConversationProcessGroup(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Opens one backend-backed user prompt edit flow.
+  // 打开单个后端支持的用户提示词编辑流程。
+  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -155,6 +159,7 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
+            onEditUserPrompt={props.onEditUserPrompt}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -184,6 +189,7 @@ export function ConversationProcessGroup(props: {
             sessionRunning={props.sessionRunning}
             expandedUserPromptIds={props.expandedUserPromptIds}
             onCopyText={props.onCopyText}
+            onEditUserPrompt={props.onEditUserPrompt}
             onOpenDetail={props.onOpenDetail}
             onOpenMedia={props.onOpenMedia}
             onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -240,6 +246,9 @@ export function ConversationRenderItemView(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Opens one backend-backed user prompt edit flow.
+  // 打开单个后端支持的用户提示词编辑流程。
+  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
   // Detail modal opener.
   // 详情弹窗打开器。
   onOpenDetail: (detail: ConversationDetail) => void;
@@ -388,6 +397,17 @@ export function ConversationRenderItemView(props: {
               type="button"
             >
               {userPromptCopied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          ) : null}
+          {props.item.userMessage?.editableUserPrompt ? (
+            <button
+              aria-label="编辑用户提示词"
+              className="user-message-copy"
+              onClick={() => void props.onEditUserPrompt?.(props.item.userMessage!.conversationId, props.item.userMessage!.id)}
+              title="编辑用户提示词"
+              type="button"
+            >
+              <Pencil size={14} />
             </button>
           ) : null}
         </div>

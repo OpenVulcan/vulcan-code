@@ -2,6 +2,7 @@ import type { AiCapabilityKind } from "@/components/composer/composer-model";
 import type {
   ComposerAttachmentSummary,
   PendingPromptSummary,
+  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
 import {
@@ -70,6 +71,36 @@ export async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
     return null;
   }
   return serviceClient.request<WorkbenchSnapshot>("service_stop_conversation_run");
+}
+
+// getUserPromptEditDraft loads a backend-validated editable prompt draft.
+// getUserPromptEditDraft 加载一份后端校验过的可编辑提示词草稿。
+export async function getUserPromptEditDraft(
+  conversationId: string,
+  messageId: string,
+): Promise<UserPromptEditDraftSummary | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<UserPromptEditDraftSummary>("service_get_user_prompt_edit_draft", {
+    conversationId,
+    messageId,
+  });
+}
+
+// submitUserPromptEdit replaces one prompt and immediately replays the edited turn.
+// submitUserPromptEdit 替换单条提示词并立即重新执行编辑后的回合。
+export async function submitUserPromptEdit(request: {
+  conversationId: string;
+  messageId: string;
+  prompt: string;
+  attachments: ComposerAttachmentSummary[];
+  stopRunning?: boolean;
+}): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_submit_user_prompt_edit", { request });
 }
 
 // saveSessionGoal persists a user-authored goal for the current conversation.

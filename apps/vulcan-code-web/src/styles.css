@@ -5948,6 +5948,44 @@ button {
   white-space: nowrap;
 }
 
+.composer-secondary-route-trigger {
+  height: 26px;
+  max-width: 120px;
+  gap: 5px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.composer-secondary-route-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondary-route-picker-content {
+  width: 440px;
+  max-width: min(440px, calc(100vw - 32px));
+}
+
+.secondary-route-picker-content .model-picker-scroll {
+  height: 260px;
+}
+
+.user-prompt-edit-dialog {
+  width: min(680px, calc(100vw - 32px));
+}
+
+.user-prompt-edit-textarea {
+  min-height: 180px;
+  max-height: min(50vh, 420px);
+  resize: vertical;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
 .send-button {
   width: 26px;
   height: 26px;

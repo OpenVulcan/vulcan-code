@@ -81,7 +81,10 @@ import type {
   MainAreaId,
   PendingPromptSummary,
   ProjectSummary,
+  ProviderModelSecondaryRouteSelection,
+  ProviderModelSecondaryRouteSummary,
   StartupSnapshot,
+  UserPromptEditDraftSummary,
   WorkspaceFileDirectoryListing,
   WorkspaceFileFilterOptions,
   WorkspaceFileReadResponse,
@@ -391,6 +394,19 @@ interface WorkspaceShellProps {
   // Selects the active model for the workbench.
   // 选择工作台当前模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Loads backend-managed secondary routes for one model.
+  // 加载单个模型的后端二级路由。
+  onListWorkbenchModelSecondaryRoutes: (
+    providerId: string,
+    modelId: string,
+  ) => Promise<ProviderModelSecondaryRouteSummary[]>;
+  // Persists a backend-managed secondary route for one model.
+  // 持久化单个模型的后端二级路由。
+  onSelectWorkbenchModelSecondaryRoute: (
+    providerId: string,
+    modelId: string,
+    route: ProviderModelSecondaryRouteSelection | null,
+  ) => Promise<boolean>;
   // Selects the active reasoning effort for the workbench.
   // 选择工作台当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
@@ -523,6 +539,20 @@ interface WorkspaceShellProps {
   // Copies text through the shell-provided clipboard path.
   // 通过外壳提供的剪贴板路径复制文本。
   onCopyText: (text: string) => Promise<void>;
+  // Loads one backend-validated user prompt edit draft.
+  // 加载单条后端校验过的用户提示词编辑草稿。
+  onGetUserPromptEditDraft: (
+    conversationId: string,
+    messageId: string,
+  ) => Promise<UserPromptEditDraftSummary | null>;
+  // Submits one user prompt edit and replays it.
+  // 提交单条用户提示词编辑并重新执行。
+  onSubmitUserPromptEdit: (request: {
+    conversationId: string;
+    messageId: string;
+    prompt: string;
+    attachments: ComposerAttachmentSummary[];
+  }) => Promise<boolean>;
   // Loads hidden tool details for transcript rows.
   // 为转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -1013,6 +1043,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         loadingConversationId={props.loadingConversationId}
         conversationLoadError={props.conversationLoadError}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+        onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
+        onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
         onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
         onSlashCommand={props.onSlashCommand}
         onSubmitPrompt={props.onSubmitPrompt}
@@ -1032,6 +1064,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onReorderPendingPrompts={props.onReorderPendingPrompts}
         onStageAttachmentBytes={props.onStageAttachmentBytes}
         onCopyText={props.onCopyText}
+        onGetUserPromptEditDraft={props.onGetUserPromptEditDraft}
+        onSubmitUserPromptEdit={props.onSubmitUserPromptEdit}
         onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
         layoutStabilityKey={[

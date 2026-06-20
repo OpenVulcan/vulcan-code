@@ -63,6 +63,7 @@ import { useI18n, type LocaleCode } from "@/i18n";
 import type {
   AiCapabilityTargetSummary,
   AgentSkillsCatalogSummary,
+  ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ConversationMessage,
   ConversationSummary,
@@ -71,8 +72,11 @@ import type {
   PendingQuestionSnapshot,
   PendingPromptSummary,
   ProjectSummary,
+  ProviderModelSecondaryRouteSelection,
+  ProviderModelSecondaryRouteSummary,
   SettingsSubAreaId,
   StartupSnapshot,
+  UserPromptEditDraftSummary,
   VmmConfigDraftSummary,
   WorkbenchDeltaEnvelope,
   WorkbenchSnapshot,
@@ -82,6 +86,7 @@ import {
   clearSessionGoal,
   compactSelectedConversationContext,
   editPendingPrompt,
+  getUserPromptEditDraft,
   insertPendingPrompt,
   openSubagentPanel,
   rejectPendingQuestion,
@@ -95,6 +100,7 @@ import {
   saveSessionAiCapabilityConfiguration,
   stopConversationRun,
   stopSubagentTask,
+  submitUserPromptEdit,
   submitConversationPrompt,
   updateSessionGoalStatus,
 } from "@/service/conversation-actions-service";
@@ -122,6 +128,7 @@ import {
   removeAiCapabilityVendor,
   removeMcpServerConfiguration,
   removeProviderConfiguration,
+  listWorkbenchModelSecondaryRoutes,
   saveAiCapabilityTargets,
   saveAiCapabilityVendor,
   saveMcpServerConfiguration,
@@ -129,6 +136,7 @@ import {
   saveProviderEnabledModels,
   saveProviderModelOverride,
   selectWorkbenchModel,
+  selectWorkbenchModelSecondaryRoute,
   selectWorkbenchReasoningEffort,
   setAiCapabilityTargetEnabled,
 } from "@/service/settings-actions-service";
@@ -1253,6 +1261,79 @@ export function WorkbenchLayout(props: {
     }
   }, []);
 
+  // handleListWorkbenchModelSecondaryRoutes loads backend route choices for the active model.
+  // handleListWorkbenchModelSecondaryRoutes 为当前模型加载后端路由选项。
+  const handleListWorkbenchModelSecondaryRoutes = React.useCallback(async (
+    providerId: string,
+    modelId: string,
+  ): Promise<ProviderModelSecondaryRouteSummary[]> => {
+    try {
+      return await listWorkbenchModelSecondaryRoutes(providerId, modelId);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return [];
+    }
+  }, []);
+
+  // handleSelectWorkbenchModelSecondaryRoute persists one backend route choice.
+  // handleSelectWorkbenchModelSecondaryRoute 持久化单个后端路由选择。
+  const handleSelectWorkbenchModelSecondaryRoute = React.useCallback(async (
+    providerId: string,
+    modelId: string,
+    route: ProviderModelSecondaryRouteSelection | null,
+  ): Promise<boolean> => {
+    try {
+      const snapshot = await selectWorkbenchModelSecondaryRoute(providerId, modelId, route);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+        toast.success(route ? "二级供应商已切换。" : "二级供应商已恢复 Auto。");
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
+  // handleGetUserPromptEditDraft loads one backend-validated edit draft.
+  // handleGetUserPromptEditDraft 加载单条后端校验过的编辑草稿。
+  const handleGetUserPromptEditDraft = React.useCallback(async (
+    conversationId: string,
+    messageId: string,
+  ): Promise<UserPromptEditDraftSummary | null> => {
+    try {
+      return await getUserPromptEditDraft(conversationId, messageId);
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return null;
+    }
+  }, []);
+
+  // handleSubmitUserPromptEdit submits one edit and merges the replay snapshot.
+  // handleSubmitUserPromptEdit 提交单次编辑并合并重放后的快照。
+  const handleSubmitUserPromptEdit = React.useCallback(async (request: {
+    conversationId: string;
+    messageId: string;
+    prompt: string;
+    attachments: ComposerAttachmentSummary[];
+  }): Promise<boolean> => {
+    try {
+      const snapshot = await submitUserPromptEdit(request);
+      if (snapshot) {
+        setHydratedConversationIds((current) => {
+          const next = new Set(current);
+          next.delete(request.conversationId);
+          return next;
+        });
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      return false;
+    }
+  }, []);
+
   // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
   // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
   const handleSelectWorkbenchReasoningEffort = React.useCallback(async (effort: string): Promise<boolean> => {
@@ -1625,6 +1706,8 @@ export function WorkbenchLayout(props: {
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
+            onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
+            onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}
             onSelectWorkbenchReasoningEffort={handleSelectWorkbenchReasoningEffort}
             skillActions={skillActions}
             memoryActions={{
@@ -1655,6 +1738,8 @@ export function WorkbenchLayout(props: {
             onRunWorkspaceGitFileAction={runWorkspaceGitFileAction}
             onStageAttachmentBytes={stageComposerAttachmentBytes}
             onCopyText={copyText}
+            onGetUserPromptEditDraft={handleGetUserPromptEditDraft}
+            onSubmitUserPromptEdit={handleSubmitUserPromptEdit}
             onLoadToolDetail={loadCachedConversationToolDetail}
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={(

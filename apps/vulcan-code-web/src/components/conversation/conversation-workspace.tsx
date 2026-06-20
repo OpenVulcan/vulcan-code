@@ -113,6 +113,9 @@ export function ConversationWorkspace(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Opens one backend-backed user prompt edit flow.
+  // 打开单个后端支持的用户提示词编辑流程。
+  onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
   // Currently pending Plan artifact, when user confirmation is required.
   // 需要用户确认时的当前待处理计划产物。
   pendingPlanArtifact?: ConversationPlanArtifact | null;
@@ -268,6 +271,7 @@ export function ConversationWorkspace(props: {
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
       onCopyText={props.onCopyText}
+      onEditUserPrompt={props.onEditUserPrompt}
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
@@ -294,6 +298,7 @@ export function ConversationWorkspace(props: {
       expandedUserPromptIds={userPromptExpansionOverrides}
       onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
       onCopyText={props.onCopyText}
+      onEditUserPrompt={props.onEditUserPrompt}
       onOpenDetail={setDetail}
       onOpenMedia={setMediaPlayer}
       onOpenSubagentPanel={props.onOpenSubagentPanel}

@@ -62,12 +62,24 @@ import type { DraftConversationSelection } from "@/components/workspace/workspac
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
   ConversationMessage,
   PendingPromptSummary,
+  ProviderModelSecondaryRouteSelection,
+  ProviderModelSecondaryRouteSummary,
   StartupSnapshot,
+  UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
 
@@ -103,6 +115,19 @@ interface ChatAreaProps {
   // Selects the active workbench model.
   // 选择当前工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
+  // Loads backend-managed secondary routes for one model.
+  // 加载单个模型的后端二级路由。
+  onListWorkbenchModelSecondaryRoutes: (
+    providerId: string,
+    modelId: string,
+  ) => Promise<ProviderModelSecondaryRouteSummary[]>;
+  // Persists a backend-managed secondary route for one model.
+  // 持久化单个模型的后端二级路由。
+  onSelectWorkbenchModelSecondaryRoute: (
+    providerId: string,
+    modelId: string,
+    route: ProviderModelSecondaryRouteSelection | null,
+  ) => Promise<boolean>;
   // Selects the active reasoning effort.
   // 选择当前推理强度。
   onSelectWorkbenchReasoningEffort: (effort: string) => Promise<boolean>;
@@ -164,6 +189,20 @@ interface ChatAreaProps {
   // Copies transcript text through the shell-provided clipboard path.
   // 通过外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void>;
+  // Loads one backend-validated user prompt edit draft.
+  // 加载单条后端校验过的用户提示词编辑草稿。
+  onGetUserPromptEditDraft: (
+    conversationId: string,
+    messageId: string,
+  ) => Promise<UserPromptEditDraftSummary | null>;
+  // Submits one user prompt edit and replays it.
+  // 提交单条用户提示词编辑并重新执行。
+  onSubmitUserPromptEdit: (request: {
+    conversationId: string;
+    messageId: string;
+    prompt: string;
+    attachments: ComposerAttachmentSummary[];
+  }) => Promise<boolean>;
   // Loads hidden tool details for expanded transcript rows.
   // 为展开的转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -202,6 +241,9 @@ export function ChatArea(props: ChatAreaProps) {
   // composerDockHeight tracks the actual floating composer stack height for overlay positioning.
   // composerDockHeight 跟踪浮动输入区堆栈真实高度，用于定位浮层。
   const [composerDockHeight, setComposerDockHeight] = React.useState(132);
+  const [userPromptEditDraft, setUserPromptEditDraft] = React.useState<UserPromptEditDraftSummary | null>(null);
+  const [userPromptEditText, setUserPromptEditText] = React.useState("");
+  const [userPromptEditSaving, setUserPromptEditSaving] = React.useState(false);
   // thinkingOverlayEnabled controls whether streaming thinking uses the floating surface or inline transcript.
   // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
   const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
@@ -807,6 +849,39 @@ export function ChatArea(props: ChatAreaProps) {
     await props.onSetSessionPlanMode(true);
   }, [props]);
 
+  // handleEditUserPrompt opens the backend-validated edit dialog for one user message.
+  // handleEditUserPrompt 为单条用户消息打开后端校验过的编辑弹窗。
+  const handleEditUserPrompt = React.useCallback(async (conversationId: string, messageId: string) => {
+    const draft = await props.onGetUserPromptEditDraft(conversationId, messageId);
+    if (!draft) {
+      return;
+    }
+    setUserPromptEditDraft(draft);
+    setUserPromptEditText(draft.prompt);
+  }, [props]);
+
+  // handleSubmitUserPromptEdit submits the edited prompt and closes the dialog on success.
+  // handleSubmitUserPromptEdit 提交编辑后的提示词，并在成功后关闭弹窗。
+  const handleSubmitUserPromptEdit = React.useCallback(async () => {
+    if (!userPromptEditDraft) {
+      return;
+    }
+    setUserPromptEditSaving(true);
+    try {
+      const ok = await props.onSubmitUserPromptEdit({
+        conversationId: userPromptEditDraft.conversationId,
+        messageId: userPromptEditDraft.messageId,
+        prompt: userPromptEditText,
+        attachments: userPromptEditDraft.attachments ?? [],
+      });
+      if (ok) {
+        setUserPromptEditDraft(null);
+      }
+    } finally {
+      setUserPromptEditSaving(false);
+    }
+  }, [props, userPromptEditDraft, userPromptEditText]);
+
   React.useEffect(() => {
     if (pendingPlanArtifact) {
       setComposerDockHeight(0);
@@ -827,6 +902,8 @@ export function ChatArea(props: ChatAreaProps) {
       emptyMode={isEmptyConversation}
       onScrollToBottom={() => scrollConversationToBottom()}
       onSelectWorkbenchModel={props.onSelectWorkbenchModel}
+      onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
+      onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
       onSelectWorkbenchReasoningEffort={props.onSelectWorkbenchReasoningEffort}
       onSlashCommand={props.onSlashCommand}
       onComposerDockHeightChange={handleComposerDockHeightChange}
@@ -898,6 +975,7 @@ export function ChatArea(props: ChatAreaProps) {
         footer={null}
         suppressEmptyPlaceholder={isEmptyConversation}
         onCopyText={props.onCopyText}
+        onEditUserPrompt={handleEditUserPrompt}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -911,6 +989,27 @@ export function ChatArea(props: ChatAreaProps) {
         />
       ) : null}
       {composerDock}
+      <Dialog open={Boolean(userPromptEditDraft)} onOpenChange={(open) => !open && setUserPromptEditDraft(null)}>
+        <DialogContent className="user-prompt-edit-dialog">
+          <DialogHeader>
+            <DialogTitle>编辑用户输入</DialogTitle>
+          </DialogHeader>
+          <Textarea
+            aria-label="编辑用户输入"
+            className="user-prompt-edit-textarea"
+            onChange={(event) => setUserPromptEditText(event.currentTarget.value)}
+            value={userPromptEditText}
+          />
+          <DialogFooter>
+            <Button disabled={userPromptEditSaving} onClick={() => setUserPromptEditDraft(null)} type="button" variant="secondary">
+              取消
+            </Button>
+            <Button disabled={userPromptEditSaving || !userPromptEditText.trim()} onClick={() => void handleSubmitUserPromptEdit()} type="button">
+              保存并重新执行
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
   return (

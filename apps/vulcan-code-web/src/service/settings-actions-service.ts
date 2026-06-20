@@ -1,4 +1,8 @@
-import type { WorkbenchSnapshot } from "@/types";
+import type {
+  ProviderModelSecondaryRouteSelection,
+  ProviderModelSecondaryRouteSummary,
+  WorkbenchSnapshot,
+} from "@/types";
 import {
   hasServiceRuntime,
   serviceClient,
@@ -24,6 +28,40 @@ export async function selectWorkbenchModel(choice: WorkbenchModelChoice): Promis
   return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_model", {
     providerId: choice.providerId,
     modelId: choice.modelId,
+  });
+}
+
+// listWorkbenchModelSecondaryRoutes loads secondary route choices for one provider/model pair.
+// listWorkbenchModelSecondaryRoutes 加载单个 Provider/模型组合的二级路由选项。
+export async function listWorkbenchModelSecondaryRoutes(
+  providerId: string,
+  modelId: string,
+): Promise<ProviderModelSecondaryRouteSummary[]> {
+  if (!hasServiceRuntime()) {
+    return [];
+  }
+  return serviceClient.request<ProviderModelSecondaryRouteSummary[]>("service_list_workbench_model_secondary_routes", {
+    providerId,
+    modelId,
+  });
+}
+
+// selectWorkbenchModelSecondaryRoute persists one secondary route or clears it back to Auto.
+// selectWorkbenchModelSecondaryRoute 持久化单个二级路由，或清除回 Auto。
+export async function selectWorkbenchModelSecondaryRoute(
+  providerId: string,
+  modelId: string,
+  route: ProviderModelSecondaryRouteSelection | null,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_select_workbench_model_secondary_route", {
+    request: {
+      providerId,
+      modelId,
+      route,
+    },
   });
 }
 
