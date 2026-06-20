@@ -2060,6 +2060,7 @@ async fn dispatch_service_rpc(
                 rpc_optional_param(&params, "projectId")?,
                 rpc_optional_param(&params, "conversationId")?,
                 rpc_required_param(&params, "prompt")?,
+                rpc_optional_param(&params, "hiddenModelGuidance")?,
                 rpc_optional_param(&params, "executionMode")?,
                 rpc_optional_param(&params, "reasoningEffort")?,
                 rpc_optional_param(&params, "attachments")?,
@@ -3755,6 +3756,7 @@ async fn service_submit_conversation_prompt(
     project_id: Option<String>,
     conversation_id: Option<String>,
     prompt: String,
+    hidden_model_guidance: Option<String>,
     execution_mode: Option<String>,
     reasoning_effort: Option<String>,
     attachments: Option<Vec<ComposerAttachmentSummary>>,
@@ -3942,6 +3944,7 @@ async fn service_submit_conversation_prompt(
             );
             let entry = build_webui_pending_prompt_panel_entry(
                 prompt,
+                hidden_model_guidance.clone(),
                 attachments,
                 current_pending_prompt_model_reference(&agent_runtime.provider_configuration),
                 pending_prompt_runtime_options_from_submission(
@@ -4107,6 +4110,7 @@ async fn service_submit_conversation_prompt(
                     current_unix_millis_text()
                 ),
                 prompt: &prompt,
+                hidden_model_guidance: hidden_model_guidance.as_deref(),
                 attachments,
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
@@ -11358,6 +11362,7 @@ fn mark_webui_session_waiting_for_guided_prompt_dispatch(
 /// 构建一条来自 WebUI 的可见待发送提示词条目。
 fn build_webui_pending_prompt_panel_entry(
     prompt: String,
+    hidden_model_guidance: Option<String>,
     attachments: Vec<ConversationAttachment>,
     model_reference: Option<PendingPromptModelReference>,
     runtime_options: PendingPromptRuntimeOptions,
@@ -11367,6 +11372,7 @@ fn build_webui_pending_prompt_panel_entry(
         id: format!("webui-pending-panel-{}", SessionId::new_v4()),
         preview: pending_prompt_preview_text(&prompt, &attachments),
         prompt,
+        hidden_model_guidance,
         attachments,
         model_reference,
         runtime_options,
@@ -14740,6 +14746,7 @@ async fn maybe_start_webui_mailbox_turn_if_ready(
                 workspace_path: &workspace_path,
                 prompt_entry_id: format!("webui-mailbox-{}", SessionId::new_v4()),
                 prompt: &prompt_text,
+                hidden_model_guidance: None,
                 attachments: Vec::new(),
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,
@@ -14934,6 +14941,7 @@ async fn maybe_start_session_goal_continuation_if_idle(
                 workspace_path: &workspace_path,
                 prompt_entry_id: format!("webui-goal-continuation-{}", SessionId::new_v4()),
                 prompt: "Continue working toward the active thread goal.",
+                hidden_model_guidance: None,
                 attachments: Vec::new(),
                 append_canonical_user_message: false,
                 append_visible_user_prompt_record: false,
@@ -15844,6 +15852,7 @@ async fn maybe_prepare_next_webui_pending_prompt(
                 workspace_path: &workspace_path,
                 prompt_entry_id: entry.id.clone(),
                 prompt: &prompt_text,
+                hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
                 attachments: entry.attachments,
                 append_canonical_user_message: entry.source.persists_canonical_user_message(),
                 append_visible_user_prompt_record: entry.source.starts_user_parent_turn(),
@@ -18618,6 +18627,7 @@ fn enqueue_session_goal_budget_limited_guidance(
     let entry = PendingSessionPromptEntry {
         id: format!("webui-goal-budget-limited-{}", goal.goal_id),
         prompt: render_goal_budget_limited_context(goal),
+        hidden_model_guidance: None,
         preview: String::from("目标预算已用尽"),
         attachments: Vec::new(),
         model_reference: None,
@@ -18687,6 +18697,7 @@ fn enqueue_session_goal_objective_updated_guidance(
     let entry = PendingSessionPromptEntry {
         id: format!("webui-goal-objective-updated-{}", goal.goal_id),
         prompt: render_goal_objective_updated_context(goal),
+        hidden_model_guidance: None,
         preview: String::from("目标已更新"),
         attachments: Vec::new(),
         model_reference: None,

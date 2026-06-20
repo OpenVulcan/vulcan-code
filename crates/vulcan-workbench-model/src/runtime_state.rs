@@ -611,6 +611,7 @@ pub fn pending_session_prompt_entry_from_panel_entry(
     PendingSessionPromptEntry {
         id: internal_entry_id,
         prompt: panel_entry.prompt.clone(),
+        hidden_model_guidance: panel_entry.hidden_model_guidance.clone(),
         preview: panel_entry.preview.clone(),
         attachments: panel_entry.attachments.clone(),
         model_reference: panel_entry.model_reference.clone(),
@@ -785,6 +786,10 @@ pub struct PendingSessionPromptEntry {
     /// Full prompt text that should be dispatched into the next session run.
     /// 应在下一次会话运行中发送的完整提示词文本。
     pub prompt: String,
+    /// Optional model-only guidance carried with this queued prompt.
+    /// 随该排队提示词携带的可选仅模型可见引导。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_model_guidance: Option<String>,
     /// Compact preview text rendered inside the pending-queue strip.
     /// 渲染在待发送队列条中的紧凑预览文本。
     pub preview: String,
@@ -858,6 +863,10 @@ pub struct PendingPromptPanelEntry {
     /// Full user-authored prompt text retained until it is explicitly inserted or removed.
     /// 在被显式插入或移除之前一直保留的完整用户提示词文本。
     pub prompt: String,
+    /// Optional model-only guidance carried into the internal queue with this row.
+    /// 随该行进入内部队列的可选仅模型可见引导。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden_model_guidance: Option<String>,
     /// Compact preview text rendered inside the visible prompt-panel row.
     /// 渲染在可见提示词面板行中的紧凑预览文本。
     pub preview: String,
@@ -1257,6 +1266,7 @@ mod tests {
         PendingPromptPanelEntry {
             id: id.to_string(),
             prompt: format!("prompt-{id}"),
+            hidden_model_guidance: None,
             preview: format!("prompt-{id}"),
             attachments: Vec::new(),
             model_reference: None,
@@ -1275,6 +1285,7 @@ mod tests {
         PendingSessionPromptEntry {
             id: id.to_string(),
             prompt: format!("prompt-{id}"),
+            hidden_model_guidance: None,
             preview: format!("prompt-{id}"),
             attachments: Vec::new(),
             model_reference: None,

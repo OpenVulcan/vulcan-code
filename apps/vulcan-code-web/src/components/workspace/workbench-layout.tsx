@@ -829,6 +829,7 @@ export function WorkbenchLayout(props: {
         activeProjectId,
         activeConversationId,
         submission.prompt,
+        submission.hiddenModelGuidance,
         submission.attachments,
         submission.executionMode,
         submission.reasoningEffort,

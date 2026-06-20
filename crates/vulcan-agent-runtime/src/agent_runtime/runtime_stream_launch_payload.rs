@@ -484,6 +484,7 @@ mod tests {
                 workspace_path: r"D:\workspace",
                 prompt_entry_id: String::from("prompt-entry-1"),
                 prompt,
+                hidden_model_guidance: None,
                 attachments: vec![attachment],
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,

@@ -85,6 +85,9 @@ pub struct SharedPromptTurnStart {
     /// Prompt text after builtin manual-injection syntax is removed.
     /// 移除内建手动注入语法后的提示词文本。
     pub prompt: String,
+    /// Optional model-only guidance appended after visible-user prompt handling.
+    /// 可选的仅模型可见引导，会在可见用户提示处理后追加。
+    pub hidden_model_guidance: Option<String>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -166,6 +169,9 @@ pub struct SharedPromptTurnBeginInput<'a> {
     /// Raw prompt text submitted by the user or queue.
     /// 用户或队列提交的原始提示词文本。
     pub prompt: &'a str,
+    /// Optional hidden host guidance appended only to the provider-facing prompt.
+    /// 仅追加到 Provider 可见提示词中的可选宿主隐藏引导。
+    pub hidden_model_guidance: Option<&'a str>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -213,6 +219,9 @@ pub struct SharedPromptTurnRuntimeBeginInput<'a> {
     /// Raw prompt text submitted by the user or queue.
     /// 用户或队列提交的原始提示词文本。
     pub prompt: &'a str,
+    /// Optional hidden host guidance appended only to the provider-facing prompt.
+    /// 仅追加到 Provider 可见提示词中的可选宿主隐藏引导。
+    pub hidden_model_guidance: Option<&'a str>,
     /// Structured attachments bound to the prompt.
     /// 绑定在提示词上的结构化附件。
     pub attachments: Vec<ConversationAttachment>,
@@ -323,6 +332,7 @@ pub fn begin_shared_prompt_turn(
                 workspace_path: input.workspace_path,
                 prompt_entry_id: input.prompt_entry_id,
                 prompt: input.prompt,
+                hidden_model_guidance: input.hidden_model_guidance,
                 attachments: input.attachments,
                 append_canonical_user_message: input.append_canonical_user_message,
                 append_visible_user_prompt_record: input.append_visible_user_prompt_record,
@@ -455,6 +465,11 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         source: input.source,
         precheck_request,
         prompt: sanitized_prompt,
+        hidden_model_guidance: input
+            .hidden_model_guidance
+            .map(str::trim)
+            .filter(|guidance| !guidance.is_empty())
+            .map(str::to_string),
         attachments: start_attachments,
         execution_mode: input.execution_mode,
         reasoning_effort: input.reasoning_effort,
@@ -525,6 +540,15 @@ fn prompt_turn_boundary_events(
 /// 将 Unix 毫秒文本解析到 会话边界事件时间戳域。
 fn unix_millis_text_to_u64(value: &str) -> u64 {
     value.trim().parse::<u64>().unwrap_or_default()
+}
+
+/// Appends host-only guidance to the provider prompt while keeping transcript records unchanged.
+/// 在保持转录记录不变的同时，将仅宿主可见引导追加到 Provider 提示词。
+fn append_hidden_model_guidance_to_prompt(prompt: String, guidance: Option<&str>) -> String {
+    let Some(guidance) = guidance.map(str::trim).filter(|value| !value.is_empty()) else {
+        return prompt;
+    };
+    format!("{prompt}\n\n<hidden_host_guidance>\n{guidance}\n</hidden_host_guidance>")
 }
 
 /// Continues one prompt turn after precheck using shared iced/WebUI semantics.
@@ -655,6 +679,10 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
             precheck_failure_detail = Some(detail);
         }
     }
+    request_prompt = append_hidden_model_guidance_to_prompt(
+        request_prompt,
+        input.start.hidden_model_guidance.as_deref(),
+    );
     let prompt_purpose = ExecutionPromptPurpose::UserTurn;
     let runtime_policy = vulcan_session_core::ExecutionRuntimePolicy::main_session();
     let context_injection = core_provider_context_injection_from_state_for_turn(
@@ -954,6 +982,7 @@ mod tests {
                 workspace_path: "D:/workspace",
                 prompt_entry_id: String::from("user-entry"),
                 prompt: "生成一张图片",
+                hidden_model_guidance: None,
                 attachments: Vec::new(),
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
@@ -1015,6 +1044,7 @@ mod tests {
                 workspace_path: "D:/workspace",
                 prompt_entry_id: String::from("mailbox-entry"),
                 prompt: "<subagent_mailbox_event>\n{}\n</subagent_mailbox_event>",
+                hidden_model_guidance: None,
                 attachments: Vec::new(),
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
@@ -1061,6 +1091,7 @@ mod tests {
                 workspace_path: "D:/workspace",
                 prompt_entry_id: String::from("goal-entry"),
                 prompt: "Continue working toward the active thread goal.",
+                hidden_model_guidance: None,
                 attachments: Vec::new(),
                 append_canonical_user_message: true,
                 append_visible_user_prompt_record: true,
@@ -1089,6 +1120,67 @@ mod tests {
         assert_eq!(
             start.boundary_events[1].payload["canonical"],
             serde_json::json!(false)
+        );
+    }
+
+    /// Verifies hidden model guidance reaches the provider request without polluting transcript records.
+    /// 验证隐藏模型引导会进入 Provider 请求，但不会污染转录记录。
+    #[test]
+    fn hidden_model_guidance_stays_out_of_visible_transcript() {
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let mut hook_runtime = ConversationHookRuntime::new();
+        let start = begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id: SessionId::from_u128(905),
+                session_title: "主会话",
+                workspace_path: "D:/workspace",
+                prompt_entry_id: String::from("plan-execute-entry"),
+                prompt: "执行计划",
+                hidden_model_guidance: Some("Plan file: D:/workspace/docs/plan/demo.md"),
+                attachments: Vec::new(),
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::UserFollowup,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: Some(String::from("project-a")),
+                prior_session_messages: None,
+            },
+        )
+        .expect("plan execution prompt should start");
+        let precheck_outcome = start.precheck_request.clone().skip();
+        let continuation = continue_shared_prompt_turn_after_precheck_with_runtime_state(
+            &mut runtime_state,
+            SharedPromptTurnContinueInput {
+                start,
+                precheck_outcome,
+                ai_tool_configuration: PersistedAiToolConfiguration::default(),
+                project_configuration: ProjectVulcanCodeConfigurationFile::default(),
+                runtime_reasoning_effort: None,
+                provider_reasoning_effort: None,
+                patch_visible_user_prompt_record: true,
+            },
+        )
+        .expect("prompt should continue");
+        let transcript_text =
+            conversation_state_to_session_messages(&runtime_state.conversation_state)
+                .into_iter()
+                .map(|message| message.body)
+                .collect::<Vec<_>>()
+                .join("\n");
+
+        assert_eq!(transcript_text, "执行计划");
+        assert!(continuation.request.prompt.contains("执行计划"));
+        assert!(
+            continuation
+                .request
+                .prompt
+                .contains("<hidden_host_guidance>\nPlan file: D:/workspace/docs/plan/demo.md")
         );
     }
 }

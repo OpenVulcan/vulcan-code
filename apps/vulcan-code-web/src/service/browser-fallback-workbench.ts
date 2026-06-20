@@ -42,6 +42,12 @@ const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
     descriptionEn: "Select the current reasoning level",
   },
   {
+    id: "plan",
+    command: "/plan",
+    descriptionZh: "切换当前会话计划模式",
+    descriptionEn: "Toggle Plan mode for the current conversation",
+  },
+  {
     id: "skill",
     command: "/skill",
     descriptionZh: "插入提示词技能加载指令",

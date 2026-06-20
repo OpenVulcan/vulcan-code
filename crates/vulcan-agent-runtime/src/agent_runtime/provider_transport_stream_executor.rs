@@ -18,7 +18,6 @@ use serde_json::json;
 use std::any::Any;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Instant;
 use vulcan_core::tool::VulcanToolExecutor;
 use vulcan_core::types::{
     CoreError as VulcanCoreError, ToolInvocationRequest as CoreToolInvocationRequest,
@@ -61,15 +60,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
-        let tool_started_at = Instant::now();
-        let session_id = self.runtime_bridge.session_id();
-        tool_runtime_trace(
-            "tool_executor_start",
-            format!(
-                "session={} tool_call_id={} tool_name={}",
-                session_id, request.tool_call_id, request.tool_name
-            ),
-        );
         let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,
@@ -116,17 +106,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
                     "failed",
                 ),
             };
-        tool_runtime_trace(
-            "tool_executor_return",
-            format!(
-                "session={} tool_call_id={} tool_name={} status={} elapsed_ms={}",
-                session_id,
-                request.tool_call_id,
-                request.tool_name,
-                display_state,
-                tool_started_at.elapsed().as_millis()
-            ),
-        );
         let tool_result_id = build_host_tool_result_id(&request.tool_call_id);
         let event_metadata = attach_tool_name_to_runtime_metadata(
             build_tool_result_runtime_metadata(
@@ -147,16 +126,6 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         )));
         Ok(result)
     }
-}
-
-/// Writes one compact host-tool runtime diagnostic to stderr for latency triage.
-/// 将一条紧凑的宿主工具运行时诊断写入 stderr，用于延迟排查。
-fn tool_runtime_trace(stage: &str, detail: impl AsRef<str>) {
-    eprintln!(
-        "[vulcan-agent-runtime][tool-trace] stage={} {}",
-        stage,
-        detail.as_ref()
-    );
 }
 
 /// Converts one panic payload into a stable diagnostic string that can be exposed as a tool error.

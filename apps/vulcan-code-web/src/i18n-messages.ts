@@ -70,6 +70,18 @@ export type TranslationKey =
   | "composer.aria.stop"
   | "composer.modelPicker.filter"
   | "composer.modelPicker.noMatches"
+  | "planArtifact.titleFallback"
+  | "planArtifact.copy"
+  | "planArtifact.copied"
+  | "planArtifact.expand"
+  | "planArtifact.collapse"
+  | "planArtifact.confirmAria"
+  | "planArtifact.noteAria"
+  | "planArtifact.notePlaceholder"
+  | "planArtifact.execute"
+  | "planArtifact.executeWithNote"
+  | "planArtifact.defer"
+  | "planArtifact.suggest"
   | "runtime.memoryRecall"
   | "runtime.requesting"
   | "runtime.thinking"
@@ -254,6 +266,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.stop": "停止",
     "composer.modelPicker.filter": "输入模型名称、ID 或 Provider 过滤",
     "composer.modelPicker.noMatches": "当前过滤条件下没有匹配模型。",
+    "planArtifact.titleFallback": "计划",
+    "planArtifact.copy": "复制 Markdown",
+    "planArtifact.copied": "已复制 Markdown",
+    "planArtifact.expand": "展开计划",
+    "planArtifact.collapse": "折叠计划",
+    "planArtifact.confirmAria": "计划确认操作",
+    "planArtifact.noteAria": "计划操作补充内容",
+    "planArtifact.notePlaceholder": "补充内容（可选）",
+    "planArtifact.execute": "执行计划",
+    "planArtifact.executeWithNote": "补充信息并执行计划",
+    "planArtifact.defer": "暂不执行",
+    "planArtifact.suggest": "补充计划内容",
     "runtime.memoryRecall": "✨ 正在记忆召回",
     "runtime.requesting": "✨ 正在请求",
     "runtime.thinking": "✨ 正在思考",
@@ -435,6 +459,18 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "composer.aria.stop": "Stop",
     "composer.modelPicker.filter": "Filter by model name, id, or provider",
     "composer.modelPicker.noMatches": "No models match the current filter.",
+    "planArtifact.titleFallback": "Plan",
+    "planArtifact.copy": "Copy Markdown",
+    "planArtifact.copied": "Copied Markdown",
+    "planArtifact.expand": "Expand plan",
+    "planArtifact.collapse": "Collapse plan",
+    "planArtifact.confirmAria": "Plan confirmation actions",
+    "planArtifact.noteAria": "Plan action note",
+    "planArtifact.notePlaceholder": "Additional note (optional)",
+    "planArtifact.execute": "Execute plan",
+    "planArtifact.executeWithNote": "Add note and execute plan",
+    "planArtifact.defer": "Not now",
+    "planArtifact.suggest": "Send plan note",
     "runtime.memoryRecall": "✨ Recalling memory",
     "runtime.requesting": "✨ Requesting",
     "runtime.thinking": "✨ Thinking",

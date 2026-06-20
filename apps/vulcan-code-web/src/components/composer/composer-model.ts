@@ -15,6 +15,9 @@ export interface ComposerSubmission {
   // User-entered prompt text to append into the active conversation.
   // 需要追加到当前会话中的用户输入提示词。
   prompt: string;
+  // Optional hidden host guidance appended only to the model-facing prompt.
+  // 仅追加到模型可见提示词中的可选宿主隐藏引导。
+  hiddenModelGuidance?: string;
   // Staged attachments submitted before the prompt text.
   // 在提示词文本之前提交的已暂存附件。
   attachments: ComposerAttachmentSummary[];

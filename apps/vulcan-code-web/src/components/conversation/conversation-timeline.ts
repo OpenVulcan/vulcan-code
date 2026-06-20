@@ -15,7 +15,6 @@ export function projectConversationTimelineItems(
   const timeline: ConversationTimelineItem[] = [];
   const turnStartUserIds = conversationTurnStartUserIds(renderItems);
   const turnStartIdsWithLaterTurn = new Set(turnStartUserIds.slice(0, -1));
-  const latestPlanArtifactItemId = latestPlanArtifactRenderItemId(renderItems);
   let currentTurn: {
     // User item that starts the current turn.
     // 当前轮次的起始用户项。
@@ -46,7 +45,7 @@ export function projectConversationTimelineItems(
     const stopped = statsStatus === "stopped";
     const terminal = Boolean(currentTurn.statsItem);
     const running = forceRunning && !terminal;
-    const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems, latestPlanArtifactItemId);
+    const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
     const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
     const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
@@ -254,19 +253,10 @@ function isPlanArtifactRenderItem(item: ConversationRenderItem): boolean {
 
 // latestPlanArtifactRenderItems keeps only the final submitted Plan card from one turn.
 // latestPlanArtifactRenderItems 仅保留单个回合中最后提交的计划卡。
-function latestPlanArtifactRenderItems(
-  items: ConversationRenderItem[],
-  latestPlanArtifactItemId: string | null,
-): ConversationRenderItem[] {
-  const planArtifactItems = items.filter((item) => item.id === latestPlanArtifactItemId && isPlanArtifactRenderItem(item));
+function latestPlanArtifactRenderItems(items: ConversationRenderItem[]): ConversationRenderItem[] {
+  const planArtifactItems = items.filter(isPlanArtifactRenderItem);
   const latest = planArtifactItems.at(-1);
   return latest ? [latest] : [];
-}
-
-// latestPlanArtifactRenderItemId returns the newest submitted Plan card id for the whole conversation.
-// latestPlanArtifactRenderItemId 返回整个会话中最新提交的计划卡标识。
-function latestPlanArtifactRenderItemId(items: ConversationRenderItem[]): string | null {
-  return [...items].reverse().find(isPlanArtifactRenderItem)?.id ?? null;
 }
 
 // popFinalAssistantItem removes and returns the final assistant markdown row when present.

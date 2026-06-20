@@ -105,12 +105,6 @@ impl VulcanManagedToolRuntimeBridge {
             )
             .await
     }
-
-    /// Returns the GUI session identifier attached to every managed tool call.
-    /// 返回附着到每次托管工具调用上的图形界面会话标识。
-    pub(crate) fn session_id(&self) -> SessionId {
-        self.session_id
-    }
 }
 
 /// Enables or disables runtime-event projection barriers for GUI-owned streams.
@@ -185,9 +179,6 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
         {
             guard.remove(&barrier_id);
         }
-        eprintln!(
-            "[vulcan-agent-runtime][tool-trace] stage=projection_barrier_timeout barrier_id={barrier_id}"
-        );
     }
 }
 

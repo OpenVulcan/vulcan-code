@@ -19,6 +19,7 @@ import {
   isComposerAiCapabilityKind,
   isComposerPrintableKey,
   isComposerTextEntryElement,
+  normalizedComposerSlashCommandId,
   serializeAiCapabilityTargetOrder,
   type AiCapabilityKind,
   type ComposerAiCapabilityConfigurationSave,
@@ -431,27 +432,6 @@ export function ComposerPanel(props: {
     return () => document.removeEventListener("keydown", handleGlobalWorkspaceTyping);
   }, [slashDismissedInput]);
 
-  // activateSlashCommand dispatches one selected command and applies its UI route result.
-  // activateSlashCommand 分派单个选中的指令并应用其 UI 路由结果。
-  const activateSlashCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
-    const result = props.onSlashCommand(command);
-    if (!result.handled) {
-      return;
-    }
-    setDraftInput("");
-    setSlashDismissedInput(null);
-    setSlashHighlightedIndex(0);
-    if (result.replacementText !== undefined) {
-      setDraftInput(result.replacementText);
-    }
-    if (result.openTarget === "model") {
-      setModelPickerOpenSignal((current) => current + 1);
-    }
-    if (result.openTarget === "reasoning") {
-      setReasoningPickerOpenSignal((current) => current + 1);
-    }
-  }, [props]);
-
   // handleComposerSend validates input and forwards it to the real backend runtime.
   // handleComposerSend 校验输入并转发到真实后端运行时。
   const handleComposerSend = React.useCallback(async () => {
@@ -583,6 +563,38 @@ export function ComposerPanel(props: {
     }
     return saved;
   }, [props, visibleSessionGoal]);
+
+  // activateSlashCommand dispatches one selected command and applies its UI route result.
+  // activateSlashCommand 分派单个选中的指令并应用其 UI 路由结果。
+  const activateSlashCommand = React.useCallback((command: ComposerSlashCommandSummary) => {
+    if (normalizedComposerSlashCommandId(command) === "plan") {
+      void handlePlanModeChange(!planModeEnabled).then((handled) => {
+        if (!handled) {
+          return;
+        }
+        setDraftInput("");
+        setSlashDismissedInput(null);
+        setSlashHighlightedIndex(0);
+      });
+      return;
+    }
+    const result = props.onSlashCommand(command);
+    if (!result.handled) {
+      return;
+    }
+    setDraftInput("");
+    setSlashDismissedInput(null);
+    setSlashHighlightedIndex(0);
+    if (result.replacementText !== undefined) {
+      setDraftInput(result.replacementText);
+    }
+    if (result.openTarget === "model") {
+      setModelPickerOpenSignal((current) => current + 1);
+    }
+    if (result.openTarget === "reasoning") {
+      setReasoningPickerOpenSignal((current) => current + 1);
+    }
+  }, [handlePlanModeChange, planModeEnabled, props]);
 
   // openGoalResumeDialog seeds the next-stage goal editor from the stopped goal.
   // openGoalResumeDialog 使用已停止目标初始化下一阶段目标编辑器。

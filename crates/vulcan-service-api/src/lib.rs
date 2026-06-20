@@ -728,6 +728,12 @@ pub fn composer_slash_command_catalog() -> Vec<ComposerSlashCommandSummary> {
             description_en: String::from("Choose the current reasoning effort"),
         },
         ComposerSlashCommandSummary {
+            id: String::from("plan"),
+            command: String::from("/plan"),
+            description_zh: String::from("切换当前会话计划模式"),
+            description_en: String::from("Toggle Plan mode for the current conversation"),
+        },
+        ComposerSlashCommandSummary {
             id: String::from("skill"),
             command: String::from("/skill"),
             description_zh: String::from("插入提示词技能加载指令"),

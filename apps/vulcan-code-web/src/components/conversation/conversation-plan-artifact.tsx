@@ -11,6 +11,7 @@ import {
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
+import { useI18n } from "@/i18n";
 
 // PlanArtifactActionPayload describes one user decision for a pending Plan artifact.
 // PlanArtifactActionPayload 描述用户对待确认计划产物的一次决策。
@@ -48,6 +49,7 @@ export function PlanArtifactBlock(props: {
   // 取消待确认计划且不执行。
   onCancel: (payload: PlanArtifactActionPayload) => Promise<void> | void;
 }) {
+  const { t } = useI18n();
   const artifactKey = `${props.artifact.path}:${props.artifact.updatedAt}`;
   const [expanded, setExpanded] = React.useState(props.pending);
   const [copied, setCopied] = React.useState(false);
@@ -127,24 +129,24 @@ export function PlanArtifactBlock(props: {
     >
       <header className="plan-artifact-card-header">
         <div className="plan-artifact-card-title">
-          <span>{props.artifact.name || "计划"}</span>
+          <span>{props.artifact.name || t("planArtifact.titleFallback")}</span>
         </div>
         <div className="plan-artifact-card-actions">
           <button
-            aria-label={copied ? "已复制 Markdown" : "复制 Markdown"}
+            aria-label={copied ? t("planArtifact.copied") : t("planArtifact.copy")}
             className="plan-artifact-icon-button"
             onClick={() => void handleCopy()}
-            title={copied ? "已复制 Markdown" : "复制 Markdown"}
+            title={copied ? t("planArtifact.copied") : t("planArtifact.copy")}
             type="button"
           >
             {copied ? <Check size={15} /> : <Copy size={15} />}
           </button>
           <button
             aria-expanded={expanded}
-            aria-label={expanded ? "折叠计划" : "展开计划"}
+            aria-label={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             className="plan-artifact-icon-button"
             onClick={() => setExpanded((current) => !current)}
-            title={expanded ? "折叠计划" : "展开计划"}
+            title={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             type="button"
           >
             {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -156,7 +158,7 @@ export function PlanArtifactBlock(props: {
           <MarkdownMessage content={props.artifact.content} eager />
           {!expanded ? (
             <button className="plan-artifact-expand-overlay" onClick={() => setExpanded(true)} type="button">
-              展开计划
+              {t("planArtifact.expand")}
             </button>
           ) : null}
         </div>
@@ -165,19 +167,19 @@ export function PlanArtifactBlock(props: {
         <div
           ref={confirmationRef}
           aria-activedescendant={`plan-artifact-action-${selectedAction}`}
-          aria-label="计划确认操作"
+          aria-label={t("planArtifact.confirmAria")}
           className="plan-artifact-confirmation"
           onKeyDown={handleConfirmationKeyDown}
           tabIndex={0}
         >
           <textarea
             ref={noteInputRef}
-            aria-label="计划操作补充内容"
+            aria-label={t("planArtifact.noteAria")}
             className="plan-artifact-note-input"
             disabled={props.disabled}
             onChange={(event) => setNote(event.currentTarget.value)}
             onInput={(event) => resizePlanNoteInput(event.currentTarget)}
-            placeholder="补充内容（可选）"
+            placeholder={t("planArtifact.notePlaceholder")}
             rows={1}
             value={note}
           />
@@ -194,7 +196,7 @@ export function PlanArtifactBlock(props: {
               type="button"
             >
               <PlayCircle size={13} />
-              <span>{noteHasContent ? "补充信息并执行计划" : "执行计划"}</span>
+              <span>{noteHasContent ? t("planArtifact.executeWithNote") : t("planArtifact.execute")}</span>
             </button>
             <button
               id="plan-artifact-action-defer"
@@ -208,7 +210,7 @@ export function PlanArtifactBlock(props: {
               type="button"
             >
               {noteHasContent ? <Send size={13} /> : <X size={13} />}
-              <span>{noteHasContent ? "补充计划内容" : "暂不执行"}</span>
+              <span>{noteHasContent ? t("planArtifact.suggest") : t("planArtifact.defer")}</span>
             </button>
           </div>
         </div>

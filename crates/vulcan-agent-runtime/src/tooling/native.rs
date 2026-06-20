@@ -3851,8 +3851,8 @@ mod tests {
         NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, ThreadGoal, ThreadGoalStatus,
         build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
         build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
-        build_update_plan_tool, build_workspace_describe_tool, effective_start_append_newline,
-        display_submit_plan_path, goal_response_value, resolve_session_shell_behavior,
+        build_update_plan_tool, build_workspace_describe_tool, display_submit_plan_path,
+        effective_start_append_newline, goal_response_value, resolve_session_shell_behavior,
         resolve_shell_command_launcher, resolve_shell_command_working_directory,
         shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
         validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
@@ -4117,7 +4117,10 @@ mod tests {
         let expected_path = target.display().to_string();
 
         assert_eq!(host_result.kind, "plan_artifact");
-        assert_eq!(host_result.payload["path"].as_str(), Some(expected_path.as_str()));
+        assert_eq!(
+            host_result.payload["path"].as_str(),
+            Some(expected_path.as_str())
+        );
         assert!(replaced.contains(SUBMIT_PLAN_MARKER));
         assert!(replaced.contains("# Replacement"));
 
@@ -4129,7 +4132,9 @@ mod tests {
     #[test]
     fn submit_plan_feedback_path_hides_windows_extended_prefix() {
         assert_eq!(
-            display_submit_plan_path(Path::new("\\\\?\\D:\\openvulcan\\test-project\\docs\\plan\\mock.md")),
+            display_submit_plan_path(Path::new(
+                "\\\\?\\D:\\openvulcan\\test-project\\docs\\plan\\mock.md"
+            )),
             "D:\\openvulcan\\test-project\\docs\\plan\\mock.md"
         );
         assert_eq!(
