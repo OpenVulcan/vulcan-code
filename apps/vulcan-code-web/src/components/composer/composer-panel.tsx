@@ -321,7 +321,9 @@ export function ComposerPanel(props: {
   // activeProviderModelSummary resolves the full API model row for secondary-route controls.
   // activeProviderModelSummary 为二级路由控件解析完整 API 模型行。
   const activeProviderModelSummary = React.useMemo(() => {
-    const [providerId, modelId] = (modelChoice || activeModelChoiceKey).split("/");
+    const parsedChoice = parseModelPickerChoiceKey(modelChoice || activeModelChoiceKey);
+    const providerId = parsedChoice?.providerId;
+    const modelId = parsedChoice?.modelId;
     if (!providerId || !modelId) {
       return null;
     }
@@ -991,6 +993,19 @@ export function ComposerPanel(props: {
       </Dialog>
     </>
   );
+}
+
+// parseModelPickerChoiceKey splits only the provider prefix because model ids may contain slashes.
+// parseModelPickerChoiceKey 只拆分 Provider 前缀，因为模型标识本身可能包含斜杠。
+function parseModelPickerChoiceKey(value: string): { providerId: string; modelId: string } | null {
+  const separatorIndex = value.indexOf("/");
+  if (separatorIndex <= 0 || separatorIndex >= value.length - 1) {
+    return null;
+  }
+  return {
+    providerId: value.slice(0, separatorIndex),
+    modelId: value.slice(separatorIndex + 1),
+  };
 }
 
 // ModelSecondaryRouteControl renders a compact provider-managed route picker beside the model selector.
