@@ -7,6 +7,7 @@ import {
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
 import { ComposerPanel } from "@/components/composer/composer-panel";
+import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type {
   ComposerRuntimeCue,
   ComposerTraceCallback,
@@ -32,6 +33,7 @@ import type {
   ReasoningSelectionSummary,
   SessionGoalSummary,
   SessionPlanModeSummary,
+  SessionTodolistSummary,
 } from "@/types";
 
 export { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
@@ -69,6 +71,12 @@ export function ComposerDock(props: {
   // Current persisted goal for the selected conversation.
   // 当前选中会话的持久化目标。
   sessionGoal: SessionGoalSummary | null;
+  // Current model-authored session progress plan for the selected conversation.
+  // 当前选中会话中模型写入的会话进程计划。
+  sessionTodolist: SessionTodolistSummary | null;
+  // Current Git review summary shown beside compact session progress.
+  // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
+  sessionReviewSummary: ConversationSessionReviewSummary | null;
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
@@ -225,6 +233,8 @@ export function ComposerDock(props: {
         slashCommands={props.slashCommands}
         pendingPrompts={props.pendingPrompts}
         sessionGoal={props.sessionGoal}
+        sessionTodolist={props.sessionTodolist}
+        sessionReviewSummary={props.sessionReviewSummary}
         isConversationRunning={props.isConversationRunning}
         thinkingOverlayEnabled={props.thinkingOverlayEnabled}
         providers={props.providers}

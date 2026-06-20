@@ -12,7 +12,7 @@ import {
   Minimize2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SessionTodoPlanItemSummary, SessionTodoPlanSummary } from "@/types";
+import type { SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
 // 会话工具形态切换动画的毫秒时长。
@@ -39,27 +39,27 @@ export interface ConversationSessionReviewSummary {
   changedFiles: number;
 }
 
-// ConversationSessionTodoPanel renders the session TODO plan inside the main conversation surface.
-// ConversationSessionTodoPanel 在主会话界面内渲染当前会话的 TODO 计划。
-export function ConversationSessionTodoPanel(props: {
-  // Current TODO plan summary projected from the selected session runtime state.
-  // 从当前选中会话运行时状态投影出的 TODO 计划摘要。
-  todoPlan: SessionTodoPlanSummary | null;
+// ConversationSessionTodolistPanel renders the session todolist inside the main conversation surface.
+// ConversationSessionTodolistPanel 在主会话界面内渲染当前会话的 todolist。
+export function ConversationSessionTodolistPanel(props: {
+  // Current todolist summary projected from the selected session runtime state.
+  // 从当前选中会话运行时状态投影出的 todolist摘要。
+  todolist: SessionTodolistSummary | null;
   // Current Git review summary projected from the selected workspace.
   // 从当前选中工作区投影出的 Git 审查摘要。
   reviewSummary: ConversationSessionReviewSummary | null;
-  // Whether the TODO panel is currently expanded.
-  // TODO 面板当前是否展开。
+  // Whether the todolist panel is currently expanded.
+  // todolist 面板当前是否展开。
   expanded: boolean;
-  // Updates the TODO panel expanded state.
-  // 更新 TODO 面板展开状态。
+  // Updates the todolist panel expanded state.
+  // 更新 todolist 面板展开状态。
   onExpandedChange: (expanded: boolean) => void;
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: () => void;
 }) {
   const hasReviewSummary = Boolean(props.reviewSummary?.branchName);
-  const hasTodoPlan = Boolean(props.todoPlan?.plan.length);
+  const hasTodolist = Boolean(props.todolist?.items.length);
   // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
   // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
   const [renderExpanded, setRenderExpanded] = React.useState(props.expanded);
@@ -109,7 +109,7 @@ export function ConversationSessionTodoPanel(props: {
     ? `conversation-session-tool-transitioning is-${transitionPhase}`
     : null;
 
-  if (!hasReviewSummary && !hasTodoPlan) {
+  if (!hasReviewSummary && !hasTodolist) {
     return null;
   }
 
@@ -118,8 +118,8 @@ export function ConversationSessionTodoPanel(props: {
       <button
         aria-label="展开会话工具"
         className={cn(
-          "workspace-tool-panel-menu-collapsed conversation-session-todo-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
-          hasReviewSummary && hasTodoPlan && "has-progress",
+          "workspace-tool-panel-menu-collapsed conversation-session-todolist-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
+          hasReviewSummary && hasTodolist && "has-progress",
           transitionClassName,
         )}
         onClick={() => requestExpandedChange(true)}
@@ -133,11 +133,11 @@ export function ConversationSessionTodoPanel(props: {
             {conversationSessionReviewDelta(props.reviewSummary)}
           </span>
         ) : null}
-        {props.todoPlan ? (
+        {props.todolist ? (
           <span className="conversation-session-tool-collapsed-row">
             <ClipboardList size={15} />
             <span>进程</span>
-            <strong>{props.todoPlan.completedCount}/{props.todoPlan.totalCount}</strong>
+            <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
           </span>
         ) : null}
         <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
@@ -148,7 +148,7 @@ export function ConversationSessionTodoPanel(props: {
   return (
     <aside
       className={cn(
-        "workspace-tool-panel-menu conversation-session-todo-menu conversation-session-tool-surface",
+        "workspace-tool-panel-menu conversation-session-todolist-menu conversation-session-tool-surface",
         transitionClassName,
       )}
       aria-label="会话工具菜单"
@@ -160,9 +160,9 @@ export function ConversationSessionTodoPanel(props: {
           onOpenReviewChanges={props.onOpenReviewChanges}
         />
       ) : null}
-      {props.todoPlan ? (
+      {props.todolist ? (
         <ConversationSessionProgressSection
-          todoPlan={props.todoPlan}
+          todolist={props.todolist}
           onCollapse={props.reviewSummary ? undefined : () => requestExpandedChange(false)}
         />
       ) : null}
@@ -221,9 +221,9 @@ function ConversationSessionReviewSection(props: {
 // ConversationSessionProgressSection renders the model-authored session progress plan.
 // ConversationSessionProgressSection 渲染模型写入的会话进程计划。
 function ConversationSessionProgressSection(props: {
-  // TODO plan rendered as session progress.
-  // 作为会话进程渲染的 TODO 计划。
-  todoPlan: SessionTodoPlanSummary;
+  // todolist rendered as session progress.
+  // 作为会话进程渲染的 todolist。
+  todolist: SessionTodolistSummary;
   // Optional collapse action used when progress is the first section.
   // 当进程为第一个区域时使用的可选折叠动作。
   onCollapse?: () => void;
@@ -233,7 +233,7 @@ function ConversationSessionProgressSection(props: {
       <div className={cn("conversation-session-tool-section-title", props.onCollapse && "with-action")}>
         <span className="conversation-session-tool-section-title-main">
           <span>进程</span>
-          <strong>{props.todoPlan.completedCount}/{props.todoPlan.totalCount}</strong>
+          <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
         </span>
         {props.onCollapse ? (
           <button
@@ -247,33 +247,33 @@ function ConversationSessionProgressSection(props: {
           </button>
         ) : null}
       </div>
-      <div className="workspace-tool-panel-menu-list conversation-session-todo-list">
-        {props.todoPlan.plan.map((item, index) => (
-          <ConversationSessionTodoRow item={item} key={`${index}-${item.status}-${item.step}`} />
+      <div className="workspace-tool-panel-menu-list conversation-session-todolist-list">
+        {props.todolist.items.map((item, index) => (
+          <ConversationSessionTodolistRow item={item} key={`${index}-${item.status}-${item.step}`} />
         ))}
       </div>
     </section>
   );
 }
 
-// ConversationSessionTodoRow renders one TODO item with its current model-authored status.
-// ConversationSessionTodoRow 使用模型写入的当前状态渲染单条 TODO。
-function ConversationSessionTodoRow(props: {
-  // TODO item rendered by this row.
-  // 当前行渲染的 TODO 条目。
-  item: SessionTodoPlanItemSummary;
+// ConversationSessionTodolistRow renders one todolist item with its current model-authored status.
+// ConversationSessionTodolistRow 使用模型写入的当前状态渲染单条 todolist。
+function ConversationSessionTodolistRow(props: {
+  // todolist item rendered by this row.
+  // 当前行渲染的 todolist 条目。
+  item: SessionTodolistItemSummary;
 }) {
   return (
-    <div className={cn("conversation-session-todo-row", `status-${props.item.status}`)}>
-      {conversationSessionTodoStatusIcon(props.item.status)}
+    <div className={cn("conversation-session-todolist-row", `status-${props.item.status}`)}>
+      {conversationSessionTodolistStatusIcon(props.item.status)}
       <span>{props.item.step}</span>
     </div>
   );
 }
 
-// conversationSessionTodoStatusIcon returns the compact icon for one TODO status.
-// conversationSessionTodoStatusIcon 返回单个 TODO 状态对应的紧凑图标。
-function conversationSessionTodoStatusIcon(status: SessionTodoPlanItemSummary["status"]): React.ReactNode {
+// conversationSessionTodolistStatusIcon returns the compact icon for one todolist status.
+// conversationSessionTodolistStatusIcon 返回单个 todolist 状态对应的紧凑图标。
+function conversationSessionTodolistStatusIcon(status: SessionTodolistItemSummary["status"]): React.ReactNode {
   if (status === "completed") {
     return <CheckCircle2 size={15} />;
   }

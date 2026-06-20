@@ -48,9 +48,9 @@ use vulcan_workspace_store::{
     },
 };
 
-/// Stable identifier for the universal session TODO update tool.
-/// 通用会话 TODO 更新工具的稳定标识。
-pub const UPDATE_PLAN_TOOL_ID: &str = "update_plan";
+/// Stable identifier for the universal session todolist update tool.
+/// 通用会话 todolist 更新工具的稳定标识。
+pub const TODOLIST_TOOL_ID: &str = "todolist";
 
 /// Stable identifier for the Plan-mode plan artifact submission tool.
 /// 计划模式计划产物提交工具的稳定标识。
@@ -286,7 +286,7 @@ pub fn build_native_tool_catalog(
         build_workspace_describe_tool(snapshot.clone()),
         build_agent_list_tool(snapshot.clone(), config),
         build_skill_list_tool(snapshot.clone(), config),
-        build_update_plan_tool(),
+        build_todolist_tool(),
         build_submit_plan_tool(),
         build_get_goal_tool(),
         build_create_goal_tool(),
@@ -487,14 +487,14 @@ fn build_skill_list_tool(
     )
 }
 
-/// Builds the AI-visible session TODO plan update tool.
-/// 构建 AI 可见的会话 TODO 计划更新工具。
-fn build_update_plan_tool() -> Arc<NativeToolDefinition> {
+/// Builds the AI-visible session todolist update tool.
+/// 构建 AI 可见的会话 todolist更新工具。
+fn build_todolist_tool() -> Arc<NativeToolDefinition> {
     let descriptor = NativeToolDescriptor {
-        id: String::from(UPDATE_PLAN_TOOL_ID),
-        name: String::from(UPDATE_PLAN_TOOL_ID),
+        id: String::from(TODOLIST_TOOL_ID),
+        name: String::from(TODOLIST_TOOL_ID),
         description: String::from(
-            "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a step and status.\nAt most one step can be in_progress at a time.",
+            "Updates the session todolist/checklist progress shown to the user.\nThis is a todolist progress tool, not Plan Mode and not a design-plan document tool.\nProvide an optional explanation and a list of todolist items, each with a step and status.\nAt most one step can be in_progress at a time.",
         ),
         help_text: None,
         ai_visible: true,
@@ -503,18 +503,18 @@ fn build_update_plan_tool() -> Arc<NativeToolDefinition> {
 
     build_native_tool_definition(
         descriptor,
-        update_plan_args_schema(),
+        todolist_args_schema(),
         move |request: NativeToolExecutionRequest| {
-            Box::pin(async move { execute_update_plan_tool(request).await })
+            Box::pin(async move { execute_todolist_tool(request).await })
         },
     )
 }
 
-/// One parsed step status accepted by the `update_plan` tool.
-/// `update_plan` 工具接受的单个已解析步骤状态。
+/// One parsed step status accepted by the `todolist` tool.
+/// `todolist` 工具接受的单个已解析步骤状态。
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum UpdatePlanStepStatusArg {
+enum TodolistStepStatusArg {
     /// The step has not started yet.
     /// 该步骤尚未开始。
     Pending,
@@ -526,7 +526,7 @@ enum UpdatePlanStepStatusArg {
     Completed,
 }
 
-impl UpdatePlanStepStatusArg {
+impl TodolistStepStatusArg {
     /// Returns the stable public status key.
     /// 返回稳定的公开状态键。
     ///
@@ -543,50 +543,50 @@ impl UpdatePlanStepStatusArg {
     }
 }
 
-/// One parsed plan item accepted by the `update_plan` tool.
-/// `update_plan` 工具接受的单个已解析计划项。
+/// One parsed todolist item accepted by the `todolist` tool.
+/// `todolist` 工具接受的单个已解析条目。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpdatePlanItemArg {
+struct TodolistItemArg {
     /// Task step text.
     /// 任务步骤文本。
     step: String,
     /// Step status.
     /// 步骤状态。
-    status: UpdatePlanStepStatusArg,
+    status: TodolistStepStatusArg,
 }
 
-/// Parsed argument payload accepted by the `update_plan` tool.
-/// `update_plan` 工具接受的已解析参数载荷。
+/// Parsed argument payload accepted by the `todolist` tool.
+/// `todolist` 工具接受的已解析参数载荷。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct UpdatePlanArgs {
-    /// Optional explanation for this plan update.
-    /// 本次计划更新的可选说明。
+struct TodolistArgs {
+    /// Optional explanation for this todolist/checklist update.
+    /// 本次 todolist/检查清单更新的可选说明。
     explanation: Option<String>,
-    /// The list of steps.
-    /// 步骤列表。
-    plan: Vec<UpdatePlanItemArg>,
+    /// The list of todolist/checklist steps.
+    /// todolist/检查清单步骤列表。
+    items: Vec<TodolistItemArg>,
 }
 
-/// Builds the Codex-compatible JSON Schema for `update_plan`.
-/// 构建与 Codex 兼容的 `update_plan` JSON Schema。
+/// Builds the Codex-compatible JSON Schema for `todolist`.
+/// 构建与 Codex 兼容的 `todolist` JSON Schema。
 ///
 /// # Returns
 /// 返回值
-/// The model-facing argument schema for the plan update tool.
-/// 面向模型的计划更新工具参数结构。
-fn update_plan_args_schema() -> Value {
+/// The model-facing argument schema for the todolist/checklist progress tool.
+/// 面向模型的 todolist/检查清单进程工具参数结构。
+fn todolist_args_schema() -> Value {
     json!({
         "type": "object",
         "properties": {
             "explanation": {
                 "type": "string",
-                "description": "Optional explanation for this plan update."
+                "description": "Optional explanation for this todolist/checklist progress update."
             },
-            "plan": {
+            "items": {
                 "type": "array",
-                "description": "The list of steps",
+                "description": "The ordered todolist/checklist steps to show as session progress.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -606,13 +606,13 @@ fn update_plan_args_schema() -> Value {
                 }
             }
         },
-        "required": ["plan"],
+        "required": ["items"],
         "additionalProperties": false
     })
 }
 
-/// Executes one `update_plan` request and returns a host projection payload.
-/// 执行单次 `update_plan` 请求并返回宿主投影载荷。
+/// Executes one `todolist` request and returns a host projection payload.
+/// 执行单次 `todolist` 请求并返回宿主投影载荷。
 ///
 /// # Parameters
 /// 参数
@@ -623,46 +623,48 @@ fn update_plan_args_schema() -> Value {
 /// 返回值
 /// A Codex-compatible model response plus a Vulcan host result for session projection.
 /// 与 Codex 兼容的模型响应以及用于会话投影的 Vulcan 宿主结果。
-async fn execute_update_plan_tool(
+async fn execute_todolist_tool(
     request: NativeToolExecutionRequest,
 ) -> Result<VulcanToolInvocationResult, NativeToolError> {
-    let args: UpdatePlanArgs = serde_json::from_value(request.arguments).map_err(|error| {
+    let args: TodolistArgs = serde_json::from_value(request.arguments).map_err(|error| {
         NativeToolError::new(format!("failed to parse function arguments: {error}"))
     })?;
     let in_progress_count = args
-        .plan
+        .items
         .iter()
-        .filter(|item| matches!(item.status, UpdatePlanStepStatusArg::InProgress))
+        .filter(|item| matches!(item.status, TodolistStepStatusArg::InProgress))
         .count();
     if in_progress_count > 1 {
         return Err(NativeToolError::new(
-            "At most one plan item can be in_progress at a time.",
+            "At most one todolist item can be in_progress at a time.",
         ));
     }
-    let mut plan = Vec::with_capacity(args.plan.len());
-    for item in &args.plan {
-        // Trim here so the host projection never accepts a plan that the WebUI persistence layer would later discard.
+    let mut items = Vec::with_capacity(args.items.len());
+    for item in &args.items {
+        // Trim here so the host projection never accepts a todolist item that the WebUI persistence layer would later discard.
         // 此处进行裁剪，避免宿主投影接受后又被 WebUI 持久化层丢弃。
         let step = item.step.trim();
         if step.is_empty() {
             return Err(NativeToolError::new(
-                "Plan item step cannot be empty after trimming.",
+                "Todolist item step cannot be empty after trimming.",
             ));
         }
-        plan.push(json!({
+        items.push(json!({
             "step": step,
             "status": item.status.as_key(),
         }));
     }
     Ok(
-        VulcanToolInvocationResult::from_model_output(Value::String(String::from("Plan updated")))
-            .with_host_result(VulcanToolHostResult {
-                kind: String::from("todo_plan"),
-                payload: json!({
-                    "explanation": args.explanation,
-                    "plan": plan,
-                }),
+        VulcanToolInvocationResult::from_model_output(Value::String(String::from(
+            "Todolist updated",
+        )))
+        .with_host_result(VulcanToolHostResult {
+            kind: String::from("todolist"),
+            payload: json!({
+                "explanation": args.explanation,
+                "items": items,
             }),
+        }),
     )
 }
 
@@ -3851,7 +3853,7 @@ mod tests {
         NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, ThreadGoal, ThreadGoalStatus,
         build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
         build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
-        build_update_plan_tool, build_workspace_describe_tool, display_submit_plan_path,
+        build_todolist_tool, build_workspace_describe_tool, display_submit_plan_path,
         effective_start_append_newline, goal_response_value, resolve_session_shell_behavior,
         resolve_shell_command_launcher, resolve_shell_command_working_directory,
         shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
@@ -3945,76 +3947,86 @@ mod tests {
         }
     }
 
-    /// Verifies update_plan returns the Codex-compatible model text and a host TODO payload.
-    /// 验证 update_plan 返回与 Codex 兼容的模型文本以及宿主 TODO 载荷。
+    /// Verifies todolist returns the Codex-compatible model text and a host todolist payload.
+    /// 验证 todolist 返回与 Codex 兼容的模型文本以及宿主 todolist 载荷。
     #[tokio::test]
-    async fn update_plan_tool_returns_todo_host_payload() {
-        let tool = build_update_plan_tool();
+    async fn todolist_tool_returns_todo_host_payload() {
+        let tool = build_todolist_tool();
         let result = tool
             .invoke(test_native_request(json!({
                 "explanation": "next pass",
-                "plan": [
+                "items": [
                     { "step": "Read source", "status": "completed" },
                     { "step": "Wire UI", "status": "in_progress" },
                     { "step": "Verify", "status": "pending" }
                 ]
             })))
             .await
-            .expect("update_plan should execute");
+            .expect("todolist should execute");
         let host_result = result.host_result.expect("host result");
 
-        assert_eq!(result.model_output, json!("Plan updated"));
-        assert_eq!(host_result.kind, "todo_plan");
+        assert_eq!(result.model_output, json!("Todolist updated"));
+        assert_eq!(host_result.kind, "todolist");
         assert_eq!(host_result.payload["explanation"], "next pass");
-        assert_eq!(host_result.payload["plan"][1]["status"], "in_progress");
+        assert_eq!(host_result.payload["items"][1]["status"], "in_progress");
     }
 
-    /// Verifies update_plan rejects multiple in-progress items.
-    /// 验证 update_plan 会拒绝多个进行中条目。
+    /// Verifies todolist rejects multiple in-progress items.
+    /// 验证 todolist 会拒绝多个进行中条目。
     #[tokio::test]
-    async fn update_plan_tool_rejects_multiple_in_progress_items() {
-        let tool = build_update_plan_tool();
+    async fn todolist_tool_rejects_multiple_in_progress_items() {
+        let tool = build_todolist_tool();
         let error = tool
             .invoke(test_native_request(json!({
-                "plan": [
+                "items": [
                     { "step": "A", "status": "in_progress" },
                     { "step": "B", "status": "in_progress" }
                 ]
             })))
             .await
-            .expect_err("update_plan should reject duplicate in-progress items");
+            .expect_err("todolist should reject duplicate in-progress items");
 
         assert!(
             error
                 .message
-                .contains("At most one plan item can be in_progress")
+                .contains("At most one todolist item can be in_progress")
         );
     }
 
-    /// Verifies update_plan stays AI-visible but is not allowed to execute in Plan mode.
-    /// 验证 update_plan 保持 AI 可见，但不允许在计划模式中执行。
+    /// Verifies todolist stays AI-visible but is not allowed to execute in Plan mode.
+    /// 验证 todolist 保持 AI 可见，但不允许在计划模式中执行。
     #[test]
-    fn update_plan_tool_is_visible_but_blocked_in_plan_mode() {
-        let tool = build_update_plan_tool();
+    fn todolist_tool_is_visible_but_blocked_in_plan_mode() {
+        let tool = build_todolist_tool();
         assert!(tool.descriptor.ai_visible);
         assert!(!tool.descriptor.available_in_plan);
     }
 
-    /// Verifies update_plan rejects blank step text before emitting host projection data.
-    /// 验证 update_plan 会在发出宿主投影数据前拒绝空白步骤文本。
+    /// Verifies todolist is described to models as a todolist/checklist progress tool.
+    /// 验证 todolist 面向模型时会被描述为 todolist/检查清单进程工具。
+    #[test]
+    fn todolist_tool_description_names_todo_semantics() {
+        let tool = build_todolist_tool();
+        assert!(tool.descriptor.description.contains("todolist/checklist"));
+        assert!(tool.descriptor.description.contains("not Plan Mode"));
+        assert!(tool.args_schema.to_string().contains("todolist/checklist"));
+    }
+
+    /// Verifies todolist rejects blank step text before emitting host projection data.
+    /// 验证 todolist 会在发出宿主投影数据前拒绝空白步骤文本。
     #[tokio::test]
-    async fn update_plan_tool_rejects_blank_step_text() {
-        let tool = build_update_plan_tool();
+    async fn todolist_tool_rejects_blank_step_text() {
+        let tool = build_todolist_tool();
         let error = tool
             .invoke(test_native_request(json!({
-                "plan": [
+                "items": [
                     { "step": "   ", "status": "pending" }
                 ]
             })))
             .await
-            .expect_err("update_plan should reject blank step text");
+            .expect_err("todolist should reject blank step text");
 
-        assert!(error.message.contains("step cannot be empty"));
+        assert!(error.message.contains("Todolist item step cannot be empty"));
     }
 
     /// Verifies submit_plan writes a marked Markdown file and returns a host artifact payload.

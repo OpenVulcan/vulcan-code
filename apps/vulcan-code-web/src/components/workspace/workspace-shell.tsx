@@ -1,9 +1,9 @@
 import React from "react";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
-  ConversationSessionTodoPanel,
+  ConversationSessionTodolistPanel,
   type ConversationSessionReviewSummary,
-} from "@/components/conversation/session-todo-panel";
+} from "@/components/conversation/session-todolist-panel";
 import type {
   ConversationDetailRef,
   ToolDetailPayload,
@@ -628,9 +628,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // memoryMenuExpanded stores the shared adaptive menu state for the memory page.
   // memoryMenuExpanded 保存记忆页共享自适应菜单展开状态。
   const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
-  // sessionTodoExpanded stores the shared adaptive menu state for the chat TODO panel.
-  // sessionTodoExpanded 保存会话 TODO 共享自适应面板展开状态。
-  const [sessionTodoExpanded, setSessionTodoExpanded] = React.useState(true);
+  // sessionToolExpanded stores the shared adaptive menu state for the chat Git tool panel.
+  // sessionToolExpanded 保存会话 Git 工具共享自适应面板展开状态。
+  const [sessionToolExpanded, setSessionToolExpanded] = React.useState(true);
   // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
   // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
   const [sessionReviewSummary, setSessionReviewSummary] = React.useState<ConversationSessionReviewSummary | null>(null);
@@ -749,11 +749,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     setRightPanelOpen(true);
   }, [hasSelectedChatConversation, notifyConversationLayoutWillChange, openContextTab, sidebar.open]);
 
-  // handleSessionTodoExpandedChange preserves the transcript viewport before TODO panel shape changes.
-  // handleSessionTodoExpandedChange 在 TODO 面板形态变化前保留转录视口。
-  const handleSessionTodoExpandedChange = React.useCallback((expanded: boolean) => {
+  // handleSessionToolExpandedChange preserves the transcript viewport before Git panel shape changes.
+  // handleSessionToolExpandedChange 在 Git 面板形态变化前保留转录视口。
+  const handleSessionToolExpandedChange = React.useCallback((expanded: boolean) => {
     notifyConversationLayoutWillChange();
-    setSessionTodoExpanded(expanded);
+    setSessionToolExpanded(expanded);
   }, [notifyConversationLayoutWillChange]);
 
   React.useEffect(() => {
@@ -782,14 +782,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     }
   }, []);
 
-  // sessionTodoPlan stores the selected conversation TODO payload when it should be visible.
-  // sessionTodoPlan 保存需要展示时当前会话的 TODO 载荷。
-  const sessionTodoPlan = hasSelectedChatConversation && props.workbench.sessionTodoPlan?.plan.length
-    ? props.workbench.sessionTodoPlan
+  // sessionTodolist stores the selected conversation todolist payload when it should be visible.
+  // sessionTodolist 保存需要展示时当前会话的 todolist 载荷。
+  const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
+    ? props.workbench.sessionTodolist
     : null;
-  // sessionToolPanelVisible opens the floating chat tool panel when either Git or progress exists.
-  // sessionToolPanelVisible 在存在 Git 信息或进程信息时打开会话浮动工具面板。
-  const sessionToolPanelVisible = hasSelectedChatConversation && Boolean(sessionTodoPlan || sessionReviewSummary?.branchName);
+  // sessionToolPanelVisible opens the floating chat tool panel only for Git review information.
+  // sessionToolPanelVisible 仅在存在 Git 审查信息时打开会话浮动工具面板。
+  const sessionToolPanelVisible = hasSelectedChatConversation && Boolean(sessionReviewSummary?.branchName);
 
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !selectedChatProject?.path) {
@@ -1042,6 +1042,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         selectedConversationId={props.selectedConversationId}
         loadingConversationId={props.loadingConversationId}
         conversationLoadError={props.conversationLoadError}
+        sessionReviewSummary={sessionReviewSummary}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
         onSelectWorkbenchModelSecondaryRoute={props.onSelectWorkbenchModelSecondaryRoute}
@@ -1071,10 +1072,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         layoutStabilityKey={[
           props.selectedConversationId ?? "none",
           props.selectedDraftConversation?.id ?? "persisted",
-          sessionTodoPlan ? "todo" : "no-todo",
+          sessionTodolist ? "todolist-progress" : "no-todolist-progress",
           props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
           sessionReviewSummary?.branchName ? "review-summary" : "no-review-summary",
-          sessionTodoExpanded ? "todo-expanded" : "todo-collapsed",
+          sessionToolPanelVisible && sessionToolExpanded ? "review-expanded" : "review-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",
           rightPanelFloating ? "context-floating" : "context-docked",
           sidebar.open ? "sidebar-open" : "sidebar-collapsed",
@@ -1087,16 +1088,16 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       className: "conversation-session-tool-adaptive-panel",
       contentClassName: "conversation-session-tool-content",
       contentShellClassName: "conversation-session-tool-content-shell",
-      expanded: sessionToolPanelVisible && sessionTodoExpanded,
+      expanded: sessionToolPanelVisible && sessionToolExpanded,
       inlineGap: 52,
       minContentWidth: 800,
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: sessionToolPanelVisible ? (
-        <ConversationSessionTodoPanel
-          expanded={sessionTodoExpanded}
+        <ConversationSessionTodolistPanel
+          expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
-          todoPlan={sessionTodoPlan}
-          onExpandedChange={handleSessionTodoExpandedChange}
+          todolist={null}
+          onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
         />
       ) : null,

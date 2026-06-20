@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Check, Edit3, ListChecks, PauseCircle, PlayCircle, Route, Search, Send, Square, Target, Trash2, X } from "lucide-react";
+import { Brain, Check, CheckCircle2, Circle, Edit3, ListChecks, LoaderCircle, PauseCircle, PlayCircle, Route, Search, Send, Square, Target, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -39,6 +39,7 @@ import {
 } from "@/components/composer/composer-controls";
 import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
+import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -67,6 +68,8 @@ import type {
   ReasoningSelectionSummary,
   SessionGoalSummary,
   SessionPlanModeSummary,
+  SessionTodolistItemSummary,
+  SessionTodolistSummary,
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
@@ -124,6 +127,12 @@ export function ComposerPanel(props: {
   // Current persisted goal for the selected conversation.
   // 当前选中会话的持久化目标。
   sessionGoal: SessionGoalSummary | null;
+  // Current model-authored session progress todolist for the selected conversation.
+  // 当前选中会话中模型写入的会话进程 todolist。
+  sessionTodolist: SessionTodolistSummary | null;
+  // Current Git review summary shown beside compact session progress.
+  // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
+  sessionReviewSummary: ConversationSessionReviewSummary | null;
   // Current persisted Plan mode state for the selected conversation.
   // 当前选中会话的持久化计划模式状态。
   sessionPlanMode: SessionPlanModeSummary | null;
@@ -303,6 +312,11 @@ export function ComposerPanel(props: {
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
   const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
+  // visibleSessionTodolist hides progress when no todolist exists or every step is complete.
+  // visibleSessionTodolist 在没有 todolist 或全部步骤完成时隐藏进程提示。
+  const visibleSessionTodolist = props.sessionTodolist?.items.some((item) => item.status !== "completed")
+    ? props.sessionTodolist
+    : null;
   // planModeEnabled follows the backend-persisted session Plan mode state.
   // planModeEnabled 跟随后端持久化的会话计划模式状态。
   const planModeEnabled = props.sessionPlanMode?.executionMode?.toLowerCase() === "plan" || (!props.conversationId && draftPlanModeEnabled);
@@ -797,6 +811,12 @@ export function ComposerPanel(props: {
 
   return (
     <>
+      {visibleSessionTodolist ? (
+        <ComposerSessionProgressCapsule
+          reviewSummary={props.sessionReviewSummary}
+          todolist={visibleSessionTodolist}
+        />
+      ) : null}
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
           entries={props.pendingPrompts}
@@ -993,6 +1013,71 @@ export function ComposerPanel(props: {
       </Dialog>
     </>
   );
+}
+
+// ComposerSessionProgressCapsule renders the transient progress summary above queue and goal strips.
+// ComposerSessionProgressCapsule 在队列与目标条上方渲染临时进程摘要。
+function ComposerSessionProgressCapsule(props: {
+  // Current session progress todolist displayed by this capsule.
+  // 当前胶囊展示的会话进程 todolist。
+  todolist: SessionTodolistSummary;
+  // Optional Git review summary shown only as compact change counters.
+  // 可选 Git 审查摘要，仅作为紧凑变更计数展示。
+  reviewSummary: ConversationSessionReviewSummary | null;
+}) {
+  const currentStepNumber = composerSessionCurrentStepNumber(props.todolist);
+  const reviewSummary = props.reviewSummary?.changedFiles ? props.reviewSummary : null;
+  return (
+    <div className="composer-session-progress-root">
+      <button
+        aria-label="查看当前进程"
+        className="composer-session-progress-capsule"
+        type="button"
+      >
+        <LoaderCircle className="spin" size={14} />
+        <span>第 {currentStepNumber} / {props.todolist.totalCount} 步</span>
+        {reviewSummary ? (
+          <span className="composer-session-progress-review-summary">
+            <span>· {reviewSummary.changedFiles} 个文件已更改</span>
+            <span className="added">+{reviewSummary.additions}</span>
+            <span className="removed">-{reviewSummary.deletions}</span>
+          </span>
+        ) : null}
+      </button>
+      <div className="composer-session-progress-popover" role="tooltip">
+        <div className="composer-session-progress-list">
+          {props.todolist.items.map((item, index) => (
+            <div className={cn("composer-session-progress-row", `status-${item.status}`)} key={`${index}-${item.status}-${item.step}`}>
+              {composerSessionProgressStatusIcon(item.status)}
+              <span>{item.step}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// composerSessionCurrentStepNumber resolves the one-based active or next step number.
+// composerSessionCurrentStepNumber 解析当前或下一步的一基序号。
+function composerSessionCurrentStepNumber(todolist: SessionTodolistSummary): number {
+  const activeIndex = todolist.items.findIndex((item) => item.status === "in_progress");
+  if (activeIndex >= 0) {
+    return activeIndex + 1;
+  }
+  return Math.min(todolist.totalCount, Math.max(1, todolist.completedCount + 1));
+}
+
+// composerSessionProgressStatusIcon returns the compact icon for one progress status.
+// composerSessionProgressStatusIcon 返回单个进程状态的紧凑图标。
+function composerSessionProgressStatusIcon(status: SessionTodolistItemSummary["status"]): React.ReactNode {
+  if (status === "completed") {
+    return <CheckCircle2 size={15} />;
+  }
+  if (status === "in_progress") {
+    return <LoaderCircle className="spin" size={15} />;
+  }
+  return <Circle size={15} />;
 }
 
 // parseModelPickerChoiceKey splits only the provider prefix because model ids may contain slashes.

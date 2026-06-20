@@ -27,11 +27,11 @@ fn session_conversation_state_is_empty(state: &SessionConversationState) -> bool
 /// 可见队列或内部队列中允许保留的最大待发送提示词数量。
 pub const PENDING_PROMPT_QUEUE_LIMIT: usize = 10;
 
-/// One stable status value used by the session TODO plan.
-/// 会话 TODO 计划使用的单个稳定状态值。
+/// One stable status value used by the session todolist.
+/// 会话 todolist使用的单个稳定状态值。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SessionTodoPlanItemStatus {
+pub enum SessionTodolistItemStatus {
     /// The step has not started yet.
     /// 该步骤尚未开始。
     Pending,
@@ -43,48 +43,48 @@ pub enum SessionTodoPlanItemStatus {
     Completed,
 }
 
-/// One TODO plan step retained for the current session.
-/// 为当前会话保留的单个 TODO 计划步骤。
+/// One todolist step retained for the current session.
+/// 为当前会话保留的单个 todolist步骤。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionTodoPlanItem {
+pub struct SessionTodolistItem {
     /// Human-readable step text supplied by the model.
     /// 模型提供的人类可读步骤文本。
     pub step: String,
     /// Current lifecycle status for the step.
     /// 当前步骤的生命周期状态。
-    pub status: SessionTodoPlanItemStatus,
+    pub status: SessionTodolistItemStatus,
 }
 
-/// Session-scoped TODO plan persisted outside the visible transcript.
-/// 在可见转录之外持久化的会话级 TODO 计划。
+/// Session-scoped todolist persisted outside the visible transcript.
+/// 在可见转录之外持久化的会话级 todolist。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionTodoPlanState {
-    /// Optional model-authored explanation for the latest plan update.
-    /// 最近一次计划更新的可选模型说明。
+pub struct SessionTodolistState {
+    /// Optional model-authored explanation for the latest todolist update.
+    /// 最近一次 todolist 更新的可选模型说明。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
-    /// Ordered plan steps supplied by the model.
-    /// 模型提供的有序计划步骤。
+    /// Ordered todolist items supplied by the model.
+    /// 模型提供的有序 todolist 条目。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plan: Vec<SessionTodoPlanItem>,
-    /// Unix-millis text capturing when the plan was last updated.
-    /// 捕获计划最近更新时间的 Unix 毫秒文本。
+    pub items: Vec<SessionTodolistItem>,
+    /// Unix-millis text capturing when the todolist was last updated.
+    /// 捕获 todolist 最近更新时间的 Unix 毫秒文本。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 
-impl SessionTodoPlanState {
-    /// Returns whether the plan has no user-facing payload.
-    /// 返回该计划是否没有任何面向用户的有效载荷。
+impl SessionTodolistState {
+    /// Returns whether the todolist has no user-facing payload.
+    /// 返回该 todolist 是否没有任何面向用户的有效载荷。
     ///
     /// # Returns
     /// 返回值
     /// `true` when no explanation, steps, or update time is stored.
     /// 当没有说明、步骤或更新时间时返回 `true`。
     pub fn is_empty(&self) -> bool {
-        self.explanation.is_none() && self.plan.is_empty() && self.updated_at.is_none()
+        self.explanation.is_none() && self.items.is_empty() && self.updated_at.is_none()
     }
 }
 
@@ -1935,10 +1935,10 @@ pub struct SessionRuntimeStateEntry {
     /// 会话级 VMM 记忆集成覆盖配置。
     #[serde(default, skip_serializing_if = "VmmConfigLayer::is_empty")]
     pub vmm: VmmConfigLayer,
-    /// Session-level TODO plan shown in the conversation tool panel.
-    /// 在会话工具面板中展示的会话级 TODO 计划。
-    #[serde(default, skip_serializing_if = "SessionTodoPlanState::is_empty")]
-    pub todo_plan: SessionTodoPlanState,
+    /// Session-level todolist shown in the conversation tool panel.
+    /// 在会话工具面板中展示的会话级 todolist。
+    #[serde(default, skip_serializing_if = "SessionTodolistState::is_empty")]
+    pub todolist: SessionTodolistState,
     /// Session-level Plan mode marker and latest generated plan artifact.
     /// 会话级计划模式标记与最近生成的计划产物。
     #[serde(default, skip_serializing_if = "SessionPlanModeState::is_empty")]

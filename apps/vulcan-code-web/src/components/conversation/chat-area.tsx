@@ -13,6 +13,7 @@ import {
   ConversationLoadingCenter,
   EmptyConversationPrompt,
 } from "@/components/conversation/conversation-chrome";
+import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type {
   ConversationTimelineUserScrollDirection,
   ConversationTimelineVirtualRestoreState,
@@ -112,6 +113,9 @@ interface ChatAreaProps {
   // Last conversation body loading error.
   // 最近一次会话正文加载错误。
   conversationLoadError: string | null;
+  // Current Git review summary shown beside compact session progress.
+  // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
+  sessionReviewSummary: ConversationSessionReviewSummary | null;
   // Selects the active workbench model.
   // 选择当前工作台模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
@@ -924,6 +928,8 @@ export function ChatArea(props: ChatAreaProps) {
       thinkingOverlayEnabled={thinkingOverlayEnabled}
       reasoningSelection={props.workbench.reasoningSelection ?? null}
       sessionGoal={isEmptyConversation ? null : props.workbench.sessionGoal ?? null}
+      sessionTodolist={isEmptyConversation ? null : props.workbench.sessionTodolist ?? null}
+      sessionReviewSummary={isEmptyConversation ? null : props.sessionReviewSummary}
       sessionPlanMode={isEmptyConversation ? null : props.workbench.sessionPlanMode ?? null}
       runtimeCue={isEmptyConversation ? null : runtimeCue}
       showScrollToBottom={!isEmptyConversation && !isAtConversationBottom}

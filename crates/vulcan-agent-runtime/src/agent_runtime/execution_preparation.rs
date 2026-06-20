@@ -12,8 +12,8 @@ use crate::luaskills_runtime::LuaSkillsRuntimeHandle;
 use crate::mcp::McpRuntimeToolBinding;
 use crate::provider_config::{AiToolKind, PersistedAiToolConfiguration, ProviderConfigurationFile};
 use crate::tooling::native::{
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, SUBMIT_PLAN_TOOL_ID, UPDATE_GOAL_TOOL_ID,
-    UPDATE_PLAN_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, SUBMIT_PLAN_TOOL_ID, TODOLIST_TOOL_ID,
+    UPDATE_GOAL_TOOL_ID,
 };
 use crate::vulcan_tools_bridge::{build_vulcan_tools_manager, resolve_ai_tool_fallback_aliases};
 use crate::workspace_path::normalize_workspace_path_text;
@@ -840,7 +840,7 @@ fn vulcan_tool_descriptor_is_visible(
 fn native_tool_id_is_universal(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        UPDATE_PLAN_TOOL_ID | GET_GOAL_TOOL_ID | CREATE_GOAL_TOOL_ID | UPDATE_GOAL_TOOL_ID
+        TODOLIST_TOOL_ID | GET_GOAL_TOOL_ID | CREATE_GOAL_TOOL_ID | UPDATE_GOAL_TOOL_ID
     )
 }
 
@@ -982,7 +982,7 @@ mod tests {
         ProjectPromptSkillsConfiguration, ProviderConfigurationFile, ReasoningEffortLevel,
     };
     use crate::tooling::native::{
-        CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+        CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
     };
     use luaskills::RuntimeEntryDescriptor;
     use serde_json::json;
@@ -1068,35 +1068,35 @@ mod tests {
                 String::from("vulcan_file_read"),
                 String::from("vmm_memory_write"),
                 String::from(GET_GOAL_TOOL_ID),
-                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(TODOLIST_TOOL_ID),
             ],
             &selectors,
         );
 
         assert_eq!(
             filtered,
-            vec!["shell_command", GET_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID]
+            vec!["shell_command", GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID]
         );
     }
 
-    /// Verifies request-scoped selectors cannot hide universal Goal and update_plan native tools.
-    /// 验证请求级选择器无法隐藏通用 Goal 与 update_plan 原生工具。
+    /// Verifies request-scoped selectors cannot hide universal Goal and todolist native tools.
+    /// 验证请求级选择器无法隐藏通用 Goal 与 todolist 原生工具。
     #[test]
-    fn execution_tool_exposure_keeps_universal_goal_and_update_plan_tools() {
+    fn execution_tool_exposure_keeps_universal_goal_and_todolist_tools() {
         let snapshot = ToolExposureSnapshot {
             allowed_tools: vec![String::from("shell_command")],
             disabled_tools: vec![
                 String::from(CREATE_GOAL_TOOL_ID),
                 String::from(GET_GOAL_TOOL_ID),
                 String::from(UPDATE_GOAL_TOOL_ID),
-                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(TODOLIST_TOOL_ID),
             ],
             ..ToolExposureSnapshot::default()
         };
         let selectors = ToolExposureSelectorState::from_snapshot(&snapshot);
 
         for tool_id in [
-            UPDATE_PLAN_TOOL_ID,
+            TODOLIST_TOOL_ID,
             GET_GOAL_TOOL_ID,
             CREATE_GOAL_TOOL_ID,
             UPDATE_GOAL_TOOL_ID,

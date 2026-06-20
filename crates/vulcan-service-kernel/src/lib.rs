@@ -124,7 +124,7 @@ use vulcan_service_api::{
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
     RuntimeModuleSnapshot, ServiceEvent, ServiceEventEmitter, SessionAddonChangedEvent,
     SessionGoalSummary, SessionPlanArtifactSummary, SessionPlanModeSummary,
-    SessionTodoPlanItemSummary, SessionTodoPlanSummary, SettingSectionSummary, StartupSnapshot,
+    SessionTodolistItemSummary, SessionTodolistSummary, SettingSectionSummary, StartupSnapshot,
     StartupStepSnapshot, StartupStepStatus, SubagentNavigationSnapshot, SubagentTaskSummary,
     ToolCallSummary, UserPromptEditDraftSummary, VmmConfigDraftSummary, VmmConfigSaveRequest,
     VmmEffectiveSummary, VmmManagementSectionSummary, VmmMemoryActionRequest,
@@ -161,7 +161,7 @@ use vulcan_workbench_model::{
     SessionAddonState, SessionId, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, SessionPlanArtifactState, SessionPlanModeState, SessionRunPhase,
     SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
-    SessionTitleSource, SessionTodoPlanItem, SessionTodoPlanItemStatus, SessionTodoPlanState,
+    SessionTitleSource, SessionTodolistItem, SessionTodolistItemStatus, SessionTodolistState,
     SessionTurnStats, SessionTurnStatsStatus, SessionWorkMode, SubagentTaskPanelState,
     SubagentTaskRunState, TaskProjectSummary, apply_pending_prompt_panel_drop_target,
     attach_tool_display_state_to_metadata, build_session_record_message_id,
@@ -10105,9 +10105,9 @@ fn session_addon_state_from_workspace_snapshot(
                     .unwrap_or(default_ai_tool_configuration);
                 let _ = addon_state.set_ai_tool_configuration(configuration, updated_at.clone());
             }
-            SessionAddonNamespace::TodoPlan => {
-                if !runtime_state.todo_plan.is_empty() {
-                    let _ = addon_state.set_todo_plan(&runtime_state.todo_plan, updated_at.clone());
+            SessionAddonNamespace::Todolist => {
+                if !runtime_state.todolist.is_empty() {
+                    let _ = addon_state.set_todolist(&runtime_state.todolist, updated_at.clone());
                 }
             }
             _ => {}
@@ -18591,7 +18591,7 @@ fn append_runtime_event_projection(
             }
         }
     }
-    let mut changed_todo_plan: Option<SessionTodoPlanState> = None;
+    let mut changed_todolist: Option<SessionTodolistState> = None;
     let mut changed_plan_mode: Option<SessionPlanModeState> = None;
     let workspace_snapshot =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
@@ -18610,12 +18610,12 @@ fn append_runtime_event_projection(
                 );
                 workspace.hydrated_session_ids.insert(session_id);
             }
-            if let Some(todo_plan) = todo_plan_state_from_tool_finished_event(event, &now)
-                && runtime_state.todo_plan != todo_plan
+            if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
+                && runtime_state.todolist != todolist
             {
-                runtime_state.todo_plan = todo_plan.clone();
+                runtime_state.todolist = todolist.clone();
                 runtime_state.updated_at = now.clone();
-                changed_todo_plan = Some(todo_plan);
+                changed_todolist = Some(todolist);
             }
             if let Some(artifact) = plan_artifact_state_from_tool_finished_event(event) {
                 let mut plan_mode = runtime_state.plan_mode.clone();
@@ -18627,14 +18627,14 @@ fn append_runtime_event_projection(
                 }
             }
         })?;
-    if let Some(todo_plan) = changed_todo_plan {
+    if let Some(todolist) = changed_todolist {
         let controller_runtime = controller_runtime_from_state(state)?;
-        let updated_at = todo_plan
+        let updated_at = todolist
             .updated_at
             .clone()
             .unwrap_or_else(current_unix_millis_text);
         let mut addon_state = SessionAddonState::new(session_id);
-        let _ = addon_state.set_todo_plan(&todo_plan, updated_at);
+        let _ = addon_state.set_todolist(&todolist, updated_at);
         spawn_workspace_session_addon_state_persist_task(
             app.clone(),
             state.clone(),
@@ -18642,8 +18642,8 @@ fn append_runtime_event_projection(
             workspace_snapshot.clone(),
             session_id,
             addon_state,
-            vec![SessionAddonNamespace::TodoPlan],
-            Some(String::from("update_plan_tool")),
+            vec![SessionAddonNamespace::Todolist],
+            Some(String::from("todolist_tool")),
         );
     }
     if let Some(plan_mode) = changed_plan_mode {
@@ -19267,7 +19267,7 @@ If the user asks for execution while this request is still in Plan Mode, treat i
 
 Plan Mode is a collaboration mode for producing a decision-complete plan. It is not a checklist or progress state.
 
-The `update_plan` tool, when present, is a progress/TODO tool. It does not enter or exit Plan Mode. Do not use `update_plan` while in Plan Mode. If you try to use it in Plan Mode, the host may reject the call.
+The `todolist` tool, when present, is a progress/todolist tool. It does not enter or exit Plan Mode. Do not use `todolist` while in Plan Mode. If you try to use it in Plan Mode, the host may reject the call.
 
 ## Plan Artifact Tool
 
@@ -19421,7 +19421,7 @@ Work from evidence:
 Use the current worktree and external state as authoritative. Previous conversation context can help locate relevant work, but inspect the current state before relying on it. Improve, replace, or remove existing work as needed to satisfy the actual objective.
 
 Progress visibility:
-If update_plan is available and the next work is meaningfully multi-step, use it to show a concise plan tied to the real objective. Keep the plan current as steps complete or the next best action changes. Skip planning overhead for trivial one-step progress, and do not treat a plan update as a substitute for doing the work.
+If todolist is available and the next work is meaningfully multi-step, use it to show a concise task checklist tied to the real objective. Keep the checklist current as steps complete or the next best action changes. Skip checklist overhead for trivial one-step progress, and do not treat a todolist update as a substitute for doing the work.
 
 Fidelity:
 - Optimize each turn for movement toward the requested end state, not for the smallest stable-looking subset or easiest passing change.
@@ -19984,24 +19984,24 @@ fn refresh_session_goal_summary_and_emit(
     )
 }
 
-/// Builds session TODO state from one completed `update_plan` tool event.
-/// 从单条已完成的 `update_plan` 工具事件构建会话 TODO 状态。
+/// Builds session todolist state from one completed `todolist` tool event.
+/// 从单条已完成的 `todolist` 工具事件构建会话 todolist 状态。
 ///
 /// # Parameters
 /// 参数
 /// `event` is the runtime event emitted after a tool call finishes.
 /// `event` 是工具调用结束后发出的运行时事件。
-/// `updated_at` is the timestamp assigned to the projected plan.
-/// `updated_at` 是分配给投影计划的时间戳。
+/// `updated_at` is the timestamp assigned to the projected todolist.
+/// `updated_at` 是分配给投影 todolist 的时间戳。
 ///
 /// # Returns
 /// 返回值
-/// The parsed TODO plan when the event carries a matching host result.
-/// 当事件携带匹配的宿主结果时返回已解析 TODO 计划。
-fn todo_plan_state_from_tool_finished_event(
+/// The parsed todolist when the event carries a matching host result.
+/// 当事件携带匹配的宿主结果时返回已解析 todolist。
+fn todolist_state_from_tool_finished_event(
     event: &RuntimeEvent,
     updated_at: &str,
-) -> Option<SessionTodoPlanState> {
+) -> Option<SessionTodolistState> {
     if event.kind != RuntimeEventKind::ToolFinished {
         return None;
     }
@@ -20010,15 +20010,15 @@ fn todo_plan_state_from_tool_finished_event(
         .as_ref()
         .and_then(|metadata| metadata.get("host_result"))
         .and_then(|host_result| {
-            (host_result.get("kind").and_then(Value::as_str) == Some("todo_plan"))
+            (host_result.get("kind").and_then(Value::as_str) == Some("todolist"))
                 .then(|| host_result.get("payload"))
                 .flatten()
         })?;
-    let plan = payload
-        .get("plan")
+    let items = payload
+        .get("items")
         .and_then(Value::as_array)?
         .iter()
-        .map(todo_plan_item_from_value)
+        .map(todolist_item_from_value)
         .collect::<Option<Vec<_>>>()?;
     let explanation = payload
         .get("explanation")
@@ -20026,26 +20026,26 @@ fn todo_plan_state_from_tool_finished_event(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string);
-    Some(SessionTodoPlanState {
+    Some(SessionTodolistState {
         explanation,
-        plan,
+        items,
         updated_at: Some(updated_at.to_string()),
     })
 }
 
-/// Parses one host-result JSON value into a session TODO item.
-/// 将单个宿主结果 JSON 值解析为会话 TODO 条目。
+/// Parses one host-result JSON value into a session todolist item.
+/// 将单个宿主结果 JSON 值解析为会话 todolist 条目。
 ///
 /// # Parameters
 /// 参数
-/// `value` is one raw plan item emitted by the native tool.
-/// `value` 是原生工具发出的单个原始计划项。
+/// `value` is one raw todolist item emitted by the native tool.
+/// `value` 是原生工具发出的单个原始 todolist 条目。
 ///
 /// # Returns
 /// 返回值
-/// The parsed plan item when both step and status are valid.
-/// 当步骤与状态均有效时返回已解析计划项。
-fn todo_plan_item_from_value(value: &Value) -> Option<SessionTodoPlanItem> {
+/// The parsed todolist item when both step and status are valid.
+/// 当步骤与状态均有效时返回已解析 todolist 条目。
+fn todolist_item_from_value(value: &Value) -> Option<SessionTodolistItem> {
     let step = value
         .get("step")
         .and_then(Value::as_str)
@@ -20053,12 +20053,12 @@ fn todo_plan_item_from_value(value: &Value) -> Option<SessionTodoPlanItem> {
         .filter(|value| !value.is_empty())?
         .to_string();
     let status = match value.get("status").and_then(Value::as_str)? {
-        "pending" => SessionTodoPlanItemStatus::Pending,
-        "in_progress" => SessionTodoPlanItemStatus::InProgress,
-        "completed" => SessionTodoPlanItemStatus::Completed,
+        "pending" => SessionTodolistItemStatus::Pending,
+        "in_progress" => SessionTodolistItemStatus::InProgress,
+        "completed" => SessionTodolistItemStatus::Completed,
         _ => return None,
     };
-    Some(SessionTodoPlanItem { step, status })
+    Some(SessionTodolistItem { step, status })
 }
 
 /// Builds a Plan artifact state from one completed submit_plan tool event.
@@ -24159,7 +24159,7 @@ fn workbench_from_runtime(
             })
             .unwrap_or_default(),
         pending_question,
-        session_todo_plan: session_todo_plan_summary_from_runtime_state(selected_runtime_state),
+        session_todolist: session_todolist_summary_from_runtime_state(selected_runtime_state),
         session_goal: session_goal_summaries
             .get(&workspace.selected_session)
             .cloned(),
@@ -24216,8 +24216,8 @@ fn pending_prompt_summary_from_panel_entry(
     }
 }
 
-/// Projects session TODO state into the WebUI snapshot.
-/// 将会话 TODO 状态投影到 WebUI 快照。
+/// Projects session todolist state into the WebUI snapshot.
+/// 将会话 todolist 状态投影到 WebUI 快照。
 ///
 /// # Parameters
 /// 参数
@@ -24226,34 +24226,34 @@ fn pending_prompt_summary_from_panel_entry(
 ///
 /// # Returns
 /// 返回值
-/// A TODO plan summary when the selected session has visible plan content.
-/// 当前选中会话存在可见计划内容时返回 TODO 计划摘要。
-fn session_todo_plan_summary_from_runtime_state(
+/// A todolist summary when the selected session has visible items.
+/// 当前选中会话存在可见条目时返回 todolist 摘要。
+fn session_todolist_summary_from_runtime_state(
     runtime_state: Option<&SessionRuntimeStateEntry>,
-) -> Option<SessionTodoPlanSummary> {
-    let todo_plan = &runtime_state?.todo_plan;
-    if todo_plan.is_empty() || todo_plan.plan.is_empty() {
+) -> Option<SessionTodolistSummary> {
+    let todolist = &runtime_state?.todolist;
+    if todolist.is_empty() || todolist.items.is_empty() {
         return None;
     }
-    let plan = todo_plan
-        .plan
+    let items = todolist
+        .items
         .iter()
-        .map(|item| SessionTodoPlanItemSummary {
+        .map(|item| SessionTodolistItemSummary {
             step: item.step.clone(),
-            status: session_todo_plan_item_status_key(item.status).to_string(),
+            status: session_todolist_item_status_key(item.status).to_string(),
         })
         .collect::<Vec<_>>();
-    let completed_count = todo_plan
-        .plan
+    let completed_count = todolist
+        .items
         .iter()
-        .filter(|item| item.status == SessionTodoPlanItemStatus::Completed)
+        .filter(|item| item.status == SessionTodolistItemStatus::Completed)
         .count();
-    Some(SessionTodoPlanSummary {
-        explanation: todo_plan.explanation.clone(),
-        total_count: plan.len(),
+    Some(SessionTodolistSummary {
+        explanation: todolist.explanation.clone(),
+        total_count: items.len(),
         completed_count,
-        plan,
-        updated_at: todo_plan.updated_at.clone(),
+        items,
+        updated_at: todolist.updated_at.clone(),
     })
 }
 
@@ -24317,23 +24317,23 @@ fn session_plan_artifact_summary_from_state(
     }
 }
 
-/// Returns the stable WebUI key for one TODO item status.
-/// 返回单个 TODO 条目状态的稳定 WebUI 键。
+/// Returns the stable WebUI key for one todolist item status.
+/// 返回单个 todolist 条目状态的稳定 WebUI 键。
 ///
 /// # Parameters
 /// 参数
-/// `status` is the internal TODO item lifecycle status.
-/// `status` 是内部 TODO 条目生命周期状态。
+/// `status` is the internal todolist item lifecycle status.
+/// `status` 是内部 todolist 条目生命周期状态。
 ///
 /// # Returns
 /// 返回值
 /// The snake_case status key consumed by WebUI.
 /// WebUI 消费的 snake_case 状态键。
-fn session_todo_plan_item_status_key(status: SessionTodoPlanItemStatus) -> &'static str {
+fn session_todolist_item_status_key(status: SessionTodolistItemStatus) -> &'static str {
     match status {
-        SessionTodoPlanItemStatus::Pending => "pending",
-        SessionTodoPlanItemStatus::InProgress => "in_progress",
-        SessionTodoPlanItemStatus::Completed => "completed",
+        SessionTodolistItemStatus::Pending => "pending",
+        SessionTodolistItemStatus::InProgress => "in_progress",
+        SessionTodolistItemStatus::Completed => "completed",
     }
 }
 
@@ -25200,7 +25200,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         composer_slash_commands: vulcan_service_api::composer_slash_command_catalog(),
         pending_prompts: Vec::new(),
         pending_question: None,
-        session_todo_plan: None,
+        session_todolist: None,
         session_goal: None,
         session_plan_mode: None,
         memories: Vec::new(),
@@ -29686,23 +29686,23 @@ mod tests {
     use vulcan_agent_runtime::provider_capabilities::ResolvedAiToolCapability;
     use vulcan_provider_config::config::AiToolPolicy;
 
-    /// Verifies todo_plan host results are projected into session runtime TODO state.
-    /// 验证 todo_plan 宿主结果会投影为会话运行态 TODO 状态。
+    /// Verifies todolist host results are projected into session runtime todolist state.
+    /// 验证 todolist 宿主结果会投影为会话运行态 todolist 状态。
     #[test]
-    fn todo_plan_state_from_tool_finished_event_parses_host_result() {
+    fn todolist_state_from_tool_finished_event_parses_host_result() {
         let event = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
-            "update_plan finished",
-            "Plan updated",
+            "todolist finished",
+            "Todolist updated",
         )
         .with_metadata(Some(json!({
-            "tool_name": "update_plan",
+            "tool_name": "todolist",
             "tool_call_id": "call-todo",
             "host_result": {
-                "kind": "todo_plan",
+                "kind": "todolist",
                 "payload": {
-                    "explanation": "同步会话计划",
-                    "plan": [
+                    "explanation": "同步任务列表",
+                    "items": [
                         { "step": "阅读参考实现", "status": "completed" },
                         { "step": "接入右侧面板", "status": "in_progress" },
                         { "step": "补充验证", "status": "pending" }
@@ -29711,15 +29711,15 @@ mod tests {
             }
         })));
 
-        let state = todo_plan_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z")
+        let state = todolist_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z")
             .expect("todo host result should parse");
 
-        assert_eq!(state.explanation.as_deref(), Some("同步会话计划"));
+        assert_eq!(state.explanation.as_deref(), Some("同步任务列表"));
         assert_eq!(state.updated_at.as_deref(), Some("2026-06-17T00:00:00Z"));
-        assert_eq!(state.plan.len(), 3);
-        assert_eq!(state.plan[0].status, SessionTodoPlanItemStatus::Completed);
-        assert_eq!(state.plan[1].status, SessionTodoPlanItemStatus::InProgress);
-        assert_eq!(state.plan[2].status, SessionTodoPlanItemStatus::Pending);
+        assert_eq!(state.items.len(), 3);
+        assert_eq!(state.items[0].status, SessionTodolistItemStatus::Completed);
+        assert_eq!(state.items[1].status, SessionTodolistItemStatus::InProgress);
+        assert_eq!(state.items[2].status, SessionTodolistItemStatus::Pending);
     }
 
     /// Verifies user-prompt edit gating blocks applied file changes and child TaskSession cards.
@@ -29823,20 +29823,20 @@ mod tests {
         assert!(subtitle.contains("42 tok/s"));
     }
 
-    /// Verifies malformed todo_plan host results are rejected as a whole.
-    /// 验证格式错误的 todo_plan 宿主结果会整体拒绝。
+    /// Verifies malformed todolist host results are rejected as a whole.
+    /// 验证格式错误的 todolist 宿主结果会整体拒绝。
     #[test]
-    fn todo_plan_state_from_tool_finished_event_rejects_invalid_items() {
+    fn todolist_state_from_tool_finished_event_rejects_invalid_items() {
         let event = RuntimeEvent::new(
             RuntimeEventKind::ToolFinished,
-            "update_plan finished",
-            "Plan updated",
+            "todolist finished",
+            "Todolist updated",
         )
         .with_metadata(Some(json!({
             "host_result": {
-                "kind": "todo_plan",
+                "kind": "todolist",
                 "payload": {
-                    "plan": [
+                    "items": [
                         { "step": "有效条目", "status": "completed" },
                         { "step": "", "status": "pending" }
                     ]
@@ -29844,24 +29844,24 @@ mod tests {
             }
         })));
 
-        assert!(todo_plan_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z").is_none());
+        assert!(todolist_state_from_tool_finished_event(&event, "2026-06-17T00:00:00Z").is_none());
     }
 
-    /// Verifies WebUI TODO summaries preserve status keys and completed counts.
-    /// 验证 WebUI TODO 摘要会保留状态键与完成数量。
+    /// Verifies WebUI todolist summaries preserve status keys and completed counts.
+    /// 验证 WebUI todolist 摘要会保留状态键与完成数量。
     #[test]
-    fn session_todo_plan_summary_counts_completed_items() {
+    fn session_todolist_summary_counts_completed_items() {
         let runtime_state = SessionRuntimeStateEntry {
-            todo_plan: SessionTodoPlanState {
+            todolist: SessionTodolistState {
                 explanation: Some(String::from("审核修复")),
-                plan: vec![
-                    SessionTodoPlanItem {
+                items: vec![
+                    SessionTodolistItem {
                         step: String::from("完成菜单接入"),
-                        status: SessionTodoPlanItemStatus::Completed,
+                        status: SessionTodolistItemStatus::Completed,
                     },
-                    SessionTodoPlanItem {
+                    SessionTodolistItem {
                         step: String::from("补充测试"),
-                        status: SessionTodoPlanItemStatus::InProgress,
+                        status: SessionTodolistItemStatus::InProgress,
                     },
                 ],
                 updated_at: Some(String::from("2026-06-17T00:00:00Z")),
@@ -29869,14 +29869,14 @@ mod tests {
             ..SessionRuntimeStateEntry::default()
         };
 
-        let summary = session_todo_plan_summary_from_runtime_state(Some(&runtime_state))
+        let summary = session_todolist_summary_from_runtime_state(Some(&runtime_state))
             .expect("summary should exist");
 
         assert_eq!(summary.explanation.as_deref(), Some("审核修复"));
         assert_eq!(summary.total_count, 2);
         assert_eq!(summary.completed_count, 1);
-        assert_eq!(summary.plan[0].status, "completed");
-        assert_eq!(summary.plan[1].status, "in_progress");
+        assert_eq!(summary.items[0].status, "completed");
+        assert_eq!(summary.items[1].status, "in_progress");
         assert_eq!(summary.updated_at.as_deref(), Some("2026-06-17T00:00:00Z"));
     }
 

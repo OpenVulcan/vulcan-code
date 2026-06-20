@@ -19,7 +19,7 @@ use crate::mcp::{
 };
 use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
 use crate::tooling::native::{
-    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+    CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
 };
 use crate::tooling::{CommandSessionRuntime, NativeToolCatalog, build_native_tool_catalog};
 use luaskills::RuntimeEntryDescriptor;
@@ -742,7 +742,7 @@ fn append_universal_native_tools(
     available_native_tool_ids: &BTreeSet<String>,
 ) {
     for tool_id in [
-        UPDATE_PLAN_TOOL_ID,
+        TODOLIST_TOOL_ID,
         GET_GOAL_TOOL_ID,
         CREATE_GOAL_TOOL_ID,
         UPDATE_GOAL_TOOL_ID,
@@ -860,7 +860,7 @@ mod tests {
     use crate::mcp::configured_mcp_runtime_access;
     use crate::provider_config::{PersistedLuaSkillsConfiguration, ProviderConfigurationFile};
     use crate::tooling::native::{
-        CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, UPDATE_GOAL_TOOL_ID, UPDATE_PLAN_TOOL_ID,
+        CREATE_GOAL_TOOL_ID, GET_GOAL_TOOL_ID, TODOLIST_TOOL_ID, UPDATE_GOAL_TOOL_ID,
     };
     use crate::tooling::{NativeToolCatalog, NativeToolDescriptor};
     use luaskills::RuntimeEntryDescriptor;
@@ -896,7 +896,7 @@ mod tests {
             String::from("shell_command"),
             String::from("shell_session"),
             String::from(UPDATE_GOAL_TOOL_ID),
-            String::from(UPDATE_PLAN_TOOL_ID),
+            String::from(TODOLIST_TOOL_ID),
         ]);
         let mut warnings = Vec::new();
 
@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(
             resolved,
             vec![
-                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(TODOLIST_TOOL_ID),
                 String::from(GET_GOAL_TOOL_ID),
                 String::from(CREATE_GOAL_TOOL_ID),
                 String::from(UPDATE_GOAL_TOOL_ID),
@@ -923,7 +923,7 @@ mod tests {
     /// Verifies universal native tools are appended even when an agent uses an explicit restricted tool list.
     /// 验证代理使用显式受限工具列表时仍会追加通用原生工具。
     #[test]
-    fn explicit_native_tool_list_keeps_universal_goal_and_update_plan_tools() {
+    fn explicit_native_tool_list_keeps_universal_goal_and_todolist_tools() {
         let definition = RuntimeAgentDefinition {
             id: String::from("agent-a"),
             name: String::from("Agent A"),
@@ -947,7 +947,7 @@ mod tests {
             String::from(GET_GOAL_TOOL_ID),
             String::from("shell_command"),
             String::from(UPDATE_GOAL_TOOL_ID),
-            String::from(UPDATE_PLAN_TOOL_ID),
+            String::from(TODOLIST_TOOL_ID),
         ]);
         let mut warnings = Vec::new();
 
@@ -962,7 +962,7 @@ mod tests {
             resolved,
             vec![
                 String::from("shell_command"),
-                String::from(UPDATE_PLAN_TOOL_ID),
+                String::from(TODOLIST_TOOL_ID),
                 String::from(GET_GOAL_TOOL_ID),
                 String::from(CREATE_GOAL_TOOL_ID),
                 String::from(UPDATE_GOAL_TOOL_ID)
@@ -1021,7 +1021,7 @@ mod tests {
         let available_native_tool_ids = BTreeSet::from([
             String::from("shell_command"),
             String::from("vulcan_file_list"),
-            String::from(UPDATE_PLAN_TOOL_ID),
+            String::from(TODOLIST_TOOL_ID),
         ]);
         let mcp_runtime_access =
             configured_mcp_runtime_access(&ProviderConfigurationFile::default());
@@ -1061,7 +1061,7 @@ mod tests {
             profile.tool_exposure.allowed_tools,
             vec![
                 String::from("shell_command"),
-                String::from(UPDATE_PLAN_TOOL_ID)
+                String::from(TODOLIST_TOOL_ID)
             ]
         );
         let resolved_temperature = profile.extra["temperature"].as_f64().unwrap_or_default();

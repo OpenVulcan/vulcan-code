@@ -3131,14 +3131,14 @@ button {
 }
 
 .chat-grid {
-  --conversation-session-todo-width: 320px;
+  --conversation-session-todolist-width: 320px;
   container-type: inline-size;
   display: block;
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
 
-.conversation-session-todo-collapsed {
+.conversation-session-todolist-collapsed {
   width: fit-content;
   min-width: 0;
   max-width: min(260px, calc(100vw - 40px));
@@ -3157,7 +3157,7 @@ button {
   animation: conversation-session-tool-collapse-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
-.conversation-session-todo-menu.conversation-session-tool-surface {
+.conversation-session-todolist-menu.conversation-session-tool-surface {
   animation: conversation-session-tool-expand-in 320ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
 
@@ -3285,32 +3285,32 @@ button {
   white-space: nowrap;
 }
 
-.conversation-session-todo-collapsed strong,
-.conversation-session-todo-header-actions strong {
+.conversation-session-todolist-collapsed strong,
+.conversation-session-todolist-header-actions strong {
   flex: 0 0 auto;
   color: var(--muted-foreground);
   font-size: 12px;
   font-weight: 400;
 }
 
-.conversation-session-todo-collapsed svg {
+.conversation-session-todolist-collapsed svg {
   flex: 0 0 auto;
 }
 
-.conversation-session-todo-menu {
-  --workspace-tool-panel-menu-width: var(--conversation-session-todo-width);
+.conversation-session-todolist-menu {
+  --workspace-tool-panel-menu-width: var(--conversation-session-todolist-width);
   position: relative;
-  width: min(var(--conversation-session-todo-width), calc(100vw - 40px));
+  width: min(var(--conversation-session-todolist-width), calc(100vw - 40px));
   max-height: min(460px, calc(100% - var(--composer-dock-height, 132px) - 72px));
   overflow: auto;
 }
 
-.conversation-session-todo-header {
+.conversation-session-todolist-header {
   height: auto;
   min-height: 28px;
 }
 
-.conversation-session-todo-title {
+.conversation-session-todolist-title {
   min-width: 0;
   display: inline-flex;
   align-items: center;
@@ -3318,12 +3318,12 @@ button {
   color: var(--foreground);
 }
 
-.conversation-session-todo-title svg,
-.conversation-session-todo-row svg {
+.conversation-session-todolist-title svg,
+.conversation-session-todolist-row svg {
   flex: 0 0 auto;
 }
 
-.conversation-session-todo-header-actions {
+.conversation-session-todolist-header-actions {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -3432,7 +3432,7 @@ button {
   color: #da3633;
 }
 
-.conversation-session-todo-explanation {
+.conversation-session-todolist-explanation {
   margin: 2px 3px 1px;
   color: var(--muted-foreground);
   font-size: 12px;
@@ -3440,7 +3440,7 @@ button {
   overflow-wrap: anywhere;
 }
 
-.conversation-session-todo-row {
+.conversation-session-todolist-row {
   min-width: 0;
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);
@@ -3455,24 +3455,24 @@ button {
   font-weight: 400;
 }
 
-.conversation-session-todo-row svg {
+.conversation-session-todolist-row svg {
   margin-top: 1px;
   color: var(--muted-foreground);
 }
 
-.conversation-session-todo-row span {
+.conversation-session-todolist-row span {
   min-width: 0;
   display: block;
   white-space: normal;
   overflow-wrap: anywhere;
 }
 
-.conversation-session-todo-row.status-in_progress svg,
-.conversation-session-todo-row.status-completed svg {
+.conversation-session-todolist-row.status-in_progress svg,
+.conversation-session-todolist-row.status-completed svg {
   color: oklch(0.62 0.16 150);
 }
 
-.conversation-session-todo-row.status-completed span {
+.conversation-session-todolist-row.status-completed span {
   color: var(--muted-foreground);
   text-decoration: line-through;
 }
@@ -3814,7 +3814,7 @@ button {
 }
 
 .conversation-session-review-row.workspace-tool-panel-menu-row,
-.conversation-session-todo-row.workspace-tool-panel-menu-row {
+.conversation-session-todolist-row.workspace-tool-panel-menu-row {
   cursor: default;
   font-weight: 400;
 }
@@ -5008,6 +5008,131 @@ button {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.composer-session-progress-root {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  max-width: min(100%, 560px);
+  pointer-events: auto;
+}
+
+.composer-session-progress-capsule {
+  min-height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  max-width: min(100%, 560px);
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: default;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  outline: none;
+  overflow: hidden;
+  white-space: nowrap;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease;
+}
+
+.composer-session-progress-capsule:hover,
+.composer-session-progress-capsule:focus-visible {
+  border-color: color-mix(in oklch, var(--ring) 46%, var(--border));
+  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  color: var(--foreground);
+}
+
+.composer-session-progress-capsule > svg {
+  color: oklch(0.58 0.18 245);
+}
+
+.composer-session-progress-review-summary {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-session-progress-review-summary .added {
+  color: #1f9d55;
+}
+
+.composer-session-progress-review-summary .removed {
+  color: #da3633;
+}
+
+.composer-session-progress-popover {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: 12;
+  width: min(360px, calc(100vw - 48px));
+  max-width: calc(100vw - 48px);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 6px);
+  transition:
+    opacity 140ms ease,
+    transform 140ms ease;
+}
+
+.composer-session-progress-root:hover .composer-session-progress-popover,
+.composer-session-progress-root:focus-within .composer-session-progress-popover {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+
+.composer-session-progress-list {
+  display: grid;
+  gap: 2px;
+}
+
+.composer-session-progress-row {
+  min-width: 0;
+  min-height: 24px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+  gap: 7px;
+  padding: 3px 5px;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.composer-session-progress-row svg {
+  margin-top: 1px;
+  color: var(--muted-foreground);
+}
+
+.composer-session-progress-row span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.composer-session-progress-row.status-in_progress svg,
+.composer-session-progress-row.status-completed svg {
+  color: oklch(0.62 0.16 150);
+}
+
+.composer-session-progress-row.status-completed span {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
 }
 
 .pending-prompt-strip {

@@ -227,10 +227,10 @@ pub struct WorkbenchSnapshot {
     /// 当前等待用户输入的最早 ask 工具问题。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<PendingQuestionSnapshot>,
-    /// Current session TODO plan shown in the conversation tool panel.
-    /// 当前会话工具面板展示的会话 TODO 计划。
+    /// Current session todolist shown in the conversation tool panel.
+    /// 当前会话工具面板展示的会话 todolist。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_todo_plan: Option<SessionTodoPlanSummary>,
+    pub session_todolist: Option<SessionTodolistSummary>,
     /// Current session goal shown above the composer when present.
     /// 当前会话存在时显示在输入区上方的会话目标。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -479,19 +479,19 @@ pub struct PendingQuestionOptionSummary {
     pub description: String,
 }
 
-/// Describes the current model-authored TODO plan for one selected session.
-/// 描述当前选中会话的模型编写 TODO 计划。
+/// Describes the current model-authored todolist for one selected session.
+/// 描述当前选中会话的模型编写 todolist。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionTodoPlanSummary {
-    /// Optional explanation attached to the latest plan update.
-    /// 最近一次计划更新附带的可选说明。
+pub struct SessionTodolistSummary {
+    /// Optional explanation attached to the latest todolist update.
+    /// 最近一次 todolist 更新附带的可选说明。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
-    /// Ordered TODO items shown in the session tool panel.
-    /// 会话工具面板中展示的有序 TODO 条目。
+    /// Ordered todolist items shown in the session tool panel.
+    /// 会话工具面板中展示的有序 todolist 条目。
     #[serde(default)]
-    pub plan: Vec<SessionTodoPlanItemSummary>,
+    pub items: Vec<SessionTodolistItemSummary>,
     /// Completed item count.
     /// 已完成条目数量。
     pub completed_count: usize,
@@ -504,11 +504,11 @@ pub struct SessionTodoPlanSummary {
     pub updated_at: Option<String>,
 }
 
-/// Describes one TODO plan item for WebUI rendering.
-/// 描述供 WebUI 渲染的单个 TODO 计划条目。
+/// Describes one todolist item for WebUI rendering.
+/// 描述供 WebUI 渲染的单个 todolist条目。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct SessionTodoPlanItemSummary {
+pub struct SessionTodolistItemSummary {
     /// Human-readable step text supplied by the model.
     /// 模型提供的人类可读步骤文本。
     pub step: String,
