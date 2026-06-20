@@ -1,7 +1,7 @@
 //! Session-scoped addon state models shared by GUI, service, and persistence layers.
 //! 由 GUI、服务与持久化层共享的会话级附属状态模型。
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use vulcan_provider_config::config::{
@@ -16,8 +16,7 @@ pub const SESSION_ADDON_SCHEMA_VERSION: u32 = 1;
 
 /// One stable namespace inside the session addon document.
 /// 会话附属状态文档中的一个稳定命名空间。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SessionAddonNamespace {
     /// Session index metadata mirrored for addon-level notifications.
     /// 用于附属状态级通知的会话索引元信息镜像。
@@ -52,9 +51,41 @@ pub enum SessionAddonNamespace {
     /// Context reconstruction anchor and budget fingerprints.
     /// 上下文重建锚点与预算指纹。
     ContextAnchor,
+    /// Unknown namespace retained only long enough to discard legacy addon payloads.
+    /// 仅用于丢弃旧附属状态载荷的未知命名空间。
+    Unknown,
 }
 
 impl SessionAddonNamespace {
+    /// Parses one durable namespace key from JSON documents and events.
+    /// 从 JSON 文档与事件中解析一个持久化命名空间键。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `key` is the raw snake_case namespace key.
+    /// `key` 是原始 snake_case 命名空间键。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The known namespace when the key belongs to the current schema.
+    /// 当键属于当前结构时返回已知命名空间。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "metadata" => Some(Self::Metadata),
+            "runtime_controls" => Some(Self::RuntimeControls),
+            "ai_capabilities" => Some(Self::AiCapabilities),
+            "work_mode" => Some(Self::WorkMode),
+            "prompt_skills" => Some(Self::PromptSkills),
+            "context_injection" => Some(Self::ContextInjection),
+            "vmm" => Some(Self::Vmm),
+            "todolist" => Some(Self::Todolist),
+            "composer" => Some(Self::Composer),
+            "request_preview" => Some(Self::RequestPreview),
+            "context_anchor" => Some(Self::ContextAnchor),
+            _ => None,
+        }
+    }
+
     /// Returns the durable string key used in JSON documents and events.
     /// 返回 JSON 文档与事件中使用的持久化字符串键。
     ///
@@ -75,7 +106,62 @@ impl SessionAddonNamespace {
             Self::Composer => "composer",
             Self::RequestPreview => "request_preview",
             Self::ContextAnchor => "context_anchor",
+            Self::Unknown => "unknown",
         }
+    }
+
+    /// Returns whether this namespace is part of the current persisted schema.
+    /// 返回该命名空间是否属于当前持久化结构。
+    ///
+    /// # Returns
+    /// 返回值
+    /// `true` for namespaces that may be stored back to disk.
+    /// 对允许重新写入磁盘的命名空间返回 `true`。
+    pub fn is_known(self) -> bool {
+        !matches!(self, Self::Unknown)
+    }
+}
+
+impl Serialize for SessionAddonNamespace {
+    /// Serializes the namespace as its durable JSON object key.
+    /// 将命名空间序列化为持久化 JSON 对象键。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `serializer` is the serde serializer receiving the namespace key.
+    /// `serializer` 是接收命名空间键的 serde 序列化器。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The serializer result for the stable key string.
+    /// 稳定键字符串的序列化结果。
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_key())
+    }
+}
+
+impl<'de> Deserialize<'de> for SessionAddonNamespace {
+    /// Deserializes one namespace key while tolerating obsolete addon namespaces.
+    /// 反序列化命名空间键，同时容忍已废弃的附属状态命名空间。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `deserializer` is the serde deserializer that yields a namespace key string.
+    /// `deserializer` 是产生命名空间键字符串的 serde 反序列化器。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A known namespace or `Unknown` when the key belongs to an obsolete schema.
+    /// 已知命名空间；若键属于废弃结构则返回 `Unknown`。
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let key = String::deserialize(deserializer)?;
+        Ok(Self::from_key(&key).unwrap_or(Self::Unknown))
     }
 }
 
@@ -151,7 +237,7 @@ impl VersionedSessionAddonValue {
 
 /// Durable session addon document split into independently versioned namespaces.
 /// 拆分为独立版本命名空间的持久化会话附属状态文档。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionAddonState {
     /// Addon document schema version used for future migrations.
@@ -167,6 +253,49 @@ pub struct SessionAddonState {
     /// 按稳定命名空间枚举索引的带版本载荷。
     #[serde(default)]
     pub namespaces: BTreeMap<SessionAddonNamespace, VersionedSessionAddonValue>,
+}
+
+impl<'de> Deserialize<'de> for SessionAddonState {
+    /// Deserializes an addon state document and drops namespaces no longer in the current schema.
+    /// 反序列化附属状态文档，并丢弃当前结构中已不存在的命名空间。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `deserializer` is the serde deserializer for the addon document.
+    /// `deserializer` 是附属状态文档的 serde 反序列化器。
+    ///
+    /// # Returns
+    /// 返回值
+    /// A cleaned addon state containing only known namespaces.
+    /// 仅包含已知命名空间的清理后附属状态。
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawSessionAddonState {
+            schema_version: u32,
+            session_id: SessionId,
+            revision: u64,
+            #[serde(default)]
+            namespaces: BTreeMap<SessionAddonNamespace, VersionedSessionAddonValue>,
+        }
+
+        let raw = RawSessionAddonState::deserialize(deserializer)?;
+        let namespaces = raw
+            .namespaces
+            .into_iter()
+            .filter(|(namespace, _)| namespace.is_known())
+            .collect();
+
+        Ok(Self {
+            schema_version: raw.schema_version,
+            session_id: raw.session_id,
+            revision: raw.revision,
+            namespaces,
+        })
+    }
 }
 
 impl SessionAddonState {
@@ -415,6 +544,9 @@ impl SessionAddonState {
         value: Value,
         updated_at: String,
     ) -> bool {
+        if !namespace.is_known() {
+            return false;
+        }
         let previous = self.namespaces.get(&namespace);
         let (entry, changed) =
             VersionedSessionAddonValue::from_json_value(previous, value, updated_at);
@@ -898,5 +1030,44 @@ mod tests {
                 .map(|work_mode| work_mode.execution_mode),
             Some(String::from("plan"))
         );
+    }
+
+    #[test]
+    fn session_addon_drops_unknown_legacy_namespaces() {
+        let session_id = SessionId::new_v4();
+        let raw = format!(
+            r#"{{
+                "schemaVersion": 1,
+                "sessionId": "{session_id}",
+                "revision": 2,
+                "namespaces": {{
+                    "todo_plan": {{
+                        "revision": 1,
+                        "hash": "legacy",
+                        "updatedAt": "1000",
+                        "value": {{"items": [{{"step": "old", "status": "pending"}}]}}
+                    }},
+                    "todolist": {{
+                        "revision": 1,
+                        "hash": "current",
+                        "updatedAt": "2000",
+                        "value": {{"items": [{{"title": "new", "status": "pending"}}]}}
+                    }}
+                }}
+            }}"#
+        );
+
+        let state: SessionAddonState =
+            serde_json::from_str(&raw).expect("legacy namespace should not break addon loading");
+
+        assert!(
+            !state
+                .namespaces
+                .contains_key(&SessionAddonNamespace::Unknown)
+        );
+        assert!(state.namespace(SessionAddonNamespace::Todolist).is_some());
+        let serialized = serde_json::to_string(&state).expect("serialize cleaned addon state");
+        assert!(!serialized.contains("todo_plan"));
+        assert!(serialized.contains("todolist"));
     }
 }

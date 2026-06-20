@@ -5076,8 +5076,8 @@ button {
   left: 50%;
   bottom: calc(100% + 8px);
   z-index: 12;
-  width: min(360px, calc(100vw - 48px));
-  max-width: calc(100vw - 48px);
+  width: max-content;
+  max-width: min(420px, calc(100vw - 48px));
   padding: 8px;
   border: 1px solid var(--border);
   border-radius: 12px;
@@ -5098,11 +5098,15 @@ button {
 }
 
 .composer-session-progress-list {
+  width: max-content;
+  max-width: 100%;
   display: grid;
   gap: 2px;
 }
 
 .composer-session-progress-row {
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   min-height: 24px;
   display: grid;
@@ -5118,11 +5122,14 @@ button {
 .composer-session-progress-row svg {
   margin-top: 1px;
   color: var(--muted-foreground);
+  flex: none;
 }
 
 .composer-session-progress-row span {
   min-width: 0;
+  white-space: normal;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .composer-session-progress-row.status-in_progress svg,
