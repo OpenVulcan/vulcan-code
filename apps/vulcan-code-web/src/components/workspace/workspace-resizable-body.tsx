@@ -131,6 +131,9 @@ export function WorkspaceResizableBody(props: {
   // Stops one backend-routed subagent task.
   // 停止单个由后端路由的子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Force-stops one live command session.
+  // 强制停止单条实时命令会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
   // Copies raw diff text from the right context panel.
   // 从右侧上下文面板复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
@@ -356,6 +359,7 @@ export function WorkspaceResizableBody(props: {
               onCopyText={props.onCopyText}
               onFileTabTitleChange={props.onFileContextTabTitleChange}
               onOpenContextTab={props.onOpenContextTab}
+              onStopCommandSession={props.onStopCommandSession}
               onRunVmmAction={props.onRunVmmAction}
               parseConversationBlocks={props.parseConversationBlocks}
               resolveMediaSourceUrl={props.resolveMediaSourceUrl}

@@ -36,6 +36,7 @@ import type {
   ConversationBlockKind,
   ConversationPlanArtifact,
 } from "@/components/conversation/conversation-model";
+import type { CommandSessionSummary } from "@/types";
 
 // ConversationBlocksView dispatches parsed blocks to their visual renderer.
 // ConversationBlocksView 将解析块分派给对应视觉渲染器。
@@ -55,6 +56,9 @@ export function ConversationBlocksView(props: {
   // Project workspace path used by file-oriented tool presentations.
   // 文件类工具展示使用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Force Markdown blocks in externally hidden panels to stay mounted when visible.
   // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
   forceEagerMarkdown?: boolean;
@@ -111,6 +115,7 @@ export function ConversationBlocksView(props: {
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
         workspacePath={props.workspacePath}
+        commandSessions={props.commandSessions}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
@@ -153,6 +158,7 @@ export function ConversationBlocksView(props: {
       conversationId={props.conversationId}
       expandedToolPresentationIds={props.expandedToolPresentationIds}
       workspacePath={props.workspacePath}
+      commandSessions={props.commandSessions}
       itemStreaming={props.itemStreaming}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
@@ -190,6 +196,9 @@ function SpecialConversationBlock(props: {
   // Project workspace path used by file-oriented tool presentations.
   // 文件类工具展示使用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Whether this row is currently streaming.
   // 该行当前是否正在流式增长。
   itemStreaming: boolean;
@@ -261,6 +270,7 @@ function SpecialConversationBlock(props: {
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
         workspacePath={props.workspacePath}
+        commandSessions={props.commandSessions}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}

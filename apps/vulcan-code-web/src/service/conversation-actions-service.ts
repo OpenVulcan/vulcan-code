@@ -9,6 +9,7 @@ import {
   hasServiceRuntime,
   serviceClient,
 } from "@/service/webui-service-runtime";
+import { updateBrowserFallbackWorkbench } from "@/service/browser-fallback-workbench";
 
 // submitConversationPrompt sends one composer prompt to the desktop conversation runtime.
 // submitConversationPrompt 将单条输入区提示词发送到桌面会话运行时。
@@ -71,6 +72,22 @@ export async function stopConversationRun(): Promise<WorkbenchSnapshot | null> {
     return null;
   }
   return serviceClient.request<WorkbenchSnapshot>("service_stop_conversation_run");
+}
+
+// stopCommandSession force-stops one live backend command session.
+// stopCommandSession 强制停止单条实时后端命令会话。
+export async function stopCommandSession(commandSessionId: string, ownerSessionId?: string | null): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return updateBrowserFallbackWorkbench((snapshot) => {
+      snapshot.commandSessions = snapshot.commandSessions.map((session) => session.id === commandSessionId
+        ? { ...session, ownerSessionId: ownerSessionId ?? session.ownerSessionId ?? null, status: "stopped", preview: "浏览器预览已标记停止。" }
+        : session);
+    });
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_stop_command_session", {
+    commandSessionId,
+    ownerSessionId: ownerSessionId ?? null,
+  });
 }
 
 // getUserPromptEditDraft loads a backend-validated editable prompt draft.

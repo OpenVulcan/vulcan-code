@@ -464,6 +464,9 @@ interface WorkspaceShellProps {
   // Stops one subagent task.
   // 停止一个子代理任务。
   onStopSubagentTask: (parentConversationId: string, taskId: string) => Promise<void>;
+  // Force-stops one live command session.
+  // 强制停止单条实时命令会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
   // Edits one queued prompt.
   // 编辑一个队列提示词。
   onEditPendingPrompt: (entryId: string) => Promise<PendingPromptSummary | null>;
@@ -1157,6 +1160,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onOpenSubagentPanel={props.onOpenSubagentPanel}
           onCloseSubagentPanel={props.onCloseSubagentPanel}
           onStopSubagentTask={props.onStopSubagentTask}
+          onStopCommandSession={props.onStopCommandSession}
           onCopyRawDiff={(rawDiff) => void props.onCopyText(rawDiff)}
           onCopyText={(text) => void props.onCopyText(text)}
           parseConversationBlocks={parseConversationBlocks}

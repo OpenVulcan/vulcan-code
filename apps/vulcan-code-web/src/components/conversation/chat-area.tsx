@@ -1127,6 +1127,7 @@ export function ChatArea(props: ChatAreaProps) {
         error={props.conversationLoadError}
         parentConversationId={activeSurfaceConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
+        commandSessions={props.workbench.commandSessions ?? []}
         pendingPlanArtifact={pendingPlanArtifact}
         onPlanArtifactExecute={handlePlanArtifactExecute}
         onPlanArtifactSuggest={handlePlanArtifactSuggest}

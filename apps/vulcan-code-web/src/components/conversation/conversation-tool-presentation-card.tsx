@@ -14,6 +14,11 @@ import { ChangeSetDiffPreview } from "@/components/conversation/conversation-cha
 import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
+import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
+import {
+  terminalStateClass,
+  terminalStateLabel,
+} from "@/components/conversation/conversation-terminal-model";
 import {
   commandPresentationStatusLabel,
   fileChangeStatusLabel,
@@ -137,6 +142,12 @@ function CommandExecutionPresentationCard(props: {
   const outputText = commandOutputText(hydratedPresentation);
   const exitCodeLabel = hydratedPresentation.exitCode === null ? "-" : String(hydratedPresentation.exitCode);
   const exitCodeState = commandExitCodeState(hydratedPresentation.exitCode);
+  const terminalState = hydratedPresentation.terminalState;
+  const statusLabel = hydratedPresentation.commandSessionAction
+    ? commandSessionActionStatusLabel(hydratedPresentation.commandSessionAction, hydratedPresentation.state)
+    : commandPresentationStatusLabel(hydratedPresentation.state);
+  const sessionMetaLabel = commandSessionMetaLabel(hydratedPresentation);
+  const detailHeading = commandDetailHeading(hydratedPresentation);
   const handleToggle = React.useCallback(() => {
     dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
@@ -151,8 +162,8 @@ function CommandExecutionPresentationCard(props: {
         title={presentation.command}
         type="button"
       >
-        <TerminalSquare size={15} />
-        <span className="tool-presentation-state">{commandPresentationStatusLabel(hydratedPresentation.state)}</span>
+        <TerminalSquare className={cn("terminal-session-icon", terminalState && terminalStateClass(terminalState))} size={15} />
+        <span className="tool-presentation-state">{statusLabel}</span>
         <span className="tool-presentation-command">{hydratedPresentation.command}</span>
         {expanded ? (
           <ChevronDown className="tool-presentation-toggle" size={15} />
@@ -162,18 +173,92 @@ function CommandExecutionPresentationCard(props: {
       </button>
       <ConversationCollapsibleMotion expanded={expanded}>
         <div className="tool-presentation-detail">
-          <pre className="tool-presentation-command-line"><span>$</span> {hydratedPresentation.command}</pre>
+          <pre className="tool-presentation-command-line"><span>{detailHeading}</span> {commandDetailText(hydratedPresentation)}</pre>
+          {hydratedPresentation.cwd || hydratedPresentation.shellLabel ? (
+            <div className="tool-presentation-terminal-meta">
+              {hydratedPresentation.shellLabel ? <span>{hydratedPresentation.shellLabel}</span> : null}
+              {hydratedPresentation.cwd ? <span>{hydratedPresentation.cwd}</span> : null}
+            </div>
+          ) : null}
           <div className="tool-presentation-output-scroll">
-            <pre className="tool-presentation-output-text">{outputText || (loadingDetail ? "正在加载输出..." : "无输出")}</pre>
+            <TerminalOutputView
+              className="tool-presentation-output-text"
+              emptyText={loadingDetail ? "正在加载输出..." : "无输出"}
+              text={outputText}
+            />
           </div>
+          {hydratedPresentation.failureReason ? (
+            <div className="tool-presentation-terminal-error">{hydratedPresentation.failureReason}</div>
+          ) : null}
           <div className="tool-presentation-footer">
-            <span />
-            <span className={cn("tool-presentation-exit-code", exitCodeState)}>退出代码 {exitCodeLabel}</span>
+            <span>{sessionMetaLabel}</span>
+            {hydratedPresentation.exitCode !== null ? (
+              <span className={cn("tool-presentation-exit-code", exitCodeState)}>退出代码 {exitCodeLabel}</span>
+            ) : null}
           </div>
         </div>
       </ConversationCollapsibleMotion>
     </div>
   );
+}
+
+// commandSessionActionStatusLabel returns an action result label instead of the session lifecycle label.
+// commandSessionActionStatusLabel 返回动作结果文案，而不是会话生命周期文案。
+function commandSessionActionStatusLabel(action: string, state: CommandExecutionPresentation["state"]): string {
+  if (state === "failed") {
+    if (action === "start") return "启动失败";
+    if (action === "read") return "读取失败";
+    if (action === "write") return "写入失败";
+    if (action === "stop") return "停止失败";
+    return "执行失败";
+  }
+  if (state === "running") {
+    if (action === "start") return "启动中";
+    if (action === "read") return "读取中";
+    if (action === "write") return "写入中";
+    if (action === "stop") return "停止中";
+    return "执行中";
+  }
+  if (action === "start") return "已启动";
+  if (action === "read") return "已读取";
+  if (action === "write") return "已写入";
+  if (action === "stop") return "已停止";
+  return commandPresentationStatusLabel(state);
+}
+
+// commandDetailHeading names the expanded content by command-session action.
+// commandDetailHeading 根据命令会话动作命名展开内容。
+function commandDetailHeading(presentation: CommandExecutionPresentation): string {
+  if (presentation.commandSessionAction === "start") return "启动命令";
+  if (presentation.commandSessionAction === "read") return "读取输出";
+  if (presentation.commandSessionAction === "write") return "写入内容";
+  if (presentation.commandSessionAction === "stop") return "停止会话";
+  return "$";
+}
+
+// commandDetailText returns the primary text shown on the first expanded line.
+// commandDetailText 返回展开区首行展示的主要文本。
+function commandDetailText(presentation: CommandExecutionPresentation): string {
+  if (presentation.commandSessionAction === "write") {
+    return presentation.commandSessionInput?.trim() || presentation.command;
+  }
+  return presentation.command;
+}
+
+// commandSessionMetaLabel builds the footer text without making old actions look failed.
+// commandSessionMetaLabel 构建页脚文本，避免让历史动作看起来失败。
+function commandSessionMetaLabel(presentation: CommandExecutionPresentation): string {
+  if (!presentation.commandSessionId) {
+    return "";
+  }
+  const id = presentation.commandSessionId.length > 8 ? presentation.commandSessionId.slice(0, 8) : presentation.commandSessionId;
+  if (presentation.lost) {
+    return `命令会话 ${id} · 实时状态已丢失`;
+  }
+  if (presentation.terminalState) {
+    return `命令会话 ${id} · 当前${terminalStateLabel(presentation.terminalState)}`;
+  }
+  return `命令会话 ${id}`;
 }
 
 // FileChangePresentationCard renders compact file operation rows and lazy diff bodies.

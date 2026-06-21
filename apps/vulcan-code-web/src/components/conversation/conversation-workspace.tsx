@@ -38,6 +38,7 @@ import type {
   ConversationTimelineItem,
 } from "@/components/conversation/conversation-model";
 import type {
+  CommandSessionSummary,
   ComposerAttachmentSummary,
   ConversationMessage,
   ConversationSummary,
@@ -78,6 +79,9 @@ export function ConversationWorkspace(props: {
   // Project workspace path used to resolve relative Markdown media references.
   // 用于解析 Markdown 相对媒体引用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Called when scroll position changes.
   // 滚动位置变化时调用。
   onScrollStateChange: () => void;
@@ -301,6 +305,7 @@ export function ConversationWorkspace(props: {
       expandedUserPromptIds={userPromptExpansionOverrides}
       expandedToolPresentationIds={toolPresentationExpansionOverrides}
       workspacePath={props.workspacePath}
+      commandSessions={props.commandSessions}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}
       onOpenDetail={setDetail}
@@ -330,6 +335,7 @@ export function ConversationWorkspace(props: {
       expandedUserPromptIds={userPromptExpansionOverrides}
       expandedToolPresentationIds={toolPresentationExpansionOverrides}
       workspacePath={props.workspacePath}
+      commandSessions={props.commandSessions}
       onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}

@@ -76,14 +76,19 @@ export function ConversationTreeRow(props: {
               <MessageSquareText size={14} />
             </span>
           ) : null}
-          <span className="vcn-sidebar-label conversation-tree-label">
-            <strong>{props.conversation.title}</strong>
-          </span>
-          <ConversationRowStatus
+          <ConversationRowLeading
             archiveConfirming={archiveConfirming}
             conversation={props.conversation}
             isPinned={props.isPinned}
             isSelected={props.isSelected}
+            onAction={props.onAction}
+          />
+          <span className="vcn-sidebar-label conversation-tree-label">
+            <strong>{props.conversation.title}</strong>
+          </span>
+          <ConversationRowTrailing
+            archiveConfirming={archiveConfirming}
+            conversation={props.conversation}
             locale={props.locale}
             nowMs={props.nowMs}
             onAction={props.onAction}
@@ -95,9 +100,9 @@ export function ConversationTreeRow(props: {
   );
 }
 
-// ConversationRowStatus renders time, unread, running state, and hover quick actions.
-// ConversationRowStatus 渲染时间、未读、运行状态与悬停快捷操作。
-function ConversationRowStatus(props: {
+// ConversationRowLeading renders the left-side conversation state and pin action.
+// ConversationRowLeading 渲染左侧会话状态与置顶操作。
+function ConversationRowLeading(props: {
   // Whether inline archive confirmation is active.
   // 行内归档确认是否激活。
   archiveConfirming: boolean;
@@ -110,14 +115,62 @@ function ConversationRowStatus(props: {
   // Whether this conversation is currently selected.
   // 当前会话是否正在被选中。
   isSelected: boolean;
+  // Handles row-level pin actions.
+  // 处理行级置顶操作。
+  onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
+}) {
+  const isRunning = props.conversation.status.toLowerCase() === "running";
+  if (props.archiveConfirming) {
+    return <span className="conversation-tree-leading" />;
+  }
+  return (
+    <span className={cn("conversation-tree-leading", isRunning && "running")}>
+      <span className={cn("conversation-tree-leading-status", isRunning && "running")}>
+        {isRunning ? (
+          <span className="conversation-tree-status-mark" aria-label="会话正在运行">
+            <ProgressRing aria-label="会话正在运行" className="conversation-tree-running-progress" size={13} value={null} />
+          </span>
+        ) : props.conversation.unread && !props.isSelected ? (
+          <span className="conversation-tree-status-mark">
+            <span className="conversation-tree-unread-dot" aria-label="未读" />
+          </span>
+        ) : null}
+      </span>
+      <span className={cn("conversation-tree-leading-actions", isRunning && "running")} aria-hidden="false">
+        <span
+          aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
+          className="conversation-tree-quick-action"
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onAction("pin", props.conversation);
+          }}
+          onMouseDown={(event) => event.preventDefault()}
+          role="button"
+        >
+          {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+// ConversationRowTrailing renders the right-side time, archive action, and archive confirmation.
+// ConversationRowTrailing 渲染右侧时间、归档操作与归档确认。
+function ConversationRowTrailing(props: {
+  // Whether inline archive confirmation is active.
+  // 行内归档确认是否激活。
+  archiveConfirming: boolean;
+  // Conversation summary used to render the right-side row state.
+  // 用于渲染右侧行状态的会话摘要。
+  conversation: ConversationSummary;
   // Active locale used for compact time labels.
   // 用于紧凑时间标签的当前语言。
   locale: LocaleCode;
   // Current timestamp used for relative time rendering.
   // 用于渲染相对时间的当前时间戳。
   nowMs: number;
-  // Handles row-level quick actions.
-  // 处理行级快捷操作。
+  // Handles row-level archive actions.
+  // 处理行级归档操作。
   onAction: (action: ConversationMenuAction, conversation: ConversationSummary) => void;
   // Enters inline archive confirmation mode.
   // 进入行内归档确认模式。
@@ -125,29 +178,7 @@ function ConversationRowStatus(props: {
 }) {
   const isRunning = props.conversation.status.toLowerCase() === "running";
   if (isRunning) {
-    return (
-      <span className="conversation-tree-trailing running">
-        <span className="conversation-tree-status running">
-          <span className="conversation-tree-status-mark" aria-label="会话正在运行">
-            <ProgressRing aria-label="会话正在运行" className="conversation-tree-running-progress" size={13} value={null} />
-          </span>
-        </span>
-        <span className="conversation-tree-quick-actions running" aria-hidden="false">
-          <span
-            aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
-            className="conversation-tree-quick-action"
-            onClick={(event) => {
-              event.stopPropagation();
-              props.onAction("pin", props.conversation);
-            }}
-            onMouseDown={(event) => event.preventDefault()}
-            role="button"
-          >
-            {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-          </span>
-        </span>
-      </span>
-    );
+    return <span className="conversation-tree-trailing running" />;
   }
   if (props.archiveConfirming) {
     return (
@@ -173,27 +204,9 @@ function ConversationRowStatus(props: {
   return (
     <span className="conversation-tree-trailing">
       <span className="conversation-tree-status">
-        {props.conversation.unread && !props.isSelected ? (
-          <span className="conversation-tree-status-mark">
-            <span className="conversation-tree-unread-dot" aria-label="未读" />
-          </span>
-        ) : (
-          formatConversationRelativeTime(props.conversation, props.nowMs, props.locale)
-        )}
+        {formatConversationRelativeTime(props.conversation, props.nowMs, props.locale)}
       </span>
       <span className="conversation-tree-quick-actions" aria-hidden="false">
-        <span
-          aria-label={props.isPinned ? "取消置顶对话" : "置顶对话"}
-          className="conversation-tree-quick-action"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onAction("pin", props.conversation);
-          }}
-          onMouseDown={(event) => event.preventDefault()}
-          role="button"
-        >
-          {props.isPinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </span>
         <span
           aria-label="归档对话"
           className="conversation-tree-quick-action"

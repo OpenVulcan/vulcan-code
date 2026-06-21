@@ -1227,6 +1227,10 @@ button {
   pointer-events: none;
 }
 
+.vcn-sidebar[data-collapsible="icon"] .conversation-tree-leading {
+  display: none;
+}
+
 .vcn-sidebar[data-collapsible="icon"] .project-create-conversation,
 .vcn-sidebar[data-collapsible="icon"] .project-folder-arrow {
   width: 0;
@@ -1331,29 +1335,32 @@ button {
 
 .conversation-tree-button {
   --conversation-tree-active-bg: color-mix(in oklch, var(--sidebar-accent) 68%, var(--foreground) 9%);
+  --conversation-tree-fade-width: 25px;
+  --conversation-tree-row-bg: var(--sidebar);
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  position: relative;
   align-items: center;
-  gap: 6px;
+  gap: 9px;
   height: 28px;
   max-height: 28px;
   min-height: 28px;
   border-radius: 6px;
   background: transparent;
   overflow: hidden;
-  padding-left: 32px;
+  padding-left: 8px;
   padding-top: 0;
   padding-bottom: 0;
 }
 
 .pinned-conversation-button {
-  padding-left: 22px;
+  padding-left: 8px;
 }
 
 .pinned-conversation-button.with-pinned-icon {
-  grid-template-columns: minmax(0, 1fr) auto;
-  padding-left: 22px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  padding-left: 8px;
 }
 
 .pinned-conversation-button.with-pinned-icon .conversation-tree-project-icon {
@@ -1376,23 +1383,28 @@ button {
 
 .conversation-tree-button:hover,
 .conversation-tree-button:focus-visible {
+  --conversation-tree-row-bg: var(--conversation-tree-active-bg);
   background: var(--conversation-tree-active-bg);
   color: var(--sidebar-accent-foreground);
 }
 
 .conversation-tree-button.active {
+  --conversation-tree-row-bg: var(--conversation-tree-active-bg);
   background: var(--conversation-tree-active-bg);
   color: var(--sidebar-accent-foreground);
 }
 
 .conversation-tree-label {
   display: block;
+  max-width: none;
   min-width: 0;
+  overflow: hidden;
+  width: 100%;
 }
 
 .conversation-empty-row {
   overflow: hidden;
-  padding: 7px 8px 7px 32px;
+  padding: 7px 8px 7px 33px;
   color: color-mix(in oklch, var(--sidebar-foreground) 34%, transparent);
   font-size: 13px;
   line-height: 1.2;
@@ -1413,7 +1425,7 @@ button {
   cursor: pointer;
   font-size: 13px;
   line-height: 1;
-  padding: 0 8px 0 32px;
+  padding: 0 8px 0 33px;
   text-align: left;
   user-select: none;
 }
@@ -1430,18 +1442,85 @@ button {
   font-weight: 400;
   font-size: 13px;
   line-height: 1.2;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--conversation-tree-fade-width)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--conversation-tree-fade-width)),
+    transparent 100%
+  );
+  overflow: visible;
+  text-overflow: clip;
   white-space: nowrap;
+}
+
+.conversation-tree-leading {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  isolation: isolate;
+}
+
+.conversation-tree-leading-status {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.conversation-tree-leading-status.running {
+  color: color-mix(in oklch, var(--sidebar-foreground) 72%, transparent);
+}
+
+.conversation-tree-leading-actions {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.conversation-tree-button:hover .conversation-tree-leading-status,
+.conversation-tree-button:focus-visible .conversation-tree-leading-status {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.conversation-tree-button:hover .conversation-tree-leading-actions,
+.conversation-tree-button:focus-visible .conversation-tree-leading-actions {
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
 }
 
 .conversation-tree-trailing {
   position: relative;
+  z-index: 2;
   display: inline-flex;
-  min-width: 42px;
+  min-width: 30px;
   height: 20px;
   align-items: center;
   justify-content: flex-end;
+  isolation: isolate;
+}
+
+.conversation-tree-trailing.running {
+  width: 0;
+  min-width: 0;
 }
 
 .conversation-tree-trailing.confirming {
@@ -1451,6 +1530,7 @@ button {
 .conversation-tree-status {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: inline-flex;
   min-height: 20px;
   align-items: center;
@@ -1487,12 +1567,13 @@ button {
   height: 7px;
   border-radius: 999px;
   background: oklch(0.62 0.2 255);
-  box-shadow: 0 0 0 2px color-mix(in oklch, var(--sidebar) 75%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--conversation-tree-row-bg) 75%, transparent);
 }
 
 .conversation-tree-quick-actions {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -1539,6 +1620,8 @@ button {
 
 .conversation-tree-confirm-action {
   display: inline-flex;
+  position: relative;
+  z-index: 1;
   min-width: 40px;
   height: 20px;
   align-items: center;
@@ -8205,6 +8288,28 @@ button {
   font-size: 13px;
 }
 
+:root {
+  --terminal-black: #1f2328;
+  --terminal-red: #d1242f;
+  --terminal-green: #1a7f37;
+  --terminal-yellow: #9a6700;
+  --terminal-blue: #0969da;
+  --terminal-magenta: #8250df;
+  --terminal-cyan: #1b7c83;
+  --terminal-white: #f6f8fa;
+}
+
+.dark {
+  --terminal-black: #8b949e;
+  --terminal-red: #ff7b72;
+  --terminal-green: #7ee787;
+  --terminal-yellow: #f2cc60;
+  --terminal-blue: #79c0ff;
+  --terminal-magenta: #d2a8ff;
+  --terminal-cyan: #76e3ea;
+  --terminal-white: #f0f6fc;
+}
+
 .tool-presentation-summary {
   width: fit-content;
   max-width: 100%;
@@ -8266,7 +8371,8 @@ button {
 }
 
 .tool-presentation-command-line,
-.tool-presentation-output-text {
+.tool-presentation-output-text,
+.terminal-output-view {
   margin: 0;
   color: var(--foreground);
   font-family: var(--font-mono);
@@ -8286,6 +8392,72 @@ button {
 
 .tool-presentation-output-text {
   color: var(--muted-foreground);
+}
+
+.terminal-output-view {
+  color: var(--muted-foreground);
+}
+
+.terminal-ansi-bold {
+  font-weight: 700;
+}
+
+.terminal-ansi-dim {
+  opacity: 0.72;
+}
+
+.terminal-ansi-italic {
+  font-style: italic;
+}
+
+.terminal-ansi-underline {
+  text-decoration: underline;
+}
+
+.terminal-session-icon.terminal-state-running {
+  color: var(--terminal-blue);
+}
+
+.terminal-session-icon.terminal-state-waiting {
+  color: var(--terminal-yellow);
+}
+
+.terminal-session-icon.terminal-state-success {
+  color: var(--terminal-green);
+}
+
+.terminal-session-icon.terminal-state-failed {
+  color: var(--terminal-red);
+}
+
+.terminal-session-icon.terminal-state-stopped {
+  color: var(--muted-foreground);
+}
+
+.terminal-session-icon.terminal-state-lost,
+.terminal-session-icon.terminal-state-unknown {
+  color: color-mix(in oklch, var(--muted-foreground) 72%, transparent);
+}
+
+.tool-presentation-terminal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 6px 16px 0;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.tool-presentation-terminal-error {
+  margin: 0 12px 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--destructive) 10%, transparent);
+  color: var(--destructive);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .tool-presentation-footer {
@@ -8312,6 +8484,100 @@ button {
 
 .tool-presentation-exit-code.failed {
   color: var(--destructive);
+}
+
+.workspace-terminal-sessions-panel {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--muted) 42%, transparent);
+}
+
+.workspace-terminal-sessions-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-terminal-sessions-list {
+  display: grid;
+  gap: 6px;
+}
+
+.workspace-terminal-session-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--background) 80%, transparent);
+}
+
+.workspace-terminal-session-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.workspace-terminal-session-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workspace-terminal-session-label {
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.workspace-terminal-session-command {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-terminal-session-preview {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-terminal-session-stop {
+  width: 24px;
+  height: 24px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted-foreground);
+}
+
+.workspace-terminal-session-stop:not(:disabled):hover {
+  background: color-mix(in oklch, var(--destructive) 12%, transparent);
+  color: var(--destructive);
+}
+
+.workspace-terminal-session-stop:disabled {
+  cursor: default;
+  opacity: 0.42;
 }
 
 .tool-presentation-card.file-change {

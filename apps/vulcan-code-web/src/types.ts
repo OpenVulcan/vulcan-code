@@ -1238,6 +1238,24 @@ export interface CommandSessionSummary {
   // Recent output preview.
   // 最近输出预览。
   preview: string;
+  // Optional owner conversation id when the runtime reports one.
+  // 运行时报告时的可选归属会话标识。
+  ownerSessionId?: string | null;
+  // Effective working directory used by the command session.
+  // 命令会话使用的实际工作目录。
+  cwd?: string | null;
+  // Effective shell label selected by the host.
+  // 宿主选择的实际 shell 标签。
+  shellLabel?: string | null;
+  // Optional process exit code captured by the host.
+  // 宿主捕获到的可选进程退出码。
+  exitCode?: number | null;
+  // Optional failure reason synthesized by the host runtime.
+  // 宿主运行时综合生成的可选失败原因。
+  failureReason?: string | null;
+  // Whether the summary represents a historical session missing from live runtime state.
+  // 摘要是否代表实时运行时中已找不到的历史会话。
+  lost?: boolean;
 }
 
 // LogEntrySummary describes one diagnostic log entry.

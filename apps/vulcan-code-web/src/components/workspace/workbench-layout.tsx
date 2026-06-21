@@ -98,6 +98,7 @@ import {
   setSessionPlanMode,
   stageComposerAttachmentBytes,
   saveSessionAiCapabilityConfiguration,
+  stopCommandSession,
   stopConversationRun,
   stopSubagentTask,
   submitUserPromptEdit,
@@ -1261,6 +1262,20 @@ export function WorkbenchLayout(props: {
     }
   }, []);
 
+  // handleStopCommandSession force-stops one live terminal session from context panels.
+  // handleStopCommandSession 从上下文面板强制停止单条实时终端会话。
+  const handleStopCommandSession = React.useCallback(async (commandSessionId: string, ownerSessionId?: string | null): Promise<void> => {
+    webuiClickTrace("command_session.stop.invoke", { commandSessionId });
+    try {
+      const snapshot = await stopCommandSession(commandSessionId, ownerSessionId ?? null);
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+      }
+    } catch (nextError) {
+      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  }, []);
+
   // handleListWorkbenchModelSecondaryRoutes loads backend route choices for the active model.
   // handleListWorkbenchModelSecondaryRoutes 为当前模型加载后端路由选项。
   const handleListWorkbenchModelSecondaryRoutes = React.useCallback(async (
@@ -1726,6 +1741,7 @@ export function WorkbenchLayout(props: {
             onOpenSubagentPanel={handleOpenSubagentPanel}
             onCloseSubagentPanel={handleCloseSubagentPanel}
             onStopSubagentTask={handleStopSubagentTask}
+            onStopCommandSession={handleStopCommandSession}
             onEditPendingPrompt={handleEditPendingPrompt}
             onInsertPendingPrompt={handleInsertPendingPrompt}
             onRemovePendingPrompt={handleRemovePendingPrompt}

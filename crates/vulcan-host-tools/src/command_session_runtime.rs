@@ -488,6 +488,26 @@ impl CommandSessionRecord {
         })
     }
 
+    /// Builds a conservative running snapshot when the async state lock is busy.
+    /// 当异步状态锁忙碌时构建一份保守的运行中快照。
+    fn fallback_running_snapshot(&self) -> CommandSessionSnapshot {
+        CommandSessionSnapshot {
+            command_session_id: self.command_session_id,
+            owner_session_id: self.owner_session_id,
+            command: self.command.clone(),
+            shell_label: self.shell_label.clone(),
+            launcher_shell_label: self.launcher_shell_label.clone(),
+            cwd: self.cwd.clone(),
+            status: CommandSessionStatus::Running,
+            exit_code: None,
+            failure_reason: None,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            last_seq: 0,
+            pending_stdin_line: false,
+        }
+    }
+
     /// Builds one incremental read outcome based on the caller-provided output cursor and read cap.
     /// 根据调用方提供的输出游标与读取上限构建一次增量读取结果。
     async fn read_since(&self, after_seq: u64, max_chunks: usize) -> CommandSessionReadOutcome {
@@ -768,7 +788,11 @@ impl CommandSessionRuntime {
         if record.owner_session_id != owner_session_id {
             return None;
         }
-        record.try_snapshot()
+        Some(
+            record
+                .try_snapshot()
+                .unwrap_or_else(|| record.fallback_running_snapshot()),
+        )
     }
 
     /// Returns one best-effort live snapshot for the requested command session identifier without enforcing ownership, so read-only GUI projections can still recover the latest visible status when the owner id must be inferred from historical metadata.
@@ -783,7 +807,29 @@ impl CommandSessionRuntime {
             .ok()?
             .get(&command_session_id)
             .cloned()?;
-        record.try_snapshot()
+        Some(
+            record
+                .try_snapshot()
+                .unwrap_or_else(|| record.fallback_running_snapshot()),
+        )
+    }
+
+    /// Returns best-effort live snapshots for all retained command sessions.
+    /// 返回当前保留的所有命令会话的尽力而为实时快照。
+    pub fn try_snapshot_sessions(&self) -> Vec<CommandSessionSnapshot> {
+        self.sessions
+            .read()
+            .map(|sessions| {
+                sessions
+                    .values()
+                    .map(|record| {
+                        record
+                            .try_snapshot()
+                            .unwrap_or_else(|| record.fallback_running_snapshot())
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
     }
 
     /// Resolves one command-session record and enforces that the caller owns it.

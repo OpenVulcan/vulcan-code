@@ -33,7 +33,7 @@ import type {
   ConversationProcessRenderItem,
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
-import type { ComposerAttachmentSummary } from "@/types";
+import type { CommandSessionSummary, ComposerAttachmentSummary } from "@/types";
 import { cn } from "@/lib/utils";
 
 // USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
@@ -73,6 +73,9 @@ export function ConversationProcessGroup(props: {
   // Project workspace path used by file-oriented tool presentations.
   // 文件类工具展示使用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Records one user-triggered collapsed state change.
   // 记录一次用户触发的折叠状态变化。
   onCollapsedChange: (collapsed: boolean) => void;
@@ -171,6 +174,7 @@ export function ConversationProcessGroup(props: {
             hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
             expandedToolPresentationIds={props.expandedToolPresentationIds}
             workspacePath={props.workspacePath}
+            commandSessions={props.commandSessions}
             item={item}
             itemStreaming={false}
             key={item.id}
@@ -205,6 +209,7 @@ export function ConversationProcessGroup(props: {
               hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
               expandedToolPresentationIds={props.expandedToolPresentationIds}
               workspacePath={props.workspacePath}
+              commandSessions={props.commandSessions}
               item={item}
               itemStreaming={item.id === streamingProcessItemId}
               key={item.id}
@@ -274,6 +279,9 @@ export function ConversationRenderItemView(props: {
   // Project workspace path used by file-oriented tool presentations.
   // 文件类工具展示使用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
@@ -473,6 +481,7 @@ export function ConversationRenderItemView(props: {
           conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
           expandedToolPresentationIds={props.expandedToolPresentationIds}
           workspacePath={props.workspacePath}
+          commandSessions={props.commandSessions}
           forceEagerMarkdown={props.forceEagerMarkdown}
           itemStreaming={Boolean(props.itemStreaming)}
           parentConversationId={props.parentConversationId}

@@ -31,7 +31,9 @@ import type {
   ToolExecutionConversationBlock,
   ToolExecutionTraceCallback,
 } from "./conversation-tool-execution-types";
+import type { CommandSessionSummary } from "@/types";
 import { ToolPresentationCard } from "./conversation-tool-presentation-card";
+import { terminalSummaryById } from "./conversation-terminal-model";
 import { resolveToolPresentation } from "./conversation-tool-presentations";
 
 export type {
@@ -56,6 +58,9 @@ export function ToolExecutionBlock(props: {
   // Project workspace path used for file presentation path shortening.
   // 文件展示路径缩短使用的项目工作区路径。
   workspacePath?: string | null;
+  // Live command-session summaries used by terminal presentations.
+  // 终端展示使用的实时命令会话摘要。
+  commandSessions: CommandSessionSummary[];
   // Parent conversation id used by routed subagent navigation.
   // 已路由子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -103,8 +108,16 @@ export function ToolExecutionBlock(props: {
   const detailRef = props.conversationId && (detailRefFields || primaryBlock.toolCallId)
     ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
     : undefined;
+  const commandSessionById = React.useMemo(
+    () => terminalSummaryById(props.commandSessions),
+    [props.commandSessions],
+  );
   const presentation = React.useMemo(
-    () => resolveToolPresentation(props.blocks, displayState, detailRef, { workspacePath: props.workspacePath }),
+    () => resolveToolPresentation(props.blocks, displayState, detailRef, {
+      commandSessionById,
+      commandSessions: props.commandSessions,
+      workspacePath: props.workspacePath,
+    }),
     [
       detailRef?.messageIndex,
       detailRef?.recordId,
@@ -112,7 +125,9 @@ export function ToolExecutionBlock(props: {
       detailRef?.sessionId,
       detailRef?.toolCallId,
       displayState,
+      commandSessionById,
       props.blocks,
+      props.commandSessions,
       props.workspacePath,
     ],
   );

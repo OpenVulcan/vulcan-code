@@ -2223,6 +2223,30 @@ pub struct CommandSessionSummary {
     /// Recent command output preview.
     /// 最近命令输出预览。
     pub preview: String,
+    /// Optional owner session id when the runtime reports one.
+    /// 运行时报告时的可选归属会话标识。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<String>,
+    /// Effective working directory used by the command session.
+    /// 命令会话使用的实际工作目录。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// Stable shell label selected by the host.
+    /// 宿主选择的稳定 shell 标签。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell_label: Option<String>,
+    /// Optional process exit code captured by the host.
+    /// 宿主捕获到的可选进程退出码。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Optional failure reason synthesized by the host runtime.
+    /// 宿主运行时综合生成的可选失败原因。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+    /// Whether this summary represents a historical session no longer present in live runtime state.
+    /// 该摘要是否代表实时运行时中已不存在的历史会话。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lost: bool,
 }
 
 /// Summarizes one diagnostic log entry.
@@ -3254,6 +3278,12 @@ fn infer_service_media_asset_mime_type(path: &Path) -> String {
         Some("pdf") => String::from("application/pdf"),
         _ => String::from("application/octet-stream"),
     }
+}
+
+/// Returns true when a boolean is false for serde omission helpers.
+/// 当布尔值为 false 时返回 true，用于 serde 省略辅助。
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[cfg(test)]

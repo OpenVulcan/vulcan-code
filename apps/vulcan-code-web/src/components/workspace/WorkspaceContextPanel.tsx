@@ -38,6 +38,7 @@ import type {
   WorkspaceFileReadResponse,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
+import { WorkspaceTerminalSessionsPanel } from "@/components/workspace/WorkspaceTerminalSessionsPanel";
 
 // LazyWorkspaceReviewPanelHost loads the heavy Git review surface only when the context rail renders it.
 // LazyWorkspaceReviewPanelHost 仅在上下文栏渲染审核页时加载较重的 Git 审核界面。
@@ -153,6 +154,9 @@ export interface WorkspaceContextPanelProps {
   // Closes the right context panel.
   // 关闭右侧上下文面板。
   onClose?: () => void;
+  // Force-stops one live command session.
+  // 强制停止单条实时命令会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
   // Copies raw diff text using the host-aware clipboard implementation.
   // 使用宿主感知的剪贴板实现复制原始 diff 文本。
   onCopyRawDiff: (rawDiff: string) => void;
@@ -581,6 +585,10 @@ function WorkspaceContextTabContent(args: {
   if (args.activeTab.kind === "review") {
     return (
       <div className="context-tab-content review-tab-content">
+        <WorkspaceTerminalSessionsPanel
+          commandSessions={args.props.workbench.commandSessions ?? []}
+          onStopCommandSession={args.props.onStopCommandSession}
+        />
         <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
           <LazyWorkspaceReviewPanelHost
             loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}

@@ -2181,6 +2181,15 @@ async fn dispatch_service_rpc(
         "service_stop_conversation_run" => {
             rpc_json_result(service_stop_conversation_run(app, state).await)
         }
+        "service_stop_command_session" => rpc_json_result(
+            service_stop_command_session(
+                app,
+                state,
+                rpc_required_param(&params, "commandSessionId")?,
+                rpc_optional_param(&params, "ownerSessionId")?,
+            )
+            .await,
+        ),
         "service_get_user_prompt_edit_draft" => rpc_json_result(
             service_get_user_prompt_edit_draft(
                 state,
@@ -4956,6 +4965,46 @@ async fn service_stop_conversation_run(
         });
     }
     Ok(workbench)
+}
+
+/// Stops one live command session and rebuilds the WebUI workbench snapshot.
+/// 停止单条实时命令会话并重建 WebUI 工作台快照。
+async fn service_stop_command_session(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    command_session_id: String,
+    owner_session_id: Option<String>,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let command_session_id = command_session_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid command session id '{command_session_id}': {error}"))?;
+    let owner_session_id = match owner_session_id {
+        Some(owner_session_id) => owner_session_id
+            .parse::<SessionId>()
+            .map_err(|error| format!("invalid owner session id '{owner_session_id}': {error}"))?,
+        None => agent_runtime
+            .command_session_runtime
+            .try_snapshot_session_by_id(command_session_id)
+            .map(|snapshot| snapshot.owner_session_id)
+            .ok_or_else(|| {
+                format!(
+                    "Command session `{command_session_id}` was not found in the live runtime."
+                )
+            })?,
+    };
+    webui_trace(
+        "stop_command_session_requested",
+        format!("owner={owner_session_id} command_session={command_session_id}"),
+    );
+    agent_runtime
+        .command_session_runtime
+        .stop_session(owner_session_id, command_session_id, Some(1500))
+        .await?;
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
+        String::from("service is still starting; workspace snapshot is not ready")
+    })?;
+    store_current_workbench_snapshot(&app, &state, &controller_runtime, &agent_runtime, workspace_snapshot)
 }
 
 /// Saves or updates the selected session goal through the user-facing WebUI API.
@@ -9698,7 +9747,7 @@ async fn service_select_conversation(
     );
     sync_selected_session_goal_summary_from_store(&state, controller_runtime.clone(), session_id)
         .await?;
-    let (surface_messages, subagent_navigation, session_goal_summaries) = {
+    let (surface_messages, subagent_navigation, session_goal_summaries, command_session_runtime) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -9706,14 +9755,20 @@ async fn service_select_conversation(
         if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
             agent_runtime.provider_configuration = provider_configuration.clone();
         }
+        let command_session_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
             guard.session_goal_summaries.clone(),
+            command_session_runtime,
         )
     };
     let workbench = workbench_from_runtime(
         &controller_runtime,
+        command_session_runtime.as_deref(),
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
@@ -13754,6 +13809,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         subagent_navigation,
         pending_question,
         session_goal_summaries,
+        command_session_runtime,
     ) = {
         let mut guard = state
             .lock()
@@ -13801,17 +13857,23 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         let pending_question =
             pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
         let session_goal_summaries = guard.session_goal_summaries.clone();
+        let command_session_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         (
             live_context_budgets,
             surface_messages,
             subagent_navigation,
             pending_question,
             session_goal_summaries,
+            command_session_runtime,
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
     let workbench = workbench_from_runtime(
         controller_runtime,
+        command_session_runtime.as_deref(),
         luaskills_catalog,
         token_budget_runtime,
         mcp_catalog,
@@ -16960,6 +17022,7 @@ fn store_current_workbench_snapshot(
     let workbench_started_at = current_unix_millis_value();
     let workbench = workbench_from_runtime(
         controller_runtime,
+        Some(agent_runtime.command_session_runtime.as_ref()),
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
@@ -21790,6 +21853,7 @@ where
         logs,
         live_context_budgets,
         session_goal_summaries,
+        command_session_runtime,
     ) = {
         let trace_lock_wait_started_at = current_unix_millis_value();
         let mut guard = state
@@ -21825,6 +21889,10 @@ where
             .unwrap_or_default();
         let pending_question =
             pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
+        let command_session_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .map(|agent_runtime| Arc::clone(&agent_runtime.command_session_runtime));
         let live_context_budgets = guard.live_context_budgets.clone();
         let session_goal_summaries = guard.session_goal_summaries.clone();
         webui_trace_if_slow(
@@ -21891,11 +21959,13 @@ where
             logs,
             live_context_budgets,
             session_goal_summaries,
+            command_session_runtime,
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
     let workbench = workbench_from_runtime(
         &controller_runtime,
+        command_session_runtime.as_deref(),
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
@@ -22668,6 +22738,9 @@ async fn refresh_workbench_snapshot(
     };
     let workbench = workbench_from_runtime(
         &controller_runtime,
+        agent_runtime_for_status
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
@@ -23703,6 +23776,7 @@ fn run_service_bootstrap(
     );
     let workbench = workbench_from_runtime(
         &controller_runtime,
+        Some(agent_runtime.command_session_runtime.as_ref()),
         &luaskills_catalog,
         &token_budget_runtime,
         &mcp_catalog,
@@ -23985,6 +24059,7 @@ fn startup_step_label(id: &str) -> String {
 /// 将运行时状态转换为 WebUI 工作台快照。
 fn workbench_from_runtime(
     controller: &ControllerRuntimeHandle,
+    command_session_runtime: Option<&CommandSessionRuntime>,
     luaskills_catalog: &TauriLuaSkillsCatalog,
     token_budget_runtime: &TauriTokenBudgetRuntime,
     mcp_catalog: &TauriMcpRuntimeCatalog,
@@ -24167,7 +24242,7 @@ fn workbench_from_runtime(
         session_plan_mode: session_plan_mode_summary_from_runtime_state(selected_runtime_state),
         memories: memories(workspace),
         vmm_memory: vmm_memory_snapshot(workspace, provider_configuration, selected_runtime_state),
-        command_sessions: command_sessions(controller),
+        command_sessions: command_sessions(controller, command_session_runtime),
         logs: logs
             .iter()
             .enumerate()
@@ -26216,8 +26291,21 @@ fn tool_calls() -> Vec<ToolCallSummary> {
 
 /// Creates command-session summaries for currently retained service backends.
 /// 为当前保留的服务后端创建命令会话摘要。
-fn command_sessions(controller: &ControllerRuntimeHandle) -> Vec<CommandSessionSummary> {
-    vec![CommandSessionSummary {
+fn command_sessions(
+    controller: &ControllerRuntimeHandle,
+    command_session_runtime: Option<&CommandSessionRuntime>,
+) -> Vec<CommandSessionSummary> {
+    let mut summaries = command_session_runtime
+        .map(|runtime| {
+            runtime
+                .try_snapshot_sessions()
+                .into_iter()
+                .map(command_session_summary_from_snapshot)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    summaries.sort_by(|left, right| left.command.cmp(&right.command).then(left.id.cmp(&right.id)));
+    summaries.push(CommandSessionSummary {
         id: String::from("vldb-controller"),
         command: controller.executable.clone(),
         status: String::from("running"),
@@ -26226,7 +26314,37 @@ fn command_sessions(controller: &ControllerRuntimeHandle) -> Vec<CommandSessionS
             controller.endpoint,
             controller.sqlite_path.display()
         ),
-    }]
+        owner_session_id: None,
+        cwd: None,
+        shell_label: None,
+        exit_code: None,
+        failure_reason: None,
+        lost: false,
+    });
+    summaries
+}
+
+/// Converts one live command-session snapshot into the WebUI summary contract.
+/// 将单条实时命令会话快照转换为 WebUI 摘要契约。
+fn command_session_summary_from_snapshot(
+    snapshot: vulcan_agent_runtime::tooling::command_session_runtime::CommandSessionSnapshot,
+) -> CommandSessionSummary {
+    let preview = format!(
+        "stdout={} stderr={} last_seq={}",
+        snapshot.stdout_bytes, snapshot.stderr_bytes, snapshot.last_seq
+    );
+    CommandSessionSummary {
+        id: snapshot.command_session_id.to_string(),
+        command: snapshot.command,
+        status: snapshot.status.as_str().to_string(),
+        preview,
+        owner_session_id: Some(snapshot.owner_session_id.to_string()),
+        cwd: Some(snapshot.cwd.display().to_string()),
+        shell_label: Some(snapshot.shell_label),
+        exit_code: snapshot.exit_code,
+        failure_reason: snapshot.failure_reason,
+        lost: false,
+    }
 }
 
 /// Creates runtime module cards shown by the dashboard.
