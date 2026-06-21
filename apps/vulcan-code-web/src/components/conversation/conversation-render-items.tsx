@@ -20,6 +20,8 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
+import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
+import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
@@ -68,6 +70,9 @@ export function ConversationProcessGroup(props: {
   // WebUI-session expansion memory for custom tool presentation cards.
   // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
   expandedToolPresentationIds: Set<string>;
+  // Project workspace path used by file-oriented tool presentations.
+  // 文件类工具展示使用的项目工作区路径。
+  workspacePath?: string | null;
   // Records one user-triggered collapsed state change.
   // 记录一次用户触发的折叠状态变化。
   onCollapsedChange: (collapsed: boolean) => void;
@@ -146,7 +151,13 @@ export function ConversationProcessGroup(props: {
         aria-expanded={bodyVisible}
         className="work-process-toggle"
         disabled={!props.process.collapsible}
-        onClick={() => props.process.collapsible && props.onCollapsedChange(!collapsed)}
+        onClick={() => {
+          if (!props.process.collapsible) {
+            return;
+          }
+          dispatchConversationLayoutWillChange();
+          props.onCollapsedChange(!collapsed);
+        }}
         type="button"
       >
         <Clock3 className="work-process-icon" size={14} />
@@ -159,6 +170,7 @@ export function ConversationProcessGroup(props: {
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
             hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
             expandedToolPresentationIds={props.expandedToolPresentationIds}
+            workspacePath={props.workspacePath}
             item={item}
             itemStreaming={false}
             key={item.id}
@@ -185,43 +197,46 @@ export function ConversationProcessGroup(props: {
           />
         ))}
       </div>
-      <div aria-hidden={!bodyVisible} className="work-process-body" hidden={!bodyVisible}>
-        {visibleProcessItems.map((item) => (
-          <ConversationRenderItemView
-            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-            hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-            expandedToolPresentationIds={props.expandedToolPresentationIds}
-            item={item}
-            itemStreaming={item.id === streamingProcessItemId}
-            key={item.id}
-            parentConversationId={props.parentConversationId}
-            sessionRunning={props.sessionRunning}
-            expandedUserPromptIds={props.expandedUserPromptIds}
-            onCopyText={props.onCopyText}
-            onEditUserPrompt={props.onEditUserPrompt}
-            onOpenDetail={props.onOpenDetail}
-            onOpenMedia={props.onOpenMedia}
-            onOpenSubagentPanel={props.onOpenSubagentPanel}
-            pendingPlanArtifact={props.pendingPlanArtifact}
-            onPlanArtifactExecute={props.onPlanArtifactExecute}
-            onPlanArtifactSuggest={props.onPlanArtifactSuggest}
-            onPlanArtifactCancel={props.onPlanArtifactCancel}
-            onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
-            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
-            resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
-            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-            onLoadToolDetail={props.onLoadToolDetail}
-            onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-            onTrace={props.onTrace}
-            forceEagerMarkdown
-          />
-        ))}
-        {props.process.stopped ? (
-          <div className="work-process-stopped-note">
-            {stoppedText}
-          </div>
-        ) : null}
-      </div>
+      <ConversationCollapsibleMotion expanded={bodyVisible}>
+        <div className="work-process-body">
+          {visibleProcessItems.map((item) => (
+            <ConversationRenderItemView
+              autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+              hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+              expandedToolPresentationIds={props.expandedToolPresentationIds}
+              workspacePath={props.workspacePath}
+              item={item}
+              itemStreaming={item.id === streamingProcessItemId}
+              key={item.id}
+              parentConversationId={props.parentConversationId}
+              sessionRunning={props.sessionRunning}
+              expandedUserPromptIds={props.expandedUserPromptIds}
+              onCopyText={props.onCopyText}
+              onEditUserPrompt={props.onEditUserPrompt}
+              onOpenDetail={props.onOpenDetail}
+              onOpenMedia={props.onOpenMedia}
+              onOpenSubagentPanel={props.onOpenSubagentPanel}
+              pendingPlanArtifact={props.pendingPlanArtifact}
+              onPlanArtifactExecute={props.onPlanArtifactExecute}
+              onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+              onPlanArtifactCancel={props.onPlanArtifactCancel}
+              onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
+              onUserPromptExpandedChange={props.onUserPromptExpandedChange}
+              resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+              resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+              onLoadToolDetail={props.onLoadToolDetail}
+              onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+              onTrace={props.onTrace}
+              forceEagerMarkdown
+            />
+          ))}
+          {props.process.stopped ? (
+            <div className="work-process-stopped-note">
+              {stoppedText}
+            </div>
+          ) : null}
+        </div>
+      </ConversationCollapsibleMotion>
     </section>
   );
 }
@@ -256,6 +271,9 @@ export function ConversationRenderItemView(props: {
   // WebUI-session expansion memory for custom tool presentation cards.
   // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
   expandedToolPresentationIds: Set<string>;
+  // Project workspace path used by file-oriented tool presentations.
+  // 文件类工具展示使用的项目工作区路径。
+  workspacePath?: string | null;
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
@@ -447,6 +465,7 @@ export function ConversationRenderItemView(props: {
           blocks={visibleBlocks}
           conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
           expandedToolPresentationIds={props.expandedToolPresentationIds}
+          workspacePath={props.workspacePath}
           forceEagerMarkdown={props.forceEagerMarkdown}
           itemStreaming={Boolean(props.itemStreaming)}
           parentConversationId={props.parentConversationId}

@@ -291,6 +291,7 @@ export function ConversationWorkspace(props: {
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
       expandedToolPresentationIds={toolPresentationExpansionOverrides}
+      workspacePath={props.workspacePath}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}
       onOpenDetail={setDetail}
@@ -319,6 +320,7 @@ export function ConversationWorkspace(props: {
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
       expandedToolPresentationIds={toolPresentationExpansionOverrides}
+      workspacePath={props.workspacePath}
       onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}

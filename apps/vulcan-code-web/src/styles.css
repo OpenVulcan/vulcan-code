@@ -33,6 +33,8 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
+  --diff-addition-base: #1f883d;
+  --diff-deletion-base: #cf222e;
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -7980,6 +7982,27 @@ button {
   white-space: nowrap;
 }
 
+.conversation-collapsible-motion {
+  min-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition:
+    height 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 140ms ease,
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: height, opacity, transform;
+}
+
+.conversation-collapsible-motion.open {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.conversation-collapsible-motion-inner {
+  min-width: 0;
+}
+
 .tool-presentation-card {
   width: min(100%, 760px);
   display: grid;
@@ -8093,6 +8116,169 @@ button {
 
 .tool-presentation-exit-code.failed {
   color: var(--destructive);
+}
+
+.tool-presentation-card.file-change {
+  gap: 6px;
+}
+
+.tool-presentation-card.file-change.disabled {
+  pointer-events: none;
+}
+
+.file-change-summary {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+
+.file-change-summary:disabled {
+  cursor: default;
+}
+
+.file-change-summary:disabled:hover {
+  color: inherit;
+}
+
+.file-change-icon-stack {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted-foreground);
+}
+
+.file-change-operation-icon {
+  color: var(--muted-foreground);
+}
+
+.file-change-fallback-icon {
+  min-width: 16px;
+  padding: 0 2px;
+  border: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border-radius: 3px;
+  color: color-mix(in oklch, var(--muted-foreground) 86%, transparent);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 13px;
+  text-align: center;
+}
+
+.file-change-path {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.file-change-path.multi {
+  display: inline-flex;
+}
+
+.file-change-path-text {
+  min-width: 0;
+  max-width: min(52vw, 560px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-change-counts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.file-change-added {
+  color: var(--diff-addition-base);
+}
+
+.file-change-removed,
+.file-change-error-badge {
+  color: var(--diff-deletion-base);
+}
+
+.file-change-error-badge {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.file-change-toggle {
+  opacity: 1;
+}
+
+.file-change-tree {
+  display: grid;
+  gap: 6px;
+  margin-left: 8px;
+  padding-left: 12px;
+  border-left: 1px solid color-mix(in oklch, var(--border) 78%, transparent);
+}
+
+.file-change-tree-item {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.file-change-detail {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+}
+
+.file-change-detail.review {
+  max-height: 315px;
+  overflow: auto;
+  background: var(--background);
+}
+
+.file-change-review-preview {
+  min-width: max-content;
+}
+
+.file-change-code-scroll {
+  max-height: 315px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.file-change-error-text {
+  max-height: 315px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px 14px;
+  color: var(--destructive);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.file-change-empty {
+  padding: 12px 14px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-collapsible-motion {
+    opacity: 1;
+    transform: none;
+    transition: none;
+    will-change: auto;
+  }
 }
 
 @keyframes tool-running-pulse {
@@ -9181,6 +9367,8 @@ button {
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  --diff-addition-base: #2ea043;
+  --diff-deletion-base: #f85149;
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

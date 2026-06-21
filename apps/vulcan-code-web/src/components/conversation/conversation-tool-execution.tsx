@@ -53,6 +53,9 @@ export function ToolExecutionBlock(props: {
   // WebUI-session expansion memory for custom tool presentation cards.
   // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
   expandedToolPresentationIds: Set<string>;
+  // Project workspace path used for file presentation path shortening.
+  // 文件展示路径缩短使用的项目工作区路径。
+  workspacePath?: string | null;
   // Parent conversation id used by routed subagent navigation.
   // 已路由子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -101,7 +104,7 @@ export function ToolExecutionBlock(props: {
     ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
     : undefined;
   const presentation = React.useMemo(
-    () => resolveToolPresentation(props.blocks, displayState, detailRef),
+    () => resolveToolPresentation(props.blocks, displayState, detailRef, { workspacePath: props.workspacePath }),
     [
       detailRef?.messageIndex,
       detailRef?.recordId,
@@ -110,6 +113,7 @@ export function ToolExecutionBlock(props: {
       detailRef?.toolCallId,
       displayState,
       props.blocks,
+      props.workspacePath,
     ],
   );
   const hydratedMediaAttachments = useToolDetailMediaAttachments(
@@ -131,6 +135,7 @@ export function ToolExecutionBlock(props: {
     return (
       <ToolPresentationCard
         expanded={props.expandedToolPresentationIds.has(presentation.id)}
+        expandedToolPresentationIds={props.expandedToolPresentationIds}
         presentation={presentation}
         onExpandedChange={props.onToolPresentationExpandedChange}
         onLoadToolDetail={props.onLoadToolDetail}

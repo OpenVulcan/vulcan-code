@@ -14,6 +14,8 @@ import {
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
+import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
@@ -89,7 +91,10 @@ export function ContextCompactionBlock(props: {
       <button
         aria-expanded={expanded}
         className="context-compaction-toggle"
-        onClick={() => setExpanded((current) => !current)}
+        onClick={() => {
+          dispatchConversationLayoutWillChange();
+          setExpanded((current) => !current);
+        }}
         type="button"
       >
         <span className="context-compaction-title">
@@ -98,7 +103,7 @@ export function ContextCompactionBlock(props: {
           {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         </span>
       </button>
-      {expanded ? (
+      <ConversationCollapsibleMotion expanded={expanded}>
         <div className="context-compaction-body">
           {thinkingBlocks.map((block) => {
             const content = block.body.trim() || block.summary || "暂无思考内容";
@@ -117,7 +122,7 @@ export function ContextCompactionBlock(props: {
           ) : null}
           <div className="context-compaction-end-line" aria-hidden="true" />
         </div>
-      ) : null}
+      </ConversationCollapsibleMotion>
     </section>
   );
 }

@@ -275,6 +275,7 @@ fn append_tool_finished_projection_to_state(
         &tool_result_id,
         tool_name.as_deref(),
         display_state,
+        event.metadata.as_ref(),
         detail_ref.as_ref(),
         false,
     );
@@ -482,6 +483,7 @@ fn normalize_tool_result_metadata(
     tool_result_id: &str,
     tool_name: Option<&str>,
     display_state: &str,
+    event_metadata: Option<&serde_json::Value>,
     detail_ref: Option<&ToolDetailRecordRef>,
     synthetic: bool,
 ) -> serde_json::Value {
@@ -519,8 +521,28 @@ fn normalize_tool_result_metadata(
             serde_json::Value::String(tool_name.to_string()),
         );
     }
+    if let Some(host_result) = raw_change_set_host_result(event_metadata) {
+        object.insert(String::from("host_result"), host_result.clone());
+    }
     object.insert(String::from("result"), serde_json::Value::Object(result));
     serde_json::Value::Object(object)
+}
+
+/// Returns the raw change-set host result that WebUI file-change cards need for expandable rows.
+/// 返回 WebUI 文件变更卡片展开行所需的原始 change-set 宿主结果。
+fn raw_change_set_host_result(metadata: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    let metadata = metadata?;
+    let nested = metadata
+        .get("host_result")
+        .or_else(|| metadata.get("hostResult"))
+        .filter(|host_result| {
+            host_result.get("kind").and_then(serde_json::Value::as_str) == Some("change_set")
+        });
+    nested.or_else(|| {
+        (metadata.get("kind").and_then(serde_json::Value::as_str) == Some("change_set")
+            && metadata.get("payload").is_some())
+        .then_some(metadata)
+    })
 }
 
 /// Attaches one compact tool result to an existing visible tool-call record.
@@ -891,6 +913,7 @@ fn complete_open_tool_records(
             &tool_result_id,
             tool_name.as_deref(),
             display_state,
+            None,
             detail_ref.as_ref(),
             true,
         );
@@ -1699,6 +1722,84 @@ mod tests {
                 .and_then(|display| display.get("kind"))
                 .and_then(serde_json::Value::as_str)
                 .is_some()
+        );
+    }
+
+    /// Verifies WebUI visible tool cards keep raw change-set host metadata for expandable file-change rendering.
+    /// 验证 WebUI 可见工具卡片会保留原始 change-set 宿主元数据，用于文件变更展开渲染。
+    #[test]
+    fn tool_result_projection_preserves_raw_change_set_host_result() {
+        let session_id = test_session_id();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-change · vulcan_file_create",
+            "## Tool Call",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-change",
+            "tool_name": "vulcan_file_create",
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3100",
+            &started,
+        ));
+        let finished = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · call-change",
+            "## Result ID\n\n`tool-result-call-change`\n\n## Tool Result\n\ncreated file",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-change",
+            "tool_result_id": "tool-result-call-change",
+            "tool_name": "vulcan_file_create",
+            "display_state": "completed",
+            "host_result": {
+                "kind": "change_set",
+                "payload": {
+                    "mode": "applied",
+                    "files": [{
+                        "change": "create",
+                        "path": "src/demo.lua",
+                        "content_mode": "full",
+                        "content": "return 1\n"
+                    }]
+                }
+            }
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3101",
+            &finished,
+        ));
+
+        let tool_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+            .expect("tool call record should remain visible");
+        let metadata = tool_record.metadata.as_ref().expect("tool metadata");
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("kind"))
+                .and_then(serde_json::Value::as_str),
+            Some("change_set")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("files"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|files| files.first())
+                .and_then(|file| file.get("content"))
+                .and_then(serde_json::Value::as_str),
+            Some("return 1\n")
         );
     }
 

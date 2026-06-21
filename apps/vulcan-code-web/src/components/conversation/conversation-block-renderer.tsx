@@ -52,6 +52,9 @@ export function ConversationBlocksView(props: {
   // WebUI-session expansion memory for custom tool presentation cards.
   // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
   expandedToolPresentationIds: Set<string>;
+  // Project workspace path used by file-oriented tool presentations.
+  // 文件类工具展示使用的项目工作区路径。
+  workspacePath?: string | null;
   // Force Markdown blocks in externally hidden panels to stay mounted when visible.
   // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
   forceEagerMarkdown?: boolean;
@@ -107,6 +110,7 @@ export function ConversationBlocksView(props: {
         blocks={props.blocks}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
+        workspacePath={props.workspacePath}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
@@ -148,6 +152,7 @@ export function ConversationBlocksView(props: {
       block={block}
       conversationId={props.conversationId}
       expandedToolPresentationIds={props.expandedToolPresentationIds}
+      workspacePath={props.workspacePath}
       itemStreaming={props.itemStreaming}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
@@ -182,6 +187,9 @@ function SpecialConversationBlock(props: {
   // WebUI-session expansion memory for custom tool presentation cards.
   // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
   expandedToolPresentationIds: Set<string>;
+  // Project workspace path used by file-oriented tool presentations.
+  // 文件类工具展示使用的项目工作区路径。
+  workspacePath?: string | null;
   // Whether this row is currently streaming.
   // 该行当前是否正在流式增长。
   itemStreaming: boolean;
@@ -252,6 +260,7 @@ function SpecialConversationBlock(props: {
         blocks={[props.block]}
         conversationId={props.conversationId}
         expandedToolPresentationIds={props.expandedToolPresentationIds}
+        workspacePath={props.workspacePath}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
