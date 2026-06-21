@@ -203,21 +203,23 @@ export function ComposerDock(props: {
   return (
     <div className={cn("composer-dock", props.emptyMode && "empty-mode")} ref={dockRef}>
       {props.showScrollToBottom ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              aria-label="滚动到底部"
-              className="scroll-to-bottom-button"
-              onClick={props.onScrollToBottom}
-              size="icon"
-              type="button"
-              variant="outline"
-            >
-              <ArrowDown size={18} />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="top">滚动到底部</TooltipContent>
-        </Tooltip>
+        <div className="scroll-to-bottom-layer">
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="滚动到底部"
+                className="scroll-to-bottom-button"
+                onClick={props.onScrollToBottom}
+                size="icon"
+                type="button"
+                variant="outline"
+              >
+                <ArrowDown size={18} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">滚动到底部</TooltipContent>
+          </Tooltip>
+        </div>
       ) : null}
       {props.runtimeCue ? (
         <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">

@@ -4917,6 +4917,17 @@ button {
   bottom: calc(50% - 94px);
 }
 
+.scroll-to-bottom-layer {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
 .scroll-to-bottom-button {
   width: 40px;
   height: 40px;

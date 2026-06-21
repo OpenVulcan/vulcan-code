@@ -58,12 +58,6 @@ const CONVERSATION_USER_SCROLL_SUPPRESS_MS = 700;
 // ConversationTimelineUserScrollDirection 描述最近一次用户驱动滚动的方向。
 export type ConversationTimelineUserScrollDirection = "up" | "down" | "unknown";
 
-// conversationDistanceFromBottom returns the scroll metric used by virtual transcript restoration.
-// conversationDistanceFromBottom 返回虚拟转录恢复使用的底部距离指标。
-function conversationDistanceFromBottom(element: HTMLElement): number {
-  return Math.max(0, element.scrollHeight - element.scrollTop - element.clientHeight);
-}
-
 // conversationScrollToDistanceFromBottom restores a visual bottom distance in the current layout.
 // conversationScrollToDistanceFromBottom 在当前布局中恢复视觉底部距离。
 function conversationScrollToDistanceFromBottom(element: HTMLElement, distanceFromBottom: number): void {
@@ -273,18 +267,6 @@ export function useConversationTimelineVirtualWindow<TItem>(
     const rowBottomBefore = rowTopBefore == null
       ? null
       : rowTopBefore + (current ?? estimated);
-    const distanceFromBottom = scrollElement
-      ? conversationDistanceFromBottom(scrollElement)
-      : Number.POSITIVE_INFINITY;
-    const wasNearBottom = scrollElement
-      ? distanceFromBottom <= 24 || (heightDelta > 0 && distanceFromBottom - heightDelta <= 24)
-      : false;
-    const userScrollIntent = userScrollIntentRef.current;
-    const isUserScrollingUp = Boolean(
-      userScrollIntent
-      && userScrollIntent.direction === "up"
-      && Date.now() <= userScrollIntent.untilMs,
-    );
     const shouldPreserveViewport = Boolean(
       scrollElement
       && heightDelta !== 0
@@ -295,12 +277,6 @@ export function useConversationTimelineVirtualWindow<TItem>(
     persistVirtualizerState(latestRenderedWindowRef.current);
     setMeasureVersion((version) => version + 1);
     if (!scrollElement) {
-      return;
-    }
-    if (wasNearBottom && !isUserScrollingUp) {
-      window.requestAnimationFrame(() => {
-        scrollElement.scrollTop = scrollElement.scrollHeight;
-      });
       return;
     }
     if (shouldPreserveViewport) {

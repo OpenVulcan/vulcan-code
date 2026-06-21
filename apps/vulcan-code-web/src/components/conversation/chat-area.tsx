@@ -94,6 +94,10 @@ import type {
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS 防止近底部自动跟随抢夺慢速向上滚动。
 const CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS = 900;
 
+// CONVERSATION_USER_SCROLL_SETTLE_MS lets native wheel scrolling settle before programmatic tail pinning resumes.
+// CONVERSATION_USER_SCROLL_SETTLE_MS 让原生滚轮滚动稳定后再恢复程序化尾部锁定。
+const CONVERSATION_USER_SCROLL_SETTLE_MS = 260;
+
 // ChatAreaProps contains the state and service edges needed by the conversation surface.
 // ChatAreaProps 包含会话展示面所需的状态与服务边界。
 interface ChatAreaProps {
@@ -238,6 +242,9 @@ export function ChatArea(props: ChatAreaProps) {
   // upwardScrollTailSuppressUntilRef records when user upward scroll should override near-bottom tail following.
   // upwardScrollTailSuppressUntilRef 记录用户向上滚动应覆盖近底部尾随的截止时间。
   const upwardScrollTailSuppressUntilRef = React.useRef(0);
+  // userScrollSettleUntilRef records a short interval where native user scrolling owns scrollTop.
+  // userScrollSettleUntilRef 记录原生用户滚动短暂接管 scrollTop 的时间窗口。
+  const userScrollSettleUntilRef = React.useRef(0);
   // selectedConversationTailRef tracks conversation switches so opening a session can jump directly to the bottom.
   // selectedConversationTailRef 跟踪会话切换，使打开会话时可直接跳到底部。
   const selectedConversationTailRef = React.useRef<string | null>(null);
@@ -474,6 +481,7 @@ export function ChatArea(props: ChatAreaProps) {
   const handleConversationUserScrollStart = React.useCallback((direction: ConversationTimelineUserScrollDirection = "unknown") => {
     const element = workspaceRef.current;
     const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    userScrollSettleUntilRef.current = Date.now() + CONVERSATION_USER_SCROLL_SETTLE_MS;
     if (direction === "up") {
       upwardScrollTailSuppressUntilRef.current = Date.now() + CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS;
     } else if (direction === "down") {
@@ -502,7 +510,6 @@ export function ChatArea(props: ChatAreaProps) {
     const alreadyTailLocked = shouldFollowConversationTailRef.current && !suppressNearBottomFollow;
     const surfaceId = element.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
     if (alreadyTailLocked) {
-      element.scrollTop = element.scrollHeight;
       if (surfaceId) {
         writeConversationScrollSnapshot(surfaceId, {
           distanceFromBottom: 0,
@@ -629,7 +636,8 @@ export function ChatArea(props: ChatAreaProps) {
       const scrollElement = workspaceRef.current;
       const surfaceId = scrollElement?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
       const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
-      if (heightChanged && scrollElement && shouldFollowConversationTailRef.current && !suppressNearBottomFollow) {
+      const userScrollSettling = Date.now() <= userScrollSettleUntilRef.current;
+      if (heightChanged && scrollElement && shouldFollowConversationTailRef.current && !suppressNearBottomFollow && !userScrollSettling) {
         scrollElement.scrollTop = scrollElement.scrollHeight;
         if (surfaceId) {
           writeConversationScrollSnapshot(surfaceId, {
@@ -640,6 +648,7 @@ export function ChatArea(props: ChatAreaProps) {
         setIsAtConversationBottom(true);
         return;
       }
+      updateConversationBottomState();
       if (widthChanged) {
         capturePendingConversationLayoutViewport();
         schedulePendingConversationLayoutRestore();
@@ -647,7 +656,7 @@ export function ChatArea(props: ChatAreaProps) {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore, writeConversationScrollSnapshot]);
+  }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore, updateConversationBottomState, writeConversationScrollSnapshot]);
 
   React.useLayoutEffect(() => {
     const element = workspaceRef.current;
@@ -704,7 +713,6 @@ export function ChatArea(props: ChatAreaProps) {
     if (!element) {
       return;
     }
-    shouldFollowConversationTailRef.current = true;
     upwardScrollTailSuppressUntilRef.current = 0;
     const safeBehavior = behavior === "auto" || behavior === "instant" || behavior === "smooth" ? behavior : "smooth";
     element.scrollTo({ top: element.scrollHeight, behavior: safeBehavior });
@@ -721,8 +729,8 @@ export function ChatArea(props: ChatAreaProps) {
     return true;
   }, []);
 
-  // handleComposerDockHeightChange updates overlay spacing without mutating transcript scroll.
-  // handleComposerDockHeightChange 更新浮层间距但不修改转录滚动位置。
+  // handleComposerDockHeightChange updates overlay spacing; tail pinning is handled after CSS variables settle.
+  // handleComposerDockHeightChange 更新浮层间距；尾部锁定在 CSS 变量稳定后处理。
   const handleComposerDockHeightChange = React.useCallback((height: number) => {
     setComposerDockHeight((current) => {
       if (current === height) {
@@ -731,6 +739,47 @@ export function ChatArea(props: ChatAreaProps) {
       return height;
     });
   }, []);
+
+  React.useLayoutEffect(() => {
+    if (!shouldFollowConversationTailRef.current || isEmptyConversation || showConversationLoadingOnly) {
+      updateConversationBottomState();
+      return;
+    }
+    const surfaceId = workspaceRef.current?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    const pinComposerAdjustedTail = () => {
+      const element = workspaceRef.current;
+      if (!element) {
+        return;
+      }
+      element.scrollTop = element.scrollHeight;
+      if (surfaceId) {
+        writeConversationScrollSnapshot(surfaceId, {
+          distanceFromBottom: 0,
+          wasAtBottom: true,
+        });
+      }
+      setIsAtConversationBottom(true);
+    };
+    let secondFrame: number | null = null;
+    pinComposerAdjustedTail();
+    const firstFrame = window.requestAnimationFrame(() => {
+      pinComposerAdjustedTail();
+      secondFrame = window.requestAnimationFrame(pinComposerAdjustedTail);
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame !== null) {
+        window.cancelAnimationFrame(secondFrame);
+      }
+    };
+  }, [
+    activeSurfaceConversationId,
+    composerDockHeight,
+    isEmptyConversation,
+    showConversationLoadingOnly,
+    updateConversationBottomState,
+    writeConversationScrollSnapshot,
+  ]);
 
   // handleTimelineVirtualizerStateChange remembers measured row heights for the active surface.
   // handleTimelineVirtualizerStateChange 记住当前界面的已测量行高。
@@ -817,11 +866,15 @@ export function ChatArea(props: ChatAreaProps) {
       };
     }
 
-    const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
+    const now = Date.now();
+    const suppressNearBottomFollow = now <= upwardScrollTailSuppressUntilRef.current;
+    const userScrollSettling = now <= userScrollSettleUntilRef.current;
     const shouldFollowTail = selectedChanged
       || !element
-      || shouldFollowConversationTailRef.current
-      || (!suppressNearBottomFollow && conversationViewportAllowsTailFollow(element));
+      || (!userScrollSettling && (
+        shouldFollowConversationTailRef.current
+        || (!suppressNearBottomFollow && conversationViewportAllowsTailFollow(element))
+      ));
     if (!shouldFollowTail) {
       updateConversationBottomState();
       return;

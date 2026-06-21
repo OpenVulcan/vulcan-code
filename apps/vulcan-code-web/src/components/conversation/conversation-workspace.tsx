@@ -285,11 +285,11 @@ export function ConversationWorkspace(props: {
 
   React.useEffect(() => {
     const handleManualViewportInteraction = () => {
-      handleConversationUserScrollStart("up");
+      timelineVirtualizer.cancelPendingScrollRestore("unknown");
     };
     window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
-  }, [handleConversationUserScrollStart]);
+  }, [timelineVirtualizer]);
 
   const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => timelineItem.kind === "item" ? (
     <ConversationRenderItemView
