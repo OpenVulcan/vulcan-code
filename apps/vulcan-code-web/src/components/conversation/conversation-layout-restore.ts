@@ -7,6 +7,9 @@ export interface ConversationSurfaceExpandedState {
   // User-controlled process collapse states keyed by surface and process id.
   // 按界面和处理过程标识保存的用户控制折叠状态。
   processCollapsedByKey: Record<string, boolean>;
+  // Tool presentation ids that are currently expanded.
+  // 当前处于展开状态的工具展示标识。
+  expandedToolPresentationIds: string[];
   // User prompt row ids that are currently expanded.
   // 当前处于展开状态的用户提示词行标识。
   expandedUserPromptIds: string[];
@@ -33,6 +36,7 @@ export interface ConversationSurfaceLayoutRestoreState {
 // createEmptyConversationSurfaceExpandedState 返回一个空的展开状态。
 export function createEmptyConversationSurfaceExpandedState(): ConversationSurfaceExpandedState {
   return {
+    expandedToolPresentationIds: [],
     expandedUserPromptIds: [],
     processCollapsedByKey: {},
   };

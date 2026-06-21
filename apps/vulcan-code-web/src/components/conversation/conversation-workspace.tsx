@@ -101,8 +101,8 @@ export function ConversationWorkspace(props: {
   // Previously captured runtime expansion state for this surface.
   // 当前界面此前捕获的运行期展开状态。
   initialExpandedState: ConversationSurfaceExpandedState | null;
-  // Persists process and user-prompt expansion state for this surface.
-  // 持久保存当前界面的处理过程与用户提示词展开状态。
+  // Persists process, user-prompt, and tool-presentation expansion state for this surface.
+  // 持久保存当前界面的处理过程、用户提示词与工具展示展开状态。
   onExpandedStateChange: (surfaceId: string, state: ConversationSurfaceExpandedState) => void;
   // Sticky footer rendered inside the transcript scroll container.
   // 渲染在转录滚动容器内部的粘性底部插槽。
@@ -161,6 +161,11 @@ export function ConversationWorkspace(props: {
   const [userPromptExpansionOverrides, setUserPromptExpansionOverrides] = React.useState<Set<string>>(
     () => new Set(props.initialExpandedState?.expandedUserPromptIds ?? []),
   );
+  // toolPresentationExpansionOverrides mirrors WebUI-session-only tool card expansion memory for virtualized rows.
+  // toolPresentationExpansionOverrides 镜像仅当前 WebUI 会话有效的工具卡片展开记忆，供虚拟行复挂载使用。
+  const [toolPresentationExpansionOverrides, setToolPresentationExpansionOverrides] = React.useState<Set<string>>(
+    () => new Set(props.initialExpandedState?.expandedToolPresentationIds ?? []),
+  );
   const timelineItems = React.useMemo(
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
     [props.renderItems, props.conversation, nowMs, props.sessionRunning],
@@ -192,11 +197,13 @@ export function ConversationWorkspace(props: {
   const persistExpandedState = React.useCallback((
     processCollapsedByKey: Map<string, boolean>,
     expandedUserPromptIds: Set<string>,
+    expandedToolPresentationIds: Set<string>,
   ) => {
     if (!surfaceRestoreId) {
       return;
     }
     onExpandedStateChange(surfaceRestoreId, {
+      expandedToolPresentationIds: Array.from(expandedToolPresentationIds),
       expandedUserPromptIds: Array.from(expandedUserPromptIds),
       processCollapsedByKey: Object.fromEntries(processCollapsedByKey),
     });
@@ -206,10 +213,10 @@ export function ConversationWorkspace(props: {
     setProcessCollapseOverrides((current) => {
       const next = new Map(current);
       next.set(key, collapsed);
-      persistExpandedState(next, userPromptExpansionOverrides);
+      persistExpandedState(next, userPromptExpansionOverrides, toolPresentationExpansionOverrides);
       return next;
     });
-  }, [persistExpandedState, processCollapseKey, userPromptExpansionOverrides]);
+  }, [persistExpandedState, processCollapseKey, toolPresentationExpansionOverrides, userPromptExpansionOverrides]);
   const handleUserPromptExpandedChange = React.useCallback((messageKey: string, expanded: boolean) => {
     setUserPromptExpansionOverrides((current) => {
       const next = new Set(current);
@@ -218,15 +225,28 @@ export function ConversationWorkspace(props: {
       } else {
         next.delete(messageKey);
       }
-      persistExpandedState(processCollapseOverrides, next);
+      persistExpandedState(processCollapseOverrides, next, toolPresentationExpansionOverrides);
       return next;
     });
-  }, [persistExpandedState, processCollapseOverrides]);
+  }, [persistExpandedState, processCollapseOverrides, toolPresentationExpansionOverrides]);
+  const handleToolPresentationExpandedChange = React.useCallback((presentationId: string, expanded: boolean) => {
+    setToolPresentationExpansionOverrides((current) => {
+      const next = new Set(current);
+      if (expanded) {
+        next.add(presentationId);
+      } else {
+        next.delete(presentationId);
+      }
+      persistExpandedState(processCollapseOverrides, userPromptExpansionOverrides, next);
+      return next;
+    });
+  }, [persistExpandedState, processCollapseOverrides, userPromptExpansionOverrides]);
 
   React.useEffect(() => {
     const nextExpandedState = props.initialExpandedState ?? createEmptyConversationSurfaceExpandedState();
     setProcessCollapseOverrides(new Map(Object.entries(nextExpandedState.processCollapsedByKey)));
     setUserPromptExpansionOverrides(new Set(nextExpandedState.expandedUserPromptIds));
+    setToolPresentationExpansionOverrides(new Set(nextExpandedState.expandedToolPresentationIds));
   }, [props.initialExpandedState, surfaceRestoreId]);
 
   React.useEffect(() => {
@@ -270,6 +290,7 @@ export function ConversationWorkspace(props: {
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
+      expandedToolPresentationIds={toolPresentationExpansionOverrides}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}
       onOpenDetail={setDetail}
@@ -280,6 +301,7 @@ export function ConversationWorkspace(props: {
       onPlanArtifactSuggest={props.onPlanArtifactSuggest}
       onPlanArtifactCancel={props.onPlanArtifactCancel}
       onUserPromptExpandedChange={handleUserPromptExpandedChange}
+      onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
       resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}
       onLoadToolDetail={props.onLoadToolDetail}
@@ -296,6 +318,7 @@ export function ConversationWorkspace(props: {
       process={timelineItem.process}
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
+      expandedToolPresentationIds={toolPresentationExpansionOverrides}
       onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
       onCopyText={props.onCopyText}
       onEditUserPrompt={props.onEditUserPrompt}
@@ -307,6 +330,7 @@ export function ConversationWorkspace(props: {
       onPlanArtifactSuggest={props.onPlanArtifactSuggest}
       onPlanArtifactCancel={props.onPlanArtifactCancel}
       onUserPromptExpandedChange={handleUserPromptExpandedChange}
+      onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
       resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
       resolveMediaSourceUrl={props.resolveMediaSourceUrl}
       onLoadToolDetail={props.onLoadToolDetail}

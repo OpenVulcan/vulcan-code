@@ -7980,6 +7980,121 @@ button {
   white-space: nowrap;
 }
 
+.tool-presentation-card {
+  width: min(100%, 760px);
+  display: grid;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+
+.tool-presentation-summary {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.tool-presentation-summary:hover,
+.tool-presentation-card.expanded .tool-presentation-summary {
+  color: var(--foreground);
+}
+
+.tool-presentation-state {
+  white-space: nowrap;
+}
+
+.tool-presentation-command {
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-presentation-toggle {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.tool-presentation-summary:hover .tool-presentation-toggle,
+.tool-presentation-card.expanded .tool-presentation-toggle {
+  opacity: 1;
+}
+
+.tool-presentation-detail {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 82%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 86%, transparent);
+}
+
+.tool-presentation-output-scroll {
+  max-height: 283px;
+  overflow: auto;
+  padding: 13px 16px;
+}
+
+.tool-presentation-command-line,
+.tool-presentation-output-text {
+  margin: 0;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-presentation-command-line {
+  padding: 13px 16px 0;
+}
+
+.tool-presentation-command-line span {
+  color: var(--muted-foreground);
+}
+
+.tool-presentation-output-text {
+  color: var(--muted-foreground);
+}
+
+.tool-presentation-footer {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 12px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  background: color-mix(in oklch, var(--card) 92%, transparent);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.tool-presentation-exit-code {
+  color: var(--muted-foreground);
+}
+
+.tool-presentation-exit-code.success {
+  color: color-mix(in oklch, var(--success) 78%, var(--muted-foreground));
+}
+
+.tool-presentation-exit-code.failed {
+  color: var(--destructive);
+}
+
 @keyframes tool-running-pulse {
   0%,
   100% {

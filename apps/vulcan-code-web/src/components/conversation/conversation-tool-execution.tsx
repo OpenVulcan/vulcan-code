@@ -1,3 +1,4 @@
+import * as React from "react";
 import { Wrench } from "lucide-react";
 import {
   GeneratedMediaStrip,
@@ -30,6 +31,8 @@ import type {
   ToolExecutionConversationBlock,
   ToolExecutionTraceCallback,
 } from "./conversation-tool-execution-types";
+import { ToolPresentationCard } from "./conversation-tool-presentation-card";
+import { resolveToolPresentation } from "./conversation-tool-presentations";
 
 export type {
   ToolExecutionConversationBlock,
@@ -47,6 +50,9 @@ export function ToolExecutionBlock(props: {
   // Conversation id that owns hidden detail records.
   // 拥有隐藏详情记录的会话标识。
   conversationId: string | null;
+  // WebUI-session expansion memory for custom tool presentation cards.
+  // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
+  expandedToolPresentationIds: Set<string>;
   // Parent conversation id used by routed subagent navigation.
   // 已路由子代理导航使用的父会话标识。
   parentConversationId: string | null;
@@ -59,6 +65,9 @@ export function ToolExecutionBlock(props: {
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Records one tool presentation expansion state change.
+  // 记录一次工具展示展开状态变化。
+  onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Subagent panel opener.
   // 子代理面板打开器。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -91,6 +100,18 @@ export function ToolExecutionBlock(props: {
   const detailRef = props.conversationId && (detailRefFields || primaryBlock.toolCallId)
     ? { sessionId: props.conversationId, ...(detailRefFields ?? {}), ...(primaryBlock.toolCallId ? { toolCallId: primaryBlock.toolCallId } : {}) }
     : undefined;
+  const presentation = React.useMemo(
+    () => resolveToolPresentation(props.blocks, displayState, detailRef),
+    [
+      detailRef?.messageIndex,
+      detailRef?.recordId,
+      detailRef?.seq,
+      detailRef?.sessionId,
+      detailRef?.toolCallId,
+      displayState,
+      props.blocks,
+    ],
+  );
   const hydratedMediaAttachments = useToolDetailMediaAttachments(
     detailRef,
     mediaAttachments.length === 0 && toolExecutionMayHaveGeneratedMedia(toolName),
@@ -105,6 +126,17 @@ export function ToolExecutionBlock(props: {
     ["状态", toolDisplayStateLabel(displayState)] as [string, string],
     ...(resultBlock ? [["结果", "已返回"] as [string, string]] : []),
   ];
+
+  if (presentation) {
+    return (
+      <ToolPresentationCard
+        expanded={props.expandedToolPresentationIds.has(presentation.id)}
+        presentation={presentation}
+        onExpandedChange={props.onToolPresentationExpandedChange}
+        onLoadToolDetail={props.onLoadToolDetail}
+      />
+    );
+  }
 
   // openFallbackDetail builds the full modal body lazily to keep transcript rows cheap.
   // openFallbackDetail 延迟构建完整弹窗正文，使转录行保持轻量。

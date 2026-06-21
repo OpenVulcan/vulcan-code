@@ -65,6 +65,9 @@ export function ConversationProcessGroup(props: {
   // WebUI-session expansion memory for long user prompt bubbles.
   // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
   expandedUserPromptIds: Set<string>;
+  // WebUI-session expansion memory for custom tool presentation cards.
+  // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
+  expandedToolPresentationIds: Set<string>;
   // Records one user-triggered collapsed state change.
   // 记录一次用户触发的折叠状态变化。
   onCollapsedChange: (collapsed: boolean) => void;
@@ -98,6 +101,9 @@ export function ConversationProcessGroup(props: {
   // Records one user prompt expansion state change.
   // 记录一次用户提示词展开状态变化。
   onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
+  // Records one tool presentation expansion state change.
+  // 记录一次工具展示展开状态变化。
+  onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Resolves composer attachments into generated-media compatible payloads.
   // 将输入区附件解析为兼容生成媒体的载荷。
   resolveComposerAttachmentMedia: (attachment: ComposerAttachmentSummary) => GeneratedMediaAttachment | null;
@@ -152,6 +158,7 @@ export function ConversationProcessGroup(props: {
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
             hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+            expandedToolPresentationIds={props.expandedToolPresentationIds}
             item={item}
             itemStreaming={false}
             key={item.id}
@@ -167,6 +174,7 @@ export function ConversationProcessGroup(props: {
             onPlanArtifactExecute={props.onPlanArtifactExecute}
             onPlanArtifactSuggest={props.onPlanArtifactSuggest}
             onPlanArtifactCancel={props.onPlanArtifactCancel}
+            onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
             onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
             resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -182,6 +190,7 @@ export function ConversationProcessGroup(props: {
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
             hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+            expandedToolPresentationIds={props.expandedToolPresentationIds}
             item={item}
             itemStreaming={item.id === streamingProcessItemId}
             key={item.id}
@@ -197,6 +206,7 @@ export function ConversationProcessGroup(props: {
             onPlanArtifactExecute={props.onPlanArtifactExecute}
             onPlanArtifactSuggest={props.onPlanArtifactSuggest}
             onPlanArtifactCancel={props.onPlanArtifactCancel}
+            onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
             onUserPromptExpandedChange={props.onUserPromptExpandedChange}
             resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
             resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -243,6 +253,9 @@ export function ConversationRenderItemView(props: {
   // WebUI-session expansion memory for long user prompt bubbles.
   // 长用户提示词气泡使用的当前 WebUI 会话展开记忆。
   expandedUserPromptIds: Set<string>;
+  // WebUI-session expansion memory for custom tool presentation cards.
+  // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
+  expandedToolPresentationIds: Set<string>;
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
@@ -273,6 +286,9 @@ export function ConversationRenderItemView(props: {
   // Records one user prompt expansion state change.
   // 记录一次用户提示词展开状态变化。
   onUserPromptExpandedChange: (messageKey: string, expanded: boolean) => void;
+  // Records one tool presentation expansion state change.
+  // 记录一次工具展示展开状态变化。
+  onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Resolves composer attachments into generated-media compatible payloads.
   // 将输入区附件解析为兼容生成媒体的载荷。
   resolveComposerAttachmentMedia: (attachment: ComposerAttachmentSummary) => GeneratedMediaAttachment | null;
@@ -430,6 +446,7 @@ export function ConversationRenderItemView(props: {
           autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
           blocks={visibleBlocks}
           conversationId={props.item.sourceMessage?.conversationId ?? props.item.userMessage?.conversationId ?? null}
+          expandedToolPresentationIds={props.expandedToolPresentationIds}
           forceEagerMarkdown={props.forceEagerMarkdown}
           itemStreaming={Boolean(props.itemStreaming)}
           parentConversationId={props.parentConversationId}
@@ -439,6 +456,7 @@ export function ConversationRenderItemView(props: {
           onOpenSubagentPanel={props.onOpenSubagentPanel}
           pendingPlanArtifact={props.pendingPlanArtifact}
           onCopyText={props.onCopyText}
+          onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
           onPlanArtifactExecute={props.onPlanArtifactExecute}
           onPlanArtifactSuggest={props.onPlanArtifactSuggest}
           onPlanArtifactCancel={props.onPlanArtifactCancel}

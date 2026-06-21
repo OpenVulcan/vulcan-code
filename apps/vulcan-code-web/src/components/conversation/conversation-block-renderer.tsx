@@ -49,6 +49,9 @@ export function ConversationBlocksView(props: {
   // Conversation id used for hidden tool details.
   // 隐藏工具详情使用的会话标识。
   conversationId: string | null;
+  // WebUI-session expansion memory for custom tool presentation cards.
+  // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
+  expandedToolPresentationIds: Set<string>;
   // Force Markdown blocks in externally hidden panels to stay mounted when visible.
   // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
   forceEagerMarkdown?: boolean;
@@ -82,6 +85,9 @@ export function ConversationBlocksView(props: {
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Records one tool presentation expansion state change.
+  // 记录一次工具展示展开状态变化。
+  onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Subagent panel opener.
   // 子代理面板打开器。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -100,10 +106,12 @@ export function ConversationBlocksView(props: {
       <ToolExecutionBlock
         blocks={props.blocks}
         conversationId={props.conversationId}
+        expandedToolPresentationIds={props.expandedToolPresentationIds}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
+        onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
@@ -139,11 +147,13 @@ export function ConversationBlocksView(props: {
       autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
       block={block}
       conversationId={props.conversationId}
+      expandedToolPresentationIds={props.expandedToolPresentationIds}
       itemStreaming={props.itemStreaming}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       onOpenDetail={props.onOpenDetail}
       onOpenMedia={props.onOpenMedia}
+      onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
       onOpenSubagentPanel={props.onOpenSubagentPanel}
       onLoadToolDetail={props.onLoadToolDetail}
       onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
@@ -169,6 +179,9 @@ function SpecialConversationBlock(props: {
   // Conversation id used for hidden tool details.
   // 隐藏工具详情使用的会话标识。
   conversationId: string | null;
+  // WebUI-session expansion memory for custom tool presentation cards.
+  // 自定义工具展示卡片使用的当前 WebUI 会话展开记忆。
+  expandedToolPresentationIds: Set<string>;
   // Whether this row is currently streaming.
   // 该行当前是否正在流式增长。
   itemStreaming: boolean;
@@ -199,6 +212,9 @@ function SpecialConversationBlock(props: {
   // Generated media opener.
   // 生成媒体打开器。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
+  // Records one tool presentation expansion state change.
+  // 记录一次工具展示展开状态变化。
+  onToolPresentationExpandedChange: (presentationId: string, expanded: boolean) => void;
   // Subagent panel opener.
   // 子代理面板打开器。
   onOpenSubagentPanel: (parentConversationId: string, taskId: string) => Promise<boolean>;
@@ -235,10 +251,12 @@ function SpecialConversationBlock(props: {
       <ToolExecutionBlock
         blocks={[props.block]}
         conversationId={props.conversationId}
+        expandedToolPresentationIds={props.expandedToolPresentationIds}
         parentConversationId={props.parentConversationId}
         sessionRunning={props.sessionRunning}
         onOpenDetail={props.onOpenDetail}
         onOpenMedia={props.onOpenMedia}
+        onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
         onOpenSubagentPanel={props.onOpenSubagentPanel}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
