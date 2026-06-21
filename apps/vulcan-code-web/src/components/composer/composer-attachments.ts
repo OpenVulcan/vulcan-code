@@ -13,6 +13,9 @@ import type {
 // UseComposerAttachmentsArgs describes the runtime dependencies needed by composer attachment staging.
 // UseComposerAttachmentsArgs 描述输入区附件暂存所需的运行时依赖。
 export interface UseComposerAttachmentsArgs {
+  // initialAttachments seeds staged files when restoring an in-memory composer draft.
+  // initialAttachments 在恢复内存输入区草稿时初始化已暂存文件。
+  initialAttachments?: ComposerAttachmentSummary[];
   // attachmentCapabilities contains backend-advertised attachment gates.
   // attachmentCapabilities 包含后端公布的附件能力门控。
   attachmentCapabilities: ComposerAttachmentCapabilitySummary[];
@@ -83,7 +86,7 @@ export interface UseComposerAttachmentsState {
 export function useComposerAttachments(args: UseComposerAttachmentsArgs): UseComposerAttachmentsState {
   // attachments stores staged composer attachments submitted with the next prompt.
   // attachments 保存下一条提示词将携带的已暂存输入区附件。
-  const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>([]);
+  const [attachments, setAttachments] = React.useState<ComposerAttachmentSummary[]>(() => args.initialAttachments ?? []);
   // isAttachmentDragOver highlights the composer when valid files are dragged over it.
   // isAttachmentDragOver 在有效文件拖入输入区时高亮边框。
   const [isAttachmentDragOver, setIsAttachmentDragOver] = React.useState(false);

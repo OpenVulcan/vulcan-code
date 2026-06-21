@@ -73,6 +73,21 @@ import type {
 } from "@/types";
 import type { ComposerTraceCallback } from "@/components/composer/composer-control-types";
 
+// ComposerSessionMemoryDraft stores unsent composer content for one conversation slot.
+// ComposerSessionMemoryDraft 保存单个会话槽中尚未发送的输入区内容。
+interface ComposerSessionMemoryDraft {
+  // input is the raw textarea value, including user-authored whitespace.
+  // input 是原始输入框内容，保留用户输入的空白字符。
+  input: string;
+  // attachments are staged files that should travel with the draft input.
+  // attachments 是应随草稿输入一起保留的已暂存文件。
+  attachments: ComposerAttachmentSummary[];
+}
+
+// composerSessionDraftMemory keeps per-session composer drafts for the current WebUI process.
+// composerSessionDraftMemory 在当前 WebUI 进程内保存按会话分槽的输入区草稿。
+const composerSessionDraftMemory = new Map<string, ComposerSessionMemoryDraft>();
+
 // composerShortcutHint returns a platform-specific keyboard hint for the composer placeholder.
 // composerShortcutHint 返回输入区 placeholder 使用的平台化快捷键提示。
 function composerShortcutHint(baseHint: string): string {
@@ -83,6 +98,57 @@ function composerShortcutHint(baseHint: string): string {
     return baseHint;
   }
   return baseHint;
+}
+
+// composerSessionDraftKey returns the in-memory slot for one selected or draft conversation.
+// composerSessionDraftKey 返回当前选中会话或新建会话对应的内存草稿槽。
+function composerSessionDraftKey(projectId: string | null, conversationId: string | null): string {
+  if (conversationId) {
+    return `conversation:${conversationId}`;
+  }
+  return `new:${projectId?.trim() || "workspace"}`;
+}
+
+// cloneComposerSessionMemoryDraft returns a detached draft copy for safe React state use.
+// cloneComposerSessionMemoryDraft 返回脱离原对象的草稿副本，供 React 状态安全使用。
+function cloneComposerSessionMemoryDraft(draft: ComposerSessionMemoryDraft): ComposerSessionMemoryDraft {
+  return {
+    input: draft.input,
+    attachments: draft.attachments.map((attachment) => ({ ...attachment })),
+  };
+}
+
+// emptyComposerSessionMemoryDraft creates an empty draft object.
+// emptyComposerSessionMemoryDraft 创建空输入区草稿对象。
+function emptyComposerSessionMemoryDraft(): ComposerSessionMemoryDraft {
+  return {
+    input: "",
+    attachments: [],
+  };
+}
+
+// readComposerSessionMemoryDraft reads one draft slot without sharing mutable arrays.
+// readComposerSessionMemoryDraft 读取单个草稿槽，并避免共享可变数组。
+function readComposerSessionMemoryDraft(key: string): ComposerSessionMemoryDraft {
+  const draft = composerSessionDraftMemory.get(key);
+  return draft ? cloneComposerSessionMemoryDraft(draft) : emptyComposerSessionMemoryDraft();
+}
+
+// writeComposerSessionMemoryDraft saves or clears one draft slot.
+// writeComposerSessionMemoryDraft 保存或清理单个草稿槽。
+function writeComposerSessionMemoryDraft(
+  key: string,
+  input: string,
+  attachments: ComposerAttachmentSummary[],
+): void {
+  if (!input && attachments.length === 0) {
+    composerSessionDraftMemory.delete(key);
+    return;
+  }
+  composerSessionDraftMemory.set(key, {
+    input,
+    attachments: attachments.map((attachment) => ({ ...attachment })),
+  });
 }
 
 // defaultAiCapabilityTargetOrderFromRecord restores a typed route order map from a saved request payload.
@@ -226,9 +292,33 @@ export function ComposerPanel(props: {
   // t translates stable composer labels while model names remain provider data.
   // t 翻译稳定输入区标签，模型名称仍保留为 provider 数据。
   const { locale, t } = useI18n();
+  // composerDraftKey scopes unsent input to the selected session or current project's new-chat slot.
+  // composerDraftKey 将尚未发送的输入限定到当前会话或当前项目的新建会话槽。
+  const composerDraftKey = React.useMemo(
+    () => composerSessionDraftKey(props.projectId, props.conversationId),
+    [props.conversationId, props.projectId],
+  );
+  // initialComposerDraftRef captures the draft that should seed this component mount.
+  // initialComposerDraftRef 捕获本次组件挂载时用于初始化的草稿。
+  const initialComposerDraftRef = React.useRef<ComposerSessionMemoryDraft | null>(null);
+  if (initialComposerDraftRef.current === null) {
+    initialComposerDraftRef.current = readComposerSessionMemoryDraft(composerDraftKey);
+  }
+  // activeComposerDraftKeyRef tracks which draft slot currently owns local state.
+  // activeComposerDraftKeyRef 跟踪当前本地状态所属的草稿槽。
+  const activeComposerDraftKeyRef = React.useRef(composerDraftKey);
+  // draftInputRef mirrors draftInput for key-switch saves without stale closures.
+  // draftInputRef 镜像 draftInput，避免切换会话保存时闭包过期。
+  const draftInputRef = React.useRef(initialComposerDraftRef.current.input);
+  // draftAttachmentsRef mirrors attachments for key-switch saves without stale closures.
+  // draftAttachmentsRef 镜像 attachments，避免切换会话保存时闭包过期。
+  const draftAttachmentsRef = React.useRef<ComposerAttachmentSummary[]>(initialComposerDraftRef.current.attachments);
+  // composerDraftRestoredRef marks that the initial draft slot has been hydrated.
+  // composerDraftRestoredRef 标记初始草稿槽已经完成恢复。
+  const composerDraftRestoredRef = React.useRef(false);
   // draftInput stores the current unsent composer text.
   // draftInput 保存当前尚未发送的输入区文本。
-  const [draftInput, setDraftInput] = React.useState("");
+  const [draftInput, setDraftInput] = React.useState(() => initialComposerDraftRef.current?.input ?? "");
   // slashHighlightedIndex stores the highlighted command row while the slash panel is visible.
   // slashHighlightedIndex 保存 slash 面板可见时的高亮指令行。
   const [slashHighlightedIndex, setSlashHighlightedIndex] = React.useState(0);
@@ -250,6 +340,7 @@ export function ComposerPanel(props: {
   // composerAttachments owns attachment filtering, picker, paste, drag-drop, and staging behavior.
   // composerAttachments 管理附件过滤、选择器、粘贴、拖拽投放与暂存行为。
   const composerAttachments = useComposerAttachments({
+    initialAttachments: initialComposerDraftRef.current.attachments,
     attachmentCapabilities: props.attachmentCapabilities,
     projectId: props.projectId,
     conversationId: props.conversationId,
@@ -270,6 +361,43 @@ export function ComposerPanel(props: {
     handleComposerDrop,
     removeComposerAttachment,
   } = composerAttachments;
+
+  React.useLayoutEffect(() => {
+    const previousKey = activeComposerDraftKeyRef.current;
+    if (composerDraftRestoredRef.current && previousKey === composerDraftKey) {
+      return;
+    }
+    if (composerDraftRestoredRef.current) {
+      writeComposerSessionMemoryDraft(previousKey, draftInputRef.current, draftAttachmentsRef.current);
+    }
+    const restoredDraft = readComposerSessionMemoryDraft(composerDraftKey);
+    activeComposerDraftKeyRef.current = composerDraftKey;
+    draftInputRef.current = restoredDraft.input;
+    draftAttachmentsRef.current = restoredDraft.attachments;
+    composerDraftRestoredRef.current = true;
+    setDraftInput(restoredDraft.input);
+    setAttachments(restoredDraft.attachments);
+    setSlashDismissedInput(null);
+    setSlashHighlightedIndex(0);
+    setComposerMediaPlayer(null);
+  }, [composerDraftKey, setAttachments]);
+
+  React.useEffect(() => {
+    if (!composerDraftRestoredRef.current) {
+      return;
+    }
+    draftInputRef.current = draftInput;
+    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, draftInput, draftAttachmentsRef.current);
+  }, [draftInput]);
+
+  React.useEffect(() => {
+    if (!composerDraftRestoredRef.current) {
+      return;
+    }
+    draftAttachmentsRef.current = attachments;
+    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, draftInputRef.current, attachments);
+  }, [attachments]);
+
   // executionMode stores the local preview execution-mode selection.
   // executionMode 保存本地预览用的执行模式选择。
   const [executionMode, setExecutionMode] = React.useState("build");
@@ -508,6 +636,9 @@ export function ComposerPanel(props: {
     // submittedAttachments preserves staged files for a failure-only restore.
     // submittedAttachments 保存已暂存文件，仅在发送失败时用于恢复。
     const submittedAttachments = attachments;
+    draftInputRef.current = "";
+    draftAttachmentsRef.current = [];
+    writeComposerSessionMemoryDraft(activeComposerDraftKeyRef.current, "", []);
     setDraftInput("");
     setAttachments([]);
     setIsComposerRunning(true);
@@ -522,8 +653,26 @@ export function ComposerPanel(props: {
         aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
       });
       if (!sent) {
-        setDraftInput((current) => current || submittedInput);
-        setAttachments((current) => current.length ? current : submittedAttachments);
+        setDraftInput((current) => {
+          const restoredInput = current || submittedInput;
+          draftInputRef.current = restoredInput;
+          writeComposerSessionMemoryDraft(
+            activeComposerDraftKeyRef.current,
+            restoredInput,
+            draftAttachmentsRef.current,
+          );
+          return restoredInput;
+        });
+        setAttachments((current) => {
+          const restoredAttachments = current.length ? current : submittedAttachments;
+          draftAttachmentsRef.current = restoredAttachments;
+          writeComposerSessionMemoryDraft(
+            activeComposerDraftKeyRef.current,
+            draftInputRef.current,
+            restoredAttachments,
+          );
+          return restoredAttachments;
+        });
       }
     } finally {
       setIsComposerRunning(false);
@@ -1232,10 +1381,12 @@ function ModelSecondaryRouteControl(props: {
                 >
                   <span className="model-picker-selected-slot">{route.active ? <Check size={15} /> : null}</span>
                   <span className="model-picker-row-copy">
-                    <span className="model-picker-row-title">{route.label}</span>
+                    <span className="model-picker-row-title">
+                      {route.label}
+                      {route.tag ? <span className="secondary-route-title-tag">（{route.tag}）</span> : null}
+                    </span>
                     <span className="model-picker-row-meta">{route.subtitle}</span>
                   </span>
-                  <span className="model-picker-row-id">{route.tag}</span>
                 </button>
               ))
             )}
