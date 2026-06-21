@@ -1,6 +1,7 @@
 import React from "react";
 import {
   Archive,
+  LoaderCircle,
   MessageSquareText,
   Pin,
   PinOff,
@@ -10,7 +11,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { ProgressRing } from "@/components/ui/progress-ring";
 import type { LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
@@ -128,7 +128,7 @@ function ConversationRowLeading(props: {
       <span className={cn("conversation-tree-leading-status", isRunning && "running")}>
         {isRunning ? (
           <span className="conversation-tree-status-mark" aria-label="会话正在运行">
-            <ProgressRing aria-label="会话正在运行" className="conversation-tree-running-progress" size={13} value={null} />
+            <LoaderCircle aria-label="会话正在运行" className="conversation-tree-running-spinner spin" size={14} />
           </span>
         ) : props.conversation.unread && !props.isSelected ? (
           <span className="conversation-tree-status-mark">

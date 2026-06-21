@@ -3,6 +3,7 @@ import type {
   ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import {
+  shortenTerminalSessionId,
   terminalSummaryById,
   terminalVisualState,
   type TerminalVisualState,
@@ -46,11 +47,14 @@ export interface CommandExecutionPresentation {
   // Optional live command-session id for session-backed terminal rows.
   // 会话型终端行使用的可选实时命令会话标识。
   commandSessionId?: string | null;
-  // Fixed shell_session action parsed from the original tool arguments.
-  // 从原始工具参数解析出的固定 shell_session 动作。
+  // Session-backed command presentation kind.
+  // 会话型命令展示类型。
+  commandSessionKind?: "terminal" | null;
+  // Fixed terminal-session action parsed from the original tool arguments.
+  // 从原始工具参数解析出的固定终端会话动作。
   commandSessionAction?: string | null;
-  // Optional stdin text sent by one shell_session write/start action.
-  // shell_session write/start 动作发送的可选 stdin 文本。
+  // Optional input text sent by one terminal-session action.
+  // 终端会话动作发送的可选输入文本。
   commandSessionInput?: string | null;
   // Optional owner conversation id for command-session controls.
   // 命令会话控制使用的可选归属会话标识。
@@ -207,9 +211,9 @@ export function hydrateCommandExecutionPresentation(
     return presentation;
   }
   const displayKind = metadataString(payload.metadata, ["display.kind"]);
-  if (presentation.commandSessionAction || displayKind === "shell_session") {
-    const shellSessionDisplay = shellSessionDisplayFromText(payload.body);
-    return shellSessionDisplay ? mergeShellSessionDisplay(presentation, shellSessionDisplay) : presentation;
+  if (presentation.commandSessionKind === "terminal" || displayKind === "terminal_session") {
+    const terminalDisplay = terminalSessionDisplayFromText(payload.body);
+    return terminalDisplay ? mergeTerminalSessionDisplay(presentation, terminalDisplay) : presentation;
   }
   const display = shellCommandDisplayFromMetadata(payload.metadata) ?? parseShellCommandDisplayFromText(payload.body);
   if (!display) {
@@ -993,40 +997,188 @@ function fixedHostKind(blocks: ToolExecutionConversationBlock[]): string | null 
     ?? null;
 }
 
-// ShellSessionCall stores fixed shell_session call arguments from the visible tool-call record.
-// ShellSessionCall 保存可见工具调用记录里的固定 shell_session 调用参数。
-interface ShellSessionCall {
-  // Action requested by the model.
-  // 模型请求的动作。
-  action: string;
-  // Session id passed to read/write/stop actions.
-  // 传给 read/write/stop 动作的会话标识。
-  commandSessionId: string | null;
-  // Start command passed to the action.
-  // 传给动作的启动命令。
-  command: string | null;
-  // Stdin text passed to start/write actions.
-  // 传给 start/write 动作的 stdin 文本。
-  stdin: string | null;
+// fixedHostPayload reads the stable host-result payload from the WebUI metadata bridge.
+// fixedHostPayload 从 WebUI metadata 桥读取稳定的宿主结果载荷。
+function fixedHostPayload(blocks: ToolExecutionConversationBlock[]): Record<string, unknown> | null {
+  return blocks
+    .map((block) => objectValue(metadataValue(block.rawMetadata, ["host_result.payload", "payload"])))
+    .find(Boolean)
+    ?? null;
 }
 
-// firstShellSessionCall reads shell_session arguments from the fixed ToolStarted metadata shape.
-// firstShellSessionCall 从固定 ToolStarted metadata 结构中读取 shell_session 参数。
-function firstShellSessionCall(blocks: ToolExecutionConversationBlock[]): ShellSessionCall | null {
-  for (const block of blocks) {
-    const argumentsValue = objectValue(metadataValue(block.rawMetadata, ["arguments"]));
-    const action = stringValue(argumentsValue?.action);
-    if (!action) {
-      continue;
+// TerminalSessionDisplay stores parsed fields from the fixed terminal_session result.
+// TerminalSessionDisplay 保存从固定 terminal_session 结果解析出的字段。
+interface TerminalSessionDisplay {
+  // Parsed action name.
+  // 解析出的动作名称。
+  action: string | null;
+  // Parsed terminal-session id.
+  // 解析出的终端会话标识。
+  terminalSessionId: string | null;
+  // Parsed owner session id.
+  // 解析出的归属会话标识。
+  ownerSessionId: string | null;
+  // Parsed terminal display name.
+  // 解析出的终端显示名称。
+  name: string | null;
+  // Parsed start command.
+  // 解析出的启动命令。
+  command: string | null;
+  // Parsed working directory.
+  // 解析出的工作目录。
+  cwd: string | null;
+  // Parsed shell label.
+  // 解析出的 shell 标签。
+  shellLabel: string | null;
+  // Parsed input label summary.
+  // 解析出的输入标签摘要。
+  inputLabels: string | null;
+  // Parsed transaction exit code.
+  // 解析出的事务退出码。
+  transactionExitCode: number | null;
+  // Parsed stdout text.
+  // 解析出的 stdout 文本。
+  stdout: string;
+  // Parsed stderr text.
+  // 解析出的 stderr 文本。
+  stderr: string;
+}
+
+// firstTerminalSessionDisplay returns the first structured terminal_session display found on visible blocks.
+// firstTerminalSessionDisplay 返回可见块上找到的首个结构化 terminal_session 展示。
+function firstTerminalSessionDisplay(blocks: ToolExecutionConversationBlock[]): TerminalSessionDisplay | null {
+  const payload = fixedHostPayload(blocks);
+  if (payload) {
+    const display = terminalSessionDisplayFromPayload(payload);
+    if (display) {
+      return display;
     }
-    return {
-      action: action.toLowerCase(),
-      command: stringValue(argumentsValue?.command),
-      commandSessionId: stringValue(argumentsValue?.command_session_id),
-      stdin: textValue(argumentsValue?.stdin),
-    };
+  }
+  for (const block of blocks) {
+    const display = terminalSessionDisplayFromText(block.body);
+    if (display) {
+      return display;
+    }
   }
   return null;
+}
+
+// terminalSessionDisplayFromPayload reads terminal-session display data from host_result.payload.
+// terminalSessionDisplayFromPayload 从 host_result.payload 读取终端会话展示数据。
+function terminalSessionDisplayFromPayload(payload: Record<string, unknown>): TerminalSessionDisplay | null {
+  const action = stringValue(payload.action);
+  const terminalSessionId = stringValue(payload.terminal_session_id ?? payload.terminalSessionId ?? payload.command_session_id);
+  const output = terminalSessionOutputFromEvents(arrayValue(payload.events));
+  const transaction = objectValue(payload.transaction);
+  const transactionExitCode = numberValue(transaction?.exit_code ?? transaction?.exitCode);
+  const inputLabels = stringValue(payload.input_labels ?? payload.inputLabels);
+  if (!action && !terminalSessionId && !output.stdout && !output.stderr) {
+    return null;
+  }
+  return {
+    action,
+    command: stringValue(payload.command),
+    cwd: stringValue(payload.cwd),
+    inputLabels,
+    name: stringValue(payload.name),
+    ownerSessionId: stringValue(payload.owner_session_id ?? payload.ownerSessionId),
+    shellLabel: stringValue(payload.shell),
+    stderr: output.stderr,
+    stdout: output.stdout,
+    terminalSessionId,
+    transactionExitCode,
+  };
+}
+
+// terminalSessionDisplayFromText parses the host-rendered terminal_session output format.
+// terminalSessionDisplayFromText 解析宿主渲染的 terminal_session 输出格式。
+function terminalSessionDisplayFromText(source: string): TerminalSessionDisplay | null {
+  const action = lineValueFromText(source, "Action")?.toLowerCase() ?? null;
+  const terminalSessionId = lineValueFromText(source, "Terminal session");
+  const ownerSessionId = lineValueFromText(source, "Owner session");
+  const name = lineValueFromText(source, "Name");
+  const command = lineValueFromText(source, "Command");
+  const cwd = lineValueFromText(source, "Working directory");
+  const shellLabel = lineValueFromText(source, "Shell");
+  const transactionExitCode = numberValue(lineValueFromText(source, "Transaction exit code"));
+  const output = streamChunksFromText(source);
+  if (!action && !terminalSessionId && !command && !output.stdout.length && !output.stderr.length && transactionExitCode === null) {
+    return null;
+  }
+  return {
+    action,
+    command,
+    cwd,
+    inputLabels: lineValueFromText(source, "Inputs"),
+    name,
+    ownerSessionId,
+    shellLabel,
+    stderr: output.stderr.join("\n").trim(),
+    stdout: output.stdout.join("\n").trim(),
+    terminalSessionId,
+    transactionExitCode,
+  };
+}
+
+// terminalSessionOutputFromEvents splits terminal-session output events by stream.
+// terminalSessionOutputFromEvents 按输出流拆分终端会话输出事件。
+function terminalSessionOutputFromEvents(events: unknown[]): { stdout: string; stderr: string } {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  for (const event of events) {
+    const record = objectValue(event);
+    if (!record) {
+      continue;
+    }
+    const text = textValue(record.text) ?? "";
+    if (!text) {
+      continue;
+    }
+    if (stringValue(record.stream) === "stderr") {
+      stderr.push(text);
+    } else {
+      stdout.push(text);
+    }
+  }
+  return {
+    stderr: stderr.join("").trim(),
+    stdout: stdout.join("").trim(),
+  };
+}
+
+// terminalSessionDisplayCommand builds a per-action terminal_session summary label.
+// terminalSessionDisplayCommand 构建按动作区分的 terminal_session 摘要文案。
+function terminalSessionDisplayCommand(
+  action: string | null,
+  command: string | null,
+  terminalSessionId: string | null,
+  inputLabels: string | null,
+  name: string | null,
+): string | null {
+  const sessionLabel = terminalSessionConversationLabel(name, terminalSessionId);
+  if (action === "start") {
+    return name || terminalSessionId ? `启动${sessionLabel}` : command ? `启动终端 ${command}` : "启动终端会话";
+  }
+  if (action === "send") {
+    return inputLabels ? `向${sessionLabel}发送 ${inputLabels}` : `发送到${sessionLabel}`;
+  }
+  if (action === "read") {
+    return `读取${sessionLabel}`;
+  }
+  if (action === "snapshot") {
+    return `检查${sessionLabel}`;
+  }
+  if (action === "stop") {
+    return `停止${sessionLabel}`;
+  }
+  return sessionLabel;
+}
+
+// terminalSessionConversationLabel formats the stable visible terminal conversation name.
+// terminalSessionConversationLabel 格式化稳定可见的终端会话名称。
+function terminalSessionConversationLabel(name: string | null, terminalSessionId: string | null): string {
+  const targetLabel = (name ?? "").trim() || (terminalSessionId ? shortenTerminalSessionId(terminalSessionId) : "");
+  return targetLabel ? `终端[${targetLabel}]的会话` : "终端会话";
 }
 
 // resolveCommandExecutionPresentation recognizes one-shot shell_command rows and excludes command sessions.
@@ -1039,22 +1191,18 @@ function resolveCommandExecutionPresentation(
 ): CommandExecutionPresentation | null {
   const toolName = fixedToolName(blocks);
   const normalizedToolName = toolName ? normalizeToolName(toolName) : null;
-  if (normalizedToolName === "shell_session") {
-    const shellSessionCall = firstShellSessionCall(blocks);
-    const action = shellSessionCall?.action ?? "session";
-    const effectiveCommandSessionId = shellSessionCall?.commandSessionId ?? blocks.find((block) => block.commandSessionId)?.commandSessionId ?? null;
+  if (normalizedToolName === "terminal_session" || fixedHostKind(blocks) === "terminal_session") {
+    const terminalDisplay = firstTerminalSessionDisplay(blocks);
+    const action = terminalDisplay?.action ?? "session";
+    const effectiveCommandSessionId = terminalDisplay?.terminalSessionId ?? blocks.find((block) => block.commandSessionId)?.commandSessionId ?? null;
     const liveCommandSession = effectiveCommandSessionId
       ? (options.commandSessionById ?? terminalSummaryById(options.commandSessions ?? [])).get(effectiveCommandSessionId) ?? null
       : null;
-    const sessionCommand = action === "start" ? shellSessionCall?.command ?? null : null;
-    const command = shellSessionDisplayCommand(action, sessionCommand, effectiveCommandSessionId, shellSessionCall?.stdin ?? null)
+    const displayName = terminalDisplay?.name ?? liveCommandSession?.name ?? null;
+    const command = terminalSessionDisplayCommand(action, terminalDisplay?.command ?? null, effectiveCommandSessionId, terminalDisplay?.inputLabels ?? null, displayName)
       ?? blocks.find((block) => block.summary)?.summary
-      ?? `shell_session ${action}`;
-    if (!command) {
-      return null;
-    }
-    const output = shellSessionOutputFromBlocks(blocks);
-    const exitCode = liveCommandSession?.exitCode ?? null;
+      ?? `terminal_session ${action}`;
+    const exitCode = terminalDisplay?.transactionExitCode ?? liveCommandSession?.exitCode ?? null;
     const terminalState = liveCommandSession
       ? terminalVisualState(liveCommandSession.status, exitCode, Boolean(liveCommandSession.lost))
       : effectiveCommandSessionId
@@ -1064,19 +1212,20 @@ function resolveCommandExecutionPresentation(
       command,
       commandSessionAction: action,
       commandSessionId: effectiveCommandSessionId,
-      commandSessionInput: shellSessionCall?.stdin ?? null,
-      cwd: liveCommandSession?.cwd ?? null,
+      commandSessionInput: terminalDisplay?.inputLabels ?? null,
+      commandSessionKind: "terminal",
+      cwd: liveCommandSession?.cwd ?? terminalDisplay?.cwd ?? null,
       detailRef,
       exitCode,
       failureReason: liveCommandSession?.failureReason ?? null,
-      id: commandPresentationId(blocks, effectiveCommandSessionId ? `session:${effectiveCommandSessionId}:${action}` : command),
+      id: commandPresentationId(blocks, effectiveCommandSessionId ? `terminal:${effectiveCommandSessionId}:${action}` : command),
       kind: "command_execution",
       lost: effectiveCommandSessionId ? !liveCommandSession : false,
-      ownerSessionId: liveCommandSession?.ownerSessionId ?? null,
-      shellLabel: liveCommandSession?.shellLabel ?? null,
+      ownerSessionId: liveCommandSession?.ownerSessionId ?? terminalDisplay?.ownerSessionId ?? null,
+      shellLabel: liveCommandSession?.shellLabel ?? terminalDisplay?.shellLabel ?? null,
       state: displayState,
-      stderr: output.stderr || liveCommandSession?.failureReason || "",
-      stdout: output.stdout,
+      stderr: terminalDisplay?.stderr ?? liveCommandSession?.failureReason ?? "",
+      stdout: terminalDisplay?.stdout ?? "",
       terminalState,
     };
   }
@@ -1117,122 +1266,16 @@ function firstShellCommandDisplay(blocks: ToolExecutionConversationBlock[]): She
   return null;
 }
 
-// shellSessionDisplayCommand builds a per-action shell_session summary label.
-// shellSessionDisplayCommand 构建按动作区分的 shell_session 摘要文案。
-function shellSessionDisplayCommand(action: string, sessionCommand: string | null, commandSessionId: string | null, stdin: string | null = null): string | null {
-  const idLabel = commandSessionId ? shortenCommandSessionId(commandSessionId) : null;
-  if (action === "start") {
-    return sessionCommand ? `启动 ${sessionCommand}` : "启动会话";
-  }
-  if (action === "read") {
-    return idLabel ? `读取会话输出 ${idLabel}` : "读取会话输出";
-  }
-  if (action === "write") {
-    const preview = shellSessionInputPreview(stdin);
-    return preview ? `写入 ${preview}` : idLabel ? `写入会话 ${idLabel}` : "写入会话";
-  }
-  if (action === "stop") {
-    return idLabel ? `停止会话 ${idLabel}` : "停止会话";
-  }
-  return idLabel ? `会话 ${idLabel} · ${action}` : `shell_session ${action}`;
-}
-
-// shellSessionInputPreview builds a one-line preview for stdin without hiding the real command text.
-// shellSessionInputPreview 为 stdin 构建单行预览，避免隐藏真实命令文本。
-function shellSessionInputPreview(value: string | null): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const singleLine = trimmed.replace(/\s+/g, " ");
-  return singleLine.length > 80 ? `${singleLine.slice(0, 77)}...` : singleLine;
-}
-
 // shortenCommandSessionId keeps long command-session ids readable in compact rows.
 // shortenCommandSessionId 让较长命令会话标识在紧凑行中保持可读。
 function shortenCommandSessionId(value: string): string {
   const trimmed = value.trim();
-  return trimmed.length > 8 ? trimmed.slice(0, 8) : trimmed;
+  return shortenTerminalSessionId(trimmed);
 }
 
-// shellSessionOutputFromBlocks extracts returned stdout and stderr chunks for read calls.
-// shellSessionOutputFromBlocks 提取 read 调用返回的 stdout 与 stderr 分片。
-function shellSessionOutputFromBlocks(blocks: ToolExecutionConversationBlock[]): { stdout: string; stderr: string } {
-  const stdout: string[] = [];
-  const stderr: string[] = [];
-  for (const block of blocks) {
-    const chunks = shellSessionChunksFromText(block.body);
-    stdout.push(...chunks.stdout);
-    stderr.push(...chunks.stderr);
-  }
-  return {
-    stdout: stdout.join("\n").trim(),
-    stderr: stderr.join("\n").trim(),
-  };
-}
-
-// ShellSessionDisplay stores parsed fields from the fixed shell_session result text.
-// ShellSessionDisplay 保存从固定 shell_session 返回正文解析出的字段。
-interface ShellSessionDisplay {
-  // Parsed action name.
-  // 解析出的动作名称。
-  action: string | null;
-  // Parsed command-session id.
-  // 解析出的命令会话标识。
-  commandSessionId: string | null;
-  // Parsed owner session id.
-  // 解析出的归属会话标识。
-  ownerSessionId: string | null;
-  // Parsed start command.
-  // 解析出的启动命令。
-  command: string | null;
-  // Parsed working directory.
-  // 解析出的工作目录。
-  cwd: string | null;
-  // Parsed shell label.
-  // 解析出的 shell 标签。
-  shellLabel: string | null;
-  // Parsed exit code.
-  // 解析出的退出码。
-  exitCode: number | null;
-  // Parsed stdout chunks returned by read.
-  // read 返回的 stdout 分片。
-  stdout: string;
-  // Parsed stderr chunks returned by read.
-  // read 返回的 stderr 分片。
-  stderr: string;
-}
-
-// shellSessionDisplayFromText parses the host-rendered shell_session output format.
-// shellSessionDisplayFromText 解析宿主渲染的 shell_session 输出格式。
-function shellSessionDisplayFromText(source: string): ShellSessionDisplay | null {
-  const action = lineValueFromText(source, "Action")?.toLowerCase() ?? null;
-  const commandSessionId = lineValueFromText(source, "Command session");
-  const ownerSessionId = lineValueFromText(source, "Owner session");
-  const command = lineValueFromText(source, "Command");
-  const cwd = lineValueFromText(source, "Working directory");
-  const shellLabel = lineValueFromText(source, "Shell");
-  const exitCode = numberValue(lineValueFromText(source, "Exit code"));
-  const output = shellSessionChunksFromText(source);
-  if (!action && !commandSessionId && !command && !output.stdout.length && !output.stderr.length && exitCode === null) {
-    return null;
-  }
-  return {
-    action,
-    command,
-    commandSessionId,
-    cwd,
-    exitCode,
-    ownerSessionId,
-    shellLabel,
-    stderr: output.stderr.join("\n").trim(),
-    stdout: output.stdout.join("\n").trim(),
-  };
-}
-
-// shellSessionChunksFromText parses `[stdout #n]` and `[stderr #n]` sections from rendered shell_session reads.
-// shellSessionChunksFromText 从已渲染的 shell_session read 文本解析 `[stdout #n]` 与 `[stderr #n]` 区段。
-function shellSessionChunksFromText(source: string): { stdout: string[]; stderr: string[] } {
+// streamChunksFromText parses `[stdout #n]` and `[stderr #n]` sections from rendered terminal reads.
+// streamChunksFromText 从已渲染终端读取文本解析 `[stdout #n]` 与 `[stderr #n]` 区段。
+function streamChunksFromText(source: string): { stdout: string[]; stderr: string[] } {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const lines = source.split(/\r?\n/);
@@ -1282,23 +1325,25 @@ function mergeCommandExecutionDisplay(
   };
 }
 
-// mergeShellSessionDisplay applies fixed shell_session detail fields without replacing the action label incorrectly.
-// mergeShellSessionDisplay 合并固定 shell_session 详情字段，避免错误替换动作文案。
-function mergeShellSessionDisplay(
+// mergeTerminalSessionDisplay applies terminal_session detail fields without falling back to legacy shell parsing.
+// mergeTerminalSessionDisplay 合并 terminal_session 详情字段，避免退回旧 shell 解析。
+function mergeTerminalSessionDisplay(
   presentation: CommandExecutionPresentation,
-  display: ShellSessionDisplay,
+  display: TerminalSessionDisplay,
 ): CommandExecutionPresentation {
   const action = display.action ?? presentation.commandSessionAction ?? "session";
-  const commandSessionId = display.commandSessionId ?? presentation.commandSessionId ?? null;
-  const command = shellSessionDisplayCommand(action, action === "start" ? display.command : null, commandSessionId, presentation.commandSessionInput ?? null)
+  const commandSessionId = display.terminalSessionId ?? presentation.commandSessionId ?? null;
+  const command = terminalSessionDisplayCommand(action, display.command, commandSessionId, display.inputLabels ?? presentation.commandSessionInput ?? null, display.name)
     ?? presentation.command;
   return {
     ...presentation,
     command,
     commandSessionAction: action,
     commandSessionId,
+    commandSessionInput: display.inputLabels ?? presentation.commandSessionInput,
+    commandSessionKind: "terminal",
     cwd: display.cwd ?? presentation.cwd,
-    exitCode: display.exitCode ?? presentation.exitCode,
+    exitCode: display.transactionExitCode ?? presentation.exitCode,
     ownerSessionId: display.ownerSessionId ?? presentation.ownerSessionId,
     shellLabel: display.shellLabel ?? presentation.shellLabel,
     stderr: display.stderr || presentation.stderr,

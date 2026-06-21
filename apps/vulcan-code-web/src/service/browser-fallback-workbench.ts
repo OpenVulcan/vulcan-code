@@ -354,8 +354,8 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
     notice: "当前项目：Vulcan Code；诊断：ready；用户/项目：20000/1001。",
   },
   commandSessions: [
-    { id: "preview-command", command: "pnpm --dir apps\\vulcan-code-web run build", status: "preview", preview: "前端预览命令会话" },
-    { id: "preview-cargo", command: "cargo check -p vulcan-code-tauri", status: "preview", preview: "Tauri 桌面壳检查入口" },
+    { id: "preview-command", name: "WebUI build", command: "pnpm --dir apps\\vulcan-code-web run build", status: "preview", preview: "前端预览命令会话" },
+    { id: "preview-cargo", name: "Cargo check", command: "cargo check -p vulcan-code-tauri", status: "preview", preview: "Tauri 桌面壳检查入口" },
   ],
   logs: [
     { id: "preview-log", level: "info", source: "webui", message: "浏览器预览模式已加载" },

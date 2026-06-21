@@ -1557,7 +1557,7 @@ button {
   justify-content: center;
 }
 
-.conversation-tree-running-progress {
+.conversation-tree-running-spinner {
   color: oklch(0.62 0.18 245);
 }
 
@@ -3534,6 +3534,129 @@ button {
 
 .conversation-session-review-delta .removed {
   color: #da3633;
+}
+
+.conversation-session-terminal-list {
+  gap: 3px;
+}
+
+.conversation-session-terminal-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  height: 26px;
+  min-height: 26px;
+  cursor: default;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.conversation-session-terminal-summary {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 28px), transparent 100%);
+}
+
+.conversation-session-terminal-summary strong,
+.conversation-session-terminal-summary .conversation-session-terminal-name,
+.conversation-session-terminal-summary small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-terminal-summary strong {
+  flex: 0 0 auto;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-terminal-summary .conversation-session-terminal-name {
+  flex: 0 1 auto;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.conversation-session-terminal-summary .conversation-session-terminal-name::before {
+  content: "终端[";
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.conversation-session-terminal-summary .conversation-session-terminal-name::after {
+  content: "]的会话";
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.conversation-session-terminal-summary small {
+  flex: 1 2 auto;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.conversation-session-terminal-stop {
+  justify-self: end;
+  flex: 0 0 auto;
+  height: 22px;
+  width: 24px;
+  padding: 0;
+  font-size: 0;
+  line-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+
+.conversation-session-terminal-stop svg {
+  flex: 0 0 auto;
+  height: 13px;
+  width: 13px;
+}
+
+.conversation-session-terminal-stop:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--destructive) 42%, var(--border));
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, transparent);
+}
+
+.conversation-session-terminal-stop:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.conversation-session-terminal-tooltip {
+  max-width: min(560px, calc(100vw - 48px));
+}
+
+.conversation-session-terminal-tooltip pre {
+  margin: 0;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .conversation-session-todolist-explanation {
@@ -6836,7 +6959,15 @@ button {
 }
 
 .settings-subarea-button {
+  grid-template-columns: minmax(0, 1fr);
   padding-left: 32px;
+}
+
+.settings-subarea-button .vcn-sidebar-label strong {
+  -webkit-mask-image: none;
+  mask-image: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .settings-collapsed-button {
@@ -7484,6 +7615,42 @@ button {
   display: grid;
   gap: 10px;
   color: var(--foreground);
+}
+
+.assistant-final-meta {
+  min-width: 0;
+  height: 22px;
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: -6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.assistant-final-meta-button {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.assistant-final-meta-button:hover,
+.assistant-final-meta-button:focus-visible {
+  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.assistant-final-meta time {
+  white-space: nowrap;
 }
 
 .markdown-message {
@@ -8511,7 +8678,7 @@ button {
 .workspace-terminal-session-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
@@ -8521,16 +8688,15 @@ button {
 }
 
 .workspace-terminal-session-main {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.workspace-terminal-session-title {
+  position: relative;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 30px), transparent 100%);
+  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 30px), transparent 100%);
 }
 
 .workspace-terminal-session-label {
@@ -8539,18 +8705,32 @@ button {
   font-size: 12px;
 }
 
-.workspace-terminal-session-command {
+.workspace-terminal-session-name {
   min-width: 0;
+  flex: 0 1 auto;
   overflow: hidden;
   color: var(--foreground);
-  font-family: var(--font-mono);
   font-size: 12px;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.workspace-terminal-session-name::before {
+  content: "终端[";
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
+.workspace-terminal-session-name::after {
+  content: "]的会话";
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+
 .workspace-terminal-session-preview {
   min-width: 0;
+  flex: 1 2 auto;
   overflow: hidden;
   color: var(--muted-foreground);
   font-family: var(--font-mono);
@@ -8578,6 +8758,20 @@ button {
 .workspace-terminal-session-stop:disabled {
   cursor: default;
   opacity: 0.42;
+}
+
+.workspace-terminal-session-tooltip {
+  max-width: min(560px, calc(100vw - 48px));
+}
+
+.workspace-terminal-session-tooltip pre {
+  margin: 0;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .tool-presentation-card.file-change {

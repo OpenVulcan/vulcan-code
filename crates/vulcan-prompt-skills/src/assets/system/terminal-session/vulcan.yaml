@@ -1,0 +1,4 @@
+interface:
+  display_name: "Terminal Session"
+  short_description: "Use persistent terminals, shortcuts, TUI screens, and incremental output safely"
+  icon_small: "./assets/terminal-session-small.svg"

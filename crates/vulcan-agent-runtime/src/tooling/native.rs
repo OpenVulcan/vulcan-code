@@ -8,10 +8,12 @@ use crate::tool_result_format::{
     EffectiveBudgetScope, HostRenderOptions, HostTextRenderInput, HostToolOverflowMode,
     ToolResultBudgetSnapshot, render_tool_result_text,
 };
+#[cfg(test)]
+use crate::tooling::command_session_runtime::DEFAULT_COMMAND_SESSION_READ_WAIT_MS;
 use crate::tooling::command_session_runtime::{
-    CommandSessionOutputChunk, CommandSessionRuntime, CommandSessionSnapshot,
-    CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
-    DEFAULT_COMMAND_SESSION_READ_WAIT_MS, DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
+    CommandSessionOutputChunk, CommandSessionReadOutcome, CommandSessionRuntime,
+    CommandSessionSnapshot, CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
+    DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
 };
 use crate::tooling::output_decode::decode_shell_output_bytes;
 use crate::tooling::shell_host::{HostCommandShell, HostCommandShellSupport};
@@ -29,7 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::fs as tokio_fs;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command as TokioCommand;
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, Instant, timeout};
 use uuid::Uuid;
 use vulcan_prompt_skills::{
     PromptSkillState, PromptSkillsGlobalConfig, PromptSkillsProjectConfig,
@@ -67,6 +69,18 @@ pub const CREATE_GOAL_TOOL_ID: &str = "create_goal";
 /// Stable identifier for the current-thread goal status update tool.
 /// 当前线程目标状态更新工具的稳定标识。
 pub const UPDATE_GOAL_TOOL_ID: &str = "update_goal";
+
+/// Quiet window used after Ctrl+C before the terminal is considered drained.
+/// Ctrl+C 后认为终端排空所需的静默窗口。
+const TERMINAL_INTERRUPT_DRAIN_QUIET_MS: u64 = 250;
+
+/// Maximum total wait used to consume residual Ctrl+C terminal output.
+/// 用于消费 Ctrl+C 残留终端输出的最大总等待时间。
+const TERMINAL_INTERRUPT_DRAIN_MAX_MS: u64 = 1_500;
+
+/// Soft byte limit for coalescing adjacent model-visible terminal chunks.
+/// 合并相邻模型可见终端分片时使用的软字节限制。
+const TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES: usize = 2_048;
 
 /// One lightweight descriptor for a registered native tool.
 /// 单个已注册原生工具的轻量描述。
@@ -293,7 +307,7 @@ pub fn build_native_tool_catalog(
         build_update_goal_tool(),
         build_prompt_skill_detail_tool(),
         build_shell_command_tool(shell_support.clone()),
-        build_shell_session_tool(command_session_runtime, shell_support),
+        build_terminal_session_tool(command_session_runtime, shell_support),
         build_mcp_server_list_tool(snapshot.clone()),
         build_vmm_memory_search_tool(snapshot.clone()),
         build_vmm_turn_details_tool(snapshot.clone()),
@@ -1692,6 +1706,7 @@ fn build_shell_command_tool(shell_support: HostCommandShellSupport) -> Arc<Nativ
 
 /// Builds the session-oriented shell-command host-owned native tool.
 /// 构建面向会话的 shell 命令宿主自有原生工具。
+#[cfg(test)]
 fn build_shell_session_tool(
     command_session_runtime: Arc<CommandSessionRuntime>,
     shell_support: HostCommandShellSupport,
@@ -1713,6 +1728,35 @@ fn build_shell_session_tool(
             let shell_support = shell_support.clone();
             Box::pin(async move {
                 execute_shell_session_tool(request, command_session_runtime, &shell_support).await
+            })
+        },
+    )
+}
+
+/// Builds the native persistent terminal-session tool exposed to AI.
+/// 构建暴露给 AI 的原生持久终端会话工具。
+fn build_terminal_session_tool(
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    shell_support: HostCommandShellSupport,
+) -> Arc<NativeToolDefinition> {
+    let descriptor = NativeToolDescriptor {
+        id: String::from("terminal_session"),
+        name: String::from("terminal_session"),
+        description: terminal_session_tool_description(),
+        help_text: None,
+        ai_visible: true,
+        available_in_plan: true,
+    };
+
+    build_native_tool_definition(
+        descriptor,
+        terminal_session_args_schema(&shell_support),
+        move |request: NativeToolExecutionRequest| {
+            let command_session_runtime = Arc::clone(&command_session_runtime);
+            let shell_support = shell_support.clone();
+            Box::pin(async move {
+                execute_terminal_session_tool(request, command_session_runtime, &shell_support)
+                    .await
             })
         },
     )
@@ -2009,6 +2053,7 @@ struct ShellCommandExecutionReport {
 
 /// One action accepted by the host-owned `shell_session` tool.
 /// 宿主自有 `shell_session` 工具接受的一种动作。
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ShellSessionToolAction {
@@ -2018,6 +2063,7 @@ enum ShellSessionToolAction {
     Stop,
 }
 
+#[cfg(test)]
 impl ShellSessionToolAction {
     /// Renders one stable lowercase action label for model output and host metadata.
     /// 为模型输出与宿主元数据渲染稳定的小写动作标签。
@@ -2033,6 +2079,7 @@ impl ShellSessionToolAction {
 
 /// One typed argument payload accepted by the host-owned `shell_session` native tool.
 /// 宿主自有 `shell_session` 原生工具接受的一份强类型参数载荷。
+#[cfg(test)]
 #[derive(Debug, Clone, Deserialize)]
 struct ShellSessionToolArgs {
     /// Requested shell-session action.
@@ -2067,6 +2114,256 @@ struct ShellSessionToolArgs {
     max_chunks: Option<usize>,
 }
 
+/// One action accepted by the host-owned `terminal_session` tool.
+/// 宿主自有 `terminal_session` 工具接受的一种动作。
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TerminalSessionToolAction {
+    /// List persistent terminal sessions owned by the current controller session.
+    /// 列出当前控制器会话拥有的持久终端会话。
+    List,
+    /// Start one persistent terminal session.
+    /// 启动一条持久终端会话。
+    Start,
+    /// Send ordered input events into an existing terminal session.
+    /// 向已有终端会话发送保序输入事件。
+    Send,
+    /// Read new output from the AI-facing incremental cursor.
+    /// 从面向 AI 的增量游标读取新输出。
+    Read,
+    /// Inspect current terminal state without advancing the read cursor.
+    /// 检查当前终端状态但不推进读取游标。
+    Snapshot,
+    /// Stop an existing terminal session.
+    /// 停止已有终端会话。
+    Stop,
+}
+
+impl TerminalSessionToolAction {
+    /// Renders one stable lowercase action label for model output and host metadata.
+    /// 为模型输出与宿主元数据渲染稳定的小写动作标签。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::List => "list",
+            Self::Start => "start",
+            Self::Send => "send",
+            Self::Read => "read",
+            Self::Snapshot => "snapshot",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+/// One ordered terminal input item accepted by `terminal_session`.
+/// `terminal_session` 接受的一条保序终端输入项。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum TerminalSessionInput {
+    /// Raw text typed into the terminal.
+    /// 输入到终端的原始文本。
+    Text {
+        /// Text payload to write.
+        /// 要写入的文本载荷。
+        text: String,
+    },
+    /// Text pasted into the terminal as one payload.
+    /// 作为一份载荷粘贴到终端的文本。
+    Paste {
+        /// Paste payload to write.
+        /// 要写入的粘贴载荷。
+        text: String,
+    },
+    /// One standardized terminal key.
+    /// 一个标准化终端按键。
+    Key {
+        /// Stable key name such as Enter or ArrowDown.
+        /// 稳定按键名称，例如 Enter 或 ArrowDown。
+        key: String,
+    },
+    /// One standardized key chord.
+    /// 一个标准化组合键。
+    Chord {
+        /// Base key for the chord.
+        /// 组合键的基础按键。
+        key: String,
+        /// Whether Ctrl is held.
+        /// 是否按住 Ctrl。
+        ctrl: Option<bool>,
+        /// Whether Alt is held.
+        /// 是否按住 Alt。
+        alt: Option<bool>,
+        /// Whether Shift is held.
+        /// 是否按住 Shift。
+        shift: Option<bool>,
+        /// Whether Meta is held.
+        /// 是否按住 Meta。
+        meta: Option<bool>,
+    },
+}
+
+/// One wait mode accepted by `terminal_session`.
+/// `terminal_session` 接受的一种等待模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TerminalSessionWaitMode {
+    /// Return immediately after the input or read request.
+    /// 在输入或读取请求后立即返回。
+    ReturnImmediately,
+    /// Wait for at least one output event within the bounded wait budget.
+    /// 在有界等待预算内等待至少一条输出事件。
+    UntilQuiet,
+    /// Wait using the same bounded behavior while prompt detection remains best-effort.
+    /// 在提示符检测仍为尽力而为时使用相同有界等待行为。
+    UntilPrompt,
+    /// Wrap one command transaction and wait for the host exit-code sentinel.
+    /// 包装一条命令事务并等待宿主退出码哨兵。
+    UntilExitCode,
+    /// Wait for output matching a known readiness pattern.
+    /// 等待匹配已知就绪模式的输出。
+    UntilPattern,
+    /// Wait briefly for screen-like output to stabilize.
+    /// 短暂等待屏幕型输出稳定。
+    ScreenStable,
+}
+
+impl TerminalSessionWaitMode {
+    /// Renders one stable lowercase wait-mode label.
+    /// 渲染稳定的小写等待模式标签。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ReturnImmediately => "return_immediately",
+            Self::UntilQuiet => "until_quiet",
+            Self::UntilPrompt => "until_prompt",
+            Self::UntilExitCode => "until_exit_code",
+            Self::UntilPattern => "until_pattern",
+            Self::ScreenStable => "screen_stable",
+        }
+    }
+}
+
+/// One wait-policy payload accepted by `terminal_session`.
+/// `terminal_session` 接受的一份等待策略载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct TerminalSessionWaitPolicy {
+    /// Requested wait mode.
+    /// 请求的等待模式。
+    mode: TerminalSessionWaitMode,
+    /// Optional quiet window in milliseconds.
+    /// 可选静默窗口毫秒数。
+    quiet_ms: Option<u64>,
+    /// Optional maximum wait budget in milliseconds.
+    /// 可选最大等待预算毫秒数。
+    max_wait_ms: Option<u64>,
+    /// Optional readiness or output pattern.
+    /// 可选就绪或输出模式。
+    pattern: Option<String>,
+}
+
+/// One typed argument payload accepted by the host-owned `terminal_session` native tool.
+/// 宿主自有 `terminal_session` 原生工具接受的一份强类型参数载荷。
+#[derive(Debug, Clone, Deserialize)]
+struct TerminalSessionToolArgs {
+    /// Requested terminal-session action.
+    /// 请求的终端会话动作。
+    action: TerminalSessionToolAction,
+    /// Optional user-facing name for a newly started terminal session.
+    /// 新启动终端会话的可选用户可见名称。
+    name: Option<String>,
+    /// Optional target terminal-session identifier used by non-start actions.
+    /// 供非 start 动作使用的可选目标终端会话标识。
+    terminal_session_id: Option<String>,
+    /// Optional raw command string used by the start action.
+    /// 供 start 动作使用的可选原始命令字符串。
+    command: Option<String>,
+    /// Optional working directory override resolved relative to the workspace root when needed.
+    /// 需要时相对工作区根目录解析的可选工作目录覆盖值。
+    cwd: Option<String>,
+    /// Optional shell family selector such as `auto`, `powershell`, `cmd`, or `bash`.
+    /// 可选 shell 类型选择器，例如 `auto`、`powershell`、`cmd` 或 `bash`。
+    shell: Option<String>,
+    /// Ordered terminal inputs used by the send action.
+    /// 供 send 动作使用的保序终端输入。
+    inputs: Option<Vec<TerminalSessionInput>>,
+    /// Optional wait policy used by send/read actions.
+    /// 供 send/read 动作使用的可选等待策略。
+    wait_policy: Option<TerminalSessionWaitPolicy>,
+    /// Optional output cursor override.
+    /// 可选输出游标覆盖值。
+    after_seq: Option<u64>,
+    /// Whether read should ignore the AI cursor and read from the beginning.
+    /// read 是否应忽略 AI 游标并从开头读取。
+    read_from_start: Option<bool>,
+    /// Optional maximum chunk count returned by one read-like action.
+    /// 一次读取类动作返回的可选最大分片数量。
+    max_chunks: Option<usize>,
+}
+
+/// One parsed terminal command transaction sentinel result.
+/// 一份已解析的终端命令事务哨兵结果。
+#[derive(Debug, Clone)]
+struct TerminalTransactionResult {
+    /// Stable host-generated transaction identifier.
+    /// 由宿主生成的稳定事务标识。
+    id: String,
+    /// User command wrapped by this transaction.
+    /// 本次事务包装的用户命令。
+    command: String,
+    /// Optional exit code captured from the sentinel line.
+    /// 从哨兵行捕获到的可选退出码。
+    exit_code: Option<i32>,
+    /// Stable transaction status.
+    /// 稳定事务状态。
+    status: String,
+    /// First output sequence observed for the transaction.
+    /// 本次事务观测到的首个输出序号。
+    started_seq: u64,
+    /// Last output sequence observed for the transaction.
+    /// 本次事务观测到的最后输出序号。
+    ended_seq: Option<u64>,
+}
+
+/// Result summary produced by an interrupt drain pass.
+/// 一次中断排空过程产生的结果摘要。
+#[derive(Debug, Clone)]
+struct TerminalInterruptDrainResult {
+    /// Latest terminal snapshot observed by the drain pass.
+    /// 排空过程中观测到的最新终端快照。
+    snapshot: CommandSessionSnapshot,
+    /// Model-visible output chunks kept after control-only fragments are discarded.
+    /// 丢弃纯控制片段后保留给模型可见的输出分片。
+    returned_chunks: Vec<CommandSessionOutputChunk>,
+    /// Whether more buffered output remains after the drain pass.
+    /// 排空过程结束后是否仍存在更多缓冲输出。
+    has_more: bool,
+    /// Milliseconds spent in the drain pass.
+    /// 排空过程消耗的毫秒数。
+    elapsed_ms: u64,
+    /// Number of control-only chunks consumed but hidden from model output.
+    /// 已消费但从模型输出中隐藏的纯控制分片数量。
+    discarded_chunk_count: usize,
+}
+
+/// Result summary produced by a best-effort interrupt input-line cleanup pass.
+/// 一次尽力而为中断输入行清理过程产生的结果摘要。
+#[derive(Debug, Clone)]
+struct TerminalInterruptCleanupResult {
+    /// Latest terminal snapshot observed by the cleanup pass.
+    /// 清理过程中观测到的最新终端快照。
+    snapshot: CommandSessionSnapshot,
+    /// Whether more buffered output remains after cleanup.
+    /// 清理结束后是否仍存在更多缓冲输出。
+    has_more: bool,
+    /// Milliseconds spent in the cleanup pass.
+    /// 清理过程消耗的毫秒数。
+    elapsed_ms: u64,
+    /// Number of cleanup output chunks consumed and hidden from model output.
+    /// 已消费但从模型输出中隐藏的清理输出分片数量。
+    discarded_chunk_count: usize,
+    /// Optional cleanup failure reason when the best-effort cleanup could not run.
+    /// 尽力清理无法运行时的可选失败原因。
+    failure_reason: Option<String>,
+}
+
 /// One resolved shell behavior snapshot for a command session, separating the outer launcher shell from the inferred interactive shell.
 /// 一份命令会话的已解析 shell 行为快照，用于区分外层启动器 shell 与推断得到的交互 shell。
 #[derive(Debug, Clone)]
@@ -2092,6 +2389,7 @@ fn shell_command_tool_description() -> String {
 
 /// Builds the English AI-facing description for the session-oriented shell tool.
 /// 构建面向会话 shell 工具面向 AI 的英文描述。
+#[cfg(test)]
 fn shell_session_tool_description() -> String {
     format!(
         "Start, read, write to, or stop a long-lived host command session. Reads are polling-based, and `cwd` only affects `start`. The `start` result reports the resolved launcher shell used for `auto` and whether stdin is currently left on an open input line. When an inline read result exceeds {SHELL_INLINE_OUTPUT_LIMIT_BYTES} bytes, the host switches to page-mode spill files under the project-local `.vulcan/temp/` directory using names like `tool_output_overflow_page_md_<unix_ms>.md`. After spill, the host preserves the full rendered output instead of truncating it, subject to successful file creation, filesystem limits, and per-line safe-read chunking."
@@ -2100,6 +2398,7 @@ fn shell_session_tool_description() -> String {
 
 /// Builds the shell-session-specific schema text for the `shell` argument so AI sees the current `auto` target plus nested-shell guidance.
 /// 为 `shell_session` 的 `shell` 参数构建专用 schema 文本，使 AI 能看到当前 `auto` 目标及嵌套 shell 指引。
+#[cfg(test)]
 fn shell_session_schema_shell_description(shell_support: &HostCommandShellSupport) -> String {
     let windows_nested_shell_policy_note = if cfg!(windows) {
         " On Windows, `shell_session` rejects `shell: auto` when the command directly launches `bash`, `sh`, or `zsh`; use an explicit Unix-like shell selector for deterministic interactive behavior."
@@ -2314,6 +2613,7 @@ fn vmm_memory_delete_args_schema() -> Value {
 
 /// Builds the JSON Schema advertised to the model for the host-owned `shell_session` tool.
 /// 为宿主自有 `shell_session` 工具构建对模型声明的 JSON Schema。
+#[cfg(test)]
 fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
     json!({
         "type": "object",
@@ -2370,8 +2670,139 @@ fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
     })
 }
 
+/// Builds the English AI-facing description for the native persistent terminal tool.
+/// 构建原生持久终端工具面向 AI 的英文描述。
+fn terminal_session_tool_description() -> String {
+    String::from(
+        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered text/paste/key/chord input, incremental output, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
+    )
+}
+
+/// Builds the terminal-session-specific schema text for the `shell` argument.
+/// 为 `terminal_session` 的 `shell` 参数构建专用 schema 文本。
+fn terminal_session_schema_shell_description(shell_support: &HostCommandShellSupport) -> String {
+    format!(
+        "{} Start launches a persistent terminal process. Use an explicit shell when deterministic interactive behavior or newline semantics matter.",
+        shell_support.schema_shell_description()
+    )
+}
+
+/// Builds the JSON Schema advertised to the model for the host-owned `terminal_session` tool.
+/// 为宿主自有 `terminal_session` 工具构建对模型声明的 JSON Schema。
+fn terminal_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["list", "start", "send", "read", "snapshot", "stop"],
+                "description": "Terminal action. `list` returns current terminal sessions owned by this controller session, `start` launches a named persistent terminal, `send` writes ordered inputs, `read` returns new output from the AI cursor, `snapshot` inspects current state without advancing the cursor, and `stop` terminates the session."
+            },
+            "name": {
+                "type": "string",
+                "description": "Optional human-readable terminal name used only by `start`. Use a short task-oriented name such as `dev server`, `python repl`, or `install shell` so later `list` calls are easy to understand."
+            },
+            "terminal_session_id": {
+                "type": "string",
+                "description": "Persistent terminal session identifier returned by `start` or `list`. Required for `send`, `read`, `snapshot`, and `stop`."
+            },
+            "command": {
+                "type": "string",
+                "description": "Raw command text used only by `start`, such as `pwsh -NoLogo`, `cmd`, `bash`, `python`, or a TUI command."
+            },
+            "cwd": {
+                "type": "string",
+                "description": "Optional working directory used only by `start`. Relative paths resolve against the workspace root when available. Later sends inherit terminal state and cannot change host-side cwd except by typing shell commands."
+            },
+            "shell": {
+                "type": "string",
+                "enum": shell_support.schema_shell_ids(),
+                "description": terminal_session_schema_shell_description(shell_support)
+            },
+            "inputs": {
+                "type": "array",
+                "description": "Ordered terminal inputs used by `send`. Do not hand-write ANSI escapes or control characters; use key/chord items.",
+                "items": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "type": "string", "enum": ["text"] },
+                                "text": { "type": "string", "description": "Text typed into the terminal. Include a newline when submitting a command." }
+                            },
+                            "required": ["kind", "text"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "type": "string", "enum": ["paste"] },
+                                "text": { "type": "string", "description": "Text pasted into the terminal as one payload." }
+                            },
+                            "required": ["kind", "text"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "type": "string", "enum": ["key"] },
+                                "key": { "type": "string", "description": "Standard key name such as Enter, Tab, Esc, ArrowDown, Home, End, PageUp, PageDown, or F1." }
+                            },
+                            "required": ["kind", "key"],
+                            "additionalProperties": false
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "kind": { "type": "string", "enum": ["chord"] },
+                                "key": { "type": "string", "description": "Base key for the shortcut, such as c, d, z, l, r, Tab, ArrowLeft, or ArrowRight." },
+                                "ctrl": { "type": "boolean" },
+                                "alt": { "type": "boolean" },
+                                "shift": { "type": "boolean" },
+                                "meta": { "type": "boolean" }
+                            },
+                            "required": ["kind", "key"],
+                            "additionalProperties": false
+                        }
+                    ]
+                }
+            },
+            "wait_policy": {
+                "type": "object",
+                "description": "Optional bounded wait behavior for send/read. Use until_exit_code only with exactly one text input containing one ordinary shell command transaction, not paste/key/chord, REPL/TUI, or long-running services.",
+                "properties": {
+                    "mode": {
+                        "type": "string",
+                        "enum": ["return_immediately", "until_quiet", "until_prompt", "until_exit_code", "until_pattern", "screen_stable"]
+                    },
+                    "quiet_ms": { "type": "integer" },
+                    "max_wait_ms": { "type": "integer" },
+                    "pattern": { "type": "string" }
+                },
+                "required": ["mode"],
+                "additionalProperties": false
+            },
+            "after_seq": {
+                "type": "integer",
+                "description": "Optional output cursor override. When omitted, read/send uses the terminal_session AI cursor."
+            },
+            "read_from_start": {
+                "type": "boolean",
+                "description": "When true, read starts from sequence 0 instead of the AI cursor. Use only for explicit history review."
+            },
+            "max_chunks": {
+                "type": "integer",
+                "description": format!("Optional maximum output chunks returned by one read-like action. Default: {DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS}.")
+            }
+        },
+        "required": ["action"],
+        "additionalProperties": false
+    })
+}
+
 /// Parses one raw model payload into the typed shell-session argument structure.
 /// 将一份原始模型载荷解析为强类型 shell 会话参数结构。
+#[cfg(test)]
 fn parse_shell_session_tool_arguments(
     arguments: Value,
 ) -> Result<ShellSessionToolArgs, NativeToolError> {
@@ -2380,8 +2811,21 @@ fn parse_shell_session_tool_arguments(
     })
 }
 
+/// Parses one raw model payload into the typed terminal-session argument structure.
+/// 将一份原始模型载荷解析为强类型终端会话参数结构。
+fn parse_terminal_session_tool_arguments(
+    arguments: Value,
+) -> Result<TerminalSessionToolArgs, NativeToolError> {
+    serde_json::from_value::<TerminalSessionToolArgs>(arguments).map_err(|error| {
+        NativeToolError::new(format!(
+            "Failed to parse terminal_session arguments: {error}"
+        ))
+    })
+}
+
 /// Resolves the controller session that owns the current shell-session tool invocation.
 /// 解析拥有当前 shell 会话工具调用的控制器会话。
+#[cfg(test)]
 fn require_shell_session_owner_session_id(
     session_id: Option<SessionId>,
 ) -> Result<SessionId, NativeToolError> {
@@ -2392,8 +2836,21 @@ fn require_shell_session_owner_session_id(
     })
 }
 
+/// Resolves the controller session that owns the current terminal-session tool invocation.
+/// 解析拥有当前终端会话工具调用的控制器会话。
+fn require_terminal_session_owner_session_id(
+    session_id: Option<SessionId>,
+) -> Result<SessionId, NativeToolError> {
+    session_id.ok_or_else(|| {
+        NativeToolError::new(
+            "The terminal_session tool requires a stable controller session identifier, but no session_id was attached to this invocation.",
+        )
+    })
+}
+
 /// Parses the caller-provided command-session identifier into the stable UUID-shaped session id.
 /// 将调用方提供的命令会话标识解析为稳定的 UUID 形态会话 id。
+#[cfg(test)]
 fn parse_command_session_id(
     raw_command_session_id: Option<&str>,
 ) -> Result<SessionId, NativeToolError> {
@@ -2410,6 +2867,62 @@ fn parse_command_session_id(
             "The `command_session_id` provided to shell_session is not a valid UUID: {error}"
         ))
     })
+}
+
+/// Parses the caller-provided terminal-session identifier into the stable UUID-shaped session id.
+/// 将调用方提供的终端会话标识解析为稳定的 UUID 形态会话 id。
+fn parse_terminal_session_id(
+    raw_terminal_session_id: Option<&str>,
+) -> Result<SessionId, NativeToolError> {
+    let raw_terminal_session_id = raw_terminal_session_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "The terminal_session tool is missing the required `terminal_session_id` argument.",
+            )
+        })?;
+    Uuid::parse_str(raw_terminal_session_id).map_err(|error| {
+        NativeToolError::new(format!(
+            "The `terminal_session_id` provided to terminal_session is not a valid UUID: {error}"
+        ))
+    })
+}
+
+/// Builds a stable fallback terminal name from a start command.
+/// 根据启动命令构建稳定的终端回退名称。
+fn terminal_session_default_name(command_text: &str) -> String {
+    let compact = command_text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if compact.is_empty() {
+        return String::from("terminal");
+    }
+    compact.chars().take(60).collect()
+}
+
+/// Normalizes a user-provided terminal name, falling back to the start command when empty.
+/// 规范化用户提供的终端名称，并在为空时回退到启动命令。
+fn normalize_terminal_session_name(raw_name: Option<&str>, command_text: &str) -> String {
+    let candidate = raw_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| terminal_session_default_name(command_text));
+    candidate.chars().take(80).collect()
+}
+
+/// Returns the runtime-stored terminal name or a stable fallback for historical sessions.
+/// 返回运行时保存的终端名称，或为历史会话生成稳定回退名称。
+fn terminal_session_name_for_snapshot(snapshot: &CommandSessionSnapshot) -> String {
+    snapshot
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| terminal_session_default_name(&snapshot.command))
 }
 
 /// Returns the shell-specific interactive newline sequence used by session input auto-submission.
@@ -2441,8 +2954,294 @@ fn stdin_payload_has_trailing_newline(text: &str) -> bool {
     text.ends_with(['\n', '\r'])
 }
 
+/// Encodes one ordered terminal input list into the bytes written to the child stdin.
+/// 将一组保序终端输入编码为写入子进程标准输入的字节文本。
+fn encode_terminal_inputs(
+    inputs: &[TerminalSessionInput],
+    interactive_newline: &str,
+) -> Result<String, NativeToolError> {
+    let mut encoded = String::new();
+    for input in inputs {
+        match input {
+            TerminalSessionInput::Text { text } | TerminalSessionInput::Paste { text } => {
+                encoded.push_str(text);
+            }
+            TerminalSessionInput::Key { key } => {
+                encoded.push_str(terminal_key_sequence(key, interactive_newline)?);
+            }
+            TerminalSessionInput::Chord {
+                key,
+                ctrl,
+                alt,
+                shift,
+                meta,
+            } => {
+                encoded.push_str(&terminal_chord_sequence(
+                    key,
+                    ctrl.unwrap_or(false),
+                    alt.unwrap_or(false),
+                    shift.unwrap_or(false),
+                    meta.unwrap_or(false),
+                    interactive_newline,
+                )?);
+            }
+        }
+    }
+    Ok(encoded)
+}
+
+/// Returns the terminal sequence for one standardized key.
+/// 返回一个标准化按键对应的终端序列。
+fn terminal_key_sequence<'a>(
+    key: &str,
+    interactive_newline: &'a str,
+) -> Result<&'a str, NativeToolError> {
+    match key {
+        "Enter" => Ok(interactive_newline),
+        "Tab" => Ok("\t"),
+        "Esc" | "Escape" => Ok("\x1b"),
+        "Backspace" => Ok("\x08"),
+        "Delete" => Ok("\x1b[3~"),
+        "ArrowUp" => Ok("\x1b[A"),
+        "ArrowDown" => Ok("\x1b[B"),
+        "ArrowRight" => Ok("\x1b[C"),
+        "ArrowLeft" => Ok("\x1b[D"),
+        "Home" => Ok("\x1b[H"),
+        "End" => Ok("\x1b[F"),
+        "PageUp" => Ok("\x1b[5~"),
+        "PageDown" => Ok("\x1b[6~"),
+        "Insert" => Ok("\x1b[2~"),
+        "F1" => Ok("\x1bOP"),
+        "F2" => Ok("\x1bOQ"),
+        "F3" => Ok("\x1bOR"),
+        "F4" => Ok("\x1bOS"),
+        "F5" => Ok("\x1b[15~"),
+        "F6" => Ok("\x1b[17~"),
+        "F7" => Ok("\x1b[18~"),
+        "F8" => Ok("\x1b[19~"),
+        "F9" => Ok("\x1b[20~"),
+        "F10" => Ok("\x1b[21~"),
+        "F11" => Ok("\x1b[23~"),
+        "F12" => Ok("\x1b[24~"),
+        _ => Err(NativeToolError::new(format!(
+            "Unsupported terminal key `{key}`. Call skill(\"terminal-session\") and use a documented key name."
+        ))),
+    }
+}
+
+/// Returns the terminal sequence for one standardized key chord.
+/// 返回一个标准化组合键对应的终端序列。
+fn terminal_chord_sequence(
+    key: &str,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+    meta: bool,
+    interactive_newline: &str,
+) -> Result<String, NativeToolError> {
+    if shift && key == "Tab" && !ctrl && !alt && !meta {
+        return Ok(String::from("\x1b[Z"));
+    }
+
+    let mut sequence = String::new();
+    if alt || meta {
+        sequence.push('\x1b');
+    }
+    if ctrl {
+        let normalized = key.trim().to_ascii_lowercase();
+        let mut chars = normalized.chars();
+        let Some(ch) = chars.next() else {
+            return Err(NativeToolError::new("Chord key cannot be empty."));
+        };
+        if chars.next().is_none() && ch.is_ascii_alphabetic() {
+            sequence.push(((ch as u8) & 0x1f) as char);
+            return Ok(sequence);
+        }
+        return Err(NativeToolError::new(format!(
+            "Unsupported Ctrl chord `{key}`. Use a single alphabetic key such as c, d, z, l, or r."
+        )));
+    }
+    sequence.push_str(terminal_key_sequence(key, interactive_newline)?);
+    Ok(sequence)
+}
+
+/// Returns whether the input list requests a foreground-process interrupt.
+/// 返回输入列表是否请求中断前台进程。
+fn terminal_inputs_request_interrupt(inputs: &[TerminalSessionInput]) -> bool {
+    inputs.iter().any(|input| {
+        matches!(
+            input,
+            TerminalSessionInput::Chord {
+                key,
+                ctrl: Some(true),
+                alt,
+                shift,
+                meta,
+            } if key.eq_ignore_ascii_case("c")
+                && !alt.unwrap_or(false)
+                && !shift.unwrap_or(false)
+                && !meta.unwrap_or(false)
+        )
+    })
+}
+
+/// Returns the visible label for one terminal input item.
+/// 返回一条终端输入项的可见标签。
+fn terminal_input_label(input: &TerminalSessionInput) -> String {
+    match input {
+        TerminalSessionInput::Text { text } => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                String::from("text")
+            } else {
+                trimmed.chars().take(80).collect()
+            }
+        }
+        TerminalSessionInput::Paste { text } => {
+            format!("paste {} chars", text.chars().count())
+        }
+        TerminalSessionInput::Key { key } => key.clone(),
+        TerminalSessionInput::Chord {
+            key,
+            ctrl,
+            alt,
+            shift,
+            meta,
+        } => {
+            let mut parts = Vec::new();
+            if ctrl.unwrap_or(false) {
+                parts.push("Ctrl");
+            }
+            if alt.unwrap_or(false) {
+                parts.push("Alt");
+            }
+            if shift.unwrap_or(false) {
+                parts.push("Shift");
+            }
+            if meta.unwrap_or(false) {
+                parts.push("Meta");
+            }
+            parts.push(key.as_str());
+            parts.join("+")
+        }
+    }
+}
+
+/// Returns the wait mode requested by one terminal-session call.
+/// 返回一次终端会话调用请求的等待模式。
+fn terminal_wait_mode(wait_policy: Option<&TerminalSessionWaitPolicy>) -> TerminalSessionWaitMode {
+    wait_policy
+        .map(|policy| policy.mode)
+        .unwrap_or(TerminalSessionWaitMode::ReturnImmediately)
+}
+
+/// Returns the bounded output wait budget for one wait policy.
+/// 返回一份等待策略对应的有界输出等待预算。
+fn terminal_wait_budget_ms(wait_policy: Option<&TerminalSessionWaitPolicy>) -> Option<u64> {
+    let Some(policy) = wait_policy else {
+        return Some(0);
+    };
+    Some(match policy.mode {
+        TerminalSessionWaitMode::ReturnImmediately => 0,
+        TerminalSessionWaitMode::UntilQuiet => policy.max_wait_ms.unwrap_or_else(|| {
+            policy
+                .quiet_ms
+                .unwrap_or(300)
+                .saturating_mul(10)
+                .clamp(500, 5_000)
+        }),
+        TerminalSessionWaitMode::UntilPrompt => policy.max_wait_ms.unwrap_or(3_000),
+        TerminalSessionWaitMode::UntilExitCode => policy.max_wait_ms.unwrap_or(120_000),
+        TerminalSessionWaitMode::UntilPattern => {
+            let has_pattern = policy
+                .pattern
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|pattern| !pattern.is_empty());
+            policy
+                .max_wait_ms
+                .unwrap_or(if has_pattern { 30_000 } else { 3_000 })
+        }
+        TerminalSessionWaitMode::ScreenStable => policy.max_wait_ms.unwrap_or_else(|| {
+            policy
+                .quiet_ms
+                .unwrap_or(150)
+                .saturating_mul(6)
+                .clamp(300, 2_000)
+        }),
+    })
+}
+
+/// Reports whether one input list can be safely wrapped as a command transaction.
+/// 判断一组输入能否安全包装为命令事务。
+fn terminal_transaction_command_text(
+    inputs: &[TerminalSessionInput],
+) -> Result<String, NativeToolError> {
+    if inputs.len() != 1 {
+        return Err(NativeToolError::new(
+            "`until_exit_code` requires exactly one text input containing one complete shell command.",
+        ));
+    }
+    let text = match &inputs[0] {
+        TerminalSessionInput::Text { text } => text,
+        TerminalSessionInput::Paste { .. } => {
+            return Err(NativeToolError::new(
+                "`until_exit_code` cannot be used with paste input. Use text for one shell command transaction or use until_quiet for pasted interactive content.",
+            ));
+        }
+        TerminalSessionInput::Key { .. } | TerminalSessionInput::Chord { .. } => {
+            return Err(NativeToolError::new(
+                "`until_exit_code` cannot be used with key or chord input.",
+            ));
+        }
+    };
+    if !stdin_payload_has_trailing_newline(text) {
+        return Err(NativeToolError::new(
+            "`until_exit_code` requires a complete command ending with a newline.",
+        ));
+    }
+    let command = text.trim().to_string();
+    if command.is_empty() {
+        return Err(NativeToolError::new(
+            "`until_exit_code` requires a non-empty command.",
+        ));
+    }
+    Ok(command)
+}
+
+/// Wraps one shell command so the host can observe the transaction exit code.
+/// 包装一条 shell 命令，使宿主可以观测该事务退出码。
+fn wrap_terminal_transaction_command(
+    command: &str,
+    shell_label: &str,
+    transaction_id: &str,
+    interactive_newline: &str,
+) -> Result<String, NativeToolError> {
+    let sentinel = format!("__VULCAN_TERMINAL_TX_EXIT__:{transaction_id}:");
+    let lower_shell = shell_label.to_ascii_lowercase();
+    if lower_shell.contains("pwsh") || lower_shell.contains("powershell") {
+        return Ok(format!(
+            "$global:LASTEXITCODE = $null; $vulcanErrorCount = $Error.Count; & {{ {command} }}; $vulcanSuccess = $?; $vulcanNativeCode = $LASTEXITCODE; $vulcanNewErrors = $Error.Count - $vulcanErrorCount; if ($null -ne $vulcanNativeCode) {{ $vulcanCode = $vulcanNativeCode }} elseif ($vulcanSuccess -and $vulcanNewErrors -le 0) {{ $vulcanCode = 0 }} else {{ $vulcanCode = 1 }}; Write-Output \"{sentinel}$vulcanCode\"{interactive_newline}"
+        ));
+    }
+    if lower_shell.contains("cmd") {
+        return Ok(format!(
+            "{command}{interactive_newline}echo {sentinel}%ERRORLEVEL%{interactive_newline}"
+        ));
+    }
+    if lower_shell.contains("bash") || lower_shell.contains("sh") || lower_shell.contains("zsh") {
+        return Ok(format!(
+            "{{ {command}; vulcan_code=$?; printf '\\n{sentinel}%s\\n' \"$vulcan_code\"; }}{interactive_newline}"
+        ));
+    }
+    Err(NativeToolError::new(format!(
+        "`until_exit_code` is not supported for shell `{shell_label}`. Use until_quiet or an explicit supported shell."
+    )))
+}
+
 /// Resolves the effective newline-submission default for the `start` action.
 /// 解析 `start` 动作的有效换行提交默认值。
+#[cfg(test)]
 fn effective_start_append_newline(
     requested_append_newline: Option<bool>,
     initial_stdin: Option<&str>,
@@ -2452,6 +3251,7 @@ fn effective_start_append_newline(
 
 /// Validates whether `start` stdin is safe to submit without hidden concatenation across later writes.
 /// 校验 `start` 的标准输入是否能安全提交，避免与后续写入发生隐式拼接。
+#[cfg(test)]
 fn validate_shell_session_start_stdin_policy(
     initial_stdin: Option<&str>,
     append_newline: bool,
@@ -2468,7 +3268,7 @@ fn validate_shell_session_start_stdin_policy(
 
 /// Validates whether one requested shell selector may safely rely on `auto` for the resolved session behavior.
 /// 校验一条请求的 shell 选择器是否可以安全依赖 `auto` 来驱动当前会话行为。
-fn validate_shell_session_start_shell_policy(
+fn validate_terminal_session_start_shell_policy(
     raw_shell_selector: Option<&str>,
     shell_behavior: &ResolvedSessionShellBehavior,
 ) -> Result<(), NativeToolError> {
@@ -2481,7 +3281,7 @@ fn validate_shell_session_start_shell_policy(
         )
     {
         return Err(NativeToolError::new(
-            "shell_session start requires an explicit `shell` when the command directly launches `bash`, `sh`, or `zsh` on Windows. `auto` resolves only the outer launcher and is rejected here to keep interactive newline behavior deterministic.",
+            "terminal_session start requires an explicit `shell` when the command directly launches `bash`, `sh`, or `zsh` on Windows. `auto` resolves only the outer launcher and is rejected here to keep interactive newline behavior deterministic.",
         ));
     }
     Ok(())
@@ -2539,6 +3339,7 @@ fn resolve_session_shell_behavior(
 
 /// Builds one model-visible text render input for shell-session actions that do not need to include buffered output chunks.
 /// 为不需要包含缓冲输出分片的 shell 会话动作构建一份模型可见文本渲染输入。
+#[cfg(test)]
 fn build_shell_session_summary_render_input(
     action: ShellSessionToolAction,
     snapshot: &CommandSessionSnapshot,
@@ -2591,6 +3392,7 @@ fn build_shell_session_summary_render_input(
 
 /// Builds one model-visible text render input for shell-session read actions that should include returned output chunks.
 /// 为需要包含返回输出分片的 shell 会话 read 动作构建一份模型可见文本渲染输入。
+#[cfg(test)]
 fn build_shell_session_read_render_input(
     snapshot: &CommandSessionSnapshot,
     returned_chunks: &[CommandSessionOutputChunk],
@@ -3189,6 +3991,7 @@ fn build_shell_command_host_payload(
 
 /// Builds the host-only structured payload returned for one shell-session tool action.
 /// 为单次 shell 会话工具动作构建宿主专用结构化返回载荷。
+#[cfg(test)]
 fn build_shell_session_host_payload(
     action: ShellSessionToolAction,
     snapshot: &CommandSessionSnapshot,
@@ -3220,8 +4023,1255 @@ fn build_shell_session_host_payload(
     payload
 }
 
+/// Converts command-session chunks into terminal-session event metadata.
+/// 将命令会话分片转换为终端会话事件元数据。
+fn terminal_events_from_chunks(chunks: &[CommandSessionOutputChunk]) -> Value {
+    Value::Array(
+        chunks
+            .iter()
+            .map(|chunk| {
+                json!({
+                    "seq": chunk.seq,
+                    "kind": "output",
+                    "stream": chunk.stream.as_str(),
+                    "text": chunk.text,
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Coalesces adjacent output chunks from the same stream for compact model-visible output.
+/// 将同一输出流的相邻分片合并为更紧凑的模型可见输出。
+fn coalesce_terminal_output_chunks(
+    chunks: Vec<CommandSessionOutputChunk>,
+) -> Vec<CommandSessionOutputChunk> {
+    let mut coalesced: Vec<CommandSessionOutputChunk> = Vec::new();
+    for chunk in chunks {
+        if let Some(last_chunk) = coalesced.last_mut() {
+            if last_chunk.stream == chunk.stream
+                && last_chunk.text.len().saturating_add(chunk.text.len())
+                    <= TERMINAL_OUTPUT_CHUNK_COALESCE_SOFT_LIMIT_BYTES
+            {
+                last_chunk.text.push_str(&chunk.text);
+                continue;
+            }
+        }
+        coalesced.push(chunk);
+    }
+    coalesced
+}
+
+/// Removes host transaction sentinel lines from chunks and returns the parsed exit code if present.
+/// 从分片中移除宿主事务哨兵行，并在存在时返回解析出的退出码。
+fn strip_terminal_transaction_sentinel(
+    chunks: &[CommandSessionOutputChunk],
+    transaction_id: &str,
+) -> (Vec<CommandSessionOutputChunk>, Option<i32>) {
+    let sentinel_prefix = format!("__VULCAN_TERMINAL_TX_EXIT__:{transaction_id}:");
+    let mut exit_code = None;
+    let mut stripped_chunks = Vec::new();
+
+    for chunk in chunks {
+        let mut stripped_text = String::new();
+        for line in chunk.text.split_inclusive('\n') {
+            let line_without_newline = line.trim_end_matches(['\r', '\n']);
+            if let Some(raw_code) = line_without_newline.trim().strip_prefix(&sentinel_prefix) {
+                exit_code = raw_code.trim().parse::<i32>().ok();
+                continue;
+            }
+            stripped_text.push_str(line);
+        }
+        if !stripped_text.is_empty() {
+            let mut stripped_chunk = chunk.clone();
+            stripped_chunk.text = stripped_text;
+            stripped_chunks.push(stripped_chunk);
+        }
+    }
+
+    (stripped_chunks, exit_code)
+}
+
+/// Detects whether terminal output appears log-like, screen-like, or mixed.
+/// 检测终端输出看起来是日志型、屏幕型还是混合型。
+fn detect_terminal_output_mode(
+    chunks: &[CommandSessionOutputChunk],
+) -> (&'static str, f64, String) {
+    let combined = chunks
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .collect::<Vec<_>>()
+        .join("");
+    if combined.contains("\x1b[?1049h")
+        || combined.contains("\x1b[?47h")
+        || combined.contains("\x1b[2J")
+        || combined.contains("\x1b[H")
+    {
+        return (
+            "screen",
+            0.82,
+            String::from("ANSI alternate-screen or cursor-control sequence detected."),
+        );
+    }
+    let escape_count = combined.matches('\x1b').count();
+    if escape_count >= 8 {
+        return (
+            "mixed",
+            0.64,
+            String::from("Multiple ANSI control sequences detected."),
+        );
+    }
+    (
+        "log",
+        0.9,
+        String::from("Output appears to be append-style text."),
+    )
+}
+
+/// Removes simple ANSI control sequences for screen-text fallback rendering.
+/// 移除简单 ANSI 控制序列以便生成屏幕文本回退内容。
+fn strip_simple_ansi_sequences(text: &str) -> String {
+    let mut output = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\x1b' {
+            output.push(ch);
+            continue;
+        }
+        if chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for next in chars.by_ref() {
+                if next.is_ascii_alphabetic() || matches!(next, '~' | '@') {
+                    break;
+                }
+            }
+        }
+    }
+    output
+}
+
+/// Returns whether a drained interrupt chunk contains model-visible content.
+/// 返回中断排空分片是否包含模型应看见的内容。
+fn terminal_interrupt_drain_chunk_is_visible(chunk: &CommandSessionOutputChunk) -> bool {
+    let text_without_ansi = strip_simple_ansi_sequences(&chunk.text);
+    let visible_text =
+        text_without_ansi.trim_matches(|ch: char| ch.is_control() || ch.is_whitespace());
+    !visible_text.is_empty()
+}
+
+/// Builds plain screen text for screen-like terminal output when available.
+/// 在存在屏幕型终端输出时构建纯文本屏幕内容。
+fn terminal_screen_text_from_chunks(
+    output_mode: &str,
+    chunks: &[CommandSessionOutputChunk],
+) -> Option<String> {
+    if output_mode != "screen" && output_mode != "mixed" {
+        return None;
+    }
+    let screen_text = strip_simple_ansi_sequences(
+        &chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<Vec<_>>()
+            .join(""),
+    );
+    (!screen_text.trim().is_empty()).then_some(screen_text)
+}
+
+/// Builds a compact controls hint for terminal-session host metadata.
+/// 为终端会话宿主元数据构建紧凑控制提示。
+fn terminal_controls_hint(output_mode: &str) -> Value {
+    if output_mode == "screen" || output_mode == "mixed" {
+        json!({
+            "preferred_input": "keys",
+            "text_input_supported": true,
+            "keys_supported": true,
+            "paste_supported": true,
+            "common_keys": ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Tab", "Enter", "Esc"],
+            "common_chords": [{ "key": "c", "ctrl": true }],
+            "note": "Screen-like output detected. Prefer keys/chords and snapshots for navigation."
+        })
+    } else {
+        json!({
+            "preferred_input": "text",
+            "text_input_supported": true,
+            "keys_supported": true,
+            "paste_supported": true,
+            "common_keys": ["Enter", "Tab", "ArrowUp", "ArrowDown"],
+            "common_chords": [{ "key": "c", "ctrl": true }]
+        })
+    }
+}
+
+/// Returns a compact model-visible controls hint line for screen-like output.
+/// 返回一条面向模型的紧凑屏幕控制提示。
+fn terminal_controls_hint_line(output_mode: &str) -> Option<&'static str> {
+    if output_mode == "screen" || output_mode == "mixed" {
+        Some(
+            "Prefer snapshot/screen_stable with key or chord inputs; avoid treating ANSI output as an append-only log.",
+        )
+    } else {
+        None
+    }
+}
+
+/// Builds one model-visible text render input for terminal-session actions.
+/// 为终端会话动作构建一份模型可见文本渲染输入。
+fn build_terminal_session_render_input(
+    action: TerminalSessionToolAction,
+    snapshot: &CommandSessionSnapshot,
+    session_name: &str,
+    returned_chunks: &[CommandSessionOutputChunk],
+    has_more: bool,
+    output_mode: &str,
+    transaction: Option<&TerminalTransactionResult>,
+    extra_lines: Vec<String>,
+) -> HostTextRenderInput {
+    let mut lines = vec![
+        format!("Action: {}", action.as_str()),
+        format!("Terminal session: {}", snapshot.command_session_id),
+        format!("Name: {session_name}"),
+        format!("Owner session: {}", snapshot.owner_session_id),
+        format!("Command: {}", snapshot.command),
+        format!("Shell: {}", snapshot.shell_label),
+        format!(
+            "Working directory: {}",
+            normalized_workspace_path_text_from_path(&snapshot.cwd)
+        ),
+        format!("Status: {}", snapshot.status.as_str()),
+        format!("Output mode: {output_mode}"),
+        format!("Last sequence: {}", snapshot.last_seq),
+        format!("Returned chunks: {}", returned_chunks.len()),
+        format!(
+            "Has more buffered output: {}",
+            if has_more { "yes" } else { "no" }
+        ),
+    ];
+    if let Some(exit_code) = snapshot.exit_code {
+        lines.push(format!("Session exit code: {exit_code}"));
+    }
+    if let Some(reason) = snapshot.failure_reason.as_deref() {
+        lines.push(format!("Reason: {reason}"));
+    }
+    if let Some(transaction) = transaction {
+        lines.push(format!("Transaction: {}", transaction.id));
+        lines.push(format!("Transaction command: {}", transaction.command));
+        lines.push(format!("Transaction status: {}", transaction.status));
+        lines.push(format!(
+            "Transaction exit code: {}",
+            transaction
+                .exit_code
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| String::from("unknown"))
+        ));
+    }
+    let screen_text = terminal_screen_text_from_chunks(output_mode, returned_chunks);
+    if screen_text.is_some() {
+        lines.push(String::from("Screen text: present"));
+    }
+    if let Some(hint) = terminal_controls_hint_line(output_mode) {
+        lines.push(format!("Controls hint: {hint}"));
+    }
+    lines.extend(extra_lines);
+    let mut content = lines.join("\n");
+    if let Some(screen_text) = screen_text {
+        content.push_str("\n\n[screen_text]\n");
+        content.push_str(&screen_text);
+    }
+    if output_mode == "screen" || output_mode == "mixed" {
+        let controls_hint = serde_json::to_string_pretty(&terminal_controls_hint(output_mode))
+            .unwrap_or_else(|_| terminal_controls_hint(output_mode).to_string());
+        content.push_str("\n\n[controls_hint]\n");
+        content.push_str(&controls_hint);
+    }
+    if returned_chunks.is_empty() {
+        content.push_str("\n\n(no new output)");
+    } else {
+        for chunk in returned_chunks {
+            content.push_str(&format!(
+                "\n\n[{} #{}]\n{}",
+                chunk.stream.as_str(),
+                chunk.seq,
+                chunk.text
+            ));
+        }
+    }
+    HostTextRenderInput {
+        content_bytes: content.len(),
+        content_lines: content.lines().count(),
+        content,
+        overflow_mode: Some(HostToolOverflowMode::Page),
+        template_hint: None,
+    }
+}
+
+/// Builds the host-only structured payload returned for one terminal-session tool action.
+/// 为单次终端会话工具动作构建宿主专用结构化返回载荷。
+fn build_terminal_session_host_payload(
+    action: TerminalSessionToolAction,
+    snapshot: &CommandSessionSnapshot,
+    session_name: &str,
+    returned_chunks: &[CommandSessionOutputChunk],
+    output_overflowed: bool,
+    output_mode: &str,
+    output_mode_confidence: f64,
+    output_mode_reason: String,
+    transaction: Option<&TerminalTransactionResult>,
+    extra_fields: Value,
+) -> Value {
+    let screen_text = terminal_screen_text_from_chunks(output_mode, returned_chunks);
+    let mut payload = json!({
+        "action": action.as_str(),
+        "owner_session_id": snapshot.owner_session_id.to_string(),
+        "terminal_session_id": snapshot.command_session_id.to_string(),
+        "command_session_id": snapshot.command_session_id.to_string(),
+        "name": session_name,
+        "command": snapshot.command.clone(),
+        "cwd": normalized_workspace_path_text_from_path(&snapshot.cwd),
+        "shell": snapshot.shell_label.clone(),
+        "launcher_shell": snapshot.launcher_shell_label.clone(),
+        "status": snapshot.status.as_str(),
+        "exit_code": snapshot.exit_code,
+        "stdout_bytes": snapshot.stdout_bytes,
+        "stderr_bytes": snapshot.stderr_bytes,
+        "last_seq": snapshot.last_seq,
+        "pending_stdin_line": snapshot.pending_stdin_line,
+        "failure_reason": snapshot.failure_reason.clone(),
+        "output_overflowed": output_overflowed,
+        "output_mode": output_mode,
+        "output_mode_confidence": output_mode_confidence,
+        "output_mode_reason": output_mode_reason,
+        "events": terminal_events_from_chunks(returned_chunks),
+        "screen_text": screen_text,
+        "controls_hint": terminal_controls_hint(output_mode),
+    });
+    if let Some(transaction) = transaction {
+        if let Some(payload_object) = payload.as_object_mut() {
+            payload_object.insert(
+                String::from("transaction"),
+                json!({
+                    "id": transaction.id,
+                    "command": transaction.command,
+                    "exit_code": transaction.exit_code,
+                    "status": transaction.status,
+                    "started_seq": transaction.started_seq,
+                    "ended_seq": transaction.ended_seq,
+                }),
+            );
+        }
+    }
+    if let (Some(payload_object), Value::Object(extra_object)) =
+        (payload.as_object_mut(), extra_fields)
+    {
+        payload_object.extend(extra_object);
+    }
+    payload
+}
+
+/// Reads terminal output once through the AI-facing cursor and returns detected output mode data.
+/// 通过面向 AI 的游标读取一次终端输出，并返回检测到的输出模式数据。
+async fn read_terminal_session_output_for_ai(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    after_seq: Option<u64>,
+    read_from_start: bool,
+    wait_for_output_ms: Option<u64>,
+    max_chunks: Option<usize>,
+) -> Result<CommandSessionReadOutcome, NativeToolError> {
+    command_session_runtime
+        .read_session_for_ai(
+            owner_session_id,
+            terminal_session_id,
+            after_seq,
+            read_from_start,
+            wait_for_output_ms,
+            max_chunks,
+        )
+        .await
+        .map_err(NativeToolError::new)
+}
+
+/// Drains residual output after Ctrl+C until the terminal is quiet or the bounded budget expires.
+/// 在 Ctrl+C 后持续排空残留输出，直到终端静默或有界预算耗尽。
+async fn drain_terminal_interrupt_output(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    after_seq: u64,
+    max_chunks: Option<usize>,
+) -> Result<TerminalInterruptDrainResult, NativeToolError> {
+    let started_at = Instant::now();
+    let mut next_after_seq = Some(after_seq);
+    let mut returned_chunks = Vec::new();
+    let mut discarded_chunk_count = 0usize;
+    let mut latest_outcome = read_terminal_session_output_for_ai(
+        command_session_runtime,
+        owner_session_id,
+        terminal_session_id,
+        next_after_seq,
+        false,
+        Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
+        max_chunks,
+    )
+    .await?;
+    loop {
+        for chunk in latest_outcome.returned_chunks.iter().cloned() {
+            if terminal_interrupt_drain_chunk_is_visible(&chunk) {
+                returned_chunks.push(chunk);
+            } else {
+                discarded_chunk_count = discarded_chunk_count.saturating_add(1);
+            }
+        }
+
+        let quiet_after_wait = latest_outcome.returned_chunks.is_empty();
+        if quiet_after_wait {
+            break;
+        }
+        if latest_outcome.snapshot.status.as_str() != "running" {
+            break;
+        }
+        if started_at.elapsed() >= Duration::from_millis(TERMINAL_INTERRUPT_DRAIN_MAX_MS) {
+            break;
+        }
+
+        next_after_seq = None;
+        latest_outcome = read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            next_after_seq,
+            false,
+            Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
+            max_chunks,
+        )
+        .await?;
+    }
+
+    Ok(TerminalInterruptDrainResult {
+        snapshot: latest_outcome.snapshot,
+        returned_chunks,
+        has_more: latest_outcome.has_more,
+        elapsed_ms: started_at.elapsed().as_millis() as u64,
+        discarded_chunk_count,
+    })
+}
+
+/// Flushes a possible leftover interrupt control character from the shell input line.
+/// 从 shell 输入行中冲刷可能残留的中断控制字符。
+async fn cleanup_terminal_interrupt_input_line(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    snapshot: CommandSessionSnapshot,
+    interactive_newline: &str,
+    max_chunks: Option<usize>,
+) -> TerminalInterruptCleanupResult {
+    if snapshot.status.as_str() != "running" || !snapshot.pending_stdin_line {
+        return TerminalInterruptCleanupResult {
+            snapshot,
+            has_more: false,
+            elapsed_ms: 0,
+            discarded_chunk_count: 0,
+            failure_reason: None,
+        };
+    }
+
+    let started_at = Instant::now();
+    let after_seq = snapshot.last_seq;
+    let write_outcome = match command_session_runtime
+        .write_session(
+            owner_session_id,
+            terminal_session_id,
+            interactive_newline.to_string(),
+            false,
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            return TerminalInterruptCleanupResult {
+                snapshot,
+                has_more: false,
+                elapsed_ms: started_at.elapsed().as_millis() as u64,
+                discarded_chunk_count: 0,
+                failure_reason: Some(error),
+            };
+        }
+    };
+
+    let mut discarded_chunk_count = 0usize;
+    let mut has_more = false;
+    let mut latest_snapshot = write_outcome.snapshot;
+    let mut next_after_seq = Some(after_seq);
+    loop {
+        let read_outcome = match read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            next_after_seq,
+            false,
+            Some(TERMINAL_INTERRUPT_DRAIN_QUIET_MS),
+            max_chunks,
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return TerminalInterruptCleanupResult {
+                    snapshot: latest_snapshot,
+                    has_more,
+                    elapsed_ms: started_at.elapsed().as_millis() as u64,
+                    discarded_chunk_count,
+                    failure_reason: Some(error.message),
+                };
+            }
+        };
+        let chunk_count = read_outcome.returned_chunks.len();
+        discarded_chunk_count = discarded_chunk_count.saturating_add(chunk_count);
+        has_more |= read_outcome.has_more;
+        latest_snapshot = read_outcome.snapshot;
+        if chunk_count == 0 {
+            break;
+        }
+        if latest_snapshot.status.as_str() != "running" {
+            break;
+        }
+        if started_at.elapsed() >= Duration::from_millis(TERMINAL_INTERRUPT_DRAIN_MAX_MS) {
+            break;
+        }
+        next_after_seq = None;
+    }
+
+    TerminalInterruptCleanupResult {
+        snapshot: latest_snapshot,
+        has_more,
+        elapsed_ms: started_at.elapsed().as_millis() as u64,
+        discarded_chunk_count,
+        failure_reason: None,
+    }
+}
+
+/// Reads terminal output until a command transaction sentinel is observed or the wait budget expires.
+/// 读取终端输出直到观测到命令事务哨兵或等待预算耗尽。
+async fn read_terminal_transaction_output(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    after_seq: u64,
+    wait_budget_ms: u64,
+    max_chunks: Option<usize>,
+    transaction_id: &str,
+) -> Result<
+    (
+        CommandSessionReadOutcome,
+        Vec<CommandSessionOutputChunk>,
+        Option<i32>,
+    ),
+    NativeToolError,
+> {
+    let started_at = Instant::now();
+    let mut all_chunks = Vec::new();
+    let mut latest_outcome = read_terminal_session_output_for_ai(
+        command_session_runtime,
+        owner_session_id,
+        terminal_session_id,
+        Some(after_seq),
+        false,
+        Some(wait_budget_ms.min(500)),
+        max_chunks,
+    )
+    .await?;
+    all_chunks.extend(latest_outcome.returned_chunks.clone());
+    let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks.clone());
+    let (stripped_chunks, exit_code) =
+        strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
+    if exit_code.is_some() {
+        return Ok((latest_outcome, stripped_chunks, exit_code));
+    }
+
+    while started_at.elapsed().as_millis() < wait_budget_ms as u128 {
+        let elapsed_ms = started_at.elapsed().as_millis() as u64;
+        let remaining_ms = wait_budget_ms.saturating_sub(elapsed_ms);
+        if remaining_ms == 0 {
+            break;
+        }
+        latest_outcome = read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            None,
+            false,
+            Some(remaining_ms.min(500)),
+            max_chunks,
+        )
+        .await?;
+        if latest_outcome.returned_chunks.is_empty() {
+            if latest_outcome.snapshot.status.as_str() != "running" {
+                break;
+            }
+            continue;
+        }
+        all_chunks.extend(latest_outcome.returned_chunks.clone());
+        let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks.clone());
+        let (stripped_chunks, exit_code) =
+            strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
+        if exit_code.is_some() {
+            return Ok((latest_outcome, stripped_chunks, exit_code));
+        }
+    }
+
+    let coalesced_chunks = coalesce_terminal_output_chunks(all_chunks);
+    let (stripped_chunks, exit_code) =
+        strip_terminal_transaction_sentinel(&coalesced_chunks, transaction_id);
+    Ok((latest_outcome, stripped_chunks, exit_code))
+}
+
+/// Executes one terminal-session list action and returns all terminals owned by this controller session.
+/// 执行一次终端会话 list 动作，并返回当前控制器会话拥有的全部终端。
+async fn execute_terminal_session_list_action(
+    request: NativeToolExecutionRequest,
+    owner_session_id: SessionId,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let mut snapshots = command_session_runtime
+        .try_snapshot_sessions()
+        .into_iter()
+        .filter(|snapshot| snapshot.owner_session_id == owner_session_id)
+        .collect::<Vec<_>>();
+    snapshots.sort_by_key(|snapshot| snapshot.command_session_id);
+
+    let terminal_entries = snapshots
+        .iter()
+        .map(|snapshot| {
+            let name = terminal_session_name_for_snapshot(snapshot);
+            json!({
+                "terminal_session_id": snapshot.command_session_id.to_string(),
+                "command_session_id": snapshot.command_session_id.to_string(),
+                "name": name,
+                "command": snapshot.command,
+                "cwd": normalized_workspace_path_text_from_path(&snapshot.cwd),
+                "shell": snapshot.shell_label,
+                "launcher_shell": snapshot.launcher_shell_label,
+                "status": snapshot.status.as_str(),
+                "exit_code": snapshot.exit_code,
+                "stdout_bytes": snapshot.stdout_bytes,
+                "stderr_bytes": snapshot.stderr_bytes,
+                "last_seq": snapshot.last_seq,
+                "pending_stdin_line": snapshot.pending_stdin_line,
+                "failure_reason": snapshot.failure_reason,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut lines = vec![
+        String::from("Action: list"),
+        format!("Owner session: {owner_session_id}"),
+        format!("Terminal count: {}", terminal_entries.len()),
+    ];
+    if terminal_entries.is_empty() {
+        lines.push(String::from("(no terminal sessions)"));
+    } else {
+        for entry in &terminal_entries {
+            let name = entry["name"].as_str().unwrap_or("terminal");
+            let terminal_id = entry["terminal_session_id"].as_str().unwrap_or("-");
+            let status = entry["status"].as_str().unwrap_or("unknown");
+            let command = entry["command"].as_str().unwrap_or("");
+            lines.push(format!(
+                "- {name} [{status}] id={terminal_id} command={command}"
+            ));
+        }
+    }
+
+    let render_input = HostTextRenderInput {
+        content_bytes: lines.join("\n").len(),
+        content_lines: lines.len(),
+        content: lines.join("\n"),
+        overflow_mode: Some(HostToolOverflowMode::Page),
+        template_hint: None,
+    };
+    let budget = default_shell_command_budget_snapshot();
+    let spill_root = resolve_shell_command_spill_root(
+        request.spill_root.as_deref(),
+        request.workspace_root.as_deref(),
+        request
+            .workspace_root
+            .as_deref()
+            .unwrap_or_else(|| Path::new(".")),
+    );
+    let host_payload = json!({
+        "action": "list",
+        "owner_session_id": owner_session_id.to_string(),
+        "terminal_count": terminal_entries.len(),
+        "terminal_sessions": terminal_entries,
+        "output_overflowed": shell_command_output_exceeds_inline_budget(&render_input, &budget),
+    });
+    let model_output = render_tool_result_text(
+        &render_input,
+        None,
+        &budget,
+        &HostRenderOptions {
+            spill_root,
+            template_skill_roots: Vec::new(),
+            template_resources_root: None,
+        },
+    );
+
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(model_output))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("terminal_session"),
+                payload: host_payload,
+            }),
+    )
+}
+
+/// Executes one terminal-session start action and returns the unified tool invocation result.
+/// 执行一次终端会话 start 动作并返回统一工具调用结果。
+async fn execute_terminal_session_start_action(
+    request: NativeToolExecutionRequest,
+    parsed_args: TerminalSessionToolArgs,
+    owner_session_id: SessionId,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    shell_support: &HostCommandShellSupport,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let command_text = parsed_args
+        .command
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "The `start` action for terminal_session requires a non-empty `command`.",
+            )
+        })?;
+    let effective_cwd = resolve_shell_command_working_directory(
+        request.workspace_root.as_deref(),
+        parsed_args.cwd.as_deref(),
+    )?;
+    let spill_root = resolve_shell_command_spill_root(
+        request.spill_root.as_deref(),
+        request.workspace_root.as_deref(),
+        &effective_cwd,
+    );
+    let (launcher_program, launcher_args, launcher_shell_label) =
+        resolve_shell_command_launcher(shell_support, parsed_args.shell.as_deref(), command_text)?;
+    let shell_behavior = resolve_session_shell_behavior(command_text, &launcher_shell_label);
+    let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
+    validate_terminal_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
+    let session_name = normalize_terminal_session_name(parsed_args.name.as_deref(), command_text);
+    let snapshot = command_session_runtime
+        .start_session(CommandSessionStartRequest {
+            owner_session_id,
+            display_name: Some(session_name.clone()),
+            command: command_text.to_string(),
+            shell_label: shell_behavior.interactive_shell_label.clone(),
+            launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
+            interactive_newline: shell_specific_newline(
+                shell_behavior.interactive_shell_label.as_str(),
+            )
+            .to_string(),
+            cwd: effective_cwd,
+            launcher_program,
+            launcher_args,
+            initial_stdin: None,
+            initial_stdin_append_newline: false,
+        })
+        .await
+        .map_err(NativeToolError::new)?;
+    let returned_chunks = Vec::new();
+    let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
+    let render_input = build_terminal_session_render_input(
+        TerminalSessionToolAction::Start,
+        &snapshot,
+        &session_name,
+        &returned_chunks,
+        false,
+        output_mode,
+        None,
+        vec![
+            format!("Requested shell selector: {}", requested_shell_selector),
+            format!(
+                "Resolved launcher shell: {}",
+                shell_behavior.launcher_shell_label
+            ),
+            format!(
+                "Interactive shell: {}",
+                shell_behavior.interactive_shell_label
+            ),
+            String::from("Before using this tool, call skill(\"terminal-session\") and follow it."),
+        ],
+    );
+    let budget = default_shell_command_budget_snapshot();
+    let host_payload = build_terminal_session_host_payload(
+        TerminalSessionToolAction::Start,
+        &snapshot,
+        &session_name,
+        &returned_chunks,
+        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        output_mode,
+        confidence,
+        reason,
+        None,
+        json!({
+            "requested_shell": requested_shell_selector,
+            "nested_shell_inferred": shell_behavior.nested_shell_inferred,
+        }),
+    );
+    let model_output = render_tool_result_text(
+        &render_input,
+        None,
+        &budget,
+        &HostRenderOptions {
+            spill_root,
+            template_skill_roots: Vec::new(),
+            template_resources_root: None,
+        },
+    );
+
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(model_output))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("terminal_session"),
+                payload: host_payload,
+            }),
+    )
+}
+
+/// Executes one terminal-session read or snapshot action.
+/// 执行一次终端会话 read 或 snapshot 动作。
+async fn execute_terminal_session_read_like_action(
+    request: NativeToolExecutionRequest,
+    parsed_args: TerminalSessionToolArgs,
+    owner_session_id: SessionId,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    action: TerminalSessionToolAction,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let terminal_session_id =
+        parse_terminal_session_id(parsed_args.terminal_session_id.as_deref())?;
+    let spill_root = resolve_shell_command_spill_root(
+        request.spill_root.as_deref(),
+        request.workspace_root.as_deref(),
+        request
+            .workspace_root
+            .as_deref()
+            .unwrap_or_else(|| Path::new(".")),
+    );
+    let read_from_start = parsed_args.read_from_start.unwrap_or(false);
+    let wait_budget = if matches!(action, TerminalSessionToolAction::Snapshot) {
+        Some(0)
+    } else {
+        terminal_wait_budget_ms(parsed_args.wait_policy.as_ref())
+    };
+    let read_outcome = read_terminal_session_output_for_ai(
+        &command_session_runtime,
+        owner_session_id,
+        terminal_session_id,
+        parsed_args.after_seq,
+        matches!(action, TerminalSessionToolAction::Snapshot) || read_from_start,
+        wait_budget,
+        parsed_args.max_chunks,
+    )
+    .await?;
+    let session_name = terminal_session_name_for_snapshot(&read_outcome.snapshot);
+    let returned_chunks = if matches!(action, TerminalSessionToolAction::Snapshot) {
+        Vec::new()
+    } else {
+        read_outcome.returned_chunks.clone()
+    };
+    let returned_chunks = coalesce_terminal_output_chunks(returned_chunks);
+    let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
+    let render_input = build_terminal_session_render_input(
+        action,
+        &read_outcome.snapshot,
+        &session_name,
+        &returned_chunks,
+        read_outcome.has_more,
+        output_mode,
+        None,
+        vec![format!(
+            "Wait mode: {}",
+            terminal_wait_mode(parsed_args.wait_policy.as_ref()).as_str()
+        )],
+    );
+    let budget = default_shell_command_budget_snapshot();
+    let host_payload = build_terminal_session_host_payload(
+        action,
+        &read_outcome.snapshot,
+        &session_name,
+        &returned_chunks,
+        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        output_mode,
+        confidence,
+        reason,
+        None,
+        json!({
+            "requested_after_seq": parsed_args.after_seq.unwrap_or(0),
+            "read_from_start": read_from_start,
+            "returned_chunk_count": returned_chunks.len(),
+            "has_more": read_outcome.has_more,
+        }),
+    );
+    let model_output = render_tool_result_text(
+        &render_input,
+        None,
+        &budget,
+        &HostRenderOptions {
+            spill_root,
+            template_skill_roots: Vec::new(),
+            template_resources_root: None,
+        },
+    );
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(model_output))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("terminal_session"),
+                payload: host_payload,
+            }),
+    )
+}
+
+/// Executes one terminal-session send action.
+/// 执行一次终端会话 send 动作。
+async fn execute_terminal_session_send_action(
+    request: NativeToolExecutionRequest,
+    parsed_args: TerminalSessionToolArgs,
+    owner_session_id: SessionId,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let terminal_session_id =
+        parse_terminal_session_id(parsed_args.terminal_session_id.as_deref())?;
+    let before_snapshot = command_session_runtime
+        .try_snapshot_owned_session(owner_session_id, terminal_session_id)
+        .ok_or_else(|| {
+            NativeToolError::new(format!(
+                "Terminal session `{terminal_session_id}` was not found."
+            ))
+        })?;
+    let session_name = terminal_session_name_for_snapshot(&before_snapshot);
+    let inputs = parsed_args.inputs.clone().ok_or_else(|| {
+        NativeToolError::new("The `send` action for terminal_session requires `inputs`.")
+    })?;
+    if inputs.is_empty() {
+        return Err(NativeToolError::new(
+            "The `inputs` array for terminal_session send cannot be empty.",
+        ));
+    }
+    let wait_mode = terminal_wait_mode(parsed_args.wait_policy.as_ref());
+    let interactive_newline = shell_specific_newline(before_snapshot.shell_label.as_str());
+    let mut encoded_input = encode_terminal_inputs(&inputs, interactive_newline)?;
+    let interrupt_requested = terminal_inputs_request_interrupt(&inputs);
+    let mut transaction = None;
+    if wait_mode == TerminalSessionWaitMode::UntilExitCode {
+        let command = terminal_transaction_command_text(&inputs)?;
+        let transaction_id = Uuid::new_v4().to_string();
+        encoded_input = wrap_terminal_transaction_command(
+            &command,
+            before_snapshot.shell_label.as_str(),
+            transaction_id.as_str(),
+            interactive_newline,
+        )?;
+        transaction = Some(TerminalTransactionResult {
+            id: transaction_id,
+            command,
+            exit_code: None,
+            status: String::from("pending"),
+            started_seq: before_snapshot.last_seq,
+            ended_seq: None,
+        });
+    }
+    let write_outcome = command_session_runtime
+        .write_session(owner_session_id, terminal_session_id, encoded_input, false)
+        .await
+        .map_err(NativeToolError::new)?;
+    let requested_wait_budget =
+        terminal_wait_budget_ms(parsed_args.wait_policy.as_ref()).unwrap_or(0);
+    let wait_budget = requested_wait_budget;
+    let mut interrupt_drain_elapsed_ms = 0u64;
+    let mut interrupt_drain_discarded_chunks = 0usize;
+    let mut interrupt_cleanup_elapsed_ms = 0u64;
+    let mut interrupt_cleanup_discarded_chunks = 0usize;
+    let mut interrupt_cleanup_failure: Option<String> = None;
+    let (read_snapshot, returned_chunks, has_more) =
+        if let Some(transaction_ref) = transaction.as_mut() {
+            let (read_outcome, stripped_chunks, exit_code) = read_terminal_transaction_output(
+                &command_session_runtime,
+                owner_session_id,
+                terminal_session_id,
+                before_snapshot.last_seq,
+                wait_budget,
+                parsed_args.max_chunks,
+                transaction_ref.id.as_str(),
+            )
+            .await?;
+            transaction_ref.exit_code = exit_code;
+            transaction_ref.status = if exit_code.is_some() {
+                String::from("completed")
+            } else {
+                String::from("timeout")
+            };
+            transaction_ref.ended_seq = read_outcome
+                .returned_chunks
+                .last()
+                .map(|chunk| chunk.seq)
+                .or(Some(read_outcome.snapshot.last_seq));
+            (
+                read_outcome.snapshot,
+                stripped_chunks,
+                read_outcome.has_more,
+            )
+        } else if interrupt_requested {
+            let drain_result = drain_terminal_interrupt_output(
+                &command_session_runtime,
+                owner_session_id,
+                terminal_session_id,
+                before_snapshot.last_seq,
+                parsed_args.max_chunks,
+            )
+            .await?;
+            interrupt_drain_elapsed_ms = drain_result.elapsed_ms;
+            interrupt_drain_discarded_chunks = drain_result.discarded_chunk_count;
+            let cleanup_result = cleanup_terminal_interrupt_input_line(
+                &command_session_runtime,
+                owner_session_id,
+                terminal_session_id,
+                drain_result.snapshot.clone(),
+                interactive_newline,
+                parsed_args.max_chunks,
+            )
+            .await;
+            interrupt_cleanup_elapsed_ms = cleanup_result.elapsed_ms;
+            interrupt_cleanup_discarded_chunks = cleanup_result.discarded_chunk_count;
+            interrupt_cleanup_failure = cleanup_result.failure_reason.clone();
+            (
+                cleanup_result.snapshot,
+                drain_result.returned_chunks,
+                drain_result.has_more || cleanup_result.has_more,
+            )
+        } else {
+            let read_outcome = read_terminal_session_output_for_ai(
+                &command_session_runtime,
+                owner_session_id,
+                terminal_session_id,
+                Some(before_snapshot.last_seq),
+                false,
+                Some(wait_budget),
+                parsed_args.max_chunks,
+            )
+            .await?;
+            (
+                read_outcome.snapshot,
+                read_outcome.returned_chunks,
+                read_outcome.has_more,
+            )
+        };
+    let returned_chunks = coalesce_terminal_output_chunks(returned_chunks);
+    let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
+    let spill_root = resolve_shell_command_spill_root(
+        request.spill_root.as_deref(),
+        request.workspace_root.as_deref(),
+        request
+            .workspace_root
+            .as_deref()
+            .unwrap_or_else(|| Path::new(".")),
+    );
+    let input_labels = inputs
+        .iter()
+        .map(terminal_input_label)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let render_input = build_terminal_session_render_input(
+        TerminalSessionToolAction::Send,
+        &read_snapshot,
+        &session_name,
+        &returned_chunks,
+        has_more,
+        output_mode,
+        transaction.as_ref(),
+        vec![
+            format!("Inputs: {input_labels}"),
+            format!("Bytes written: {}", write_outcome.bytes_written),
+            format!("Wait mode: {}", wait_mode.as_str()),
+            format!(
+                "Interrupt drain: {}",
+                if interrupt_requested { "yes" } else { "no" }
+            ),
+            format!("Interrupt drain elapsed ms: {interrupt_drain_elapsed_ms}"),
+            format!("Interrupt drain discarded chunks: {interrupt_drain_discarded_chunks}"),
+            format!("Interrupt cleanup elapsed ms: {interrupt_cleanup_elapsed_ms}"),
+            format!("Interrupt cleanup discarded chunks: {interrupt_cleanup_discarded_chunks}"),
+            format!(
+                "Interrupt cleanup failure: {}",
+                interrupt_cleanup_failure.as_deref().unwrap_or("none")
+            ),
+        ],
+    );
+    let budget = default_shell_command_budget_snapshot();
+    let host_payload = build_terminal_session_host_payload(
+        TerminalSessionToolAction::Send,
+        &read_snapshot,
+        &session_name,
+        &returned_chunks,
+        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        output_mode,
+        confidence,
+        reason,
+        transaction.as_ref(),
+        json!({
+            "input_labels": input_labels,
+            "bytes_written": write_outcome.bytes_written,
+            "wait_mode": wait_mode.as_str(),
+            "interrupt_drain_ms": interrupt_drain_elapsed_ms,
+            "interrupt_drain_discarded_chunks": interrupt_drain_discarded_chunks,
+            "interrupt_cleanup_ms": interrupt_cleanup_elapsed_ms,
+            "interrupt_cleanup_discarded_chunks": interrupt_cleanup_discarded_chunks,
+            "interrupt_cleanup_failure": interrupt_cleanup_failure,
+            "returned_chunk_count": returned_chunks.len(),
+            "has_more": has_more,
+        }),
+    );
+    let model_output = render_tool_result_text(
+        &render_input,
+        None,
+        &budget,
+        &HostRenderOptions {
+            spill_root,
+            template_skill_roots: Vec::new(),
+            template_resources_root: None,
+        },
+    );
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(model_output))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("terminal_session"),
+                payload: host_payload,
+            }),
+    )
+}
+
+/// Executes one terminal-session stop action.
+/// 执行一次终端会话 stop 动作。
+async fn execute_terminal_session_stop_action(
+    parsed_args: TerminalSessionToolArgs,
+    owner_session_id: SessionId,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let terminal_session_id =
+        parse_terminal_session_id(parsed_args.terminal_session_id.as_deref())?;
+    let snapshot = command_session_runtime
+        .stop_session(
+            owner_session_id,
+            terminal_session_id,
+            Some(DEFAULT_COMMAND_SESSION_STOP_WAIT_MS),
+        )
+        .await
+        .map_err(NativeToolError::new)?;
+    let session_name = terminal_session_name_for_snapshot(&snapshot);
+    let returned_chunks = Vec::new();
+    let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
+    let render_input = build_terminal_session_render_input(
+        TerminalSessionToolAction::Stop,
+        &snapshot,
+        &session_name,
+        &returned_chunks,
+        false,
+        output_mode,
+        None,
+        vec![format!(
+            "Stop wait ms: {DEFAULT_COMMAND_SESSION_STOP_WAIT_MS}"
+        )],
+    );
+    let budget = default_shell_command_budget_snapshot();
+    let host_payload = build_terminal_session_host_payload(
+        TerminalSessionToolAction::Stop,
+        &snapshot,
+        &session_name,
+        &returned_chunks,
+        shell_command_output_exceeds_inline_budget(&render_input, &budget),
+        output_mode,
+        confidence,
+        reason,
+        None,
+        json!({
+            "stop_wait_ms": DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
+        }),
+    );
+    Ok(
+        VulcanToolInvocationResult::from_model_output(Value::String(render_input.content))
+            .with_host_result(VulcanToolHostResult {
+                kind: String::from("terminal_session"),
+                payload: host_payload,
+            }),
+    )
+}
+
+/// Executes the host-owned `terminal_session` tool and returns a unified tool invocation result.
+/// 执行宿主自有 `terminal_session` 工具并返回统一工具调用结果。
+async fn execute_terminal_session_tool(
+    request: NativeToolExecutionRequest,
+    command_session_runtime: Arc<CommandSessionRuntime>,
+    shell_support: &HostCommandShellSupport,
+) -> Result<VulcanToolInvocationResult, NativeToolError> {
+    let owner_session_id = require_terminal_session_owner_session_id(request.session_id)?;
+    let parsed_args = parse_terminal_session_tool_arguments(request.arguments.clone())?;
+    match parsed_args.action {
+        TerminalSessionToolAction::List => {
+            execute_terminal_session_list_action(request, owner_session_id, command_session_runtime)
+                .await
+        }
+        TerminalSessionToolAction::Start => {
+            execute_terminal_session_start_action(
+                request,
+                parsed_args,
+                owner_session_id,
+                command_session_runtime,
+                shell_support,
+            )
+            .await
+        }
+        TerminalSessionToolAction::Send => {
+            execute_terminal_session_send_action(
+                request,
+                parsed_args,
+                owner_session_id,
+                command_session_runtime,
+            )
+            .await
+        }
+        TerminalSessionToolAction::Read => {
+            execute_terminal_session_read_like_action(
+                request,
+                parsed_args,
+                owner_session_id,
+                command_session_runtime,
+                TerminalSessionToolAction::Read,
+            )
+            .await
+        }
+        TerminalSessionToolAction::Snapshot => {
+            execute_terminal_session_read_like_action(
+                request,
+                parsed_args,
+                owner_session_id,
+                command_session_runtime,
+                TerminalSessionToolAction::Snapshot,
+            )
+            .await
+        }
+        TerminalSessionToolAction::Stop => {
+            execute_terminal_session_stop_action(
+                parsed_args,
+                owner_session_id,
+                command_session_runtime,
+            )
+            .await
+        }
+    }
+}
+
 /// Executes one shell-session start action and returns the unified tool invocation result.
 /// 执行一次 shell 会话 start 动作并返回统一工具调用结果。
+#[cfg(test)]
 async fn execute_shell_session_start_action(
     request: NativeToolExecutionRequest,
     parsed_args: ShellSessionToolArgs,
@@ -3252,7 +5302,7 @@ async fn execute_shell_session_start_action(
         resolve_shell_command_launcher(shell_support, parsed_args.shell.as_deref(), command_text)?;
     let shell_behavior = resolve_session_shell_behavior(command_text, &launcher_shell_label);
     let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
-    validate_shell_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
+    validate_terminal_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
     let append_newline =
         effective_start_append_newline(parsed_args.append_newline, parsed_args.stdin.as_deref());
     let initial_stdin = parsed_args.stdin.clone();
@@ -3260,6 +5310,7 @@ async fn execute_shell_session_start_action(
     let snapshot = command_session_runtime
         .start_session(CommandSessionStartRequest {
             owner_session_id,
+            display_name: None,
             command: command_text.to_string(),
             shell_label: shell_behavior.interactive_shell_label.clone(),
             launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
@@ -3363,6 +5414,7 @@ async fn execute_shell_session_start_action(
 
 /// Executes one shell-session read action and returns the unified tool invocation result.
 /// 执行一次 shell 会话 read 动作并返回统一工具调用结果。
+#[cfg(test)]
 async fn execute_shell_session_read_action(
     request: NativeToolExecutionRequest,
     parsed_args: ShellSessionToolArgs,
@@ -3427,6 +5479,7 @@ async fn execute_shell_session_read_action(
 
 /// Executes one shell-session write action and returns the unified tool invocation result.
 /// 执行一次 shell 会话 write 动作并返回统一工具调用结果。
+#[cfg(test)]
 async fn execute_shell_session_write_action(
     parsed_args: ShellSessionToolArgs,
     owner_session_id: SessionId,
@@ -3485,6 +5538,7 @@ async fn execute_shell_session_write_action(
 
 /// Executes one shell-session stop action and returns the unified tool invocation result.
 /// 执行一次 shell 会话 stop 动作并返回统一工具调用结果。
+#[cfg(test)]
 async fn execute_shell_session_stop_action(
     parsed_args: ShellSessionToolArgs,
     owner_session_id: SessionId,
@@ -3525,6 +5579,7 @@ async fn execute_shell_session_stop_action(
 
 /// Executes the host-owned `shell_session` tool and returns a unified tool invocation result.
 /// 执行宿主自有 `shell_session` 工具并返回统一工具调用结果。
+#[cfg(test)]
 async fn execute_shell_session_tool(
     request: NativeToolExecutionRequest,
     command_session_runtime: Arc<CommandSessionRuntime>,
@@ -3850,20 +5905,26 @@ fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeTo
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeToolExecutionRequest, SUBMIT_PLAN_MARKER, ThreadGoal, ThreadGoalStatus,
-        build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
-        build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
-        build_todolist_tool, build_workspace_describe_tool, display_submit_plan_path,
-        effective_start_append_newline, goal_response_value, resolve_session_shell_behavior,
+        CommandSessionOutputChunk, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
+        TerminalSessionInput, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
+        build_mcp_server_list_tool, build_shell_command_tool, build_shell_session_tool,
+        build_skill_list_tool, build_submit_plan_tool, build_terminal_session_tool,
+        build_todolist_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
+        display_submit_plan_path, effective_start_append_newline, goal_response_value,
+        normalize_terminal_session_name, resolve_session_shell_behavior,
         resolve_shell_command_launcher, resolve_shell_command_working_directory,
-        shell_command_args_schema, shell_session_args_schema, shell_specific_newline,
-        validate_shell_session_start_shell_policy, validate_shell_session_start_stdin_policy,
+        shell_command_args_schema, shell_specific_newline, terminal_inputs_request_interrupt,
+        terminal_interrupt_drain_chunk_is_visible, terminal_screen_text_from_chunks,
+        terminal_session_args_schema, terminal_transaction_command_text,
+        validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
+        wrap_terminal_transaction_command,
     };
     use crate::agent_runtime::config::{
         AgentRuntimeConfig, RuntimeAgentDefinition, RuntimeAgentKind, RuntimeAgentRoute,
         RuntimeSkillDefinition, RuntimeSkillKind,
     };
     use crate::tooling::CommandSessionRuntime;
+    use crate::tooling::command_session_runtime::CommandSessionOutputStream;
     use crate::tooling::shell_host::{
         DetectedHostCommandShell, HostCommandShell, HostCommandShellSupport,
     };
@@ -4435,7 +6496,7 @@ mod tests {
     fn shell_tool_schemas_expose_dynamic_detected_shells() {
         let shell_support = test_shell_support();
         let command_schema = shell_command_args_schema(&shell_support);
-        let session_schema = shell_session_args_schema(&shell_support);
+        let session_schema = terminal_session_args_schema(&shell_support);
 
         assert_eq!(
             command_schema["properties"]["shell"]["enum"],
@@ -4453,12 +6514,12 @@ mod tests {
     fn shell_tool_schema_descriptions_document_defaults_in_english() {
         let shell_support = test_shell_support();
         let command_tool = build_shell_command_tool(shell_support.clone());
-        let session_tool = build_shell_session_tool(
+        let session_tool = build_terminal_session_tool(
             Arc::new(CommandSessionRuntime::new()),
             shell_support.clone(),
         );
         let command_schema = shell_command_args_schema(&shell_support);
-        let session_schema = shell_session_args_schema(&shell_support);
+        let session_schema = terminal_session_args_schema(&shell_support);
 
         assert!(
             command_tool
@@ -4470,7 +6531,7 @@ mod tests {
             session_tool
                 .descriptor
                 .description
-                .starts_with("Start, read, write to, or stop")
+                .contains("call skill(\"terminal-session\")")
         );
         assert!(
             command_tool
@@ -4494,7 +6555,7 @@ mod tests {
             session_tool
                 .descriptor
                 .description
-                .contains("tool_output_overflow_page_md_")
+                .contains("until_exit_code")
         );
         assert!(
             command_schema["properties"]["timeout_ms"]["description"]
@@ -4521,10 +6582,10 @@ mod tests {
                 .contains("No newline is added automatically")
         );
         assert!(
-            session_schema["properties"]["wait_for_output_ms"]["description"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("Default: 0")
+            session_schema["properties"]["action"]["enum"]
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .contains(&json!("send"))
         );
         assert!(
             session_schema["properties"]["max_chunks"]["description"]
@@ -4533,36 +6594,22 @@ mod tests {
                 .contains("Default: 128")
         );
         assert!(
-            session_schema["properties"]["max_chunks"]["description"]
+            session_schema["properties"]["inputs"]["description"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("coalesces adjacent undelivered fragments")
+                .contains("Do not hand-write ANSI")
         );
         assert!(
-            session_schema["properties"]["append_newline"]["description"]
+            session_schema["properties"]["wait_policy"]["description"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("resolved launcher shell")
+                .contains("until_exit_code")
         );
         assert!(
             session_schema["properties"]["cwd"]["description"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("falls back to the host process working directory")
-        );
-        if cfg!(windows) {
-            assert!(
-                session_schema["properties"]["shell"]["description"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("rejects `shell: auto`")
-            );
-        }
-        assert!(
-            session_schema["properties"]["stdin"]["description"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("hidden concatenation")
+                .contains("workspace root")
         );
     }
 
@@ -4635,14 +6682,14 @@ mod tests {
     fn shell_session_start_rejects_windows_auto_for_nested_unix_shells() {
         let bash_behavior = resolve_session_shell_behavior("bash", "pwsh");
         if cfg!(windows) {
-            let error = validate_shell_session_start_shell_policy(Some("auto"), &bash_behavior)
+            let error = validate_terminal_session_start_shell_policy(Some("auto"), &bash_behavior)
                 .expect_err("windows auto nested bash should be rejected");
             assert!(error.message.contains("requires an explicit `shell`"));
         } else {
-            validate_shell_session_start_shell_policy(Some("auto"), &bash_behavior)
+            validate_terminal_session_start_shell_policy(Some("auto"), &bash_behavior)
                 .expect("non-windows hosts should keep current auto behavior");
         }
-        validate_shell_session_start_shell_policy(Some("bash"), &bash_behavior)
+        validate_terminal_session_start_shell_policy(Some("bash"), &bash_behavior)
             .expect("explicit bash should remain valid");
     }
 
@@ -4679,14 +6726,150 @@ mod tests {
         assert!(tool.descriptor.available_in_plan);
     }
 
-    /// The shell-session tool should stay AI-visible in Plan mode so interactive command workflows are not silently hidden from the model.
-    /// shell-session 工具应在 Plan 模式下继续对 AI 可见，避免交互式命令工作流被模型静默隐藏。
+    /// The terminal-session tool should stay AI-visible in Plan mode so interactive command workflows are not silently hidden from the model.
+    /// terminal-session 工具应在 Plan 模式下继续对 AI 可见，避免交互式命令工作流被模型静默隐藏。
     #[test]
-    fn shell_session_tool_stays_visible_in_plan_mode() {
-        let tool =
-            build_shell_session_tool(Arc::new(CommandSessionRuntime::new()), test_shell_support());
+    fn terminal_session_tool_stays_visible_in_plan_mode() {
+        let tool = build_terminal_session_tool(
+            Arc::new(CommandSessionRuntime::new()),
+            test_shell_support(),
+        );
         assert!(tool.descriptor.ai_visible);
         assert!(tool.descriptor.available_in_plan);
+        assert!(
+            tool.descriptor
+                .description
+                .contains("skill(\"terminal-session\")")
+        );
+    }
+
+    /// Screen-like terminal chunks should expose a plain screen text view for AI navigation.
+    /// 屏幕型终端分片应暴露用于 AI 导航的纯文本屏幕视图。
+    #[test]
+    fn terminal_screen_text_from_chunks_strips_ansi_sequences() {
+        let chunks = vec![CommandSessionOutputChunk {
+            seq: 1,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from("\x1b[?1049h\x1b[2J\x1b[HMenu\n> Item"),
+        }];
+
+        let screen_text = terminal_screen_text_from_chunks("screen", &chunks)
+            .expect("screen mode should expose screen text");
+
+        assert!(screen_text.contains("Menu"));
+        assert!(screen_text.contains("> Item"));
+        assert!(!screen_text.contains("\x1b"));
+        assert!(terminal_screen_text_from_chunks("log", &chunks).is_none());
+    }
+
+    /// Ctrl+C chord input should be recognized as an interrupt so send can drain immediate output.
+    /// Ctrl+C 组合键输入应被识别为中断，以便 send 可以消化即时输出。
+    #[test]
+    fn terminal_inputs_request_interrupt_detects_ctrl_c() {
+        assert!(terminal_inputs_request_interrupt(&[
+            TerminalSessionInput::Chord {
+                key: String::from("c"),
+                ctrl: Some(true),
+                alt: None,
+                shift: None,
+                meta: None,
+            }
+        ]));
+        assert!(!terminal_inputs_request_interrupt(&[
+            TerminalSessionInput::Key {
+                key: String::from("c"),
+            }
+        ]));
+    }
+
+    /// Interrupt drain should hide pure control fragments while keeping visible prompt or output text.
+    /// 中断排空应隐藏纯控制片段，同时保留可见的提示符或输出文本。
+    #[test]
+    fn terminal_interrupt_drain_hides_control_only_chunks() {
+        let control_chunk = CommandSessionOutputChunk {
+            seq: 1,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from("\x03\r\n\x1b[?25l"),
+        };
+        let prompt_chunk = CommandSessionOutputChunk {
+            seq: 2,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from("PS D:\\repo> "),
+        };
+
+        assert!(!terminal_interrupt_drain_chunk_is_visible(&control_chunk));
+        assert!(terminal_interrupt_drain_chunk_is_visible(&prompt_chunk));
+    }
+
+    /// Adjacent terminal chunks from the same stream should be coalesced before returning to the model.
+    /// 返回给模型前应合并同一输出流上的相邻终端分片。
+    #[test]
+    fn terminal_output_chunks_coalesce_adjacent_same_stream() {
+        let chunks = vec![
+            CommandSessionOutputChunk {
+                seq: 1,
+                stream: CommandSessionOutputStream::Stdout,
+                text: String::from("$"),
+            },
+            CommandSessionOutputChunk {
+                seq: 2,
+                stream: CommandSessionOutputStream::Stdout,
+                text: String::from("global"),
+            },
+            CommandSessionOutputChunk {
+                seq: 3,
+                stream: CommandSessionOutputStream::Stderr,
+                text: String::from("err"),
+            },
+        ];
+
+        let coalesced = coalesce_terminal_output_chunks(chunks);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(coalesced[0].seq, 1);
+        assert_eq!(coalesced[0].text, "$global");
+        assert_eq!(coalesced[1].stream, CommandSessionOutputStream::Stderr);
+    }
+
+    /// Terminal names should preserve explicit labels and fall back to compact command text when omitted.
+    /// 终端名称应保留显式标签，并在省略时回退到紧凑命令文本。
+    #[test]
+    fn terminal_session_name_normalization_uses_explicit_or_command_fallback() {
+        assert_eq!(
+            normalize_terminal_session_name(Some("  dev server  "), "pwsh -NoLogo"),
+            "dev server"
+        );
+        assert_eq!(
+            normalize_terminal_session_name(None, "pwsh   -NoLogo"),
+            "pwsh -NoLogo"
+        );
+        assert_eq!(normalize_terminal_session_name(Some("   "), ""), "terminal");
+    }
+
+    /// Terminal command transactions must reject paste input because wrapping pasted payloads can corrupt interactive shell state.
+    /// 终端命令事务必须拒绝粘贴输入，因为包装粘贴载荷可能破坏交互式 shell 状态。
+    #[test]
+    fn terminal_transaction_rejects_paste_input() {
+        let error = terminal_transaction_command_text(&[TerminalSessionInput::Paste {
+            text: String::from("echo pasted\n"),
+        }])
+        .expect_err("paste input should not be accepted for exit-code transactions");
+
+        assert!(error.message.contains("cannot be used with paste"));
+    }
+
+    /// PowerShell transaction wrapping should report non-terminating cmdlet errors as a failed transaction.
+    /// PowerShell 事务包装应将 cmdlet 非终止错误报告为失败事务。
+    #[test]
+    fn terminal_transaction_powershell_wrapper_tracks_non_terminating_errors() {
+        let wrapped =
+            wrap_terminal_transaction_command("Get-Item missing", "pwsh", "tx-id", "\r\n")
+                .expect("pwsh wrapper should be supported");
+
+        assert!(wrapped.contains("$vulcanErrorCount = $Error.Count"));
+        assert!(wrapped.contains("$vulcanNewErrors = $Error.Count - $vulcanErrorCount"));
+        assert!(wrapped.contains("$vulcanSuccess -and $vulcanNewErrors -le 0"));
+        assert!(wrapped.contains("__VULCAN_TERMINAL_TX_EXIT__:tx-id:"));
     }
 
     /// The shell-command tool should execute one simple command and emit the structured `command_run` host result.

@@ -616,6 +616,7 @@ fn session_ui_state_json_preserves_pending_prompt_panel_queue() {
             prompt: String::from("继续排队消息"),
             preview: String::from("继续排队消息"),
             attachments: Vec::new(),
+            hidden_model_guidance: None,
             model_reference: None,
             runtime_options: crate::model::PendingPromptRuntimeOptions::default(),
             state: PendingPromptPanelEntryState::Ready,

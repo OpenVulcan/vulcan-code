@@ -1229,6 +1229,9 @@ export interface CommandSessionSummary {
   // Stable command session identifier.
   // 稳定命令会话标识。
   id: string;
+  // Optional user-facing terminal session name.
+  // 可选用户可见终端会话名称。
+  name?: string | null;
   // Command text.
   // 命令文本。
   command: string;

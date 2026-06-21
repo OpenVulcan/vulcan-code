@@ -466,7 +466,7 @@ fn default_analysis_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         allow_all_native: false,
         native_tools: vec![
             String::from("shell_command"),
-            String::from("shell_session"),
+            String::from("terminal_session"),
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
         ],
@@ -484,7 +484,7 @@ fn default_lua_runtime_tool_policy() -> RuntimeToolPolicyDefinition {
         allow_all_native: false,
         native_tools: vec![
             String::from("shell_command"),
-            String::from("shell_session"),
+            String::from("terminal_session"),
             String::from("vmm_memory_search"),
             String::from("vmm_turn_details"),
         ],
@@ -885,7 +885,7 @@ mod tests {
             analysis_safe.native_tools,
             vec![
                 String::from("shell_command"),
-                String::from("shell_session"),
+                String::from("terminal_session"),
                 String::from("vmm_memory_search"),
                 String::from("vmm_turn_details"),
             ]
@@ -899,7 +899,7 @@ mod tests {
             lua_safe.native_tools,
             vec![
                 String::from("shell_command"),
-                String::from("shell_session"),
+                String::from("terminal_session"),
                 String::from("vmm_memory_search"),
                 String::from("vmm_turn_details"),
             ]

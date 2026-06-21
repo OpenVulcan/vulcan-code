@@ -2992,7 +2992,7 @@ async fn service_install_system_agent_skills(
         &configuration.prompt_skills,
     );
     let source_root = vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory();
-    if source_root.is_dir() {
+    if system_prompt_skills_source_covers_embedded_inventory(&source_root) {
         vulcan_prompt_skills::install_system_prompt_skills_from_source(
             source_root,
             vulcan_prompt_skills::configured_system_skill_root(&runtime_config),
@@ -3008,6 +3008,30 @@ async fn service_install_system_agent_skills(
         )
     })?;
     refresh_workbench_snapshot(state).await
+}
+
+/// Returns whether a packaged system Agent Skills resource directory covers every embedded skill.
+/// 返回打包系统 Agent Skills 资源目录是否覆盖当前所有内嵌技能。
+fn system_prompt_skills_source_covers_embedded_inventory(source_root: &Path) -> bool {
+    if !source_root.is_dir() {
+        return false;
+    }
+
+    let Ok(entries) = fs::read_dir(source_root) else {
+        return false;
+    };
+    let packaged_names = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.is_dir() && path.join(vulcan_prompt_skills::SKILL_FILE_NAME).is_file())
+                .then(|| entry.file_name().to_string_lossy().to_string())
+        })
+        .collect::<BTreeSet<_>>();
+
+    vulcan_prompt_skills::embedded_system_skill_names()
+        .into_iter()
+        .all(|name| packaged_names.contains(&name))
 }
 
 /// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
@@ -4988,9 +5012,7 @@ async fn service_stop_command_session(
             .try_snapshot_session_by_id(command_session_id)
             .map(|snapshot| snapshot.owner_session_id)
             .ok_or_else(|| {
-                format!(
-                    "Command session `{command_session_id}` was not found in the live runtime."
-                )
+                format!("Command session `{command_session_id}` was not found in the live runtime.")
             })?,
     };
     webui_trace(
@@ -5001,10 +5023,17 @@ async fn service_stop_command_session(
         .command_session_runtime
         .stop_session(owner_session_id, command_session_id, Some(1500))
         .await?;
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
-        String::from("service is still starting; workspace snapshot is not ready")
-    })?;
-    store_current_workbench_snapshot(&app, &state, &controller_runtime, &agent_runtime, workspace_snapshot)
+    let workspace_snapshot =
+        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    store_current_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &agent_runtime,
+        workspace_snapshot,
+    )
 }
 
 /// Saves or updates the selected session goal through the user-facing WebUI API.
@@ -19348,7 +19377,7 @@ Allowed non-mutating actions include:
 
 * Reading or searching files, configs, schemas, types, manifests, and docs.
 * Static analysis, inspection, and repository exploration.
-* One-shot or interactive command-line exploration through tools such as `shell_command` or `shell_session`, when the command is used only to inspect, test, or validate the plan.
+* One-shot or interactive command-line exploration through tools such as `shell_command` or `terminal_session`, when the command is used only to inspect, test, or validate the plan. Before using `terminal_session`, call `skill("terminal-session")` and follow that skill.
 * Dry-run style commands when they do not edit repo-tracked files.
 * Tests, builds, or checks that may write to caches or build artifacts, as long as they do not edit repo-tracked files.
 
@@ -26304,9 +26333,16 @@ fn command_sessions(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    summaries.sort_by(|left, right| left.command.cmp(&right.command).then(left.id.cmp(&right.id)));
+    summaries.sort_by(|left, right| {
+        left.name.cmp(&right.name).then(
+            left.command
+                .cmp(&right.command)
+                .then(left.id.cmp(&right.id)),
+        )
+    });
     summaries.push(CommandSessionSummary {
         id: String::from("vldb-controller"),
+        name: Some(String::from("VLDB Controller")),
         command: controller.executable.clone(),
         status: String::from("running"),
         preview: format!(
@@ -26335,6 +26371,7 @@ fn command_session_summary_from_snapshot(
     );
     CommandSessionSummary {
         id: snapshot.command_session_id.to_string(),
+        name: snapshot.display_name,
         command: snapshot.command,
         status: snapshot.status.as_str().to_string(),
         preview,

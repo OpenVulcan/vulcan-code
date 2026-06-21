@@ -26,7 +26,7 @@ import type { PlanArtifactActionPayload } from "@/components/conversation/conver
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
   conversationMessageUnixMillis,
-  formatFullConversationTimestamp,
+  formatShortConversationTimestamp,
   formatWorkProcessDuration,
 } from "@/components/conversation/conversation-timeline";
 import type {
@@ -261,6 +261,9 @@ export function ConversationRenderItemView(props: {
   // Whether this row is the currently streaming process item.
   // 该行是否为当前流式过程项。
   itemStreaming?: boolean;
+  // Whether this row is the final assistant answer for one completed turn.
+  // 该行是否为已完成回合的最终 Assistant 回答。
+  finalAssistantOutput?: boolean;
   // Force Markdown blocks in externally hidden panels to stay mounted when visible.
   // 强制外层隐藏面板中的 Markdown 块在可见时保持直接挂载。
   forceEagerMarkdown?: boolean;
@@ -346,7 +349,7 @@ export function ConversationRenderItemView(props: {
   }, [props.item.id, props.item.userMessage, props.parentConversationId]);
   const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey);
   const userTimestampMs = conversationMessageUnixMillis(props.item.userMessage);
-  const userTimestamp = formatFullConversationTimestamp(props.item.userMessage);
+  const userTimestamp = formatShortConversationTimestamp(props.item.userMessage);
   const handleCopyUserPrompt = React.useCallback(async () => {
     if (!userBody) {
       return;
@@ -472,7 +475,7 @@ export function ConversationRenderItemView(props: {
   }
 
   return (
-    <article className={`message-row ${props.item.role}`}>
+    <article className={cn("message-row", props.item.role, props.finalAssistantOutput && "assistant-final-output")}>
       <div className="assistant-flow">
         {props.item.role === "system" ? <span className="message-role-label">SYSTEM</span> : null}
         <ConversationBlocksView
@@ -504,6 +507,48 @@ export function ConversationRenderItemView(props: {
   );
 }
 
+// ConversationFinalAssistantMeta renders fixed actions below one final assistant turn.
+// ConversationFinalAssistantMeta 渲染单个最终 Assistant 回合下方的固定操作信息。
+export function ConversationFinalAssistantMeta(props: {
+  // Final assistant row used for raw copy content and timestamp.
+  // 用于原文复制内容与时间戳的最终 Assistant 行。
+  item: ConversationRenderItem;
+  // Copies transcript text using the shell-provided clipboard path.
+  // 使用外壳提供的剪贴板路径复制转录文本。
+  onCopyText: (text: string) => Promise<void> | void;
+}) {
+  const finalAssistantRawText = finalAssistantOutputText(props.item);
+  const finalAssistantTimestampMs = conversationMessageUnixMillis(props.item.sourceMessage);
+  const finalAssistantTimestamp = formatShortConversationTimestamp(props.item.sourceMessage);
+  const [finalAssistantCopied, setFinalAssistantCopied] = React.useState(false);
+  const handleCopyFinalAssistantOutput = React.useCallback(async () => {
+    if (!finalAssistantRawText) {
+      return;
+    }
+    await props.onCopyText(finalAssistantRawText);
+    setFinalAssistantCopied(true);
+  }, [finalAssistantRawText, props]);
+  return (
+    <div className="assistant-final-meta">
+      {finalAssistantRawText ? (
+        <button
+          aria-label={finalAssistantCopied ? "已复制最终输出原文" : "复制最终输出原文"}
+          className="assistant-final-meta-button"
+          onClick={() => void handleCopyFinalAssistantOutput()}
+          onMouseLeave={() => setFinalAssistantCopied(false)}
+          title={finalAssistantCopied ? "已复制最终输出原文" : "复制最终输出原文"}
+          type="button"
+        >
+          {finalAssistantCopied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      ) : null}
+      {finalAssistantTimestamp && finalAssistantTimestampMs ? (
+        <time dateTime={new Date(finalAssistantTimestampMs).toISOString()}>{finalAssistantTimestamp}</time>
+      ) : null}
+    </div>
+  );
+}
+
 // renderItemHiddenByThinkingDisplay hides a render row when all its thinking blocks are display-filtered.
 // renderItemHiddenByThinkingDisplay 在一条渲染行的思考块全部被展示策略过滤时隐藏整行。
 export function renderItemHiddenByThinkingDisplay(item: ConversationRenderItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
@@ -518,4 +563,18 @@ function stripUserPromptHeading(body: string): string {
   return body
     .replace(/^\s*(?:#{1,6}\s*)?(?:\*\*)?(?:用户指令|User Prompt|USER)(?:\*\*)?\s*\n+/i, "")
     .trim();
+}
+
+// finalAssistantOutputText returns the raw Markdown source for one final assistant row.
+// finalAssistantOutputText 返回单条最终 Assistant 行的 Markdown 原文。
+function finalAssistantOutputText(item: ConversationRenderItem): string {
+  const sourceBody = item.sourceMessage?.body?.trim();
+  if (sourceBody) {
+    return sourceBody;
+  }
+  return item.blocks
+    .filter((block) => block.kind === "markdown")
+    .map((block) => block.body.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }

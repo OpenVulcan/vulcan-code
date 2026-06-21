@@ -2,6 +2,7 @@ import React from "react";
 import {
   CheckCircle2,
   Circle,
+  CircleStop,
   ClipboardList,
   FileDiff,
   GitBranch,
@@ -10,9 +11,20 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  TerminalSquare,
 } from "lucide-react";
+import {
+  terminalSessionViewModel,
+  terminalStateClass,
+  type TerminalSessionViewModel,
+} from "@/components/conversation/conversation-terminal-model";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import type { SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
+import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
 
 // Conversation session tool morph animation duration in milliseconds.
 // 会话工具形态切换动画的毫秒时长。
@@ -48,6 +60,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Current Git review summary projected from the selected workspace.
   // 从当前选中工作区投影出的 Git 审查摘要。
   reviewSummary: ConversationSessionReviewSummary | null;
+  // Current terminal sessions owned by the selected conversation.
+  // 当前选中会话拥有的终端会话集合。
+  terminalSessions: CommandSessionSummary[];
   // Whether the todolist panel is currently expanded.
   // todolist 面板当前是否展开。
   expanded: boolean;
@@ -57,9 +72,23 @@ export function ConversationSessionTodolistPanel(props: {
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: () => void;
+  // Force-stops one live terminal session.
+  // 强制停止单条实时终端会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
   const hasReviewSummary = Boolean(props.reviewSummary?.branchName);
   const hasTodolist = Boolean(props.todolist?.items.length);
+  const terminalSessions = React.useMemo(
+    () => props.terminalSessions
+      .map(terminalSessionViewModel)
+      .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
+    [props.terminalSessions],
+  );
+  const terminalSummaryById = React.useMemo(
+    () => new Map(props.terminalSessions.map((summary) => [summary.id, summary])),
+    [props.terminalSessions],
+  );
+  const hasTerminalSessions = terminalSessions.length > 0;
   // renderExpanded follows the requested target state while transitionPhase keeps a short animation marker.
   // renderExpanded 跟随请求的目标状态，transitionPhase 则短暂保留动画标记。
   const [renderExpanded, setRenderExpanded] = React.useState(props.expanded);
@@ -109,7 +138,7 @@ export function ConversationSessionTodolistPanel(props: {
     ? `conversation-session-tool-transitioning is-${transitionPhase}`
     : null;
 
-  if (!hasReviewSummary && !hasTodolist) {
+  if (!hasReviewSummary && !hasTodolist && !hasTerminalSessions) {
     return null;
   }
 
@@ -119,7 +148,7 @@ export function ConversationSessionTodolistPanel(props: {
         aria-label="展开会话工具"
         className={cn(
           "workspace-tool-panel-menu-collapsed conversation-session-todolist-collapsed conversation-session-tool-collapsed conversation-session-tool-surface",
-          hasReviewSummary && hasTodolist && "has-progress",
+          (hasReviewSummary || hasTerminalSessions) && hasTodolist && "has-progress",
           transitionClassName,
         )}
         onClick={() => requestExpandedChange(true)}
@@ -138,6 +167,13 @@ export function ConversationSessionTodolistPanel(props: {
             <ClipboardList size={15} />
             <span>进程</span>
             <strong>{props.todolist.completedCount}/{props.todolist.totalCount}</strong>
+          </span>
+        ) : null}
+        {hasTerminalSessions ? (
+          <span className="conversation-session-tool-collapsed-row">
+            <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(terminalSessions[0].state))} size={15} />
+            <span>终端</span>
+            <strong>{terminalSessions.length}</strong>
           </span>
         ) : null}
         <Maximize2 className="conversation-session-tool-expand-hint" size={12} />
@@ -160,14 +196,166 @@ export function ConversationSessionTodolistPanel(props: {
           onOpenReviewChanges={props.onOpenReviewChanges}
         />
       ) : null}
+      {hasTerminalSessions ? (
+        <ConversationSessionTerminalSection
+          showCollapse={!props.reviewSummary}
+          summariesById={terminalSummaryById}
+          terminalSessions={terminalSessions}
+          onCollapse={() => requestExpandedChange(false)}
+          onStopCommandSession={props.onStopCommandSession}
+        />
+      ) : null}
       {props.todolist ? (
         <ConversationSessionProgressSection
           todolist={props.todolist}
-          onCollapse={props.reviewSummary ? undefined : () => requestExpandedChange(false)}
+          onCollapse={props.reviewSummary || hasTerminalSessions ? undefined : () => requestExpandedChange(false)}
         />
       ) : null}
     </aside>
   );
+}
+
+// ConversationSessionTerminalSection renders active terminal sessions in the shared floating session tool panel.
+// ConversationSessionTerminalSection 在共享会话浮动工具面板中渲染活跃终端会话。
+function ConversationSessionTerminalSection(props: {
+  // Normalized terminal session rows.
+  // 归一化后的终端会话行。
+  terminalSessions: TerminalSessionViewModel[];
+  // Original summaries keyed by session id for owner metadata.
+  // 按会话标识索引的原始摘要，用于归属元数据。
+  summariesById: Map<string, CommandSessionSummary>;
+  // Whether this section owns the panel collapse action.
+  // 当前区域是否拥有面板折叠动作。
+  showCollapse: boolean;
+  // Collapses the expanded session tool panel.
+  // 折叠当前展开的会话工具面板。
+  onCollapse: () => void;
+  // Force-stops one live terminal session.
+  // 强制停止单条实时终端会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
+}) {
+  return (
+    <section className="conversation-session-tool-section conversation-session-terminal-section">
+      <div className={cn("conversation-session-tool-section-title", props.showCollapse && "with-action")}>
+        <span className="conversation-session-tool-section-title-main">
+          <span>终端</span>
+          <strong>{props.terminalSessions.length}</strong>
+        </span>
+        {props.showCollapse ? (
+          <button
+            aria-label="折叠会话工具"
+            className="workspace-tool-panel-menu-icon-button"
+            onClick={props.onCollapse}
+            title="折叠会话工具"
+            type="button"
+          >
+            <Minimize2 size={13} />
+          </button>
+        ) : null}
+      </div>
+      <div className="workspace-tool-panel-menu-list conversation-session-terminal-list">
+        {props.terminalSessions.map((session) => (
+          <ConversationSessionTerminalRow
+            key={session.id}
+            session={session}
+            summary={props.summariesById.get(session.id) ?? null}
+            onStopCommandSession={props.onStopCommandSession}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// ConversationSessionTerminalRow renders one terminal session row with status and force-stop action.
+// ConversationSessionTerminalRow 渲染单条带状态与强制停止动作的终端会话。
+function ConversationSessionTerminalRow(props: {
+  // Normalized terminal session row.
+  // 归一化后的终端会话行。
+  session: TerminalSessionViewModel;
+  // Original summary used for owner metadata.
+  // 用于归属元数据的原始摘要。
+  summary: CommandSessionSummary | null;
+  // Force-stops one live terminal session.
+  // 强制停止单条实时终端会话。
+  onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
+}) {
+  const [stopping, setStopping] = React.useState(false);
+  const handleStop = React.useCallback(async () => {
+    if (!props.session.canStop || stopping) {
+      return;
+    }
+    if (!window.confirm(`确认强制终止终端会话？\n\n${props.session.command}`)) {
+      return;
+    }
+    setStopping(true);
+    try {
+      await props.onStopCommandSession(props.session.id, props.summary?.ownerSessionId ?? null);
+    } finally {
+      setStopping(false);
+    }
+  }, [props, stopping]);
+  const tooltipText = terminalSessionTooltipText(props.session, props.summary);
+  return (
+    <div className="workspace-tool-panel-menu-row conversation-session-terminal-row">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div className="conversation-session-terminal-summary">
+            <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(props.session.state))} size={15} />
+            <strong>{props.session.label}</strong>
+            <span className="conversation-session-terminal-name">{props.session.name}</span>
+            {props.session.preview ? <small>{props.session.preview}</small> : null}
+          </div>
+        </TooltipTrigger>
+        <TooltipContent className="conversation-session-terminal-tooltip" side="left" sideOffset={8}>
+          <pre>{tooltipText}</pre>
+        </TooltipContent>
+      </Tooltip>
+      <button
+        aria-label="强制终止终端会话"
+        className="conversation-session-terminal-stop"
+        disabled={!props.session.canStop || stopping}
+        onClick={handleStop}
+        title={props.session.canStop ? "强制终止" : props.session.label}
+        type="button"
+      >
+        <CircleStop size={13} />
+      </button>
+    </div>
+  );
+}
+
+// terminalSessionTooltipText builds a complete hover description for one compact terminal row.
+// terminalSessionTooltipText 为单条紧凑终端行构建完整悬浮说明。
+function terminalSessionTooltipText(
+  // Normalized terminal row shown in the panel.
+  // 面板中展示的归一化终端行。
+  session: TerminalSessionViewModel,
+  // Original backend summary with raw runtime fields.
+  // 带原始运行时字段的后端摘要。
+  summary: CommandSessionSummary | null,
+): string {
+  const lines = [
+    `状态：${session.label}`,
+    `命令：${session.command}`,
+  ];
+  if (summary?.cwd) {
+    lines.push(`目录：${summary.cwd}`);
+  }
+  if (summary?.shellLabel) {
+    lines.push(`Shell：${summary.shellLabel}`);
+  }
+  if (typeof session.exitCode === "number") {
+    lines.push(`退出码：${session.exitCode}`);
+  }
+  if (summary?.failureReason) {
+    lines.push(`错误：${summary.failureReason}`);
+  }
+  if (session.preview) {
+    lines.push(`输出：${session.preview}`);
+  }
+  lines.push(`会话：${session.id}`);
+  return lines.join("\n");
 }
 
 // ConversationSessionReviewSection renders compact Git review information above progress.

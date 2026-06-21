@@ -781,7 +781,7 @@ fn read_marker(path: &Path) -> Result<String, PromptSkillLoadError> {
 
 /// Returns embedded system skill names in stable order.
 /// 返回稳定顺序的内置系统技能名称。
-fn embedded_system_skill_names() -> Vec<String> {
+pub fn embedded_system_skill_names() -> Vec<String> {
     let mut names = SYSTEM_SKILLS_DIR
         .dirs()
         .filter_map(|dir| dir.path().file_name()?.to_str().map(ToOwned::to_owned))

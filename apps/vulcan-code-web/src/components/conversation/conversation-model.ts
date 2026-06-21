@@ -168,5 +168,23 @@ export interface ConversationProcessRenderItem {
 // ConversationTimelineItem describes either one normal row or one grouped process row.
 // ConversationTimelineItem 描述单条普通行或单条分组过程行。
 export type ConversationTimelineItem =
-  | { kind: "item"; item: ConversationRenderItem }
+  | {
+    // Timeline row rendered as one concrete transcript item.
+    // 渲染为单条具体转录项的时间线行。
+    kind: "item";
+    // Projected transcript row.
+    // 投影后的转录行。
+    item: ConversationRenderItem;
+    // Whether this item is the final assistant answer for one turn.
+    // 该条目是否为单个回合的最终 Assistant 回答。
+    finalAssistantOutput?: boolean;
+  }
+  | {
+    // Timeline row rendered as metadata actions for one final assistant answer.
+    // 渲染为单条最终 Assistant 回答元信息操作的时间线行。
+    kind: "final-assistant-meta";
+    // Final assistant row used for raw copy content and timestamp.
+    // 用于原文复制内容与时间戳的最终 Assistant 行。
+    item: ConversationRenderItem;
+  }
   | { kind: "process"; process: ConversationProcessRenderItem };

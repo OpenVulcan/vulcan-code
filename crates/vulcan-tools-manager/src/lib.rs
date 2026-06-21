@@ -1473,7 +1473,7 @@ mod tests {
                 VulcanPlanToolPolicy::Visible,
             ),
             test_candidate(
-                "shell_session",
+                "terminal_session",
                 VulcanToolSourceKind::Native,
                 VulcanPlanToolPolicy::Visible,
             ),
@@ -1482,7 +1482,7 @@ mod tests {
 
         assert_eq!(
             resolved_names(resolved.clone()),
-            vec!["shell_command", "shell_session"]
+            vec!["shell_command", "terminal_session"]
         );
         assert!(
             resolved

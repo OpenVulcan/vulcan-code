@@ -10,6 +10,9 @@ export interface TerminalSessionViewModel {
   // Stable command-session identifier.
   // 稳定命令会话标识。
   id: string;
+  // User-facing terminal session name.
+  // 用户可见终端会话名称。
+  name: string;
   // Command text shown in terminal summaries.
   // 终端摘要中展示的命令文本。
   command: string;
@@ -30,12 +33,23 @@ export interface TerminalSessionViewModel {
   canStop: boolean;
 }
 
+// shortenTerminalSessionId keeps long terminal ids readable in compact UI.
+// shortenTerminalSessionId 让较长终端标识在紧凑界面中保持可读。
+export function shortenTerminalSessionId(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 8) {
+    return trimmed;
+  }
+  return trimmed.slice(0, 8);
+}
+
 // terminalSessionViewModel normalizes one backend command-session summary for rendering.
 // terminalSessionViewModel 将单条后端命令会话摘要归一化为渲染模型。
 export function terminalSessionViewModel(summary: CommandSessionSummary): TerminalSessionViewModel {
   const state = terminalVisualState(summary.status, summary.exitCode ?? null, Boolean(summary.lost));
   return {
     id: summary.id,
+    name: (summary.name ?? "").trim() || shortenTerminalSessionId(summary.id),
     command: summary.command || summary.id,
     state,
     label: terminalStateLabel(state),

@@ -894,7 +894,7 @@ mod tests {
             String::from(CREATE_GOAL_TOOL_ID),
             String::from(GET_GOAL_TOOL_ID),
             String::from("shell_command"),
-            String::from("shell_session"),
+            String::from("terminal_session"),
             String::from(UPDATE_GOAL_TOOL_ID),
             String::from(TODOLIST_TOOL_ID),
         ]);

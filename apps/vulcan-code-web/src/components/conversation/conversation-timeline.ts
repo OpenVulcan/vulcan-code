@@ -76,10 +76,13 @@ export function projectConversationTimelineItems(
       });
     }
     if (finalItem) {
-      timeline.push({ kind: "item", item: finalItem });
+      timeline.push({ kind: "item", item: finalItem, finalAssistantOutput: true });
     }
     if (currentTurn.statsItem) {
       timeline.push({ kind: "item", item: currentTurn.statsItem });
+    }
+    if (finalItem) {
+      timeline.push({ kind: "final-assistant-meta", item: finalItem });
     }
     if (!running) {
       for (const item of planArtifactItems) {
@@ -165,16 +168,16 @@ export function conversationMessageUnixMillis(message?: ConversationMessage): nu
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-// formatFullConversationTimestamp renders a complete local timestamp for transcript metadata.
-// formatFullConversationTimestamp 为转录元信息渲染完整本地时间戳。
-export function formatFullConversationTimestamp(message?: ConversationMessage): string | null {
+// formatShortConversationTimestamp renders the compact local timestamp used by transcript metadata.
+// formatShortConversationTimestamp 渲染转录元信息使用的紧凑本地时间戳。
+export function formatShortConversationTimestamp(message?: ConversationMessage): string | null {
   const timestamp = conversationMessageUnixMillis(message);
   if (!timestamp) {
     return null;
   }
   const date = new Date(timestamp);
   const pad = (value: number) => value.toString().padStart(2, "0");
-  return `${date.getFullYear()}年${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // formatWorkProcessDuration formats elapsed duration for the process header.

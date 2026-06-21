@@ -631,8 +631,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // memoryMenuExpanded stores the shared adaptive menu state for the memory page.
   // memoryMenuExpanded 保存记忆页共享自适应菜单展开状态。
   const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
-  // sessionToolExpanded stores the shared adaptive menu state for the chat Git tool panel.
-  // sessionToolExpanded 保存会话 Git 工具共享自适应面板展开状态。
+  // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
+  // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
   const [sessionToolExpanded, setSessionToolExpanded] = React.useState(true);
   // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
   // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
@@ -656,6 +656,22 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
     ? props.workbench.projects.find((project) => project.id === props.selectedConversation?.projectId) ?? null
     : null;
+  // sessionTerminalSessions stores terminal sessions relevant to the selected conversation.
+  // sessionTerminalSessions 保存与当前选中会话相关的终端会话。
+  const sessionTerminalSessions = React.useMemo(
+    () => {
+      if (!hasSelectedChatConversation || !props.selectedConversationId) {
+        return [];
+      }
+      return (props.workbench.commandSessions ?? []).filter((session) => {
+        if (session.id === "vldb-controller") {
+          return false;
+        }
+        return session.ownerSessionId ? session.ownerSessionId === props.selectedConversationId : true;
+      });
+    },
+    [hasSelectedChatConversation, props.selectedConversationId, props.workbench.commandSessions],
+  );
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
   // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
   const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
@@ -790,9 +806,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
     ? props.workbench.sessionTodolist
     : null;
-  // sessionToolPanelVisible opens the floating chat tool panel only for Git review information.
-  // sessionToolPanelVisible 仅在存在 Git 审查信息时打开会话浮动工具面板。
-  const sessionToolPanelVisible = hasSelectedChatConversation && Boolean(sessionReviewSummary?.branchName);
+  // sessionToolPanelVisible opens the floating chat tool panel for Git review or terminal sessions only.
+  // sessionToolPanelVisible 仅在存在 Git 审查或终端会话时打开会话浮动工具面板。
+  const sessionToolPanelVisible = hasSelectedChatConversation && (
+    Boolean(sessionReviewSummary?.branchName) || sessionTerminalSessions.length > 0
+  );
 
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !selectedChatProject?.path) {
@@ -1078,6 +1096,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           sessionTodolist ? "todolist-progress" : "no-todolist-progress",
           props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
           sessionReviewSummary?.branchName ? "review-summary" : "no-review-summary",
+          sessionTerminalSessions.length > 0 ? `terminal-${sessionTerminalSessions.length}` : "no-terminal",
           sessionToolPanelVisible && sessionToolExpanded ? "review-expanded" : "review-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",
           rightPanelFloating ? "context-floating" : "context-docked",
@@ -1099,9 +1118,11 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         <ConversationSessionTodolistPanel
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
+          terminalSessions={sessionTerminalSessions}
           todolist={null}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
+          onStopCommandSession={props.onStopCommandSession}
         />
       ) : null,
       panelWidth: 320,

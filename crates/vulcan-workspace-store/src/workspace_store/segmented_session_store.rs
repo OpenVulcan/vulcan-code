@@ -73,6 +73,9 @@ const RUNTIME_COMPACTION_BACKUP_LIMIT: usize = 5;
 /// Process-local mutex protecting overwrite-only state read/modify/write operations.
 /// 保护覆盖式状态读改写操作的进程内互斥锁。
 static SEGMENTED_STATE_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// Process-local mutex protecting segmented JSONL append read/modify/write operations.
+/// 保护分段 JSONL 追加读改写操作的进程内互斥锁。
+static SEGMENTED_APPEND_FILE_IO_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// Append-only event kind persisted in segmented session JSONL files.
 /// 持久化到分段会话 JSONL 文件中的追加式事件类型。
@@ -1074,6 +1077,11 @@ pub(super) fn append_segmented_session_events(
     session_dir: &Path,
     events: &[SegmentedSessionEventInput],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    // Hold one process-local append lock across metadata and segment updates.
+    // 在元数据与分段更新期间持有同一个进程内追加锁。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     // Load metadata first so sequence numbers and active segment remain authoritative.
     // 先加载元数据，确保序号与活动分段以元数据为准。
     let mut metadata = read_session_metadata(session_dir)?;
@@ -1093,6 +1101,11 @@ pub(super) fn append_segmented_boundary_events(
     if events.is_empty() {
         return Ok(Vec::new());
     }
+    // Serialize boundary and display transcript appends sharing the same active segment.
+    // 串行化共享同一活动分段的边界事件与展示转录追加。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     // Load metadata before every batch so the store remains the only sequence authority.
     // 批量追加前先加载元数据，确保存储层始终是唯一序号来源。
     let mut metadata = read_session_metadata(session_dir)?;
@@ -1121,6 +1134,11 @@ pub(super) fn append_segmented_session_message_tail(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    // Keep transcript tail detection, sequence assignment, and file append atomic in-process.
+    // 让转录尾部检测、序号分配与文件追加在进程内保持原子。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
     if messages.len() < first_new_index {
@@ -1183,6 +1201,11 @@ fn append_segmented_session_replacement(
     session_dir: &Path,
     messages: &[SessionMessageEntry],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    // Rollback replacement rewrites metadata checkpoints, so it shares the append lock.
+    // 回滚替换会重写元数据检查点，因此共用追加锁。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let mut metadata = read_session_metadata(session_dir)?;
     let turn_indexes = assign_segmented_message_turn_indexes(messages);
     let timestamp = messages
@@ -2165,6 +2188,11 @@ fn append_runtime_line_to_active_segment(
     metadata: &RuntimeLogMetadata,
     line: &RuntimeLogEventLine,
 ) -> Result<(), String> {
+    // Runtime single-line appends use the same lock to avoid JSONL byte interleaving.
+    // 运行时单行追加使用同一把锁，避免 JSONL 字节交错。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let active_segment_path = session_dir.join(&metadata.active_segment);
     if !active_segment_path.exists() {
         return Err(format!(
@@ -2181,6 +2209,11 @@ fn append_runtime_log_tail(
     session_dir: &Path,
     tail: &[RuntimeLogEventLine],
 ) -> Result<RuntimeLogMetadata, String> {
+    // Runtime tail append also refreshes metadata, so keep the batch serialized.
+    // 运行时尾部追加也会刷新元数据，因此保持批量串行。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     let mut metadata = read_runtime_metadata(session_dir)?;
     let active_segment_path = session_dir.join(&metadata.active_segment);
     if !active_segment_path.exists() {
@@ -2664,6 +2697,11 @@ pub(super) fn create_segmented_task_session(
     parent_session_dir: &Path,
     request: SegmentedTaskSessionCreateRequest,
 ) -> Result<PathBuf, String> {
+    // Task creation appends a parent link and writes child metadata, so serialize it with session appends.
+    // 子任务创建会追加父会话关联并写入子元数据，因此与会话追加串行化。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     // Load parent metadata so task mirrors stay colocated with the parent directory index.
     // 加载父元数据，确保任务镜像与父目录索引保持一致。
     let mut parent_metadata = read_session_metadata(parent_session_dir)?;
@@ -2786,6 +2824,11 @@ pub(super) fn append_segmented_task_events(
     task_dir: &Path,
     events: &[SegmentedSessionEventInput],
 ) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    // Child task JSONL appends share the process-local append lock with parent sessions.
+    // 子任务 JSONL 追加与父会话共用进程内追加锁。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     // Load task metadata first so task-local sequence numbers stay authoritative.
     // 先加载子任务元数据，确保子任务局部序号保持权威。
     let mut metadata = read_task_session_metadata(task_dir)?;
@@ -2802,6 +2845,11 @@ pub(super) fn record_segmented_task_link_update(
     parent_session_dir: &Path,
     update: SegmentedTaskLinkUpdate,
 ) -> Result<SegmentedSessionEventLine, String> {
+    // Parent task-link updates append to the parent JSONL segment and mutate metadata together.
+    // 父任务关联更新会同时追加父 JSONL 分段并修改元数据。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
     // Load parent metadata so the task mirror remains the routing source for this update.
     // 加载父元数据，确保任务镜像仍是本次更新的路由来源。
     let mut parent_metadata = read_session_metadata(parent_session_dir)?;
@@ -3630,6 +3678,12 @@ fn segmented_state_file_io_lock() -> &'static Mutex<()> {
     SEGMENTED_STATE_FILE_IO_LOCK.get_or_init(|| Mutex::new(()))
 }
 
+/// Returns the shared process-local mutex used for segmented JSONL append operations.
+/// 返回分段 JSONL 追加操作共用的进程内互斥锁。
+fn segmented_append_file_io_lock() -> &'static Mutex<()> {
+    SEGMENTED_APPEND_FILE_IO_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// Builds a stable segment file name from its one-based index.
 /// 根据从一开始的索引构建稳定分段文件名。
 fn segment_file_name(index: usize) -> String {
@@ -3651,13 +3705,17 @@ where
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
     }
+    // Encode one complete JSONL row before touching the file handle.
+    // 在接触文件句柄前先编码完整 JSONL 行。
+    let mut encoded_line = serde_json::to_string(value).map_err(to_store_error)?;
+    encoded_line.push('\n');
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(to_store_error)?;
-    serde_json::to_writer(&mut file, value).map_err(to_store_error)?;
-    file.write_all(b"\n").map_err(to_store_error)?;
+    file.write_all(encoded_line.as_bytes())
+        .map_err(to_store_error)?;
     file.flush().map_err(to_store_error)
 }
 
@@ -3729,15 +3787,20 @@ where
     if let Some(parent) = path.parent() {
         create_dir_all(parent)?;
     }
+    // Build the full batch first so each append call emits one contiguous byte buffer.
+    // 先构建完整批次，使每次追加调用输出一个连续字节缓冲。
+    let mut encoded_batch = String::new();
+    for value in values {
+        encoded_batch.push_str(&serde_json::to_string(value).map_err(to_store_error)?);
+        encoded_batch.push('\n');
+    }
     let mut file = OpenOptions::new()
         .append(true)
         .create(true)
         .open(path)
         .map_err(to_store_error)?;
-    for value in values {
-        serde_json::to_writer(&mut file, value).map_err(to_store_error)?;
-        file.write_all(b"\n").map_err(to_store_error)?;
-    }
+    file.write_all(encoded_batch.as_bytes())
+        .map_err(to_store_error)?;
     file.flush().map_err(to_store_error)
 }
 

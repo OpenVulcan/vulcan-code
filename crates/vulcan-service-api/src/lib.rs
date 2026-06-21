@@ -2214,6 +2214,10 @@ pub struct CommandSessionSummary {
     /// Stable command session identifier.
     /// 稳定命令会话标识。
     pub id: String,
+    /// Optional user-facing terminal session name.
+    /// 可选用户可见终端会话名称。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Command display name.
     /// 命令显示名称。
     pub command: String,

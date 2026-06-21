@@ -22,6 +22,7 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import {
+  ConversationFinalAssistantMeta,
   ConversationProcessGroup,
   ConversationRenderItemView,
   renderItemHiddenByThinkingDisplay,
@@ -51,6 +52,10 @@ const CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX = 220;
 // CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX is the fallback process-group height before measurement.
 // CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX 是测量前处理过程分组使用的兜底高度。
 const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
+
+// CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX is the fallback final-answer metadata row height.
+// CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX 是最终回答元信息行测量前使用的兜底高度。
+const CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX = 28;
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -295,66 +300,80 @@ export function ConversationWorkspace(props: {
     return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
   }, [timelineVirtualizer]);
 
-  const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => timelineItem.kind === "item" ? (
-    <ConversationRenderItemView
-      item={timelineItem.item}
-      autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-      hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-      parentConversationId={props.parentConversationId}
-      sessionRunning={props.sessionRunning}
-      expandedUserPromptIds={userPromptExpansionOverrides}
-      expandedToolPresentationIds={toolPresentationExpansionOverrides}
-      workspacePath={props.workspacePath}
-      commandSessions={props.commandSessions}
-      onCopyText={props.onCopyText}
-      onEditUserPrompt={props.onEditUserPrompt}
-      onOpenDetail={setDetail}
-      onOpenMedia={setMediaPlayer}
-      onOpenSubagentPanel={props.onOpenSubagentPanel}
-      pendingPlanArtifact={props.pendingPlanArtifact}
-      onPlanArtifactExecute={props.onPlanArtifactExecute}
-      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
-      onPlanArtifactCancel={props.onPlanArtifactCancel}
-      onUserPromptExpandedChange={handleUserPromptExpandedChange}
-      onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
-      resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
-      resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-      onLoadToolDetail={props.onLoadToolDetail}
-      onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-      onTrace={props.onTrace}
-    />
-  ) : (
-    <ConversationProcessGroup
-      autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-      collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
-      hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
-      nowMs={nowMs}
-      parentConversationId={props.parentConversationId}
-      process={timelineItem.process}
-      sessionRunning={props.sessionRunning}
-      expandedUserPromptIds={userPromptExpansionOverrides}
-      expandedToolPresentationIds={toolPresentationExpansionOverrides}
-      workspacePath={props.workspacePath}
-      commandSessions={props.commandSessions}
-      onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
-      onCopyText={props.onCopyText}
-      onEditUserPrompt={props.onEditUserPrompt}
-      onOpenDetail={setDetail}
-      onOpenMedia={setMediaPlayer}
-      onOpenSubagentPanel={props.onOpenSubagentPanel}
-      pendingPlanArtifact={props.pendingPlanArtifact}
-      onPlanArtifactExecute={props.onPlanArtifactExecute}
-      onPlanArtifactSuggest={props.onPlanArtifactSuggest}
-      onPlanArtifactCancel={props.onPlanArtifactCancel}
-      onUserPromptExpandedChange={handleUserPromptExpandedChange}
-      onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
-      resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
-      resolveMediaSourceUrl={props.resolveMediaSourceUrl}
-      onLoadToolDetail={props.onLoadToolDetail}
-      onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
-      onTrace={props.onTrace}
-    />
-  );
+  const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => {
+    if (timelineItem.kind === "final-assistant-meta") {
+      return (
+        <ConversationFinalAssistantMeta
+          item={timelineItem.item}
+          onCopyText={props.onCopyText}
+        />
+      );
+    }
+    if (timelineItem.kind === "item") {
+      return (
+        <ConversationRenderItemView
+          item={timelineItem.item}
+          finalAssistantOutput={timelineItem.finalAssistantOutput}
+          autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+          hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+          parentConversationId={props.parentConversationId}
+          sessionRunning={props.sessionRunning}
+          expandedUserPromptIds={userPromptExpansionOverrides}
+          expandedToolPresentationIds={toolPresentationExpansionOverrides}
+          workspacePath={props.workspacePath}
+          commandSessions={props.commandSessions}
+          onCopyText={props.onCopyText}
+          onEditUserPrompt={props.onEditUserPrompt}
+          onOpenDetail={setDetail}
+          onOpenMedia={setMediaPlayer}
+          onOpenSubagentPanel={props.onOpenSubagentPanel}
+          pendingPlanArtifact={props.pendingPlanArtifact}
+          onPlanArtifactExecute={props.onPlanArtifactExecute}
+          onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+          onPlanArtifactCancel={props.onPlanArtifactCancel}
+          onUserPromptExpandedChange={handleUserPromptExpandedChange}
+          onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
+          resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+          resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+          onLoadToolDetail={props.onLoadToolDetail}
+          onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+          onTrace={props.onTrace}
+        />
+      );
+    }
+    return (
+      <ConversationProcessGroup
+        autoExpandThinkingBlockId={autoExpandThinkingBlockId}
+        collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
+        hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+        nowMs={nowMs}
+        parentConversationId={props.parentConversationId}
+        process={timelineItem.process}
+        sessionRunning={props.sessionRunning}
+        expandedUserPromptIds={userPromptExpansionOverrides}
+        expandedToolPresentationIds={toolPresentationExpansionOverrides}
+        workspacePath={props.workspacePath}
+        commandSessions={props.commandSessions}
+        onCollapsedChange={(collapsed) => handleProcessCollapsedChange(timelineItem.process, collapsed)}
+        onCopyText={props.onCopyText}
+        onEditUserPrompt={props.onEditUserPrompt}
+        onOpenDetail={setDetail}
+        onOpenMedia={setMediaPlayer}
+        onOpenSubagentPanel={props.onOpenSubagentPanel}
+        pendingPlanArtifact={props.pendingPlanArtifact}
+        onPlanArtifactExecute={props.onPlanArtifactExecute}
+        onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+        onPlanArtifactCancel={props.onPlanArtifactCancel}
+        onUserPromptExpandedChange={handleUserPromptExpandedChange}
+        onToolPresentationExpandedChange={handleToolPresentationExpandedChange}
+        resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+        resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+        onLoadToolDetail={props.onLoadToolDetail}
+        onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+        onTrace={props.onTrace}
+      />
+    );
+  };
 
   return (
     <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
@@ -430,21 +449,34 @@ export function ConversationWorkspace(props: {
 // conversationTimelineItemKey returns a stable measurement key for one timeline entry.
 // conversationTimelineItemKey 返回单条时间线记录的稳定测量键。
 function conversationTimelineItemKey(item: ConversationTimelineItem): string {
-  return item.kind === "item" ? `item:${item.item.id}` : `process:${item.process.id}`;
+  if (item.kind === "item") {
+    return `item:${item.item.id}`;
+  }
+  if (item.kind === "final-assistant-meta") {
+    return `final-assistant-meta:${item.item.id}`;
+  }
+  return `process:${item.process.id}`;
 }
 
 // conversationTimelineItemEstimatedHeight returns a conservative initial height by entry kind.
 // conversationTimelineItemEstimatedHeight 按记录类型返回保守初始高度。
 function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem): number {
-  return item.kind === "process"
-    ? CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX
-    : CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX;
+  if (item.kind === "process") {
+    return CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX;
+  }
+  if (item.kind === "final-assistant-meta") {
+    return CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX;
+  }
+  return CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX;
 }
 
 // timelineItemVisibleInMainTranscript filters virtualized rows before height estimation.
 // timelineItemVisibleInMainTranscript 在高度估算前过滤主转录中不可见的虚拟行。
 function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
   if (item.kind === "item") {
+    return !renderItemHiddenByThinkingDisplay(item.item, hiddenThinkingBlockIds);
+  }
+  if (item.kind === "final-assistant-meta") {
     return !renderItemHiddenByThinkingDisplay(item.item, hiddenThinkingBlockIds);
   }
   const hasVisibleGuidanceItem = item.process.guidanceItems.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));

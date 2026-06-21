@@ -13,8 +13,8 @@ pub fn built_in_tool_help_entries() -> Vec<ToolHelpEntry> {
             "Use shell_command for concrete local inspection, validation, and deterministic environment checks.",
         ),
         ToolHelpEntry::new(
-            "shell_session",
-            "Use shell_session only when you truly need an interactive command stream instead of one-shot execution.",
+            "terminal_session",
+            "Before using terminal_session, call skill(\"terminal-session\") and follow that skill for persistent terminals, shortcuts, TUI screens, and incremental output.",
         ),
         ToolHelpEntry::new(
             "task",
