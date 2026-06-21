@@ -23,7 +23,7 @@ import {
 import {
   ConversationProcessGroup,
   ConversationRenderItemView,
-  renderItemHiddenByThinkingOverlay,
+  renderItemHiddenByThinkingDisplay,
 } from "@/components/conversation/conversation-render-items";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
@@ -59,9 +59,9 @@ export function ConversationWorkspace(props: {
   // Whether the owning conversation is currently running.
   // 所属会话当前是否正在运行。
   sessionRunning: boolean;
-  // Thinking block mirrored by the floating overlay and hidden from the transcript.
-  // 被浮动思考面板镜像并从转录中隐藏的思考块。
-  hiddenThinkingBlockId: string | null;
+  // Thinking blocks filtered from the main transcript by the display mode.
+  // 被展示模式从主会话面板过滤的思考块。
+  hiddenThinkingBlockIds: ReadonlySet<string>;
   // Raw messages used only for empty-state parity.
   // 仅用于保持空状态一致性的原始消息。
   messages: ConversationMessage[];
@@ -166,8 +166,8 @@ export function ConversationWorkspace(props: {
     [props.renderItems, props.conversation, nowMs, props.sessionRunning],
   );
   const visibleTimelineItems = React.useMemo(
-    () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockId)),
-    [props.hiddenThinkingBlockId, timelineItems],
+    () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),
+    [props.hiddenThinkingBlockIds, timelineItems],
   );
   const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
   const timelineVirtualizer = useConversationTimelineVirtualWindow(
@@ -180,7 +180,7 @@ export function ConversationWorkspace(props: {
     conversationTimelineItemKey,
     conversationTimelineItemEstimatedHeight,
   );
-  const autoExpandThinkingBlockId = props.sessionRunning && !props.hiddenThinkingBlockId
+  const autoExpandThinkingBlockId = props.sessionRunning && props.hiddenThinkingBlockIds.size === 0
     ? latestThinkingBlockIdAfterLastUser(props.renderItems)
     : null;
   const processCollapseKey = React.useCallback((process: ConversationProcessRenderItem) => {
@@ -266,7 +266,7 @@ export function ConversationWorkspace(props: {
     <ConversationRenderItemView
       item={timelineItem.item}
       autoExpandThinkingBlockId={autoExpandThinkingBlockId}
-      hiddenThinkingBlockId={null}
+      hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
       parentConversationId={props.parentConversationId}
       sessionRunning={props.sessionRunning}
       expandedUserPromptIds={userPromptExpansionOverrides}
@@ -290,7 +290,7 @@ export function ConversationWorkspace(props: {
     <ConversationProcessGroup
       autoExpandThinkingBlockId={autoExpandThinkingBlockId}
       collapsedOverride={processCollapseOverrides.get(processCollapseKey(timelineItem.process))}
-      hiddenThinkingBlockId={props.hiddenThinkingBlockId}
+      hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
       nowMs={nowMs}
       parentConversationId={props.parentConversationId}
       process={timelineItem.process}
@@ -402,6 +402,11 @@ function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem)
 
 // timelineItemVisibleInMainTranscript filters virtualized rows before height estimation.
 // timelineItemVisibleInMainTranscript 在高度估算前过滤主转录中不可见的虚拟行。
-function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockId: string | null): boolean {
-  return item.kind !== "item" || !renderItemHiddenByThinkingOverlay(item.item, hiddenThinkingBlockId);
+function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
+  if (item.kind === "item") {
+    return !renderItemHiddenByThinkingDisplay(item.item, hiddenThinkingBlockIds);
+  }
+  const hasVisibleGuidanceItem = item.process.guidanceItems.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
+  const hasVisibleProcessItem = item.process.items.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
+  return hasVisibleGuidanceItem || hasVisibleProcessItem || item.process.running || item.process.stopped;
 }

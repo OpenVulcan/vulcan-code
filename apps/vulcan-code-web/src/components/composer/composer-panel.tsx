@@ -40,6 +40,7 @@ import {
 import { composerAttachmentMedia } from "@/components/composer/composer-attachment-media";
 import { useComposerAttachments } from "@/components/composer/composer-attachments";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -205,9 +206,9 @@ export function ComposerPanel(props: {
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
-  // Whether streaming thinking should use the floating thinking surface.
-  // 流式思考是否使用浮动思考面板。
-  thinkingOverlayEnabled: boolean;
+  // Thinking display mode selected by the WebUI plus menu.
+  // WebUI 加号菜单选中的思考展示模式。
+  thinkingDisplayMode: ThinkingDisplayMode;
   // Providers exposed by the shared service API for model picking.
   // 共享 service API 暴露给模型选择器的 Provider 列表。
   providers: ProviderSummary[];
@@ -282,9 +283,9 @@ export function ComposerPanel(props: {
   // Persists the pending prompt order.
   // 持久化待发送提示词顺序。
   onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
-  // Updates the WebUI-only thinking display preference.
-  // 更新仅 WebUI 使用的思考展示偏好。
-  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
+  // Updates the WebUI-only thinking display mode.
+  // 更新仅 WebUI 使用的思考展示模式。
+  onThinkingDisplayModeChange: (mode: ThinkingDisplayMode) => void;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -1045,10 +1046,10 @@ export function ComposerPanel(props: {
           <div className="composer-toolbar-left">
             <ComposerAttachmentMenu
               capabilities={enabledAttachmentCapabilities}
-              thinkingOverlayEnabled={props.thinkingOverlayEnabled}
+              thinkingDisplayMode={props.thinkingDisplayMode}
               planModeEnabled={planModeEnabled}
               onPick={openAttachmentPicker}
-              onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
+              onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
               onOpenGoal={() => void openGoalDialog()}
               onPlanModeChange={(enabled) => void handlePlanModeChange(enabled)}
             />

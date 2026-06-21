@@ -32,6 +32,12 @@ import {
   normalizedSessionRunPhase,
 } from "@/components/conversation/conversation-runtime";
 import {
+  THINKING_DISPLAY_STORAGE_KEY,
+  activeThinkingOverlayBlock,
+  hiddenThinkingBlockIdsForDisplayMode,
+  initialThinkingDisplayMode,
+} from "@/components/conversation/thinking-display";
+import {
   generatedMediaAttachmentsFromToolDetailPayload,
   projectConversationRenderItems,
   thinkingOverlayBlockSignature,
@@ -83,10 +89,6 @@ import type {
   UserPromptEditDraftSummary,
   WorkbenchSnapshot,
 } from "@/types";
-
-// THINKING_OVERLAY_STORAGE_KEY persists the WebUI-only thinking display preference.
-// THINKING_OVERLAY_STORAGE_KEY 持久化仅 WebUI 使用的思考展示偏好。
-const THINKING_OVERLAY_STORAGE_KEY = "vulcan-webui-thinking-overlay-enabled";
 
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS prevents near-bottom auto-follow from fighting slow upward scrolling.
 // CONVERSATION_UPWARD_SCROLL_TAIL_SUPPRESS_MS 防止近底部自动跟随抢夺慢速向上滚动。
@@ -248,9 +250,9 @@ export function ChatArea(props: ChatAreaProps) {
   const [userPromptEditDraft, setUserPromptEditDraft] = React.useState<UserPromptEditDraftSummary | null>(null);
   const [userPromptEditText, setUserPromptEditText] = React.useState("");
   const [userPromptEditSaving, setUserPromptEditSaving] = React.useState(false);
-  // thinkingOverlayEnabled controls whether streaming thinking uses the floating surface or inline transcript.
-  // thinkingOverlayEnabled 控制流式思考使用浮层还是会话内联展示。
-  const [thinkingOverlayEnabled, setThinkingOverlayEnabled] = React.useState(() => initialThinkingOverlayEnabled());
+  // thinkingDisplayMode controls how thinking blocks flow between the popup and transcript.
+  // thinkingDisplayMode 控制思考块在弹窗与会话面板之间的展示方式。
+  const [thinkingDisplayMode, setThinkingDisplayMode] = React.useState(() => initialThinkingDisplayMode());
   const selectedConversation = props.workbench.conversations.find((conversation) => conversation.id === props.selectedConversationId);
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
@@ -268,6 +270,25 @@ export function ChatArea(props: ChatAreaProps) {
     anchor: ConversationViewportAnchorSnapshot | null;
     distanceFromBottom: number;
     surfaceId: string;
+    wasAtBottom: boolean;
+  } | null>(null);
+  // hiddenThinkingLayoutSnapshotRef stores the viewport before thinking display filters change rows.
+  // hiddenThinkingLayoutSnapshotRef 保存思考展示过滤改变行集合前的视口状态。
+  const hiddenThinkingLayoutSnapshotRef = React.useRef<{
+    // Stable hidden-thinking signature captured with this viewport snapshot.
+    // 与该视口快照绑定的稳定思考隐藏签名。
+    hiddenThinkingSignature: string;
+    // Anchor row visible before the display filter changed the virtualized row set.
+    // 展示过滤改变虚拟行集合前可见的锚点行。
+    anchor: ConversationViewportAnchorSnapshot | null;
+    // Bottom distance used when an anchor is unavailable.
+    // 锚点不可用时用于恢复的底部距离。
+    distanceFromBottom: number;
+    // Surface id that owns the captured viewport.
+    // 拥有该视口快照的界面标识。
+    surfaceId: string;
+    // Whether the transcript should keep following the latest content.
+    // 转录是否应继续跟随最新内容。
     wasAtBottom: boolean;
   } | null>(null);
   // layoutRestoreFramesRef stores scheduled viewport correction frames.
@@ -310,7 +331,7 @@ export function ChatArea(props: ChatAreaProps) {
   // emptyPromptLeaving 标记空会话提示退出动画。
   const [emptyPromptLeaving, setEmptyPromptLeaving] = React.useState(false);
   const streamingThinkingBlock = activeStreamingThinkingBlock(surfaceConversation, renderItems);
-  const displayedStreamingThinkingBlock = thinkingOverlayEnabled ? streamingThinkingBlock : null;
+  const displayedStreamingThinkingBlock = activeThinkingOverlayBlock(thinkingDisplayMode, streamingThinkingBlock);
   // streamingThinkingOverlayBlock keeps the last thinking popup mounted during its delayed exit.
   // streamingThinkingOverlayBlock 在思考弹窗延迟退场期间保留最后一个思考块。
   const [streamingThinkingOverlayBlock, setStreamingThinkingOverlayBlock] = React.useState<ConversationBlock | null>(null);
@@ -318,6 +339,22 @@ export function ChatArea(props: ChatAreaProps) {
   // streamingThinkingOverlayLeaving 标记思考弹窗延迟退场中的淡出阶段。
   const [streamingThinkingOverlayLeaving, setStreamingThinkingOverlayLeaving] = React.useState(false);
   const visibleStreamingThinkingOverlayBlock = displayedStreamingThinkingBlock ?? streamingThinkingOverlayBlock;
+  // hiddenThinkingBlockIds contains thinking blocks removed from the virtualized transcript projection.
+  // hiddenThinkingBlockIds 包含从虚拟化会话投影中移除的思考块。
+  const hiddenThinkingBlockIds = React.useMemo(
+    () => hiddenThinkingBlockIdsForDisplayMode(
+      thinkingDisplayMode,
+      renderItems,
+      visibleStreamingThinkingOverlayBlock?.id ?? null,
+    ),
+    [thinkingDisplayMode, renderItems, visibleStreamingThinkingOverlayBlock?.id],
+  );
+  // hiddenThinkingSignature is a stable change marker for restoring scroll after filter changes.
+  // hiddenThinkingSignature 是过滤变化后恢复滚动位置的稳定变更标记。
+  const hiddenThinkingSignature = React.useMemo(
+    () => Array.from(hiddenThinkingBlockIds).sort().join("\u0000"),
+    [hiddenThinkingBlockIds],
+  );
   const displayedStreamingThinkingOverlaySignature = displayedStreamingThinkingBlock
     ? thinkingOverlayBlockSignature(displayedStreamingThinkingBlock)
     : null;
@@ -548,6 +585,8 @@ export function ChatArea(props: ChatAreaProps) {
     return () => window.removeEventListener(CONVERSATION_LAYOUT_WILL_CHANGE_EVENT, handleLayoutWillChange);
   }, [capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
 
+  // Restore the virtualized transcript viewport when thinking display filters insert or remove rows.
+  // 当思考展示过滤插入或移除虚拟化行时恢复会话视口位置。
   React.useLayoutEffect(() => {
     if (!props.layoutStabilityKey) {
       return;
@@ -573,6 +612,44 @@ export function ChatArea(props: ChatAreaProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
+
+  React.useLayoutEffect(() => {
+    const element = workspaceRef.current;
+    const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    const previousSnapshot = hiddenThinkingLayoutSnapshotRef.current;
+    if (
+      previousSnapshot
+      && previousSnapshot.hiddenThinkingSignature !== hiddenThinkingSignature
+      && element
+      && surfaceId
+      && previousSnapshot.surfaceId === surfaceId
+    ) {
+      if (previousSnapshot.wasAtBottom) {
+        element.scrollTop = element.scrollHeight;
+      } else if (!previousSnapshot.anchor || !restoreConversationViewportAnchor(element, previousSnapshot.anchor)) {
+        conversationScrollToDistanceFromBottom(element, previousSnapshot.distanceFromBottom);
+      }
+      pendingLayoutViewportRef.current = {
+        anchor: previousSnapshot.anchor,
+        distanceFromBottom: previousSnapshot.distanceFromBottom,
+        surfaceId,
+        wasAtBottom: previousSnapshot.wasAtBottom,
+      };
+      schedulePendingConversationLayoutRestore();
+    }
+
+    if (!element || !surfaceId || isEmptyConversation || showConversationLoadingOnly) {
+      hiddenThinkingLayoutSnapshotRef.current = null;
+      return;
+    }
+    hiddenThinkingLayoutSnapshotRef.current = {
+      hiddenThinkingSignature,
+      anchor: captureConversationViewportAnchor(element),
+      distanceFromBottom: conversationDistanceFromBottom(element),
+      surfaceId,
+      wasAtBottom: shouldFollowConversationTailRef.current && conversationViewportAllowsTailFollow(element),
+    };
+  });
 
   // handleOpenSubagentPanelFromTimeline preserves the current scroll before opening a child transcript.
   // handleOpenSubagentPanelFromTimeline 在打开子代理转录前保留当前滚动位置。
@@ -754,8 +831,8 @@ export function ChatArea(props: ChatAreaProps) {
   }, [activeSurfaceConversationId, conversationStreamSignature, updateConversationBottomState]);
 
   React.useEffect(() => {
-    window.localStorage.setItem(THINKING_OVERLAY_STORAGE_KEY, thinkingOverlayEnabled ? "true" : "false");
-  }, [thinkingOverlayEnabled]);
+    window.localStorage.setItem(THINKING_DISPLAY_STORAGE_KEY, thinkingDisplayMode);
+  }, [thinkingDisplayMode]);
 
   React.useEffect(() => {
     if (displayedStreamingThinkingBlock) {
@@ -925,7 +1002,7 @@ export function ChatArea(props: ChatAreaProps) {
       providers={props.workbench.providers}
       pendingPrompts={props.workbench.pendingPrompts ?? []}
       isConversationRunning={isConversationRunning}
-      thinkingOverlayEnabled={thinkingOverlayEnabled}
+      thinkingDisplayMode={thinkingDisplayMode}
       reasoningSelection={props.workbench.reasoningSelection ?? null}
       sessionGoal={isEmptyConversation ? null : props.workbench.sessionGoal ?? null}
       sessionTodolist={isEmptyConversation ? null : props.workbench.sessionTodolist ?? null}
@@ -937,7 +1014,7 @@ export function ChatArea(props: ChatAreaProps) {
       onInsertPendingPrompt={props.onInsertPendingPrompt}
       onRemovePendingPrompt={props.onRemovePendingPrompt}
       onReorderPendingPrompts={props.onReorderPendingPrompts}
-      onThinkingOverlayEnabledChange={setThinkingOverlayEnabled}
+      onThinkingDisplayModeChange={setThinkingDisplayMode}
     />
   );
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.
@@ -953,7 +1030,7 @@ export function ChatArea(props: ChatAreaProps) {
       <ConversationWorkspace
         conversation={surfaceConversation}
         sessionRunning={conversationIsRunning(surfaceConversation)}
-        hiddenThinkingBlockId={displayedStreamingThinkingBlock?.id ?? null}
+        hiddenThinkingBlockIds={hiddenThinkingBlockIds}
         messages={messages}
         renderItems={renderItems}
         error={props.conversationLoadError}
@@ -1107,10 +1184,4 @@ function displayPlanArtifactPath(path: string): string {
     return trimmed.slice(extendedPathPrefix.length);
   }
   return trimmed;
-}
-
-// initialThinkingOverlayEnabled returns the persisted thinking display preference.
-// initialThinkingOverlayEnabled 返回持久化的思考展示偏好。
-function initialThinkingOverlayEnabled(): boolean {
-  return window.localStorage.getItem(THINKING_OVERLAY_STORAGE_KEY) !== "false";
 }

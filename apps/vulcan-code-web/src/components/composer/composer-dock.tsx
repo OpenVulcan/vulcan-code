@@ -12,6 +12,7 @@ import type {
   ComposerRuntimeCue,
   ComposerTraceCallback,
 } from "@/components/composer/composer-control-types";
+import type { ThinkingDisplayMode } from "@/components/conversation/thinking-display";
 import { Button } from "@/components/ui/button";
 import { ShinyText } from "@/components/ui/shiny-text";
 import {
@@ -80,9 +81,9 @@ export function ComposerDock(props: {
   // Whether the selected conversation has an active backend run.
   // 当前选中会话是否存在活跃后端运行。
   isConversationRunning: boolean;
-  // Whether streaming thinking should use the floating thinking surface.
-  // 流式思考是否使用浮动思考面板。
-  thinkingOverlayEnabled: boolean;
+  // Thinking display mode selected by the WebUI plus menu.
+  // WebUI 加号菜单选中的思考展示模式。
+  thinkingDisplayMode: ThinkingDisplayMode;
   // showScrollToBottom controls whether the bottom-jump button is visible.
   // showScrollToBottom 控制是否显示跳转到底部按钮。
   showScrollToBottom: boolean;
@@ -166,9 +167,9 @@ export function ComposerDock(props: {
   // Persists the pending prompt order.
   // 持久化待发送提示词顺序。
   onReorderPendingPrompts: (entryIds: string[], draggedEntryId: string, targetEntryId: string | null) => Promise<void>;
-  // Updates the WebUI-only thinking display preference.
-  // 更新仅 WebUI 使用的思考展示偏好。
-  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
+  // Updates the WebUI-only thinking display mode.
+  // 更新仅 WebUI 使用的思考展示模式。
+  onThinkingDisplayModeChange: (mode: ThinkingDisplayMode) => void;
   // Backend-resolved reasoning selector view for the active provider and model.
   // 后端根据当前激活 Provider 与模型解析出的思考选择器视图。
   reasoningSelection: ReasoningSelectionSummary | null;
@@ -236,7 +237,7 @@ export function ComposerDock(props: {
         sessionTodolist={props.sessionTodolist}
         sessionReviewSummary={props.sessionReviewSummary}
         isConversationRunning={props.isConversationRunning}
-        thinkingOverlayEnabled={props.thinkingOverlayEnabled}
+        thinkingDisplayMode={props.thinkingDisplayMode}
         providers={props.providers}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
@@ -258,7 +259,7 @@ export function ComposerDock(props: {
         onInsertPendingPrompt={props.onInsertPendingPrompt}
         onRemovePendingPrompt={props.onRemovePendingPrompt}
         onReorderPendingPrompts={props.onReorderPendingPrompts}
-        onThinkingOverlayEnabledChange={props.onThinkingOverlayEnabledChange}
+        onThinkingDisplayModeChange={props.onThinkingDisplayModeChange}
         reasoningSelection={props.reasoningSelection}
         sessionPlanMode={props.sessionPlanMode}
       />

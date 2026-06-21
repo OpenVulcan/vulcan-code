@@ -5477,8 +5477,21 @@ button {
 }
 
 .composer-thinking-menu [data-slot="dropdown-menu-item"] {
-  min-width: 96px;
+  min-width: 172px;
   justify-content: space-between;
+}
+
+.composer-thinking-mode-label {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.composer-thinking-mode-label small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 1.2;
 }
 
 .composer-toolbar-left {

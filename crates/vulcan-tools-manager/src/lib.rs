@@ -1462,6 +1462,36 @@ mod tests {
         assert!(super::tool_is_allowed_in_plan(tool));
     }
 
+    /// Verifies native command-line tools remain executable in Plan mode for exploration and validation.
+    /// 验证原生命令行工具在计划模式下仍可用于探索与验证。
+    #[test]
+    fn manager_allows_command_line_tools_in_plan_mode() {
+        let manager = VulcanToolsManager::new(vec![
+            test_candidate(
+                "shell_command",
+                VulcanToolSourceKind::Native,
+                VulcanPlanToolPolicy::Visible,
+            ),
+            test_candidate(
+                "shell_session",
+                VulcanToolSourceKind::Native,
+                VulcanPlanToolPolicy::Visible,
+            ),
+        ]);
+        let resolved = manager.resolve_for_execution_mode("Plan");
+
+        assert_eq!(
+            resolved_names(resolved.clone()),
+            vec!["shell_command", "shell_session"]
+        );
+        assert!(
+            resolved
+                .definitions
+                .iter()
+                .all(super::tool_is_allowed_in_plan)
+        );
+    }
+
     /// Verifies OpenRouter Gemini-family models select the compact Gemini projection even on an OpenAI-compatible wire API.
     /// 验证 OpenRouter 的 Gemini 模型即使走 OpenAI 兼容线协议也会选择紧凑 Gemini 投影。
     #[test]

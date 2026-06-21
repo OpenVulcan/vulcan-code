@@ -19285,6 +19285,7 @@ Allowed non-mutating actions include:
 
 * Reading or searching files, configs, schemas, types, manifests, and docs.
 * Static analysis, inspection, and repository exploration.
+* One-shot or interactive command-line exploration through tools such as `shell_command` or `shell_session`, when the command is used only to inspect, test, or validate the plan.
 * Dry-run style commands when they do not edit repo-tracked files.
 * Tests, builds, or checks that may write to caches or build artifacts, as long as they do not edit repo-tracked files.
 

@@ -47,9 +47,9 @@ export function ConversationProcessGroup(props: {
   // Optional user-controlled collapsed state remembered by the conversation surface.
   // 会话界面记住的可选用户控制折叠状态。
   collapsedOverride?: boolean;
-  // hiddenThinkingBlockId hides the block currently shown in the floating thinking overlay.
-  // hiddenThinkingBlockId 隐藏当前在浮动思考面板中展示的块。
-  hiddenThinkingBlockId: string | null;
+  // hiddenThinkingBlockIds hides thinking blocks filtered by the display mode.
+  // hiddenThinkingBlockIds 隐藏由展示模式过滤的思考块。
+  hiddenThinkingBlockIds: ReadonlySet<string>;
   // Current clock tick used for live duration projection.
   // 用于实时耗时投影的当前时钟刻度。
   nowMs: number;
@@ -119,8 +119,8 @@ export function ConversationProcessGroup(props: {
     fallbackStartedAtMsRef.current = Date.now();
   }, [props.process.id]);
   const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
-  const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
-  const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingOverlay(item, props.hiddenThinkingBlockId));
+  const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
+  const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
   const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
@@ -151,7 +151,7 @@ export function ConversationProcessGroup(props: {
         {visibleGuidanceItems.map((item) => (
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-            hiddenThinkingBlockId={null}
+            hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
             item={item}
             itemStreaming={false}
             key={item.id}
@@ -181,7 +181,7 @@ export function ConversationProcessGroup(props: {
         {visibleProcessItems.map((item) => (
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
-            hiddenThinkingBlockId={null}
+            hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
             item={item}
             itemStreaming={item.id === streamingProcessItemId}
             key={item.id}
@@ -225,9 +225,9 @@ export function ConversationRenderItemView(props: {
   // Thinking block that should auto expand while running.
   // 运行中应自动展开的思考块。
   autoExpandThinkingBlockId: string | null;
-  // Thinking block hidden by the overlay.
-  // 被浮层隐藏的思考块。
-  hiddenThinkingBlockId: string | null;
+  // Thinking blocks hidden by the display mode.
+  // 被展示模式隐藏的思考块。
+  hiddenThinkingBlockIds: ReadonlySet<string>;
   // Whether this row is the currently streaming process item.
   // 该行是否为当前流式过程项。
   itemStreaming?: boolean;
@@ -415,8 +415,8 @@ export function ConversationRenderItemView(props: {
     );
   }
 
-  const visibleBlocks = props.hiddenThinkingBlockId
-    ? props.item.blocks.filter((block) => block.id !== props.hiddenThinkingBlockId)
+  const visibleBlocks = props.hiddenThinkingBlockIds.size > 0
+    ? props.item.blocks.filter((block) => !props.hiddenThinkingBlockIds.has(block.id))
     : props.item.blocks;
   if (visibleBlocks.length === 0) {
     return null;
@@ -451,10 +451,12 @@ export function ConversationRenderItemView(props: {
   );
 }
 
-// renderItemHiddenByThinkingOverlay hides the whole render row that is mirrored by the live thinking overlay.
-// renderItemHiddenByThinkingOverlay 隐藏被实时思考浮层镜像展示的整条渲染行。
-export function renderItemHiddenByThinkingOverlay(item: ConversationRenderItem, hiddenThinkingBlockId: string | null): boolean {
-  return Boolean(hiddenThinkingBlockId && item.blocks.some((block) => block.id === hiddenThinkingBlockId));
+// renderItemHiddenByThinkingDisplay hides a render row when all its thinking blocks are display-filtered.
+// renderItemHiddenByThinkingDisplay 在一条渲染行的思考块全部被展示策略过滤时隐藏整行。
+export function renderItemHiddenByThinkingDisplay(item: ConversationRenderItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
+  return hiddenThinkingBlockIds.size > 0
+    && item.blocks.length > 0
+    && item.blocks.every((block) => block.kind === "thinking" && hiddenThinkingBlockIds.has(block.id));
 }
 
 // stripUserPromptHeading removes legacy transcript headings from visible user bubbles.

@@ -29,6 +29,10 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  THINKING_DISPLAY_MODE_OPTIONS,
+  type ThinkingDisplayMode,
+} from "@/components/conversation/thinking-display";
 import { cn } from "@/lib/utils";
 import type { ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary } from "@/types";
 
@@ -40,18 +44,18 @@ export function ComposerAttachmentMenu(props: {
   // Enabled attachment capability gates available for this prompt.
   // 当前提示词可用的已启用附件能力门控。
   capabilities: ComposerAttachmentCapabilitySummary[];
-  // Whether streaming thinking currently uses the floating thinking surface.
-  // 当前流式思考是否使用浮动思考面板。
-  thinkingOverlayEnabled: boolean;
+  // Thinking display mode selected by the WebUI plus menu.
+  // WebUI 加号菜单选中的思考展示模式。
+  thinkingDisplayMode: ThinkingDisplayMode;
   // Whether session Plan mode is currently enabled.
   // 当前会话计划模式是否已启用。
   planModeEnabled: boolean;
   // Opens a file picker for one attachment kind or all kinds.
   // 按附件类型或全部类型打开文件选择器。
   onPick: (kind: string | null) => void;
-  // Updates the thinking display preference from the plus menu.
-  // 从加号菜单更新思考展示偏好。
-  onThinkingOverlayEnabledChange: (enabled: boolean) => void;
+  // Updates the thinking display mode from the plus menu.
+  // 从加号菜单更新思考展示模式。
+  onThinkingDisplayModeChange: (mode: ThinkingDisplayMode) => void;
   // Updates the session Plan mode from the plus menu.
   // 从加号菜单更新会话计划模式。
   onPlanModeChange: (enabled: boolean) => void;
@@ -107,17 +111,18 @@ export function ComposerAttachmentMenu(props: {
         <DropdownMenuSub>
           <DropdownMenuSubTrigger>
             <BrainCircuit size={15} />
-            <span>思考弹窗</span>
+            <span>思考过程</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent className="composer-thinking-menu">
-            <DropdownMenuItem onSelect={() => props.onThinkingOverlayEnabledChange(true)}>
-              <span>开启</span>
-              {props.thinkingOverlayEnabled ? <CheckCircle2 size={14} /> : null}
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => props.onThinkingOverlayEnabledChange(false)}>
-              <span>关闭</span>
-              {!props.thinkingOverlayEnabled ? <CheckCircle2 size={14} /> : null}
-            </DropdownMenuItem>
+            {THINKING_DISPLAY_MODE_OPTIONS.map((option) => (
+              <DropdownMenuItem key={option.value} onSelect={() => props.onThinkingDisplayModeChange(option.value)}>
+                <span className="composer-thinking-mode-label">
+                  <span>{option.labelZh}</span>
+                  <small>{option.labelEn}</small>
+                </span>
+                {props.thinkingDisplayMode === option.value ? <CheckCircle2 size={14} /> : null}
+              </DropdownMenuItem>
+            ))}
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuCheckboxItem
