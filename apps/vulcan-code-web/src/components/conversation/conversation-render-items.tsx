@@ -162,7 +162,7 @@ export function ConversationProcessGroup(props: {
       >
         <Clock3 className="work-process-icon" size={14} />
         <span>{headerText}</span>
-        {props.process.collapsible ? (collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />) : null}
+        {props.process.collapsible ? (collapsed ? <ChevronRight className="work-process-toggle-icon" size={13} /> : <ChevronDown className="work-process-toggle-icon" size={13} />) : null}
       </button>
       <div className="work-process-guidance">
         {visibleGuidanceItems.map((item) => (
@@ -416,7 +416,11 @@ export function ConversationRenderItemView(props: {
               type="button"
             >
               <span>{userPromptExpanded ? "收起" : "显示更多"}</span>
-              {userPromptExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              {userPromptExpanded ? (
+                <ChevronUp className="user-prompt-expand-icon" size={14} />
+              ) : (
+                <ChevronDown className="user-prompt-expand-icon" size={14} />
+              )}
             </button>
           ) : null}
         </div>

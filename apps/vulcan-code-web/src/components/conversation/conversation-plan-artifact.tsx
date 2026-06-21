@@ -145,7 +145,7 @@ export function PlanArtifactBlock(props: {
           <button
             aria-expanded={expanded}
             aria-label={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
-            className="plan-artifact-icon-button"
+            className="plan-artifact-icon-button plan-artifact-collapse-toggle"
             onClick={() => {
               dispatchConversationManualViewportInteraction();
               setExpanded((current) => !current);
@@ -153,7 +153,11 @@ export function PlanArtifactBlock(props: {
             title={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             type="button"
           >
-            {expanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+            {expanded ? (
+              <ChevronUp className="plan-artifact-collapse-icon" size={16} />
+            ) : (
+              <ChevronDown className="plan-artifact-collapse-icon" size={16} />
+            )}
           </button>
         </div>
       </header>

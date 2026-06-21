@@ -7324,6 +7324,17 @@ button {
   outline: none;
 }
 
+.user-prompt-expand-icon {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.user-prompt-expand-toggle:hover .user-prompt-expand-icon,
+.user-prompt-expand-toggle:focus-visible .user-prompt-expand-icon,
+.user-prompt-expand-toggle[aria-expanded="true"] .user-prompt-expand-icon {
+  opacity: 1;
+}
+
 .user-message-meta {
   max-width: min(72%, 760px);
   display: inline-flex;
@@ -7538,6 +7549,17 @@ button {
 .plan-artifact-icon-button:hover {
   background: color-mix(in oklch, var(--muted) 70%, transparent);
   color: var(--foreground);
+}
+
+.plan-artifact-collapse-icon {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.plan-artifact-collapse-toggle:hover .plan-artifact-collapse-icon,
+.plan-artifact-collapse-toggle:focus-visible .plan-artifact-collapse-icon,
+.plan-artifact-collapse-toggle[aria-expanded="true"] .plan-artifact-collapse-icon {
+  opacity: 1;
 }
 
 .plan-artifact-card-body {
@@ -7778,6 +7800,17 @@ button {
   color: currentColor;
 }
 
+.work-process-toggle-icon {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.work-process-toggle:not(:disabled):hover .work-process-toggle-icon,
+.work-process-toggle:not(:disabled):focus-visible .work-process-toggle-icon,
+.work-process-group[data-process-body-visible="true"] .work-process-toggle-icon {
+  opacity: 1;
+}
+
 .work-process-guidance,
 .work-process-body {
   display: grid;
@@ -7823,6 +7856,11 @@ button {
   gap: 6px;
 }
 
+.thinking-toggle-label strong {
+  color: inherit;
+  font-weight: 500;
+}
+
 .thinking-toggle:hover,
 .thinking-toggle:focus-visible {
   color: var(--foreground);
@@ -7832,6 +7870,12 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thinking-toggle:hover .thinking-toggle-icon,
+.thinking-toggle:focus-visible .thinking-toggle-icon,
+.thinking-block.expanded .thinking-toggle-icon {
+  opacity: 1;
 }
 
 .thinking-body {
@@ -7846,11 +7890,6 @@ button {
   max-width: none;
   color: inherit;
   font-size: inherit;
-}
-
-.thinking-body .markdown-message p:first-child > strong:first-child {
-  color: var(--foreground);
-  font-weight: 700;
 }
 
 .context-compaction-block {
@@ -7884,6 +7923,17 @@ button {
 .context-compaction-toggle:hover,
 .context-compaction-toggle:focus-visible {
   color: var(--foreground);
+}
+
+.context-compaction-toggle-icon {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.context-compaction-toggle:hover .context-compaction-toggle-icon,
+.context-compaction-toggle:focus-visible .context-compaction-toggle-icon,
+.context-compaction-block.expanded .context-compaction-toggle-icon {
+  opacity: 1;
 }
 
 .context-compaction-title {
@@ -8016,7 +8066,8 @@ button {
 }
 
 .tool-presentation-summary {
-  width: 100%;
+  width: fit-content;
+  max-width: 100%;
   min-width: 0;
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
@@ -8055,7 +8106,8 @@ button {
 }
 
 .tool-presentation-summary:hover .tool-presentation-toggle,
-.tool-presentation-card.expanded .tool-presentation-toggle {
+.tool-presentation-summary:focus-visible .tool-presentation-toggle,
+.tool-presentation-summary[aria-expanded="true"] .tool-presentation-toggle {
   opacity: 1;
 }
 
@@ -8219,10 +8271,6 @@ button {
 .file-change-error-badge {
   font-weight: 700;
   letter-spacing: 0;
-}
-
-.file-change-toggle {
-  opacity: 1;
 }
 
 .file-change-tree {

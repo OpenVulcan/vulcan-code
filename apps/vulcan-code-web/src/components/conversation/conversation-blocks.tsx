@@ -17,6 +17,7 @@ import type { GeneratedMediaAttachment } from "@/components/media/generated-medi
 import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
 // ConversationDisplayBlock 包含已拆分展示块所需的转录字段。
@@ -48,6 +49,9 @@ export interface ConversationDisplayBlock {
   // Optional context-compaction state.
   // 可选上下文压缩状态。
   compactionState?: string;
+  // Optional raw transcript metadata used by specialized display rows.
+  // 专用展示行使用的可选原始转录元数据。
+  rawMetadata?: unknown;
 }
 
 // ContextCompactionBlock renders the original compacted context status section as one collapsible row.
@@ -87,7 +91,7 @@ export function ContextCompactionBlock(props: {
   const hasExpandedContent = thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
-    <section className={cn("context-compaction-block", displayStatus)}>
+    <section className={cn("context-compaction-block", displayStatus, expanded && "expanded")}>
       <button
         aria-expanded={expanded}
         className="context-compaction-toggle"
@@ -100,7 +104,7 @@ export function ContextCompactionBlock(props: {
         <span className="context-compaction-title">
           <ScrollText size={15} />
           <strong>{title}</strong>
-          {expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+          {expanded ? <ChevronDown className="context-compaction-toggle-icon" size={13} /> : <ChevronRight className="context-compaction-toggle-icon" size={13} />}
         </span>
       </button>
       <ConversationCollapsibleMotion expanded={expanded}>
@@ -147,13 +151,138 @@ export function ThinkingBlock(props: {
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const content = props.block.body.trim() || props.block.summary || "暂无思考内容";
+  const shouldAutoExpand = props.streaming || props.autoExpanded;
+  const [expanded, setExpanded] = React.useState(shouldAutoExpand);
+  const wasStreamingRef = React.useRef(props.streaming);
+
+  React.useEffect(() => {
+    wasStreamingRef.current = props.streaming;
+    setExpanded(shouldAutoExpand);
+  }, [props.block.id]);
+
+  React.useEffect(() => {
+    if (shouldAutoExpand) {
+      setExpanded(true);
+    }
+    if (wasStreamingRef.current && !props.streaming) {
+      setExpanded(false);
+    }
+    wasStreamingRef.current = props.streaming;
+  }, [props.streaming, shouldAutoExpand]);
+
+  const durationLabel = props.streaming ? "正在思考" : thinkingDurationLabel(props.block);
+
   return (
-    <section className="thinking-block">
-      <div className="thinking-body">
-        <MarkdownMessage content={`**Thinking:** ${content}`} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
-      </div>
+    <section className={cn("thinking-block", expanded && "expanded")}>
+      <button
+        aria-expanded={expanded}
+        className="thinking-toggle"
+        onClick={() => {
+          dispatchConversationManualViewportInteraction();
+          setExpanded((current) => !current);
+        }}
+        type="button"
+      >
+        <span className="thinking-toggle-label">
+          <BrainCircuit size={15} />
+          <strong>思考过程</strong>
+          {durationLabel ? <span>{durationLabel}</span> : null}
+        </span>
+        {expanded ? (
+          <ChevronDown className="tool-presentation-toggle thinking-toggle-icon" size={15} />
+        ) : (
+          <ChevronRight className="tool-presentation-toggle thinking-toggle-icon" size={15} />
+        )}
+      </button>
+      <ConversationCollapsibleMotion expanded={expanded}>
+        <div className="thinking-body">
+          <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
+        </div>
+      </ConversationCollapsibleMotion>
     </section>
   );
+}
+
+// thinkingDurationLabel reads a concrete thinking duration from transcript metadata.
+// thinkingDurationLabel 从转录元数据中读取明确记录的思考耗时。
+function thinkingDurationLabel(block: ConversationDisplayBlock): string | null {
+  const durationMs = thinkingDurationMs(block.rawMetadata);
+  if (durationMs === null) {
+    return null;
+  }
+  const formatted = formatWorkProcessDuration(durationMs);
+  return formatted ? `持续 ${formatted}` : null;
+}
+
+// thinkingDurationMs extracts known duration or elapsed fields without fabricating fallback values.
+// thinkingDurationMs 提取已知 duration 或 elapsed 字段，且不会伪造兜底耗时。
+function thinkingDurationMs(metadata: unknown): number | null {
+  const direct = thinkingDurationFromRecord(metadata, 0);
+  if (direct !== null) {
+    return direct;
+  }
+  return null;
+}
+
+// thinkingDurationFromRecord recursively scans shallow metadata records for concrete duration values.
+// thinkingDurationFromRecord 递归扫描浅层元数据记录中的明确耗时值。
+function thinkingDurationFromRecord(value: unknown, depth: number): number | null {
+  if (!value || typeof value !== "object" || Array.isArray(value) || depth > 2) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const candidateKeys = [
+    "thinking_duration_ms",
+    "thinkingDurationMs",
+    "duration_ms",
+    "durationMs",
+    "elapsed_ms",
+    "elapsedMs",
+    "duration",
+    "elapsed",
+  ];
+  for (const key of candidateKeys) {
+    const parsed = thinkingDurationValueToMs(record[key], key);
+    if (parsed !== null) {
+      return parsed;
+    }
+  }
+  for (const key of ["metadata", "display", "timing", "stats"]) {
+    const nested = thinkingDurationFromRecord(record[key], depth + 1);
+    if (nested !== null) {
+      return nested;
+    }
+  }
+  return null;
+}
+
+// thinkingDurationValueToMs normalizes metadata duration values into milliseconds.
+// thinkingDurationValueToMs 将元数据耗时值规范化为毫秒。
+function thinkingDurationValueToMs(value: unknown, key: string): number | null {
+  const lowerKey = key.toLowerCase();
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    return lowerKey.includes("ms") ? value : value * 1000;
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const millisecondMatch = /^(\d+(?:\.\d+)?)\s*ms$/i.exec(trimmed);
+  if (millisecondMatch) {
+    return Number.parseFloat(millisecondMatch[1]);
+  }
+  const secondMatch = /^(\d+(?:\.\d+)?)\s*(s|秒)$/i.exec(trimmed);
+  if (secondMatch) {
+    return Number.parseFloat(secondMatch[1]) * 1000;
+  }
+  const numericValue = Number.parseFloat(trimmed);
+  if (Number.isFinite(numericValue) && /^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return lowerKey.includes("ms") ? numericValue : numericValue * 1000;
+  }
+  return null;
 }
 
 // TurnStatsBlock renders the compact non-clickable per-turn statistics row.
