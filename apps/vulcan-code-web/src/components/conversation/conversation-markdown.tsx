@@ -2,8 +2,27 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
+import { Check, Copy, WrapText } from "lucide-react";
+import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
+import {
+  highlightedDiffLineSpansForLanguage,
+  useHighlightedCodeBlockRevision,
+} from "@/diff/diff-highlight";
+import {
+  escapeHtml,
+  normalizeShikiLanguage,
+  tokenSpansToHtml,
+} from "@/diff/diff-shiki-shared";
 import { localMediaSourceUrl } from "@/resources/localMedia";
+
+// MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT caps Shiki work per fenced Markdown code block.
+// MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT 限制单个 Markdown 代码块触发的 Shiki 高亮行数。
+const MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT = 800;
+
+// MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT caps large code blocks before worker highlighting.
+// MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT 在 Worker 高亮前限制超大代码块体积。
+const MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT = 240_000;
 
 // markdownPlugins stores the Markdown extension set shared by inline and modal renderers.
 // markdownPlugins 保存内联与弹窗渲染器共享的 Markdown 扩展集合。
@@ -156,7 +175,7 @@ function MarkdownContentRenderer(props: {
         />
       );
     },
-    pre: ({ children }: { children?: React.ReactNode }) => <pre className="markdown-code-block">{children}</pre>,
+    pre: ({ children }: { children?: React.ReactNode }) => <MarkdownCodeBlock>{children}</MarkdownCodeBlock>,
     table: ({ children }: { children?: React.ReactNode }) => <div className="markdown-table-wrap"><table>{children}</table></div>,
   }), [props.onOpenMedia, props.workspacePath]);
   return (
@@ -194,6 +213,221 @@ function LazyMarkdownMessage(props: {
     />
   );
 }
+
+// MarkdownCodeBlock renders fenced code with language chrome, copy, wrap, and syntax highlighting.
+// MarkdownCodeBlock 为围栏代码渲染语言栏、复制、折行与语法高亮。
+function MarkdownCodeBlock(props: {
+  // ReactMarkdown code element children wrapped by the pre component.
+  // ReactMarkdown 中由 pre 包裹的 code 元素子节点。
+  children?: React.ReactNode;
+}) {
+  const codeElement = markdownCodeElement(props.children);
+  const className = codeElement?.props.className;
+  const rawCode = markdownCodeText(codeElement?.props.children ?? props.children);
+  const code = rawCode.replace(/\n$/u, "");
+  const language = markdownCodeLanguage(className);
+  const displayLanguage = markdownCodeDisplayLanguage(language);
+  const normalizedLanguage = normalizeShikiLanguage(markdownCodeHighlightLanguage(language));
+  const lines = React.useMemo(() => code.split(/\r\n|\r|\n/u), [code]);
+  const highlightEnabled = Boolean(
+    normalizedLanguage
+    && lines.length <= MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT
+    && code.length <= MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT,
+  );
+  const highlightRevision = useHighlightedCodeBlockRevision(lines, normalizedLanguage, highlightEnabled);
+  const renderedLines = React.useMemo(
+    () => markdownCodeRenderedLines(lines, normalizedLanguage, highlightRevision, highlightEnabled),
+    [highlightEnabled, highlightRevision, lines, normalizedLanguage],
+  );
+  const [copied, setCopied] = React.useState(false);
+  const [wrapped, setWrapped] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!copied) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => setCopied(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const icon = React.useMemo(
+    () => resolveFileTypeIcon(markdownCodeIconHint(displayLanguage)),
+    [displayLanguage],
+  );
+  return (
+    <figure className="markdown-code-block">
+      <figcaption className="markdown-code-header">
+        <span className="markdown-code-language">
+          <FileTypeIcon icon={icon} />
+          <span>{displayLanguage}</span>
+        </span>
+        <span className="markdown-code-actions">
+          <button
+            aria-pressed={wrapped}
+            className="markdown-code-action"
+            onClick={() => setWrapped((current) => !current)}
+            title={wrapped ? "关闭自动换行" : "开启自动换行"}
+            type="button"
+          >
+            <WrapText size={14} />
+          </button>
+          <button
+            className="markdown-code-action"
+            onClick={() => {
+              void copyMarkdownCode(code).then(() => setCopied(true));
+            }}
+            title={copied ? "已复制" : "复制代码"}
+            type="button"
+          >
+            {copied ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </span>
+      </figcaption>
+      <div className="markdown-code-scroll" data-wrap={wrapped ? "true" : "false"}>
+        <pre className="markdown-code-pre">
+          <code>
+            {renderedLines.map((line, index) => (
+              <span
+                className="markdown-code-line"
+                dangerouslySetInnerHTML={{ __html: line || "&#8203;" }}
+                key={`${index}:${line.length}`}
+              />
+            ))}
+          </code>
+        </pre>
+      </div>
+    </figure>
+  );
+}
+
+// markdownCodeElement returns the single code element carried by a pre node when available.
+// markdownCodeElement 在可用时返回 pre 节点内携带的单个 code 元素。
+function markdownCodeElement(children: React.ReactNode): React.ReactElement<{ className?: string; children?: React.ReactNode }> | null {
+  if (React.isValidElement<{ className?: string; children?: React.ReactNode }>(children)) {
+    return children;
+  }
+  if (Array.isArray(children) && children.length === 1 && React.isValidElement<{ className?: string; children?: React.ReactNode }>(children[0])) {
+    return children[0];
+  }
+  return null;
+}
+
+// markdownCodeText converts nested Markdown code children into a stable source string.
+// markdownCodeText 将嵌套的 Markdown 代码子节点转换为稳定源码字符串。
+function markdownCodeText(children: React.ReactNode): string {
+  if (children == null || typeof children === "boolean") {
+    return "";
+  }
+  if (typeof children === "string" || typeof children === "number") {
+    return String(children);
+  }
+  if (Array.isArray(children)) {
+    return children.map(markdownCodeText).join("");
+  }
+  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
+    return markdownCodeText(children.props.children);
+  }
+  return "";
+}
+
+// markdownCodeLanguage extracts the fence language from a react-markdown class name.
+// markdownCodeLanguage 从 react-markdown 的 className 中提取围栏语言。
+function markdownCodeLanguage(className: string | undefined): string | null {
+  const match = className?.match(/(?:^|\s)language-([^\s]+)/u);
+  return match?.[1]?.trim() || null;
+}
+
+// markdownCodeDisplayLanguage returns the compact language label shown in the code header.
+// markdownCodeDisplayLanguage 返回代码块头部显示的紧凑语言标签。
+function markdownCodeDisplayLanguage(language: string | null): string {
+  const normalized = language?.toLowerCase() ?? "";
+  return MARKDOWN_CODE_LANGUAGE_LABELS[normalized] ?? (normalized || "text");
+}
+
+// markdownCodeHighlightLanguage maps Markdown fence aliases to Shiki language ids.
+// markdownCodeHighlightLanguage 将 Markdown 围栏别名映射为 Shiki 语言标识。
+function markdownCodeHighlightLanguage(language: string | null): string | null {
+  const normalized = language?.toLowerCase() ?? "";
+  return MARKDOWN_CODE_HIGHLIGHT_LANGUAGE_ALIASES[normalized] ?? (normalized || null);
+}
+
+// markdownCodeIconHint converts a language label into a pseudo file name for the shared icon resolver.
+// markdownCodeIconHint 将语言标签转换为共享图标解析器可识别的伪文件名。
+function markdownCodeIconHint(language: string): string {
+  return MARKDOWN_CODE_ICON_HINTS[language.toLowerCase()] ?? `snippet.${language}`;
+}
+
+// markdownCodeRenderedLines renders highlighted line HTML when cached, otherwise escaped source.
+// markdownCodeRenderedLines 在缓存可用时渲染高亮行 HTML，否则渲染转义源码。
+function markdownCodeRenderedLines(
+  lines: readonly string[],
+  language: string | null,
+  _highlightRevision: number,
+  highlightEnabled: boolean,
+): string[] {
+  return lines.map((line) => {
+    const spans = highlightEnabled && language ? highlightedDiffLineSpansForLanguage(line, language) : null;
+    return spans ? tokenSpansToHtml(spans) : escapeHtml(line);
+  });
+}
+
+// copyMarkdownCode writes a Markdown code block to the clipboard with a textarea fallback.
+// copyMarkdownCode 将 Markdown 代码块写入剪贴板，并提供 textarea 降级。
+async function copyMarkdownCode(code: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(code);
+      return;
+    } catch {
+      // Fall back to the legacy selection path when the Clipboard API is blocked.
+      // 当 Clipboard API 被阻止时降级到旧版选区复制路径。
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = code;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+const MARKDOWN_CODE_LANGUAGE_LABELS: Record<string, string> = {
+  js: "javascript",
+  jsx: "jsx",
+  shell: "bash",
+  sh: "bash",
+  text: "text",
+  txt: "text",
+  plaintext: "text",
+  ts: "typescript",
+  tsx: "tsx",
+};
+
+const MARKDOWN_CODE_HIGHLIGHT_LANGUAGE_ALIASES: Record<string, string> = {
+  javascript: "javascript",
+  js: "javascript",
+  shell: "bash",
+  sh: "bash",
+  text: "text",
+  txt: "text",
+  plaintext: "text",
+  typescript: "typescript",
+  ts: "typescript",
+};
+
+const MARKDOWN_CODE_ICON_HINTS: Record<string, string> = {
+  bash: "snippet.sh",
+  javascript: "snippet.js",
+  jsx: "snippet.jsx",
+  lua: "snippet.lua",
+  powershell: "snippet.ps1",
+  python: "snippet.py",
+  text: "snippet.txt",
+  typescript: "snippet.ts",
+  tsx: "snippet.tsx",
+};
 
 // mediaSourceUrl converts local media paths into URLs usable by either Tauri or browser preview mode.
 // mediaSourceUrl 将本地媒体路径转换为 Tauri 或浏览器预览模式可用的 URL。

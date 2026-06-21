@@ -336,6 +336,50 @@ export function useHighlightedDiffFileRevision(file: DiffFile, language: string 
   return revision;
 }
 
+// useHighlightedCodeBlockRevision schedules plain Markdown code lines for shared Shiki highlighting.
+// useHighlightedCodeBlockRevision 将普通 Markdown 代码行调度到共享 Shiki 高亮流程。
+export function useHighlightedCodeBlockRevision(
+  // Source lines rendered by one Markdown fenced code block.
+  // 单个 Markdown 围栏代码块渲染的源码行。
+  lines: readonly string[],
+  // Requested Shiki language id.
+  // 请求的 Shiki 语言标识。
+  language: string | null,
+  // Whether this block should spend worker time on syntax highlighting.
+  // 当前代码块是否应消耗 Worker 时间进行语法高亮。
+  enabled: boolean,
+): number {
+  const [revision, refresh] = React.useReducer((value: number) => value + 1, 0);
+  const normalizedLanguage = normalizeShikiLanguage(language);
+  const theme = useDiffShikiTheme();
+  React.useEffect(() => {
+    if (!enabled || !normalizedLanguage || lines.length === 0) {
+      return undefined;
+    }
+    // Duplicate guard keeps repeated lines in one code block from scheduling duplicate worker jobs.
+    // 去重集合避免同一代码块中的重复行重复调度 Worker 任务。
+    const scheduledKeys = new Set<string>();
+    const unsubscribeList: Array<() => void> = [];
+    for (const line of lines) {
+      const cacheKey = highlightCacheKey(line, normalizedLanguage, theme);
+      if (highlightedLineCache.has(cacheKey) || failedHighlightKeys.has(cacheKey) || scheduledKeys.has(cacheKey)) {
+        continue;
+      }
+      scheduledKeys.add(cacheKey);
+      unsubscribeList.push(requestHighlightedLineByKey(cacheKey, line, normalizedLanguage, theme, refresh));
+    }
+    if (unsubscribeList.length === 0) {
+      return undefined;
+    }
+    return () => {
+      for (const unsubscribe of unsubscribeList) {
+        unsubscribe();
+      }
+    };
+  }, [enabled, lines, normalizedLanguage, theme]);
+  return revision;
+}
+
 // highlightedDiffLineSpans returns cached syntax-highlighted token spans when ready.
 // highlightedDiffLineSpans 在高亮完成后返回缓存的语法高亮 token span。
 export function highlightedDiffLineSpans(line: string, language: string): DiffShikiTokenSpan[] | null {

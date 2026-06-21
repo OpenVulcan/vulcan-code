@@ -7259,8 +7259,8 @@ button {
   padding: 10px 13px;
   border: 1px solid var(--border);
   border-radius: 16px;
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--muted);
+  color: var(--foreground);
 }
 
 .user-bubble::after {
@@ -7273,7 +7273,7 @@ button {
   background: transparent;
   border-top: 6px solid transparent;
   border-bottom: 6px solid transparent;
-  border-left: 8px solid var(--primary);
+  border-left: 8px solid var(--muted);
 }
 
 .user-bubble::before {
@@ -7310,7 +7310,7 @@ button {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: color-mix(in oklch, var(--primary-foreground) 82%, transparent);
+  color: var(--muted-foreground);
   font: inherit;
   font-size: 13px;
   line-height: 1;
@@ -7319,8 +7319,8 @@ button {
 
 .user-prompt-expand-toggle:hover,
 .user-prompt-expand-toggle:focus-visible {
-  background: color-mix(in oklch, var(--primary-foreground) 14%, transparent);
-  color: var(--primary-foreground);
+  background: color-mix(in oklch, var(--background) 64%, transparent);
+  color: var(--foreground);
   outline: none;
 }
 
@@ -7394,6 +7394,7 @@ button {
 .markdown-message ul,
 .markdown-message ol,
 .markdown-message blockquote,
+.markdown-message figure,
 .markdown-message pre,
 .markdown-message table {
   margin: 0 0 11px;
@@ -7461,7 +7462,6 @@ button {
   color: var(--foreground);
 }
 
-.markdown-code-block,
 .diff-detail {
   max-width: 100%;
   overflow: auto;
@@ -7472,6 +7472,118 @@ button {
   color: var(--foreground);
   font-size: 13px;
   line-height: 1.55;
+}
+
+.markdown-code-block {
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--card) 94%, var(--muted));
+  color: var(--foreground);
+}
+
+.markdown-message .markdown-code-block {
+  margin: 0 0 11px;
+}
+
+.markdown-code-header {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px 4px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.markdown-code-language {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.markdown-code-language > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.markdown-code-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+.markdown-code-action {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.markdown-code-action:hover,
+.markdown-code-action:focus-visible,
+.markdown-code-action[aria-pressed="true"] {
+  background: color-mix(in oklch, var(--muted) 80%, transparent);
+  color: var(--foreground);
+  outline: none;
+}
+
+.markdown-code-scroll {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  padding: 5px 0 10px;
+}
+
+.markdown-code-scroll[data-wrap="true"] {
+  overflow-x: hidden;
+}
+
+.markdown-code-pre {
+  min-width: max-content;
+  margin: 0;
+  padding: 0 14px;
+  background: transparent;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+
+.markdown-message .markdown-code-pre {
+  margin: 0;
+}
+
+.markdown-code-scroll[data-wrap="true"] .markdown-code-pre {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.markdown-code-line {
+  display: block;
+  min-height: 1.55em;
+  white-space: pre;
+}
+
+.markdown-code-scroll[data-wrap="true"] .markdown-code-line {
+  white-space: pre-wrap;
 }
 
 .markdown-table-wrap {

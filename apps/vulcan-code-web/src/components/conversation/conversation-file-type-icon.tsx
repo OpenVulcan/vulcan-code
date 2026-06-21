@@ -121,6 +121,7 @@ const FILE_EXTENSION_ICON_NAMES = new Map<string, string>([
   ["toml", "material-icon-theme:toml"],
   ["ts", "material-icon-theme:typescript"],
   ["tsx", "material-icon-theme:react-ts"],
+  ["txt", "material-icon-theme:document"],
   ["vue", "material-icon-theme:vue"],
   ["xml", "material-icon-theme:xml"],
   ["yaml", "material-icon-theme:yaml"],
