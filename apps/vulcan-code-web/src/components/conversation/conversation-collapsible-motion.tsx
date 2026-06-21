@@ -1,6 +1,5 @@
 import * as React from "react";
 
-import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import { cn } from "@/lib/utils";
 
 // CONVERSATION_COLLAPSIBLE_MOTION_MS matches the CSS transition duration used by transcript fold boxes.
@@ -21,8 +20,8 @@ export interface ConversationCollapsibleMotionProps {
   children: React.ReactNode;
 }
 
-// ConversationCollapsibleMotion animates height changes and notifies virtual scrolling before remeasurement.
-// ConversationCollapsibleMotion 为高度变化添加动画，并在虚拟滚动重测前发出通知。
+// ConversationCollapsibleMotion animates height changes without repeatedly rewriting the viewport anchor.
+// ConversationCollapsibleMotion 为高度变化添加动画，同时避免反复改写视口锚点。
 export function ConversationCollapsibleMotion(props: ConversationCollapsibleMotionProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const [rendered, setRendered] = React.useState(props.expanded);
@@ -62,7 +61,6 @@ export function ConversationCollapsibleMotion(props: ConversationCollapsibleMoti
 
   const finishTransition = React.useCallback(() => {
     fallbackTimerRef.current = null;
-    dispatchConversationLayoutWillChange();
     if (expandedRef.current) {
       setVisualOpen(true);
       setHeight("auto");
@@ -87,7 +85,6 @@ export function ConversationCollapsibleMotion(props: ConversationCollapsibleMoti
     }
     previousExpandedRef.current = props.expanded;
     clearScheduledWork();
-    dispatchConversationLayoutWillChange();
 
     if (prefersReducedMotion) {
       setRendered(props.expanded);
@@ -103,7 +100,6 @@ export function ConversationCollapsibleMotion(props: ConversationCollapsibleMoti
       frameRef.current = window.requestAnimationFrame(() => {
         frameRef.current = null;
         const nextHeight = innerRef.current?.scrollHeight ?? 0;
-        dispatchConversationLayoutWillChange();
         setVisualOpen(true);
         setHeight(`${nextHeight}px`);
         scheduleTransitionFinish();
@@ -120,7 +116,6 @@ export function ConversationCollapsibleMotion(props: ConversationCollapsibleMoti
     setHeight(`${currentHeight}px`);
     frameRef.current = window.requestAnimationFrame(() => {
       frameRef.current = null;
-      dispatchConversationLayoutWillChange();
       setVisualOpen(false);
       setHeight("0px");
       scheduleTransitionFinish();
@@ -136,7 +131,6 @@ export function ConversationCollapsibleMotion(props: ConversationCollapsibleMoti
       return;
     }
     const observer = new ResizeObserver(() => {
-      dispatchConversationLayoutWillChange();
       if (expandedRef.current && heightRef.current !== "auto") {
         setHeight(`${element.scrollHeight}px`);
       }

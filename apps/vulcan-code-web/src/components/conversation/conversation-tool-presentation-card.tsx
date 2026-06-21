@@ -12,7 +12,7 @@ import type {
 } from "@/components/conversation/conversation-detail";
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
 import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
-import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
+import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import {
   commandPresentationStatusLabel,
@@ -117,7 +117,6 @@ function CommandExecutionPresentationCard(props: {
         }
         const nextPresentation = hydrateCommandExecutionPresentation(presentation, payload);
         commandPresentationDetailCache.set(detailCacheKey, nextPresentation);
-        dispatchConversationLayoutWillChange();
         setHydratedPresentation(nextPresentation);
       })
       .catch(() => {
@@ -139,7 +138,7 @@ function CommandExecutionPresentationCard(props: {
   const exitCodeLabel = hydratedPresentation.exitCode === null ? "-" : String(hydratedPresentation.exitCode);
   const exitCodeState = commandExitCodeState(hydratedPresentation.exitCode);
   const handleToggle = React.useCallback(() => {
-    dispatchConversationLayoutWillChange();
+    dispatchConversationManualViewportInteraction();
     onExpandedChange(presentation.id, !expanded);
   }, [expanded, onExpandedChange, presentation.id]);
 
@@ -209,7 +208,7 @@ function FileChangePresentationCard(props: {
     if (!presentation.interactive) {
       return;
     }
-    dispatchConversationLayoutWillChange();
+    dispatchConversationManualViewportInteraction();
     if (presentation.state === "failed" && presentation.errorDetail) {
       setErrorExpanded((value) => !value);
       return;
@@ -268,11 +267,13 @@ function FileChangePresentationCard(props: {
                   file={file}
                   interactive={file.expandable}
                   presentation={presentation}
+                  showOperationIcon={false}
+                  showStatusLabel={false}
                   onToggle={() => {
                     if (!file.expandable) {
                       return;
                     }
-                    dispatchConversationLayoutWillChange();
+                    dispatchConversationManualViewportInteraction();
                     onExpandedChange(fileExpansionId(presentation, file), !fileExpanded);
                   }}
                 />
@@ -303,21 +304,33 @@ function FileChangeSummaryButton(props: {
   // Parent file change presentation.
   // 父级文件变更展示。
   presentation: FileChangePresentation;
+  // Whether to show the left operation icon before the status label.
+  // 是否在状态文案前显示左侧操作图标。
+  showOperationIcon?: boolean;
+  // Whether to show the operation status label before the file name.
+  // 是否在文件名前显示操作状态文案。
+  showStatusLabel?: boolean;
   // Toggle handler for interactive rows.
   // 可交互行的切换处理器。
   onToggle: () => void;
 }) {
+  const showOperationIcon = props.showOperationIcon ?? true;
+  const showStatusLabel = props.showStatusLabel ?? true;
   return (
     <button
       aria-expanded={props.expanded}
-      className="tool-presentation-summary file-change-summary"
+      className={cn(
+        "tool-presentation-summary file-change-summary",
+        !showOperationIcon && "without-operation-icon",
+        !showOperationIcon && !showStatusLabel && "file-only",
+      )}
       disabled={!props.interactive}
       onClick={props.onToggle}
       title={props.file.path}
       type="button"
     >
-      <FileChangeOperationIcon operation={props.file.operation} />
-      <span className="tool-presentation-state">{fileChangeStatusLabel(props.presentation, props.file.operation)}</span>
+      {showOperationIcon ? <FileChangeOperationIcon operation={props.file.operation} /> : null}
+      {showStatusLabel ? <span className="tool-presentation-state">{fileChangeStatusLabel(props.presentation, props.file.operation)}</span> : null}
       <span className="file-change-path">
         <span className="file-change-icon-stack"><FileTypeIcon icon={props.file.icon} /></span>
         <span className="file-change-path-text">{props.file.displayPath}</span>

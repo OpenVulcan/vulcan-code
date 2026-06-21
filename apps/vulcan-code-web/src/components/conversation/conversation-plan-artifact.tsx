@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import { useI18n } from "@/i18n";
 
@@ -145,7 +146,10 @@ export function PlanArtifactBlock(props: {
             aria-expanded={expanded}
             aria-label={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             className="plan-artifact-icon-button"
-            onClick={() => setExpanded((current) => !current)}
+            onClick={() => {
+              dispatchConversationManualViewportInteraction();
+              setExpanded((current) => !current);
+            }}
             title={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             type="button"
           >
@@ -157,7 +161,14 @@ export function PlanArtifactBlock(props: {
         <div className="plan-artifact-markdown-frame">
           <MarkdownMessage content={props.artifact.content} eager />
           {!expanded ? (
-            <button className="plan-artifact-expand-overlay" onClick={() => setExpanded(true)} type="button">
+            <button
+              className="plan-artifact-expand-overlay"
+              onClick={() => {
+                dispatchConversationManualViewportInteraction();
+                setExpanded(true);
+              }}
+              type="button"
+            >
               {t("planArtifact.expand")}
             </button>
           ) : null}

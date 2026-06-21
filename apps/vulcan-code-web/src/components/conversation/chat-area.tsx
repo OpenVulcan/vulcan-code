@@ -484,7 +484,9 @@ export function ChatArea(props: ChatAreaProps) {
     if (surfaceId && scrollRestoreGuardRef.current?.surfaceId === surfaceId) {
       scrollRestoreGuardRef.current = null;
     }
-    shouldFollowConversationTailRef.current = false;
+    if (direction !== "down") {
+      shouldFollowConversationTailRef.current = false;
+    }
   }, [activeSurfaceConversationId, clearLayoutRestoreFrames]);
 
   // updateConversationBottomState refreshes the bottom affordance from the timeline scroll position.
@@ -497,8 +499,20 @@ export function ChatArea(props: ChatAreaProps) {
       return;
     }
     const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
-    const shouldFollow = !suppressNearBottomFollow && conversationViewportAllowsTailFollow(element);
+    const alreadyTailLocked = shouldFollowConversationTailRef.current && !suppressNearBottomFollow;
     const surfaceId = element.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+    if (alreadyTailLocked) {
+      element.scrollTop = element.scrollHeight;
+      if (surfaceId) {
+        writeConversationScrollSnapshot(surfaceId, {
+          distanceFromBottom: 0,
+          wasAtBottom: true,
+        });
+      }
+      setIsAtConversationBottom(true);
+      return;
+    }
+    const shouldFollow = !suppressNearBottomFollow && conversationViewportAllowsTailFollow(element);
     const restoreGuard = scrollRestoreGuardRef.current;
     if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !suppressNearBottomFollow && !shouldFollow) {
       shouldFollowConversationTailRef.current = true;
@@ -528,10 +542,10 @@ export function ChatArea(props: ChatAreaProps) {
       pendingLayoutViewportRef.current = null;
       return;
     }
-    const wasAtBottom = conversationViewportAllowsTailFollow(element);
+    const wasAtBottom = shouldFollowConversationTailRef.current || conversationViewportAllowsTailFollow(element);
     pendingLayoutViewportRef.current = {
       anchor: captureConversationViewportAnchor(element),
-      distanceFromBottom: conversationDistanceFromBottom(element),
+      distanceFromBottom: wasAtBottom ? 0 : conversationDistanceFromBottom(element),
       surfaceId,
       wasAtBottom,
     };
@@ -599,19 +613,41 @@ export function ChatArea(props: ChatAreaProps) {
     if (!element || typeof ResizeObserver === "undefined") {
       return;
     }
-    let previousWidth = element.getBoundingClientRect().width;
+    const initialRect = element.getBoundingClientRect();
+    let previousWidth = initialRect.width;
+    let previousHeight = initialRect.height;
     const observer = new ResizeObserver(([entry]) => {
       const nextWidth = entry.contentRect.width;
-      if (Math.abs(nextWidth - previousWidth) < 1) {
+      const nextHeight = entry.contentRect.height;
+      const widthChanged = Math.abs(nextWidth - previousWidth) >= 1;
+      const heightChanged = Math.abs(nextHeight - previousHeight) >= 1;
+      if (!widthChanged && !heightChanged) {
         return;
       }
       previousWidth = nextWidth;
-      capturePendingConversationLayoutViewport();
-      schedulePendingConversationLayoutRestore();
+      previousHeight = nextHeight;
+      const scrollElement = workspaceRef.current;
+      const surfaceId = scrollElement?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
+      const suppressNearBottomFollow = Date.now() <= upwardScrollTailSuppressUntilRef.current;
+      if (heightChanged && scrollElement && shouldFollowConversationTailRef.current && !suppressNearBottomFollow) {
+        scrollElement.scrollTop = scrollElement.scrollHeight;
+        if (surfaceId) {
+          writeConversationScrollSnapshot(surfaceId, {
+            distanceFromBottom: 0,
+            wasAtBottom: true,
+          });
+        }
+        setIsAtConversationBottom(true);
+        return;
+      }
+      if (widthChanged) {
+        capturePendingConversationLayoutViewport();
+        schedulePendingConversationLayoutRestore();
+      }
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore]);
+  }, [activeSurfaceConversationId, capturePendingConversationLayoutViewport, schedulePendingConversationLayoutRestore, writeConversationScrollSnapshot]);
 
   React.useLayoutEffect(() => {
     const element = workspaceRef.current;
@@ -668,6 +704,8 @@ export function ChatArea(props: ChatAreaProps) {
     if (!element) {
       return;
     }
+    shouldFollowConversationTailRef.current = true;
+    upwardScrollTailSuppressUntilRef.current = 0;
     const safeBehavior = behavior === "auto" || behavior === "instant" || behavior === "smooth" ? behavior : "smooth";
     element.scrollTo({ top: element.scrollHeight, behavior: safeBehavior });
   }, []);

@@ -15,7 +15,7 @@ import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
-import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
+import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
@@ -92,7 +92,7 @@ export function ContextCompactionBlock(props: {
         aria-expanded={expanded}
         className="context-compaction-toggle"
         onClick={() => {
-          dispatchConversationLayoutWillChange();
+          dispatchConversationManualViewportInteraction();
           setExpanded((current) => !current);
         }}
         type="button"

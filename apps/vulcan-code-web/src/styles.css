@@ -7985,18 +7985,11 @@ button {
 .conversation-collapsible-motion {
   min-width: 0;
   overflow: hidden;
-  opacity: 0;
-  transform: translateY(-3px);
-  transition:
-    height 180ms cubic-bezier(0.22, 1, 0.36, 1),
-    opacity 140ms ease,
-    transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: height, opacity, transform;
+  transition: height 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .conversation-collapsible-motion.open {
-  opacity: 1;
-  transform: translateY(0);
+  overflow: visible;
 }
 
 .conversation-collapsible-motion-inner {
@@ -8128,6 +8121,14 @@ button {
 
 .file-change-summary {
   grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+
+.file-change-summary.without-operation-icon {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.file-change-summary.file-only {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .file-change-summary:disabled {
@@ -8274,10 +8275,7 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   .conversation-collapsible-motion {
-    opacity: 1;
-    transform: none;
     transition: none;
-    will-change: auto;
   }
 }
 

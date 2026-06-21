@@ -1,6 +1,5 @@
 import * as React from "react";
 
-import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
 import {
   diffLanguageForFile,
   useHighlightedDiffFileRevision,
@@ -47,9 +46,6 @@ export function ChangeSetDiffPreview(props: {
     viewMode: "unified",
   }, useHighlightedRenderer);
   const html = useHighlightedRenderer ? highlightedHtml : plainHtml;
-  React.useLayoutEffect(() => {
-    dispatchConversationLayoutWillChange();
-  }, [html]);
   return (
     <div className="file-change-review-preview diff-plain-rendered-window">
       <div dangerouslySetInnerHTML={{ __html: html }} />

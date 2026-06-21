@@ -13,6 +13,7 @@ import {
   createEmptyConversationSurfaceExpandedState,
   type ConversationSurfaceExpandedState,
 } from "@/components/conversation/conversation-layout-restore";
+import { CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT } from "@/components/conversation/conversation-layout-events";
 import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
 import {
   ConversationDetailModal,
@@ -280,6 +281,14 @@ export function ConversationWorkspace(props: {
       return;
     }
     handleConversationUserScrollStart("unknown");
+  }, [handleConversationUserScrollStart]);
+
+  React.useEffect(() => {
+    const handleManualViewportInteraction = () => {
+      handleConversationUserScrollStart("up");
+    };
+    window.addEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
+    return () => window.removeEventListener(CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT, handleManualViewportInteraction);
   }, [handleConversationUserScrollStart]);
 
   const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => timelineItem.kind === "item" ? (

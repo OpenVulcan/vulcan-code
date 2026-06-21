@@ -21,7 +21,7 @@ import {
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
 import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
-import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
+import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import {
@@ -155,7 +155,7 @@ export function ConversationProcessGroup(props: {
           if (!props.process.collapsible) {
             return;
           }
-          dispatchConversationLayoutWillChange();
+          dispatchConversationManualViewportInteraction();
           props.onCollapsedChange(!collapsed);
         }}
         type="button"
@@ -409,7 +409,10 @@ export function ConversationRenderItemView(props: {
             <button
               aria-expanded={userPromptExpanded}
               className="user-prompt-expand-toggle"
-              onClick={() => props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded)}
+              onClick={() => {
+                dispatchConversationManualViewportInteraction();
+                props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded);
+              }}
               type="button"
             >
               <span>{userPromptExpanded ? "收起" : "显示更多"}</span>
