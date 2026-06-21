@@ -1,5 +1,5 @@
 import React from "react";
-import { Brain, Check, CheckCircle2, Circle, Edit3, ListChecks, LoaderCircle, PauseCircle, PlayCircle, Route, Search, Send, Square, Target, Trash2, X } from "lucide-react";
+import { Brain, Check, CheckCircle2, Circle, Edit3, ListChecks, PauseCircle, PlayCircle, Route, Search, Send, Square, Target, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   ModelPickerControl,
@@ -45,6 +45,7 @@ import { GeneratedMediaPlayerWindow, type GeneratedMediaAttachment } from "@/com
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { ProgressRing } from "@/components/ui/progress-ring";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Dialog,
@@ -441,11 +442,6 @@ export function ComposerPanel(props: {
   // visibleSessionGoal hides completed goals from the composer-level control strip.
   // visibleSessionGoal 从输入区控制条中隐藏已完成目标。
   const visibleSessionGoal = props.sessionGoal?.status === "complete" ? null : props.sessionGoal;
-  // visibleSessionTodolist hides progress when no todolist exists or every step is complete.
-  // visibleSessionTodolist 在没有 todolist 或全部步骤完成时隐藏进程提示。
-  const visibleSessionTodolist = props.sessionTodolist?.items.some((item) => item.status !== "completed")
-    ? props.sessionTodolist
-    : null;
   // planModeEnabled follows the backend-persisted session Plan mode state.
   // planModeEnabled 跟随后端持久化的会话计划模式状态。
   const planModeEnabled = props.sessionPlanMode?.executionMode?.toLowerCase() === "plan" || (!props.conversationId && draftPlanModeEnabled);
@@ -961,12 +957,6 @@ export function ComposerPanel(props: {
 
   return (
     <>
-      {visibleSessionTodolist ? (
-        <ComposerSessionProgressCapsule
-          reviewSummary={props.sessionReviewSummary}
-          todolist={visibleSessionTodolist}
-        />
-      ) : null}
       {props.pendingPrompts.length ? (
         <PendingPromptQueueStrip
           entries={props.pendingPrompts}
@@ -1167,7 +1157,7 @@ export function ComposerPanel(props: {
 
 // ComposerSessionProgressCapsule renders the transient progress summary above queue and goal strips.
 // ComposerSessionProgressCapsule 在队列与目标条上方渲染临时进程摘要。
-function ComposerSessionProgressCapsule(props: {
+export function ComposerSessionProgressCapsule(props: {
   // Current session progress todolist displayed by this capsule.
   // 当前胶囊展示的会话进程 todolist。
   todolist: SessionTodolistSummary;
@@ -1176,6 +1166,7 @@ function ComposerSessionProgressCapsule(props: {
   reviewSummary: ConversationSessionReviewSummary | null;
 }) {
   const currentStepNumber = composerSessionCurrentStepNumber(props.todolist);
+  const progressValue = composerSessionProgressValue(currentStepNumber, props.todolist.totalCount);
   const reviewSummary = props.reviewSummary?.changedFiles ? props.reviewSummary : null;
   return (
     <div className="composer-session-progress-root">
@@ -1184,7 +1175,7 @@ function ComposerSessionProgressCapsule(props: {
         className="composer-session-progress-capsule"
         type="button"
       >
-        <LoaderCircle className="spin" size={14} />
+        <ProgressRing aria-label={`进程进度 ${currentStepNumber}/${props.todolist.totalCount}`} size={14} value={progressValue} />
         <span>第 {currentStepNumber} / {props.todolist.totalCount} 步</span>
         {reviewSummary ? (
           <span className="composer-session-progress-review-summary">
@@ -1208,6 +1199,15 @@ function ComposerSessionProgressCapsule(props: {
   );
 }
 
+// composerSessionProgressValue converts the displayed step count into a bounded ring ratio.
+// composerSessionProgressValue 将展示用步骤计数转换为受限的圆环比例。
+function composerSessionProgressValue(currentStepNumber: number, totalCount: number): number {
+  if (!Number.isFinite(currentStepNumber) || !Number.isFinite(totalCount) || totalCount <= 0) {
+    return 0;
+  }
+  return Math.min(1, Math.max(0, currentStepNumber / totalCount));
+}
+
 // composerSessionCurrentStepNumber resolves the one-based active or next step number.
 // composerSessionCurrentStepNumber 解析当前或下一步的一基序号。
 function composerSessionCurrentStepNumber(todolist: SessionTodolistSummary): number {
@@ -1225,7 +1225,7 @@ function composerSessionProgressStatusIcon(status: SessionTodolistItemSummary["s
     return <CheckCircle2 size={15} />;
   }
   if (status === "in_progress") {
-    return <LoaderCircle className="spin" size={15} />;
+    return <ProgressRing aria-label="步骤进行中" size={15} value={null} />;
   }
   return <Circle size={15} />;
 }

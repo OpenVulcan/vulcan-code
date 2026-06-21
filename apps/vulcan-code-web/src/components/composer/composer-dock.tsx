@@ -6,7 +6,7 @@ import {
   type ComposerSlashCommandResult,
   type ComposerSubmission,
 } from "@/components/composer/composer-model";
-import { ComposerPanel } from "@/components/composer/composer-panel";
+import { ComposerPanel, ComposerSessionProgressCapsule } from "@/components/composer/composer-panel";
 import type { ConversationSessionReviewSummary } from "@/components/conversation/session-todolist-panel";
 import type {
   ComposerRuntimeCue,
@@ -180,10 +180,18 @@ export function ComposerDock(props: {
   // runtimeCue 在输入区附近显示当前会话的进行中活动。
   runtimeCue: ComposerRuntimeCue | null;
 }) {
-  // dockRef measures the full composer stack, including pending queue rows and runtime cues.
-  // dockRef 测量完整输入区堆栈，包括待发送队列行与运行提示。
+  // dockRef measures only in-flow composer content; floating status rows stay outside this height.
+  // dockRef 只测量布局流内的输入区内容；浮动状态行不参与该高度。
   const dockRef = React.useRef<HTMLDivElement | null>(null);
   const onComposerDockHeightChange = props.onComposerDockHeightChange;
+  // visibleSessionTodolist hides progress when no todolist exists or every step is complete.
+  // visibleSessionTodolist 在没有 todolist 或全部步骤完成时隐藏进程提示。
+  const visibleSessionTodolist = props.sessionTodolist?.items.some((item) => item.status !== "completed")
+    ? props.sessionTodolist
+    : null;
+  // hasFloatingStatus keeps the floating stack absent unless at least one status row is visible.
+  // hasFloatingStatus 确保没有状态行可见时不创建浮动堆栈。
+  const hasFloatingStatus = Boolean(props.showScrollToBottom || props.runtimeCue || visibleSessionTodolist);
 
   React.useLayoutEffect(() => {
     const element = dockRef.current;
@@ -202,28 +210,38 @@ export function ComposerDock(props: {
 
   return (
     <div className={cn("composer-dock", props.emptyMode && "empty-mode")} ref={dockRef}>
-      {props.showScrollToBottom ? (
-        <div className="scroll-to-bottom-layer">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                aria-label="滚动到底部"
-                className="scroll-to-bottom-button"
-                onClick={props.onScrollToBottom}
-                size="icon"
-                type="button"
-                variant="outline"
-              >
-                <ArrowDown size={18} />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="top">滚动到底部</TooltipContent>
-          </Tooltip>
-        </div>
-      ) : null}
-      {props.runtimeCue ? (
-        <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
-          <ShinyText text={props.runtimeCue.text} />
+      {hasFloatingStatus ? (
+        <div className="composer-floating-status-stack">
+          {props.showScrollToBottom ? (
+            <div className="scroll-to-bottom-layer">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    aria-label="滚动到底部"
+                    className="scroll-to-bottom-button"
+                    onClick={props.onScrollToBottom}
+                    size="icon"
+                    type="button"
+                    variant="outline"
+                  >
+                    <ArrowDown size={18} />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent side="top">滚动到底部</TooltipContent>
+              </Tooltip>
+            </div>
+          ) : null}
+          {props.runtimeCue ? (
+            <div className="composer-runtime-cue" aria-live="polite" aria-busy="true">
+              <ShinyText text={props.runtimeCue.text} />
+            </div>
+          ) : null}
+          {visibleSessionTodolist ? (
+            <ComposerSessionProgressCapsule
+              reviewSummary={props.sessionReviewSummary}
+              todolist={visibleSessionTodolist}
+            />
+          ) : null}
         </div>
       ) : null}
       <ComposerPanel

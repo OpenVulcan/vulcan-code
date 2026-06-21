@@ -2,12 +2,13 @@ import React from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
-import { Check, Copy, WrapText } from "lucide-react";
+import { Check, Copy, Text, TextWrap } from "lucide-react";
 import { FileTypeIcon, resolveFileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
   highlightedDiffLineSpansForLanguage,
   useHighlightedCodeBlockRevision,
+  useDiffShikiTheme,
 } from "@/diff/diff-highlight";
 import {
   escapeHtml,
@@ -234,10 +235,11 @@ function MarkdownCodeBlock(props: {
     && lines.length <= MARKDOWN_CODE_HIGHLIGHT_LINE_LIMIT
     && code.length <= MARKDOWN_CODE_HIGHLIGHT_BYTE_LIMIT,
   );
+  const shikiTheme = useDiffShikiTheme();
   const highlightRevision = useHighlightedCodeBlockRevision(lines, normalizedLanguage, highlightEnabled);
   const renderedLines = React.useMemo(
     () => markdownCodeRenderedLines(lines, normalizedLanguage, highlightRevision, highlightEnabled),
-    [highlightEnabled, highlightRevision, lines, normalizedLanguage],
+    [highlightEnabled, highlightRevision, lines, normalizedLanguage, shikiTheme],
   );
   const [copied, setCopied] = React.useState(false);
   const [wrapped, setWrapped] = React.useState(false);
@@ -263,13 +265,13 @@ function MarkdownCodeBlock(props: {
         </span>
         <span className="markdown-code-actions">
           <button
-            aria-pressed={wrapped}
+            aria-label={wrapped ? "关闭自动换行" : "开启自动换行"}
             className="markdown-code-action"
             onClick={() => setWrapped((current) => !current)}
             title={wrapped ? "关闭自动换行" : "开启自动换行"}
             type="button"
           >
-            <WrapText size={14} />
+            {wrapped ? <Text size={14} /> : <TextWrap size={14} />}
           </button>
           <button
             className="markdown-code-action"

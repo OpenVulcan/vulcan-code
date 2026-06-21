@@ -10,7 +10,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { Spinner } from "@/components/ui/spinner";
+import { ProgressRing } from "@/components/ui/progress-ring";
 import type { LocaleCode } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary, ProjectSummary } from "@/types";
@@ -129,7 +129,7 @@ function ConversationRowStatus(props: {
       <span className="conversation-tree-trailing running">
         <span className="conversation-tree-status running">
           <span className="conversation-tree-status-mark" aria-label="会话正在运行">
-            <Spinner className="size-3" />
+            <ProgressRing aria-label="会话正在运行" className="conversation-tree-running-progress" size={13} value={null} />
           </span>
         </span>
         <span className="conversation-tree-quick-actions running" aria-hidden="false">
