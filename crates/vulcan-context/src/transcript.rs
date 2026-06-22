@@ -1,5 +1,5 @@
-//! Transcript-facing context models shared by GUI state, persistence, and context tooling.
-//! 供图形界面状态、持久化与上下文工具共享的转录侧上下文模型。
+//! Transcript-facing context models shared by WebUI state, persistence, and context tooling.
+//! 供WebUI状态、持久化与上下文工具共享的转录侧上下文模型。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

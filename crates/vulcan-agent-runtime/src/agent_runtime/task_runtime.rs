@@ -184,8 +184,8 @@ struct TaskSessionRecord {
     /// Caller-facing task identifier used to look up or resume this task from future tool invocations.
     /// 用于从后续工具调用中查找或续跑该任务的调用方面向任务标识。
     public_task_id: String,
-    /// The top-level GUI or task session that originated this task creation.
-    /// 发起该任务创建的顶层 GUI 或任务会话标识。
+    /// The top-level WebUI or task session that originated this task creation.
+    /// 发起该任务创建的顶层 WebUI 或任务会话标识。
     origin_session_id: SessionId,
     /// Optional parent task identifier for the nested task chain.
     /// 用于嵌套任务链的可选父任务标识。
@@ -524,8 +524,8 @@ pub struct TaskRuntime {
     /// Active child-task abort handles keyed by stable task identifier.
     /// 按稳定任务标识索引存储的活动子任务中止句柄。
     active_task_runs: RwLock<HashMap<SessionId, AbortHandle>>,
-    /// Detached child-task event streams keyed by stable task identifier for non-blocking GUI mirroring.
-    /// 为无阻塞图形界面镜像保留的按稳定任务标识索引的分离子任务事件流。
+    /// Detached child-task event streams keyed by stable task identifier for non-blocking WebUI mirroring.
+    /// 为无阻塞WebUI镜像保留的按稳定任务标识索引的分离子任务事件流。
     detached_task_event_streams: RwLock<HashMap<SessionId, DetachedTaskEventStreamState>>,
     /// session-boundary mailbox used for child-agent lifecycle association events.
     /// 用于子代理生命周期关联事件的 会话边界 mailbox。
@@ -1339,8 +1339,8 @@ impl TaskRuntime {
         Ok(stopped_task_ids)
     }
 
-    /// Returns whether one child task still owns an in-flight abort handle, which the GUI can treat as the source of truth for active-running state.
-    /// 返回某个子任务当前是否仍持有活动中的中止句柄，供图形界面将其视作真实运行态事实源。
+    /// Returns whether one child task still owns an in-flight abort handle, which the WebUI can treat as the source of truth for active-running state.
+    /// 返回某个子任务当前是否仍持有活动中的中止句柄，供WebUI将其视作真实运行态事实源。
     pub fn is_task_running(&self, task_id: SessionId) -> Result<bool, String> {
         self.task_has_active_or_starting_run(task_id)
     }
@@ -1529,8 +1529,8 @@ impl TaskRuntime {
         }
     }
 
-    /// Marks one detached child-task event stream as terminal and drops active senders so GUI listener streams can close naturally.
-    /// 将某条分离子任务事件流标记为终态，并释放活动发送端，让图形界面监听流自然关闭。
+    /// Marks one detached child-task event stream as terminal and drops active senders so WebUI listener streams can close naturally.
+    /// 将某条分离子任务事件流标记为终态，并释放活动发送端，让WebUI监听流自然关闭。
     fn close_detached_task_event_stream(&self, task_id: SessionId) {
         let mut streams = self
             .detached_task_event_streams
@@ -4085,8 +4085,8 @@ fn current_task_runtime_trace_timestamp() -> String {
     )
 }
 
-/// Returns whether task-runtime tracing should be emitted with the WebUI trace switch.
-/// 返回是否应随 WebUI 跟踪开关输出任务运行时日志。
+/// Returns whether task-runtime tracing should be emitted with the workbench trace switch.
+/// 返回是否应随工作台跟踪开关输出任务运行时日志。
 fn task_runtime_trace_enabled() -> bool {
     std::env::var("VULCAN_WEBUI_TRACE")
         .ok()
@@ -4097,8 +4097,8 @@ fn task_runtime_trace_enabled() -> bool {
         .unwrap_or(false)
 }
 
-/// Emits one task-runtime timing trace line when WebUI tracing is enabled.
-/// 当 WebUI 跟踪启用时输出一条任务运行时耗时日志。
+/// Emits one task-runtime timing trace line when workbench tracing is enabled.
+/// 当工作台跟踪启用时输出一条任务运行时耗时日志。
 fn task_runtime_trace(stage: &str, detail: impl AsRef<str>) {
     if !task_runtime_trace_enabled() {
         return;
@@ -4767,8 +4767,8 @@ async fn run_task_with_shared_runtime_context(
     let _ = parent_live_sender.send(Ok(ProviderStreamDelta::RuntimeEvent(
         delegate_started_event,
     )));
-    // Wait until the parent WebUI projection sees the subagent-start event before the child run advances.
-    // 等待父级 WebUI 投影看到子代理启动事件后，再推进子任务执行。
+    // Wait until the parent workbench projection sees the subagent-start event before the child run advances.
+    // 等待父级工作台投影看到子代理启动事件后，再推进子任务执行。
     let has_projection_barrier = projection_barrier.is_some();
     wait_runtime_event_projection_barrier(projection_barrier).await;
     if !has_projection_barrier {

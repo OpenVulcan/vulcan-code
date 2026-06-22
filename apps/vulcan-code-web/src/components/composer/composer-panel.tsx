@@ -538,8 +538,8 @@ export function ComposerPanel(props: {
   const placeholder = React.useMemo(() => {
     return t("composer.placeholder").replace("{shortcut}", composerShortcutHint(t("composer.shortcutHint")));
   }, [t]);
-  // visibleSlashCommands mirrors iced prefix filtering for the slash command panel.
-  // visibleSlashCommands 对齐 iced 前缀过滤逻辑，供 slash 指令面板展示。
+  // visibleSlashCommands mirrors WebUI prefix filtering for the slash command panel.
+  // visibleSlashCommands 对齐 WebUI 前缀过滤逻辑，供 slash 指令面板展示。
   const visibleSlashCommands = React.useMemo(() => {
     if (!draftInput.startsWith("/") || slashDismissedInput === draftInput) {
       return [];
@@ -552,8 +552,8 @@ export function ComposerPanel(props: {
   // highlightedSlashCommand resolves the currently highlighted command row.
   // highlightedSlashCommand 解析当前高亮的指令行。
   const highlightedSlashCommand = visibleSlashCommands[Math.min(slashHighlightedIndex, Math.max(visibleSlashCommands.length - 1, 0))] ?? null;
-  // exactSlashCommand mirrors iced exact trigger activation before the highlighted row.
-  // exactSlashCommand 对齐 iced 精确触发优先于高亮项的激活规则。
+  // exactSlashCommand mirrors WebUI exact trigger activation before the highlighted row.
+  // exactSlashCommand 对齐 WebUI 精确触发优先于高亮项的激活规则。
   const exactSlashCommand = React.useMemo(
     () => exactComposerSlashCommand(visibleSlashCommands, draftInput),
     [draftInput, visibleSlashCommands],

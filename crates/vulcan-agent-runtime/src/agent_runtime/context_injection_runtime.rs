@@ -1,5 +1,5 @@
-//! GUI runtime adapters for shared context-injection state and hook helpers.
-//! 共享上下文注入状态与 hook helper 的 GUI 运行时适配器。
+//! host runtime adapters for shared context-injection state and hook helpers.
+//! 共享上下文注入状态与 hook helper 的宿主运行时适配器。
 
 use vulcan_context_injection::{
     ContextInjectionState, InjectionHelper, InjectionInsert, InjectionKind, InjectionPanelCard,
@@ -70,8 +70,8 @@ fn state_without_legacy_vmm_profile_injection(
     state
 }
 
-/// Builds the renderer registry used by GUI runtime context-injection views.
-/// 构建 GUI 运行时上下文注入视图使用的渲染器注册表。
+/// Builds the renderer registry used by host runtime context-injection views.
+/// 构建宿主运行时上下文注入视图使用的渲染器注册表。
 fn context_injection_renderer_registry() -> InjectionRendererRegistry {
     InjectionRendererRegistry::default().with_renderer(
         vulcan_vmm::adapter::VMM_PRECHECK_MEMORY_RENDERER_ID,
@@ -121,8 +121,8 @@ pub fn collect_builtin_manual_injection_ops_and_sanitized_prompt(
 
 #[cfg(test)]
 mod tests {
-    //! Tests for GUI context-injection runtime adapters.
-    //! GUI 上下文注入运行时适配器测试。
+    //! Tests for host context-injection runtime adapters.
+    //! 宿主上下文注入运行时适配器测试。
 
     use super::*;
 

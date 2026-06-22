@@ -21,8 +21,8 @@ import type {
 
 import { localizedLiteral } from "./ai-capability-settings-utils"
 
-// AiCapabilityTargetsDialog renders the iced-style target configuration modal.
-// AiCapabilityTargetsDialog 渲染 iced 风格能力目标配置弹窗。
+// AiCapabilityTargetsDialog renders the WebUI-style target configuration modal.
+// AiCapabilityTargetsDialog 渲染 WebUI 风格能力目标配置弹窗。
 export function AiCapabilityTargetsDialog(props: {
   // Capability being configured.
   // 正在配置的能力。

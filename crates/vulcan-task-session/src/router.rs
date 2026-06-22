@@ -19,8 +19,8 @@ pub struct TaskSessionHistoryPage {
     pub next_cursor: Option<String>,
 }
 
-/// Shared task-session router used by iced and WebUI bridges.
-/// iced 与 WebUI 桥接共同使用的子代理会话路由。
+/// Shared task-session router used by WebUI and service bridges.
+/// WebUI 与服务桥接共同使用的子代理会话路由。
 pub trait TaskSessionRouter: SessionNodeRouter {
     /// Opens a task-session view by identifier.
     /// 按标识符打开子代理会话视图。

@@ -1,5 +1,5 @@
-//! Shared subagent task-session projection helpers reused by iced and WebUI.
-//! 供 iced 与 WebUI 复用的共享子代理 task-session 投影辅助逻辑。
+//! Shared subagent task-session projection helpers reused by WebUI and service.
+//! 供 WebUI 与服务复用的共享子代理 task-session 投影辅助逻辑。
 
 use crate::SessionId;
 use serde::{Deserialize, Serialize};
@@ -971,8 +971,8 @@ pub fn subagent_task_panel_state_has_recoverable_conversation(
 ///
 /// # Parameters
 /// 参数
-/// `state` is the normalized panel state shared by iced and WebUI.
-/// `state` 是 iced 与 WebUI 共用的已归一化面板状态。
+/// `state` is the normalized panel state shared by WebUI and service.
+/// `state` 是 WebUI 与服务共用的已归一化面板状态。
 /// `has_recoverable_detail` reports whether the host can still project a transcript for this task.
 /// `has_recoverable_detail` 表示宿主是否仍能为该任务投影转录详情。
 ///
@@ -1234,8 +1234,8 @@ mod tests {
     use vulcan_context::{SessionMessageKind, conversation_state_from_session_messages};
     use vulcan_session_core::SessionNodeStore;
 
-    /// Verifies shared task-session payload parsing keeps iced-visible labels and lifecycle state.
-    /// 验证共享 task-session payload 解析会保留 iced 可见标签与生命周期状态。
+    /// Verifies shared task-session payload parsing keeps WebUI-visible labels and lifecycle state.
+    /// 验证共享 task-session payload 解析会保留 WebUI 可见标签与生命周期状态。
     #[test]
     fn parses_task_session_payload_into_subagent_state() {
         let parent_session_id = SessionId::new_v4();
@@ -1534,8 +1534,8 @@ mod tests {
         );
     }
 
-    /// Verifies segmented TaskSession metadata can produce the same panel state used by both iced and WebUI.
-    /// 验证分段 TaskSession 元数据可以生成 iced 与 WebUI 共用的同一面板状态。
+    /// Verifies segmented TaskSession metadata can produce the same panel state used by both WebUI and service.
+    /// 验证分段 TaskSession 元数据可以生成 WebUI 与服务共用的同一面板状态。
     #[test]
     fn builds_panel_state_from_task_session_metadata() {
         let root_session_id = vulcan_session_core::SessionNodeId::new_v4();

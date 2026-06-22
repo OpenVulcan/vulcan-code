@@ -1,5 +1,5 @@
-//! Shared host-tool infrastructure reused by the GUI native-tool integration layer.
-//! 供图形界面原生工具集成层复用的共享宿主工具基础设施。
+//! Shared host-tool infrastructure reused by the WebUI native-tool integration layer.
+//! 供WebUI原生工具集成层复用的共享宿主工具基础设施。
 
 pub mod command_session_runtime;
 pub mod output_decode;

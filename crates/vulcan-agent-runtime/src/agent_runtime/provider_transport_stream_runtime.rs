@@ -52,8 +52,8 @@ pub(crate) struct PreparedProviderTransportAdapterInputs {
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
 }
 
-/// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the GUI layer.
-/// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给图形界面层。
+/// Executes one host-controlled provider stream through `vulcan-core`, forwards live deltas, and returns the final canonical state to the workbench layer.
+/// 通过 `vulcan-core` 执行一次宿主控制的 Provider 流，转发实时增量，并把最终规范状态返回给工作台层。
 pub(crate) fn execute_host_controlled_stream<A, F>(
     session_id: SessionId,
     task_runtime: Arc<TaskRuntime>,
@@ -191,8 +191,8 @@ where
                                 "delay_ms": delay_ms,
                                 "reason": decision.reason,
                             })));
-                            // Stop retrying when the GUI/runtime consumer has already dropped this stream.
-                            // 当 GUI/运行时消费端已经丢弃当前流时，停止继续后台重试。
+                            // Stop retrying when the host runtime consumer has already dropped this stream.
+                            // 当宿主运行时消费端已经丢弃当前流时，停止继续后台重试。
                             if task_sender
                                 .send(Ok(ProviderStreamDelta::RuntimeEvent(retry_event)))
                                 .is_err()

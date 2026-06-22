@@ -123,8 +123,8 @@ export function ProjectSidebar(props: {
   const projectsById = React.useMemo(() => {
     return new Map(props.projects.map((project) => [project.id, project]));
   }, [props.projects]);
-  // pinnedProjects mirrors the iced task tree section split.
-  // pinnedProjects 对齐 iced 任务树中的置顶分区拆分。
+  // pinnedProjects mirrors the WebUI task tree section split.
+  // pinnedProjects 对齐 WebUI 任务树中的置顶分区拆分。
   const pinnedProjects = React.useMemo(() => props.projects.filter((project) => project.pinned), [props.projects]);
   // regularProjects keeps non-pinned projects in their service-provided order.
   // regularProjects 保留普通项目在服务端快照中的原始顺序。

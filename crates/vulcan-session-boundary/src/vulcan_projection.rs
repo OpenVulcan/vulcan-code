@@ -14,8 +14,8 @@ use vulcan_context::{
 /// 为 Vulcan 转录表面从边界事件生成的展示投影。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct BoundaryConversationProjection {
-    /// Canonical conversation state consumed by existing GUI and WebUI projection layers.
-    /// 由现有 GUI 与 WebUI 投影层消费的规范会话状态。
+    /// Canonical conversation state consumed by existing WebUI and WebUI projection layers.
+    /// 由现有 WebUI 与 WebUI 投影层消费的规范会话状态。
     pub conversation_state: SessionConversationState,
 }
 

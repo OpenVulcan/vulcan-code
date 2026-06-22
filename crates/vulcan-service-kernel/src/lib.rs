@@ -233,8 +233,8 @@ struct AgentRuntimeBridge {
     /// Shared token-budget runtime used by context assembly.
     /// 上下文装配使用的共享 Token 预算运行时。
     token_budget_runtime: Arc<TokenBudgetRuntime>,
-    /// Shared conversation hook runtime used to mirror iced turn assembly semantics.
-    /// 用于复刻 iced 回合组装语义的共享会话 hook 运行时。
+    /// Shared conversation hook runtime used to mirror WebUI turn assembly semantics.
+    /// 用于复刻 WebUI 回合组装语义的共享会话 hook 运行时。
     conversation_hook_runtime: Arc<Mutex<ConversationHookRuntime>>,
     /// Shared VMM hook runtime snapshot used by built-in memory hooks.
     /// 内置记忆 hook 使用的共享 VMM hook 运行时快照。
@@ -12177,8 +12177,8 @@ fn mark_webui_subagent_tasks_stopped_in_state(
     }
 }
 
-/// Stops WebUI-visible session work and restores queue state to the iced stopped semantics.
-/// 停止 WebUI 可见会话任务，并按 iced 停止语义恢复队列状态。
+/// Stops WebUI-visible session work and restores queue state to the service stopped semantics.
+/// 停止 WebUI 可见会话任务，并按服务停止语义恢复队列状态。
 fn stop_webui_session_work(
     workspace_snapshot: &mut WorkspaceSnapshot,
     session_id: SessionId,
@@ -12311,8 +12311,8 @@ fn append_webui_session_message_entry_to_state(
     message_id
 }
 
-/// Appends one canonical WebUI turn-statistics record using the shared iced/WebUI turn stats builder.
-/// 使用 iced/WebUI 共享的轮次统计构建器追加一条 WebUI 规范轮次统计记录。
+/// Appends one canonical WebUI turn-statistics record using the shared WebUI turn stats builder.
+/// 使用 WebUI 轮次统计构建器追加一条 WebUI 规范轮次统计记录。
 fn append_webui_session_turn_stats_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -12683,8 +12683,8 @@ fn owning_project_id_for_session(
         .filter(|project_id| !project_id.trim().is_empty())
 }
 
-/// Captures the iced-equivalent context snapshot before a WebUI user prompt mutates context.
-/// 在 WebUI 用户提示词改变上下文前捕获与 iced 等价的上下文快照。
+/// Captures the service-equivalent context snapshot before a WebUI user prompt mutates context.
+/// 在 WebUI 用户提示词改变上下文前捕获与服务运行时等价的上下文快照。
 ///
 /// # Parameters
 /// 参数
@@ -12719,8 +12719,8 @@ fn snapshot_webui_context_before_user_prompt(
     )
 }
 
-/// Applies iced-equivalent outer steps after one WebUI prompt begin reducer has run.
-/// 在 WebUI 提示词 begin reducer 执行后应用与 iced 等价的外层步骤。
+/// Applies service-equivalent outer steps after one WebUI prompt begin reducer has run.
+/// 在 WebUI 提示词 begin reducer 执行后应用与服务运行时等价的外层步骤。
 ///
 /// # Parameters
 /// 参数
@@ -12772,8 +12772,8 @@ fn apply_webui_prompt_begin_outer_steps(
     );
 }
 
-/// Persists the iced-equivalent current context document for a WebUI session when possible.
-/// 在可行时为 WebUI 会话持久化与 iced 等价的当前上下文文档。
+/// Persists the service-equivalent current context document for a WebUI session when possible.
+/// 在可行时为 WebUI 会话持久化与服务运行时等价的当前上下文文档。
 ///
 /// # Parameters
 /// 参数
@@ -12950,8 +12950,8 @@ fn load_project_configuration(
         .unwrap_or_default()
 }
 
-/// Builds the shared precheck plan for a WebUI session using the iced VMM layering rules.
-/// 使用 iced 的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
+/// Builds the shared precheck plan for a WebUI session using the service VMM layering rules.
+/// 使用服务运行时的 VMM 分层规则为一个 WebUI 会话构建共享 precheck 计划。
 ///
 /// # Parameters
 /// 参数
@@ -12966,8 +12966,8 @@ fn load_project_configuration(
 ///
 /// # Returns
 /// 返回值
-/// A shared precheck plan matching the iced shell.
-/// 返回与 iced 外壳一致的共享 precheck 计划。
+/// A shared precheck plan matching the WebUI service shell.
+/// 返回与 WebUI 服务外壳一致的共享 precheck 计划。
 fn webui_shared_prompt_precheck_plan(
     agent_runtime: &AgentRuntimeBridge,
     workspace_snapshot: &WorkspaceSnapshot,
@@ -15244,8 +15244,8 @@ fn spawn_agent_stream_task(
     }
 }
 
-/// Starts one detached child-task listener using the same task runtime stream as iced.
-/// 使用与 iced 相同的任务运行时流启动单个分离子任务监听器。
+/// Starts one detached child-task listener using the shared task runtime stream.
+/// 使用共享任务运行时流启动单个分离子任务监听器。
 fn maybe_start_webui_detached_subagent_task_listener(
     app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
@@ -16618,8 +16618,8 @@ fn normalize_webui_interjected_prompt_for_provider(
 /// `app` 由工作区变更辅助函数用于发出更新后的队列视图。
 /// `state` contains the current workspace snapshot and live runtime handles.
 /// `state` 包含当前工作区快照与实时运行时句柄。
-/// `provider_configuration` lets the shared router preserve iced Anthropic dispatch preference.
-/// `provider_configuration` 用于让共享路由器保留 iced 的 Anthropic 分发优先级。
+/// `provider_configuration` lets the shared router preserve service Anthropic dispatch preference.
+/// `provider_configuration` 用于让共享路由器保留服务运行时的 Anthropic 分发优先级。
 /// `session_id` identifies the session whose stream reached a safe tool boundary.
 /// `session_id` 标识流已经到达安全工具边界的会话。
 ///
@@ -16697,8 +16697,8 @@ fn clear_stale_webui_session_mailbox_pending_prompts(
 /// Prepares the next visible queued prompt after one WebUI-owned session run reaches a clean idle point.
 /// 在 WebUI 拥有的单次会话运行到达干净空闲点后准备下一条可见排队提示词。
 ///
-/// `allow_from_stopped_phase` lets manual insert match iced while automatic continuation still respects stop.
-/// `allow_from_stopped_phase` 让手动插入对齐 iced，同时自动续跑仍尊重停止状态。
+/// `allow_from_stopped_phase` lets manual insert match service behavior while automatic continuation still respects stop.
+/// `allow_from_stopped_phase` 让手动插入对齐服务行为，同时自动续跑仍尊重停止状态。
 async fn maybe_prepare_next_webui_pending_prompt(
     app: &ServiceEventEmitter,
     state: &SharedServiceBridgeState,
@@ -21310,8 +21310,8 @@ fn replace_webui_subagent_task_conversation_state(
     workspace_snapshot.hydrated_session_ids.insert(task_id);
 }
 
-/// Hides the selected parent subagent navigation round once iced-equivalent blocking work has settled.
-/// 当与 iced 等价的阻塞工作全部收敛后，隐藏该轮子代理导航。
+/// Hides the selected parent subagent navigation round once service-equivalent blocking work has settled.
+/// 当与服务运行时等价的阻塞工作全部收敛后，隐藏该轮子代理导航。
 fn refresh_webui_subagent_navigation_round_visibility(
     state: &SharedServiceBridgeState,
     parent_session_id: SessionId,
@@ -23434,8 +23434,8 @@ fn bootstrap_step<T>(
     result.map_err(|error| ServiceBootstrapError::new(step_id, step_label, error))
 }
 
-/// Loads the same standalone AI capability configuration used by the iced workbench.
-/// 加载与 iced 工作台一致的独立 AI 能力配置。
+/// Loads the same standalone AI capability configuration used by the WebUI workbench.
+/// 加载与 WebUI 工作台一致的独立 AI 能力配置。
 fn load_service_ai_tool_configuration(
     provider_configuration: &ProviderConfigurationFile,
     logs: &mut Vec<String>,
@@ -23490,8 +23490,8 @@ fn load_service_ai_tool_configuration(
     }
 }
 
-/// Runs the real startup sequence shared with the legacy GUI.
-/// 运行与旧版 GUI 共享的真实启动顺序。
+/// Runs the real startup sequence owned by the WebUI service.
+/// 运行由 WebUI 服务持有的真实启动顺序。
 fn run_service_bootstrap(
     state: &SharedServiceBridgeState,
     event_emitter: &ServiceEventEmitter,
@@ -24821,8 +24821,8 @@ fn context_injection_memory_id_from_detail(detail: &str) -> Option<u64> {
     })
 }
 
-/// Builds the same compact multi-line preview used by the iced panel.
-/// 构建与 iced 面板一致的多行紧凑预览。
+/// Builds the same compact multi-line preview used by the WebUI panel.
+/// 构建与 WebUI 面板一致的多行紧凑预览。
 fn compact_panel_preview(content: &str) -> String {
     let mut lines = content
         .lines()
@@ -25434,8 +25434,8 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
     }
 }
 
-/// Creates feature areas matching the legacy GUI navigation surface.
-/// 创建与旧版 GUI 导航面相匹配的功能区域。
+/// Creates feature areas matching the WebUI navigation surface.
+/// 创建与 WebUI 导航面相匹配的功能区域。
 fn feature_areas() -> Vec<FeatureAreaSummary> {
     vec![
         feature_area("chat", "控制台", "控制台、消息流与模型输入区", "真实快照"),
@@ -25869,8 +25869,8 @@ fn provider_fields(
 ///
 /// # Returns
 /// 返回值
-/// Ordered AI capability summaries matching the iced workbench quick-toggle surface.
-/// 与 iced 工作台快捷开关界面顺序一致的 AI 能力摘要。
+/// Ordered AI capability summaries matching the WebUI workbench quick-toggle surface.
+/// 与 WebUI 工作台快捷开关界面顺序一致的 AI 能力摘要。
 fn ai_capabilities(
     configuration: &vulcan_provider_config::config::PersistedAiToolConfiguration,
     model_capabilities: Option<&ResolvedModelCapabilities>,
@@ -26312,8 +26312,8 @@ fn vmm_runtime_summary(runtime_state: Option<&SessionRuntimeStateEntry>) -> VmmR
     }
 }
 
-/// Returns the VMM management sections mirrored from the iced workbench.
-/// 返回从 iced 工作台镜像而来的 VMM 管理分区。
+/// Returns the VMM management sections owned by the WebUI workbench.
+/// 返回由 WebUI 工作台持有的 VMM 管理分区。
 fn vmm_management_sections() -> Vec<VmmManagementSectionSummary> {
     [
         (
@@ -33343,8 +33343,8 @@ mod tests {
         assert!(subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot).is_none());
     }
 
-    /// Verifies WebUI stop projects the same stopped turn records as the iced transcript chain.
-    /// 验证 WebUI 停止流程投影与 iced 转录链条一致的已停止轮次记录。
+    /// Verifies WebUI stop projects the same stopped turn records as the WebUI transcript chain.
+    /// 验证 WebUI 停止流程投影与 WebUI 转录链条一致的已停止轮次记录。
     #[test]
     fn webui_stop_session_work_appends_stopped_turn_projection_once() {
         let session_id = SessionId::new_v4();

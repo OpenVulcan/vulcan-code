@@ -1,5 +1,5 @@
-//! Canonical conversation compaction rewrite helpers shared by GUI state and persistence flows.
-//! 供图形界面状态与持久化流程共享的规范会话压缩改写辅助模块。
+//! Canonical conversation compaction rewrite helpers shared by WebUI state and persistence flows.
+//! 供WebUI状态与持久化流程共享的规范会话压缩改写辅助模块。
 
 use serde_json::Value;
 use vulcan_context::{

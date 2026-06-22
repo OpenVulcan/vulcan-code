@@ -1,5 +1,5 @@
-//! Regression guards that keep `vulcan-code-gui` free from reintroducing the removed `rig` runtime dependency.
-//! 防止 `vulcan-code-gui` 重新引入已移除 `rig` 运行时依赖的回归护栏。
+//! Regression guards that keep the service runtime boundary from reintroducing removed desktop dependencies.
+//! 防止服务运行时边界重新引入已移除桌面依赖的回归护栏。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -27,19 +27,34 @@ fn collect_rust_source_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// Verifies the GUI crate manifest no longer declares a direct `rig` workspace dependency.
-/// 验证 GUI crate 清单文件已不再声明直接的 `rig` 工作区依赖。
+/// Verifies the workspace manifest no longer declares the removed legacy desktop shell and UI-only crates.
+/// 验证工作区清单文件不再声明已移除的旧桌面壳与 UI 专属 crate。
 #[test]
-fn gui_crate_manifest_does_not_depend_on_rig_workspace() {
-    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    let manifest_text = fs::read_to_string(&manifest_path)
-        .expect("vulcan-code-gui Cargo.toml should remain readable");
+fn workspace_manifest_does_not_reintroduce_removed_desktop_members() {
+    let manifest_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("agent-runtime manifest should live under crates")
+        .join("Cargo.toml");
+    let manifest_text =
+        fs::read_to_string(&manifest_path).expect("workspace Cargo.toml should remain readable");
 
-    assert!(
-        !manifest_text.contains("rig.workspace = true"),
-        "GUI crate manifest must not reintroduce `rig.workspace = true`: {}",
-        manifest_path.display()
-    );
+    let removed_entries = [
+        ["apps/", "vulcan-code-", "gui"].concat(),
+        ["crates/", "vulcan-agent-", "view"].concat(),
+        ["crates/", "vulcan-", "markdown"].concat(),
+        ["crates/", "vulcan-", "i", "ced-widget"].concat(),
+        ["i", "ced", " ="].concat(),
+        ["i", "ced", "_aw ="].concat(),
+        ["i", "ced", "_fonts ="].concat(),
+    ];
+    for removed_entry in removed_entries {
+        assert!(
+            !manifest_text.contains(&removed_entry),
+            "workspace manifest must not reintroduce `{removed_entry}`: {}",
+            manifest_path.display()
+        );
+    }
 }
 
 /// Verifies the agent runtime source tree no longer references `rig` types or imports after host-owned transports took over the execution chain.
@@ -120,15 +135,15 @@ fn agent_runtime_module_level_dead_code_suppressions_stay_narrow() {
 /// 验证在 stdio 传输选项成为一等运行时输入后，MCP 运行时层不再依赖通用 dead_code 抑制。
 #[test]
 fn mcp_runtime_sources_do_not_reintroduce_dead_code_suppressions() {
-    let gui_manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let gui_mcp_root = gui_manifest_dir.join("src").join("mcp");
-    let mcp_runtime_root = gui_manifest_dir
+    let runtime_manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let agent_mcp_root = runtime_manifest_dir.join("src").join("mcp");
+    let mcp_runtime_root = runtime_manifest_dir
         .parent()
-        .expect("gui crate should remain nested under apps/")
+        .expect("agent-runtime crate should remain nested under crates/")
         .join("vulcan-mcp-runtime")
         .join("src");
 
-    let offending_files = [gui_mcp_root, mcp_runtime_root]
+    let offending_files = [agent_mcp_root, mcp_runtime_root]
         .into_iter()
         .flat_map(|root| collect_rust_source_files(&root))
         .filter_map(|path| {
@@ -146,15 +161,15 @@ fn mcp_runtime_sources_do_not_reintroduce_dead_code_suppressions() {
     );
 }
 
-/// Verifies GUI-side MCP glue keeps concrete transport launch wiring centralized in `mcp/config.rs`.
-/// 验证 GUI 侧 MCP 胶水层继续将具体传输启动接线集中保留在 `mcp/config.rs` 中。
+/// Verifies agent-runtime MCP glue keeps concrete transport launch wiring centralized in `mcp/config.rs`.
+/// 验证 agent-runtime MCP 胶水层继续将具体传输启动接线集中保留在 `mcp/config.rs` 中。
 #[test]
-fn gui_mcp_sources_keep_launch_spec_mapping_centralized() {
-    let gui_mcp_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn agent_mcp_sources_keep_launch_spec_mapping_centralized() {
+    let agent_mcp_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("src")
         .join("mcp");
-    let rust_files = collect_rust_source_files(&gui_mcp_root);
-    let approved_launch_spec_file = gui_mcp_root.join("config.rs");
+    let rust_files = collect_rust_source_files(&agent_mcp_root);
+    let approved_launch_spec_file = agent_mcp_root.join("config.rs");
 
     let offending_launch_spec_files = rust_files
         .iter()
@@ -167,17 +182,17 @@ fn gui_mcp_sources_keep_launch_spec_mapping_centralized() {
 
     assert!(
         offending_launch_spec_files.is_empty(),
-        "GUI MCP sources must keep launch-spec mapping centralized in config.rs: {:?}",
+        "agent MCP sources must keep launch-spec mapping centralized in config.rs: {:?}",
         offending_launch_spec_files
     );
 }
 
-/// Verifies GUI sources do not directly import concrete MCP transport implementations after the runtime boundary split.
-/// 验证在 MCP 运行时边界拆分后，GUI 源码不再直接导入具体 MCP 传输实现类型。
+/// Verifies agent runtime sources do not directly import concrete MCP transport implementations after the runtime boundary split.
+/// 验证在 MCP 运行时边界拆分后，agent runtime 源码不再直接导入具体 MCP 传输实现类型。
 #[test]
-fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
-    let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let rust_files = collect_rust_source_files(&gui_src_root);
+fn agent_runtime_sources_do_not_directly_import_concrete_mcp_transports() {
+    let runtime_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let rust_files = collect_rust_source_files(&runtime_src_root);
 
     let offending_files = rust_files
         .into_iter()
@@ -197,7 +212,7 @@ fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
 
     assert!(
         offending_files.is_empty(),
-        "GUI sources must not directly import concrete MCP transports again: {:?}",
+        "agent runtime sources must not directly import concrete MCP transports again: {:?}",
         offending_files
     );
 }
@@ -205,13 +220,13 @@ fn gui_sources_do_not_directly_import_concrete_mcp_transports() {
 /// Verifies tool-manager preparation surfaces consume MCP tool bindings instead of reaching back to the raw runtime handle or legacy tool-view type.
 /// 验证工具管理器准备链路改为消费 MCP 工具绑定，而不是重新回退到原始运行时句柄或旧工具视图类型。
 #[test]
-fn gui_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
-    let gui_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let bridge_path = gui_src_root.join("tooling").join("bridge.rs");
-    let preparation_path = gui_src_root
+fn runtime_tool_preparation_surfaces_stay_on_mcp_tool_bindings() {
+    let runtime_src_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let bridge_path = runtime_src_root.join("tooling").join("bridge.rs");
+    let preparation_path = runtime_src_root
         .join("agent_runtime")
         .join("execution_preparation.rs");
-    let bootstrap_resources_path = gui_src_root
+    let bootstrap_resources_path = runtime_src_root
         .join("agent_runtime")
         .join("runtime_stream_bootstrap_resources.rs");
 
@@ -317,65 +332,47 @@ fn runtime_stream_inner_layers_do_not_reintroduce_raw_mcp_runtime_handles() {
     );
 }
 
-/// Verifies top-level workbench construction paths do not manually assemble MCP runtime access objects outside the runtime foundation boundary.
-/// 验证顶层工作台构建路径不会在运行时基础架构边界之外手工装配 MCP 运行时访问对象。
+/// Verifies top-level service workbench construction paths stay on stable MCP runtime access objects.
+/// 验证顶层服务工作台构建路径继续使用稳定 MCP 运行时访问对象。
 #[test]
-fn app_level_workbench_paths_do_not_manually_construct_mcp_runtime_access() {
+fn service_workbench_paths_stay_on_mcp_runtime_access() {
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .expect("agent-runtime manifest should live under crates");
-    let src_root = workspace_root
-        .join("apps")
-        .join("vulcan-code-gui")
-        .join("src");
-    let app_path = src_root.join("app_shell").join("mod.rs");
-    let app_configuration_path = src_root.join("app_shell").join("configuration.rs");
+    let service_kernel_path = workspace_root
+        .join("crates")
+        .join("vulcan-service-kernel")
+        .join("src")
+        .join("lib.rs");
 
-    let app_source =
-        fs::read_to_string(&app_path).expect("app_shell/mod.rs should remain readable");
-    let app_configuration_source = fs::read_to_string(&app_configuration_path)
-        .expect("app_shell/configuration.rs should remain readable");
+    let service_kernel_source =
+        fs::read_to_string(&service_kernel_path).expect("service kernel should remain readable");
 
     assert!(
-        app_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
-        "app_shell/mod.rs should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
-        app_path.display()
+        service_kernel_source.contains("mcp_runtime: Option<McpRuntimeAccess>"),
+        "service kernel should retain MCP runtime state through the stable McpRuntimeAccess field: {}",
+        service_kernel_path.display()
     );
     assert!(
-        !app_source.contains("mcp_runtime: Option<McpRuntimeHandle>"),
-        "app_shell/mod.rs must not keep the old raw McpRuntimeHandle field anymore: {}",
-        app_path.display()
+        !service_kernel_source.contains("mcp_runtime: Option<McpRuntimeHandle>"),
+        "service kernel must not keep a raw McpRuntimeHandle as its agent-runtime field: {}",
+        service_kernel_path.display()
     );
     assert!(
-        !app_source.contains("McpRuntimeHandle"),
-        "app_shell/mod.rs must not reintroduce raw McpRuntimeHandle knowledge at the workbench layer: {}",
-        app_path.display()
+        service_kernel_source.contains("bootstrap_mcp_runtime_access"),
+        "service kernel should bootstrap the stable McpRuntimeAccess surface: {}",
+        service_kernel_path.display()
     );
     assert!(
-        app_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
-        "app_shell/mod.rs should build runtime foundations through the MCP access helper: {}",
-        app_path.display()
+        service_kernel_source.contains("stream_runtime_run_with_intervention("),
+        "service kernel should pass the stable McpRuntimeAccess surface into the agent stream entrypoint: {}",
+        service_kernel_path.display()
     );
     assert!(
-        !app_source.contains("from_configuration("),
-        "app_shell/mod.rs must not reintroduce the wide MCP from_configuration constructor path: {}",
-        app_path.display()
-    );
-    assert!(
-        !app_source.contains("McpRuntimeAccess::from_configuration"),
-        "app_shell/mod.rs must not manually assemble McpRuntimeAccess anymore: {}",
-        app_path.display()
-    );
-    assert!(
-        app_configuration_source.contains("RuntimeFoundation::build_from_optional_mcp_access"),
-        "app_shell/configuration.rs should rebuild runtime foundations through the MCP access helper: {}",
-        app_configuration_path.display()
-    );
-    assert!(
-        !app_configuration_source.contains("McpRuntimeAccess::from_configuration"),
-        "app_shell/configuration.rs must not manually assemble McpRuntimeAccess anymore: {}",
-        app_configuration_path.display()
+        !service_kernel_source.contains("McpRuntimeAccess::from_configuration"),
+        "service kernel must not manually assemble McpRuntimeAccess through a wide constructor: {}",
+        service_kernel_path.display()
     );
 }
 

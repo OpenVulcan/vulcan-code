@@ -46,8 +46,8 @@ pub trait TaskSessionCompactionStore: Send + Sync {
     ) -> Result<(), SessionStoreError>;
 }
 
-/// Applies one shared compaction result to a TaskSession context document without touching GUI state or database projection.
-/// 将共享压缩结果应用到 TaskSession 上下文文档，不触碰 GUI 状态或数据库投影。
+/// Applies one shared compaction result to a TaskSession context document without touching WebUI state or database projection.
+/// 将共享压缩结果应用到 TaskSession 上下文文档，不触碰 WebUI 状态或数据库投影。
 pub fn apply_task_session_compaction_result(
     mut context: SessionContextDocument,
     compaction_result: &vulcan_context_compaction::CompactionResult,

@@ -128,8 +128,8 @@ function ComposerCapabilityIcon(props: {
   );
 }
 
-// ComposerAiCapabilityControl renders the iced-aligned capability dialog.
-// ComposerAiCapabilityControl 渲染对齐 iced 的能力设置对话框。
+// ComposerAiCapabilityControl renders the WebUI-aligned capability dialog.
+// ComposerAiCapabilityControl 渲染对齐 WebUI 的能力设置对话框。
 export function ComposerAiCapabilityControl(props: {
   // Accessible label for the dialog trigger.
   // 对话框触发器的无障碍标签。
@@ -742,8 +742,8 @@ function composerCapabilityDraftSignature(
   });
 }
 
-// ComposerSelectControl renders one iced-aligned compact composer selector.
-// ComposerSelectControl 渲染一个对齐 iced 的紧凑输入区选择器。
+// ComposerSelectControl renders one WebUI-aligned compact composer selector.
+// ComposerSelectControl 渲染一个对齐 WebUI 的紧凑输入区选择器。
 export function ComposerSelectControl(props: {
   // Accessible label for the dropdown trigger.
   // 下拉触发器的无障碍标签。
@@ -760,8 +760,8 @@ export function ComposerSelectControl(props: {
   // Whether the closed trigger should suppress subtitle text.
   // 闭合触发器是否隐藏副标题文本。
   hideTriggerSubtitle?: boolean;
-  // CSS class suffix controlling the iced-aligned fixed width.
-  // 控制 iced 对齐固定宽度的 CSS 类后缀。
+  // CSS class suffix controlling the WebUI-aligned fixed width.
+  // 控制 WebUI 对齐固定宽度的 CSS 类后缀。
   className: string;
   // Available local options for this selector.
   // 当前选择器可用的本地选项。

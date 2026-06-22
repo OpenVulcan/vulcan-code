@@ -1,5 +1,5 @@
-//! Shared controller-backed workspace storage and bootstrap surface reused by the GUI shell.
-//! 供图形界面壳层复用的共享控制器工作区存储与引导表面。
+//! Shared controller-backed workspace storage and bootstrap surface reused by the WebUI shell.
+//! 供WebUI壳层复用的共享控制器工作区存储与引导表面。
 
 pub mod data_plane;
 pub mod provider_usage;

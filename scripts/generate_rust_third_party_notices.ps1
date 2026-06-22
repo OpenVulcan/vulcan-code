@@ -50,9 +50,9 @@ $CargoAboutConfigFile = Join-Path $ProjectDir "about.toml"
 # CargoAboutTemplateFile 指向用于 Markdown 输出的 cargo-about Handlebars 模板。
 $CargoAboutTemplateFile = Join-Path $ProjectDir "about.hbs"
 
-# GuiManifestPath points at the GUI crate manifest used as the dependency graph root.
-# GuiManifestPath 指向作为依赖图根节点的 GUI crate 清单文件。
-$GuiManifestPath = Join-Path $ProjectDir "apps\vulcan-code-gui\Cargo.toml"
+# TauriManifestPath points at the Tauri/WebUI desktop shell manifest used as the dependency graph root.
+# TauriManifestPath 指向作为依赖图根节点的 Tauri/WebUI 桌面壳清单文件。
+$TauriManifestPath = Join-Path $ProjectDir "apps\vulcan-code-tauri\Cargo.toml"
 
 # Convert-ToStableLicenseIdentifier maps one free-form title to a lowercase stable identifier fragment.
 # Convert-ToStableLicenseIdentifier 用于把自由格式标题映射为小写稳定标识片段。
@@ -204,11 +204,11 @@ function Invoke-GenerateRustThirdPartyNotices {
     if (-not (Test-Path -LiteralPath $CargoAboutTemplateFile)) {
         throw "Missing cargo-about template: $CargoAboutTemplateFile"
     }
-    if (-not (Test-Path -LiteralPath $GuiManifestPath)) {
-        throw "Missing GUI manifest: $GuiManifestPath"
+    if (-not (Test-Path -LiteralPath $TauriManifestPath)) {
+        throw "Missing Tauri/WebUI manifest: $TauriManifestPath"
     }
 
-    & cargo about generate $CargoAboutTemplateFile --manifest-path $GuiManifestPath --config $CargoAboutConfigFile --output-file $OutputThirdPartyNoticesFile
+    & cargo about generate $CargoAboutTemplateFile --manifest-path $TauriManifestPath --config $CargoAboutConfigFile --output-file $OutputThirdPartyNoticesFile
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }

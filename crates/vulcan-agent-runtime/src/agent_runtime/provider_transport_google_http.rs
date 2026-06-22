@@ -789,8 +789,8 @@ fn gemini_function_call_to_core_tool_call(
     }
 }
 
-/// Forwards one normalized Gemini delta to both the GUI live-delta channel and the `vulcan-core` streaming sink.
-/// 将一条规范化 Gemini 增量同时转发给 GUI 实时增量通道与 `vulcan-core` 流式接收器。
+/// Forwards one normalized Gemini delta to both the host live-delta channel and the `vulcan-core` streaming sink.
+/// 将一条规范化 Gemini 增量同时转发给宿主实时增量通道与 `vulcan-core` 流式接收器。
 fn forward_google_gemini_delta<S>(
     live_sender: &ProviderLiveDeltaSender,
     sink: &mut S,

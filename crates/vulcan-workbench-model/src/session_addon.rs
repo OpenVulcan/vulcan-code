@@ -1,5 +1,5 @@
-//! Session-scoped addon state models shared by GUI, service, and persistence layers.
-//! 由 GUI、服务与持久化层共享的会话级附属状态模型。
+//! Session-scoped addon state models shared by WebUI, service, and persistence layers.
+//! 由 WebUI、服务与持久化层共享的会话级附属状态模型。
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;

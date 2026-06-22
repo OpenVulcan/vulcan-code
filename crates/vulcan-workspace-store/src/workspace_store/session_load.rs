@@ -33,8 +33,8 @@ struct SegmentedWindowMessages {
     /// Visible transcript messages projected from segmented JSONL lines.
     /// 从分段 JSONL 行投影出的可见转录消息。
     messages: Vec<SessionMessageEntry>,
-    /// Tool-detail messages split out for the existing GUI side channel.
-    /// 为现有 GUI 带外通道拆出的工具明细消息。
+    /// Tool-detail messages split out for the existing WebUI side channel.
+    /// 为现有 WebUI 带外通道拆出的工具明细消息。
     tool_detail_messages: Vec<SessionMessageEntry>,
     /// Earliest event sequence included in this window.
     /// 当前窗口包含的最早事件序号。

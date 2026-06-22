@@ -1,5 +1,5 @@
-//! Shared runtime prompt-composer access for GUI agent execution.
-//! GUI 代理执行使用的共享运行时提示词组合器入口。
+//! Shared runtime prompt-composer access for host agent execution.
+//! 宿主代理执行使用的共享运行时提示词组合器入口。
 
 use std::sync::{Arc, OnceLock, RwLock};
 

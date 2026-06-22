@@ -83,13 +83,13 @@ export interface ComposerSelectOption {
   // Primary label rendered in the compact trigger.
   // 紧凑触发器中渲染的主标签。
   label: string;
-  // Optional secondary line matching the iced dual-line trigger subtitle.
-  // 可选副标题，对齐 iced 双行触发器的第二行。
+  // Optional secondary line matching the WebUI dual-line trigger subtitle.
+  // 可选副标题，对齐 WebUI 双行触发器的第二行。
   subtitle?: string;
 }
 
-// AiCapabilityKind mirrors provider-config AiToolKind snake_case keys supported by iced quick toggles.
-// AiCapabilityKind 对齐 iced 快捷开关支持的 provider-config AiToolKind snake_case 键。
+// AiCapabilityKind mirrors provider-config AiToolKind snake_case keys supported by WebUI quick toggles.
+// AiCapabilityKind 对齐 WebUI 快捷开关支持的 provider-config AiToolKind snake_case 键。
 export type AiCapabilityKind =
   | "web_search"
   | "understand_image"
@@ -125,8 +125,8 @@ export interface ComposerAiCapabilityOption {
   color: string;
 }
 
-// COMPOSER_AI_CAPABILITY_OPTIONS keeps the WebUI quick menu in the same semantic order as the iced workbench.
-// COMPOSER_AI_CAPABILITY_OPTIONS 保持 WebUI 快捷菜单与 iced 工作台相同的语义顺序。
+// COMPOSER_AI_CAPABILITY_OPTIONS keeps the WebUI quick menu in the same semantic order as the WebUI workbench.
+// COMPOSER_AI_CAPABILITY_OPTIONS 保持 WebUI 快捷菜单与 WebUI 工作台相同的语义顺序。
 export const COMPOSER_AI_CAPABILITY_OPTIONS: ComposerAiCapabilityOption[] = [
   {
     value: "web_search",
@@ -284,8 +284,8 @@ export function isComposerAiCapabilityKind(value: string): value is AiCapability
   return COMPOSER_AI_CAPABILITY_OPTIONS.some((option) => option.value === value);
 }
 
-// MAX_COMPOSER_ATTACHMENTS matches the iced composer attachment limit.
-// MAX_COMPOSER_ATTACHMENTS 对齐 iced 输入区附件数量上限。
+// MAX_COMPOSER_ATTACHMENTS matches the WebUI composer attachment limit.
+// MAX_COMPOSER_ATTACHMENTS 对齐 WebUI 输入区附件数量上限。
 export const MAX_COMPOSER_ATTACHMENTS = 10;
 
 // normalizedComposerSlashCommandId returns the stable action id for a projected command.

@@ -1,5 +1,5 @@
-//! Shared workbench-facing domain models reused across GUI, persistence, and runtime layers.
-//! 在 GUI、持久化与运行时层之间复用的共享工作台领域模型。
+//! Shared workbench-facing domain models reused across WebUI, persistence, and runtime layers.
+//! 在 WebUI、持久化与运行时层之间复用的共享工作台领域模型。
 
 mod activity;
 mod project;

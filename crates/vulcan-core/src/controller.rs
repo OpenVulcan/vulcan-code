@@ -151,8 +151,8 @@ impl VulcanCoreController {
         self.events.push(event);
     }
 
-    /// Records one provider-emitted text event for later GUI and audit projection.
-    /// 记录一条 Provider 产出的文本事件，供后续 GUI 与审计投影使用。
+    /// Records one provider-emitted text event for later WebUI and audit projection.
+    /// 记录一条 Provider 产出的文本事件，供后续 WebUI 与审计投影使用。
     pub fn record_output(&mut self, body: impl Into<String>) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::Output,
@@ -162,8 +162,8 @@ impl VulcanCoreController {
         });
     }
 
-    /// Records one provider-emitted reasoning event for later GUI and audit projection.
-    /// 记录一条 Provider 产出的思考事件，供后续 GUI 与审计投影使用。
+    /// Records one provider-emitted reasoning event for later WebUI and audit projection.
+    /// 记录一条 Provider 产出的思考事件，供后续 WebUI 与审计投影使用。
     pub fn record_thinking(&mut self, body: impl Into<String>) {
         self.push_event(CoreEvent {
             kind: CoreEventKind::Thinking,

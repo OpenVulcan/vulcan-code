@@ -81,8 +81,8 @@ impl McpServerRegistry {
             .collect()
     }
 
-    /// Builds one lightweight overview snapshot for GUI layers that do not need transport-spawning capabilities.
-    /// 为不需要传输启动能力的 GUI 层构建一个轻量概览快照。
+    /// Builds one lightweight overview snapshot for service layers that do not need transport-spawning capabilities.
+    /// 为不需要传输启动能力的服务层构建一个轻量概览快照。
     pub(crate) fn overview(&self) -> McpRuntimeOverview {
         McpRuntimeOverview::new(
             self.summary_rows(),

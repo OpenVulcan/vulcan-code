@@ -1633,8 +1633,8 @@ fn goal_completion_budget_report(goal: &ThreadGoal) -> Option<String> {
     }
 }
 
-/// Builds the host-facing goal projection used by WebUI snapshots.
-/// 构建 WebUI 快照使用的宿主可见目标投影。
+/// Builds the host-facing goal projection used by workbench snapshots.
+/// 构建工作台快照使用的宿主可见目标投影。
 ///
 /// # Parameters
 /// 参数

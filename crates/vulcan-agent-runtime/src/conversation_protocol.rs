@@ -1,5 +1,5 @@
-//! Thin GUI adapter for shared canonical conversation protocol and compaction rewrite helpers.
-//! 面向图形界面的共享规范会话协议与压缩改写辅助薄适配层。
+//! Runtime facade for the shared canonical conversation protocol and compaction rewrite helpers.
+//! 面向运行时的共享规范会话协议与压缩改写辅助门面。
 
 use crate::context_budget::ContextCompactionPolicy;
 use crate::tooling::change_set::compact_change_set_host_result;

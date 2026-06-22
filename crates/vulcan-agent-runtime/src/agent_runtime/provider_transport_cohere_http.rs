@@ -676,8 +676,8 @@ fn finalize_pending_cohere_tool_call(
     })
 }
 
-/// Forwards one normalized Cohere delta into both the controller sink and the GUI live sender.
-/// 将一条规范 Cohere 增量同时转发给控制器汇聚器与 GUI 实时发送器。
+/// Forwards one normalized Cohere delta into both the controller sink and the host live sender.
+/// 将一条规范 Cohere 增量同时转发给控制器汇聚器与宿主实时发送器。
 fn forward_cohere_delta<S>(
     live_sender: &ProviderLiveDeltaSender,
     sink: &mut S,

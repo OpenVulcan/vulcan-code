@@ -37,8 +37,8 @@ pub struct ChangeSetModalSummary {
     pub verification: ChangeSetVerificationSummary,
 }
 
-/// Aggregated change counters shown by the GUI and used for compact inline summaries.
-/// 供图形界面展示并用于紧凑内联摘要的聚合变更计数。
+/// Aggregated change counters shown by the WebUI and used for compact inline summaries.
+/// 供WebUI展示并用于紧凑内联摘要的聚合变更计数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChangeSetStats {
     /// Total file record count carried by the payload.

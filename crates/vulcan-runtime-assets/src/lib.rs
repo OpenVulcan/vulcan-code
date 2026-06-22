@@ -151,8 +151,8 @@ pub fn resolve_bundled_controller_executable_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-/// Resolves the active LuaSkills runtime root used by the GUI host.
-/// 解析图形界面宿主实际使用的 LuaSkills 活动运行根目录。
+/// Resolves the active LuaSkills runtime root used by the WebUI host.
+/// 解析WebUI宿主实际使用的 LuaSkills 活动运行根目录。
 pub fn resolve_luaskills_runtime_root() -> Option<PathBuf> {
     if let Some(output_root) = resolve_output_root() {
         let packaged_runtime_root = output_root.join(LUASKILLS_RUNTIME_ROOT_DIR_NAME);

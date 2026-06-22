@@ -1,8 +1,0 @@
-{
-  "task_tree.no_sessions": "No conversations yet",
-  "task_tree.add_project_from_folder": "Add project from folder",
-  "task_tree.archived_badge": "Archived",
-  "task_tree.archived_project": "Archived project",
-  "task_tree.archived_session": "Archived session",
-  "task_tree.permanent_delete_prompt": "This will permanently delete the {subject_label} `{title}`. This action cannot be undone."
-}

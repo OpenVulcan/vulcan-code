@@ -100,7 +100,7 @@ export function AboutLicensesSettingsArea(props: {
         <article className="settings-card">
           <StatusPill status="pending" label="licenses" />
           <strong>{text("许可证目录", "License directory")}</strong>
-          <p>{text("iced 版本包含许可证目录打开与加载状态；WebUI 当前展示入口状态，后续接入目录命令后可直接打开。", "The iced version exposes license loading and directory opening. WebUI shows the entry state until the directory command is connected.")}</p>
+          <p>{text("WebUI 当前展示许可证入口状态，后续接入目录命令后可直接打开。", "The WebUI shows the license entry state until the directory command is connected.")}</p>
         </article>
       </div>
     </section>

@@ -32,12 +32,12 @@ use std::sync::{Arc, Mutex};
 /// 声明宿主管理 ROOT 技能引导集合的相对配置文件路径。
 const ROOT_SKILL_BOOTSTRAP_CONFIG_RELATIVE_PATH: &str = "config/luaskills_root_skills.yaml";
 
-/// Maximum queued LuaSkills progress event count retained for GUI polling snapshots.
-/// 为图形界面轮询快照保留的 LuaSkills 进度事件最大排队数量。
+/// Maximum queued LuaSkills progress event count retained for host polling snapshots.
+/// 为宿主轮询快照保留的 LuaSkills 进度事件最大排队数量。
 const LUASKILLS_PROGRESS_EVENT_QUEUE_LIMIT: usize = 256;
 
-/// Long-lived LuaSkills runtime handle kept by the GUI after startup succeeds.
-/// 启动成功后由图形界面保留的长生命周期 LuaSkills 运行时句柄。
+/// Long-lived LuaSkills runtime handle kept by the host runtime after startup succeeds.
+/// 启动成功后由宿主运行时保留的长生命周期 LuaSkills 运行时句柄。
 #[derive(Clone)]
 pub struct LuaSkillsRuntimeHandle {
     /// Shared LuaSkills engine reused by later skill-facing panels and workflows.
@@ -58,8 +58,8 @@ pub struct LuaSkillsRuntimeHandle {
     /// Cached runtime entries currently visible to provider-facing tool preparation.
     /// 当前对 Provider 工具准备链可见的运行时入口缓存。
     pub tool_entries: Arc<Mutex<Vec<RuntimeEntryDescriptor>>>,
-    /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for GUI polling.
-    /// 保存细粒度 LuaSkills 操作进度事件并供图形界面轮询的共享 FIFO 队列。
+    /// Shared FIFO queue holding fine-grained LuaSkills operation progress events for host polling.
+    /// 保存细粒度 LuaSkills 操作进度事件并供宿主轮询的共享 FIFO 队列。
     pub operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
 }
 
@@ -97,8 +97,8 @@ impl std::fmt::Debug for LuaSkillsRuntimeHandle {
 /// 单次 LuaSkills 引导完成后返回的摘要信息。
 #[derive(Debug, Clone)]
 pub struct LuaSkillsBootstrapReport {
-    /// Long-lived runtime handle retained by the GUI.
-    /// 由图形界面保留的长生命周期运行时句柄。
+    /// Long-lived runtime handle retained by the host runtime.
+    /// 由宿主运行时保留的长生命周期运行时句柄。
     pub handle: LuaSkillsRuntimeHandle,
 }
 
@@ -388,8 +388,8 @@ fn bootstrap_luaskills_runtime_blocking(
     })
 }
 
-/// Installs one process-wide LuaSkills progress callback that forwards events into the shared GUI queue.
-/// 安装一个进程级 LuaSkills 进度回调，并将事件转发到共享图形界面队列。
+/// Installs one process-wide LuaSkills progress callback that forwards events into the shared host queue.
+/// 安装一个进程级 LuaSkills 进度回调，并将事件转发到共享宿主队列。
 fn install_luaskills_operation_progress_callback(
     operation_progress_events: Arc<Mutex<VecDeque<RuntimeSkillOperationProgressEvent>>>,
 ) {
@@ -709,7 +709,7 @@ fn perform_luaskills_management_action_blocking(
                         &handle.skill_roots,
                         SkillManagementAuthority::System,
                         &skill_id,
-                        Some("disabled from vulcan-code-gui"),
+                        Some("disabled from vulcan-code"),
                     )
                     .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
             } else {
@@ -717,7 +717,7 @@ fn perform_luaskills_management_action_blocking(
                     .disable_skill_in_roots(
                         &handle.skill_roots,
                         &skill_id,
-                        Some("disabled from vulcan-code-gui"),
+                        Some("disabled from vulcan-code"),
                     )
                     .map_err(|error| format!("停用 LuaSkills 技能失败：{error}"))?;
             }
@@ -960,7 +960,7 @@ pub fn build_luaskills_tool_invocation_context(
 ) -> LuaInvocationContext {
     let request_context = RuntimeRequestContext {
         request_id: Some(format!("luaskills-tool:{tool_name}")),
-        client_name: Some(String::from("vulcan-code-gui")),
+        client_name: Some(String::from("vulcan-code")),
         transport_name: Some(transport_name.to_string()),
         session_id: session_id.map(|value| value.to_string()),
         client_info: Some(RuntimeClientInfo {
@@ -990,9 +990,9 @@ fn normalize_host_render_text(text: &str) -> String {
 fn build_default_luaskills_client_budget(tool_name: &str) -> Value {
     let budget = build_default_luaskills_budget_snapshot(tool_name);
     json!({
-        "client_name": "vulcan-code-gui",
+        "client_name": "vulcan-code",
         "tool_name": tool_name,
-        "matched_client_pattern": "vulcan-code-gui",
+        "matched_client_pattern": "vulcan-code",
         "tool_result": {
             "bytes": budget.tool_result.bytes,
             "lines": budget.tool_result.lines

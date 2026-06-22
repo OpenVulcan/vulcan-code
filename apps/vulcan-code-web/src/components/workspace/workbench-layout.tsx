@@ -256,8 +256,8 @@ export interface WorkbenchDeltaSignal {
   // 单个渲染帧内批处理的后端局部工作台更新信封。
   envelopes: WorkbenchDeltaEnvelope[];
 }
-// WorkbenchLayout renders the GUI-like workbench shell.
-// WorkbenchLayout 渲染接近 GUI 的工作台外壳。
+// WorkbenchLayout renders the WebUI workbench shell.
+// WorkbenchLayout 渲染 WebUI 工作台外壳。
 export function WorkbenchLayout(props: {
   // Latest startup snapshot displayed by the shell blocker.
   // 壳层阻塞面板展示的最近启动快照。

@@ -1,5 +1,5 @@
-//! Shared session runtime-state and queued-prompt models reused by GUI, persistence, and runtime layers.
-//! 在 GUI、持久化与运行时层之间复用的共享会话运行时状态与排队提示词模型。
+//! Shared session runtime-state and queued-prompt models reused by WebUI, persistence, and runtime layers.
+//! 在 WebUI、持久化与运行时层之间复用的共享会话运行时状态与排队提示词模型。
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -270,15 +270,15 @@ pub enum PendingPromptDispatchBlockReason {
     Stopped,
 }
 
-/// Returns the shared iced-compatible reason that blocks queued prompt dispatch.
-/// 返回与 iced 兼容的共享排队提示词分发阻塞原因。
+/// Returns the shared service-compatible reason that blocks queued prompt dispatch.
+/// 返回与服务兼容的共享排队提示词分发阻塞原因。
 ///
 /// # Parameters
 /// 参数
 /// `context` contains UI-specific runtime facts collected by the caller.
 /// `context` 包含调用方收集的界面专属运行态事实。
-/// `allow_from_stopped_phase` mirrors iced manual insert behavior.
-/// `allow_from_stopped_phase` 对齐 iced 手动引导行为。
+/// `allow_from_stopped_phase` mirrors service manual insert behavior.
+/// `allow_from_stopped_phase` 对齐服务手动引导行为。
 ///
 /// # Returns
 /// 返回值
@@ -298,8 +298,8 @@ pub fn pending_prompt_dispatch_block_reason(
 /// 参数
 /// `context` contains UI-specific runtime facts collected by the caller.
 /// `context` 包含调用方收集的界面专属运行态事实。
-/// `allow_from_stopped_phase` mirrors iced manual insert behavior.
-/// `allow_from_stopped_phase` 对齐 iced 手动引导行为。
+/// `allow_from_stopped_phase` mirrors service manual insert behavior.
+/// `allow_from_stopped_phase` 对齐服务手动引导行为。
 /// `next_source` identifies the next prompt that would be dispatched, when known.
 /// `next_source` 标识即将分发的下一条提示词来源，未知时传入空值。
 ///
@@ -370,8 +370,8 @@ pub struct PendingPromptBusyLaneContext {
     pub has_precheck_progress: bool,
 }
 
-/// Returns whether the internal system lane is still busy using iced semantics.
-/// 使用 iced 语义判断内部系统通道是否仍然繁忙。
+/// Returns whether the internal system lane is still busy using service semantics.
+/// 使用服务语义判断内部系统通道是否仍然繁忙。
 ///
 /// # Parameters
 /// 参数
@@ -440,8 +440,8 @@ pub enum PendingPromptInternalQueueEnqueueOutcome {
     },
 }
 
-/// Builds the iced-compatible internal queue mutation plan without changing the queue.
-/// 在不修改队列的情况下构建与 iced 兼容的内部队列变更计划。
+/// Builds the service-compatible internal queue mutation plan without changing the queue.
+/// 在不修改队列的情况下构建与服务兼容的内部队列变更计划。
 ///
 /// # Parameters
 /// 参数
@@ -507,8 +507,8 @@ pub fn apply_pending_prompt_internal_queue_enqueue_plan(
     }
 }
 
-/// Enqueues one internal prompt entry using the shared iced queue semantics.
-/// 使用共享 iced 队列语义加入一条内部提示词条目。
+/// Enqueues one internal prompt entry using the shared service queue semantics.
+/// 使用共享服务队列语义加入一条内部提示词条目。
 ///
 /// # Parameters
 /// 参数
@@ -1121,8 +1121,8 @@ pub fn remove_pending_prompt_panel_entry(
     Some(removed_entry)
 }
 
-/// Applies the iced pending-prompt drop-target semantics to the shared visible panel queue.
-/// 将 iced 的待发送提示词落点语义应用到共享可见面板队列。
+/// Applies the service pending-prompt drop-target semantics to the shared visible panel queue.
+/// 将服务待发送提示词落点语义应用到共享可见面板队列。
 ///
 /// # Parameters
 /// 参数
@@ -1130,8 +1130,8 @@ pub fn remove_pending_prompt_panel_entry(
 /// `ui_state` 是同时包含两个提示词队列的会话级 UI 状态。
 /// `dragged_entry_id` identifies the visible row being moved.
 /// `dragged_entry_id` 标识正在移动的可见行。
-/// `drop_target` is the iced-compatible insertion target.
-/// `drop_target` 是与 iced 兼容的插入落点。
+/// `drop_target` is the service-compatible insertion target.
+/// `drop_target` 是与服务兼容的插入落点。
 ///
 /// # Returns
 /// 返回值
@@ -1378,7 +1378,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_prompt_panel_drop_target_matches_iced_before_semantics() {
+    fn pending_prompt_panel_drop_target_matches_webui_before_semantics() {
         let mut ui_state = SessionTranscriptUiState {
             pending_prompt_panel_queue: vec![
                 test_panel_entry("a"),
@@ -1399,7 +1399,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_prompt_panel_drop_target_matches_iced_end_semantics() {
+    fn pending_prompt_panel_drop_target_matches_webui_end_semantics() {
         let mut ui_state = SessionTranscriptUiState {
             pending_prompt_panel_queue: vec![
                 test_panel_entry("a"),

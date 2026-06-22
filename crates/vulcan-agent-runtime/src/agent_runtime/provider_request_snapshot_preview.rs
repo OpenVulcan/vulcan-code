@@ -1,5 +1,5 @@
-//! Snapshot-only provider adapter used by request-preview construction before real transport dispatch.
-//! 面向真实传输分发前请求预览构建的仅快照 Provider 适配器模块。
+//! Core request-preview provider adapter used before real transport dispatch.
+//! 面向真实传输分发前 core 请求预览构建的 Provider 适配器模块。
 
 use crate::agent_runtime::provider_protocol_bridge::scope_continuation_to_active_provider;
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history;
@@ -13,15 +13,15 @@ use vulcan_core::types::{
     ProviderRequestToolSchema as CoreProviderRequestToolSchema,
 };
 
-/// Snapshot-only provider adapter used to let `vulcan-core` own request construction before real transport execution is migrated.
-/// 在真实传输执行迁移完成前，仅供快照使用的 Provider 适配器，用于让 `vulcan-core` 持有请求构造权。
+/// Core request-preview provider adapter used to let `vulcan-core` own request construction before real transport execution is migrated.
+/// 在真实传输执行迁移完成前，供 core 请求预览使用的 Provider 适配器，用于让 `vulcan-core` 持有请求构造权。
 #[derive(Debug, Clone)]
-pub(crate) struct PreviewSnapshotProviderAdapter {
-    /// Stable provider identifier used by the snapshot adapter.
-    /// 快照适配器使用的稳定 Provider 标识。
+pub(crate) struct CoreRequestPreviewProviderAdapter {
+    /// Stable provider identifier used by the request-preview provider adapter.
+    /// 请求预览 Provider 适配器使用的稳定 Provider 标识。
     provider_id: String,
-    /// Stable model identifier used by the snapshot adapter.
-    /// 快照适配器使用的稳定模型标识。
+    /// Stable model identifier used by the request-preview provider adapter.
+    /// 请求预览 Provider 适配器使用的稳定模型标识。
     model_id: String,
     /// Latest outgoing prompt body attached to the snapshot request.
     /// 附着在快照请求中的最新出站提示词正文。
@@ -34,9 +34,9 @@ pub(crate) struct PreviewSnapshotProviderAdapter {
     tool_schemas: Vec<CoreProviderRequestToolSchema>,
 }
 
-impl PreviewSnapshotProviderAdapter {
-    /// Creates one snapshot-only provider adapter from already resolved provider-visible request parts.
-    /// 根据已经解析完成的 Provider 可见请求组成部分创建一份仅快照 Provider 适配器。
+impl CoreRequestPreviewProviderAdapter {
+    /// Creates one core request-preview provider adapter from already resolved provider-visible request parts.
+    /// 根据已经解析完成的 Provider 可见请求组成部分创建一份 core 请求预览 Provider 适配器。
     pub(crate) fn new(
         provider_id: String,
         model_id: String,
@@ -55,18 +55,18 @@ impl PreviewSnapshotProviderAdapter {
 }
 
 #[async_trait]
-impl VulcanProviderAdapter for PreviewSnapshotProviderAdapter {
+impl VulcanProviderAdapter for CoreRequestPreviewProviderAdapter {
     type Request = CoreProviderRequestSnapshot;
     type Response = ();
 
-    /// Returns the stable provider identifier used by the snapshot adapter.
-    /// 返回快照适配器使用的稳定 Provider 标识。
+    /// Returns the stable provider identifier used by the request-preview provider adapter.
+    /// 返回请求预览 Provider 适配器使用的稳定 Provider 标识。
     fn provider_id(&self) -> &str {
         &self.provider_id
     }
 
-    /// Returns the stable model identifier used by the snapshot adapter.
-    /// 返回快照适配器使用的稳定模型标识。
+    /// Returns the stable model identifier used by the request-preview provider adapter.
+    /// 返回请求预览 Provider 适配器使用的稳定模型标识。
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -102,8 +102,8 @@ impl VulcanProviderAdapter for PreviewSnapshotProviderAdapter {
         })
     }
 
-    /// Snapshot adapters do not perform real network execution and therefore always return a no-op response.
-    /// 快照适配器不会执行真实网络调用，因此始终返回一次空操作响应。
+    /// Request-preview provider adapters do not perform real network execution and therefore always return a no-op response.
+    /// 请求预览 Provider 适配器不会执行真实网络调用，因此始终返回一次空操作响应。
     async fn execute_request(
         &self,
         _request: Self::Request,

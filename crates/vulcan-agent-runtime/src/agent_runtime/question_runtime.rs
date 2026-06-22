@@ -18,8 +18,8 @@ use vulcan_tools_manager::{
 /// 待回答问题可见性变化时触发的回调。
 pub type PendingQuestionChangeCallback = Arc<dyn Fn() + Send + Sync + 'static>;
 
-/// Stable host-result kind emitted by the ask tool so transcript and future GUI enrichments can identify structured question replies.
-/// ask 工具输出的稳定宿主结果类型，供转录与后续图形界面增强识别结构化问答回复。
+/// Stable host-result kind emitted by the ask tool so transcript and future WebUI enrichments can identify structured question replies.
+/// ask 工具输出的稳定宿主结果类型，供转录与后续WebUI增强识别结构化问答回复。
 const QUESTION_TOOL_HOST_RESULT_KIND: &str = "ask";
 
 /// Structured question-tool arguments accepted from the model-visible `ask` tool surface.
@@ -39,8 +39,8 @@ pub struct QuestionOption {
     /// Short user-facing label returned back to the model when this option is selected.
     /// 该选项被选中时回传给模型的简短用户可见标签。
     pub label: String,
-    /// Optional explanatory helper text rendered under the option label in the GUI.
-    /// 在图形界面中显示于选项标签下方的可选说明文字。
+    /// Optional explanatory helper text rendered under the option label in the WebUI.
+    /// 在WebUI中显示于选项标签下方的可选说明文字。
     pub description: String,
 }
 
@@ -76,8 +76,8 @@ impl QuestionPrompt {
 /// 宿主运行时在用户回复或拒绝前持久保存的规范待回答问题请求。
 #[derive(Debug, Clone)]
 pub struct QuestionRequest {
-    /// Stable request identifier used by GUI actions to route replies back into the runtime.
-    /// 图形界面动作用于把回复路由回运行时的稳定请求标识。
+    /// Stable request identifier used by WebUI actions to route replies back into the runtime.
+    /// WebUI动作用于把回复路由回运行时的稳定请求标识。
     pub id: String,
     /// Controller session that owns the current blocking tool call.
     /// 拥有当前阻塞式工具调用的控制器会话标识。
@@ -115,8 +115,8 @@ enum PendingQuestionCompletion {
 /// One pending question entry retained inside the runtime registry while the tool invocation is suspended.
 /// 在工具调用挂起期间保存在运行时注册表中的单条待回答问题记录。
 struct PendingQuestionEntry {
-    /// Canonical request metadata mirrored into the GUI poll surface.
-    /// 镜像到图形界面轮询表面的规范请求元数据。
+    /// Canonical request metadata mirrored into the WebUI poll surface.
+    /// 镜像到WebUI轮询表面的规范请求元数据。
     request: QuestionRequest,
     /// One-shot sender used to resume the suspended tool invocation.
     /// 用于恢复挂起工具调用的一次性发送端。
@@ -142,14 +142,14 @@ impl Drop for PendingQuestionGuard {
     }
 }
 
-/// Host-managed registry that mirrors pending structured questions into the GUI and resumes tool calls once the user answers them.
-/// 把待回答结构化问题镜像到图形界面并在用户作答后恢复工具调用的宿主管理注册表。
+/// Host-managed registry that mirrors pending structured questions into the WebUI and resumes tool calls once the user answers them.
+/// 把待回答结构化问题镜像到WebUI并在用户作答后恢复工具调用的宿主管理注册表。
 pub struct QuestionRuntime {
     /// Pending structured question requests keyed by their stable request identifiers.
     /// 按稳定请求标识索引的待回答结构化问题请求集合。
     pending: RwLock<HashMap<String, PendingQuestionEntry>>,
-    /// Optional host callback used to notify GUI projections when pending requests change.
-    /// 待回答请求变化时用于通知图形界面投影的可选宿主回调。
+    /// Optional host callback used to notify WebUI projections when pending requests change.
+    /// 待回答请求变化时用于通知WebUI投影的可选宿主回调。
     change_callback: RwLock<Option<PendingQuestionChangeCallback>>,
     /// Monotonic sequence allocator used to preserve display order for concurrently pending questions.
     /// 用于在并发待回答问题之间保持展示顺序的单调序号分配器。
@@ -187,8 +187,8 @@ impl QuestionRuntime {
         Ok(())
     }
 
-    /// Suspends the current tool invocation, registers the pending structured questions, and waits until the GUI replies or rejects them.
-    /// 挂起当前工具调用、注册待回答结构化问题，并等待图形界面回复或拒绝。
+    /// Suspends the current tool invocation, registers the pending structured questions, and waits until the WebUI replies or rejects them.
+    /// 挂起当前工具调用、注册待回答结构化问题，并等待WebUI回复或拒绝。
     pub async fn ask(
         self: &Arc<Self>,
         session_id: SessionId,
@@ -224,8 +224,8 @@ impl QuestionRuntime {
         }
     }
 
-    /// Returns every currently pending structured question request ordered by creation sequence so the GUI can present the oldest blocking prompt first.
-    /// 返回按创建序号排序的全部当前待回答结构化问题请求，供图形界面优先展示最早阻塞的提示。
+    /// Returns every currently pending structured question request ordered by creation sequence so the WebUI can present the oldest blocking prompt first.
+    /// 返回按创建序号排序的全部当前待回答结构化问题请求，供WebUI优先展示最早阻塞的提示。
     pub fn list_pending(&self) -> Result<Vec<QuestionRequest>, String> {
         let mut requests = self
             .pending
@@ -494,8 +494,8 @@ pub fn build_question_reply_markdown(
     lines.join("\n")
 }
 
-/// Builds a structured display payload for GUI-only ask presentation without changing the model-facing answer text.
-/// 构建仅供图形界面展示使用的 ask 结构化载荷，同时不改变面向模型的答案文本。
+/// Builds a structured display payload for WebUI-only ask presentation without changing the model-facing answer text.
+/// 构建仅供WebUI展示使用的 ask 结构化载荷，同时不改变面向模型的答案文本。
 fn build_question_display_payload(questions: &[QuestionPrompt], answers: &[Vec<String>]) -> Value {
     let display_questions = questions
         .iter()
@@ -596,8 +596,8 @@ mod tests {
         assert_eq!(reply.answers, vec![vec![String::from("A")]]);
     }
 
-    /// Verifies the prompt validator rejects duplicate option labels so the GUI never has to disambiguate ambiguous selections.
-    /// 验证问题校验器会拒绝重复选项标签，从而避免图形界面处理歧义选择。
+    /// Verifies the prompt validator rejects duplicate option labels so the WebUI never has to disambiguate ambiguous selections.
+    /// 验证问题校验器会拒绝重复选项标签，从而避免WebUI处理歧义选择。
     #[test]
     fn validate_question_prompts_rejects_duplicate_option_labels() {
         let prompts = vec![QuestionPrompt {

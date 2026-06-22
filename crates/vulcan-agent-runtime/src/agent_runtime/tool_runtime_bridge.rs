@@ -1,5 +1,5 @@
-//! Shared host-managed tool runtime bridge for the GUI executor and `vulcan-core` controller.
-//! 供图形界面执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
+//! Shared host-managed tool runtime bridge for the host executor and `vulcan-core` controller.
+//! 供宿主执行器与 `vulcan-core` 控制器共享的宿主管理工具运行时桥接层。
 
 use crate::agent_runtime::events::RuntimeEvent;
 use crate::model::SessionId;
@@ -20,8 +20,8 @@ use vulcan_tools_manager::{
     ResolvedToolDefinition, VulcanToolInvocationResult, VulcanToolsManager,
 };
 
-/// Shared host-managed tool bridge that backs the GUI executor and `vulcan-core` host-side tool execution.
-/// 同时支撑图形界面执行器与 `vulcan-core` 宿主侧工具执行的共享宿主管理工具桥接层。
+/// Shared host-managed tool bridge that backs the host executor and `vulcan-core` host-side tool execution.
+/// 同时支撑宿主执行器与 `vulcan-core` 宿主侧工具执行的共享宿主管理工具桥接层。
 #[derive(Clone)]
 pub struct VulcanManagedToolRuntimeBridge {
     /// Shared host-owned unified tools manager used for the final dispatch.
@@ -30,8 +30,8 @@ pub struct VulcanManagedToolRuntimeBridge {
     /// Stable resolved tool definitions indexed by canonical tool identifier.
     /// 以规范工具标识建立索引的稳定已解析工具定义集合。
     definitions_by_id: HashMap<String, ResolvedToolDefinition>,
-    /// GUI session identifier attached to every host-managed tool invocation.
-    /// 附着到每一次宿主管理工具调用上的图形界面会话标识。
+    /// Workbench session identifier attached to every host-managed tool invocation.
+    /// 附着到每一次宿主管理工具调用上的工作台会话标识。
     session_id: SessionId,
     /// Execution mode label used by invocation-time Plan-mode guards.
     /// 调用期计划模式守卫使用的执行模式标签。
@@ -42,8 +42,8 @@ pub struct VulcanManagedToolRuntimeBridge {
 /// 用于把单条运行时事件投影与工具执行屏障关联起来的元数据键。
 pub const RUNTIME_EVENT_PROJECTION_BARRIER_ID: &str = "webui_projection_barrier_id";
 
-/// Enables projection barriers only when a GUI consumer can acknowledge them.
-/// 仅在存在可确认投影的图形界面消费端时启用投影屏障。
+/// Enables projection barriers only when a service consumer can acknowledge them.
+/// 仅在存在可确认投影的服务消费端时启用投影屏障。
 static RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Stores pending projection barrier acknowledgements by stable barrier id.
@@ -61,14 +61,14 @@ pub(crate) struct RuntimeEventProjectionBarrier {
     /// Stable barrier id copied into runtime-event metadata.
     /// 复制到运行时事件元数据中的稳定屏障标识。
     id: String,
-    /// Receiver resolved by the GUI bridge after it emits the projected workbench snapshot.
-    /// 图形界面桥接层完成投影快照发送后解析的接收端。
+    /// Receiver resolved by the host bridge after it emits the projected workbench snapshot.
+    /// 宿主桥接层完成投影快照发送后解析的接收端。
     receiver: oneshot::Receiver<()>,
 }
 
 impl VulcanManagedToolRuntimeBridge {
-    /// Builds one shared runtime bridge from the current tools manager, resolved definitions, and GUI session.
-    /// 根据当前工具管理器、已解析定义与图形界面会话构建共享运行时桥接层。
+    /// Builds one shared runtime bridge from the current tools manager, resolved definitions, and workbench session.
+    /// 根据当前工具管理器、已解析定义与工作台会话构建共享运行时桥接层。
     pub fn new(
         manager: Arc<VulcanToolsManager>,
         definitions: &[ResolvedToolDefinition],
@@ -107,8 +107,8 @@ impl VulcanManagedToolRuntimeBridge {
     }
 }
 
-/// Enables or disables runtime-event projection barriers for GUI-owned streams.
-/// 为图形界面拥有的流启用或停用运行时事件投影屏障。
+/// Enables or disables runtime-event projection barriers for host-owned streams.
+/// 为宿主拥有的流启用或停用运行时事件投影屏障。
 pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) {
     RUNTIME_EVENT_PROJECTION_BARRIERS_ENABLED.store(enabled, Ordering::SeqCst);
     if !enabled
@@ -119,8 +119,8 @@ pub fn set_runtime_event_projection_barriers_enabled(enabled: bool) {
     }
 }
 
-/// Attaches a projection barrier id to one runtime event when GUI barriers are enabled.
-/// 当图形界面屏障启用时，为单条运行时事件附加投影屏障标识。
+/// Attaches a projection barrier id to one runtime event when service barriers are enabled.
+/// 当服务屏障启用时，为单条运行时事件附加投影屏障标识。
 pub(crate) fn attach_runtime_event_projection_barrier(
     mut event: RuntimeEvent,
 ) -> (RuntimeEvent, Option<RuntimeEventProjectionBarrier>) {
@@ -161,8 +161,8 @@ pub(crate) fn attach_runtime_event_projection_barrier(
     )
 }
 
-/// Waits until the GUI bridge confirms the start event has been projected.
-/// 等待图形界面桥接层确认开始事件已经完成投影。
+/// Waits until the host bridge confirms the start event has been projected.
+/// 等待宿主桥接层确认开始事件已经完成投影。
 pub(crate) async fn wait_runtime_event_projection_barrier(
     barrier: Option<RuntimeEventProjectionBarrier>,
 ) {
@@ -182,8 +182,8 @@ pub(crate) async fn wait_runtime_event_projection_barrier(
     }
 }
 
-/// Acknowledges one projection barrier from runtime-event metadata after WebUI has emitted it.
-/// WebUI 发出运行时事件投影后，根据事件元数据确认对应投影屏障。
+/// Acknowledges one projection barrier from runtime-event metadata after the service emits it.
+/// 服务发出运行时事件投影后，根据事件元数据确认对应投影屏障。
 pub fn acknowledge_runtime_event_projection_barrier_from_event(event: &RuntimeEvent) -> bool {
     let Some(barrier_id) = event
         .metadata
@@ -686,8 +686,8 @@ mod tests {
         assert_eq!(result.host_result, None);
     }
 
-    /// Verifies the host-owned `vulcan-core` loop can execute through the shared GUI tool bridge and preserve host metadata in canonical records.
-    /// 验证宿主自有的 `vulcan-core` 循环能够经由共享 GUI 工具桥接执行，并在规范记录中保留宿主元数据。
+    /// Verifies the host-owned `vulcan-core` loop can execute through the shared workbench tool bridge and preserve host metadata in canonical records.
+    /// 验证宿主自有的 `vulcan-core` 循环能够经由共享工作台工具桥接执行，并在规范记录中保留宿主元数据。
     #[test]
     fn managed_tool_runtime_bridge_integrates_with_core_controller_loop() {
         let (manager, definitions) = build_demo_manager();

@@ -182,8 +182,8 @@ export function modelPickerChoiceKey(choice: ModelPickerChoice | undefined): str
   return choice ? `${choice.providerId}/${choice.modelId}` : "";
 }
 
-// filterModelPickerChoices applies the iced-style free-text model filter.
-// filterModelPickerChoices 应用与 iced 一致的自由文本模型过滤。
+// filterModelPickerChoices applies the WebUI-style free-text model filter.
+// filterModelPickerChoices 应用与 WebUI 一致的自由文本模型过滤。
 function filterModelPickerChoices(choices: ModelPickerChoice[], filter: string): ModelPickerChoice[] {
   const normalizedFilter = filter.trim().toLowerCase();
   if (!normalizedFilter) {

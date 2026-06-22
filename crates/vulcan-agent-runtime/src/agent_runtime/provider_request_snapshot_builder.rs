@@ -6,7 +6,7 @@ use crate::agent_runtime::provider_request_bridge_conversation::build_core_conve
 use crate::agent_runtime::provider_request_bridge_messages::core_messages_to_provider_visible_history_for_model_with_system_updates;
 use crate::agent_runtime::provider_request_bridge_tools::resolved_tool_definition_to_core_tool_schema;
 use crate::agent_runtime::provider_request_controller_config::build_core_controller_config_with_layers;
-use crate::agent_runtime::provider_request_snapshot_adapter::PreviewSnapshotProviderAdapter;
+use crate::agent_runtime::provider_request_snapshot_preview::CoreRequestPreviewProviderAdapter;
 use crate::agent_runtime::provider_request_snapshot_support::serialize_provider_request_headers;
 use crate::agent_runtime::provider_system_update_lowering::ProviderSystemUpdateLoweringPolicy;
 use crate::conversation_protocol::SessionConversationState;
@@ -59,7 +59,7 @@ pub(crate) async fn build_core_provider_request_snapshot(
         ),
         core_snapshot,
     );
-    let adapter = PreviewSnapshotProviderAdapter::new(
+    let adapter = CoreRequestPreviewProviderAdapter::new(
         preparation.model_blueprint.provider_id.clone(),
         preparation.model_blueprint.model_id.clone(),
         prompt.to_string(),

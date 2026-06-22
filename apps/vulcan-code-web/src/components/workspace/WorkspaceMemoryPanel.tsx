@@ -25,8 +25,8 @@ import type {
   VmmMemoryActionResult,
 } from "@/types";
 
-// WorkspaceMemoryPanel renders iced-aligned dynamic and static context injection lists.
-// WorkspaceMemoryPanel 渲染对齐 iced 的动态与静态上下文注入列表。
+// WorkspaceMemoryPanel renders WebUI-aligned dynamic and static context injection lists.
+// WorkspaceMemoryPanel 渲染对齐 WebUI 的动态与静态上下文注入列表。
 export function WorkspaceMemoryPanel(props: {
   // Selected-session context injection snapshot from the service.
   // 来自服务的当前选中会话上下文注入快照。

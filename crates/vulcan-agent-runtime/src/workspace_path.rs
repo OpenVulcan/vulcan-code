@@ -1,5 +1,5 @@
-//! Workspace-path normalization helpers shared by the GUI and runtime prompt builders.
-//! 图形界面与运行时提示词构建器共享的工作区路径规范化辅助模块。
+//! Workspace-path normalization helpers shared by the service and runtime prompt builders.
+//! 服务与运行时提示词构建器共享的工作区路径规范化辅助模块。
 
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -4,7 +4,7 @@
 
 ### 1. AI 可见的工具提示词
 - 面向 AI 的 tool description / schema / 参数说明固定使用英文。
-- 面向用户的 GUI 文案可以继续使用中文。
+- 面向用户的 WebUI / 桌面壳文案可以继续使用中文。
 - 不要在工具提示词里使用“summary”描述 `shell_command` 的返回值，当前语义是返回完整解码后的 `stdout` / `stderr` 与退出状态。
 
 ### 2. shell_command 当前契约
@@ -33,7 +33,7 @@
 ### 5. 命令会话状态展示
 - `command_session` 相关 UI 不能只相信历史 tool result payload。
 - 主转录卡片、工具弹层、停止按钮判定都必须优先通过 `command_session_id` 查询实时运行时状态。
-- `owner_session_id` 必须保留在 metadata / payload / transcript attributes 中，方便 GUI 重新绑定实时会话。
+- `owner_session_id` 必须保留在 metadata / payload / transcript attributes 中，方便 WebUI 重新绑定实时会话。
 - 历史 payload 只作为无实时会话时的回退信息源，不应用来覆盖实时状态。
 - 如果运行时里已经找不到对应 `command_session_id`，则当前语义直接视为 `stopped`，不能继续显示 `running`。
 
@@ -45,16 +45,16 @@
 ### 7. 设计取舍
 - 状态型工具要把“历史记录”和“实时状态”分层处理。
 - 一次性命令结果可以主要依赖历史记录。
-- 长生命周期命令会话必须始终有一条按 id 回查实时状态的路径，否则 GUI 一定会出现“历史状态冒充当前状态”的问题。
+- 长生命周期命令会话必须始终有一条按 id 回查实时状态的路径，否则 WebUI 一定会出现“历史状态冒充当前状态”的问题。
 
 ## 本轮会话沉淀（2026-05）
 
 ### 8. ask 工具当前约定
-- 模型可见的提问工具当前只保留 `ask`，不再保留 `question` 别名；注册入口在 `apps/vulcan-code-gui/src/tooling/bridge.rs`。
+- 模型可见的提问工具当前只保留 `ask`，不再保留 `question` 别名；注册入口在 `crates/vulcan-agent-runtime/src/tooling/bridge.rs`。
 - `ask` 的 tool description / schema / 参数说明继续固定使用英文，目的不是给用户看，而是提高模型主动发起澄清与确认的概率。
-- `ask` 的最终返回当前固定为 Markdown，而不是 JSON；实现位于 `apps/vulcan-code-gui/src/agent_runtime/question_runtime.rs` 的 `build_question_reply_markdown`。
-- `ask` 运行时必须复用共享 `QuestionRuntime`，不能在 runtime refresh 时重建丢失；相关复用点在 `apps/vulcan-code-gui/src/agent_runtime/runtime.rs` 与 runtime stream bootstrap 链路。
-- `ask` GUI 当前是专用阻塞面板，不是通用 notice modal；多题采用标签页加确认页模式，来源状态定义在 `apps/vulcan-code-gui/src/app_shell/mod.rs`。
+- `ask` 的最终返回当前固定为 Markdown，而不是 JSON；实现位于 `crates/vulcan-agent-runtime/src/agent_runtime/question_runtime.rs` 的 `build_question_reply_markdown`。
+- `ask` 运行时必须复用共享 `QuestionRuntime`，不能在 runtime refresh 时重建丢失；相关复用点在 `crates/vulcan-agent-runtime/src/agent_runtime/runtime.rs` 与 runtime stream bootstrap 链路。
+- `ask` WebUI 当前通过 `apps/vulcan-code-web/src/components/ask/AskQuestionDialog.tsx` 渲染紧凑 question bar，并由 service kernel 镜像待回答请求。
 - 当前交互语义：
   - 左右键切换问题标签或确认页。
   - 上下键移动当前题高亮项。
@@ -66,26 +66,26 @@
 - 确认页使用单独页面，不再保留底部“上一题/下一题/进入确认”大按钮；若存在未答完问题，确认页应明确列出未完成项并允许快捷跳转。
 - 示例面板当前保留“工作区入口 / 补丁与骨架预览 / Git Diff 入口 / Git Diff 独立窗口”，并提供 `ask 调试` 入口专门用于样式调试。
 - `ask` 调试预览当前是只读、可选择、可复制的 Markdown 预览缓冲区，不应退回为普通纯文本。
-- `ask` 相关 Markdown 预览与渲染不要再回退到 `iced` 原生 Markdown；统一走项目自己的 `vulcan_markdown` 链路。
+- `ask` 相关 Markdown 预览与渲染走 WebUI Markdown/文本预览链路，不再依赖旧桌面 Markdown 控件。
 - overlay 顺序要注意：放弃确认提示必须渲染在 `ask` 面板之上，否则会出现提示被 ask 面板盖住的错觉。
 
 ### 9. Markdown 组件约定
-- 项目内 Markdown 渲染优先使用自有 `vulcan_markdown`，相关入口见 `apps/vulcan-code-gui/src/ui/theme.rs`。
-- 需要“可选中 / 可复制 / 只读”的 Markdown 预览时，优先用 `text_editor::Content` 承载可选择文本，而不是直接嵌回 `iced` 原生 Markdown 控件。
+- WebUI Markdown 渲染优先使用 `react-markdown`、`remark-gfm`、`rehype-sanitize` 与现有会话渲染组件。
+- 需要“可选中 / 可复制 / 只读”的 Markdown 预览时，优先使用 WebUI 可选择文本或只读编辑区承载，不要退回不可复制的普通展示文本。
 - 如果只是为了显示 Markdown 外观，但实际需求是“复制测试结果”，不要为了省事退回普通 `text`；这样会丢掉选择与复制能力。
 
 ### 10. LuaSkills 0.4.3 对接约定
 - 当前仓库已经对齐 `luaskills = 0.4.3`，不要再按 `0.4.2` 的旧扁平参数推导逻辑修改宿主。
-- `LuaSkills` 工具参数 schema 当前应优先直接复用 `RuntimeEntryDescriptor.input_schema`；实现位于 `apps/vulcan-code-gui/src/runtime_support/luaskills_runtime.rs` 的 `luaskills_entry_args_schema`。
+- `LuaSkills` 工具参数 schema 当前应优先直接复用 `RuntimeEntryDescriptor.input_schema`；实现位于 `crates/vulcan-agent-runtime/src/luaskills_runtime.rs` 的 `luaskills_entry_args_schema`。
 - `LUASKILL_SID` 仍然是宿主管理字段，但处理方式是：
   - 面向模型的可见 schema 里隐藏该字段。
   - 调用执行前由宿主自动注入。
   - 如果 `input_schema.required` 包含该字段，隐藏时必须同步从 `required` 中移除。
-- `tooling/bridge.rs` 中判断某个 skill 是否声明 `LUASKILL_SID` 时，优先看 `input_schema.properties`，只把旧版 `parameters` 作为回退。
+- `crates/vulcan-agent-runtime/src/tooling/bridge.rs` 中判断某个 skill 是否声明 `LUASKILL_SID` 时，优先看 `input_schema.properties`，只把旧版 `parameters` 作为回退。
 - 如果某个 skill 包本身还没升级到 `input_schema` / `input_schema_file`，即使宿主已经升级到 0.4.3，也拿不到完整 schema 能力；此时要去更新 skill 包本身，而不是继续在宿主里手搓特例 schema。
 - 当前会触发严格 schema 问题的典型 LuaSkills 技能有 `vulcan-codekit`、`vulcan-curl`、`vulcan-testkit`；排查时优先检查 skill 包是否提供完整 schema。
-- 0.4.3 新增的技能操作进度当前已经接到 GUI：宿主在 `apps/vulcan-code-gui/src/runtime_support/luaskills_runtime.rs` 里通过 `set_skill_operation_progress_callback` 把事件写入运行时句柄队列，工作台再按 Tick 轮询消费。
-- 当前 GUI 展示链路位于 `apps/vulcan-code-gui/src/app_shell/mod.rs` 与 `apps/vulcan-code-gui/src/app_shell/views/mod.rs`：
+- 0.4.3 新增的技能操作进度当前已经接到 WebUI / Service 链路：宿主通过 LuaSkills runtime callback 把事件写入运行时句柄队列，WebUI 按 service snapshot / event 更新展示。
+- 当前 WebUI 展示链路位于 `apps/vulcan-code-web/src/components/features/skills/` 与 service kernel 对应 LuaSkills snapshot：
   - 顶部 LuaSkills 面板会显示当前操作、阶段、百分比、字节进度、来源和消息。
   - 对应技能行会显示“安装中 / 更新中”这类紧凑徽标与当前阶段。
 - 当前要注意上游粒度并不完全一致：安装 / 更新能拿到细粒度 phase，卸载 / 启用 / 停用更多还是宿主侧合成的粗粒度“进行中”状态；如果后续上游补了更细 phase，优先直接接 callback，不要再加宿主特判。
@@ -95,7 +95,7 @@
 
 ### 11. OpenRouter / Gemini 工具 schema 兼容层
 - 当前 OpenRouter 经 Google AI Studio 路由时，对函数工具 schema 的校验明显严于通用 JSON Schema；不要假设“上游 schema 合法 = Gemini 一定接受”。
-- 宿主当前通过共享兼容层 `normalize_provider_tool_parameters_schema` 做正规化，位置在 `apps/vulcan-code-gui/src/agent_runtime/provider_protocol_tool_definition.rs`。
+- 宿主当前通过共享兼容层 `normalize_provider_tool_parameters_schema` 做正规化，位置在 `crates/vulcan-agent-runtime/src/agent_runtime/provider_protocol_tool_definition.rs`。
 - 这层兼容当前已经接入：
   - `provider_transport_google_http.rs`
   - `provider_transport_openai_compatible_http.rs`
@@ -112,8 +112,8 @@
 - 这类问题优先在 provider 兼容层修，不要先去改 skill 原始 schema，除非确认 skill 本身就是错的。
 
 ### 12. Provider 错误诊断约定
-- 工具与 provider 错误文案当前要求统一英文，不走语言包；面向用户 GUI 可继续中文。
-- 标准 HTTP provider 错误格式化统一走 `apps/vulcan-code-gui/src/agent_runtime/provider_transport_http_support.rs` 的 `format_standard_error_response`。
+- 工具与 provider 错误文案当前要求统一英文，不走语言包；面向用户 WebUI 可继续中文。
+- 标准 HTTP provider 错误格式化统一走 `crates/vulcan-agent-runtime/src/agent_runtime/provider_transport_http_support.rs` 的 `format_standard_error_response`。
 - 该格式化当前会尽量保留：
   - HTTP status
   - `error.code`
@@ -149,7 +149,7 @@
 - 不要直接编辑 `output/resources/providers` 作为长期来源；源资源目录以 `crates/vulcan-runtime-assets/resources/providers` 为准。
 
 ### 14. Provider 模型显示与 enabled_models 约定
-- UI 里大多数模型列表看的不是“完整 catalog”，而是 `effective_model_choices`；实现位于 `apps/vulcan-code-gui/src/provider/config.rs`。
+- UI 里大多数模型列表看的不是“完整 catalog”，而是 `effective_model_choices`；实现位于 `crates/vulcan-provider-config/src/config.rs`。
 - 只要某个 provider 配置项已经持久化了 `enabled_models`，新增同步进来的模型不会自动出现在工作台模型选择器里，除非：
   - 它被手动加入 `enabled_models`
   - 或它在刷新合并时命中“新发现且 `default_enabled = true`”的自动启用逻辑

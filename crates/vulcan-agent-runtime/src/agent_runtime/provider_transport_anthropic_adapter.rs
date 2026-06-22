@@ -19,8 +19,8 @@ use vulcan_core::types::{
     CoreError as VulcanCoreError, ProviderTurnResponse as CoreProviderTurnResponse,
 };
 
-/// Streaming Anthropic provider adapter that lets `vulcan-core` own request construction while the GUI only consumes normalized deltas.
-/// 让 `vulcan-core` 持有请求构造权、而图形界面只消费规范化增量的流式 Anthropic Provider 适配器。
+/// Streaming Anthropic provider adapter that lets `vulcan-core` own request construction while the host runtime consumes normalized deltas.
+/// 让 `vulcan-core` 持有请求构造权、而宿主运行时消费规范化增量的流式 Anthropic Provider 适配器。
 #[derive(Clone)]
 pub(crate) struct AnthropicCoreStreamingAdapter {
     /// Stable provider identifier attached to every request and continuation snapshot.
@@ -41,8 +41,8 @@ pub(crate) struct AnthropicCoreStreamingAdapter {
     /// Provider-visible tool definitions mirrored from the resolved host tool definitions.
     /// 从已解析宿主工具定义镜像而来的 Provider 可见工具定义集合。
     pub(crate) provider_tool_definitions: Vec<ProviderToolDefinition>,
-    /// Live sender used to forward snapshots and normalized stream deltas to the GUI runtime.
-    /// 用于把快照与规范化流式增量转发回图形界面运行时的实时发送器。
+    /// Live sender used to forward snapshots and normalized stream deltas to the host runtime.
+    /// 用于把快照与规范化流式增量转发回宿主运行时的实时发送器。
     pub(crate) live_sender: ProviderLiveDeltaSender,
 }
 

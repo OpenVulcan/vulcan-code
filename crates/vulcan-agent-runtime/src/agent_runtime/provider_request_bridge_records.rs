@@ -22,8 +22,8 @@ pub(crate) fn session_continuation_to_core_continuation(
     }
 }
 
-/// Converts one `vulcan-core` continuation snapshot back into the GUI-owned continuation shape.
-/// 将一份 `vulcan-core` continuation 快照转换回 GUI 持有的 continuation 形状。
+/// Converts one `vulcan-core` continuation snapshot back into the host-owned continuation shape.
+/// 将一份 `vulcan-core` continuation 快照转换回运行时持有的 continuation 形状。
 pub(crate) fn core_continuation_to_session_continuation(
     continuation: &CoreProviderContinuation,
 ) -> SessionProviderContinuationState {
@@ -52,8 +52,8 @@ pub(crate) fn session_record_to_core_record(
     }
 }
 
-/// Converts one `vulcan-core` durable record back into the GUI-owned record shape while preserving display metadata.
-/// 将一条 `vulcan-core` 持久化记录转换回 GUI 持有的记录形状，同时保留显示元数据。
+/// Converts one `vulcan-core` durable record back into the host-owned record shape while preserving display metadata.
+/// 将一条 `vulcan-core` 持久化记录转换回运行时持有的记录形状，同时保留显示元数据。
 pub(crate) fn core_record_to_session_record(
     record: &CoreConversationRecord,
 ) -> SessionConversationRecord {
@@ -69,8 +69,8 @@ pub(crate) fn core_record_to_session_record(
     }
 }
 
-/// Derives the `vulcan-core` record role from one GUI-owned durable record.
-/// 根据一条 GUI 持有的持久化记录推导 `vulcan-core` 记录角色。
+/// Derives the `vulcan-core` record role from one host-owned durable record.
+/// 根据一条运行时持有的持久化记录推导 `vulcan-core` 记录角色。
 fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTranscriptRole {
     match record.record_kind {
         SessionMessageRecordKind::ThinkingOutput => CoreTranscriptRole::Thinking,
@@ -93,8 +93,8 @@ fn session_record_to_core_role(record: &SessionConversationRecord) -> CoreTransc
     }
 }
 
-/// Converts one GUI-owned durable record kind into the `vulcan-core` record-kind classification.
-/// 将一种 GUI 持有的持久化记录类型转换为 `vulcan-core` 记录类型分类。
+/// Converts one host-owned durable record kind into the `vulcan-core` record-kind classification.
+/// 将一种运行时持有的持久化记录类型转换为 `vulcan-core` 记录类型分类。
 fn session_record_to_core_record_kind(
     record_kind: SessionMessageRecordKind,
 ) -> CoreTranscriptRecordKind {
@@ -116,8 +116,8 @@ fn session_record_to_core_record_kind(
     }
 }
 
-/// Derives the GUI transcript message kind from one `vulcan-core` durable record role.
-/// 根据一条 `vulcan-core` 持久化记录角色推导 GUI 转录消息类型。
+/// Derives the workbench transcript message kind from one `vulcan-core` durable record role.
+/// 根据一条 `vulcan-core` 持久化记录角色推导工作台转录消息类型。
 fn core_record_to_session_message_kind(record: &CoreConversationRecord) -> SessionMessageKind {
     match record.role {
         CoreTranscriptRole::User => SessionMessageKind::User,
@@ -125,8 +125,8 @@ fn core_record_to_session_message_kind(record: &CoreConversationRecord) -> Sessi
     }
 }
 
-/// Derives the GUI record kind from one `vulcan-core` durable record while preserving the semantic difference between tool calls, tool results, and hidden nodes.
-/// 根据一条 `vulcan-core` 持久化记录推导 GUI 记录类型，同时保留工具调用、工具结果与隐藏节点之间的语义差异。
+/// Derives the workbench record kind from one `vulcan-core` durable record while preserving the semantic difference between tool calls, tool results, and hidden nodes.
+/// 根据一条 `vulcan-core` 持久化记录推导工作台记录类型，同时保留工具调用、工具结果与隐藏节点之间的语义差异。
 fn core_record_to_session_record_kind(record: &CoreConversationRecord) -> SessionMessageRecordKind {
     match (&record.role, &record.record_kind) {
         _ if record

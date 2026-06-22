@@ -43,8 +43,8 @@ export function turnStatsStatus(metadata: unknown): string | null {
   return typeof status === "string" && status.trim() ? status.trim() : null;
 }
 
-// turnStatsSummary builds the same compact summary line used by the legacy GUI.
-// turnStatsSummary 构建与旧 GUI 一致的紧凑摘要行。
+// turnStatsSummary builds the compact summary line used by WebUI tool metadata.
+// turnStatsSummary 构建 WebUI 工具元数据使用的紧凑摘要行。
 export function turnStatsSummary(metadata: unknown): string | null {
   const stats = turnStatsObject(metadata);
   if (!stats) {

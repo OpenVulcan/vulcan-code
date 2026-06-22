@@ -33,8 +33,8 @@ pub(crate) struct StreamingRuntimeToolExecutor {
     /// Shared host-managed bridge that owns the real tool dispatch and metadata normalization.
     /// 持有真实工具调度与元数据规范化能力的共享宿主管理桥接层。
     runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
-    /// Live sender used to forward tool boundary runtime events into the GUI stream.
-    /// 用于把工具边界运行时事件转发进图形界面流中的实时发送器。
+    /// Live sender used to forward tool boundary runtime events into the host stream.
+    /// 用于把工具边界运行时事件转发进宿主流中的实时发送器。
     live_sender: ProviderLiveDeltaSender,
 }
 
@@ -78,8 +78,8 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         let _ = self
             .live_sender
             .send(Ok(ProviderStreamDelta::RuntimeEvent(tool_started_event)));
-        // Wait for the GUI bridge to project the start card before the real tool body can begin.
-        // 在真实工具主体开始前等待图形界面桥接层完成开始卡片投影。
+        // Wait for the host bridge to project the start card before the real tool body can begin.
+        // 在真实工具主体开始前等待宿主桥接层完成开始卡片投影。
         let has_projection_barrier = projection_barrier.is_some();
         wait_runtime_event_projection_barrier(projection_barrier).await;
         if !has_projection_barrier {

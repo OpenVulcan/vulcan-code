@@ -43,17 +43,9 @@ if ($PSVersionTable.PSEdition -ne "Core") {
 # ScriptDir 用于保存仓库根目录，确保子脚本始终从稳定的基路径解析。
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-# BuildScriptPath points at the legacy iced GUI build script.
-# BuildScriptPath 用于指向旧版 iced GUI 构建脚本。
-$BuildScriptPath = Join-Path $ScriptDir "scripts\build.ps1"
-
 # TauriBuildScriptPath points at the new Tauri/WebUI build script.
 # TauriBuildScriptPath 用于指向新版 Tauri/WebUI 构建脚本。
 $TauriBuildScriptPath = Join-Path $ScriptDir "scripts\build_tauri.ps1"
-
-# RunScriptPath points at the legacy iced GUI run script.
-# RunScriptPath 用于指向旧版 iced GUI 运行脚本。
-$RunScriptPath = Join-Path $ScriptDir "scripts\run.ps1"
 
 # TauriRunScriptPath points at the new Tauri/WebUI run script.
 # TauriRunScriptPath 用于指向新版 Tauri/WebUI 运行脚本。
@@ -88,31 +80,6 @@ function Normalize-Command {
     return $Value.Trim().ToLowerInvariant()
 }
 
-# Invoke-Build forwards the current mode to scripts/build.ps1 and returns the child exit code unchanged.
-# Invoke-Build 用于把当前模式转发给 scripts/build.ps1，并原样返回子进程退出码。
-# IsRelease controls whether the packaged build should target Cargo release output.
-# IsRelease 用于控制打包构建是否指向 Cargo 的 release 产物。
-function Invoke-Build {
-    param(
-        [bool]$IsRelease
-    )
-
-    if (-not (Test-Path -LiteralPath $BuildScriptPath)) {
-        throw "Missing build script: $BuildScriptPath"
-    }
-
-    if ($IsRelease) {
-        & $BuildScriptPath -Release
-    }
-    else {
-        & $BuildScriptPath
-    }
-
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-}
-
 # Invoke-TauriBuild forwards the current mode to scripts/build_tauri.ps1.
 # Invoke-TauriBuild 用于把当前模式转发给 scripts/build_tauri.ps1。
 # IsRelease controls whether the Tauri shell should target Cargo release output.
@@ -136,29 +103,6 @@ function Invoke-TauriBuild {
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
     }
-}
-
-# Invoke-Run forwards the current mode to scripts/run.ps1 so Ctrl+C no longer traverses a cmd batch wrapper.
-# Invoke-Run 用于把当前模式转发给 scripts/run.ps1，从而避免 Ctrl+C 再经过 cmd 批处理包装层。
-# IsRelease controls whether the runtime should execute the release binary instead of the debug binary.
-# IsRelease 用于控制运行时执行 release 二进制还是 debug 二进制。
-function Invoke-Run {
-    param(
-        [bool]$IsRelease
-    )
-
-    if (-not (Test-Path -LiteralPath $RunScriptPath)) {
-        throw "Missing run script: $RunScriptPath"
-    }
-
-    if ($IsRelease) {
-        & $RunScriptPath -Release
-    }
-    else {
-        & $RunScriptPath
-    }
-
-    exit $LASTEXITCODE
 }
 
 # Invoke-TauriRun forwards the current mode to scripts/run_tauri.ps1.
@@ -236,10 +180,6 @@ function Show-Usage {
     Write-Host "  ./make             # Tauri/WebUI debug build"
     Write-Host "  ./make build       # Tauri/WebUI debug build"
     Write-Host "  ./make release     # Tauri/WebUI release build"
-    Write-Host "  ./make build iced  # legacy iced GUI debug build"
-    Write-Host "  ./make run iced    # legacy iced GUI debug run"
-    Write-Host "  ./make build iced release # legacy iced GUI release build"
-    Write-Host "  ./make run iced release   # legacy iced GUI release run"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make run         # run Tauri/WebUI debug build"
     Write-Host "  ./make run release # run Tauri/WebUI release build"
@@ -261,12 +201,13 @@ switch ($NormalizedMode) {
         Invoke-TauriBuild -IsRelease $false
     }
     "build" {
-        if ($NormalizedVariant -eq "iced") {
-            $IcedRelease = ($RemainingArgs.Count -gt 0 -and (Normalize-Command -Value $RemainingArgs[0]) -eq "release")
-            Invoke-Build -IsRelease $IcedRelease
+        if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {
+            Invoke-TauriBuild -IsRelease ($NormalizedVariant -eq "release")
         }
         else {
-            Invoke-TauriBuild -IsRelease ($NormalizedVariant -eq "release")
+            Write-Error "Unsupported build command: '$CommandVariant'"
+            Show-Usage
+            exit 1
         }
     }
     "release" {
@@ -281,12 +222,13 @@ switch ($NormalizedMode) {
         Invoke-RustThirdPartyNoticeGeneration
     }
     "run" {
-        if ($NormalizedVariant -eq "iced") {
-            $IcedRelease = ($RemainingArgs.Count -gt 0 -and (Normalize-Command -Value $RemainingArgs[0]) -eq "release")
-            Invoke-Run -IsRelease $IcedRelease
+        if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {
+            Invoke-TauriRun -IsRelease ($NormalizedVariant -eq "release")
         }
         else {
-            Invoke-TauriRun -IsRelease ($NormalizedVariant -eq "release")
+            Write-Error "Unsupported run command: '$CommandVariant'"
+            Show-Usage
+            exit 1
         }
     }
     "deps" {

@@ -481,8 +481,8 @@ impl CommandSessionRecord {
         }
     }
 
-    /// Builds one best-effort immutable snapshot without waiting on the async mutex, so synchronous GUI render paths can reuse the latest runtime state when it is immediately available.
-    /// 在不等待异步互斥锁的前提下构建一份尽力而为的不可变快照，使同步 GUI 渲染路径可以在状态立即可得时复用最新运行时状态。
+    /// Builds one best-effort immutable snapshot without waiting on the async mutex, so synchronous WebUI render paths can reuse the latest runtime state when it is immediately available.
+    /// 在不等待异步互斥锁的前提下构建一份尽力而为的不可变快照，使同步 WebUI 渲染路径可以在状态立即可得时复用最新运行时状态。
     fn try_snapshot(&self) -> Option<CommandSessionSnapshot> {
         let state = self.shared_state.mutable_state.try_lock().ok()?;
         Some(CommandSessionSnapshot {
@@ -810,8 +810,8 @@ impl CommandSessionRuntime {
         }
     }
 
-    /// Returns one best-effort live snapshot for the requested owned command session without blocking on async state, so GUI status surfaces can prefer current runtime state over historical transcript payloads.
-    /// 在不阻塞异步状态锁的前提下返回目标归属命令会话的一份尽力而为实时快照，使 GUI 状态界面可以优先展示当前运行时状态而不是历史转录载荷。
+    /// Returns one best-effort live snapshot for the requested owned command session without blocking on async state, so WebUI status surfaces can prefer current runtime state over historical transcript payloads.
+    /// 在不阻塞异步状态锁的前提下返回目标归属命令会话的一份尽力而为实时快照，使 WebUI 状态界面可以优先展示当前运行时状态而不是历史转录载荷。
     pub fn try_snapshot_owned_session(
         &self,
         owner_session_id: SessionId,
@@ -877,8 +877,8 @@ impl CommandSessionRuntime {
         }
     }
 
-    /// Returns one best-effort live snapshot for the requested command session identifier without enforcing ownership, so read-only GUI projections can still recover the latest visible status when the owner id must be inferred from historical metadata.
-    /// 在不强制校验归属的前提下返回目标命令会话标识的一份尽力而为实时快照，使只读 GUI 投影在只能从历史元数据推断 owner id 时仍可恢复最新可见状态。
+    /// Returns one best-effort live snapshot for the requested command session identifier without enforcing ownership, so read-only WebUI projections can still recover the latest visible status when the owner id must be inferred from historical metadata.
+    /// 在不强制校验归属的前提下返回目标命令会话标识的一份尽力而为实时快照，使只读 WebUI 投影在只能从历史元数据推断 owner id 时仍可恢复最新可见状态。
     pub fn try_snapshot_session_by_id(
         &self,
         command_session_id: SessionId,
@@ -1192,8 +1192,8 @@ mod tests {
         ));
     }
 
-    /// Best-effort live snapshots should expose the latest shared state to synchronous GUI callers without crossing ownership boundaries.
-    /// 尽力而为的实时快照应在不跨越归属边界的前提下，把最新共享状态暴露给同步 GUI 调用方。
+    /// Best-effort live snapshots should expose the latest shared state to synchronous WebUI callers without crossing ownership boundaries.
+    /// 尽力而为的实时快照应在不跨越归属边界的前提下，把最新共享状态暴露给同步 WebUI 调用方。
     #[test]
     fn try_snapshot_owned_session_returns_live_state_without_async_wait() {
         let runtime = CommandSessionRuntime::new();

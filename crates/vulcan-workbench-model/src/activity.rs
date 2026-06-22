@@ -61,11 +61,11 @@ impl ActivityEntry {
             Self::new(
                 ActivityLevel::Success,
                 "工作区骨架已准备",
-                "已规划 Cargo workspace、GUI crate 与后续扩展模块边界。",
+                "已规划 Cargo workspace、WebUI crate 与后续扩展模块边界。",
             ),
             Self::new(
                 ActivityLevel::Info,
-                "iced 组件接入中",
+                "WebUI 组件接入中",
                 "当前窗口将同时验证 pane_grid、text_editor、markdown 与 svg 等关键控件。",
             ),
             Self::new(

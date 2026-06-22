@@ -633,8 +633,8 @@ impl OpenRouterEndpointRouteSelection {
     }
 }
 
-/// Supported model discovery kinds used by the current GUI implementation.
-/// 当前 GUI 实现支持的模型发现方式。
+/// Supported model discovery kinds used by the current WebUI implementation.
+/// 当前 WebUI 实现支持的模型发现方式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProviderModelDiscoveryKind {
     /// No remote discovery is attempted and the embedded catalog is used directly.
@@ -1729,8 +1729,8 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub workbench_reasoning_effort: Option<ReasoningEffortLevel>,
-    /// Remembered GUI locale identifier selected by the user.
-    /// 由用户选择并记忆的图形界面语言标识。
+    /// Remembered WebUI locale identifier selected by the user.
+    /// 由用户选择并记忆的WebUI语言标识。
     #[serde(rename = "uiLocale", skip_serializing_if = "Option::is_none")]
     pub ui_locale: Option<String>,
     /// Remembered startup transcript page size expressed in complete user turns.

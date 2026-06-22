@@ -286,8 +286,8 @@ export async function removePendingPrompt(entryId: string): Promise<WorkbenchSna
   return serviceClient.request<WorkbenchSnapshot>("service_remove_pending_prompt", { entryId });
 }
 
-// reorderPendingPrompts persists one iced-compatible pending prompt drop target.
-// reorderPendingPrompts 持久化一次与 iced 兼容的待发送提示词拖放落点。
+// reorderPendingPrompts persists one service-compatible pending prompt drop target.
+// reorderPendingPrompts 持久化一次与服务兼容的待发送提示词拖放落点。
 export async function reorderPendingPrompts(
   conversationId: string | null,
   draggedEntryId: string,

@@ -15,8 +15,8 @@ import {
   localizedLiteral,
 } from "./provider-settings-utils"
 
-// ModelListSettingsArea renders enabled models with an iced-style provider/model split.
-// ModelListSettingsArea 使用 iced 风格供应商/模型分栏渲染已启用模型。
+// ModelListSettingsArea renders enabled models with a WebUI-style provider/model split.
+// ModelListSettingsArea 使用 WebUI 风格供应商/模型分栏渲染已启用模型。
 export function ModelListSettingsArea(props: {
   // Service-backed settings actions.
   // 服务端支持的设置动作。

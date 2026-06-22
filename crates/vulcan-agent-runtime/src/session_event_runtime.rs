@@ -536,7 +536,9 @@ fn raw_visible_host_result(metadata: Option<&serde_json::Value>) -> Option<&serd
         .get("host_result")
         .or_else(|| metadata.get("hostResult"))
         .filter(|host_result| {
-            raw_host_result_kind_is_visible(host_result.get("kind").and_then(serde_json::Value::as_str))
+            raw_host_result_kind_is_visible(
+                host_result.get("kind").and_then(serde_json::Value::as_str),
+            )
         });
     nested.or_else(|| {
         (raw_host_result_kind_is_visible(metadata.get("kind").and_then(serde_json::Value::as_str))
@@ -743,8 +745,8 @@ fn ask_question_display_payload(
     serde_json::Value::Object(object)
 }
 
-/// Extracts the GUI-only ask display contract from one tool-finished metadata object.
-/// 从单条工具完成元数据中提取仅供 GUI 使用的 ask 展示契约。
+/// Extracts the workbench-only ask display contract from one tool-finished metadata object.
+/// 从单条工具完成元数据中提取仅供工作台使用的 ask 展示契约。
 fn ask_question_host_display(metadata: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
     let payload = host_result_payload_by_kind(metadata?, "ask")?;
     payload.get("display").filter(|display| {
@@ -1040,8 +1042,8 @@ pub fn apply_checkpoint_conversation_state(
 ///
 /// # Parameters
 /// 参数
-/// `preserved_records` are the WebUI-local transcript projections retained across checkpoints.
-/// `preserved_records` 是跨检查点保留的 WebUI 本地转录投影。
+/// `preserved_records` are the workbench-local transcript projections retained across checkpoints.
+/// `preserved_records` 是跨检查点保留的工作台本地转录投影。
 /// `checkpoint_records` are records emitted by the canonical controller snapshot.
 /// `checkpoint_records` 是规范控制器快照发出的记录。
 fn merge_checkpoint_user_records(
@@ -1403,8 +1405,8 @@ fn append_terminal_turn_stats_record(
     Some(record_id)
 }
 
-/// Appends one hidden derived session record with the same metadata shape used by iced.
-/// 以 iced 使用的相同元数据结构追加一条隐藏派生会话记录。
+/// Appends one hidden derived session record with the same metadata shape used by the workbench.
+/// 以工作台使用的相同元数据结构追加一条隐藏派生会话记录。
 fn append_derived_record(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -1975,7 +1977,10 @@ mod tests {
             .iter()
             .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
             .expect("ask detail record should be hidden");
-        let detail_metadata = detail_record.metadata.as_ref().expect("ask detail metadata");
+        let detail_metadata = detail_record
+            .metadata
+            .as_ref()
+            .expect("ask detail metadata");
         assert_eq!(
             detail_metadata
                 .get("display")

@@ -358,8 +358,8 @@ fn provider_configuration_round_trips_workbench_reasoning_effort() {
     );
 }
 
-/// Verifies the persisted GUI locale keeps the stable `uiLocale` field name and round-trips through the shared provider configuration file.
-/// 验证持久化图形界面语言会保持稳定的 `uiLocale` 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
+/// Verifies the persisted WebUI locale keeps the stable `uiLocale` field name and round-trips through the shared provider configuration file.
+/// 验证持久化WebUI语言会保持稳定的 `uiLocale` 字段名，并且能够经由共享 Provider 配置文件完成往返序列化。
 #[test]
 fn provider_configuration_round_trips_ui_locale() {
     let config = ProviderConfigurationFile {

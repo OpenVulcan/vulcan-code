@@ -444,8 +444,8 @@ mod tests {
         ));
     }
 
-    /// Captures terminal errors while final conversation states also emit a safe GUI checkpoint.
-    /// 捕获终态错误，同时让最终会话状态额外发出安全 GUI 检查点。
+    /// Captures terminal errors while final conversation states also emit a safe workbench checkpoint.
+    /// 捕获终态错误，同时让最终会话状态额外发出安全工作台检查点。
     #[test]
     fn terminal_error_is_buffered_and_final_state_emits_checkpoint() {
         let session_id = Uuid::nil();

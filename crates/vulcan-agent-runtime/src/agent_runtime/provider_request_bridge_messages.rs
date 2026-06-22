@@ -64,8 +64,8 @@ pub(crate) fn session_message_to_core_message(
     }
 }
 
-/// Converts one `vulcan-core` message back into the GUI-owned canonical session message shape.
-/// 将一条 `vulcan-core` 消息转换回 GUI 持有的规范会话消息形状。
+/// Converts one `vulcan-core` message back into the host-owned canonical session message shape.
+/// 将一条 `vulcan-core` 消息转换回运行时持有的规范会话消息形状。
 pub(crate) fn core_message_to_session_message(
     message: &CoreConversationMessage,
 ) -> SessionConversationMessage {
@@ -750,8 +750,8 @@ fn session_tool_call_to_core_tool_call(
     }
 }
 
-/// Converts one `vulcan-core` tool-call entry back into the GUI-owned canonical tool-call shape.
-/// 将一条 `vulcan-core` 工具调用项转换回 GUI 持有的规范工具调用形状。
+/// Converts one `vulcan-core` tool-call entry back into the host-owned canonical tool-call shape.
+/// 将一条 `vulcan-core` 工具调用项转换回运行时持有的规范工具调用形状。
 fn core_tool_call_to_session_tool_call(
     tool_call: &CoreConversationToolCall,
 ) -> SessionConversationToolCall {

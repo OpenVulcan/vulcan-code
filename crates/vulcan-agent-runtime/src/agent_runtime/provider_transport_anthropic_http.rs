@@ -1650,8 +1650,8 @@ fn build_anthropic_provider_tool_name(host_tool_name: &str) -> String {
     build_direct_public_tool_name(host_tool_name)
 }
 
-/// Forwards one normalized provider delta into both the controller sink and the GUI live sender.
-/// 将一条规范 Provider 增量同时转发给控制器汇聚器与 GUI 实时发送器。
+/// Forwards one normalized provider delta into both the controller sink and the host live sender.
+/// 将一条规范 Provider 增量同时转发给控制器汇聚器与宿主实时发送器。
 fn forward_anthropic_delta<S>(
     live_sender: &ProviderLiveDeltaSender,
     sink: &mut S,

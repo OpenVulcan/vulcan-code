@@ -20,8 +20,8 @@ export const browserFallbackStartup: StartupSnapshot = {
   recentLogs: ["[webui] browser preview mode"],
 };
 
-// browserFallbackSlashCommands mirrors the service-projected iced command catalog for preview mode.
-// browserFallbackSlashCommands 在预览模式中镜像 service 投影出的 iced 指令目录。
+// browserFallbackSlashCommands mirrors the service-projected command catalog for preview mode.
+// browserFallbackSlashCommands 在预览模式中镜像 service 投影出的指令目录。
 const browserFallbackSlashCommands: ComposerSlashCommandSummary[] = [
   {
     id: "model",
@@ -340,7 +340,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
       profileSyncCount: 3,
       completedTurns: 1,
       updatedAt: "1780908377000",
-      profilePreview: "用户偏好：偏向工程化闭环。\n项目画像：WebUI 正在迁移 iced 功能。",
+      profilePreview: "用户偏好：偏向工程化闭环。\n项目画像：WebUI 已承接桌面功能。",
     },
     sections: [
       { id: "user_manager", key: "USER MANAGER", label: "用户管理", description: "解析、创建预检和删除长期用户。" },
@@ -359,7 +359,7 @@ const browserFallbackWorkbench: WorkbenchSnapshot = {
   ],
   logs: [
     { id: "preview-log", level: "info", source: "webui", message: "浏览器预览模式已加载" },
-    { id: "preview-legacy", level: "info", source: "iced", message: "旧 iced GUI 保留为 reference 入口" },
+    { id: "preview-service", level: "info", source: "service", message: "Tauri/WebUI 是当前桌面入口" },
   ],
 };
 

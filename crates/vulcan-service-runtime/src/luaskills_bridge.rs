@@ -178,8 +178,8 @@ pub struct TauriLuaSkillToolSummary {
     pub description: String,
 }
 
-/// Bootstraps LuaSkills using the same controller-backed database mode as the iced GUI.
-/// 使用与 iced GUI 相同的控制器数据库模式引导 LuaSkills。
+/// Bootstraps LuaSkills using the controller-backed database mode shared by Vulcan Code hosts.
+/// 使用 Vulcan Code 宿主共享的控制器数据库模式引导 LuaSkills。
 pub fn bootstrap_luaskills<F>(
     controller: PersistedControllerConfiguration,
     mut progress: F,
@@ -785,8 +785,8 @@ fn build_host_options(
     host_options
 }
 
-/// Returns the mutable user skill root shared with the iced GUI.
-/// 返回与 iced GUI 共享的可变用户技能根目录。
+/// Returns the mutable user skill root shared by Vulcan Code hosts.
+/// 返回 Vulcan Code 宿主共享的可变用户技能根目录。
 fn default_user_skill_root() -> PathBuf {
     vulcan_workspace_store::data_plane::application_data_root()
         .join("luaskills-user")

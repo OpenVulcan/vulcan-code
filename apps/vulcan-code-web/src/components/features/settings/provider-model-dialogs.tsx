@@ -35,8 +35,8 @@ export interface ModelCapabilityTarget {
   model: ProviderModelSummary
 }
 
-// ProviderModelsDialog renders the iced-style enabled-model picker across providers.
-// ProviderModelsDialog 渲染跨供应商的 iced 风格启用模型选择器。
+// ProviderModelsDialog renders the WebUI-style enabled-model picker across providers.
+// ProviderModelsDialog 渲染跨供应商的 WebUI 风格启用模型选择器。
 export function ProviderModelsDialog(props: {
   // Service-backed settings actions.
   // 服务端支持的设置动作。

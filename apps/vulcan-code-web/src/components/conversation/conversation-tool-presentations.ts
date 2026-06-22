@@ -354,8 +354,8 @@ function resolveAskQuestionPresentation(
   };
 }
 
-// AskQuestionDisplayPayload stores the GUI-only display JSON emitted by the ask tool.
-// AskQuestionDisplayPayload 保存 ask 工具输出的仅供图形界面使用的展示 JSON。
+// AskQuestionDisplayPayload stores the WebUI-only display JSON emitted by the ask tool.
+// AskQuestionDisplayPayload 保存 ask 工具输出的仅供WebUI使用的展示 JSON。
 interface AskQuestionDisplayPayload {
   // Display title.
   // 展示标题。

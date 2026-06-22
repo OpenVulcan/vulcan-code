@@ -1,5 +1,5 @@
-//! Shared turn-statistics construction for desktop and WebUI transcript lifecycles.
-//! 桌面端与 WebUI 转录生命周期共享的轮次统计构建逻辑。
+//! Shared turn-statistics construction for service and workbench transcript lifecycles.
+//! 面向服务与工作台转录生命周期共享的轮次统计构建逻辑。
 
 use serde_json::Value;
 use vulcan_workbench_model::{

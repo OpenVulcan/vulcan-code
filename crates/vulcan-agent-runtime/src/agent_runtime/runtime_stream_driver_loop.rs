@@ -15,9 +15,9 @@ use async_stream::stream;
 use futures_util::{Stream, StreamExt};
 use std::time::Duration;
 
-/// GUI-facing stream delta flush cadence used to avoid repainting the full workbench for every provider token.
-/// 面向图形界面的流式增量刷新节奏，用于避免每个 Provider token 都触发整窗重绘。
-const RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
+/// Workbench-facing stream delta flush cadence used to avoid repainting the full workbench for every provider token.
+/// 面向工作台的流式增量刷新节奏，用于避免每个 Provider token 都触发整窗重绘。
+const RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Accumulates adjacent visible stream deltas while preserving non-delta event ordering.
 /// 在保留非增量事件顺序的同时，合并相邻的可见流式增量。
@@ -32,8 +32,8 @@ struct ExecutionStreamDeltaCoalescer {
 }
 
 impl ExecutionStreamDeltaCoalescer {
-    /// Returns whether no visible delta is waiting for the next GUI flush.
-    /// 返回当前是否没有等待下一次图形界面刷新的可见增量。
+    /// Returns whether no visible delta is waiting for the next workbench flush.
+    /// 返回当前是否没有等待下一次工作台刷新的可见增量。
     fn is_empty(&self) -> bool {
         self.pending_thinking_delta.is_none() && self.pending_output_delta.is_none()
     }
@@ -142,7 +142,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
         let mut delta_coalescer = ExecutionStreamDeltaCoalescer::default();
         let mut next_delta_flush_at =
-            tokio::time::Instant::now() + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+            tokio::time::Instant::now() + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
 
         loop {
             let item = if delta_coalescer.is_empty() {
@@ -155,7 +155,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                             yield event;
                         }
                         next_delta_flush_at = tokio::time::Instant::now()
-                            + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+                            + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
                         continue;
                     }
                 }
@@ -177,7 +177,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
                 if starts_new_flush_window {
                     next_delta_flush_at = tokio::time::Instant::now()
-                        + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+                        + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
                 }
             }
 
@@ -186,7 +186,7 @@ pub(crate) fn drive_runtime_stream_provider_loop(
                     yield event;
                 }
                 next_delta_flush_at =
-                    tokio::time::Instant::now() + RUNTIME_STREAM_GUI_DELTA_FLUSH_INTERVAL;
+                    tokio::time::Instant::now() + RUNTIME_STREAM_WORKBENCH_DELTA_FLUSH_INTERVAL;
             }
 
             if stream_state.has_terminal_error() {
@@ -230,15 +230,15 @@ pub(crate) fn drive_runtime_stream_provider_loop(
 
 #[cfg(test)]
 mod tests {
-    //! Runtime stream driver-loop tests for GUI-facing delta coalescing.
-    //! 面向图形界面增量合并的运行时流驱动循环测试。
+    //! Runtime stream driver-loop tests for workbench-facing delta coalescing.
+    //! 面向工作台增量合并的运行时流驱动循环测试。
 
     use super::*;
     use crate::agent_runtime::events::{RuntimeEvent, RuntimeEventKind};
     use uuid::Uuid;
 
-    /// Verifies adjacent output deltas for the same session are merged into one GUI event.
-    /// 验证同一会话的相邻输出增量会合并为一个图形界面事件。
+    /// Verifies adjacent output deltas for the same session are merged into one workbench event.
+    /// 验证同一会话的相邻输出增量会合并为一个工作台事件。
     #[test]
     fn coalescer_merges_adjacent_output_deltas_for_same_session() {
         let session_id = Uuid::nil();

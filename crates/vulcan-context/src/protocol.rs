@@ -1,5 +1,5 @@
-//! Canonical conversation protocol models shared by GUI state, persistence, and runtime bridges.
-//! 供图形界面状态、持久化与运行时桥接共享的规范会话协议模型。
+//! Canonical conversation protocol models shared by WebUI state, persistence, and runtime bridges.
+//! 供WebUI状态、持久化与运行时桥接共享的规范会话协议模型。
 
 use crate::transcript::{SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind};
 use serde::{Deserialize, Serialize};
@@ -565,8 +565,8 @@ fn push_labeled_non_empty_part(parts: &mut Vec<String>, label: &str, text: &str)
     }
 }
 
-/// Projects canonical session records into the persisted transcript model used by the existing GUI surfaces.
-/// 将规范会话记录投影为现有图形界面表面使用的持久化转录模型。
+/// Projects canonical session records into the persisted transcript model used by the existing WebUI surfaces.
+/// 将规范会话记录投影为现有WebUI表面使用的持久化转录模型。
 pub fn conversation_state_to_session_messages(
     state: &SessionConversationState,
 ) -> Vec<SessionMessageEntry> {
@@ -601,8 +601,8 @@ pub fn conversation_state_to_context_records(
         .collect()
 }
 
-/// Converts one canonical session record back into the persisted transcript entry shape expected by the current GUI layer.
-/// 将单条规范会话记录重新转换为当前图形界面层期望的持久化转录条目形状。
+/// Converts one canonical session record back into the persisted transcript entry shape expected by the current WebUI layer.
+/// 将单条规范会话记录重新转换为当前WebUI层期望的持久化转录条目形状。
 fn conversation_record_to_session_message(
     record: SessionConversationRecord,
 ) -> SessionMessageEntry {

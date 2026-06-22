@@ -49,8 +49,8 @@ export {
   projectConversationCount,
 } from "./project-settings-utils";
 
-// ProjectSettingsDialog renders project-level settings migrated from the iced workbench.
-// ProjectSettingsDialog 渲染从 iced 工作台迁移来的项目级设置。
+// ProjectSettingsDialog renders project-level settings owned by the WebUI workbench.
+// ProjectSettingsDialog 渲染由 WebUI 工作台持有的项目级设置。
 export function ProjectSettingsDialog(props: {
   // Project currently edited by this dialog.
   // 当前弹窗正在编辑的项目。

@@ -61,8 +61,8 @@ export function PendingPromptQueueStrip(props: {
   // entryIds is the stable dnd item list derived from the backend queue.
   // entryIds 是从后端队列派生出的稳定拖拽条目列表。
   const entryIds = React.useMemo(() => props.entries.map((entry) => entry.id), [props.entries]);
-  // handleDragEnd persists the iced-compatible drop target derived from the visual dnd order.
-  // handleDragEnd 从可视拖拽顺序推导与 iced 兼容的落点并持久化。
+  // handleDragEnd persists the service-compatible drop target derived from the visual dnd order.
+  // handleDragEnd 从可视拖拽顺序推导与服务兼容的落点并持久化。
   const handleDragEnd = React.useCallback((event: DragEndEvent) => {
     const activeId = String(event.active.id);
     const overId = event.over ? String(event.over.id) : null;
@@ -202,8 +202,8 @@ function PendingPromptQueueRow(props: {
   );
 }
 
-// ComposerSlashCommandPanel renders the iced-style slash command candidate list.
-// ComposerSlashCommandPanel 渲染对齐 iced 的 slash 指令候选列表。
+// ComposerSlashCommandPanel renders the WebUI-style slash command candidate list.
+// ComposerSlashCommandPanel 渲染对齐 WebUI 的 slash 指令候选列表。
 export function ComposerSlashCommandPanel(props: {
   // Visible commands after prefix filtering.
   // 前缀过滤后的可见指令。

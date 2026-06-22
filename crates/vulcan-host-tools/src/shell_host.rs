@@ -5,8 +5,8 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-/// One supported host shell family that may be exposed to AI tools and GUI settings.
-/// 一种可暴露给 AI 工具与图形界面设置的宿主 shell 族。
+/// One supported host shell family that may be exposed to AI tools and WebUI settings.
+/// 一种可暴露给 AI 工具与WebUI设置的宿主 shell 族。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostCommandShell {
     /// PowerShell 7+ (`pwsh`) when available on the host.

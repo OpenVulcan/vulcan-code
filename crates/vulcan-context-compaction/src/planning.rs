@@ -13,8 +13,8 @@ const PREVIOUS_SUMMARY_END_TAG: &str = "</previous-summary>";
 const LEGACY_SUMMARY_PREFIX: &str = "Earlier context summary:\n";
 const LEGACY_SUMMARY_SUFFIX: &str = "\n\nContinue from the newer messages below";
 
-/// Stateless summary record returned by one compaction result before the GUI turns it into its own hidden-node shape.
-/// 单次压缩结果返回的无状态摘要记录，供图形界面在落地前转换为自身隐藏节点形态。
+/// Stateless summary record returned by one compaction result before the WebUI turns it into its own hidden-node shape.
+/// 单次压缩结果返回的无状态摘要记录，供WebUI在落地前转换为自身隐藏节点形态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionSummaryRecord {
     /// Transcript-facing message kind used by the hidden node.
@@ -462,8 +462,8 @@ fn canonical_compaction_message_label(message: &SessionMessageEntry) -> &'static
     }
 }
 
-/// Resolves the stable English headline used for model-facing compaction summaries without depending on GUI locale.
-/// 解析供面向模型的压缩摘要使用的稳定英文标题，并且不依赖图形界面语言。
+/// Resolves the stable English headline used for model-facing compaction summaries without depending on WebUI locale.
+/// 解析供面向模型的压缩摘要使用的稳定英文标题，并且不依赖WebUI语言。
 fn canonical_compaction_message_title(message: &SessionMessageEntry) -> String {
     match message.record_kind {
         SessionMessageRecordKind::Transcript => match message.kind {

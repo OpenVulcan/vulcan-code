@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "apps/vulcan-code-gui",
     "apps/vulcan-code-tauri",
     "crates/vulcan-agent-runtime",
     "crates/vulcan-session-core",
@@ -26,9 +25,6 @@ members = [
     "crates/vulcan-prompt-skills",
     "crates/vulcan-file-watcher",
     "crates/vulcan-mcp-runtime",
-    "crates/vulcan-agent-view",
-    "crates/vulcan-markdown",
-    "crates/vulcan-iced-widget",
     "crates/vulcan-tools-manager",
     "crates/vulcan-core",
     "crates/vulcan-token-counter",
@@ -36,9 +32,6 @@ members = [
     "crates/vulcan-luaskills-prompt",
 ]
 exclude = [
-    "third_party/iced",
-    "third_party/iced_aw",
-    "third_party/iced_fonts",
 ]
 resolver = "2"
 
@@ -49,18 +42,12 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
-iced = { git = "https://github.com/lingeasy/iced.git", branch = "vulcan-code", default-features = false, features = ["wgpu", "tokio", "svg", "highlighter", "advanced", "lazy", "image", "canvas"] }
-iced_aw = { git = "https://github.com/lingeasy/iced_aw.git", branch = "vulcan-code", default-features = false, features = ["context_menu", "date_picker"] }
-iced_fonts = { git = "https://github.com/lingeasy/iced_fonts.git", branch = "vulcan-code", default-features = false, features = ["codicon", "fontawesome", "lucide"] }
 vulcan-agent-runtime = { path = "crates/vulcan-agent-runtime" }
 vulcan-session-core = { path = "crates/vulcan-session-core" }
 vulcan-session-boundary = { path = "crates/vulcan-session-boundary" }
 vulcan-main-session = { path = "crates/vulcan-main-session" }
 vulcan-task-session = { path = "crates/vulcan-task-session" }
 vulcan-mcp-runtime = { path = "crates/vulcan-mcp-runtime" }
-vulcan-agent-view = { path = "crates/vulcan-agent-view" }
-vulcan-markdown = { path = "crates/vulcan-markdown" }
-vulcan-iced-widget = { path = "crates/vulcan-iced-widget" }
 vulcan-tools-manager = { path = "crates/vulcan-tools-manager" }
 vulcan-core = { path = "crates/vulcan-core" }
 vulcan-change-set = { path = "crates/vulcan-change-set" }

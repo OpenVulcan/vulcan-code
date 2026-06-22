@@ -32,8 +32,8 @@ use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
-/// Minimal execution request captured from the current GUI state.
-/// 从当前 GUI 状态捕获的最小执行请求。
+/// Minimal execution request captured from the current workbench state.
+/// 从当前工作台状态捕获的最小执行请求。
 #[derive(Debug, Clone)]
 pub struct ExecutionPreparationRequest {
     /// Target session identifier.
@@ -178,8 +178,8 @@ impl ExecutionPromptPurpose {
     }
 }
 
-/// Prepared execution plan rendered by the GUI before real LLM execution begins.
-/// 在真实 LLM 执行开始前由 GUI 渲染的执行准备计划。
+/// Prepared execution plan rendered by the workbench before real LLM execution begins.
+/// 在真实 LLM 执行开始前由工作台渲染的执行准备计划。
 #[derive(Debug, Clone)]
 pub struct ExecutionPreparation {
     /// Active session identifier.

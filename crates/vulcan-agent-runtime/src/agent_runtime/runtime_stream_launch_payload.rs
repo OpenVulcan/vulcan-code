@@ -457,10 +457,10 @@ mod tests {
         );
     }
 
-    /// Covers the WebUI-style begin/continue/launch chain so the preseeded user prompt remains the controller prompt.
-    /// 覆盖 WebUI 风格的 begin/continue/launch 链路，确保预播种用户提示词仍作为控制器提示词。
+    /// Covers the workbench begin/continue/launch chain so the preseeded user prompt remains the controller prompt.
+    /// 覆盖工作台 begin/continue/launch 链路，确保预播种用户提示词仍作为控制器提示词。
     #[test]
-    fn launch_payload_preserves_webui_preseeded_user_prompt_through_shared_turn_flow() {
+    fn launch_payload_preserves_workbench_preseeded_user_prompt_through_shared_turn_flow() {
         let session_id = Uuid::nil();
         let prompt = "请分析主入口文件";
         let attachment = ConversationAttachment {

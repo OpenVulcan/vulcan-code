@@ -20,8 +20,8 @@ pub(crate) const PROVIDER_REQUEST_CAPTURE_ONLY_API_KEY: &str = "vulcan-dry-run-a
 ///
 /// # Parameters
 /// 参数
-/// `live_sender` receives the captured wire request for GUI inspection.
-/// `live_sender` 接收用于 GUI 检查的最终请求。
+/// `live_sender` receives the captured wire request for workbench inspection.
+/// `live_sender` 接收用于工作台检查的最终请求。
 /// `provider_id` is the stable provider identifier.
 /// `provider_id` 是稳定 Provider 标识。
 /// `model_id` is the concrete provider model identifier.

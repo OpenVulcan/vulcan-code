@@ -1,5 +1,5 @@
-//! VulcanMemoryMesh integration primitives shared by GUI runtime and future plugins.
-//! GUI 运行时与后续插件共享的 VulcanMemoryMesh 集成原语。
+//! VulcanMemoryMesh integration primitives shared by WebUI runtime and future plugins.
+//! WebUI 运行时与后续插件共享的 VulcanMemoryMesh 集成原语。
 
 pub mod adapter;
 pub mod client;

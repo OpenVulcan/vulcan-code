@@ -6,8 +6,8 @@ export type StartupStepStatus = "pending" | "running" | "ready" | "warning" | "e
 // MainAreaId 描述 WebUI 顶层可选择区域。
 export type MainAreaId = "chat" | "skills" | "memory" | "settings";
 
-// SettingsSubAreaId describes secondary settings pages aligned with the legacy iced settings tree.
-// SettingsSubAreaId 描述与旧 iced 设置树对齐的设置二级页面。
+// SettingsSubAreaId describes secondary settings pages exposed by the WebUI settings shell.
+// SettingsSubAreaId 描述 WebUI 设置壳暴露的设置二级页面。
 export type SettingsSubAreaId =
   | "model-providers"
   | "model-list"

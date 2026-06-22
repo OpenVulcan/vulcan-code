@@ -97,8 +97,8 @@ export function settingsSubAreas(t: ReturnType<typeof useI18n>["t"]): SettingsSu
   return settingsSubAreaGroups(t).flatMap((group) => group.items);
 }
 
-// settingsSubAreaGroups returns the settings tree aligned with the iced settings navigation.
-// settingsSubAreaGroups 返回与 iced 设置导航对齐的设置树。
+// settingsSubAreaGroups returns the settings tree aligned with the WebUI settings navigation.
+// settingsSubAreaGroups 返回与 WebUI 设置导航对齐的设置树。
 export function settingsSubAreaGroups(t: ReturnType<typeof useI18n>["t"]): SettingsSubAreaGroup[] {
   return [
     {

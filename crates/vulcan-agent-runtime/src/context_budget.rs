@@ -1,5 +1,5 @@
-//! Thin GUI adapter for shared context-budget estimation helpers.
-//! 面向图形界面的共享上下文预算估算辅助薄适配层。
+//! Runtime facade for shared context-budget estimation helpers.
+//! 面向运行时的共享上下文预算估算辅助门面。
 
 use crate::agent_runtime::provider_reasoning::ProviderRuntimeReasoningResolution;
 use crate::provider_capabilities::ResolvedModelCapabilities;
@@ -65,8 +65,8 @@ pub fn build_context_budget_fingerprint(
     )
 }
 
-/// Maps one GUI provider API family into the shared budget-computation family enum.
-/// 将一条图形界面 Provider 接口族映射为共享预算计算接口族枚举。
+/// Maps one runtime provider API family into the shared budget-computation family enum.
+/// 将一条运行时 Provider 接口族映射为共享预算计算接口族枚举。
 fn map_provider_api_family(api_family: ProviderApiFamily) -> ContextProviderApiFamily {
     match api_family {
         ProviderApiFamily::OpenAiResponses => ContextProviderApiFamily::OpenAiResponses,
@@ -80,8 +80,8 @@ fn map_provider_api_family(api_family: ProviderApiFamily) -> ContextProviderApiF
     }
 }
 
-/// Maps one GUI reasoning preset into the shared budget-computation reasoning bucket.
-/// 将一条图形界面推理档位映射为共享预算计算推理分桶。
+/// Maps one runtime reasoning preset into the shared budget-computation reasoning bucket.
+/// 将一条运行时推理档位映射为共享预算计算推理分桶。
 fn map_reasoning_effort(reasoning_effort: ReasoningEffortLevel) -> ContextReasoningEffort {
     match reasoning_effort {
         ReasoningEffortLevel::Off => ContextReasoningEffort::None,
@@ -92,8 +92,8 @@ fn map_reasoning_effort(reasoning_effort: ReasoningEffortLevel) -> ContextReason
     }
 }
 
-/// Maps one GUI capability snapshot into the shared budget-computation capability shape.
-/// 将一份图形界面能力快照映射为共享预算计算能力形态。
+/// Maps one runtime capability snapshot into the shared budget-computation capability shape.
+/// 将一份运行时能力快照映射为共享预算计算能力形态。
 fn map_capabilities(capabilities: &ResolvedModelCapabilities) -> ContextBudgetCapabilities {
     ContextBudgetCapabilities {
         context_limit: capabilities.context_limit,

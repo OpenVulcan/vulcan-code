@@ -104,8 +104,8 @@ pub struct RuntimeFoundation {
     /// Shared resumable task runtime reused across turns and child task chains.
     /// 在多轮执行与子任务链之间复用的共享可恢复任务运行时。
     task_runtime: Arc<TaskRuntime>,
-    /// Shared structured-question runtime reused across turns so ask tool calls can survive runtime refreshes while still waiting for GUI input.
-    /// 在多轮执行之间复用的共享结构化问题运行时，使 ask 工具在等待图形界面输入期间也能穿越运行时刷新继续存活。
+    /// Shared structured-question runtime reused across turns so ask tool calls can survive runtime refreshes while still waiting for WebUI input.
+    /// 在多轮执行之间复用的共享结构化问题运行时，使 ask 工具在等待WebUI输入期间也能穿越运行时刷新继续存活。
     question_runtime: Arc<QuestionRuntime>,
     /// Shared command-session runtime reused across turns so long-lived shell sessions can survive execution refreshes.
     /// 在多轮执行之间复用的共享命令会话运行时，使长生命周期 shell 会话能够穿越执行刷新继续存活。

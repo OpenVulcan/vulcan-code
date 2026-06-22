@@ -1,5 +1,5 @@
-//! Runtime request-capture entrypoint for GUI API-request diagnostics.
-//! 面向 GUI API 请求诊断的运行时请求捕获入口。
+//! Runtime request-capture entrypoint for workbench API-request diagnostics.
+//! 面向工作台 API 请求诊断的运行时请求捕获入口。
 
 use crate::agent_profile::AgentProfileCatalog;
 use crate::agent_runtime::execution_models::{ExecutionPreparationRequest, ExecutionRunReport};

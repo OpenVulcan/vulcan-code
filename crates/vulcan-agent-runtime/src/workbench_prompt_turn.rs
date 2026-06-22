@@ -1,5 +1,5 @@
-//! Shared prompt-turn reducers used by iced and WebUI shells.
-//! iced 与 WebUI 外壳共用的提示词轮次归约器。
+//! Shared prompt-turn reducers used by workbench and service shells.
+//! 工作台与服务外壳共用的提示词轮次归约器。
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -76,8 +76,8 @@ pub struct SharedPromptTurnStart {
     /// Workspace path locked for this prompt turn.
     /// 该提示词回合锁定的工作区路径。
     pub workspace_path: String,
-    /// Prompt entry source shared with iced queue semantics.
-    /// 与 iced 队列语义共享的提示词来源。
+    /// Prompt entry source shared with service queue semantics.
+    /// 与服务队列语义共享的提示词来源。
     pub source: PendingSessionPromptSource,
     /// Prepared precheck request returned by the shared hook runtime.
     /// 共享 hook 运行时返回的已准备 precheck 请求。
@@ -283,8 +283,8 @@ pub struct SharedPromptTurnContinueInput {
     pub patch_visible_user_prompt_record: bool,
 }
 
-/// Begins one prompt turn using the shared iced/WebUI semantics.
-/// 使用 iced 与 WebUI 共用语义开始一个提示词回合。
+/// Begins one prompt turn using the shared workbench semantics.
+/// 使用工作台与服务共用语义开始一个提示词回合。
 ///
 /// # Parameters
 /// 参数
@@ -551,8 +551,8 @@ fn append_hidden_model_guidance_to_prompt(prompt: String, guidance: Option<&str>
     format!("{prompt}\n\n<hidden_host_guidance>\n{guidance}\n</hidden_host_guidance>")
 }
 
-/// Continues one prompt turn after precheck using shared iced/WebUI semantics.
-/// 使用 iced 与 WebUI 共用语义在 precheck 后继续一个提示词回合。
+/// Continues one prompt turn after precheck using shared workbench semantics.
+/// 使用工作台与服务共用语义在 precheck 后继续一个提示词回合。
 ///
 /// # Parameters
 /// 参数
@@ -731,8 +731,8 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
     })
 }
 
-/// Builds the shared iced/WebUI plan for precheck dispatch visibility and skipping.
-/// 构建 iced 与 WebUI 共用的 precheck 调度显示和跳过计划。
+/// Builds the shared workbench plan for precheck dispatch visibility and skipping.
+/// 构建工作台与服务共用的 precheck 调度显示和跳过计划。
 ///
 /// # Parameters
 /// 参数
@@ -743,8 +743,8 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
 ///
 /// # Returns
 /// 返回值
-/// A shared precheck plan matching the iced behavior.
-/// 返回与 iced 行为一致的共享 precheck 计划。
+/// A shared precheck plan matching service behavior.
+/// 返回与服务行为一致的共享 precheck 计划。
 pub fn shared_prompt_precheck_plan(
     effective_vmm_config: &VmmEffectiveConfig,
     precheck_hook_snapshots: &[HookRegistrationSnapshot],
@@ -885,8 +885,8 @@ fn append_shared_user_prompt_record_with_attachments(
 ///
 /// # Returns
 /// 返回值
-/// A transcript body matching the iced visible-prompt projection semantics.
-/// 返回与 iced 可见提示词投影视图一致的转录正文。
+/// A transcript body matching the workbench visible-prompt projection semantics.
+/// 返回与工作台可见提示词投影视图一致的转录正文。
 pub fn build_shared_user_prompt_transcript_body(
     prompt: &str,
     attachments: &[ConversationAttachment],

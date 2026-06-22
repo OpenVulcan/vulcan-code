@@ -31,8 +31,8 @@ pub(crate) fn build_core_conversation_snapshot(
     }
 }
 
-/// Converts one `vulcan-core` snapshot back into the GUI-owned canonical session state without dropping durable records or continuation data.
-/// 将一份 `vulcan-core` 快照转换回 GUI 持有的规范会话状态，同时不丢失持久化记录与 continuation 数据。
+/// Converts one `vulcan-core` snapshot back into the host-owned canonical session state without dropping durable records or continuation data.
+/// 将一份 `vulcan-core` 快照转换回运行时持有的规范会话状态，同时不丢失持久化记录与 continuation 数据。
 pub(crate) fn core_snapshot_to_session_conversation_state(
     snapshot: &CoreConversationSnapshot,
 ) -> SessionConversationState {

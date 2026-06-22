@@ -683,8 +683,8 @@ pub struct ProviderRequestToolSchema {
     pub parameters_schema: Value,
 }
 
-/// Represents one controller event emitted for the GUI, logs, and persistence adapters.
-/// 表示供 GUI、日志与持久化适配器消费的一条控制器事件。
+/// Represents one controller event emitted for the WebUI, logs, and persistence adapters.
+/// 表示供 WebUI、日志与持久化适配器消费的一条控制器事件。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoreEvent {
     /// Event kind describing the semantic phase.

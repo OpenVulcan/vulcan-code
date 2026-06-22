@@ -1,5 +1,5 @@
-//! GUI-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
-//! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的 GUI 侧桥接层。
+//! host-side bridge that adapts native, LuaSkills, and MCP runtime sources into the standalone VulcanToolsManager crate.
+//! 将原生工具、LuaSkills 与 MCP 运行时来源适配到独立 VulcanToolsManager crate 的宿主侧桥接层。
 
 use crate::agent_runtime::ai_tool_router::{AiToolRouteKind, resolve_ai_tool_plan};
 use crate::agent_runtime::provider::ProviderRuntimeBlueprint;
@@ -94,8 +94,8 @@ pub fn resolve_ai_tool_fallback_aliases(
         .collect()
 }
 
-/// Builds one standalone host-owned tools manager from the current GUI runtime surfaces.
-/// 根据当前 GUI 运行时工具面构建独立宿主自有工具管理器。
+/// Builds one standalone host-owned tools manager from the current host runtime surfaces.
+/// 根据当前宿主运行时工具面构建独立宿主自有工具管理器。
 pub fn build_vulcan_tools_manager(
     task_runtime: Arc<TaskRuntime>,
     question_runtime: Arc<QuestionRuntime>,
@@ -1177,8 +1177,8 @@ fn inject_host_managed_pwd_if_needed(
 
 #[cfg(test)]
 mod tests {
-    //! GUI bridge tests for semantic AI fallback aliasing.
-    //! 面向语义 AI 回退别名的 GUI 桥接层测试。
+    //! host bridge tests for semantic AI fallback aliasing.
+    //! 面向语义 AI 回退别名的宿主桥接层测试。
 
     use super::{
         AiToolFallbackAlias, append_ai_tool_fallback_aliases, build_luaskills_dispatch_candidate,

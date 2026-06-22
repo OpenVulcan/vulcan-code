@@ -921,8 +921,8 @@ fn build_openai_responses_terminal_error_message(
     String::from("响应以失败或不完整状态结束，但未返回错误详情。")
 }
 
-/// Forwards one normalized provider delta into both the controller sink and the GUI live sender.
-/// 将一条规范 Provider 增量同时转发给控制器汇聚器与 GUI 实时发送器。
+/// Forwards one normalized provider delta into both the controller sink and the host live sender.
+/// 将一条规范 Provider 增量同时转发给控制器汇聚器与宿主实时发送器。
 fn forward_openai_responses_delta<S>(
     live_sender: &ProviderLiveDeltaSender,
     sink: &mut S,

@@ -82,8 +82,8 @@ impl RuntimeEvent {
     }
 }
 
-/// Incremental execution events streamed from the real provider runtime into the GUI workbench.
-/// 从真实 Provider 运行时流式发送到图形工作台的增量执行事件。
+/// Incremental execution events streamed from the real provider runtime into the workbench.
+/// 从真实 Provider 运行时流式发送到工作台的增量执行事件。
 #[derive(Debug, Clone)]
 pub enum ExecutionStreamEvent {
     /// Execution preparation completed and validated.
@@ -113,8 +113,8 @@ pub enum ExecutionStreamEvent {
         /// 拥有该 Provider 线缆请求的会话标识。
         session_id: SessionId,
     },
-    /// One real provider request snapshot has just been sent and the GUI should show a lightweight waiting hint until visible output arrives.
-    /// 一次真实 Provider 请求快照刚刚发出，图形界面应显示轻量等待提示，直到出现可见输出为止。
+    /// One real provider request snapshot has just been sent and the workbench should show a lightweight waiting hint until visible output arrives.
+    /// 一次真实 Provider 请求快照刚刚发出，工作台应显示轻量等待提示，直到出现可见输出为止。
     RequestStarted {
         /// Session identifier owning the provider request.
         /// 拥有该 Provider 请求的会话标识。

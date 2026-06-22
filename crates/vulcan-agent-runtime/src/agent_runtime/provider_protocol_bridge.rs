@@ -118,8 +118,8 @@ pub(crate) fn format_host_tool_result_runtime_detail(
     format!("## Result ID\n\n`{tool_result_id}`\n\n## Tool Result\n\n{normalized_output}")
 }
 
-/// Converts one `vulcan-core` provider-turn delta into the GUI-facing runtime delta shape without changing the semantic payload.
-/// 将一条 `vulcan-core` Provider 回合增量转换为面向 GUI 的运行时增量形状，同时不改变其语义载荷。
+/// Converts one `vulcan-core` provider-turn delta into the workbench-facing runtime delta shape without changing the semantic payload.
+/// 将一条 `vulcan-core` Provider 回合增量转换为面向工作台的运行时增量形状，同时不改变其语义载荷。
 pub(crate) fn core_provider_turn_delta_to_runtime_delta(
     delta: CoreProviderTurnDelta,
 ) -> ProviderStreamDelta {

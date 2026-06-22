@@ -29,8 +29,8 @@ static APP_SQLITE_BINDING_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 /// 存储在应用元数据表中的共享结构版本号。
 pub const APP_SCHEMA_VERSION: i64 = 10;
 
-/// Long-lived controller handle kept by the GUI after startup succeeds.
-/// 启动成功后由图形界面持有的长生命周期控制器句柄。
+/// Long-lived controller handle kept by the host runtime after startup succeeds.
+/// 启动成功后由宿主运行时持有的长生命周期控制器句柄。
 #[derive(Clone)]
 pub struct ControllerRuntimeHandle {
     /// Shared controller client proxy reused by later data operations.
@@ -122,7 +122,7 @@ pub async fn bootstrap_application_data_plane(
         client_name: format!("vulcan-code-{}-{}", std::process::id(), started_at_ms),
         host_kind: String::from("vulcan-code"),
         process_id: std::process::id(),
-        process_name: String::from("vulcan-code-gui"),
+        process_name: String::from("vulcan-code"),
         lease_ttl_secs: Some(controller.default_lease_ttl_secs),
     };
     let client = ControllerClient::new(config, registration);
@@ -396,7 +396,7 @@ pub fn application_data_root() -> PathBuf {
     #[cfg(test)]
     {
         std::env::temp_dir()
-            .join("vulcan-code-gui-tests")
+            .join("vulcan-code-tests")
             .join(std::process::id().to_string())
     }
 
