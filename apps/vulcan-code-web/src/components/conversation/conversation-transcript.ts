@@ -19,8 +19,11 @@ export { metadataString } from "@/components/conversation/conversation-metadata"
 // projectConversationRenderItems 合并相关底层转录行以生成最终展示项。
 export function projectConversationRenderItems(messages: ConversationMessage[]): ConversationRenderItem[] {
   const items: ConversationRenderItem[] = [];
-  const toolCallItems = new Map<string, ConversationRenderItem>();
+  const toolMergeState = createToolMergeProjectionState();
   const compactionItems = new Map<string, ConversationRenderItem>();
+  const projectionIds = conversationProjectionMessageIds(messages);
+  const compactionSectionInstanceCounts = new Map<string, number>();
+  const compactionSectionInstanceKeys = new Map<string, string>();
   let activeCompactionSectionId: string | null = null;
 
   const drainTrailingCompactionThinkingBlocks = (sectionId: string): ConversationBlock[] => {
@@ -49,6 +52,7 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
     const leadingThinkingBlocks = drainTrailingCompactionThinkingBlocks(sectionId);
     const item: ConversationRenderItem = {
       id: `context-compaction-${sectionId}`,
+      renderKey: `context-compaction:${sectionId}`,
       role: message.role === "system" ? "system" : "assistant",
       blocks: mergeContextCompactionBlocks(leadingThinkingBlocks, block),
       sourceMessage: message,
@@ -58,28 +62,37 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
     return item;
   };
 
-  for (const message of messages) {
+  messages.forEach((message, messageIndex) => {
+    const projectionId = projectionIds[messageIndex] ?? message.id;
+    const projectionMessage = projectionId === message.id ? message : { ...message, id: projectionId };
     if (message.role === "user") {
       items.push({
-        id: message.id,
+        id: projectionId,
+        renderKey: `item:${projectionId}`,
         role: "user",
         blocks: [],
         sourceMessage: message,
         userMessage: message,
       });
-      continue;
+      return;
     }
 
-    const blocks = parseConversationBlocks(message);
+    const blocks = parseConversationBlocks(projectionMessage);
     for (const block of blocks) {
       if (isContextCompactionBlock(block)) {
         const sectionId = block.compactionSectionId ?? block.id;
-        appendCompactionBlock(sectionId, block, message);
+        const sectionKey = contextCompactionInstanceKey(
+          sectionId,
+          block.compactionRole,
+          compactionSectionInstanceCounts,
+          compactionSectionInstanceKeys,
+        );
+        appendCompactionBlock(sectionKey, block, message);
         if (block.compactionRole === "start") {
-          activeCompactionSectionId = sectionId;
+          activeCompactionSectionId = sectionKey;
         }
         if (block.compactionRole === "end") {
-          activeCompactionSectionId = activeCompactionSectionId === sectionId ? null : activeCompactionSectionId;
+          activeCompactionSectionId = activeCompactionSectionId === sectionKey ? null : activeCompactionSectionId;
         }
         continue;
       }
@@ -94,34 +107,106 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
       }
 
       if (isMergeableToolBlock(block)) {
-        const existing = block.kind !== "tool-call" ? findToolMergeItem(toolCallItems, block) : undefined;
+        const mergeKeys = toolMergeInstanceKeysForBlock(toolMergeState, block);
+        const existing = block.kind !== "tool-call" ? findToolMergeItem(toolMergeState.itemsByKey, mergeKeys) : undefined;
         if (existing) {
           existing.blocks = mergeToolBlocks(existing.blocks, block);
-          registerToolMergeItem(toolCallItems, existing);
+          registerToolMergeItem(toolMergeState.itemsByKey, existing, mergeKeys);
           continue;
         }
 
         const item: ConversationRenderItem = {
           id: block.id,
+          renderKey: `item:${block.id}`,
           role: message.role === "system" ? "system" : "assistant",
           blocks: [block],
           sourceMessage: message,
         };
         items.push(item);
-        registerToolMergeItem(toolCallItems, item);
+        registerToolMergeItem(toolMergeState.itemsByKey, item, mergeKeys);
         continue;
       }
 
       items.push({
         id: block.id,
+        renderKey: `item:${block.id}`,
         role: message.role === "system" ? "system" : "assistant",
         blocks: [block],
         sourceMessage: message,
       });
     }
-  }
+  });
 
   return repositionContextCompactionItems(items);
+}
+
+// ToolMergeProjectionState tracks tool-call/result grouping per repeated historical execution instance.
+// ToolMergeProjectionState 按重复历史执行实例跟踪工具调用与返回的分组状态。
+interface ToolMergeProjectionState {
+  // Visible tool rows keyed by instance-scoped merge keys.
+  // 按实例作用域合并键索引的可见工具行。
+  itemsByKey: Map<string, ConversationRenderItem>;
+  // Latest execution instance id for each base tool merge key.
+  // 每个基础工具合并键对应的最新执行实例标识。
+  latestInstanceByBaseKey: Map<string, string>;
+  // Execution instance counters keyed by primary base merge key.
+  // 按主基础合并键记录的执行实例计数器。
+  instanceCountsByPrimaryKey: Map<string, number>;
+}
+
+// createToolMergeProjectionState creates isolated state for one transcript projection pass.
+// createToolMergeProjectionState 为单次转录投影创建隔离状态。
+function createToolMergeProjectionState(): ToolMergeProjectionState {
+  return {
+    itemsByKey: new Map(),
+    latestInstanceByBaseKey: new Map(),
+    instanceCountsByPrimaryKey: new Map(),
+  };
+}
+
+// conversationProjectionMessageIds returns per-message ids that keep historical duplicate rows render-safe.
+// conversationProjectionMessageIds 返回让历史重复行安全渲染的逐消息标识。
+function conversationProjectionMessageIds(messages: ConversationMessage[]): string[] {
+  const totals = new Map<string, number>();
+  for (const message of messages) {
+    totals.set(message.id, (totals.get(message.id) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  return messages.map((message, index) => {
+    const total = totals.get(message.id) ?? 0;
+    if (total <= 1) {
+      return message.id;
+    }
+    const nextSeen = (seen.get(message.id) ?? 0) + 1;
+    seen.set(message.id, nextSeen);
+    if (nextSeen === total) {
+      return message.id;
+    }
+    const timestamp = message.createdAt?.trim() || "unknown";
+    return `${message.id}::history-${timestamp}-${index}`;
+  });
+}
+
+// contextCompactionInstanceKey separates repeated compaction sections from rollback history.
+// contextCompactionInstanceKey 将回滚历史中重复出现的压缩分段隔离为不同实例。
+function contextCompactionInstanceKey(
+  sectionId: string,
+  role: string | undefined,
+  counts: Map<string, number>,
+  latestKeys: Map<string, string>,
+): string {
+  if (role === "start" || !latestKeys.has(sectionId)) {
+    const count = (counts.get(sectionId) ?? 0) + 1;
+    counts.set(sectionId, count);
+    const key = count === 1 ? sectionId : `${sectionId}::history-${count}`;
+    latestKeys.set(sectionId, key);
+    return key;
+  }
+  const key = latestKeys.get(sectionId) ?? sectionId;
+  if (role === "end") {
+    latestKeys.delete(sectionId);
+  }
+  return key;
 }
 
 // thinkingOverlayBlockSignature returns a stable content key for delayed popup retention.
@@ -175,7 +260,17 @@ function contextCompactionExplicitTargetIndex(items: ConversationRenderItem[], i
   if (!targetId) {
     return -1;
   }
-  return items.findIndex((candidate) => candidate !== item && conversationRenderItemMessageId(candidate) === targetId);
+  const currentIndex = items.indexOf(item);
+  if (currentIndex < 0) {
+    return -1;
+  }
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const candidate = items[index];
+    if (candidate && conversationRenderItemMessageId(candidate) === targetId) {
+      return index;
+    }
+  }
+  return -1;
 }
 
 // conversationRenderItemMessageId returns the stable visible transcript message id for one item.
@@ -194,10 +289,10 @@ function contextCompactionRoleOrder(role?: string): number {
   return 4;
 }
 
-// findToolMergeItem resolves an existing tool execution row using exact ids before the tool-name fallback.
-// findToolMergeItem 优先使用精确标识，其次用工具名回退，解析已有工具执行行。
-function findToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, block: ConversationBlock): ConversationRenderItem | undefined {
-  for (const key of toolMergeKeysForBlock(block)) {
+// findToolMergeItem resolves an existing tool execution row from instance-scoped merge keys.
+// findToolMergeItem 通过实例作用域合并键解析已有工具执行行。
+function findToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, keys: string[]): ConversationRenderItem | undefined {
+  for (const key of keys) {
     const item = toolCallItems.get(key);
     if (item) {
       return item;
@@ -206,19 +301,54 @@ function findToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, b
   return undefined;
 }
 
-// registerToolMergeItem indexes every known key for one visible tool execution row.
-// registerToolMergeItem 为单条可见工具执行行登记所有已知合并键。
-function registerToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, item: ConversationRenderItem): void {
-  for (const block of item.blocks) {
-    for (const key of toolMergeKeysForBlock(block)) {
-      toolCallItems.set(key, item);
-    }
+// registerToolMergeItem indexes instance-scoped keys for one visible tool execution row.
+// registerToolMergeItem 为单条可见工具执行行登记实例作用域合并键。
+function registerToolMergeItem(toolCallItems: Map<string, ConversationRenderItem>, item: ConversationRenderItem, keys: string[]): void {
+  for (const key of keys) {
+    toolCallItems.set(key, item);
   }
 }
 
-// toolMergeKeysForBlock resolves stable grouping keys from precise ids to the tool-name fallback.
-// toolMergeKeysForBlock 按精确标识到工具名回退的顺序解析稳定分组键。
-function toolMergeKeysForBlock(block: ConversationBlock): string[] {
+// toolMergeInstanceKeysForBlock resolves merge keys scoped to one sequential tool execution instance.
+// toolMergeInstanceKeysForBlock 解析限定在单个顺序工具执行实例内的合并键。
+function toolMergeInstanceKeysForBlock(state: ToolMergeProjectionState, block: ConversationBlock): string[] {
+  const baseKeys = toolMergeBaseKeysForBlock(block);
+  if (baseKeys.length === 0) {
+    return [];
+  }
+  const instanceKey = block.kind === "tool-call"
+    ? createToolMergeInstanceKey(state, baseKeys)
+    : latestToolMergeInstanceKey(state, baseKeys);
+  for (const baseKey of baseKeys) {
+    state.latestInstanceByBaseKey.set(baseKey, instanceKey);
+  }
+  return baseKeys.map((baseKey) => `${baseKey}@${instanceKey}`);
+}
+
+// createToolMergeInstanceKey starts a new execution instance for a tool-call block.
+// createToolMergeInstanceKey 为工具调用块启动一个新的执行实例。
+function createToolMergeInstanceKey(state: ToolMergeProjectionState, baseKeys: string[]): string {
+  const primaryKey = baseKeys[0] ?? "tool";
+  const nextCount = (state.instanceCountsByPrimaryKey.get(primaryKey) ?? 0) + 1;
+  state.instanceCountsByPrimaryKey.set(primaryKey, nextCount);
+  return `${primaryKey}#${nextCount}`;
+}
+
+// latestToolMergeInstanceKey reuses the nearest preceding call instance or creates a result-only one.
+// latestToolMergeInstanceKey 复用最近的前置调用实例，或创建仅返回实例。
+function latestToolMergeInstanceKey(state: ToolMergeProjectionState, baseKeys: string[]): string {
+  for (const baseKey of baseKeys) {
+    const instanceKey = state.latestInstanceByBaseKey.get(baseKey);
+    if (instanceKey) {
+      return instanceKey;
+    }
+  }
+  return createToolMergeInstanceKey(state, baseKeys);
+}
+
+// toolMergeBaseKeysForBlock resolves stable grouping keys from precise ids to the tool-name fallback.
+// toolMergeBaseKeysForBlock 按精确标识到工具名回退的顺序解析基础分组键。
+function toolMergeBaseKeysForBlock(block: ConversationBlock): string[] {
   const keys = [
     block.toolCallId ? `call:${block.toolCallId}` : null,
     block.commandSessionId ? `command:${block.commandSessionId}` : null,

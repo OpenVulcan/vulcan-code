@@ -65,6 +65,7 @@ export function projectConversationTimelineItems(
         kind: "process",
         process: {
           id: `process-${currentTurn.anchorItem.id}`,
+          renderKey: `process:${currentTurn.anchorItem.renderKey ?? currentTurn.anchorItem.id}`,
           items: processItems,
           guidanceItems: currentTurn.guidanceItems,
           collapsible: Boolean(finalItem) && !running && !stopped,

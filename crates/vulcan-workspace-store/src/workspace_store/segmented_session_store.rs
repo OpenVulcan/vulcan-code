@@ -1371,13 +1371,6 @@ pub(super) fn read_segmented_session_turn_window(
     }
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
-    let rollback_boundary = metadata.latest_rollback_seq;
-    if before_seq.is_some_and(|seq| rollback_boundary.is_some_and(|boundary| seq <= boundary)) {
-        return Ok(SegmentedSessionTurnWindow {
-            lines: Vec::new(),
-            has_more_history: false,
-        });
-    }
     let mut window = Vec::new();
     let mut seen_turn_indexes = BTreeSet::new();
     for segment in metadata.segments.iter().rev() {
@@ -1388,13 +1381,6 @@ pub(super) fn read_segmented_session_turn_window(
         for line in lines.into_iter().rev() {
             if line.seq >= cursor {
                 continue;
-            }
-            if rollback_boundary.is_some_and(|boundary| line.seq <= boundary) {
-                window.reverse();
-                return Ok(SegmentedSessionTurnWindow {
-                    lines: window,
-                    has_more_history: false,
-                });
             }
             let Some(turn_index) = segmented_line_turn_index(&line) else {
                 continue;
@@ -4446,18 +4432,43 @@ mod tests {
             latest_window
                 .lines
                 .iter()
+                .filter(|line| line.payload.get("message").is_some())
                 .map(|line| line.payload["message_id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec!["m-user-1"]
+            vec!["m-user-1", "m-assistant-1", "m-user-1"]
         );
         let latest_messages =
             segmented_lines_to_session_messages(&latest_window.lines).expect("project messages");
-        assert_eq!(latest_messages[0].body, "edited prompt");
+        assert_eq!(
+            latest_messages
+                .iter()
+                .map(|message| message.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first prompt", "first answer", "edited prompt"]
+        );
         assert!(!latest_window.has_more_history);
+        let latest_event_window =
+            read_segmented_session_event_window(&session_dir, None, 10).expect("read event window");
+        assert_eq!(
+            latest_event_window
+                .iter()
+                .filter(|line| line.payload.get("message").is_some())
+                .map(|line| line.payload["message_id"].as_str().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            vec!["m-user-1", "m-assistant-1", "m-user-1"]
+        );
         let earliest_seq = latest_window.lines.first().map(|line| line.seq);
         let previous_window = read_segmented_session_turn_window(&session_dir, earliest_seq, 1)
             .expect("read previous window");
         assert!(previous_window.lines.is_empty());
+        let previous_event_window =
+            read_segmented_session_event_window(&session_dir, earliest_seq, 10)
+                .expect("read previous event window");
+        assert!(
+            previous_event_window
+                .iter()
+                .all(|line| line.payload.get("message").is_none())
+        );
 
         let replay =
             replay_segmented_session_context(&session_dir).expect("replay segmented context");
@@ -4530,7 +4541,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             latest_message_ids,
-            vec!["m-user-1", "m-assistant-1", "m-assistant-removed"]
+            vec![
+                "m-user-1",
+                "m-assistant-1",
+                "m-assistant-removed",
+                "m-user-1",
+                "m-assistant-1",
+                "m-assistant-removed",
+            ]
         );
     }
 

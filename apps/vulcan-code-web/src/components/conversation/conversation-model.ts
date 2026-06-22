@@ -122,6 +122,9 @@ export interface ConversationRenderItem {
   // Stable projected row identifier.
   // 稳定投影行标识。
   id: string;
+  // Stable render-instance key used when historical rows reuse the same persisted id.
+  // 当历史行复用同一个持久化标识时使用的稳定渲染实例键。
+  renderKey?: string;
   // Projected row role.
   // 投影行角色。
   role: ConversationRenderItemKind;
@@ -142,6 +145,9 @@ export interface ConversationProcessRenderItem {
   // Stable process row identifier.
   // 稳定过程行标识。
   id: string;
+  // Stable render-instance key used by virtual measurement and React reconciliation.
+  // 虚拟测量与 React 协调使用的稳定渲染实例键。
+  renderKey?: string;
   // Process rows that belong to the current turn before final assistant output.
   // 属于当前轮次最终助手输出前的过程行。
   items: ConversationRenderItem[];

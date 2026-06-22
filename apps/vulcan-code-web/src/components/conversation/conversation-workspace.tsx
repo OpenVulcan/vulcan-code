@@ -481,12 +481,12 @@ export function ConversationWorkspace(props: {
 // conversationTimelineItemKey 返回单条时间线记录的稳定测量键。
 function conversationTimelineItemKey(item: ConversationTimelineItem): string {
   if (item.kind === "item") {
-    return `item:${item.item.id}`;
+    return item.item.renderKey ?? `item:${item.item.id}`;
   }
   if (item.kind === "final-assistant-meta") {
-    return `final-assistant-meta:${item.item.id}`;
+    return `final-assistant-meta:${item.item.renderKey ?? item.item.id}`;
   }
-  return `process:${item.process.id}`;
+  return item.process.renderKey ?? `process:${item.process.id}`;
 }
 
 // conversationTimelineItemEstimatedHeight returns a conservative initial height by entry kind.
