@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
-import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
+import {
+  ConversationMeasuredCollapse,
+  useConversationMeasuredExpansion,
+} from "@/components/conversation/conversation-measured-collapse";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
 import { useI18n } from "@/i18n";
 
@@ -52,7 +55,8 @@ export function PlanArtifactBlock(props: {
 }) {
   const { t } = useI18n();
   const artifactKey = `${props.artifact.path}:${props.artifact.updatedAt}`;
-  const [expanded, setExpanded] = React.useState(props.pending);
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(`plan-artifact:${artifactKey}`, props.pending);
+  const collapsedPreviewHeight = usePlanArtifactCollapsedPreviewHeight();
   const [copied, setCopied] = React.useState(false);
   const [note, setNote] = React.useState("");
   const [selectedAction, setSelectedAction] = React.useState<"execute" | "defer">("execute");
@@ -61,10 +65,10 @@ export function PlanArtifactBlock(props: {
   const noteHasContent = Boolean(note.trim());
 
   React.useEffect(() => {
-    setExpanded(props.pending);
+    setExpanded(props.pending, { manual: false });
     setNote("");
     setSelectedAction("execute");
-  }, [artifactKey, props.pending]);
+  }, [artifactKey, props.pending, setExpanded]);
 
   React.useEffect(() => {
     if (props.pending) {
@@ -147,8 +151,7 @@ export function PlanArtifactBlock(props: {
             aria-label={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             className="plan-artifact-icon-button plan-artifact-collapse-toggle"
             onClick={() => {
-              dispatchConversationManualViewportInteraction();
-              setExpanded((current) => !current);
+              setExpanded(!expanded);
             }}
             title={expanded ? t("planArtifact.collapse") : t("planArtifact.expand")}
             type="button"
@@ -162,21 +165,26 @@ export function PlanArtifactBlock(props: {
         </div>
       </header>
       <div className="plan-artifact-card-body">
-        <div className="plan-artifact-markdown-frame">
-          <MarkdownMessage content={props.artifact.content} eager />
-          {!expanded ? (
-            <button
-              className="plan-artifact-expand-overlay"
-              onClick={() => {
-                dispatchConversationManualViewportInteraction();
-                setExpanded(true);
-              }}
-              type="button"
-            >
-              {t("planArtifact.expand")}
-            </button>
-          ) : null}
-        </div>
+        <ConversationMeasuredCollapse
+          collapseId={`plan-artifact-body:${artifactKey}`}
+          collapsedHeight={collapsedPreviewHeight}
+          expanded={expanded}
+        >
+          <div className="plan-artifact-markdown-frame">
+            <MarkdownMessage content={props.artifact.content} eager />
+            {!expanded ? (
+              <button
+                className="plan-artifact-expand-overlay"
+                onClick={() => {
+                  setExpanded(true);
+                }}
+                type="button"
+              >
+                {t("planArtifact.expand")}
+              </button>
+            ) : null}
+          </div>
+        </ConversationMeasuredCollapse>
       </div>
       {props.pending ? (
         <div
@@ -232,6 +240,27 @@ export function PlanArtifactBlock(props: {
       ) : null}
     </section>
   );
+}
+
+// usePlanArtifactCollapsedPreviewHeight returns the stable preview height for collapsed Plan cards.
+// usePlanArtifactCollapsedPreviewHeight 返回计划卡片收起态使用的稳定预览高度。
+function usePlanArtifactCollapsedPreviewHeight(): number {
+  // readPreviewHeight mirrors the previous CSS rule min(320px, 38vh).
+  // readPreviewHeight 对齐原 CSS 规则 min(320px, 38vh)。
+  const readPreviewHeight = React.useCallback(() => {
+    if (typeof window === "undefined") {
+      return 320;
+    }
+    return Math.max(160, Math.min(320, window.innerHeight * 0.38));
+  }, []);
+  const [height, setHeight] = React.useState(readPreviewHeight);
+  React.useEffect(() => {
+    const handleResize = () => setHeight(readPreviewHeight());
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [readPreviewHeight]);
+  return height;
 }
 
 // resizePlanNoteInput keeps the Plan confirmation input compact until the user writes multiple lines.

@@ -11,8 +11,8 @@ import type {
   ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ChangeSetDiffPreview } from "@/components/conversation/conversation-change-set-diff-preview";
-import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
+import { ConversationMeasuredCollapse } from "@/components/conversation/conversation-measured-collapse";
 import { FileTypeIcon } from "@/components/conversation/conversation-file-type-icon";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import {
@@ -171,7 +171,7 @@ function CommandExecutionPresentationCard(props: {
           <ChevronRight className="tool-presentation-toggle" size={15} />
         )}
       </button>
-      <ConversationCollapsibleMotion expanded={expanded}>
+      <ConversationMeasuredCollapse collapseId={`command-detail:${presentation.id}`} expanded={expanded}>
         <div className="tool-presentation-detail">
           <pre className="tool-presentation-command-line"><span>{detailHeading}</span> {commandDetailText(hydratedPresentation)}</pre>
           {hydratedPresentation.cwd || hydratedPresentation.shellLabel ? (
@@ -197,7 +197,7 @@ function CommandExecutionPresentationCard(props: {
             ) : null}
           </div>
         </div>
-      </ConversationCollapsibleMotion>
+      </ConversationMeasuredCollapse>
     </div>
   );
 }
@@ -208,6 +208,7 @@ function commandSessionActionStatusLabel(action: string, state: CommandExecution
   if (state === "failed") {
     if (action === "start") return "启动失败";
     if (action === "read") return "读取失败";
+    if (action === "send") return "发送失败";
     if (action === "write") return "写入失败";
     if (action === "stop") return "停止失败";
     return "执行失败";
@@ -215,12 +216,15 @@ function commandSessionActionStatusLabel(action: string, state: CommandExecution
   if (state === "running") {
     if (action === "start") return "启动中";
     if (action === "read") return "读取中";
+    if (action === "send") return "发送中";
     if (action === "write") return "写入中";
     if (action === "stop") return "停止中";
     return "执行中";
   }
   if (action === "start") return "已启动";
+  if (action === "list") return "已列出";
   if (action === "read") return "已读取";
+  if (action === "send") return "已发送";
   if (action === "write") return "已写入";
   if (action === "stop") return "已停止";
   return commandPresentationStatusLabel(state);
@@ -231,6 +235,7 @@ function commandSessionActionStatusLabel(action: string, state: CommandExecution
 function commandDetailHeading(presentation: CommandExecutionPresentation): string {
   if (presentation.commandSessionAction === "start") return "启动命令";
   if (presentation.commandSessionAction === "read") return "读取输出";
+  if (presentation.commandSessionAction === "send") return "发送内容";
   if (presentation.commandSessionAction === "write") return "写入内容";
   if (presentation.commandSessionAction === "stop") return "停止会话";
   return "$";
@@ -239,7 +244,7 @@ function commandDetailHeading(presentation: CommandExecutionPresentation): strin
 // commandDetailText returns the primary text shown on the first expanded line.
 // commandDetailText 返回展开区首行展示的主要文本。
 function commandDetailText(presentation: CommandExecutionPresentation): string {
-  if (presentation.commandSessionAction === "write") {
+  if (presentation.commandSessionAction === "write" || presentation.commandSessionAction === "send") {
     return presentation.commandSessionInput?.trim() || presentation.command;
   }
   return presentation.command;
@@ -311,12 +316,12 @@ function FileChangePresentationCard(props: {
           presentation={presentation}
           onToggle={handleTopToggle}
         />
-        <ConversationCollapsibleMotion expanded={effectiveExpanded}>
+        <ConversationMeasuredCollapse collapseId={`file-change:${presentation.id}:single`} expanded={effectiveExpanded}>
           <FileChangeExpandableBody
             errorDetail={presentation.state === "failed" ? presentation.errorDetail : null}
             file={singleFile}
           />
-        </ConversationCollapsibleMotion>
+        </ConversationMeasuredCollapse>
       </div>
     );
   }
@@ -339,7 +344,7 @@ function FileChangePresentationCard(props: {
         </span>
         {presentation.interactive ? (effectiveExpanded ? <ChevronDown className="tool-presentation-toggle file-change-toggle" size={15} /> : <ChevronRight className="tool-presentation-toggle file-change-toggle" size={15} />) : <span />}
       </button>
-      <ConversationCollapsibleMotion expanded={effectiveExpanded}>
+      <ConversationMeasuredCollapse collapseId={`file-change:${presentation.id}:tree`} expanded={effectiveExpanded}>
         <div className="file-change-tree">
           {presentation.state === "failed" && presentation.errorDetail ? (
             <FileChangeErrorDetail detail={presentation.errorDetail} />
@@ -362,14 +367,14 @@ function FileChangePresentationCard(props: {
                     onExpandedChange(fileExpansionId(presentation, file), !fileExpanded);
                   }}
                 />
-                <ConversationCollapsibleMotion expanded={fileExpanded}>
+                <ConversationMeasuredCollapse collapseId={fileExpansionId(presentation, file)} expanded={fileExpanded}>
                   <FileChangeExpandableBody file={file} />
-                </ConversationCollapsibleMotion>
+                </ConversationMeasuredCollapse>
               </div>
             );
           })}
         </div>
-      </ConversationCollapsibleMotion>
+      </ConversationMeasuredCollapse>
     </div>
   );
 }

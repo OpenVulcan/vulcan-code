@@ -2,7 +2,6 @@ import React from "react";
 import {
   CheckCircle2,
   Circle,
-  CircleStop,
   ClipboardList,
   FileDiff,
   GitBranch,
@@ -11,6 +10,7 @@ import {
   LoaderCircle,
   Maximize2,
   Minimize2,
+  Square,
   TerminalSquare,
 } from "lucide-react";
 import {
@@ -302,9 +302,7 @@ function ConversationSessionTerminalRow(props: {
         <TooltipTrigger asChild>
           <div className="conversation-session-terminal-summary">
             <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(props.session.state))} size={15} />
-            <strong>{props.session.label}</strong>
             <span className="conversation-session-terminal-name">{props.session.name}</span>
-            {props.session.preview ? <small>{props.session.preview}</small> : null}
           </div>
         </TooltipTrigger>
         <TooltipContent className="conversation-session-terminal-tooltip" side="left" sideOffset={8}>
@@ -319,7 +317,7 @@ function ConversationSessionTerminalRow(props: {
         title={props.session.canStop ? "强制终止" : props.session.label}
         type="button"
       >
-        <CircleStop size={13} />
+        <Square fill="currentColor" size={11} strokeWidth={0} />
       </button>
     </div>
   );

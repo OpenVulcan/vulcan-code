@@ -2700,7 +2700,7 @@ fn terminal_session_args_schema(shell_support: &HostCommandShellSupport) -> Valu
             },
             "name": {
                 "type": "string",
-                "description": "Optional human-readable terminal name used only by `start`. Use a short task-oriented name such as `dev server`, `python repl`, or `install shell` so later `list` calls are easy to understand."
+                "description": "Human-readable terminal name used only by `start`. Provide a short task-oriented name for every started terminal, such as `dev server`, `python repl`, or `install shell`, so UI rows and later `list` calls are easy to understand."
             },
             "terminal_session_id": {
                 "type": "string",

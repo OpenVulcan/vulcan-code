@@ -3590,18 +3590,6 @@ button {
   font-weight: 500;
 }
 
-.conversation-session-terminal-summary .conversation-session-terminal-name::before {
-  content: "终端[";
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-.conversation-session-terminal-summary .conversation-session-terminal-name::after {
-  content: "]的会话";
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
 .conversation-session-terminal-summary small {
   flex: 1 2 auto;
   color: var(--muted-foreground);
@@ -3613,19 +3601,19 @@ button {
   justify-self: end;
   flex: 0 0 auto;
   height: 22px;
-  width: 24px;
+  width: 22px;
   padding: 0;
   font-size: 0;
   line-height: 0;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--background);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--muted-foreground);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  transition: color 120ms ease, opacity 120ms ease;
 }
 
 .conversation-session-terminal-stop svg {
@@ -3635,9 +3623,8 @@ button {
 }
 
 .conversation-session-terminal-stop:not(:disabled):hover {
-  border-color: color-mix(in srgb, var(--destructive) 42%, var(--border));
   color: var(--destructive);
-  background: color-mix(in srgb, var(--destructive) 8%, transparent);
+  background: transparent;
 }
 
 .conversation-session-terminal-stop:disabled {
@@ -3976,6 +3963,12 @@ button {
 .workspace-tool-panel-menu-row:hover,
 .workspace-tool-panel-menu-row.active {
   background: color-mix(in oklch, var(--muted) 76%, transparent);
+}
+
+.workspace-tool-panel-menu-row.conversation-session-terminal-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22px;
+  cursor: default;
 }
 
 .workspace-tool-panel-menu-collapsed {
@@ -7537,11 +7530,6 @@ button {
   white-space: pre-wrap;
 }
 
-.user-prompt-text.collapsed {
-  max-height: calc(1.55em * 20);
-  overflow: hidden;
-}
-
 .user-prompt-expand-toggle {
   width: fit-content;
   min-height: 26px;
@@ -7960,10 +7948,6 @@ button {
   position: relative;
   overflow: hidden;
   color: var(--foreground);
-}
-
-.plan-artifact-card[data-plan-artifact-expanded="false"] .plan-artifact-markdown-frame {
-  max-height: min(320px, 38vh);
 }
 
 .plan-artifact-card[data-plan-artifact-expanded="false"] .plan-artifact-markdown-frame::after {
@@ -8716,18 +8700,6 @@ button {
   white-space: nowrap;
 }
 
-.workspace-terminal-session-name::before {
-  content: "终端[";
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
-.workspace-terminal-session-name::after {
-  content: "]的会话";
-  color: var(--muted-foreground);
-  font-weight: 400;
-}
-
 .workspace-terminal-session-preview {
   min-width: 0;
   flex: 1 2 auto;
@@ -8740,18 +8712,20 @@ button {
 }
 
 .workspace-terminal-session-stop {
-  width: 24px;
-  height: 24px;
+  justify-self: end;
+  width: 22px;
+  height: 22px;
   display: inline-grid;
   place-items: center;
   border: 0;
-  border-radius: 999px;
+  border-radius: 0;
   background: transparent;
   color: var(--muted-foreground);
+  transition: color 120ms ease, opacity 120ms ease;
 }
 
 .workspace-terminal-session-stop:not(:disabled):hover {
-  background: color-mix(in oklch, var(--destructive) 12%, transparent);
+  background: transparent;
   color: var(--destructive);
 }
 

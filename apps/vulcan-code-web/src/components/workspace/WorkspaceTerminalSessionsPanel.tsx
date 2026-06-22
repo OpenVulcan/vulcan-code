@@ -1,5 +1,5 @@
 import React from "react";
-import { CircleStop, TerminalSquare } from "lucide-react";
+import { Square, TerminalSquare } from "lucide-react";
 import {
   terminalSessionViewModel,
   terminalStateClass,
@@ -88,9 +88,7 @@ function WorkspaceTerminalSessionRow(props: {
         <TooltipTrigger asChild>
           <div className="workspace-terminal-session-main">
             <TerminalSquare className={cn("terminal-session-icon", terminalStateClass(props.session.state))} size={15} />
-            <span className="workspace-terminal-session-label">{props.session.label}</span>
             <span className="workspace-terminal-session-name">{props.session.name}</span>
-            {props.session.preview ? <span className="workspace-terminal-session-preview">{props.session.preview}</span> : null}
           </div>
         </TooltipTrigger>
         <TooltipContent className="workspace-terminal-session-tooltip" side="left" sideOffset={8}>
@@ -105,7 +103,7 @@ function WorkspaceTerminalSessionRow(props: {
         title={props.session.canStop ? "强制终止" : props.session.label}
         type="button"
       >
-        <CircleStop size={13} />
+        <Square fill="currentColor" size={11} strokeWidth={0} />
       </button>
     </div>
   );

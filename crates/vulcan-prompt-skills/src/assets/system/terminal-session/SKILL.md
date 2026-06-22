@@ -19,7 +19,7 @@ Before using `terminal_session`, read this skill and follow it. Do not use `term
 ## Basic Workflow
 
 1. `list` existing terminals when you need to recover names and ids.
-2. `start` a named terminal with a shell command such as `pwsh -NoLogo`, `cmd`, `bash`, `python`, or a TUI command.
+2. `start` a named terminal with a shell command such as `pwsh -NoLogo`, `cmd`, `bash`, `python`, or a TUI command. Give every new terminal a short task-oriented `name`; if the terminal already has a suitable name, keep using that existing name.
 3. `send` ordered text, paste, keys, or chords.
 4. `read` new output after the last delivered cursor.
 5. `snapshot` current terminal state without advancing the delivered cursor.
@@ -41,7 +41,7 @@ The result includes each terminal's `name`, `terminal_session_id`, status, comma
 
 ### start
 
-Starts one named persistent terminal. Always provide a short task-oriented `name` when starting more than one terminal. `cwd` only applies when the session starts. Later `send` calls inherit the running process state and do not change `cwd` unless you send a shell command such as `cd`.
+Starts one named persistent terminal. Always provide a short task-oriented `name` for every terminal you start, even when there is only one terminal, because the UI and later `list` recovery use the name to distinguish sessions. If you already assigned a clear name, reuse it instead of renaming casually. `cwd` only applies when the session starts. Later `send` calls inherit the running process state and do not change `cwd` unless you send a shell command such as `cd`.
 
 ```json
 {

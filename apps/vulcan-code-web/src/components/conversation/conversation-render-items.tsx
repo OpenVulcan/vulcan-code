@@ -20,7 +20,10 @@ import {
   type ToolDetailPayload,
 } from "@/components/conversation/conversation-detail";
 import { ConversationBlocksView } from "@/components/conversation/conversation-block-renderer";
-import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
+import {
+  ConversationMeasuredCollapse,
+  useConversationMeasuredExpansion,
+} from "@/components/conversation/conversation-measured-collapse";
 import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
 import type { PlanArtifactActionPayload } from "@/components/conversation/conversation-plan-artifact";
 import type { ConversationPlanArtifact } from "@/components/conversation/conversation-model";
@@ -144,6 +147,7 @@ export function ConversationProcessGroup(props: {
   const headerText = durationLabel ? `处理过程 ${durationLabel}` : "处理过程";
   const stoppedText = durationLabel ? `你在 ${durationLabel} 后停止了` : "你已停止本轮工作";
   const bodyVisible = !props.process.collapsible || !collapsed;
+  const processBodyCollapseId = `process-body:${props.process.id}`;
   return (
     <section
       className={cn("work-process-group", props.process.running && "running", props.process.stopped && "stopped")}
@@ -201,7 +205,7 @@ export function ConversationProcessGroup(props: {
           />
         ))}
       </div>
-      <ConversationCollapsibleMotion expanded={bodyVisible}>
+      <ConversationMeasuredCollapse collapseId={processBodyCollapseId} expanded={bodyVisible}>
         <div className="work-process-body">
           {visibleProcessItems.map((item) => (
             <ConversationRenderItemView
@@ -241,7 +245,7 @@ export function ConversationProcessGroup(props: {
             </div>
           ) : null}
         </div>
-      </ConversationCollapsibleMotion>
+      </ConversationMeasuredCollapse>
     </section>
   );
 }
@@ -341,13 +345,20 @@ export function ConversationRenderItemView(props: {
   const userPromptTextRef = React.useRef<HTMLParagraphElement | null>(null);
   const [userPromptOverflowing, setUserPromptOverflowing] = React.useState(false);
   const [userPromptCopied, setUserPromptCopied] = React.useState(false);
+  // userPromptCollapsedHeight stores the stable preview height for long user prompts.
+  // userPromptCollapsedHeight 保存长用户提示词的稳定预览高度。
+  const [userPromptCollapsedHeight, setUserPromptCollapsedHeight] = React.useState(0);
   const userPromptKey = React.useMemo(() => {
     const message = props.item.userMessage;
     const messageId = message?.id ?? props.item.id;
     const surfaceId = props.parentConversationId ?? message?.conversationId ?? "conversation";
     return `${surfaceId}:${messageId}`;
   }, [props.item.id, props.item.userMessage, props.parentConversationId]);
-  const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey);
+  const [measuredUserPromptExpanded, setMeasuredUserPromptExpanded] = useConversationMeasuredExpansion(
+    `user-prompt:${userPromptKey}`,
+    props.expandedUserPromptIds.has(userPromptKey),
+  );
+  const userPromptExpanded = props.expandedUserPromptIds.has(userPromptKey) || measuredUserPromptExpanded;
   const userTimestampMs = conversationMessageUnixMillis(props.item.userMessage);
   const userTimestamp = formatShortConversationTimestamp(props.item.userMessage);
   const handleCopyUserPrompt = React.useCallback(async () => {
@@ -371,6 +382,7 @@ export function ConversationRenderItemView(props: {
       const lineHeight = Number.parseFloat(computedStyle.lineHeight);
       const effectiveLineHeight = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 20;
       const collapsedHeight = effectiveLineHeight * USER_PROMPT_COLLAPSE_LINE_LIMIT;
+      setUserPromptCollapsedHeight(collapsedHeight);
       setUserPromptOverflowing(element.scrollHeight > collapsedHeight + 1);
     };
     measureOverflow();
@@ -408,9 +420,19 @@ export function ConversationRenderItemView(props: {
           />
         ) : null}
         <div className="user-bubble">
-          {userBody ? (
+          {userBody && userPromptOverflowing ? (
+            <ConversationMeasuredCollapse
+              collapseId={`user-prompt-body:${userPromptKey}`}
+              collapsedHeight={userPromptCollapsedHeight}
+              expanded={userPromptExpanded}
+            >
+              <p className="user-prompt-text" ref={userPromptTextRef}>
+                {userBody}
+              </p>
+            </ConversationMeasuredCollapse>
+          ) : userBody ? (
             <p
-              className={cn("user-prompt-text", userPromptOverflowing && !userPromptExpanded && "collapsed")}
+              className="user-prompt-text"
               ref={userPromptTextRef}
             >
               {userBody}
@@ -421,7 +443,7 @@ export function ConversationRenderItemView(props: {
               aria-expanded={userPromptExpanded}
               className="user-prompt-expand-toggle"
               onClick={() => {
-                dispatchConversationManualViewportInteraction();
+                setMeasuredUserPromptExpanded(!userPromptExpanded);
                 props.onUserPromptExpandedChange(userPromptKey, !userPromptExpanded);
               }}
               type="button"

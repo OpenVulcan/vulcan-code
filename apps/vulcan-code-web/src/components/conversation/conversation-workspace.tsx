@@ -13,6 +13,11 @@ import {
   createEmptyConversationSurfaceExpandedState,
   type ConversationSurfaceExpandedState,
 } from "@/components/conversation/conversation-layout-restore";
+import {
+  ConversationMeasuredCollapseProvider,
+  conversationMeasuredCollapseMapEqual,
+  type ConversationMeasuredCollapseMap,
+} from "@/components/conversation/conversation-measured-collapse";
 import { CONVERSATION_MANUAL_VIEWPORT_INTERACTION_EVENT } from "@/components/conversation/conversation-layout-events";
 import { MarkdownImageWorkspacePathProvider } from "@/components/conversation/conversation-markdown";
 import {
@@ -176,6 +181,11 @@ export function ConversationWorkspace(props: {
   const [toolPresentationExpansionOverrides, setToolPresentationExpansionOverrides] = React.useState<Set<string>>(
     () => new Set(props.initialExpandedState?.expandedToolPresentationIds ?? []),
   );
+  // measuredCollapseById mirrors stable collapse state and height memory for the current surface.
+  // measuredCollapseById 镜像当前界面的稳定折叠状态与高度记忆。
+  const [measuredCollapseById, setMeasuredCollapseById] = React.useState<ConversationMeasuredCollapseMap>(
+    () => ({ ...(props.initialExpandedState?.measuredCollapseById ?? {}) }),
+  );
   const timelineItems = React.useMemo(
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
     [props.renderItems, props.conversation, nowMs, props.sessionRunning],
@@ -208,16 +218,23 @@ export function ConversationWorkspace(props: {
     processCollapsedByKey: Map<string, boolean>,
     expandedUserPromptIds: Set<string>,
     expandedToolPresentationIds: Set<string>,
+    nextMeasuredCollapseById: ConversationMeasuredCollapseMap = measuredCollapseById,
   ) => {
     if (!surfaceRestoreId) {
       return;
     }
     onExpandedStateChange(surfaceRestoreId, {
+      expandedById: Object.fromEntries(Object.entries(nextMeasuredCollapseById).map(([id, memory]) => [id, Boolean(memory.expanded)])),
       expandedToolPresentationIds: Array.from(expandedToolPresentationIds),
       expandedUserPromptIds: Array.from(expandedUserPromptIds),
+      measuredCollapseById: nextMeasuredCollapseById,
       processCollapsedByKey: Object.fromEntries(processCollapsedByKey),
     });
-  }, [onExpandedStateChange, surfaceRestoreId]);
+  }, [measuredCollapseById, onExpandedStateChange, surfaceRestoreId]);
+  const handleMeasuredCollapseMemoryChange = React.useCallback((nextMeasuredCollapseById: ConversationMeasuredCollapseMap) => {
+    setMeasuredCollapseById(nextMeasuredCollapseById);
+    persistExpandedState(processCollapseOverrides, userPromptExpansionOverrides, toolPresentationExpansionOverrides, nextMeasuredCollapseById);
+  }, [persistExpandedState, processCollapseOverrides, toolPresentationExpansionOverrides, userPromptExpansionOverrides]);
   const handleProcessCollapsedChange = React.useCallback((process: ConversationProcessRenderItem, collapsed: boolean) => {
     const key = processCollapseKey(process);
     setProcessCollapseOverrides((current) => {
@@ -254,9 +271,17 @@ export function ConversationWorkspace(props: {
 
   React.useEffect(() => {
     const nextExpandedState = props.initialExpandedState ?? createEmptyConversationSurfaceExpandedState();
-    setProcessCollapseOverrides(new Map(Object.entries(nextExpandedState.processCollapsedByKey)));
-    setUserPromptExpansionOverrides(new Set(nextExpandedState.expandedUserPromptIds));
-    setToolPresentationExpansionOverrides(new Set(nextExpandedState.expandedToolPresentationIds));
+    const nextProcessCollapseOverrides = new Map(Object.entries(nextExpandedState.processCollapsedByKey));
+    const nextUserPromptExpansionOverrides = new Set(nextExpandedState.expandedUserPromptIds);
+    const nextToolPresentationExpansionOverrides = new Set(nextExpandedState.expandedToolPresentationIds);
+    setProcessCollapseOverrides((current) => stringBooleanMapEqual(current, nextProcessCollapseOverrides) ? current : nextProcessCollapseOverrides);
+    setUserPromptExpansionOverrides((current) => stringSetEqual(current, nextUserPromptExpansionOverrides) ? current : nextUserPromptExpansionOverrides);
+    setToolPresentationExpansionOverrides((current) => stringSetEqual(current, nextToolPresentationExpansionOverrides) ? current : nextToolPresentationExpansionOverrides);
+    setMeasuredCollapseById((current) => (
+      conversationMeasuredCollapseMapEqual(current, nextExpandedState.measuredCollapseById)
+        ? current
+        : { ...nextExpandedState.measuredCollapseById }
+    ));
   }, [props.initialExpandedState, surfaceRestoreId]);
 
   React.useEffect(() => {
@@ -377,71 +402,77 @@ export function ConversationWorkspace(props: {
 
   return (
     <MarkdownImageWorkspacePathProvider value={props.workspacePath}>
-      <section
-        className="conversation-panel"
-        data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
-        onPointerDown={handleConversationPointerDown}
-        onScroll={handleConversationScroll}
-        onTouchStart={() => handleConversationUserScrollStart("unknown")}
-        onWheel={handleConversationWheel}
-        ref={props.scrollRef}
+      <ConversationMeasuredCollapseProvider
+        initialMemory={measuredCollapseById}
+        scopeId={surfaceRestoreId}
+        onMemoryChange={handleMeasuredCollapseMemoryChange}
       >
-        <div className="conversation-scroll-content">
-          <div className="timeline">
-            {props.error ? (
-              <article className="message-card system error-message">
-                <span>system</span>
-                <p>会话正文加载失败：{props.error}</p>
-              </article>
-            ) : null}
-            {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
-              <article className="message-card system">
-                <span>system</span>
-                <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
-              </article>
-            ) : null}
-            {timelineVirtualizer.window.paddingTop > 0 ? (
-              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingTop }} />
-            ) : null}
-            {timelineVirtualizer.window.items.map(({ item: timelineItem }) => {
-              const rowKey = conversationTimelineItemKey(timelineItem);
-              return timelineVirtualizer.window.measuring ? (
-                <ConversationTimelineVirtualRow
-                  key={rowKey}
-                  rowKey={rowKey}
-                  onHeight={timelineVirtualizer.onRowHeight}
-                >
-                  {renderTimelineItem(timelineItem)}
-                </ConversationTimelineVirtualRow>
-              ) : (
-                <React.Fragment key={rowKey}>
-                  {renderTimelineItem(timelineItem)}
-                </React.Fragment>
-              );
-            })}
-            {timelineVirtualizer.window.paddingBottom > 0 ? (
-              <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingBottom }} />
+        <section
+          className="conversation-panel"
+          data-conversation-surface-id={props.conversation?.id ?? props.parentConversationId ?? undefined}
+          onPointerDown={handleConversationPointerDown}
+          onScroll={handleConversationScroll}
+          onTouchStart={() => handleConversationUserScrollStart("unknown")}
+          onWheel={handleConversationWheel}
+          ref={props.scrollRef}
+        >
+          <div className="conversation-scroll-content">
+            <div className="timeline">
+              {props.error ? (
+                <article className="message-card system error-message">
+                  <span>system</span>
+                  <p>会话正文加载失败：{props.error}</p>
+                </article>
+              ) : null}
+              {props.messages.length === 0 && !props.suppressEmptyPlaceholder ? (
+                <article className="message-card system">
+                  <span>system</span>
+                  <p>{props.conversation ? "当前会话正文尚未载入或没有可见消息。" : "尚未选择会话，等待工作区数据载入。"}</p>
+                </article>
+              ) : null}
+              {timelineVirtualizer.window.paddingTop > 0 ? (
+                <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingTop }} />
+              ) : null}
+              {timelineVirtualizer.window.items.map(({ item: timelineItem }) => {
+                const rowKey = conversationTimelineItemKey(timelineItem);
+                return timelineVirtualizer.window.measuring ? (
+                  <ConversationTimelineVirtualRow
+                    key={rowKey}
+                    rowKey={rowKey}
+                    onHeight={timelineVirtualizer.onRowHeight}
+                  >
+                    {renderTimelineItem(timelineItem)}
+                  </ConversationTimelineVirtualRow>
+                ) : (
+                  <React.Fragment key={rowKey}>
+                    {renderTimelineItem(timelineItem)}
+                  </React.Fragment>
+                );
+              })}
+              {timelineVirtualizer.window.paddingBottom > 0 ? (
+                <div aria-hidden="true" className="timeline-virtual-spacer" style={{ height: timelineVirtualizer.window.paddingBottom }} />
+              ) : null}
+            </div>
+            {props.footer ? (
+              <div className="conversation-footer" data-conversation-scroll-footer="true">
+                {props.footer}
+              </div>
             ) : null}
           </div>
-          {props.footer ? (
-            <div className="conversation-footer" data-conversation-scroll-footer="true">
-              {props.footer}
-            </div>
+          {detail ? (
+            <ConversationDetailModal
+              detail={detail}
+              onCopyText={props.onCopyText}
+              onClose={() => setDetail(null)}
+              onLoadToolDetail={props.onLoadToolDetail}
+              onOpenMedia={setMediaPlayer}
+            />
           ) : null}
-        </div>
-        {detail ? (
-          <ConversationDetailModal
-            detail={detail}
-            onCopyText={props.onCopyText}
-            onClose={() => setDetail(null)}
-            onLoadToolDetail={props.onLoadToolDetail}
-            onOpenMedia={setMediaPlayer}
-          />
-        ) : null}
-        {mediaPlayer ? (
-          <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
-        ) : null}
-      </section>
+          {mediaPlayer ? (
+            <GeneratedMediaPlayerWindow attachment={mediaPlayer} onClose={() => setMediaPlayer(null)} />
+          ) : null}
+        </section>
+      </ConversationMeasuredCollapseProvider>
     </MarkdownImageWorkspacePathProvider>
   );
 }
@@ -482,4 +513,32 @@ function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hid
   const hasVisibleGuidanceItem = item.process.guidanceItems.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
   const hasVisibleProcessItem = item.process.items.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
   return hasVisibleGuidanceItem || hasVisibleProcessItem || item.process.running || item.process.stopped;
+}
+
+// stringBooleanMapEqual compares small expansion maps without rebuilding state for equal content.
+// stringBooleanMapEqual 比较小型展开映射，避免内容相同仍重建状态。
+function stringBooleanMapEqual(left: Map<string, boolean>, right: Map<string, boolean>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [key, value] of left) {
+    if (right.get(key) !== value) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// stringSetEqual compares expansion id sets by value.
+// stringSetEqual 按值比较展开标识集合。
+function stringSetEqual(left: Set<string>, right: Set<string>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+  return true;
 }

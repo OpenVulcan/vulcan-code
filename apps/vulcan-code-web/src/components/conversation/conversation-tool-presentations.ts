@@ -1055,6 +1055,12 @@ function firstTerminalSessionDisplay(blocks: ToolExecutionConversationBlock[]): 
     }
   }
   for (const block of blocks) {
+    const display = terminalSessionDisplayFromArguments(argumentsFromMetadata(block.rawMetadata));
+    if (display) {
+      return display;
+    }
+  }
+  for (const block of blocks) {
     const display = terminalSessionDisplayFromText(block.body);
     if (display) {
       return display;
@@ -1088,6 +1094,93 @@ function terminalSessionDisplayFromPayload(payload: Record<string, unknown>): Te
     terminalSessionId,
     transactionExitCode,
   };
+}
+
+// terminalSessionDisplayFromArguments reads fixed terminal_session call arguments before detail hydration.
+// terminalSessionDisplayFromArguments 在详情水合前读取固定 terminal_session 调用参数。
+function terminalSessionDisplayFromArguments(value: unknown): TerminalSessionDisplay | null {
+  const args = objectValue(value);
+  if (!args) {
+    return null;
+  }
+  const action = stringValue(args.action)?.toLowerCase() ?? null;
+  const terminalSessionId = stringValue(args.terminal_session_id);
+  const inputLabels = terminalSessionInputLabelsFromArguments(arrayValue(args.inputs));
+  const command = stringValue(args.command);
+  const name = stringValue(args.name);
+  if (!action && !terminalSessionId && !command && !name && !inputLabels) {
+    return null;
+  }
+  return {
+    action,
+    command,
+    cwd: stringValue(args.cwd),
+    inputLabels,
+    name,
+    ownerSessionId: null,
+    shellLabel: stringValue(args.shell),
+    stderr: "",
+    stdout: "",
+    terminalSessionId,
+    transactionExitCode: null,
+  };
+}
+
+// terminalSessionInputLabelsFromArguments builds a compact label from fixed terminal_session input items.
+// terminalSessionInputLabelsFromArguments 从固定 terminal_session 输入项构建紧凑标签。
+function terminalSessionInputLabelsFromArguments(inputs: unknown[]): string | null {
+  const labels = inputs
+    .map(terminalSessionInputLabelFromArgument)
+    .filter(Boolean) as string[];
+  if (!labels.length) {
+    return null;
+  }
+  const visibleLabels = labels.slice(0, 3).join(" + ");
+  return labels.length > 3 ? `${visibleLabels} 等 ${labels.length} 项` : visibleLabels;
+}
+
+// terminalSessionInputLabelFromArgument formats one fixed terminal_session input item.
+// terminalSessionInputLabelFromArgument 格式化单条固定 terminal_session 输入项。
+function terminalSessionInputLabelFromArgument(value: unknown): string | null {
+  const input = objectValue(value);
+  if (!input) {
+    return null;
+  }
+  const kind = stringValue(input.kind);
+  if (kind === "text") {
+    return compactTerminalSessionInputText(stringValue(input.text), "输入");
+  }
+  if (kind === "paste") {
+    return compactTerminalSessionInputText(stringValue(input.text), "粘贴");
+  }
+  if (kind === "key") {
+    return stringValue(input.key);
+  }
+  if (kind === "chord") {
+    const key = stringValue(input.key);
+    if (!key) {
+      return null;
+    }
+    const modifiers = [
+      input.ctrl === true ? "Ctrl" : null,
+      input.alt === true ? "Alt" : null,
+      input.shift === true ? "Shift" : null,
+      input.meta === true ? "Meta" : null,
+      key,
+    ].filter(Boolean);
+    return modifiers.join("+");
+  }
+  return null;
+}
+
+// compactTerminalSessionInputText keeps terminal input summaries readable in collapsed rows.
+// compactTerminalSessionInputText 让终端输入摘要在折叠行中保持可读。
+function compactTerminalSessionInputText(value: string | null, fallback: string): string {
+  const compact = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return fallback;
+  }
+  return compact.length > 42 ? `${compact.slice(0, 39)}...` : compact;
 }
 
 // terminalSessionDisplayFromText parses the host-rendered terminal_session output format.
@@ -1161,6 +1254,9 @@ function terminalSessionDisplayCommand(
   }
   if (action === "send") {
     return inputLabels ? `向${sessionLabel}发送 ${inputLabels}` : `发送到${sessionLabel}`;
+  }
+  if (action === "list") {
+    return "列出终端会话";
   }
   if (action === "read") {
     return `读取${sessionLabel}`;

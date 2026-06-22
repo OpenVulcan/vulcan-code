@@ -14,8 +14,10 @@ import {
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
-import { ConversationCollapsibleMotion } from "@/components/conversation/conversation-collapsible-motion";
-import { dispatchConversationManualViewportInteraction } from "@/components/conversation/conversation-layout-events";
+import {
+  ConversationMeasuredCollapse,
+  useConversationMeasuredExpansion,
+} from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 
@@ -71,20 +73,21 @@ export function ContextCompactionBlock(props: {
   const state = endBlock?.compactionState ?? bodyBlock?.compactionState ?? startBlock?.compactionState ?? "running";
   const running = state === "running";
   const displayStatus = running ? "running" : state === "failed" ? "failed" : "completed";
-  const [expanded, setExpanded] = React.useState(running);
   const sectionIdRef = React.useRef(startBlock?.compactionSectionId ?? startBlock?.id ?? "");
+  const collapseId = `context-compaction:${startBlock?.compactionSectionId ?? startBlock?.id ?? "unknown"}`;
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, running);
 
   React.useEffect(() => {
     const sectionId = startBlock?.compactionSectionId ?? startBlock?.id ?? "";
     if (sectionIdRef.current !== sectionId) {
       sectionIdRef.current = sectionId;
-      setExpanded(running);
+      setExpanded(running, { manual: false });
       return;
     }
     if (!running) {
-      setExpanded(false);
+      setExpanded(false, { manual: false });
     }
-  }, [running, startBlock?.compactionSectionId, startBlock?.id]);
+  }, [running, setExpanded, startBlock?.compactionSectionId, startBlock?.id]);
 
   const title = running ? (startBlock?.title ?? "上下文正在压缩") : (endBlock?.title ?? "上下文已压缩");
   const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? endBlock?.body?.trim() ?? "" : "");
@@ -96,8 +99,7 @@ export function ContextCompactionBlock(props: {
         aria-expanded={expanded}
         className="context-compaction-toggle"
         onClick={() => {
-          dispatchConversationManualViewportInteraction();
-          setExpanded((current) => !current);
+          setExpanded(!expanded);
         }}
         type="button"
       >
@@ -107,7 +109,7 @@ export function ContextCompactionBlock(props: {
           {expanded ? <ChevronDown className="context-compaction-toggle-icon" size={13} /> : <ChevronRight className="context-compaction-toggle-icon" size={13} />}
         </span>
       </button>
-      <ConversationCollapsibleMotion expanded={expanded}>
+      <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
         <div className="context-compaction-body">
           {thinkingBlocks.map((block) => {
             const content = block.body.trim() || block.summary || "暂无思考内容";
@@ -126,7 +128,7 @@ export function ContextCompactionBlock(props: {
           ) : null}
           <div className="context-compaction-end-line" aria-hidden="true" />
         </div>
-      </ConversationCollapsibleMotion>
+      </ConversationMeasuredCollapse>
     </section>
   );
 }
@@ -152,23 +154,24 @@ export function ThinkingBlock(props: {
 }) {
   const content = props.block.body.trim() || props.block.summary || "暂无思考内容";
   const shouldAutoExpand = props.streaming || props.autoExpanded;
-  const [expanded, setExpanded] = React.useState(shouldAutoExpand);
+  const collapseId = `thinking:${props.block.id}`;
+  const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, shouldAutoExpand);
   const wasStreamingRef = React.useRef(props.streaming);
 
   React.useEffect(() => {
     wasStreamingRef.current = props.streaming;
-    setExpanded(shouldAutoExpand);
-  }, [props.block.id]);
+    setExpanded(shouldAutoExpand, { manual: false });
+  }, [props.block.id, setExpanded, shouldAutoExpand]);
 
   React.useEffect(() => {
     if (shouldAutoExpand) {
-      setExpanded(true);
+      setExpanded(true, { manual: false });
     }
     if (wasStreamingRef.current && !props.streaming) {
-      setExpanded(false);
+      setExpanded(false, { manual: false });
     }
     wasStreamingRef.current = props.streaming;
-  }, [props.streaming, shouldAutoExpand]);
+  }, [props.streaming, setExpanded, shouldAutoExpand]);
 
   const durationLabel = props.streaming ? "正在思考" : thinkingDurationLabel(props.block);
 
@@ -178,8 +181,7 @@ export function ThinkingBlock(props: {
         aria-expanded={expanded}
         className="thinking-toggle"
         onClick={() => {
-          dispatchConversationManualViewportInteraction();
-          setExpanded((current) => !current);
+          setExpanded(!expanded);
         }}
         type="button"
       >
@@ -194,11 +196,11 @@ export function ThinkingBlock(props: {
           <ChevronRight className="tool-presentation-toggle thinking-toggle-icon" size={15} />
         )}
       </button>
-      <ConversationCollapsibleMotion expanded={expanded}>
+      <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
         <div className="thinking-body">
           <MarkdownMessage content={content} eager streaming={props.streaming} onOpenMedia={props.onOpenMedia} />
         </div>
-      </ConversationCollapsibleMotion>
+      </ConversationMeasuredCollapse>
     </section>
   );
 }

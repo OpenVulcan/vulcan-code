@@ -380,20 +380,55 @@ export function ConversationTimelineVirtualRow(props: {
     if (!element) {
       return;
     }
+    let frame: number | null = null;
     const updateHeight = () => {
-      onHeight(rowKey, element.getBoundingClientRect().height);
+      onHeight(rowKey, measureTimelineVirtualRowStableHeight(element));
+    };
+    const scheduleUpdateHeight = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        updateHeight();
+      });
     };
     updateHeight();
     if (typeof ResizeObserver === "undefined") {
-      return;
+      return () => {
+        if (frame !== null) {
+          window.cancelAnimationFrame(frame);
+        }
+      };
     }
-    const observer = new ResizeObserver(updateHeight);
+    const observer = new ResizeObserver(scheduleUpdateHeight);
     observer.observe(element);
-    return () => observer.disconnect();
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      observer.disconnect();
+    };
   }, [onHeight, rowKey]);
   return (
     <div className="timeline-virtual-row" data-conversation-row-key={rowKey} ref={elementRef}>
       {props.children}
     </div>
   );
+}
+
+// measureTimelineVirtualRowStableHeight replaces measured-collapse animation heights with target heights.
+// measureTimelineVirtualRowStableHeight 使用统一折叠组件的目标高度替换动画临时高度。
+function measureTimelineVirtualRowStableHeight(element: HTMLElement): number {
+  let height = element.getBoundingClientRect().height;
+  const collapseNodes = Array.from(element.querySelectorAll<HTMLElement>("[data-conversation-measured-target-height]"))
+    .filter((node) => !node.parentElement?.closest("[data-conversation-measured-target-height]"));
+  for (const collapseNode of collapseNodes) {
+    const targetHeight = Number(collapseNode.dataset.conversationMeasuredTargetHeight);
+    if (!Number.isFinite(targetHeight)) {
+      continue;
+    }
+    height += targetHeight - collapseNode.getBoundingClientRect().height;
+  }
+  return Math.max(0, height);
 }

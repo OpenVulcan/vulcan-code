@@ -4,6 +4,12 @@ import type { ConversationTimelineVirtualRestoreState } from "@/components/conve
 // ConversationSurfaceExpandedState stores UI expansion choices for one transcript surface.
 // ConversationSurfaceExpandedState 保存单个转录界面的 UI 展开选择。
 export interface ConversationSurfaceExpandedState {
+  // Generic expansion states keyed by stable collapse ids.
+  // 按稳定折叠标识保存的通用展开状态。
+  expandedById: Record<string, boolean>;
+  // Stable measured collapse metrics keyed by stable collapse ids.
+  // 按稳定折叠标识保存的稳定折叠测量数据。
+  measuredCollapseById: Record<string, ConversationMeasuredCollapseMemory>;
   // User-controlled process collapse states keyed by surface and process id.
   // 按界面和处理过程标识保存的用户控制折叠状态。
   processCollapsedByKey: Record<string, boolean>;
@@ -13,6 +19,23 @@ export interface ConversationSurfaceExpandedState {
   // User prompt row ids that are currently expanded.
   // 当前处于展开状态的用户提示词行标识。
   expandedUserPromptIds: string[];
+}
+
+// ConversationMeasuredCollapseMemory stores stable size and expansion memory for one collapsible node.
+// ConversationMeasuredCollapseMemory 保存单个可折叠节点的稳定尺寸与展开记忆。
+export interface ConversationMeasuredCollapseMemory {
+  // Last known expanded state for this collapse node.
+  // 当前折叠节点最近一次记录的展开状态。
+  expanded?: boolean;
+  // Last stable collapsed height in pixels.
+  // 最近一次稳定折叠高度，单位像素。
+  collapsedHeight?: number | null;
+  // Last stable expanded height in pixels.
+  // 最近一次稳定展开高度，单位像素。
+  expandedHeight?: number | null;
+  // Last stable rendered height in pixels.
+  // 最近一次稳定渲染高度，单位像素。
+  stableHeight?: number | null;
 }
 
 // ConversationSurfaceLayoutRestoreState stores all runtime layout restore data for one surface.
@@ -36,8 +59,10 @@ export interface ConversationSurfaceLayoutRestoreState {
 // createEmptyConversationSurfaceExpandedState 返回一个空的展开状态。
 export function createEmptyConversationSurfaceExpandedState(): ConversationSurfaceExpandedState {
   return {
+    expandedById: {},
     expandedToolPresentationIds: [],
     expandedUserPromptIds: [],
+    measuredCollapseById: {},
     processCollapsedByKey: {},
   };
 }
