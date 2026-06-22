@@ -185,9 +185,55 @@ export interface FileChangeDiffRow {
   content: string;
 }
 
+// AskQuestionPresentation describes one user-question tool display.
+// AskQuestionPresentation 描述一次向用户提问工具展示。
+export interface AskQuestionPresentation {
+  // Discriminator for ask/question presentation cards.
+  // ask/question 展示卡片的判别字段。
+  kind: "ask_question";
+  // Stable id used for expansion state across virtualized remounts.
+  // 用于跨虚拟滚动重挂保持展开状态的稳定标识。
+  id: string;
+  // Hidden detail reference carrying completed structured answers.
+  // 承载完成态结构化答案的隐藏详情引用。
+  detailRef?: ConversationDetailRef;
+  // Current compact display state.
+  // 当前紧凑展示状态。
+  state: ToolPresentationDisplayState;
+  // Compact title shown beside the status label.
+  // 状态文案旁展示的紧凑标题。
+  title: string;
+  // Text shown when the user rejected, cancelled, or left an answer empty.
+  // 用户拒绝、取消或答案为空时展示的文本。
+  ignoredAnswerText: string;
+  // Ordered questions and answers shown in the expanded panel.
+  // 展开面板内按顺序展示的问题与回答。
+  questions: AskQuestionPresentationItem[];
+}
+
+// AskQuestionPresentationItem describes one question-answer pair.
+// AskQuestionPresentationItem 描述单个问题与回答配对。
+export interface AskQuestionPresentationItem {
+  // Stable per-question id.
+  // 单个问题的稳定标识。
+  id: string;
+  // Short question header from the original ask payload.
+  // 原始 ask 载荷中的短问题标题。
+  header: string;
+  // Full question text shown to the user.
+  // 展示给用户的完整问题文本。
+  question: string;
+  // Ordered answer labels supplied by the user.
+  // 用户提交的有序回答标签。
+  answers: string[];
+  // Whether this question has at least one concrete answer.
+  // 当前问题是否至少包含一个具体回答。
+  answered: boolean;
+}
+
 // ToolPresentation is the union of all recognized custom tool displays.
 // ToolPresentation 是所有已识别自定义工具展示的联合类型。
-export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation;
+export type ToolPresentation = CommandExecutionPresentation | FileChangePresentation | AskQuestionPresentation;
 
 // resolveToolPresentation builds a specialized presentation model or returns null for default rendering.
 // resolveToolPresentation 构建专用展示模型；无法识别时返回 null 以回退默认渲染。
@@ -197,7 +243,8 @@ export function resolveToolPresentation(
   detailRef?: ConversationDetailRef,
   options: ToolPresentationResolveOptions = {},
 ): ToolPresentation | null {
-  return resolveFileChangePresentation(blocks, displayState, options)
+  return resolveAskQuestionPresentation(blocks, displayState, detailRef)
+    ?? resolveFileChangePresentation(blocks, displayState, options)
     ?? resolveCommandExecutionPresentation(blocks, displayState, detailRef, options);
 }
 
@@ -222,6 +269,27 @@ export function hydrateCommandExecutionPresentation(
   return mergeCommandExecutionDisplay(presentation, display);
 }
 
+// hydrateAskQuestionPresentation merges hidden structured ask detail into one ask presentation.
+// hydrateAskQuestionPresentation 将隐藏的结构化 ask 详情合并进一条提问展示模型。
+export function hydrateAskQuestionPresentation(
+  presentation: AskQuestionPresentation,
+  payload: ToolDetailPayload | null,
+): AskQuestionPresentation {
+  if (!payload) {
+    return presentation;
+  }
+  const display = askQuestionDisplayFromMetadata(payload.metadata);
+  if (!display) {
+    return presentation;
+  }
+  return {
+    ...presentation,
+    ignoredAnswerText: display.ignoredAnswerText,
+    questions: display.questions.length ? display.questions : presentation.questions,
+    title: display.title,
+  };
+}
+
 // commandPresentationStatusLabel returns the short Chinese state label shown in collapsed rows.
 // commandPresentationStatusLabel 返回折叠行展示的短中文状态文案。
 export function commandPresentationStatusLabel(state: ToolPresentationDisplayState): string {
@@ -229,6 +297,14 @@ export function commandPresentationStatusLabel(state: ToolPresentationDisplaySta
   if (state === "failed") return "执行失败";
   if (state === "stopped") return "已停止";
   return "已执行";
+}
+
+// askQuestionStatusLabel returns the compact Chinese status label for ask/question rows.
+// askQuestionStatusLabel 返回 ask/question 行的紧凑中文状态文案。
+export function askQuestionStatusLabel(state: ToolPresentationDisplayState): string {
+  if (state === "running") return "提问中";
+  if (state === "failed" || state === "stopped") return "已忽略";
+  return "已提问";
 }
 
 // fileChangeStatusLabel returns the localized action label for one file change row.
@@ -244,6 +320,179 @@ export function fileChangeStatusLabel(presentation: FileChangePresentation, oper
     return operationLabel(operation, "将写入", "将编辑", "将删除", "将变更");
   }
   return operationLabel(operation, "已写入", "已编辑", "已删除", "已变更");
+}
+
+// resolveAskQuestionPresentation recognizes the native ask tool and projects structured question display data.
+// resolveAskQuestionPresentation 识别原生 ask 工具并投影结构化问题展示数据。
+function resolveAskQuestionPresentation(
+  blocks: ToolExecutionConversationBlock[],
+  displayState: ToolPresentationDisplayState,
+  detailRef?: ConversationDetailRef,
+): AskQuestionPresentation | null {
+  const toolName = fixedToolName(blocks);
+  const normalizedToolName = toolName ? normalizeToolName(toolName) : null;
+  if (normalizedToolName !== "ask" && fixedHostKind(blocks) !== "ask") {
+    return null;
+  }
+  const payload = fixedHostPayload(blocks);
+  const display = askQuestionDisplayFromPayload(payload);
+  const fallbackQuestions = askQuestionItemsFromArguments(blocks);
+  const payloadAnswers = payload ? askQuestionAnswersFromPayload(payload) : null;
+  const baseQuestions = display?.questions.length ? display.questions : fallbackQuestions;
+  const questions = applyAskQuestionAnswers(baseQuestions, payloadAnswers);
+  if (!questions.length) {
+    return null;
+  }
+  return {
+    detailRef,
+    id: askQuestionPresentationId(blocks, questions),
+    ignoredAnswerText: display?.ignoredAnswerText ?? "用户忽略回答",
+    kind: "ask_question",
+    questions,
+    state: displayState,
+    title: display?.title ?? "向用户提问",
+  };
+}
+
+// AskQuestionDisplayPayload stores the GUI-only display JSON emitted by the ask tool.
+// AskQuestionDisplayPayload 保存 ask 工具输出的仅供图形界面使用的展示 JSON。
+interface AskQuestionDisplayPayload {
+  // Display title.
+  // 展示标题。
+  title: string;
+  // Ignored-answer placeholder.
+  // 忽略回答占位文案。
+  ignoredAnswerText: string;
+  // Display question items.
+  // 展示问题条目。
+  questions: AskQuestionPresentationItem[];
+}
+
+// askQuestionDisplayFromPayload reads the fixed host_result.payload.display contract for ask.
+// askQuestionDisplayFromPayload 读取 ask 固定的 host_result.payload.display 契约。
+function askQuestionDisplayFromPayload(payload: Record<string, unknown> | null): AskQuestionDisplayPayload | null {
+  const display = objectValue(payload?.display);
+  if (!display || stringValue(display.kind) !== "ask_question") {
+    return null;
+  }
+  const questions = arrayValue(display.questions)
+    .map((item, index) => askQuestionItemFromDisplay(item, index))
+    .filter((item): item is AskQuestionPresentationItem => Boolean(item));
+  if (!questions.length) {
+    return null;
+  }
+  return {
+    ignoredAnswerText: stringValue(display.ignored_answer_text ?? display.ignoredAnswerText) ?? "用户忽略回答",
+    questions,
+    title: stringValue(display.title) ?? "向用户提问",
+  };
+}
+
+// askQuestionDisplayFromMetadata reads the hidden tool-detail display contract for ask.
+// askQuestionDisplayFromMetadata 读取隐藏工具详情中的 ask 展示契约。
+function askQuestionDisplayFromMetadata(metadata: unknown): AskQuestionDisplayPayload | null {
+  return askQuestionDisplayFromPayload(objectValue(metadataValue(metadata, ["display"])));
+}
+
+// askQuestionItemFromDisplay converts one fixed display JSON question into a render item.
+// askQuestionItemFromDisplay 将固定展示 JSON 中的一条问题转换为渲染条目。
+function askQuestionItemFromDisplay(value: unknown, index: number): AskQuestionPresentationItem | null {
+  const item = objectValue(value);
+  if (!item) {
+    return null;
+  }
+  const header = stringValue(item.header) ?? `问题 ${index + 1}`;
+  const question = stringValue(item.question) ?? header;
+  const answers = askQuestionAnswerList(item.answers);
+  const answered = item.answered === true && answers.length > 0;
+  return {
+    answered,
+    answers,
+    header,
+    id: `ask-question:${index}:${compactHash(`${header}\n${question}`)}`,
+    question,
+  };
+}
+
+// askQuestionItemsFromArguments reads the fixed ask arguments.questions array before completion.
+// askQuestionItemsFromArguments 在完成前读取固定 ask arguments.questions 数组。
+function askQuestionItemsFromArguments(blocks: ToolExecutionConversationBlock[]): AskQuestionPresentationItem[] {
+  for (const block of blocks) {
+    const args = objectValue(argumentsFromMetadata(block.rawMetadata));
+    const rawQuestions = arrayValue(args?.questions);
+    if (!rawQuestions.length) {
+      continue;
+    }
+    const questions = rawQuestions
+      .map((item, index) => askQuestionItemFromArguments(item, index))
+      .filter((item): item is AskQuestionPresentationItem => Boolean(item));
+    if (questions.length) {
+      return questions;
+    }
+  }
+  return [];
+}
+
+// askQuestionItemFromArguments converts one fixed ask argument question into a render item.
+// askQuestionItemFromArguments 将固定 ask 参数中的一条问题转换为渲染条目。
+function askQuestionItemFromArguments(value: unknown, index: number): AskQuestionPresentationItem | null {
+  const item = objectValue(value);
+  if (!item) {
+    return null;
+  }
+  const header = stringValue(item.header) ?? `问题 ${index + 1}`;
+  const question = stringValue(item.question) ?? header;
+  return {
+    answered: false,
+    answers: [],
+    header,
+    id: `ask-question:${index}:${compactHash(`${header}\n${question}`)}`,
+    question,
+  };
+}
+
+// askQuestionAnswersFromPayload reads the fixed ask host_result payload answers array.
+// askQuestionAnswersFromPayload 读取固定 ask host_result payload 中的答案数组。
+function askQuestionAnswersFromPayload(payload: Record<string, unknown>): string[][] | null {
+  const answers = arrayValue(payload.answers).map(askQuestionAnswerList);
+  return answers.length ? answers : null;
+}
+
+// applyAskQuestionAnswers overlays completed ask answers onto argument-derived questions.
+// applyAskQuestionAnswers 将完成后的 ask 答案叠加到参数派生的问题上。
+function applyAskQuestionAnswers(
+  questions: AskQuestionPresentationItem[],
+  answers: string[][] | null,
+): AskQuestionPresentationItem[] {
+  if (!answers?.length) {
+    return questions;
+  }
+  return questions.map((question, index) => {
+    const answer = answers[index] ?? [];
+    return {
+      ...question,
+      answered: answer.length > 0,
+      answers: answer,
+    };
+  });
+}
+
+// askQuestionAnswerList normalizes one answer array from fixed ask JSON.
+// askQuestionAnswerList 规范化固定 ask JSON 中的一组答案。
+function askQuestionAnswerList(value: unknown): string[] {
+  return arrayValue(value)
+    .map(stringValue)
+    .filter((answer): answer is string => Boolean(answer));
+}
+
+// askQuestionPresentationId creates a stable expansion key for one ask display row.
+// askQuestionPresentationId 为单条 ask 展示行创建稳定展开键。
+function askQuestionPresentationId(blocks: ToolExecutionConversationBlock[], questions: AskQuestionPresentationItem[]): string {
+  const identifier = blocks
+    .map((block) => block.toolCallId ?? block.toolResultId ?? block.id)
+    .find(Boolean);
+  const questionKey = questions.map((question) => `${question.header}:${question.question}`).join("|");
+  return `ask-question:${identifier ?? compactHash(questionKey)}`;
 }
 
 // resolveFileChangePresentation recognizes native vulcan-file calls and completed host change sets.

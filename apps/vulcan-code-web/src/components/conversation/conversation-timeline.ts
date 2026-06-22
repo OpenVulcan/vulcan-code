@@ -3,6 +3,7 @@ import type {
   ConversationRenderItem,
   ConversationTimelineItem,
 } from "@/components/conversation/conversation-model";
+import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
 
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
 // projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
@@ -135,7 +136,7 @@ function timelineCanStartImplicitProcessTurn(
   item: ConversationRenderItem,
   conversationRunning: boolean,
 ): boolean {
-  if (item.role === "user" || isTurnStatsRenderItem(item)) {
+  if (item.role === "user" || isTurnStatsRenderItem(item) || isContextCompactionRenderItem(item)) {
     return false;
   }
   const previousItem = lastTimelineRenderItem(timeline);
@@ -143,6 +144,12 @@ function timelineCanStartImplicitProcessTurn(
     return true;
   }
   return conversationRunning && timeline.length === 0;
+}
+
+// isContextCompactionRenderItem returns whether one projected row is only a context-compaction status block.
+// isContextCompactionRenderItem 判断单条投影行是否只是上下文压缩状态块。
+function isContextCompactionRenderItem(item: ConversationRenderItem): boolean {
+  return item.blocks.some(isContextCompactionBlock);
 }
 
 // lastTimelineRenderItem returns the latest concrete transcript item already emitted.

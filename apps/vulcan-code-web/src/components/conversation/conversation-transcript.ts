@@ -121,7 +121,7 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
     }
   }
 
-  return items;
+  return repositionContextCompactionItems(items);
 }
 
 // thinkingOverlayBlockSignature returns a stable content key for delayed popup retention.
@@ -142,6 +142,46 @@ function mergeContextCompactionBlocks(blocks: ConversationBlock[], block: Conver
   const next = blocks.filter((candidate) => candidate.id !== block.id);
   next.push(block);
   return next.sort((left, right) => contextCompactionRoleOrder(left.compactionRole) - contextCompactionRoleOrder(right.compactionRole));
+}
+
+// repositionContextCompactionItems moves compaction markers only when the backend provides an explicit safe boundary.
+// repositionContextCompactionItems 仅在后端提供明确安全边界时移动压缩标记。
+function repositionContextCompactionItems(items: ConversationRenderItem[]): ConversationRenderItem[] {
+  const next = [...items];
+  for (const item of items) {
+    if (!item.blocks.some(isContextCompactionBlock)) {
+      continue;
+    }
+    const currentIndex = next.indexOf(item);
+    if (currentIndex < 0) {
+      continue;
+    }
+    const targetIndex = contextCompactionExplicitTargetIndex(next, item);
+    if (targetIndex < 0 || currentIndex <= targetIndex) {
+      continue;
+    }
+    next.splice(currentIndex, 1);
+    next.splice(targetIndex, 0, item);
+  }
+  return next;
+}
+
+// contextCompactionExplicitTargetIndex finds a backend-provided visible insertion boundary.
+// contextCompactionExplicitTargetIndex 查找后端提供的可见插入边界。
+function contextCompactionExplicitTargetIndex(items: ConversationRenderItem[], item: ConversationRenderItem): number {
+  const targetId = item.blocks
+    .map((block) => block.compactionInsertBeforeMessageId)
+    .find((value): value is string => Boolean(value));
+  if (!targetId) {
+    return -1;
+  }
+  return items.findIndex((candidate) => candidate !== item && conversationRenderItemMessageId(candidate) === targetId);
+}
+
+// conversationRenderItemMessageId returns the stable visible transcript message id for one item.
+// conversationRenderItemMessageId 返回单个展示项对应的稳定可见转录消息标识。
+function conversationRenderItemMessageId(item: ConversationRenderItem): string | null {
+  return item.userMessage?.id ?? item.sourceMessage?.id ?? null;
 }
 
 // contextCompactionRoleOrder returns the display order for merged compaction rows.

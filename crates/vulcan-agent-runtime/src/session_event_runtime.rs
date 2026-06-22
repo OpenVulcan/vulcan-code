@@ -521,28 +521,34 @@ fn normalize_tool_result_metadata(
             serde_json::Value::String(tool_name.to_string()),
         );
     }
-    if let Some(host_result) = raw_change_set_host_result(event_metadata) {
+    if let Some(host_result) = raw_visible_host_result(event_metadata) {
         object.insert(String::from("host_result"), host_result.clone());
     }
     object.insert(String::from("result"), serde_json::Value::Object(result));
     serde_json::Value::Object(object)
 }
 
-/// Returns the raw change-set host result that WebUI file-change cards need for expandable rows.
-/// 返回 WebUI 文件变更卡片展开行所需的原始 change-set 宿主结果。
-fn raw_change_set_host_result(metadata: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+/// Returns compact host results that WebUI specialized cards need without opening the raw tool modal.
+/// 返回 WebUI 专用卡片无需打开原始工具弹窗即可使用的紧凑宿主结果。
+fn raw_visible_host_result(metadata: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
     let metadata = metadata?;
     let nested = metadata
         .get("host_result")
         .or_else(|| metadata.get("hostResult"))
         .filter(|host_result| {
-            host_result.get("kind").and_then(serde_json::Value::as_str) == Some("change_set")
+            raw_host_result_kind_is_visible(host_result.get("kind").and_then(serde_json::Value::as_str))
         });
     nested.or_else(|| {
-        (metadata.get("kind").and_then(serde_json::Value::as_str) == Some("change_set")
+        (raw_host_result_kind_is_visible(metadata.get("kind").and_then(serde_json::Value::as_str))
             && metadata.get("payload").is_some())
         .then_some(metadata)
     })
+}
+
+/// Returns whether one host-result kind is small and structured enough for visible transcript metadata.
+/// 判断一个宿主结果类型是否足够紧凑且结构化，可安全保留在可见转录元数据里。
+fn raw_host_result_kind_is_visible(kind: Option<&str>) -> bool {
+    matches!(kind, Some("change_set" | "ask"))
 }
 
 /// Attaches one compact tool result to an existing visible tool-call record.
@@ -676,6 +682,9 @@ fn tool_result_display_payload(
     if tool_name == Some("vulcan_file_list") {
         return vulcan_file_list_display_payload(display_state, metadata, model_output);
     }
+    if tool_name == Some("ask") {
+        return ask_question_display_payload(display_state, metadata, model_output);
+    }
     let mut object = serde_json::Map::new();
     object.insert(
         String::from("kind"),
@@ -693,6 +702,74 @@ fn tool_result_display_payload(
         serde_json::Value::String(compact_display_summary(model_output)),
     );
     serde_json::Value::Object(object)
+}
+
+/// Builds the structured ask display payload from the native ask host result.
+/// 从原生 ask 宿主结果中构建结构化提问展示载荷。
+fn ask_question_display_payload(
+    display_state: &str,
+    metadata: Option<&serde_json::Value>,
+    model_output: &str,
+) -> serde_json::Value {
+    if let Some(display) = ask_question_host_display(metadata) {
+        let mut display = display.clone();
+        if let serde_json::Value::Object(object) = &mut display {
+            object.insert(
+                String::from("status"),
+                serde_json::Value::String(display_state.to_string()),
+            );
+            object.entry(String::from("summary")).or_insert_with(|| {
+                serde_json::Value::String(compact_display_summary(model_output))
+            });
+        }
+        return display;
+    }
+    let mut object = serde_json::Map::new();
+    object.insert(
+        String::from("kind"),
+        serde_json::Value::String(String::from("ask")),
+    );
+    object.insert(
+        String::from("status"),
+        serde_json::Value::String(display_state.to_string()),
+    );
+    if let Some(arguments) = metadata.and_then(|metadata| metadata.get("arguments")) {
+        object.insert(String::from("arguments"), arguments.clone());
+    }
+    object.insert(
+        String::from("summary"),
+        serde_json::Value::String(compact_display_summary(model_output)),
+    );
+    serde_json::Value::Object(object)
+}
+
+/// Extracts the GUI-only ask display contract from one tool-finished metadata object.
+/// 从单条工具完成元数据中提取仅供 GUI 使用的 ask 展示契约。
+fn ask_question_host_display(metadata: Option<&serde_json::Value>) -> Option<&serde_json::Value> {
+    let payload = host_result_payload_by_kind(metadata?, "ask")?;
+    payload.get("display").filter(|display| {
+        display.get("kind").and_then(serde_json::Value::as_str) == Some("ask_question")
+    })
+}
+
+/// Extracts a host-result payload by kind from nested or flattened runtime metadata.
+/// 从嵌套或扁平运行时元数据中按类型提取宿主结果载荷。
+fn host_result_payload_by_kind<'a>(
+    metadata: &'a serde_json::Value,
+    expected_kind: &str,
+) -> Option<&'a serde_json::Value> {
+    let nested = metadata
+        .get("host_result")
+        .or_else(|| metadata.get("hostResult"))
+        .filter(|host_result| {
+            host_result.get("kind").and_then(serde_json::Value::as_str) == Some(expected_kind)
+        })
+        .and_then(|host_result| host_result.get("payload"));
+    nested.or_else(|| {
+        (metadata.get("kind").and_then(serde_json::Value::as_str) == Some(expected_kind))
+            .then(|| metadata.get("payload"))
+            .flatten()
+    })
 }
 
 /// Builds a compact structured display payload for the file-list tool.
@@ -1800,6 +1877,123 @@ mod tests {
                 .and_then(|file| file.get("content"))
                 .and_then(serde_json::Value::as_str),
             Some("return 1\n")
+        );
+    }
+
+    /// Verifies ask answers are persisted as structured display data instead of requiring Markdown parsing.
+    /// 验证 ask 答案会以结构化展示数据持久化，而不需要从 Markdown 文本反解析。
+    #[test]
+    fn tool_result_projection_preserves_structured_ask_display() {
+        let session_id = test_session_id();
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        let started = RuntimeEvent::new(
+            RuntimeEventKind::ToolStarted,
+            "工具调用 · call-ask · ask",
+            "## Tool Call",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-ask",
+            "tool_name": "ask",
+            "arguments": {
+                "questions": [{
+                    "header": "确认",
+                    "question": "是否继续？"
+                }]
+            }
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3200",
+            &started,
+        ));
+        let finished = RuntimeEvent::new(
+            RuntimeEventKind::ToolFinished,
+            "工具返回 · call-ask",
+            "## Result ID\n\n`tool-result-call-ask`\n\n## Tool Result\n\n## User Answers\n\n- 确认: 继续\n\nContinue with these answers.",
+        )
+        .with_metadata(Some(json!({
+            "tool_call_id": "call-ask",
+            "tool_result_id": "tool-result-call-ask",
+            "tool_name": "ask",
+            "display_state": "completed",
+            "host_result": {
+                "kind": "ask",
+                "payload": {
+                    "answers": [["继续"]],
+                    "display": {
+                        "kind": "ask_question",
+                        "title": "向用户提问",
+                        "ignored_answer_text": "用户忽略回答",
+                        "questions": [{
+                            "header": "确认",
+                            "question": "是否继续？",
+                            "answers": ["继续"],
+                            "answered": true
+                        }]
+                    }
+                }
+            }
+        })));
+        assert!(append_runtime_event_projection_to_state(
+            &mut runtime_state,
+            session_id,
+            "3201",
+            &finished,
+        ));
+
+        let tool_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.record_kind == SessionMessageRecordKind::ToolCallOutput)
+            .expect("ask tool call record should remain visible");
+        let metadata = tool_record.metadata.as_ref().expect("ask metadata");
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("kind"))
+                .and_then(serde_json::Value::as_str),
+            Some("ask")
+        );
+        assert_eq!(
+            metadata
+                .get("host_result")
+                .and_then(|host_result| host_result.get("payload"))
+                .and_then(|payload| payload.get("answers"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|answers| answers.first())
+                .and_then(serde_json::Value::as_array)
+                .and_then(|answers| answers.first())
+                .and_then(serde_json::Value::as_str),
+            Some("继续")
+        );
+
+        let detail_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.record_kind == SessionMessageRecordKind::ToolDetailOutput)
+            .expect("ask detail record should be hidden");
+        let detail_metadata = detail_record.metadata.as_ref().expect("ask detail metadata");
+        assert_eq!(
+            detail_metadata
+                .get("display")
+                .and_then(|display| display.get("kind"))
+                .and_then(serde_json::Value::as_str),
+            Some("ask_question")
+        );
+        assert_eq!(
+            detail_metadata
+                .get("display")
+                .and_then(|display| display.get("questions"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|questions| questions.first())
+                .and_then(|question| question.get("answers"))
+                .and_then(serde_json::Value::as_array)
+                .and_then(|answers| answers.first())
+                .and_then(serde_json::Value::as_str),
+            Some("继续")
         );
     }
 

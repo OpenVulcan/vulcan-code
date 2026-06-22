@@ -494,6 +494,35 @@ pub fn build_question_reply_markdown(
     lines.join("\n")
 }
 
+/// Builds a structured display payload for GUI-only ask presentation without changing the model-facing answer text.
+/// 构建仅供图形界面展示使用的 ask 结构化载荷，同时不改变面向模型的答案文本。
+fn build_question_display_payload(questions: &[QuestionPrompt], answers: &[Vec<String>]) -> Value {
+    let display_questions = questions
+        .iter()
+        .enumerate()
+        .map(|(index, prompt)| {
+            let answer_values = answers.get(index).cloned().unwrap_or_default();
+            json!({
+                "header": prompt.header,
+                "question": prompt.question,
+                "options": prompt.options.iter().map(|option| json!({
+                    "label": option.label,
+                    "description": option.description,
+                })).collect::<Vec<_>>(),
+                "multiple": prompt.allows_multiple(),
+                "answers": answer_values,
+                "answered": !answer_values.is_empty(),
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "kind": "ask_question",
+        "title": "向用户提问",
+        "ignored_answer_text": "用户忽略回答",
+        "questions": display_questions,
+    })
+}
+
 /// Builds the final tool invocation result surfaced back to the model after the user has answered every structured question.
 /// 在用户完成全部结构化问题作答后，构建回传给模型的最终工具调用结果。
 fn build_question_invocation_result(
@@ -509,6 +538,7 @@ fn build_question_invocation_result(
                 "tool_name": tool_name,
                 "headers": questions.iter().map(|question| question.header.clone()).collect::<Vec<_>>(),
                 "answers": reply.answers,
+                "display": build_question_display_payload(questions, &reply.answers),
             }),
         },
     )

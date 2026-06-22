@@ -441,6 +441,7 @@ function conversationSpecialBlock(
   const compactionState = metadataString(rawMetadata, ["context_compaction_state"]);
   const compactionTrigger = metadataString(rawMetadata, ["context_compaction_trigger"]);
   const compactionBudgetNote = metadataString(rawMetadata, ["context_compaction_budget_note"]);
+  const compactionInsertBeforeMessageId = metadataString(rawMetadata, ["context_compaction_insert_before_message_id"]);
   const status = mediaAttachments.length > 0
     ? "completed"
     : normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
@@ -464,6 +465,7 @@ function conversationSpecialBlock(
     compactionState: compactionState ?? undefined,
     compactionTrigger: compactionTrigger ?? undefined,
     compactionBudgetNote: compactionBudgetNote ?? undefined,
+    compactionInsertBeforeMessageId: compactionInsertBeforeMessageId ?? undefined,
     planArtifact,
   };
 }

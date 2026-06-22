@@ -86,6 +86,9 @@ export interface ConversationBlock {
   // Optional context-compaction budget note.
   // 可选上下文压缩预算摘要。
   compactionBudgetNote?: string;
+  // Optional visible message id that this compaction boundary should render before.
+  // 可选压缩边界应渲染在其前方的可见消息标识。
+  compactionInsertBeforeMessageId?: string;
   // Optional submitted Plan artifact rendered as a transcript card.
   // 可选已提交计划产物，用作转录卡片渲染。
   planArtifact?: ConversationPlanArtifact;

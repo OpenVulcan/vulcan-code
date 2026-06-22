@@ -18270,6 +18270,11 @@ fn finish_webui_context_compaction_execution(
                 session_id,
                 summary_entry,
             );
+            let compaction_insert_before_message_id =
+                first_visible_user_record_id_after_context_compaction_section(
+                    &runtime_state.conversation_state,
+                    section_id,
+                );
             let mut checkpoint = execution
                 .compaction_result
                 .materialize_checkpoint(summary_message_id.clone());
@@ -18329,6 +18334,11 @@ fn finish_webui_context_compaction_execution(
                 "completed",
                 Some(budget_note),
             );
+            set_webui_context_compaction_insert_before_metadata_in_state(
+                runtime_state,
+                section_id,
+                compaction_insert_before_message_id.as_deref(),
+            );
             update_webui_context_compaction_body_state(runtime_state, section_id, "completed");
             append_webui_context_compaction_end_message_to_state(
                 runtime_state,
@@ -18336,6 +18346,7 @@ fn finish_webui_context_compaction_execution(
                 section_id,
                 budget_note,
                 provider_request_count,
+                compaction_insert_before_message_id.as_deref(),
             );
             runtime_state.updated_at = now;
             workspace.session_messages.insert(
@@ -18538,7 +18549,24 @@ fn append_webui_context_compaction_end_message_to_state(
     section_id: &str,
     budget_note: &str,
     _provider_request_count: usize,
+    insert_before_message_id: Option<&str>,
 ) {
+    let mut metadata = json!({
+        "context_compaction_status": true,
+        "context_compaction_section_id": section_id,
+        "context_compaction_role": "end",
+        "context_compaction_state": "completed",
+        "context_compaction_trigger": "manual_slash",
+        "context_compaction_budget_note": budget_note,
+    });
+    if let (Some(insert_before_message_id), Some(object)) =
+        (insert_before_message_id, metadata.as_object_mut())
+    {
+        object.insert(
+            String::from("context_compaction_insert_before_message_id"),
+            json!(insert_before_message_id),
+        );
+    }
     let entry = SessionMessageEntry {
         id: String::new(),
         kind: SessionMessageKind::Assistant,
@@ -18546,17 +18574,71 @@ fn append_webui_context_compaction_end_message_to_state(
         visible: true,
         title: String::from("上下文已压缩"),
         body: String::new(),
-        metadata: Some(json!({
-            "context_compaction_status": true,
-            "context_compaction_section_id": section_id,
-            "context_compaction_role": "end",
-            "context_compaction_state": "completed",
-            "context_compaction_trigger": "manual_slash",
-            "context_compaction_budget_note": budget_note,
-        })),
+        metadata: Some(metadata),
         created_at: String::new(),
     };
     append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+}
+
+/// Finds the next visible user prompt after the visible context-compaction section started.
+/// 查找可见上下文压缩分段开始后出现的下一条可见用户提示词。
+fn first_visible_user_record_id_after_context_compaction_section(
+    state: &SessionConversationState,
+    section_id: &str,
+) -> Option<String> {
+    let mut after_section = false;
+    for record in &state.records {
+        if after_section
+            && record.visible
+            && matches!(record.kind, SessionMessageKind::User)
+            && record.record_kind == SessionMessageRecordKind::Transcript
+        {
+            return Some(record.id.clone());
+        }
+        if record.id == section_id
+            || record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                .and_then(Value::as_str)
+                == Some(section_id)
+        {
+            after_section = true;
+        }
+    }
+    None
+}
+
+/// Adds the WebUI-only insertion boundary metadata to retained compaction section rows.
+/// 为保留下来的压缩分段行补充仅供 WebUI 使用的插入边界元数据。
+fn set_webui_context_compaction_insert_before_metadata_in_state(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    section_id: &str,
+    insert_before_message_id: Option<&str>,
+) {
+    let Some(insert_before_message_id) = insert_before_message_id else {
+        return;
+    };
+    for record in &mut runtime_state.conversation_state.records {
+        let belongs_to_section = record.id == section_id
+            || record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                .and_then(Value::as_str)
+                == Some(section_id);
+        if !belongs_to_section {
+            continue;
+        }
+        let mut metadata = record.metadata.take().unwrap_or_else(|| json!({}));
+        if let Some(object) = metadata.as_object_mut() {
+            object.insert(
+                String::from("context_compaction_insert_before_message_id"),
+                json!(insert_before_message_id),
+            );
+        }
+        record.metadata = Some(metadata);
+    }
 }
 
 /// Updates shared metadata on one compaction section record.

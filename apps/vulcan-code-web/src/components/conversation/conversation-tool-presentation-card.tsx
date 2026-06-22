@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   ChevronDown,
   ChevronRight,
+  MessageCircleQuestionMark,
   Pencil,
   TerminalSquare,
   Trash2,
@@ -20,9 +21,13 @@ import {
   terminalStateLabel,
 } from "@/components/conversation/conversation-terminal-model";
 import {
+  askQuestionStatusLabel,
   commandPresentationStatusLabel,
+  hydrateAskQuestionPresentation,
   fileChangeStatusLabel,
   hydrateCommandExecutionPresentation,
+  type AskQuestionPresentation,
+  type AskQuestionPresentationItem,
   type CommandExecutionPresentation,
   type FileChangeFilePresentation,
   type FileChangeOperation,
@@ -70,12 +75,26 @@ export function ToolPresentationCard(props: {
       />
     );
   }
+  if (props.presentation.kind === "ask_question") {
+    return (
+      <AskQuestionPresentationCard
+        expanded={props.expanded}
+        presentation={props.presentation}
+        onExpandedChange={props.onExpandedChange}
+        onLoadToolDetail={props.onLoadToolDetail}
+      />
+    );
+  }
   return null;
 }
 
 // commandPresentationDetailCache avoids refetching hidden details after virtualized remounts.
 // commandPresentationDetailCache 避免虚拟滚动重挂后重复请求隐藏详情。
 const commandPresentationDetailCache = new Map<string, CommandExecutionPresentation>();
+
+// askQuestionPresentationDetailCache avoids refetching completed ask answers after virtualized remounts.
+// askQuestionPresentationDetailCache 避免虚拟滚动重挂后重复请求已完成 ask 答案。
+const askQuestionPresentationDetailCache = new Map<string, AskQuestionPresentation>();
 
 // CommandExecutionPresentationCard renders the command-line specific compact and expanded states.
 // CommandExecutionPresentationCard 渲染命令行专用的紧凑与展开状态。
@@ -264,6 +283,157 @@ function commandSessionMetaLabel(presentation: CommandExecutionPresentation): st
     return `命令会话 ${id} · 当前${terminalStateLabel(presentation.terminalState)}`;
   }
   return `命令会话 ${id}`;
+}
+
+// AskQuestionPresentationCard renders compact and expanded ask/question display.
+// AskQuestionPresentationCard 渲染 ask/question 的紧凑与展开展示。
+function AskQuestionPresentationCard(props: {
+  // Ask/question presentation model.
+  // ask/question 展示模型。
+  presentation: AskQuestionPresentation;
+  // Whether this ask card is expanded.
+  // 当前提问卡片是否展开。
+  expanded: boolean;
+  // Updates the surface-level expansion state.
+  // 更新界面级展开状态。
+  onExpandedChange: (presentationId: string, expanded: boolean) => void;
+  // Loads one hidden tool-detail record for completed answers.
+  // 加载单条隐藏工具详情记录用于补全完成态答案。
+  onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
+}) {
+  const {
+    expanded,
+    onExpandedChange,
+    onLoadToolDetail,
+    presentation,
+  } = props;
+  const detailCacheKey = askQuestionPresentationDetailCacheKey(presentation);
+  const [hydratedPresentation, setHydratedPresentation] = React.useState<AskQuestionPresentation>(
+    () => detailCacheKey ? askQuestionPresentationDetailCache.get(detailCacheKey) ?? presentation : presentation,
+  );
+  React.useEffect(() => {
+    const cached = detailCacheKey ? askQuestionPresentationDetailCache.get(detailCacheKey) : undefined;
+    setHydratedPresentation(cached ?? presentation);
+  }, [detailCacheKey, presentation]);
+
+  React.useEffect(() => {
+    if (!expanded || !presentation.detailRef || !detailCacheKey || askQuestionPresentationDetailCache.has(detailCacheKey)) {
+      return;
+    }
+    let cancelled = false;
+    void onLoadToolDetail(presentation.detailRef)
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        const nextPresentation = hydrateAskQuestionPresentation(presentation, payload);
+        askQuestionPresentationDetailCache.set(detailCacheKey, nextPresentation);
+        setHydratedPresentation(nextPresentation);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHydratedPresentation(presentation);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailCacheKey, expanded, onLoadToolDetail, presentation]);
+
+  const handleToggle = React.useCallback(() => {
+    dispatchConversationManualViewportInteraction();
+    onExpandedChange(presentation.id, !expanded);
+  }, [expanded, onExpandedChange, presentation.id]);
+
+  return (
+    <div className={cn("tool-presentation-card ask-question", expanded && "expanded")}>
+      <button
+        aria-expanded={expanded}
+        className="tool-presentation-summary ask-question-summary"
+        onClick={handleToggle}
+        title={hydratedPresentation.questions.map((question) => question.question).join("\n")}
+        type="button"
+      >
+        <MessageCircleQuestionMark className="ask-question-icon" size={15} />
+        <span className="tool-presentation-state">{askQuestionStatusLabel(hydratedPresentation.state)}</span>
+        <span className="tool-presentation-command">{hydratedPresentation.title}</span>
+        {expanded ? (
+          <ChevronDown className="tool-presentation-toggle" size={15} />
+        ) : (
+          <ChevronRight className="tool-presentation-toggle" size={15} />
+        )}
+      </button>
+      <ConversationMeasuredCollapse collapseId={`ask-question:${presentation.id}`} expanded={expanded}>
+        <div className="ask-question-detail">
+          {hydratedPresentation.questions.map((question, index) => (
+            <AskQuestionAnswerItem
+              ignoredAnswerText={hydratedPresentation.ignoredAnswerText}
+              index={index}
+              item={question}
+              key={question.id}
+              state={hydratedPresentation.state}
+            />
+          ))}
+        </div>
+      </ConversationMeasuredCollapse>
+    </div>
+  );
+}
+
+// askQuestionPresentationDetailCacheKey returns a cache key for one ask detail reference.
+// askQuestionPresentationDetailCacheKey 返回单条 ask 详情引用的缓存键。
+function askQuestionPresentationDetailCacheKey(presentation: AskQuestionPresentation): string | null {
+  if (!presentation.detailRef) {
+    return null;
+  }
+  return `${presentation.detailRef.recordId ?? ""}:${presentation.detailRef.seq ?? ""}:${presentation.detailRef.messageIndex ?? ""}`;
+}
+
+// AskQuestionAnswerItem renders one expanded question and its user answer.
+// AskQuestionAnswerItem 渲染展开区中的单个问题与用户回答。
+function AskQuestionAnswerItem(props: {
+  // Zero-based display index.
+  // 从零开始的展示序号。
+  index: number;
+  // Question-answer item.
+  // 问答条目。
+  item: AskQuestionPresentationItem;
+  // Placeholder for ignored answers.
+  // 忽略回答时的占位文案。
+  ignoredAnswerText: string;
+  // Parent presentation state.
+  // 父级展示状态。
+  state: AskQuestionPresentation["state"];
+}) {
+  const answerText = askQuestionAnswerText(props.item, props.ignoredAnswerText, props.state);
+  return (
+    <div className="ask-question-item">
+      <div className="ask-question-item-header">
+        <span>{props.item.header || `问题 ${props.index + 1}`}</span>
+      </div>
+      <div className="ask-question-prompt">{props.item.question}</div>
+      <div className={cn("ask-question-answer", !props.item.answered && props.state !== "running" && "ignored")}>
+        <span className="ask-question-answer-label">用户回答</span>
+        <span className="ask-question-answer-text">{answerText}</span>
+      </div>
+    </div>
+  );
+}
+
+// askQuestionAnswerText chooses the visible answer text for running, answered, and ignored states.
+// askQuestionAnswerText 为等待中、已回答与忽略状态选择可见答案文本。
+function askQuestionAnswerText(
+  item: AskQuestionPresentationItem,
+  ignoredAnswerText: string,
+  state: AskQuestionPresentation["state"],
+): string {
+  if (item.answered && item.answers.length) {
+    return item.answers.join(", ");
+  }
+  if (state === "running") {
+    return "等待用户回答";
+  }
+  return ignoredAnswerText;
 }
 
 // FileChangePresentationCard renders compact file operation rows and lazy diff bodies.

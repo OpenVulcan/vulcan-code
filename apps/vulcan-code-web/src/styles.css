@@ -8637,6 +8637,62 @@ button {
   color: var(--destructive);
 }
 
+.ask-question-icon {
+  color: color-mix(in oklch, var(--primary) 74%, var(--muted-foreground));
+}
+
+.ask-question-detail {
+  width: min(100%, 760px);
+  display: grid;
+  gap: 8px;
+  padding: 8px 0 0 23px;
+  border-left: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+}
+
+.ask-question-item {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--muted) 24%, transparent);
+}
+
+.ask-question-item-header {
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ask-question-prompt {
+  color: var(--foreground);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.ask-question-answer {
+  display: grid;
+  gap: 3px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+}
+
+.ask-question-answer-label {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.ask-question-answer-text {
+  color: var(--foreground);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.ask-question-answer.ignored .ask-question-answer-text {
+  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+}
+
 .workspace-terminal-sessions-panel {
   display: grid;
   gap: 8px;
