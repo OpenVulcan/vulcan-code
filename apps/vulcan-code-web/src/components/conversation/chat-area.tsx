@@ -81,6 +81,7 @@ import { Textarea } from "@/components/ui/textarea";
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ConversationHydrationProgress,
   ConversationMessage,
   PendingPromptSummary,
   ProviderModelSecondaryRouteSelection,
@@ -119,6 +120,9 @@ interface ChatAreaProps {
   // Last conversation body loading error.
   // 最近一次会话正文加载错误。
   conversationLoadError: string | null;
+  // Current lazy conversation body loading progress.
+  // 当前懒加载会话正文进度。
+  conversationHydration: ConversationHydrationProgress | null;
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;
@@ -321,7 +325,17 @@ export function ChatArea(props: ChatAreaProps) {
   // renderItems stores parsed transcript rows for this active surface.
   // renderItems 保存当前活动界面的已解析转录行。
   const renderItems = React.useMemo(() => projectConversationRenderItems(messages), [messages]);
-  const isLoading = props.loadingConversationId === props.selectedConversationId;
+  const activeConversationHydration = props.conversationHydration?.sessionId === activeSurfaceConversationId
+    ? props.conversationHydration
+    : null;
+  const isLoadingByRequest = props.loadingConversationId === activeSurfaceConversationId;
+  const isLoading = isLoadingByRequest
+    || activeConversationHydration?.status === "loading";
+  // displayedConversationHydration avoids rendering stale ready progress while a fresh request is active.
+  // displayedConversationHydration 避免在新请求进行中渲染旧的完成态进度。
+  const displayedConversationHydration = isLoadingByRequest && activeConversationHydration?.status !== "loading"
+    ? null
+    : activeConversationHydration;
   // showConversationLoadingOnly is true only when no cached messages can be shown during hydration.
   // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
   const showConversationLoadingOnly = isLoading && messages.length === 0 && !props.conversationLoadError;
@@ -1197,7 +1211,7 @@ export function ChatArea(props: ChatAreaProps) {
       style={{ "--composer-dock-height": `${composerDockHeight}px` } as React.CSSProperties}
     >
       {showConversationLoadingOnly ? (
-        <ConversationLoadingCenter />
+        <ConversationLoadingCenter progress={displayedConversationHydration} />
       ) : (
         conversationSurfaceContent
       )}

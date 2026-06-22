@@ -50,6 +50,18 @@ struct SegmentedWindowMessages {
     boundary_conversation_state: Option<SessionConversationState>,
 }
 
+/// Selects which segmented source should feed the visible transcript window.
+/// 选择用于构建可见转录窗口的分段数据来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentedWindowSourcePreference {
+    /// Prefer compact session-boundary projection when it exists.
+    /// 当存在会话边界投影时优先使用紧凑投影。
+    SessionBoundaryFirst,
+    /// Read the raw turn window so tool, thinking, and stats rows stay available.
+    /// 读取原始轮次窗口，确保工具、思考与统计行仍可展示。
+    RawTurnOnly,
+}
+
 /// Lazily loads the recent transcript window and lightweight runtime state for one session.
 /// 为单个会话懒加载最近转录窗口与轻量运行时状态。
 pub async fn load_session_hydration_snapshot(
@@ -58,8 +70,32 @@ pub async fn load_session_hydration_snapshot(
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
     let locator = query_session_locator(&controller, session_id).await?;
-    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
-        .await
+    load_session_hydration_snapshot_from_locator(
+        controller,
+        session_id,
+        requested_limit,
+        locator,
+        SegmentedWindowSourcePreference::SessionBoundaryFirst,
+    )
+    .await
+}
+
+/// Lazily loads a display-complete transcript window for one session.
+/// 为单个会话懒加载展示完整的转录窗口。
+pub async fn load_session_display_hydration_snapshot(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    requested_limit: usize,
+) -> Result<SessionHydrationSnapshot, String> {
+    let locator = query_session_locator(&controller, session_id).await?;
+    load_session_hydration_snapshot_from_locator(
+        controller,
+        session_id,
+        requested_limit,
+        locator,
+        SegmentedWindowSourcePreference::RawTurnOnly,
+    )
+    .await
 }
 
 /// Lazily loads one session by constraining segmented lookup to its owning project.
@@ -87,8 +123,49 @@ pub async fn load_session_hydration_snapshot_for_project(
     requested_limit: usize,
 ) -> Result<SessionHydrationSnapshot, String> {
     let locator = query_session_locator_for_project(&controller, project_id, session_id).await?;
-    load_session_hydration_snapshot_from_locator(controller, session_id, requested_limit, locator)
-        .await
+    load_session_hydration_snapshot_from_locator(
+        controller,
+        session_id,
+        requested_limit,
+        locator,
+        SegmentedWindowSourcePreference::SessionBoundaryFirst,
+    )
+    .await
+}
+
+/// Lazily loads a display-complete transcript window for one project-scoped session.
+/// 为单个项目内会话懒加载展示完整的转录窗口。
+///
+/// # Parameters
+/// 参数
+/// `controller` owns the workspace-store runtime bridge.
+/// `controller` 持有工作区存储运行时桥。
+/// `project_id` is the known owning project identifier used as the segmented project tag.
+/// `project_id` 是已知的所属项目标识，用作分段项目标签。
+/// `session_id` selects the session to hydrate.
+/// `session_id` 选择要水合的会话。
+/// `requested_limit` is the requested recent-turn window size before clamping.
+/// `requested_limit` 是裁剪前请求的最近轮次窗口大小。
+///
+/// # Returns
+/// 返回值
+/// A display-complete hydration snapshot for the target session.
+/// 返回目标会话的展示完整水合快照。
+pub async fn load_session_display_hydration_snapshot_for_project(
+    controller: ControllerRuntimeHandle,
+    project_id: &str,
+    session_id: SessionId,
+    requested_limit: usize,
+) -> Result<SessionHydrationSnapshot, String> {
+    let locator = query_session_locator_for_project(&controller, project_id, session_id).await?;
+    load_session_hydration_snapshot_from_locator(
+        controller,
+        session_id,
+        requested_limit,
+        locator,
+        SegmentedWindowSourcePreference::RawTurnOnly,
+    )
+    .await
 }
 
 /// Builds a session hydration snapshot from an already resolved segmented locator.
@@ -114,6 +191,7 @@ async fn load_session_hydration_snapshot_from_locator(
     session_id: SessionId,
     requested_limit: usize,
     locator: Option<StoredSessionLocatorRow>,
+    source_preference: SegmentedWindowSourcePreference,
 ) -> Result<SessionHydrationSnapshot, String> {
     let requested_limit = requested_limit
         .max(1)
@@ -132,6 +210,7 @@ async fn load_session_hydration_snapshot_from_locator(
         session_id,
         None,
         target_turn_count,
+        source_preference,
     )?;
     let (
         has_more_history,
@@ -233,6 +312,7 @@ pub async fn load_session_history_page(
         session_id,
         Some(before_ordinal),
         requested_limit,
+        SegmentedWindowSourcePreference::RawTurnOnly,
     )? {
         return Ok(SessionHistoryPage {
             session_id,
@@ -282,6 +362,7 @@ pub async fn load_session_transcript_window(
         session_id,
         None,
         requested_limit,
+        SegmentedWindowSourcePreference::RawTurnOnly,
     )? {
         return Ok(SessionHistoryPage {
             session_id,
@@ -417,6 +498,7 @@ fn load_segmented_window_messages(
     session_id: SessionId,
     before_ordinal: Option<i64>,
     requested_limit: usize,
+    source_preference: SegmentedWindowSourcePreference,
 ) -> Result<Option<SegmentedWindowMessages>, String> {
     let Some(locator) = locator else {
         return Ok(None);
@@ -427,10 +509,15 @@ fn load_segmented_window_messages(
         return Ok(None);
     };
     let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
-    if let Some(window) =
-        load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
-    {
-        return Ok(Some(window));
+    if matches!(
+        source_preference,
+        SegmentedWindowSourcePreference::SessionBoundaryFirst
+    ) {
+        if let Some(window) =
+            load_segmented_boundary_window_messages(&session_dir, before_seq, requested_limit)?
+        {
+            return Ok(Some(window));
+        }
     }
     let turn_window =
         read_segmented_session_turn_window(&session_dir, before_seq, requested_limit)?;

@@ -2,9 +2,9 @@ import React from "react";
 import { Bot, Boxes, ChevronLeft, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ShinyText } from "@/components/ui/shiny-text";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
-import type { WorkbenchSnapshot } from "@/types";
+import type { ConversationHydrationProgress, WorkbenchSnapshot } from "@/types";
 
 // SubagentNavigationTrace records user initiated subagent title-menu actions.
 // SubagentNavigationTrace 记录用户触发的子代理标题菜单动作。
@@ -12,12 +12,50 @@ export type SubagentNavigationTrace = (action: string, detail: Record<string, un
 
 // ConversationLoadingCenter renders the cache-miss conversation hydration placeholder.
 // ConversationLoadingCenter 渲染无缓存会话水合时的居中占位提示。
-export function ConversationLoadingCenter() {
+export function ConversationLoadingCenter(props: {
+  // Current backend-projected loading progress.
+  // 当前后端投影出的加载进度。
+  progress: ConversationHydrationProgress | null;
+}) {
+  const { t } = useI18n();
+  const percent = Math.max(0, Math.min(100, props.progress?.percent ?? 8));
+  const phaseKey = conversationHydrationPhaseTranslationKey(props.progress?.phase);
+  const phaseText = phaseKey ? t(phaseKey) : props.progress?.message ?? t("conversation.loading.locating");
   return (
     <section className="conversation-loading-center" aria-live="polite" aria-busy="true">
-      <ShinyText text="✨ 正在加载会话信息" />
+      <div className="conversation-loading-card">
+        <div className="conversation-loading-heading">
+          <strong>{t("conversation.loading.title")}</strong>
+          <span>{Math.round(percent)}%</span>
+        </div>
+        <div className="conversation-loading-bar" aria-label={t("conversation.loading.title")} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+          <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
+        </div>
+        <ShinyText text={phaseText} />
+      </div>
     </section>
   );
+}
+
+// conversationHydrationPhaseTranslationKey maps backend progress phase keys onto WebUI translation keys.
+// conversationHydrationPhaseTranslationKey 将后端进度阶段键映射到 WebUI 翻译键。
+function conversationHydrationPhaseTranslationKey(phase: string | null | undefined): TranslationKey | null {
+  switch (phase) {
+    case "locating":
+      return "conversation.loading.locating";
+    case "readingIndex":
+      return "conversation.loading.index";
+    case "readingMessages":
+      return "conversation.loading.reading";
+    case "projecting":
+      return "conversation.loading.projecting";
+    case "done":
+      return "conversation.loading.done";
+    case "failed":
+      return "conversation.loading.failed";
+    default:
+      return null;
+  }
 }
 
 // EmptyConversationPrompt renders the blank-chat prompt above the shared composer dock.

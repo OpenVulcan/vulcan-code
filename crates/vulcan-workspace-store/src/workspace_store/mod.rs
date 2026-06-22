@@ -65,6 +65,7 @@ pub use persistence::{
     restore_project_with_sessions, restore_single_session, toggle_project_pinned,
 };
 pub use session_load::{
+    load_session_display_hydration_snapshot, load_session_display_hydration_snapshot_for_project,
     load_session_history_page, load_session_hydration_snapshot,
     load_session_hydration_snapshot_for_project, load_session_transcript_window,
 };
@@ -396,10 +397,35 @@ pub async fn load_or_seed_workspace(
     load_workspace_snapshot(controller).await
 }
 
+/// Loads the persisted workspace index without eagerly hydrating every session runtime state.
+/// 加载持久化工作区索引，但不急切水合每个会话运行态。
+pub async fn load_or_seed_workspace_index(
+    controller: ControllerRuntimeHandle,
+) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_index_snapshot(controller).await
+}
+
 /// Loads the current persisted workspace snapshot from project config and segmented text metadata.
 /// 从项目配置与分段文本元数据加载当前持久化工作台快照。
 pub async fn load_workspace_snapshot(
     controller: ControllerRuntimeHandle,
+) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_snapshot_with_runtime_state(controller, true).await
+}
+
+/// Loads the current persisted workspace index without full per-session runtime state.
+/// 加载当前持久化工作区索引，不包含每个会话的完整运行态。
+pub async fn load_workspace_index_snapshot(
+    controller: ControllerRuntimeHandle,
+) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_snapshot_with_runtime_state(controller, false).await
+}
+
+/// Loads the current persisted workspace snapshot with an optional runtime-state pass.
+/// 按可选运行态加载过程读取当前持久化工作区快照。
+async fn load_workspace_snapshot_with_runtime_state(
+    controller: ControllerRuntimeHandle,
+    load_runtime_state: bool,
 ) -> Result<WorkspaceSnapshot, String> {
     let project_rows = query_project_rows(&controller).await?;
     let session_rows = query_session_index_rows(&controller).await?;
@@ -481,7 +507,7 @@ pub async fn load_workspace_snapshot(
                 session_id,
             );
         }
-        if !archived {
+        if !archived && load_runtime_state {
             let mut runtime_state = if let Some(state_document) = read_state(&session_dir)? {
                 if state_document.runtime_state.is_null() {
                     None

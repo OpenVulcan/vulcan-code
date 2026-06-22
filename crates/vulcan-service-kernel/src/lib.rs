@@ -115,10 +115,12 @@ use vulcan_service_api::{
     AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
-    ConversationMessage, ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary,
-    LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary,
-    MessageRole, PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
-    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    ConversationHydrationProgress, ConversationHydrationStatus, ConversationMessage,
+    ConversationMessagesLoadResponse, ConversationSummary, FeatureAreaSummary, KeyValueSummary,
+    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary,
+    McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
+    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
+    PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -2148,7 +2150,7 @@ async fn dispatch_service_rpc(
             service_save_vmm_memory_config(state, rpc_required_param(&params, "request")?).await,
         ),
         "service_session_messages" => rpc_json_result(
-            service_session_messages(state, rpc_required_param(&params, "sessionId")?).await,
+            service_session_messages(app, state, rpc_required_param(&params, "sessionId")?).await,
         ),
         "service_session_tool_detail" => rpc_json_result(
             service_session_tool_detail(
@@ -3655,86 +3657,342 @@ fn workbench_with_live_pending_question(guard: &ServiceBridgeState) -> Workbench
 /// Loads the recent transcript window for one conversation.
 /// 加载单个会话的最近转录窗口。
 async fn service_session_messages(
+    app: ServiceEventEmitter,
     state: SharedServiceBridgeState,
     session_id: String,
-) -> Result<Vec<ConversationMessage>, String> {
+) -> Result<ConversationMessagesLoadResponse, String> {
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
-    let (controller_runtime, agent_runtime, live_listener_task_ids, project_id, in_memory_messages) = {
+    emit_conversation_hydration_progress(
+        &app,
+        &state,
+        conversation_hydration_progress(
+            &session_id,
+            ConversationHydrationStatus::Loading,
+            "locating",
+            5,
+            "正在定位会话。",
+        ),
+    )?;
+    let workbench = load_hydrated_session_workbench(&app, &state, parsed_session_id, &session_id)
+        .await
+        .map_err(|error| {
+            let _ = emit_conversation_hydration_progress(
+                &app,
+                &state,
+                conversation_hydration_progress(
+                    &session_id,
+                    ConversationHydrationStatus::Error,
+                    "failed",
+                    100,
+                    &error,
+                ),
+            );
+            error
+        })?;
+    let progress = conversation_hydration_progress(
+        &session_id,
+        ConversationHydrationStatus::Ready,
+        "done",
+        100,
+        "会话载入完成。",
+    );
+    let mut completed_workbench = workbench;
+    completed_workbench.conversation_hydration = Some(progress.clone());
+    let messages = completed_workbench.messages.clone();
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench = completed_workbench.clone();
+    }
+    emit_workbench_event(&app, &completed_workbench);
+    Ok(ConversationMessagesLoadResponse {
+        workbench: Box::new(completed_workbench),
+        messages,
+        progress,
+    })
+}
+
+/// Loads one conversation using the original selected-session workbench projection path.
+/// 使用原始选中会话工作台投影路径加载单个会话。
+async fn load_hydrated_session_workbench(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    parsed_session_id: SessionId,
+    session_id: &str,
+) -> Result<WorkbenchSnapshot, String> {
+    let (
+        controller_runtime,
+        luaskills_catalog,
+        token_budget_runtime,
+        mcp_catalog,
+        logs,
+        preserved_workspace_run_state,
+        provider_configuration,
+        ai_tool_configuration,
+        live_context_budgets,
+        agent_runtime_for_status,
+        live_listener_task_ids,
+    ) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
             String::from("service is still starting; controller runtime is not ready")
         })?;
-        let project_id = guard
-            .workspace_snapshot
+        let active_kernel_sessions = active_kernel_session_ids(&guard);
+        let preserved_workspace_run_state = capture_preserved_workspace_run_state(
+            guard.workspace_snapshot.as_ref(),
+            &active_kernel_sessions,
+            None,
+        );
+        let provider_configuration = guard
+            .agent_runtime
             .as_ref()
-            .and_then(|workspace_snapshot| {
-                owning_project_id_for_session(workspace_snapshot, parsed_session_id)
-            });
-        let in_memory_messages =
-            in_memory_session_messages_for_service(&guard.workspace_snapshot, parsed_session_id);
+            .map(|runtime| runtime.provider_configuration.clone())
+            .unwrap_or_default();
+        let ai_tool_configuration = guard
+            .agent_runtime
+            .as_ref()
+            .map(|runtime| runtime.ai_tool_configuration.clone())
+            .unwrap_or_default();
         (
             controller_runtime,
+            cached_luaskills_catalog_from_state(&guard),
+            guard.token_budget_runtime.clone().ok_or_else(|| {
+                String::from("service is still starting; token budget runtime is not ready")
+            })?,
+            cached_mcp_catalog_from_state(&guard),
+            guard.startup.recent_logs.clone(),
+            preserved_workspace_run_state,
+            provider_configuration,
+            ai_tool_configuration,
+            guard.live_context_budgets.clone(),
             guard.agent_runtime.clone(),
             guard.detached_subagent_task_listeners.clone(),
-            project_id,
-            in_memory_messages,
         )
     };
-    if let Some(mut messages) = in_memory_messages {
-        apply_task_mirror_statuses_to_surface_messages_if_needed(
-            &controller_runtime,
-            agent_runtime.as_ref(),
-            &live_listener_task_ids,
-            project_id.as_deref(),
-            parsed_session_id,
-            messages.as_mut_slice(),
-            None,
-        )?;
-        let allow_user_prompt_editing = {
-            let mut guard = state
-                .lock()
-                .map_err(|error| format!("failed to lock service state: {error}"))?;
-            webui_session_allows_user_prompt_editing(&mut guard, parsed_session_id)
-        };
-        return Ok(conversation_messages_from_session(
-            &session_id,
-            messages.as_slice(),
-            allow_user_prompt_editing,
-        ));
-    }
-    let mut transcript_page =
-        match vulcan_workspace_store::workspace_store::load_session_transcript_window(
-            controller_runtime.clone(),
-            parsed_session_id,
-            SELECTED_SESSION_TURN_LOAD_LIMIT,
-        )
-        .await
-        {
-            Ok(snapshot) => snapshot,
-            Err(error) if is_missing_segmented_session_file_error(&error) => {
-                return Ok(Vec::new());
-            }
-            Err(error) => return Err(error),
-        };
-    apply_task_mirror_statuses_to_surface_messages_if_needed(
-        &controller_runtime,
-        agent_runtime.as_ref(),
-        &live_listener_task_ids,
-        project_id.as_deref(),
-        parsed_session_id,
-        transcript_page.messages.as_mut_slice(),
-        None,
+    emit_conversation_hydration_progress(
+        app,
+        state,
+        conversation_hydration_progress(
+            session_id,
+            ConversationHydrationStatus::Loading,
+            "readingIndex",
+            20,
+            "正在读取消息索引。",
+        ),
     )?;
+    let mut refreshed_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller_runtime.clone(),
+        )
+        .await?;
+    preserve_active_session_run_state(
+        preserved_workspace_run_state.as_ref(),
+        &mut refreshed_snapshot,
+    );
+    refreshed_snapshot.selected_session = parsed_session_id;
+    let project_id = owning_project_id_for_session(&refreshed_snapshot, parsed_session_id);
+    emit_conversation_hydration_progress(
+        app,
+        state,
+        conversation_hydration_progress(
+            session_id,
+            ConversationHydrationStatus::Loading,
+            "readingMessages",
+            55,
+            "正在读取消息内容。",
+        ),
+    )?;
+    let hydration = match project_id.as_deref() {
+        Some(project_id) => {
+            vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot_for_project(
+                controller_runtime.clone(),
+                project_id,
+                parsed_session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        }
+        None => {
+            vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot(
+                controller_runtime.clone(),
+                parsed_session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        }
+    }
+    .or_else(|error| {
+        if is_missing_segmented_session_file_error(&error) {
+            Ok(empty_session_hydration_snapshot(parsed_session_id))
+        } else {
+            Err(error)
+        }
+    })?;
+    emit_conversation_hydration_progress(
+        app,
+        state,
+        conversation_hydration_progress(
+            session_id,
+            ConversationHydrationStatus::Loading,
+            "projecting",
+            85,
+            "正在整理显示数据。",
+        ),
+    )?;
+    apply_hydration_to_selected_workspace_snapshot(
+        &controller_runtime,
+        &mut refreshed_snapshot,
+        parsed_session_id,
+        hydration,
+        agent_runtime_for_status
+            .as_ref()
+            .map(|runtime| &runtime.task_runtime),
+        &live_listener_task_ids,
+    )?;
+    sync_selected_session_goal_summary_from_store(
+        state,
+        controller_runtime.clone(),
+        parsed_session_id,
+    )
+    .await?;
+    let (surface_messages, subagent_navigation, session_goal_summaries) = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let active_kernel_sessions = active_kernel_session_ids(&guard);
+        let preserved_workspace_run_state = capture_preserved_workspace_run_state(
+            guard.workspace_snapshot.as_ref(),
+            &active_kernel_sessions,
+            None,
+        );
+        preserve_active_session_run_state(
+            preserved_workspace_run_state.as_ref(),
+            &mut refreshed_snapshot,
+        );
+        (
+            active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
+            subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
+            guard.session_goal_summaries.clone(),
+        )
+    };
+    let workbench = workbench_from_runtime(
+        &controller_runtime,
+        agent_runtime_for_status
+            .as_ref()
+            .map(|agent_runtime| agent_runtime.command_session_runtime.as_ref()),
+        &luaskills_catalog,
+        &token_budget_runtime,
+        &mcp_catalog,
+        &provider_configuration,
+        &ai_tool_configuration,
+        &refreshed_snapshot,
+        surface_messages.as_slice(),
+        subagent_navigation,
+        pending_question_snapshot_from_agent_runtime(agent_runtime_for_status.as_ref()),
+        &logs,
+        &live_context_budgets,
+        &session_goal_summaries,
+    );
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workspace_snapshot = Some(refreshed_snapshot);
+    }
+    Ok(workbench)
+}
 
-    Ok(conversation_messages_from_session(
-        &session_id,
-        transcript_page.messages.as_slice(),
-        false,
-    ))
+/// Builds an empty hydration payload for a missing segmented session file.
+/// 为缺失分段会话文件构建空水合载荷。
+fn empty_session_hydration_snapshot(session_id: SessionId) -> SessionHydrationSnapshot {
+    SessionHydrationSnapshot {
+        session_id,
+        messages: Vec::new(),
+        tool_detail_messages: Vec::new(),
+        compactions: Vec::new(),
+        runtime_state: None,
+        earliest_ordinal: None,
+        has_more_history: false,
+    }
+}
+
+/// Applies a hydrated selected session to a workspace snapshot before WebUI projection.
+/// 在 WebUI 投影之前将已水合的选中会话应用到工作区快照。
+fn apply_hydration_to_selected_workspace_snapshot(
+    controller_runtime: &ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    hydration: SessionHydrationSnapshot,
+    task_runtime: Option<&Arc<TaskRuntime>>,
+    live_listener_task_ids: &BTreeSet<SessionId>,
+) -> Result<(), String> {
+    workspace_snapshot
+        .session_messages
+        .insert(session_id, hydration.messages);
+    workspace_snapshot
+        .session_compactions
+        .insert(session_id, hydration.compactions);
+    if let Some(runtime_state) = hydration.runtime_state {
+        workspace_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+    }
+    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    apply_persisted_task_mirror_statuses_to_workspace(
+        controller_runtime,
+        workspace_snapshot,
+        session_id,
+        |task_id| {
+            webui_subagent_task_has_live_run(
+                task_runtime,
+                live_listener_task_ids.contains(&task_id),
+                task_id,
+            )
+        },
+    )?;
+    Ok(())
+}
+
+/// Builds one lazy conversation hydration progress payload.
+/// 构建单个懒加载会话正文水合进度载荷。
+fn conversation_hydration_progress(
+    session_id: &str,
+    status: ConversationHydrationStatus,
+    phase: &str,
+    percent: u8,
+    message: &str,
+) -> ConversationHydrationProgress {
+    ConversationHydrationProgress {
+        session_id: session_id.to_string(),
+        status,
+        phase: phase.to_string(),
+        message: message.to_string(),
+        percent: percent.min(100),
+    }
+}
+
+/// Stores and emits one lazy conversation hydration progress update.
+/// 存储并发送一条懒加载会话正文水合进度更新。
+fn emit_conversation_hydration_progress(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    progress: ConversationHydrationProgress,
+) -> Result<(), String> {
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.workbench.conversation_hydration = Some(progress);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(app, &workbench);
+    Ok(())
 }
 
 /// Loads one hidden tool-detail payload by stable record id or tool-call id fallback.
@@ -4122,15 +4380,6 @@ fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind) -> &'stati
         }
         ConversationAttachmentKind::Pdf => "application/pdf",
     }
-}
-
-/// Returns the current in-memory transcript projection for one service session.
-/// 返回单个服务会话当前的内存转录投影。
-fn in_memory_session_messages_for_service(
-    workspace_snapshot: &Option<WorkspaceSnapshot>,
-    session_id: SessionId,
-) -> Option<Vec<SessionMessageEntry>> {
-    in_memory_session_messages_from_workspace(workspace_snapshot.as_ref()?, session_id)
 }
 
 /// Returns the current in-memory transcript projection for one session from a concrete workspace snapshot.
@@ -11639,13 +11888,14 @@ async fn load_workspace_for_submission(
     controller_runtime: ControllerRuntimeHandle,
     conversation_id: Option<&str>,
 ) -> Result<WorkspaceSnapshot, String> {
-    // Measures full workspace snapshot loading for prompt submission.
-    // 衡量提示词提交时完整工作区快照载入耗时。
+    // Measures lightweight workspace index loading for prompt submission.
+    // 衡量提示词提交时轻量工作区索引载入耗时。
     let workspace_load_started_at = current_unix_millis_value();
-    let mut workspace_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
-        controller_runtime.clone(),
-    )
-    .await?;
+    let mut workspace_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller_runtime.clone(),
+        )
+        .await?;
     webui_trace_if_slow(
         "submit_prompt_workspace_snapshot_load_slow",
         workspace_load_started_at,
@@ -20611,65 +20861,6 @@ fn load_segmented_session_task_mirrors_for_service(
     )
 }
 
-/// Applies persisted task mirrors only when the visible surface contains task-session cards.
-/// 仅当可见界面包含 task-session 卡片时应用持久化任务镜像。
-///
-/// # Parameters
-/// 参数
-/// `controller_runtime` owns the workspace-store runtime bridge.
-/// `controller_runtime` 持有工作区存储运行时桥。
-/// `agent_runtime` optionally reports live subagent runtime state.
-/// `agent_runtime` 可选报告实时子代理运行态。
-/// `live_listener_task_ids` contains detached subagent listener ids still owned by WebUI.
-/// `live_listener_task_ids` 包含 WebUI 仍持有的分离子代理监听标识。
-/// `project_id` optionally narrows the mirror lookup to the known parent project.
-/// `project_id` 可选将镜像查询收窄到已知父项目。
-/// `session_id` identifies the parent session displayed by the surface.
-/// `session_id` 标识界面正在显示的父会话。
-/// `messages` is the mutable projected transcript window.
-/// `messages` 是可变的投影转录窗口。
-/// `runtime_state` optionally carries canonical records to repair in parallel.
-/// `runtime_state` 可选携带需要同步修复的规范记录。
-///
-/// # Returns
-/// 返回值
-/// `Ok(())` when no mirror work is needed or after eligible task cards are repaired.
-/// 无需镜像处理或已修复符合条件的任务卡片后返回 `Ok(())`。
-fn apply_task_mirror_statuses_to_surface_messages_if_needed(
-    controller_runtime: &ControllerRuntimeHandle,
-    agent_runtime: Option<&AgentRuntimeBridge>,
-    live_listener_task_ids: &BTreeSet<SessionId>,
-    project_id: Option<&str>,
-    session_id: SessionId,
-    messages: &mut [SessionMessageEntry],
-    mut runtime_state: Option<&mut SessionRuntimeStateEntry>,
-) -> Result<(), String> {
-    if !surface_contains_task_session_tool_card(messages.iter(), runtime_state.as_deref()) {
-        return Ok(());
-    }
-    let task_mirrors = load_segmented_session_task_mirrors_for_service(
-        controller_runtime,
-        project_id,
-        session_id,
-    )?;
-    if task_mirrors.is_empty() {
-        return Ok(());
-    }
-    apply_task_mirror_statuses_to_parent_messages(
-        messages,
-        runtime_state.as_deref_mut(),
-        task_mirrors.as_slice(),
-        |task_id| {
-            webui_subagent_task_has_live_run(
-                agent_runtime.map(|runtime| &runtime.task_runtime),
-                live_listener_task_ids.contains(&task_id),
-                task_id,
-            )
-        },
-    );
-    Ok(())
-}
-
 /// Applies lightweight persisted child-task mirror states to parent spawn-agent tool cards.
 /// 将持久化轻量子任务镜像状态应用到父级 spawn_agent 工具卡片。
 ///
@@ -22804,21 +22995,21 @@ async fn refresh_workbench_snapshot(
         )
     };
 
-    let mut refreshed_snapshot = vulcan_workspace_store::workspace_store::load_workspace_snapshot(
-        controller_runtime.clone(),
-    )
-    .await?;
+    let mut refreshed_snapshot =
+        vulcan_workspace_store::workspace_store::load_workspace_index_snapshot(
+            controller_runtime.clone(),
+        )
+        .await?;
     preserve_active_session_run_state(
         preserved_workspace_run_state.as_ref(),
         &mut refreshed_snapshot,
     );
-    let selected_messages =
-        if let Some(messages) = selected_session_messages_from_workspace(&refreshed_snapshot) {
-            messages
-        } else {
+    let selected_session_id = refreshed_snapshot.selected_session;
+    if selected_session_id != SessionId::nil() {
+        if selected_session_messages_from_workspace(&refreshed_snapshot).is_none() {
             let hydration_snapshot = match load_selected_session_hydration(
                 controller_runtime.clone(),
-                refreshed_snapshot.selected_session,
+                selected_session_id,
             )
             .await
             {
@@ -22826,29 +23017,34 @@ async fn refresh_workbench_snapshot(
                 Err(error) if is_missing_segmented_session_file_error(&error) => None,
                 Err(error) => return Err(error),
             };
-            hydration_snapshot
-                .map(|snapshot| snapshot.messages)
-                .unwrap_or_default()
-        };
-    let selected_session_id = refreshed_snapshot.selected_session;
-    if selected_session_id != SessionId::nil() && !selected_messages.is_empty() {
-        refreshed_snapshot
-            .session_messages
-            .insert(selected_session_id, selected_messages);
-        apply_persisted_task_mirror_statuses_to_workspace(
-            &controller_runtime,
-            &mut refreshed_snapshot,
-            selected_session_id,
-            |task_id| {
-                webui_subagent_task_has_live_run(
+            if let Some(hydration) = hydration_snapshot {
+                apply_hydration_to_selected_workspace_snapshot(
+                    &controller_runtime,
+                    &mut refreshed_snapshot,
+                    selected_session_id,
+                    hydration,
                     agent_runtime_for_status
                         .as_ref()
                         .map(|runtime| &runtime.task_runtime),
-                    live_listener_task_ids.contains(&task_id),
-                    task_id,
-                )
-            },
-        )?;
+                    &live_listener_task_ids,
+                )?;
+            }
+        } else {
+            apply_persisted_task_mirror_statuses_to_workspace(
+                &controller_runtime,
+                &mut refreshed_snapshot,
+                selected_session_id,
+                |task_id| {
+                    webui_subagent_task_has_live_run(
+                        agent_runtime_for_status
+                            .as_ref()
+                            .map(|runtime| &runtime.task_runtime),
+                        live_listener_task_ids.contains(&task_id),
+                        task_id,
+                    )
+                },
+            )?;
+        }
     }
     sync_selected_session_goal_summary_from_store(
         &state,
@@ -23143,7 +23339,7 @@ async fn load_selected_session_hydration(
     if selected_session_id == SessionId::nil() {
         return Ok(None);
     }
-    vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+    vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot(
         controller_runtime,
         selected_session_id,
         SELECTED_SESSION_TURN_LOAD_LIMIT,
@@ -23840,7 +24036,7 @@ fn run_service_bootstrap(
                 (
                     "workspace",
                     StartupStepStatus::Running,
-                    "正在载入项目、会话与当前会话正文",
+                    "正在载入项目与会话索引",
                 ),
             ],
         )
@@ -23848,7 +24044,7 @@ fn run_service_bootstrap(
 
     let workspace_snapshot = bootstrap_step(
         runtime.block_on(
-            vulcan_workspace_store::workspace_store::load_or_seed_workspace(
+            vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
                 controller_runtime.clone(),
             ),
         ),
@@ -23864,14 +24060,6 @@ fn run_service_bootstrap(
         .vmm_hook_runtime
         .replace_snapshot(vmm_hook_snapshot);
     let selected_session_id = workspace_snapshot.selected_session;
-    let hydration_snapshot = bootstrap_step(
-        runtime.block_on(load_selected_session_hydration(
-            controller_runtime.clone(),
-            selected_session_id,
-        )),
-        "workspace",
-        "Workspace",
-    )?;
     logs.push(format!(
         "[webui-service] workspace loaded: projects={} sessions={} selected={}",
         workspace_snapshot.task_projects.len(),
@@ -23908,7 +24096,7 @@ fn run_service_bootstrap(
                 (
                     "workspace",
                     StartupStepStatus::Ready,
-                    "项目、会话与当前会话正文已载入",
+                    "项目与会话索引已载入",
                 ),
             ],
         ),
@@ -23923,10 +24111,7 @@ fn run_service_bootstrap(
         &provider_configuration,
         &ai_tool_configuration,
         &workspace_snapshot,
-        hydration_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.messages.as_slice())
-            .unwrap_or(&[]),
+        &[],
         None,
         pending_question_snapshot_from_agent_runtime(Some(&agent_runtime)),
         &logs,
@@ -24104,7 +24289,7 @@ fn startup_ready_message(step_id: &str) -> String {
         "luaskills" => "LuaSkills 引擎与技能目录已就绪",
         "token-budget" => "Token 预算运行时已初始化",
         "mcp" => "MCP Runtime 已初始化",
-        "workspace" => "项目、会话与当前会话正文已载入",
+        "workspace" => "项目与会话索引已载入",
         _ => "已就绪",
     }
     .to_string()
@@ -24339,6 +24524,7 @@ fn workbench_from_runtime(
             .collect(),
         selected_conversation_id,
         messages,
+        conversation_hydration: None,
         subagent_navigation,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
@@ -25387,6 +25573,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         archived_conversations: Vec::new(),
         selected_conversation_id: None,
         messages: Vec::new(),
+        conversation_hydration: None,
         subagent_navigation: None,
         tool_calls: tool_calls(),
         feature_areas: feature_areas(),
@@ -26424,7 +26611,7 @@ fn tool_calls() -> Vec<ToolCallSummary> {
             id: String::from("service-workbench"),
             name: String::from("service_workbench_snapshot"),
             status: String::from("ready"),
-            detail: String::from("WebUI 可读取真实项目、会话、插件与当前会话正文。"),
+            detail: String::from("WebUI 可读取真实项目、会话索引与插件信息。"),
         },
     ]
 }

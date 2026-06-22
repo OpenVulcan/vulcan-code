@@ -1,5 +1,6 @@
 import type {
   ConversationMessage,
+  ConversationMessagesLoadResponse,
   StartupSnapshot,
   WorkspaceFileDirectoryListing,
   WorkspaceFileFilterOptions,
@@ -200,11 +201,28 @@ export async function loadWorkspaceFilePreview(
 
 // loadConversationMessages loads one conversation body from the local service.
 // loadConversationMessages 从本地服务加载单个会话正文。
-export async function loadConversationMessages(sessionId: string): Promise<ConversationMessage[]> {
+export async function loadConversationMessages(sessionId: string): Promise<ConversationMessagesLoadResponse> {
   if (!hasServiceRuntime()) {
-    return loadBrowserFallbackConversationMessages(sessionId);
+    const progress = {
+      sessionId,
+      status: "ready" as const,
+      phase: "done",
+      message: "会话载入完成。",
+      percent: 100,
+    };
+    const messages = loadBrowserFallbackConversationMessages(sessionId);
+    const workbench = {
+      ...browserFallbackSnapshot(),
+      messages,
+      conversationHydration: progress,
+    };
+    return {
+      workbench,
+      messages,
+      progress,
+    };
   }
-  return serviceClient.request<ConversationMessage[]>("service_session_messages", { sessionId });
+  return serviceClient.request<ConversationMessagesLoadResponse>("service_session_messages", { sessionId });
 }
 
 // loadBrowserFallbackWorkspaceFileDirectory returns a compact demo tree for browser-only previews.

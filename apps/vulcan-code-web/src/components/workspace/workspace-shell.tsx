@@ -77,6 +77,7 @@ import type {
 import type {
   ComposerAttachmentSummary,
   ComposerSlashCommandSummary,
+  ConversationHydrationProgress,
   ConversationSummary,
   MainAreaId,
   PendingPromptSummary,
@@ -352,6 +353,9 @@ interface WorkspaceShellProps {
   // Last conversation loading error.
   // 最近一次会话加载错误。
   conversationLoadError: string | null;
+  // Current lazy conversation body loading progress.
+  // 当前懒加载会话正文进度。
+  conversationHydration: ConversationHydrationProgress | null;
   // Pinned conversation ids used by the project tree.
   // 项目树使用的置顶会话标识集合。
   pinnedConversationIds: Set<string>;
@@ -1063,6 +1067,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         selectedConversationId={props.selectedConversationId}
         loadingConversationId={props.loadingConversationId}
         conversationLoadError={props.conversationLoadError}
+        conversationHydration={props.conversationHydration}
         sessionReviewSummary={sessionReviewSummary}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}

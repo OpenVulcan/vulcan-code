@@ -182,7 +182,6 @@ import {
   coalesceWorkbenchDeltaEnvelopes,
   injectCachedSubagentSurfaceMessages,
   markConversationLocallyRead,
-  mergeConversationMessagesWithSubagentSurfaceMessageCache,
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
   openSubagentSurfaceForConversation,
   reorderPendingPromptSummaries,
@@ -256,6 +255,30 @@ export interface WorkbenchDeltaSignal {
   // 单个渲染帧内批处理的后端局部工作台更新信封。
   envelopes: WorkbenchDeltaEnvelope[];
 }
+
+// conversationIdsWithMessages returns conversation ids that already have visible message bodies in a snapshot.
+// conversationIdsWithMessages 返回快照中已经带有可见正文消息的会话标识。
+function conversationIdsWithMessages(messages: ConversationMessage[]): Set<string> {
+  return new Set(messages.map((message) => message.conversationId).filter(Boolean));
+}
+
+// mergeHydratedConversationIds returns the previous set when no new hydrated ids are discovered.
+// mergeHydratedConversationIds 在没有发现新正文会话标识时返回旧集合以避免重复触发水合。
+function mergeHydratedConversationIds(
+  current: Set<string>,
+  conversationIds: Iterable<string>,
+): Set<string> {
+  let next: Set<string> | null = null;
+  for (const conversationId of conversationIds) {
+    if (current.has(conversationId)) {
+      continue;
+    }
+    next ??= new Set(current);
+    next.add(conversationId);
+  }
+  return next ?? current;
+}
+
 // WorkbenchLayout renders the WebUI workbench shell.
 // WorkbenchLayout 渲染 WebUI 工作台外壳。
 export function WorkbenchLayout(props: {
@@ -353,18 +376,6 @@ export function WorkbenchLayout(props: {
   const mergeWorkbenchWithLocalCaches = React.useCallback((current: WorkbenchSnapshot, incoming: WorkbenchSnapshot) => (
     mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache(current, incoming, subagentSurfaceMessageCacheRef.current)
   ), []);
-  // mergeConversationMessagesWithLocalCaches centralizes lazy message hydration cache updates.
-  // mergeConversationMessagesWithLocalCaches 集中处理懒加载正文时的缓存更新。
-  const mergeConversationMessagesWithLocalCaches = React.useCallback((
-    current: WorkbenchSnapshot,
-    conversationId: string,
-    messages: ConversationMessage[],
-  ) => mergeConversationMessagesWithSubagentSurfaceMessageCache(
-    current,
-    conversationId,
-    messages,
-    subagentSurfaceMessageCacheRef.current,
-  ), []);
   // applySkillWorkbenchAction runs one skill-page service action and merges the returned snapshot.
   // applySkillWorkbenchAction 执行单个技能页面服务动作并合并返回快照。
   const applySkillWorkbenchAction = React.useCallback(async (action: () => Promise<WorkbenchSnapshot>) => {
@@ -418,7 +429,7 @@ export function WorkbenchLayout(props: {
   // hydratedConversationIds stores conversations already requested from the service.
   // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
-    () => new Set(),
+    () => conversationIdsWithMessages(props.workbench.messages),
   );
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
@@ -1592,6 +1603,10 @@ export function WorkbenchLayout(props: {
       }
       return nextSelected;
     });
+    setHydratedConversationIds((current) => mergeHydratedConversationIds(
+      current,
+      conversationIdsWithMessages(props.workbench.messages),
+    ));
   }, [props.workbench]);
 
   React.useEffect(() => {
@@ -1613,13 +1628,7 @@ export function WorkbenchLayout(props: {
       .map(workbenchDeltaConversationId)
       .filter((conversationId): conversationId is string => Boolean(conversationId));
     if (conversationIds.length > 0) {
-      setHydratedConversationIds((current) => {
-        const next = new Set(current);
-        for (const conversationId of conversationIds) {
-          next.add(conversationId);
-        }
-        return next;
-      });
+      setHydratedConversationIds((current) => mergeHydratedConversationIds(current, conversationIds));
     }
   }, [props.workbenchDelta]);
 
@@ -1643,12 +1652,18 @@ export function WorkbenchLayout(props: {
     // hydrateConversation 在不重载整个工作台的情况下加载当前选中会话正文。
     async function hydrateConversation() {
       try {
-        const messages = await loadConversationMessages(conversationId);
+        const response = await loadConversationMessages(conversationId);
         if (cancelled) {
           return;
         }
-        setWorkbenchState((current) => mergeConversationMessagesWithLocalCaches(current, conversationId, messages));
-        setHydratedConversationIds((current) => new Set(current).add(conversationId));
+        const hydratedWorkbench = {
+          ...response.workbench,
+          conversationHydration: response.progress,
+        };
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, hydratedWorkbench));
+        setHydratedConversationIds((current) => (
+          mergeHydratedConversationIds(current, conversationIdsWithMessages(hydratedWorkbench.messages))
+        ));
       } catch (nextError) {
         if (!cancelled) {
           setConversationLoadError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -1664,7 +1679,7 @@ export function WorkbenchLayout(props: {
     return () => {
       cancelled = true;
     };
-  }, [draftConversation?.id, hydratedConversationIds, selectedConversationId]);
+  }, [draftConversation?.id, hydratedConversationIds, mergeWorkbenchWithLocalCaches, selectedConversationId]);
 
   // handleComposerSlashCommand routes slash commands into existing workbench actions.
   // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
@@ -1707,6 +1722,7 @@ export function WorkbenchLayout(props: {
             onTitlebarDoubleClick={handleTitlebarDoubleClick}
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
+            conversationHydration={workbenchState.conversationHydration ?? null}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}

@@ -25,6 +25,13 @@ export type TranslationKey =
   | "console.title"
   | "console.newConversation"
   | "console.emptyPrompt"
+  | "conversation.loading.title"
+  | "conversation.loading.locating"
+  | "conversation.loading.index"
+  | "conversation.loading.reading"
+  | "conversation.loading.projecting"
+  | "conversation.loading.done"
+  | "conversation.loading.failed"
   | "contextPanel.open"
   | "contextPanel.close"
   | "contextPanel.review"
@@ -221,6 +228,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "console.title": "会话",
     "console.newConversation": "新会话",
     "console.emptyPrompt": "我们应该在 {projectName} 中构建什么？",
+    "conversation.loading.title": "正在载入会话",
+    "conversation.loading.locating": "正在定位会话",
+    "conversation.loading.index": "正在读取消息索引",
+    "conversation.loading.reading": "正在读取消息内容",
+    "conversation.loading.projecting": "正在整理显示数据",
+    "conversation.loading.done": "会话载入完成",
+    "conversation.loading.failed": "会话正文载入失败",
     "contextPanel.open": "打开右侧面板",
     "contextPanel.close": "关闭右侧面板",
     "contextPanel.review": "审核",
@@ -414,6 +428,13 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "console.title": "Conversation",
     "console.newConversation": "New conversation",
     "console.emptyPrompt": "What should we build in {projectName}?",
+    "conversation.loading.title": "Loading conversation",
+    "conversation.loading.locating": "Locating conversation",
+    "conversation.loading.index": "Reading message index",
+    "conversation.loading.reading": "Reading message content",
+    "conversation.loading.projecting": "Preparing display data",
+    "conversation.loading.done": "Conversation loaded",
+    "conversation.loading.failed": "Conversation body failed to load",
     "contextPanel.open": "Open right panel",
     "contextPanel.close": "Close right panel",
     "contextPanel.review": "Review",

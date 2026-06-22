@@ -160,6 +160,10 @@ pub struct WorkbenchSnapshot {
     /// Conversation messages shown in the main timeline.
     /// 主时间线展示的会话消息。
     pub messages: Vec<ConversationMessage>,
+    /// Current lazy conversation body hydration progress.
+    /// 当前懒加载会话正文水合进度。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_hydration: Option<ConversationHydrationProgress>,
     /// Subagent navigation projected for the currently selected parent conversation.
     /// 为当前选中父会话投影出的子代理导航状态。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -260,6 +264,60 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes lazy loading progress for one conversation transcript body.
+/// 描述单个会话正文懒加载进度。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHydrationProgress {
+    /// Conversation identifier being loaded.
+    /// 正在加载的会话标识。
+    pub session_id: String,
+    /// Current loading status key.
+    /// 当前加载状态键。
+    pub status: ConversationHydrationStatus,
+    /// Current phase key used by the WebUI i18n layer.
+    /// WebUI 多语言层使用的当前阶段键。
+    pub phase: String,
+    /// Human-readable fallback message.
+    /// 面向用户的回退消息。
+    pub message: String,
+    /// Completed progress percentage from 0 to 100.
+    /// 0 到 100 的已完成百分比。
+    pub percent: u8,
+}
+
+/// Stable lazy conversation hydration status values.
+/// 稳定的懒加载会话正文水合状态值。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum ConversationHydrationStatus {
+    /// The conversation body is being loaded.
+    /// 会话正文正在加载。
+    Loading,
+    /// The conversation body has been loaded.
+    /// 会话正文已经载入。
+    Ready,
+    /// The conversation body failed to load.
+    /// 会话正文载入失败。
+    Error,
+}
+
+/// Response returned by a lazy conversation body load request.
+/// 懒加载会话正文请求返回的响应。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationMessagesLoadResponse {
+    /// Complete workbench snapshot rebuilt with the hydrated selected conversation.
+    /// 使用已水合选中会话重建出的完整工作台快照。
+    pub workbench: Box<WorkbenchSnapshot>,
+    /// Loaded conversation messages.
+    /// 已加载的会话消息。
+    pub messages: Vec<ConversationMessage>,
+    /// Final loading progress.
+    /// 最终加载进度。
+    pub progress: ConversationHydrationProgress,
 }
 
 /// Full WebUI summary for the embedded Lua Skills catalog.

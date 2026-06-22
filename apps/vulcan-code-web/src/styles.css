@@ -5003,6 +5003,46 @@ button {
   padding: 24px;
 }
 
+.conversation-loading-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 12px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--card) 96%, transparent);
+  box-shadow: 0 18px 52px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.conversation-loading-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--foreground);
+  font-size: 0.92rem;
+}
+
+.conversation-loading-heading span {
+  color: var(--muted-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.conversation-loading-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted) 76%, var(--background));
+}
+
+.conversation-loading-bar-value {
+  height: 100%;
+  min-width: 8px;
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 180ms ease;
+}
+
 .streaming-thinking-overlay {
   position: absolute;
   left: calc(50% - var(--conversation-inline-offset, 0px));

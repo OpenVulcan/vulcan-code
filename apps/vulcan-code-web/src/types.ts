@@ -1682,6 +1682,9 @@ export interface WorkbenchSnapshot {
   // Conversation messages.
   // 会话消息。
   messages: ConversationMessage[];
+  // Current lazy conversation body hydration progress.
+  // 当前懒加载会话正文水合进度。
+  conversationHydration?: ConversationHydrationProgress | null;
   // Backend-routed subagent navigation state for the selected parent conversation.
   // 当前选中父会话的后端路由子代理导航状态。
   subagentNavigation?: SubagentNavigationSnapshot | null;
@@ -1760,4 +1763,42 @@ export interface WorkbenchSnapshot {
   // Context token usage snapshot projected from the latest execution preparation.
   // 从最近一次执行准备投影出的上下文 Token 占用快照。
   contextUsage?: ContextUsageSnapshot | null;
+}
+
+// ConversationHydrationStatus describes lazy conversation body loading state.
+// ConversationHydrationStatus 描述懒加载会话正文的加载状态。
+export type ConversationHydrationStatus = "loading" | "ready" | "error";
+
+// ConversationHydrationProgress describes one lazy conversation body loading update.
+// ConversationHydrationProgress 描述单个懒加载会话正文的加载进度更新。
+export interface ConversationHydrationProgress {
+  // Conversation identifier being loaded.
+  // 正在加载的会话标识。
+  sessionId: string;
+  // Current loading status.
+  // 当前加载状态。
+  status: ConversationHydrationStatus;
+  // Current phase key used for localization.
+  // 用于本地化的当前阶段键。
+  phase: string;
+  // Human-readable fallback message.
+  // 面向用户的回退消息。
+  message: string;
+  // Completed progress percentage from 0 to 100.
+  // 0 到 100 的已完成百分比。
+  percent: number;
+}
+
+// ConversationMessagesLoadResponse contains one lazily loaded conversation body.
+// ConversationMessagesLoadResponse 包含单个懒加载完成的会话正文。
+export interface ConversationMessagesLoadResponse {
+  // Complete workbench snapshot rebuilt with the hydrated selected conversation.
+  // 使用已水合选中会话重建出的完整工作台快照。
+  workbench: WorkbenchSnapshot;
+  // Loaded conversation messages.
+  // 已加载的会话消息。
+  messages: ConversationMessage[];
+  // Final loading progress.
+  // 最终加载进度。
+  progress: ConversationHydrationProgress;
 }

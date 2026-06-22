@@ -85,6 +85,7 @@ export function mergeWorkbenchSnapshot(
     ...incoming,
     selectedConversationId,
     expandedProjectIds,
+    conversationHydration: incoming.conversationHydration ?? current.conversationHydration ?? null,
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...mergedIncomingMessages],
   };
