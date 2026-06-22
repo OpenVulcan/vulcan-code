@@ -2971,7 +2971,7 @@ async fn service_set_luaskill_tool_registration_state(
             .set_tool_registration_state(&skill_id, &local_name, next_state);
         Ok(())
     })?;
-    refresh_workbench_snapshot(state).await
+    refresh_luaskills_local_state(&state)
 }
 
 /// Refreshes Agent Skills by rebuilding the current WebUI workbench snapshot.
@@ -10761,6 +10761,26 @@ fn refresh_agent_skills_local_state(
     Ok(summary)
 }
 
+/// Reprojects LuaSkills after a focused tool-registration configuration change.
+/// 在聚焦的工具注册配置变更后重新投影 LuaSkills。
+fn refresh_luaskills_local_state(
+    state: &SharedServiceBridgeState,
+) -> Result<WorkbenchSnapshot, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let provider_configuration = guard
+        .agent_runtime
+        .as_ref()
+        .map(|runtime| runtime.provider_configuration.clone())
+        .unwrap_or_default();
+    let catalog = cached_luaskills_catalog_from_state(&guard);
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    guard.workbench.lua_skills = lua_skills_catalog_summary(&catalog, &provider_configuration);
+    guard.workbench.plugins = plugins_from_luaskills(&catalog);
+    Ok(guard.workbench.clone())
+}
+
 /// Parses the project-level Agent Skill tri-state key from the WebUI.
 /// 从 WebUI 解析项目级 Agent Skill 三态键。
 fn parse_agent_skill_project_state(
@@ -17327,9 +17347,18 @@ fn mark_webui_prompt_snapshot_preparing(
     session_id: SessionId,
 ) {
     let now = current_unix_millis_text();
-    workspace_snapshot
+    let phase = workspace_snapshot
         .session_run_phases
-        .insert(session_id, SessionRunPhase::Preparing);
+        .get(&session_id)
+        .copied()
+        .unwrap_or(SessionRunPhase::Preparing);
+    // Preserve the explicit memory-recall phase until the precheck continuation promotes the turn to provider preparation.
+    // 保留显式记忆召回阶段，直到 precheck continuation 将本轮推进到 Provider 准备阶段。
+    if phase != SessionRunPhase::MemoryRecall {
+        workspace_snapshot
+            .session_run_phases
+            .insert(session_id, SessionRunPhase::Preparing);
+    }
     if let Some(runtime_state) = workspace_snapshot
         .session_runtime_state
         .get_mut(&session_id)
@@ -31218,6 +31247,48 @@ mod tests {
 
         runtime_state.active_precheck_turn_id = Some(String::from("turn-1"));
         assert!(webui_pending_prompt_has_precheck_progress(&runtime_state));
+    }
+
+    /// Verifies the initial WebUI prompt snapshot keeps memory recall visible instead of downgrading to a generic request cue.
+    /// 验证 WebUI 提示词初始快照会保留记忆召回显示，而不是降级成通用请求提示。
+    #[test]
+    fn webui_prompt_snapshot_preparing_preserves_memory_recall_phase() {
+        let session_id = SessionId::new_v4();
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "记忆召回测试",
+                "",
+                SessionState::Running,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(
+                session_id,
+                SessionRuntimeStateEntry::default(),
+            )]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::from([(session_id, SessionRunPhase::MemoryRecall)]),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        mark_webui_prompt_snapshot_preparing(&mut workspace_snapshot, session_id);
+
+        assert_eq!(
+            workspace_snapshot.session_run_phases.get(&session_id),
+            Some(&SessionRunPhase::MemoryRecall)
+        );
     }
 
     /// Verifies WebUI can rebuild runnable runtime state from visible messages after SQLite runtime storage is removed.

@@ -30,12 +30,24 @@ export function LuaSkillsPanel(props: {
 }) {
   const { t } = useI18n();
   const [busyAction, setBusyAction] = React.useState<string | null>(null);
-  // detailSkill stores the Lua Skill selected for the details dialog.
-  // detailSkill 保存当前打开详情弹窗的 Lua Skill。
-  const [detailSkill, setDetailSkill] = React.useState<LuaSkillSummary | null>(null);
-  // toolsSkill stores the Lua Skill selected for the tools dialog.
-  // toolsSkill 保存当前打开工具弹窗的 Lua Skill。
-  const [toolsSkill, setToolsSkill] = React.useState<LuaSkillSummary | null>(null);
+  // detailSkillId stores the Lua Skill selected for the details dialog.
+  // detailSkillId 保存当前打开详情弹窗的 Lua Skill 标识。
+  const [detailSkillId, setDetailSkillId] = React.useState<string | null>(null);
+  // toolsSkillId stores the Lua Skill selected for the tools dialog.
+  // toolsSkillId 保存当前打开工具弹窗的 Lua Skill 标识。
+  const [toolsSkillId, setToolsSkillId] = React.useState<string | null>(null);
+  // detailSkill derives the selected details skill from the latest snapshot.
+  // detailSkill 从最新快照派生当前详情技能，避免弹窗持有旧对象。
+  const detailSkill = React.useMemo(
+    () => props.skills.find((skill) => skill.skillId === detailSkillId) ?? null,
+    [detailSkillId, props.skills],
+  );
+  // toolsSkill derives the selected tools skill from the latest snapshot.
+  // toolsSkill 从最新快照派生当前工具技能，避免工具状态同步后仍显示旧对象。
+  const toolsSkill = React.useMemo(
+    () => props.skills.find((skill) => skill.skillId === toolsSkillId) ?? null,
+    [props.skills, toolsSkillId],
+  );
 
   const runAction = React.useCallback(async (label: string, action: () => Promise<void>) => {
     setBusyAction(label);
@@ -60,30 +72,30 @@ export function LuaSkillsPanel(props: {
             actions={props.actions}
             busy={busyAction !== null}
             key={skill.skillId}
-            onOpenDetail={setDetailSkill}
-            onOpenTools={setToolsSkill}
+            onOpenDetail={(selectedSkill) => setDetailSkillId(selectedSkill.skillId)}
+            onOpenTools={(selectedSkill) => setToolsSkillId(selectedSkill.skillId)}
             onRunAction={runAction}
             skill={skill}
           />
         ))}
       </div>
       <LuaSkillDetailDialog
-        open={detailSkill !== null}
+        open={detailSkillId !== null && detailSkill !== null}
         skill={detailSkill}
         onOpenChange={(open) => {
           if (!open) {
-            setDetailSkill(null);
+            setDetailSkillId(null);
           }
         }}
       />
       <LuaSkillToolsDialog
         actions={props.actions}
         busy={busyAction !== null}
-        open={toolsSkill !== null}
+        open={toolsSkillId !== null && toolsSkill !== null}
         skill={toolsSkill}
         onOpenChange={(open) => {
           if (!open) {
-            setToolsSkill(null);
+            setToolsSkillId(null);
           }
         }}
       />
