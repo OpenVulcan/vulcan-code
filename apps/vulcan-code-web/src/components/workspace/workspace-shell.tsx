@@ -356,6 +356,12 @@ interface WorkspaceShellProps {
   // Current lazy conversation body loading progress.
   // 当前懒加载会话正文进度。
   conversationHydration: ConversationHydrationProgress | null;
+  // Whether older history exists before the loaded selected conversation window.
+  // 当前已加载选中会话窗口之前是否存在更早历史。
+  conversationHasMoreHistory: boolean;
+  // Whether an older history page is currently being loaded.
+  // 当前是否正在加载更早历史页。
+  conversationHistoryLoading: boolean;
   // Pinned conversation ids used by the project tree.
   // 项目树使用的置顶会话标识集合。
   pinnedConversationIds: Set<string>;
@@ -395,6 +401,9 @@ interface WorkspaceShellProps {
   // Selects one persisted conversation.
   // 选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;
+  // Loads one older history page for a conversation.
+  // 为单个会话加载一页更早历史。
+  onLoadConversationHistory: (conversationId: string) => Promise<boolean>;
   // Selects the active model for the workbench.
   // 选择工作台当前模型。
   onSelectWorkbenchModel: (choice: ModelPickerChoice) => Promise<boolean>;
@@ -1071,6 +1080,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         loadingConversationId={props.loadingConversationId}
         conversationLoadError={props.conversationLoadError}
         conversationHydration={props.conversationHydration}
+        conversationHasMoreHistory={props.conversationHasMoreHistory}
+        conversationHistoryLoading={props.conversationHistoryLoading}
         sessionReviewSummary={sessionReviewSummary}
         onSelectWorkbenchModel={props.onSelectWorkbenchModel}
         onListWorkbenchModelSecondaryRoutes={props.onListWorkbenchModelSecondaryRoutes}
@@ -1098,6 +1109,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onSubmitUserPromptEdit={props.onSubmitUserPromptEdit}
         onForkConversation={props.onForkConversation}
         onSelectConversation={props.onSelectConversation}
+        onLoadConversationHistory={props.onLoadConversationHistory}
         onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
         layoutStabilityKey={[

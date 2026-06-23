@@ -1821,7 +1821,33 @@ export interface ConversationMessagesLoadResponse {
   // Loaded conversation messages.
   // 已加载的会话消息。
   messages: ConversationMessage[];
+  // Earliest loaded transcript ordinal used to request older history.
+  // 用于继续请求更早历史的已加载最早转录序号。
+  earliestOrdinal?: number | null;
+  // Whether older transcript turns still exist before this window.
+  // 当前窗口之前是否仍存在更早的转录轮次。
+  hasMoreHistory: boolean;
   // Final loading progress.
   // 最终加载进度。
   progress: ConversationHydrationProgress;
+}
+
+// ConversationHistoryPageResponse contains one older conversation history page.
+// ConversationHistoryPageResponse 包含单页更早会话历史。
+export interface ConversationHistoryPageResponse {
+  // Conversation identifier owning this page.
+  // 拥有该页历史的会话标识。
+  sessionId: string;
+  // Complete workbench snapshot after merging this older page.
+  // 合并该页更早历史后的完整工作台快照。
+  workbench: WorkbenchSnapshot;
+  // Older conversation messages in ascending display order.
+  // 按展示正序排列的更早会话消息。
+  messages: ConversationMessage[];
+  // Earliest loaded transcript ordinal after this page.
+  // 加载该页后已加载的最早转录序号。
+  earliestOrdinal?: number | null;
+  // Whether more older transcript turns still exist.
+  // 是否仍存在更多更早的转录轮次。
+  hasMoreHistory: boolean;
 }

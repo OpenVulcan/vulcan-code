@@ -315,9 +315,37 @@ pub struct ConversationMessagesLoadResponse {
     /// Loaded conversation messages.
     /// 已加载的会话消息。
     pub messages: Vec<ConversationMessage>,
+    /// Earliest loaded transcript ordinal used to request older history.
+    /// 用于继续请求更早历史的已加载最早转录序号。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether older transcript turns still exist before this window.
+    /// 当前窗口之前是否仍存在更早的转录轮次。
+    pub has_more_history: bool,
     /// Final loading progress.
     /// 最终加载进度。
     pub progress: ConversationHydrationProgress,
+}
+
+/// Response returned by one older conversation history page request.
+/// 单次更早会话历史页请求返回的响应。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationHistoryPageResponse {
+    /// Conversation identifier owning this page.
+    /// 拥有该页历史的会话标识。
+    pub session_id: String,
+    /// Complete workbench snapshot after merging this older page.
+    /// 合并该页更早历史后的完整工作台快照。
+    pub workbench: Box<WorkbenchSnapshot>,
+    /// Older conversation messages in ascending display order.
+    /// 按展示正序排列的更早会话消息。
+    pub messages: Vec<ConversationMessage>,
+    /// Earliest loaded transcript ordinal after this page.
+    /// 加载该页后已加载的最早转录序号。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether more older transcript turns still exist.
+    /// 是否仍存在更多更早的转录轮次。
+    pub has_more_history: bool,
 }
 
 /// Full WebUI summary for the embedded Lua Skills catalog.

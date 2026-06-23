@@ -115,12 +115,12 @@ use vulcan_service_api::{
     AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
-    ConversationForkSourceSummary, ConversationHydrationProgress, ConversationHydrationStatus,
-    ConversationMessage, ConversationMessagesLoadResponse, ConversationSummary, FeatureAreaSummary,
-    KeyValueSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
-    LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
-    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
-    PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    ConversationForkSourceSummary, ConversationHistoryPageResponse, ConversationHydrationProgress,
+    ConversationHydrationStatus, ConversationMessage, ConversationMessagesLoadResponse,
+    ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
+    LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole,
+    PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
+    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -187,10 +187,11 @@ use vulcan_workbench_model::{
 use vulcan_workspace_store::{
     data_plane::{APP_SPACE_ID, ControllerRuntimeHandle},
     workspace_store::{
-        GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, SessionHydrationSnapshot,
-        SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
-        WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
-        load_persisted_user_prompt_edit_draft, load_segmented_session_fork_source_for_project,
+        GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, SessionHistoryPage,
+        SessionHydrationSnapshot, SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus,
+        VulcanGoalStore, WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
+        fork_persisted_session, load_persisted_user_prompt_edit_draft,
+        load_segmented_session_fork_source_for_project,
         record_persisted_session_fork_source_marker, rollback_persisted_session_before_user_prompt,
     },
 };
@@ -616,7 +617,21 @@ impl SessionLifecycleHook for WebuiSessionLifecycleHook {
 
 /// Number of recent turns loaded for the selected conversation.
 /// 为当前选中会话加载的最近轮次数量。
-const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 24;
+const SELECTED_SESSION_TURN_LOAD_LIMIT: usize = 30;
+
+/// Hydrated workbench plus transcript pagination cursors for one selected session.
+/// 单个选中会话的已水合工作台与转录分页游标。
+struct HydratedSessionWorkbench {
+    /// Workbench snapshot rebuilt with the loaded conversation window.
+    /// 使用已加载会话窗口重建出的工作台快照。
+    workbench: WorkbenchSnapshot,
+    /// Earliest loaded transcript ordinal used to page older turns.
+    /// 用于继续分页加载更早轮次的已加载最早转录序号。
+    earliest_ordinal: Option<i64>,
+    /// Whether older transcript turns exist before the current window.
+    /// 当前窗口之前是否存在更早的转录轮次。
+    has_more_history: bool,
+}
 
 /// Maximum loaded subagent transcript surfaces retained by the Tauri service.
 /// Tauri 服务保留的已加载子代理转录界面最大数量。
@@ -2167,6 +2182,15 @@ async fn dispatch_service_rpc(
         "service_session_messages" => rpc_json_result(
             service_session_messages(app, state, rpc_required_param(&params, "sessionId")?).await,
         ),
+        "service_session_history_page" => rpc_json_result(
+            service_session_history_page(
+                app,
+                state,
+                rpc_required_param(&params, "sessionId")?,
+                rpc_required_param(&params, "beforeOrdinal")?,
+            )
+            .await,
+        ),
         "service_session_tool_detail" => rpc_json_result(
             service_session_tool_detail(
                 state,
@@ -3554,6 +3578,7 @@ async fn service_fork_conversation(
         &target_session_id_text,
     )
     .await
+    .map(|hydrated| hydrated.workbench)
 }
 
 /// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.
@@ -3630,7 +3655,7 @@ async fn service_session_messages(
             "正在定位会话。",
         ),
     )?;
-    let workbench = load_hydrated_session_workbench(&app, &state, parsed_session_id, &session_id)
+    let hydrated = load_hydrated_session_workbench(&app, &state, parsed_session_id, &session_id)
         .await
         .map_err(|error| {
             let _ = emit_conversation_hydration_progress(
@@ -3653,7 +3678,7 @@ async fn service_session_messages(
         100,
         "会话载入完成。",
     );
-    let mut completed_workbench = workbench;
+    let mut completed_workbench = hydrated.workbench;
     completed_workbench.conversation_hydration = Some(progress.clone());
     let messages = completed_workbench.messages.clone();
     {
@@ -3667,8 +3692,111 @@ async fn service_session_messages(
     Ok(ConversationMessagesLoadResponse {
         workbench: Box::new(completed_workbench),
         messages,
+        earliest_ordinal: hydrated.earliest_ordinal,
+        has_more_history: hydrated.has_more_history,
         progress,
     })
+}
+
+/// Loads one older transcript page and merges it into the retained conversation window.
+/// 加载一页更早转录历史，并将其合并进保留的会话窗口。
+async fn service_session_history_page(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    session_id: String,
+    before_ordinal: i64,
+) -> Result<ConversationHistoryPageResponse, String> {
+    let parsed_session_id = session_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
+    let controller_runtime = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.controller_runtime.clone().ok_or_else(|| {
+            String::from("service is still starting; controller runtime is not ready")
+        })?
+    };
+    let page = vulcan_workspace_store::workspace_store::load_session_history_page(
+        controller_runtime,
+        parsed_session_id,
+        before_ordinal,
+        SELECTED_SESSION_TURN_LOAD_LIMIT,
+    )
+    .await?;
+    let page_messages = conversation_messages_from_session(&session_id, &page.messages, false);
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() else {
+            return Err(String::from("service workspace snapshot is not ready"));
+        };
+        let merged_messages = merge_older_session_history_page(
+            workspace_snapshot
+                .session_messages
+                .entry(parsed_session_id)
+                .or_default(),
+            &page,
+        );
+        let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
+            workspace_snapshot,
+            parsed_session_id,
+            None,
+        );
+        if guard.workbench.selected_conversation_id.as_deref() == Some(session_id.as_str()) {
+            guard.workbench.messages = conversation_messages_from_session(
+                &session_id,
+                &merged_messages,
+                allow_user_prompt_editing,
+            );
+        }
+        guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(ConversationHistoryPageResponse {
+        session_id,
+        workbench: Box::new(workbench),
+        messages: page_messages,
+        earliest_ordinal: page.earliest_ordinal,
+        has_more_history: page.has_more_history,
+    })
+}
+
+/// Prepends an older history page into the retained session message window without duplicating rows.
+/// 将更早历史页前置合并到保留的会话消息窗口中，并避免重复行。
+fn merge_older_session_history_page(
+    retained_messages: &mut Vec<SessionMessageEntry>,
+    page: &SessionHistoryPage,
+) -> Vec<SessionMessageEntry> {
+    let mut seen_keys = retained_messages
+        .iter()
+        .map(session_message_entry_stable_merge_key)
+        .collect::<BTreeSet<_>>();
+    let mut merged = page
+        .messages
+        .iter()
+        .filter(|message| seen_keys.insert(session_message_entry_stable_merge_key(message)))
+        .cloned()
+        .collect::<Vec<_>>();
+    merged.append(retained_messages);
+    *retained_messages = merged.clone();
+    retained_messages.clone()
+}
+
+/// Returns the stable merge key used by transcript history pagination.
+/// 返回转录历史分页使用的稳定合并键。
+fn session_message_entry_stable_merge_key(message: &SessionMessageEntry) -> String {
+    if !message.id.is_empty() {
+        return message.id.clone();
+    }
+    format!(
+        "{}:{}:{}",
+        message.created_at,
+        message.record_kind.as_persisted_key(),
+        message.body
+    )
 }
 
 /// Loads one conversation using the original selected-session workbench projection path.
@@ -3678,7 +3806,7 @@ async fn load_hydrated_session_workbench(
     state: &SharedServiceBridgeState,
     parsed_session_id: SessionId,
     session_id: &str,
-) -> Result<WorkbenchSnapshot, String> {
+) -> Result<HydratedSessionWorkbench, String> {
     let (
         controller_runtime,
         luaskills_catalog,
@@ -3789,6 +3917,8 @@ async fn load_hydrated_session_workbench(
             Err(error)
         }
     })?;
+    let earliest_ordinal = hydration.earliest_ordinal;
+    let has_more_history = hydration.has_more_history;
     emit_conversation_hydration_progress(
         app,
         state,
@@ -3860,7 +3990,11 @@ async fn load_hydrated_session_workbench(
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
-    Ok(workbench)
+    Ok(HydratedSessionWorkbench {
+        workbench,
+        earliest_ordinal,
+        has_more_history,
+    })
 }
 
 /// Builds an empty hydration payload for a missing segmented session file.

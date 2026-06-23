@@ -124,6 +124,12 @@ interface ChatAreaProps {
   // Current lazy conversation body loading progress.
   // 当前懒加载会话正文进度。
   conversationHydration: ConversationHydrationProgress | null;
+  // Whether the selected conversation has older history before the loaded window.
+  // 当前选中会话已加载窗口之前是否还有更早历史。
+  conversationHasMoreHistory: boolean;
+  // Whether an older history page is currently being loaded.
+  // 当前是否正在加载更早历史页。
+  conversationHistoryLoading: boolean;
   // Current Git review summary shown beside compact session progress.
   // 当前用于紧凑会话进程旁展示的 Git 审查摘要。
   sessionReviewSummary: ConversationSessionReviewSummary | null;
@@ -224,6 +230,9 @@ interface ChatAreaProps {
   // Selects one persisted conversation from a transcript navigation affordance.
   // 从转录导航入口选择一个持久化会话。
   onSelectConversation: (conversationId: string) => void;
+  // Loads one older history page for a conversation.
+  // 为单个会话加载一页更早历史。
+  onLoadConversationHistory: (conversationId: string) => Promise<boolean>;
   // Loads hidden tool details for expanded transcript rows.
   // 为展开的转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -478,26 +487,47 @@ export function ChatArea(props: ChatAreaProps) {
   // writeConversationScrollSnapshot stores the current scroll snapshot inside the surface restore state.
   // writeConversationScrollSnapshot 将当前滚动快照写入界面恢复状态。
   const writeConversationScrollSnapshot = React.useCallback((surfaceId: string, snapshot: ConversationScrollSnapshot) => {
+    // pendingSurfaceSwitch blocks pre-restore writes after React swaps the DOM to the next surface.
+    // pendingSurfaceSwitch 阻止 React 已换到新界面但恢复流程尚未接管时的预恢复写入。
+    const pendingSurfaceSwitch = activeSurfaceConversationId !== null
+      && selectedConversationTailRef.current !== activeSurfaceConversationId
+      && surfaceId === activeSurfaceConversationId;
+    if (pendingSurfaceSwitch) {
+      return;
+    }
     updateConversationSurfaceLayoutState(surfaceId, (current) => ({
       ...current,
       scroll: snapshot,
     }));
-  }, [updateConversationSurfaceLayoutState]);
+  }, [activeSurfaceConversationId, updateConversationSurfaceLayoutState]);
+  // rememberConversationScrollSnapshotForSurface captures the current DOM viewport for one exact surface.
+  // rememberConversationScrollSnapshotForSurface 为指定界面精确捕获当前 DOM 视口。
+  const rememberConversationScrollSnapshotForSurface = React.useCallback((surfaceId: string) => {
+    const element = workspaceRef.current;
+    if (!element || element.dataset.conversationSurfaceId !== surfaceId) {
+      return false;
+    }
+    const wasAtBottom = conversationViewportAllowsTailFollow(element);
+    writeConversationScrollSnapshot(surfaceId, {
+      anchor: wasAtBottom ? null : captureConversationViewportAnchor(element),
+      distanceFromBottom: wasAtBottom ? 0 : conversationDistanceFromBottom(element),
+      wasAtBottom,
+    });
+    return true;
+  }, [writeConversationScrollSnapshot]);
   // rememberConversationScrollSnapshot captures the current shared scroll element before route changes.
   // rememberConversationScrollSnapshot 在路由切换前捕获当前共享滚动元素状态。
   const rememberConversationScrollSnapshot = React.useCallback(() => {
     const element = workspaceRef.current;
     const surfaceId = element?.dataset.conversationSurfaceId ?? renderedSurfaceConversationIdRef.current ?? activeSurfaceConversationId ?? null;
-    if (!element || !surfaceId) {
+    if (!surfaceId) {
       return;
     }
-    const wasAtBottom = conversationViewportAllowsTailFollow(element);
-    writeConversationScrollSnapshot(surfaceId, {
-      distanceFromBottom: conversationDistanceFromBottom(element),
-      wasAtBottom,
-    });
-    shouldFollowConversationTailRef.current = wasAtBottom;
-  }, [activeSurfaceConversationId, writeConversationScrollSnapshot]);
+    if (rememberConversationScrollSnapshotForSurface(surfaceId)) {
+      const snapshot = readConversationSurfaceLayoutState(surfaceId)?.scroll;
+      shouldFollowConversationTailRef.current = snapshot?.wasAtBottom ?? shouldFollowConversationTailRef.current;
+    }
+  }, [activeSurfaceConversationId, readConversationSurfaceLayoutState, rememberConversationScrollSnapshotForSurface]);
 
   // clearLayoutRestoreFrames cancels pending viewport correction frames.
   // clearLayoutRestoreFrames 取消待执行的视口校正帧。
@@ -544,6 +574,7 @@ export function ChatArea(props: ChatAreaProps) {
     if (alreadyTailLocked) {
       if (surfaceId) {
         writeConversationScrollSnapshot(surfaceId, {
+          anchor: null,
           distanceFromBottom: 0,
           wasAtBottom: true,
         });
@@ -556,6 +587,7 @@ export function ChatArea(props: ChatAreaProps) {
     if (surfaceId && restoreGuard?.surfaceId === surfaceId && restoreGuard.wasAtBottom && !suppressNearBottomFollow && !shouldFollow) {
       shouldFollowConversationTailRef.current = true;
       writeConversationScrollSnapshot(surfaceId, {
+        anchor: null,
         distanceFromBottom: 0,
         wasAtBottom: true,
       });
@@ -565,6 +597,7 @@ export function ChatArea(props: ChatAreaProps) {
     shouldFollowConversationTailRef.current = shouldFollow;
     if (surfaceId) {
       writeConversationScrollSnapshot(surfaceId, {
+        anchor: shouldFollow ? null : captureConversationViewportAnchor(element),
         distanceFromBottom: conversationDistanceFromBottom(element),
         wasAtBottom: shouldFollow,
       });
@@ -589,6 +622,7 @@ export function ChatArea(props: ChatAreaProps) {
       wasAtBottom,
     };
     writeConversationScrollSnapshot(surfaceId, {
+      anchor: pendingLayoutViewportRef.current.anchor,
       distanceFromBottom: pendingLayoutViewportRef.current.distanceFromBottom,
       wasAtBottom,
     });
@@ -673,6 +707,7 @@ export function ChatArea(props: ChatAreaProps) {
         scrollElement.scrollTop = scrollElement.scrollHeight;
         if (surfaceId) {
           writeConversationScrollSnapshot(surfaceId, {
+            anchor: null,
             distanceFromBottom: 0,
             wasAtBottom: true,
           });
@@ -786,6 +821,7 @@ export function ChatArea(props: ChatAreaProps) {
       element.scrollTop = element.scrollHeight;
       if (surfaceId) {
         writeConversationScrollSnapshot(surfaceId, {
+          anchor: null,
           distanceFromBottom: 0,
           wasAtBottom: true,
         });
@@ -844,18 +880,6 @@ export function ChatArea(props: ChatAreaProps) {
     const element = workspaceRef.current;
     const previousSurfaceId = selectedConversationTailRef.current;
     const selectedChanged = previousSurfaceId !== activeSurfaceConversationId;
-    if (
-      selectedChanged
-      && previousSurfaceId
-      && element
-      && !readConversationSurfaceLayoutState(previousSurfaceId)
-      && shouldFollowConversationTailRef.current
-    ) {
-      writeConversationScrollSnapshot(previousSurfaceId, {
-        distanceFromBottom: 0,
-        wasAtBottom: true,
-      });
-    }
     selectedConversationTailRef.current = activeSurfaceConversationId;
     renderedSurfaceConversationIdRef.current = activeSurfaceConversationId ?? null;
     const savedScrollSnapshot = selectedChanged && activeSurfaceConversationId
@@ -868,7 +892,16 @@ export function ChatArea(props: ChatAreaProps) {
           element.scrollTop = element.scrollHeight;
           return;
         }
-        conversationScrollToDistanceFromBottom(element, savedScrollSnapshot.distanceFromBottom);
+        if (savedScrollSnapshot.anchor) {
+          if (restoreConversationViewportAnchor(element, savedScrollSnapshot.anchor)) {
+            return;
+          }
+          element.scrollTop = element.scrollHeight;
+          return;
+        }
+        if (!savedScrollSnapshot.anchor) {
+          conversationScrollToDistanceFromBottom(element, savedScrollSnapshot.distanceFromBottom);
+        }
       };
       shouldFollowConversationTailRef.current = savedScrollSnapshot.wasAtBottom;
       scrollRestoreGuardRef.current = {
@@ -898,13 +931,51 @@ export function ChatArea(props: ChatAreaProps) {
       };
     }
 
+    if (selectedChanged && !savedScrollSnapshot && element && restoreSurfaceId) {
+      shouldFollowConversationTailRef.current = true;
+      scrollRestoreGuardRef.current = {
+        surfaceId: restoreSurfaceId,
+        wasAtBottom: true,
+      };
+      // secondFrame keeps the default tail initialization stable after React paints the new transcript.
+      // secondFrame 在 React 绘制新转录后保持默认贴底初始化稳定。
+      let secondFrame: number | null = null;
+      // restoreDefaultTailPosition initializes unseen surfaces without reusing the previous surface scrollTop.
+      // restoreDefaultTailPosition 初始化未见过的界面，避免复用上一个界面的 scrollTop。
+      const restoreDefaultTailPosition = () => {
+        element.scrollTop = element.scrollHeight;
+      };
+      restoreDefaultTailPosition();
+      const firstFrame = window.requestAnimationFrame(() => {
+        restoreDefaultTailPosition();
+        secondFrame = window.requestAnimationFrame(() => {
+          restoreDefaultTailPosition();
+          updateConversationBottomState();
+          if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
+            scrollRestoreGuardRef.current = null;
+          }
+        });
+      });
+      return () => {
+        window.cancelAnimationFrame(firstFrame);
+        if (secondFrame !== null) {
+          window.cancelAnimationFrame(secondFrame);
+        }
+        if (scrollRestoreGuardRef.current?.surfaceId === restoreSurfaceId) {
+          scrollRestoreGuardRef.current = null;
+        }
+      };
+    }
+
     const now = Date.now();
     const suppressNearBottomFollow = now <= upwardScrollTailSuppressUntilRef.current;
     const userScrollSettling = now <= userScrollSettleUntilRef.current;
-    const shouldFollowTail = selectedChanged
-      || !element
+    // inheritedTailFollow is ignored during surface switches to prevent previous conversations from forcing tail lock.
+    // inheritedTailFollow 在界面切换时不继承，避免上一个会话强制污染当前会话锁底。
+    const inheritedTailFollow = selectedChanged ? false : shouldFollowConversationTailRef.current;
+    const shouldFollowTail = !element
       || (!userScrollSettling && (
-        shouldFollowConversationTailRef.current
+        inheritedTailFollow
         || (!suppressNearBottomFollow && conversationViewportAllowsTailFollow(element))
       ));
     if (!shouldFollowTail) {
@@ -1142,6 +1213,11 @@ export function ChatArea(props: ChatAreaProps) {
   );
   // conversationSurfaceContent keeps transcript, overlays, and composer in one adaptive content coordinate space.
   // conversationSurfaceContent 将转录、浮层与输入区保留在同一个自适应内容坐标空间内。
+  // activeSurfaceLayoutState reuses one surface-scoped layout snapshot for this render.
+  // activeSurfaceLayoutState 在本次渲染中复用单个界面级布局快照。
+  const activeSurfaceLayoutState = activeSurfaceConversationId
+    ? readConversationSurfaceLayoutState(activeSurfaceConversationId)
+    : null;
   const conversationSurfaceContent = (
     <>
       {emptyPromptVisible ? (
@@ -1157,6 +1233,9 @@ export function ChatArea(props: ChatAreaProps) {
         messages={messages}
         renderItems={renderItems}
         error={props.conversationLoadError}
+        hasMoreHistory={props.conversationHasMoreHistory}
+        historyLoading={props.conversationHistoryLoading}
+        onLoadMoreHistory={props.onLoadConversationHistory}
         parentConversationId={activeSurfaceConversationId ?? null}
         workspacePath={selectedProject?.path ?? null}
         commandSessions={props.workbench.commandSessions ?? []}
@@ -1168,16 +1247,11 @@ export function ChatArea(props: ChatAreaProps) {
         onUserScrollStart={handleConversationUserScrollStart}
         onOpenSubagentPanel={handleOpenSubagentPanelFromTimeline}
         scrollRef={workspaceRef}
-        initialScrollDistanceFromBottom={activeSurfaceConversationId
-          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.scroll.distanceFromBottom ?? 0
-          : 0}
-        initialVirtualizerState={activeSurfaceConversationId
-          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.virtualizer ?? null
-          : null}
+        initialScrollDistanceFromBottom={activeSurfaceLayoutState?.scroll.distanceFromBottom ?? 0}
+        suppressInitialDistanceRestore={Boolean(activeSurfaceLayoutState?.scroll.anchor)}
+        initialVirtualizerState={activeSurfaceLayoutState?.virtualizer ?? null}
         onVirtualizerStateChange={handleTimelineVirtualizerStateChange}
-        initialExpandedState={activeSurfaceConversationId
-          ? readConversationSurfaceLayoutState(activeSurfaceConversationId)?.expandedState ?? null
-          : null}
+        initialExpandedState={activeSurfaceLayoutState?.expandedState ?? null}
         onExpandedStateChange={handleExpandedStateChange}
         footer={null}
         suppressEmptyPlaceholder={isEmptyConversation}

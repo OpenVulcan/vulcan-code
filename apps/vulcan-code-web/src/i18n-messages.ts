@@ -32,6 +32,8 @@ export type TranslationKey =
   | "conversation.loading.projecting"
   | "conversation.loading.done"
   | "conversation.loading.failed"
+  | "conversation.history.loadMore"
+  | "conversation.history.loading"
   | "conversation.action.copyFinal"
   | "conversation.action.copiedFinal"
   | "conversation.action.fork"
@@ -247,6 +249,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "正在整理显示数据",
     "conversation.loading.done": "会话载入完成",
     "conversation.loading.failed": "会话正文载入失败",
+    "conversation.history.loadMore": "加载更多历史",
+    "conversation.history.loading": "正在加载历史",
     "conversation.action.copyFinal": "复制最终输出原文",
     "conversation.action.copiedFinal": "已复制最终输出原文",
     "conversation.action.fork": "分叉会话",
@@ -459,6 +463,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "Preparing display data",
     "conversation.loading.done": "Conversation loaded",
     "conversation.loading.failed": "Conversation body failed to load",
+    "conversation.history.loadMore": "Load more history",
+    "conversation.history.loading": "Loading history",
     "conversation.action.copyFinal": "Copy final output source",
     "conversation.action.copiedFinal": "Copied final output source",
     "conversation.action.fork": "Fork conversation",

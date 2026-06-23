@@ -164,6 +164,7 @@ import {
   saveVmmMemoryConfig,
 } from "@/service/memory-actions-service";
 import {
+  loadConversationHistoryPage,
   loadConversationMessages,
   loadWorkbenchSnapshot,
   loadWorkspaceDiffFileDetail,
@@ -245,6 +246,20 @@ import {
 // ThemeMode describes the two shadcn default theme modes.
 // ThemeMode 描述 shadcn 默认的两种主题模式。
 type ThemeMode = "light" | "dark";
+
+// ConversationHistoryCursor stores the backend cursor for one loaded conversation window.
+// ConversationHistoryCursor 保存单个已加载会话窗口的后端历史游标。
+interface ConversationHistoryCursor {
+  // earliestOrdinal points to the oldest loaded transcript row.
+  // earliestOrdinal 指向当前已加载的最早转录行。
+  earliestOrdinal: number | null;
+  // hasMoreHistory indicates whether an older page can be requested.
+  // hasMoreHistory 表示是否还能请求更早历史页。
+  hasMoreHistory: boolean;
+  // loading marks an in-flight older-page request for this conversation.
+  // loading 标记该会话是否正在请求更早历史页。
+  loading: boolean;
+}
 
 // WorkbenchDeltaSignal wraps the newest partial update with a React-visible sequence.
 // WorkbenchDeltaSignal 使用 React 可见序号包装最新局部更新。
@@ -432,6 +447,9 @@ export function WorkbenchLayout(props: {
   const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
     () => conversationIdsWithMessages(props.workbench.messages),
   );
+  // conversationHistoryCursors stores backend pagination cursors for hydrated conversation windows.
+  // conversationHistoryCursors 保存已水合会话窗口的后端分页游标。
+  const [conversationHistoryCursors, setConversationHistoryCursors] = React.useState<Record<string, ConversationHistoryCursor>>({});
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
   const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
@@ -1663,7 +1681,8 @@ export function WorkbenchLayout(props: {
       return;
     }
     const conversationId = selectedConversationId;
-    if (hydratedConversationIds.has(conversationId)) {
+    const conversationCursor = conversationHistoryCursors[conversationId];
+    if (hydratedConversationIds.has(conversationId) && conversationCursor) {
       return;
     }
 
@@ -1687,6 +1706,14 @@ export function WorkbenchLayout(props: {
         setHydratedConversationIds((current) => (
           mergeHydratedConversationIds(current, conversationIdsWithMessages(hydratedWorkbench.messages))
         ));
+        setConversationHistoryCursors((current) => ({
+          ...current,
+          [conversationId]: {
+            earliestOrdinal: response.earliestOrdinal ?? null,
+            hasMoreHistory: response.hasMoreHistory,
+            loading: false,
+          },
+        }));
       } catch (nextError) {
         if (!cancelled) {
           setConversationLoadError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -1702,7 +1729,50 @@ export function WorkbenchLayout(props: {
     return () => {
       cancelled = true;
     };
-  }, [draftConversation?.id, hydratedConversationIds, mergeWorkbenchWithLocalCaches, selectedConversationId]);
+  }, [conversationHistoryCursors, draftConversation?.id, hydratedConversationIds, mergeWorkbenchWithLocalCaches, selectedConversationId]);
+
+  // handleLoadConversationHistory requests one older turn page for the selected conversation.
+  // handleLoadConversationHistory 为当前选中会话请求一页更早轮次。
+  const handleLoadConversationHistory = React.useCallback(async (conversationId: string): Promise<boolean> => {
+    const cursor = conversationHistoryCursors[conversationId];
+    if (!cursor?.hasMoreHistory || cursor.earliestOrdinal == null || cursor.loading) {
+      return false;
+    }
+    setConversationHistoryCursors((current) => ({
+      ...current,
+      [conversationId]: {
+        ...cursor,
+        loading: true,
+      },
+    }));
+    try {
+      const response = await loadConversationHistoryPage(conversationId, cursor.earliestOrdinal);
+      setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, response.workbench));
+      setConversationHistoryCursors((current) => ({
+        ...current,
+        [conversationId]: {
+          earliestOrdinal: response.earliestOrdinal ?? null,
+          hasMoreHistory: response.hasMoreHistory,
+          loading: false,
+        },
+      }));
+      setHydratedConversationIds((current) => mergeHydratedConversationIds(current, [conversationId]));
+      return true;
+    } catch (error) {
+      console.error("Failed to load older conversation history", error);
+      setConversationHistoryCursors((current) => {
+        const currentCursor = current[conversationId] ?? cursor;
+        return {
+          ...current,
+          [conversationId]: {
+            ...currentCursor,
+            loading: false,
+          },
+        };
+      });
+      return false;
+    }
+  }, [conversationHistoryCursors, mergeWorkbenchWithLocalCaches]);
 
   // handleComposerSlashCommand routes slash commands into existing workbench actions.
   // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
@@ -1746,6 +1816,8 @@ export function WorkbenchLayout(props: {
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
             conversationHydration={workbenchState.conversationHydration ?? null}
+            conversationHasMoreHistory={selectedConversationId ? Boolean(conversationHistoryCursors[selectedConversationId]?.hasMoreHistory) : false}
+            conversationHistoryLoading={selectedConversationId ? Boolean(conversationHistoryCursors[selectedConversationId]?.loading) : false}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}
@@ -1759,6 +1831,7 @@ export function WorkbenchLayout(props: {
             onProjectMenuAction={handleProjectMenuAction}
             onReorderProjects={handleReorderProjects}
             onSelectConversation={handleSelectConversation}
+            onLoadConversationHistory={handleLoadConversationHistory}
             onSelectWorkbenchModel={handleSelectWorkbenchModel}
             onListWorkbenchModelSecondaryRoutes={handleListWorkbenchModelSecondaryRoutes}
             onSelectWorkbenchModelSecondaryRoute={handleSelectWorkbenchModelSecondaryRoute}

@@ -1,5 +1,6 @@
 import type {
   ConversationMessage,
+  ConversationHistoryPageResponse,
   ConversationMessagesLoadResponse,
   StartupSnapshot,
   WorkspaceFileDirectoryListing,
@@ -219,10 +220,33 @@ export async function loadConversationMessages(sessionId: string): Promise<Conve
     return {
       workbench,
       messages,
+      earliestOrdinal: null,
+      hasMoreHistory: false,
       progress,
     };
   }
   return serviceClient.request<ConversationMessagesLoadResponse>("service_session_messages", { sessionId });
+}
+
+// loadConversationHistoryPage loads older turns before the current conversation window.
+// loadConversationHistoryPage 加载当前会话窗口之前的更早轮次。
+export async function loadConversationHistoryPage(
+  sessionId: string,
+  beforeOrdinal: number,
+): Promise<ConversationHistoryPageResponse> {
+  if (!hasServiceRuntime()) {
+    return {
+      sessionId,
+      workbench: browserFallbackSnapshot(),
+      messages: [],
+      earliestOrdinal: null,
+      hasMoreHistory: false,
+    };
+  }
+  return serviceClient.request<ConversationHistoryPageResponse>("service_session_history_page", {
+    sessionId,
+    beforeOrdinal,
+  });
 }
 
 // loadBrowserFallbackWorkspaceFileDirectory returns a compact demo tree for browser-only previews.

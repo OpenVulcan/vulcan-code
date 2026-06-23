@@ -7,6 +7,9 @@ const STREAM_SIGNATURE_TAIL_MESSAGE_LIMIT = 8;
 // ConversationScrollSnapshot stores one transcript surface scroll restoration point.
 // ConversationScrollSnapshot 保存单个转录界面的滚动恢复点。
 export interface ConversationScrollSnapshot {
+  // First visible row anchor captured with this scroll point.
+  // 与该滚动点一起捕获的首个可见行锚点。
+  anchor?: ConversationViewportAnchorSnapshot | null;
   // Distance from the visual viewport bottom to the transcript bottom.
   // 从视觉视口底部到转录底部的距离。
   distanceFromBottom: number;
