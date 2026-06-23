@@ -115,10 +115,10 @@ use vulcan_service_api::{
     AiCapabilityVendorTargetChoiceSummary, AppendMessageBodyDelta, CommandSessionSummary,
     ComposerAttachmentCapabilitySummary, ComposerAttachmentSummary, ContextInjectionCardSummary,
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
-    ConversationHydrationProgress, ConversationHydrationStatus, ConversationMessage,
-    ConversationMessagesLoadResponse, ConversationSummary, FeatureAreaSummary, KeyValueSummary,
-    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary,
-    McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
+    ConversationForkSourceSummary, ConversationHydrationProgress, ConversationHydrationStatus,
+    ConversationMessage, ConversationMessagesLoadResponse, ConversationSummary, FeatureAreaSummary,
+    KeyValueSummary, LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary,
+    LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
     PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
     PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
@@ -190,7 +190,8 @@ use vulcan_workspace_store::{
         GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, SessionHydrationSnapshot,
         SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
         WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
-        load_persisted_user_prompt_edit_draft, rollback_persisted_session_before_user_prompt,
+        load_persisted_user_prompt_edit_draft, load_segmented_session_fork_source_for_project,
+        record_persisted_session_fork_source_marker, rollback_persisted_session_before_user_prompt,
     },
 };
 
@@ -1714,16 +1715,13 @@ fn webui_session_allows_user_prompt_editing(
     state: &mut ServiceBridgeState,
     session_id: SessionId,
 ) -> bool {
+    if session_id == SessionId::nil() {
+        return false;
+    }
     if state.active_stream_tasks.contains_key(&session_id)
         || webui_session_kernel_has_active_turn(state, session_id)
         || webui_session_has_active_run(state, session_id)
     {
-        return false;
-    }
-    let Some(workspace_snapshot) = state.workspace_snapshot.clone() else {
-        return false;
-    };
-    if !workspace_surface_allows_user_prompt_editing(&workspace_snapshot, session_id, None) {
         return false;
     }
     running_webui_subagent_task_states_for_tree_from_live_cache(state, session_id).is_empty()
@@ -3542,6 +3540,12 @@ async fn service_fork_conversation(
         )
         .await?;
     }
+    record_persisted_session_fork_source_marker(
+        &controller_runtime,
+        fork_result.session.id,
+        &source_session,
+        &project_id,
+    )?;
     let target_session_id_text = fork_result.session.id.to_string();
     load_hydrated_session_workbench(
         &app,
@@ -9839,6 +9843,7 @@ fn archived_conversation_summary_from_session(session: &SessionSummary) -> Conve
         last_updated_at: session.updated_at.clone(),
         unread: false,
         project_id: session.project_id.clone(),
+        fork_source: conversation_fork_source_summary_from_session(session),
     }
 }
 
@@ -24437,6 +24442,7 @@ fn workbench_from_runtime(
                         .get(&session.id)
                         .is_some_and(|runtime_state| runtime_state.ui_state.unread),
                     project_id: session.project_id.clone(),
+                    fork_source: conversation_fork_source_summary_from_session(session),
                 }
             })
             .collect(),
@@ -24471,6 +24477,7 @@ fn workbench_from_runtime(
                 last_updated_at: session.updated_at.clone(),
                 unread: false,
                 project_id: session.project_id.clone(),
+                fork_source: conversation_fork_source_summary_from_session(session),
             })
             .collect(),
         selected_conversation_id,
@@ -25457,6 +25464,28 @@ fn session_segmented_metadata_exists(session: &vulcan_workbench_model::SessionSu
     .ok()
     .flatten()
     .is_some_and(|session_dir| session_dir.join("metadata.json").is_file())
+}
+
+/// Builds the WebUI fork-source summary for one session when metadata carries it.
+/// 当元数据携带分叉来源时，为单个会话构建 WebUI 来源摘要。
+fn conversation_fork_source_summary_from_session(
+    session: &vulcan_workbench_model::SessionSummary,
+) -> Option<ConversationForkSourceSummary> {
+    let project_id = session.project_id.as_deref()?;
+    let source = load_segmented_session_fork_source_for_project(
+        &vulcan_workspace_store::data_plane::application_data_root(),
+        project_id,
+        session.id,
+    )
+    .ok()
+    .flatten()?;
+    Some(ConversationForkSourceSummary {
+        source_project_tag: source.source_project_tag,
+        source_conversation_id: source.source_session_id,
+        source_title: source.source_title,
+        anchor_message_id: source.anchor_message_id,
+        created_at: source.created_at,
+    })
 }
 
 /// Returns a trimmed string only when it contains visible content.

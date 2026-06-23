@@ -9,6 +9,7 @@ import {
   type ConversationTimelineUserScrollDirection,
   type ConversationTimelineVirtualRestoreState,
 } from "@/components/conversation/conversation-virtualization";
+import { GitFork } from "lucide-react";
 import {
   createEmptyConversationSurfaceExpandedState,
   type ConversationSurfaceExpandedState,
@@ -49,6 +50,7 @@ import type {
   ConversationMessage,
   ConversationSummary,
 } from "@/types";
+import { useI18n } from "@/i18n";
 
 // CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX is the fallback row height before measurement.
 // CONVERSATION_VIRTUAL_ITEM_ESTIMATE_PX 是测量前使用的兜底行高。
@@ -61,6 +63,9 @@ const CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX = 320;
 // CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX is the fallback final-answer metadata row height.
 // CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX 是最终回答元信息行测量前使用的兜底高度。
 const CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX = 28;
+// CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX is the fallback fork-source separator row height.
+// CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX 是分叉来源分隔行测量前使用的兜底行高。
+const CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX = 40;
 
 // ConversationWorkspace renders the conversation transcript surface.
 // ConversationWorkspace 渲染会话转录展示面。
@@ -134,6 +139,9 @@ export function ConversationWorkspace(props: {
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
   onForkConversation?: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean> | boolean;
+  // Selects the original source conversation for a fork marker.
+  // 选择分叉标记对应的原始来源会话。
+  onSelectForkSourceConversation?: (conversationId: string) => void;
   // Currently pending Plan artifact, when user confirmation is required.
   // 需要用户确认时的当前待处理计划产物。
   pendingPlanArtifact?: ConversationPlanArtifact | null;
@@ -162,6 +170,7 @@ export function ConversationWorkspace(props: {
   // 用于本地诊断的可选埋点回调。
   onTrace?: (action: string, detail?: Record<string, unknown>) => void;
 }) {
+  const { t } = useI18n();
   // detail stores the currently opened transcript detail modal.
   // detail 保存当前打开的转录详情弹窗。
   const [detail, setDetail] = React.useState<ConversationDetail | null>(null);
@@ -356,6 +365,20 @@ export function ConversationWorkspace(props: {
   }, [timelineVirtualizer]);
 
   const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => {
+    if (timelineItem.kind === "fork-source") {
+      return (
+        <ConversationForkSourceSeparator
+          label={t("conversation.forkSource.label")}
+          onSelect={() => {
+            const sourceId = props.conversation?.forkSource?.sourceConversationId;
+            if (!sourceId) {
+              return;
+            }
+            props.onSelectForkSourceConversation?.(sourceId);
+          }}
+        />
+      );
+    }
     if (timelineItem.kind === "final-assistant-meta") {
       const metaKey = conversationTimelineItemKey(timelineItem);
       const forkBeforeMessageId = forkTargetByFinalAssistantMetaKey.get(metaKey);
@@ -511,9 +534,34 @@ export function ConversationWorkspace(props: {
   );
 }
 
+// ConversationForkSourceSeparator renders the display-only source marker for a forked conversation.
+// ConversationForkSourceSeparator 渲染分叉会话的纯展示来源标记。
+function ConversationForkSourceSeparator(props: {
+  // Localized label shown in the separator center.
+  // 展示在分隔线中央的本地化文本。
+  label: string;
+  // Opens the original source conversation when available.
+  // 可用时打开原始来源会话。
+  onSelect: () => void;
+}) {
+  return (
+    <button className="conversation-fork-source" onClick={props.onSelect} type="button">
+      <span className="conversation-fork-source__line" />
+      <span className="conversation-fork-source__label">
+        <GitFork size={14} />
+        <span>{props.label}</span>
+      </span>
+      <span className="conversation-fork-source__line" />
+    </button>
+  );
+}
+
 // conversationTimelineItemKey returns a stable measurement key for one timeline entry.
 // conversationTimelineItemKey 返回单条时间线记录的稳定测量键。
 function conversationTimelineItemKey(item: ConversationTimelineItem): string {
+  if (item.kind === "fork-source") {
+    return "fork-source";
+  }
   if (item.kind === "item") {
     return item.item.renderKey ?? `item:${item.item.id}`;
   }
@@ -529,6 +577,9 @@ function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem)
   if (item.kind === "process") {
     return CONVERSATION_VIRTUAL_PROCESS_ESTIMATE_PX;
   }
+  if (item.kind === "fork-source") {
+    return CONVERSATION_VIRTUAL_FORK_SOURCE_ESTIMATE_PX;
+  }
   if (item.kind === "final-assistant-meta") {
     return CONVERSATION_VIRTUAL_FINAL_META_ESTIMATE_PX;
   }
@@ -538,6 +589,9 @@ function conversationTimelineItemEstimatedHeight(item: ConversationTimelineItem)
 // timelineItemVisibleInMainTranscript filters virtualized rows before height estimation.
 // timelineItemVisibleInMainTranscript 在高度估算前过滤主转录中不可见的虚拟行。
 function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hiddenThinkingBlockIds: ReadonlySet<string>): boolean {
+  if (item.kind === "fork-source") {
+    return true;
+  }
   if (item.kind === "item") {
     return !renderItemHiddenByThinkingDisplay(item.item, hiddenThinkingBlockIds);
   }

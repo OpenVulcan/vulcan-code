@@ -196,4 +196,9 @@ export type ConversationTimelineItem =
     // 用于原文复制内容与时间戳的最终 Assistant 行。
     item: ConversationRenderItem;
   }
+  | {
+    // Timeline row rendered as a display-only fork origin separator.
+    // 渲染为纯展示分叉来源分隔行的时间线行。
+    kind: "fork-source";
+  }
   | { kind: "process"; process: ConversationProcessRenderItem };

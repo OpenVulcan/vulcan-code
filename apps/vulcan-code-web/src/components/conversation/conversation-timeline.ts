@@ -127,7 +127,7 @@ export function projectConversationTimelineItems(
   }
 
   flushTurn(conversationRunning || Boolean(conversation && conversation.status.trim().toLowerCase() === "running"));
-  return timeline;
+  return insertForkSourceTimelineItem(timeline, conversation);
 }
 
 // timelineCanStartImplicitProcessTurn detects host-started turns after a prior terminal stats row.
@@ -163,6 +163,62 @@ function lastTimelineRenderItem(timeline: ConversationTimelineItem[]): Conversat
     }
   }
   return null;
+}
+
+// insertForkSourceTimelineItem inserts a display-only fork separator after its retained anchor row.
+// insertForkSourceTimelineItem 在保留锚点行之后插入纯展示分叉来源分隔线。
+function insertForkSourceTimelineItem(
+  timeline: ConversationTimelineItem[],
+  conversation: ConversationSummary | undefined,
+): ConversationTimelineItem[] {
+  const anchorMessageId = conversation?.forkSource?.anchorMessageId?.trim();
+  if (!conversation?.forkSource) {
+    return timeline;
+  }
+  const next = [...timeline];
+  if (!anchorMessageId) {
+    next.push({ kind: "fork-source" });
+    return next;
+  }
+  let insertIndex = -1;
+  for (let index = 0; index < next.length; index += 1) {
+    const item = next[index];
+    if (timelineItemMatchesMessageId(item, anchorMessageId)) {
+      insertIndex = index;
+    }
+  }
+  if (insertIndex < 0) {
+    return timeline;
+  }
+  while (next[insertIndex + 1]?.kind === "final-assistant-meta") {
+    insertIndex += 1;
+  }
+  next.splice(insertIndex + 1, 0, { kind: "fork-source" });
+  return next;
+}
+
+// timelineItemMatchesMessageId returns whether one timeline item is anchored to one transcript message id.
+// timelineItemMatchesMessageId 判断单个时间线条目是否锚定到指定转录消息标识。
+function timelineItemMatchesMessageId(item: ConversationTimelineItem, messageId: string): boolean {
+  if (item.kind === "item") {
+    return renderItemMatchesMessageId(item.item, messageId);
+  }
+  if (item.kind === "final-assistant-meta") {
+    return renderItemMatchesMessageId(item.item, messageId);
+  }
+  if (item.kind === "process") {
+    return item.process.items.some((processItem) => renderItemMatchesMessageId(processItem, messageId))
+      || item.process.guidanceItems.some((processItem) => renderItemMatchesMessageId(processItem, messageId));
+  }
+  return false;
+}
+
+// renderItemMatchesMessageId returns whether a projected row originated from one transcript message id.
+// renderItemMatchesMessageId 判断投影行是否来源于指定转录消息标识。
+function renderItemMatchesMessageId(item: ConversationRenderItem, messageId: string): boolean {
+  return item.id === messageId
+    || item.sourceMessage?.id === messageId
+    || item.userMessage?.id === messageId;
 }
 
 // conversationMessageUnixMillis parses the optional Unix-millis timestamp carried by one message.

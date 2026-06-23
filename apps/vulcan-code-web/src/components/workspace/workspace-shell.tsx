@@ -1097,6 +1097,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onGetUserPromptEditDraft={props.onGetUserPromptEditDraft}
         onSubmitUserPromptEdit={props.onSubmitUserPromptEdit}
         onForkConversation={props.onForkConversation}
+        onSelectConversation={props.onSelectConversation}
         onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
         layoutStabilityKey={[

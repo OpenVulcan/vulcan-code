@@ -467,6 +467,27 @@ pub(super) struct SubagentTaskMirror {
     pub updated_at: String,
 }
 
+/// Display-only marker describing where one forked session came from.
+/// 描述分叉会话来源位置的纯展示标记。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct SegmentedSessionForkSource {
+    /// Source project tag used to locate the original conversation.
+    /// 用于定位原始会话的源项目标签。
+    pub source_project_tag: String,
+    /// Source session identifier for navigation.
+    /// 用于导航的源会话标识。
+    pub source_session_id: String,
+    /// Source conversation title captured at fork time.
+    /// 分叉时捕获的源会话标题。
+    pub source_title: String,
+    /// Last retained message id at the fork boundary.
+    /// 分叉边界处最后保留的消息标识。
+    pub anchor_message_id: Option<String>,
+    /// Fork creation timestamp.
+    /// 分叉创建时间戳。
+    pub created_at: String,
+}
+
 /// Metadata document stored in each main segmented session directory.
 /// 存储在每个主分段会话目录中的元数据文档。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -534,6 +555,10 @@ pub(super) struct SegmentedSessionMetadata {
     /// Lightweight child task mirrors.
     /// 子任务轻量镜像集合。
     pub tasks: Vec<SubagentTaskMirror>,
+    /// Display-only source marker for forked sessions.
+    /// 分叉会话的纯展示来源标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_source: Option<SegmentedSessionForkSource>,
 }
 
 /// Metadata document stored in each child task session directory.
@@ -1000,6 +1025,7 @@ pub(super) fn create_segmented_session_in_location(
         segment_policy: request.segment_policy,
         segments: vec![first_segment],
         tasks: Vec::new(),
+        fork_source: None,
     };
     // The first JSONL line stores the canonical SessionMeta audit record.
     // 首条 JSONL 行存储规范 SessionMeta 审计记录。
@@ -1881,6 +1907,102 @@ fn append_segmented_session_replacement(
     update_segmented_message_checkpoint(&mut metadata, messages)?;
     write_metadata(session_dir, &metadata)?;
     Ok(lines)
+}
+
+/// Physically truncates a segmented session before one persisted message without adding display events.
+/// 在不追加展示事件的情况下，将分段会话物理截断到某条已持久化消息之前。
+pub(super) fn truncate_segmented_session_before_message(
+    session_dir: &Path,
+    message_id: &str,
+    retained_messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    // Editing a prompt is semantically identical to rewinding the transcript, so no rollback marker is appended.
+    // 编辑提示词语义上等同回退转录，因此这里不追加任何回滚标记。
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    let mut metadata = read_session_metadata(session_dir)?;
+    let mut retained_segment_lines: Vec<(String, Vec<SegmentedSessionEventLine>)> = Vec::new();
+    let mut found_cutoff = false;
+    let mut latest_rollback_seq = None;
+    let original_segments = metadata.segments.clone();
+    for segment in &original_segments {
+        let segment_path = session_dir.join(&segment.file);
+        let lines = read_segment_event_lines(&segment_path)?;
+        let mut retained_lines = Vec::new();
+        if !found_cutoff {
+            for line in lines {
+                if segmented_line_message_id(&line) == Some(message_id) {
+                    found_cutoff = true;
+                    break;
+                }
+                if line.kind == SegmentedSessionEventKind::ThreadRolledBack {
+                    latest_rollback_seq = Some(line.seq);
+                }
+                retained_lines.push(line);
+            }
+        }
+        if !retained_lines.is_empty() {
+            retained_segment_lines.push((segment.file.clone(), retained_lines));
+        }
+        if found_cutoff {
+            break;
+        }
+    }
+    if !found_cutoff {
+        return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND"));
+    }
+    let mut retained_segments = Vec::new();
+    for (file, retained_lines) in &retained_segment_lines {
+        let segment_path = session_dir.join(file);
+        write_json_lines_file_atomic(&segment_path, retained_lines)?;
+        retained_segments.push(rebuild_segment_metadata(file, retained_lines)?);
+    }
+    for segment in original_segments.iter().filter(|segment| {
+        !retained_segment_lines
+            .iter()
+            .any(|(file, _)| file == &segment.file)
+    }) {
+        let segment_path = session_dir.join(&segment.file);
+        if segment_path.exists() {
+            let _ = fs::remove_file(segment_path);
+        }
+    }
+    if retained_segments.is_empty() {
+        let empty_segment = SegmentMetadata::empty(segment_file_name(1), 1);
+        write_json_lines_file_atomic::<SegmentedSessionEventLine>(
+            &session_dir.join(&empty_segment.file),
+            &[],
+        )?;
+        metadata.active_segment = empty_segment.file.clone();
+        metadata.next_global_seq = empty_segment.start_seq;
+        metadata.segments = vec![empty_segment];
+        metadata.latest_rollback_seq = None;
+    } else {
+        metadata.active_segment = retained_segments
+            .last()
+            .map(|segment| segment.file.clone())
+            .unwrap_or_else(|| segment_file_name(1));
+        metadata.next_global_seq = retained_segments
+            .last()
+            .and_then(|segment| segment.start_seq.checked_add(segment.line_count))
+            .unwrap_or(1);
+        metadata.segments = retained_segments;
+        metadata.latest_rollback_seq = latest_rollback_seq;
+    }
+    metadata.updated_at = current_unix_millis_text();
+    if let Some(anchor_message_id) = metadata
+        .fork_source
+        .as_ref()
+        .and_then(|source| source.anchor_message_id.as_deref())
+        && !retained_messages
+            .iter()
+            .any(|message| message.id == anchor_message_id)
+    {
+        metadata.fork_source = None;
+    }
+    update_segmented_message_checkpoint(&mut metadata, retained_messages)?;
+    write_metadata(session_dir, &metadata)
 }
 
 /// Validates the persisted transcript tail boundary without scanning historical segment files.
@@ -3082,6 +3204,20 @@ pub(super) fn patch_segmented_session_metadata(
     Ok(metadata)
 }
 
+/// Writes the display-only fork source marker into one session metadata document.
+/// 将纯展示用的分叉来源标记写入单个会话元数据文档。
+pub(super) fn write_segmented_session_fork_source(
+    session_dir: &Path,
+    fork_source: SegmentedSessionForkSource,
+) -> Result<(), String> {
+    let _guard = segmented_state_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    let mut metadata = read_session_metadata(session_dir)?;
+    metadata.fork_source = Some(fork_source);
+    write_metadata(session_dir, &metadata)
+}
+
 /// Moves one active session directory into the archived tree and marks metadata archived.
 /// 将一个活动会话目录移动到归档树，并在元数据中标记归档。
 pub(super) fn archive_segmented_session(
@@ -4209,6 +4345,33 @@ fn update_segment_metadata(
     }
 }
 
+/// Rebuilds one segment metadata record from the retained physical event lines.
+/// 根据保留的物理事件行重建一条分段元数据记录。
+fn rebuild_segment_metadata(
+    file: &str,
+    lines: &[SegmentedSessionEventLine],
+) -> Result<SegmentMetadata, String> {
+    let start_seq = lines.first().map(|line| line.seq).unwrap_or(1);
+    let mut segment = SegmentMetadata::empty(file.to_string(), start_seq);
+    for line in lines {
+        let line_text = serde_json::to_string(line).map_err(to_store_error)?;
+        let line_byte_len = line_text.as_bytes().len() as u64 + 1;
+        update_segment_metadata(
+            &mut segment,
+            line,
+            line_byte_len,
+            segmented_line_turn_index(line),
+        );
+    }
+    Ok(segment)
+}
+
+/// Reads the canonical message identifier carried by one segmented event line.
+/// 读取单条分段事件行携带的规范消息标识。
+fn segmented_line_message_id(line: &SegmentedSessionEventLine) -> Option<&str> {
+    line.payload.get("message_id").and_then(Value::as_str)
+}
+
 /// Reads one main segmented session metadata document.
 /// 读取一份主分段会话元数据文档。
 pub(super) fn read_session_metadata(
@@ -4680,6 +4843,23 @@ mod tests {
             .join(Uuid::new_v4().to_string());
         fs::create_dir_all(&root).expect("create temp test root");
         root
+    }
+
+    /// Reads every segment file as raw text for mutation-safety assertions.
+    /// 以原始文本读取全部分段文件，用于断言失败路径不会改写磁盘。
+    fn read_segment_texts_for_test(session_dir: &Path) -> BTreeMap<String, String> {
+        let metadata: SegmentedSessionMetadata =
+            read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+                .expect("read test metadata");
+        metadata
+            .segments
+            .iter()
+            .map(|segment| {
+                let text = fs::read_to_string(session_dir.join(&segment.file))
+                    .expect("read test segment text");
+                (segment.file.clone(), text)
+            })
+            .collect()
     }
 
     /// Builds a minimal main session creation request.
@@ -5415,6 +5595,150 @@ mod tests {
         );
         assert_eq!(replay_messages[0].body, "edited prompt");
         assert_eq!(replay_messages.len(), 1);
+    }
+
+    /// Verifies prompt-edit rewinds physically truncate later events without a rollback marker.
+    /// 验证提示词编辑回退会物理截断后续事件且不写入回滚标记。
+    #[test]
+    fn truncate_before_message_removes_tail_without_rollback_marker() {
+        let root = test_root("truncate_before_message_removes_tail_without_rollback_marker");
+        let session_dir = create_segmented_session(
+            &root,
+            test_session_request(SegmentPolicy {
+                max_lines: 2,
+                max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+            }),
+        )
+        .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+            test_message(
+                "m-user-2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "second prompt",
+            ),
+            test_message(
+                "m-assistant-2",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "second answer",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages)
+            .expect("append original messages");
+        write_segmented_session_fork_source(
+            &session_dir,
+            SegmentedSessionForkSource {
+                source_project_tag: String::from("project-a"),
+                source_session_id: String::from("source-session"),
+                source_title: String::from("source title"),
+                anchor_message_id: Some(String::from("m-user-2")),
+                created_at: String::from("123"),
+            },
+        )
+        .expect("write fork source");
+
+        truncate_segmented_session_before_message(&session_dir, "m-user-2", &messages[..2])
+            .expect("truncate before second prompt");
+
+        let metadata: SegmentedSessionMetadata =
+            read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+                .expect("read truncated metadata");
+        assert_eq!(metadata.message_count, 2);
+        assert_eq!(metadata.latest_rollback_seq, None);
+        let retained_lines = metadata
+            .segments
+            .iter()
+            .flat_map(|segment| {
+                read_segment_event_lines(&session_dir.join(&segment.file))
+                    .expect("read retained segment")
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            retained_lines
+                .iter()
+                .all(|line| line.kind != SegmentedSessionEventKind::ThreadRolledBack)
+        );
+        assert!(
+            retained_lines
+                .iter()
+                .all(|line| segmented_line_message_id(line) != Some("m-user-2"))
+        );
+        assert_eq!(metadata.fork_source, None);
+        let replay =
+            replay_segmented_session_context(&session_dir).expect("replay truncated context");
+        let replay_messages = conversation_state_to_session_messages(
+            &replay.expect("replay result").conversation_state,
+        );
+        assert_eq!(
+            replay_messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m-user-1", "m-assistant-1"]
+        );
+    }
+
+    /// Verifies a missing prompt id cannot partially mutate segment files.
+    /// 验证缺失的提示词标识不会导致分段文件发生局部改写。
+    #[test]
+    fn truncate_before_missing_message_leaves_segments_unchanged() {
+        let root = test_root("truncate_before_missing_message_leaves_segments_unchanged");
+        let session_dir = create_segmented_session(
+            &root,
+            test_session_request(SegmentPolicy {
+                max_lines: 2,
+                max_bytes: DEFAULT_SEGMENT_MAX_BYTES,
+            }),
+        )
+        .expect("create session");
+        let messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+            test_message(
+                "m-user-2",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "second prompt",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages)
+            .expect("append original messages");
+        let before_metadata =
+            fs::read_to_string(session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+        let before_segments = read_segment_texts_for_test(&session_dir);
+
+        let result =
+            truncate_segmented_session_before_message(&session_dir, "missing-message", &messages);
+
+        assert_eq!(result, Err(String::from("ERR_USER_PROMPT_EDIT_NOT_FOUND")));
+        let after_metadata =
+            fs::read_to_string(session_dir.join(SEGMENTED_METADATA_FILE)).expect("read metadata");
+        let after_segments = read_segment_texts_for_test(&session_dir);
+        assert_eq!(after_metadata, before_metadata);
+        assert_eq!(after_segments, before_segments);
     }
 
     /// Verifies messages removed by rollback can be reintroduced with the same id later.

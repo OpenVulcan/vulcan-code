@@ -69,6 +69,7 @@ import type { DraftConversationSelection } from "@/components/workspace/workspac
 import { cn } from "@/lib/utils";
 import { useI18n } from "@/i18n";
 import { projectForConversation } from "@/state/workbench-selectors";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -220,6 +221,9 @@ interface ChatAreaProps {
   // Creates a forked copy of one conversation.
   // 创建单个会话的分叉副本。
   onForkConversation: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean>;
+  // Selects one persisted conversation from a transcript navigation affordance.
+  // 从转录导航入口选择一个持久化会话。
+  onSelectConversation: (conversationId: string) => void;
   // Loads hidden tool details for expanded transcript rows.
   // 为展开的转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -271,6 +275,17 @@ export function ChatArea(props: ChatAreaProps) {
   const subagentNavigation = props.workbench.subagentNavigation?.parentConversationId === props.selectedConversationId
     ? props.workbench.subagentNavigation
     : null;
+  // handleForkSourceConversationSelect opens the original source only when it is still active.
+  // handleForkSourceConversationSelect 仅在原始来源仍处于活动会话时打开它。
+  const handleForkSourceConversationSelect = React.useCallback((conversationId: string) => {
+    const activeSource = props.workbench.conversations.some((conversation) => conversation.id === conversationId);
+    const archivedSource = (props.workbench.archivedConversations ?? []).some((conversation) => conversation.id === conversationId);
+    if (!activeSource || archivedSource) {
+      toast.info(t("conversation.forkSource.missing"));
+      return;
+    }
+    props.onSelectConversation(conversationId);
+  }, [props.onSelectConversation, props.workbench.archivedConversations, props.workbench.conversations, t]);
   const activeSurfaceConversationId = subagentNavigation?.activeConversationId ?? props.selectedConversationId;
   // renderedSurfaceConversationIdRef tracks the surface currently represented by the shared scroll element.
   // renderedSurfaceConversationIdRef 跟踪当前共享滚动元素代表的界面。
@@ -1169,6 +1184,7 @@ export function ChatArea(props: ChatAreaProps) {
         onCopyText={props.onCopyText}
         onEditUserPrompt={handleEditUserPrompt}
         onForkConversation={props.onForkConversation}
+        onSelectForkSourceConversation={handleForkSourceConversationSelect}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}

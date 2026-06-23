@@ -5,14 +5,16 @@
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
-    append_segmented_session_message_update, archive_segmented_session_by_created_date,
-    archive_segmented_session_by_id, create_segmented_session_in_location,
-    delete_segmented_session_by_created_date, delete_segmented_session_by_id,
-    find_segmented_session_directory, find_segmented_session_directory_by_id,
-    fork_segmented_session_directory, patch_segmented_session_metadata,
+    SegmentedSessionForkSource, append_segmented_session_message_update,
+    archive_segmented_session_by_created_date, archive_segmented_session_by_id,
+    create_segmented_session_in_location, delete_segmented_session_by_created_date,
+    delete_segmented_session_by_id, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, fork_segmented_session_directory,
+    patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
     replay_segmented_session_context, restore_segmented_session_by_created_date,
     segmented_session_directory, state_document_from_runtime_state,
-    sync_runtime_log_from_conversation_state, write_state,
+    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
+    write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -1021,7 +1023,11 @@ pub async fn rollback_persisted_session_before_user_prompt(
     message_id: &str,
 ) -> Result<PersistedUserPromptRollbackResult, String> {
     let target = locate_persisted_user_prompt_target(controller, session_id, message_id)?;
-    append_segmented_session_message_update(&target.session_dir, &target.retained_messages)?;
+    truncate_segmented_session_before_message(
+        &target.session_dir,
+        message_id,
+        &target.retained_messages,
+    )?;
     let mut runtime_state = SessionRuntimeStateEntry {
         conversation_state: target.retained_conversation_state,
         updated_at: current_unix_millis_text(),
@@ -1033,7 +1039,7 @@ pub async fn rollback_persisted_session_before_user_prompt(
     let state_document =
         state_document_from_runtime_state(&session_id.to_string(), &runtime_state)?;
     write_state(&target.session_dir, &state_document)?;
-    sync_runtime_log_from_conversation_state(
+    rebuild_runtime_log_from_conversation_state(
         &target.session_dir,
         &runtime_state.conversation_state,
         &runtime_state.updated_at,
@@ -1094,6 +1100,36 @@ pub async fn fork_persisted_session(
     Ok(PersistedSessionForkResult {
         session: forked_session,
     })
+}
+
+/// Records a display-only source marker for a forked persisted session.
+/// 为已分叉的持久化会话记录纯展示用来源标记。
+pub fn record_persisted_session_fork_source_marker(
+    controller: &ControllerRuntimeHandle,
+    target_session_id: SessionId,
+    source_session: &SessionSummary,
+    source_project_id: &str,
+) -> Result<(), String> {
+    let session_dir = find_segmented_session_directory_by_id(
+        &controller.data_root,
+        &target_session_id.to_string(),
+    )?
+    .ok_or_else(|| String::from("ERR_SESSION_FORK_TARGET_NOT_FOUND"))?;
+    let replay = replay_segmented_session_context(&session_dir)?;
+    let anchor_message_id = replay
+        .as_ref()
+        .and_then(|replay| replay.conversation_state.messages.last())
+        .map(|message| message.id.clone());
+    write_segmented_session_fork_source(
+        &session_dir,
+        SegmentedSessionForkSource {
+            source_project_tag: source_project_id.to_string(),
+            source_session_id: source_session.id.to_string(),
+            source_title: source_session.title.clone(),
+            anchor_message_id,
+            created_at: current_unix_millis_text(),
+        },
+    )
 }
 
 /// Located persisted user prompt and its retained prefix.

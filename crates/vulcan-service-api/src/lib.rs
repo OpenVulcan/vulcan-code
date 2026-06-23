@@ -1429,6 +1429,32 @@ pub struct ConversationSummary {
     /// 可选所属项目标识。
     #[serde(default)]
     pub project_id: Option<String>,
+    /// Display-only fork source marker.
+    /// 纯展示用分叉来源标记。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_source: Option<ConversationForkSourceSummary>,
+}
+
+/// Describes the display-only source marker for a forked conversation.
+/// 描述分叉会话的纯展示来源标记。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationForkSourceSummary {
+    /// Source project tag used to locate the original conversation.
+    /// 用于定位原始会话的源项目标签。
+    pub source_project_tag: String,
+    /// Source conversation identifier for navigation.
+    /// 用于导航的源会话标识。
+    pub source_conversation_id: String,
+    /// Source conversation title captured at fork time.
+    /// 分叉时捕获的源会话标题。
+    pub source_title: String,
+    /// Last retained message id at the fork boundary.
+    /// 分叉边界处最后保留的消息标识。
+    pub anchor_message_id: Option<String>,
+    /// Fork creation timestamp.
+    /// 分叉创建时间戳。
+    pub created_at: String,
 }
 
 /// Represents one rendered conversation message.

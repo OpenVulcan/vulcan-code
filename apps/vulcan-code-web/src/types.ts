@@ -432,6 +432,29 @@ export interface ConversationSummary {
   // Optional owning project identifier.
   // 可选所属项目标识。
   projectId?: string | null;
+  // Display-only fork source marker.
+  // 纯展示用分叉来源标记。
+  forkSource?: ConversationForkSourceSummary | null;
+}
+
+// ConversationForkSourceSummary describes where a forked conversation was derived from.
+// ConversationForkSourceSummary 描述分叉会话从哪里派生。
+export interface ConversationForkSourceSummary {
+  // Source project tag used to locate the original conversation.
+  // 用于定位原始会话的源项目标签。
+  sourceProjectTag: string;
+  // Source conversation identifier for navigation.
+  // 用于导航的源会话标识。
+  sourceConversationId: string;
+  // Source conversation title captured at fork time.
+  // 分叉时捕获的源会话标题。
+  sourceTitle: string;
+  // Last retained message id at the fork boundary.
+  // 分叉边界处最后保留的消息标识。
+  anchorMessageId?: string | null;
+  // Fork creation timestamp.
+  // 分叉创建时间戳。
+  createdAt: string;
 }
 
 // ConversationMessage describes one rendered message in the timeline.

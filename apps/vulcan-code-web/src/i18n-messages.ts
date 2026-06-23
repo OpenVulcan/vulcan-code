@@ -38,6 +38,8 @@ export type TranslationKey =
   | "conversation.action.forkTitleSuffix"
   | "conversation.action.forkFailed"
   | "conversation.action.forkSucceeded"
+  | "conversation.forkSource.label"
+  | "conversation.forkSource.missing"
   | "conversation.action.editPrompt"
   | "conversation.action.editPromptFailed"
   | "conversation.action.cancel"
@@ -251,6 +253,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkTitleSuffix": "（分叉）",
     "conversation.action.forkFailed": "分叉失败",
     "conversation.action.forkSucceeded": "已创建分叉会话",
+    "conversation.forkSource.label": "从对话中派生",
+    "conversation.forkSource.missing": "原会话已经不存在",
     "conversation.action.editPrompt": "编辑用户输入",
     "conversation.action.editPromptFailed": "编辑用户输入失败",
     "conversation.action.cancel": "取消",
@@ -461,6 +465,8 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.forkTitleSuffix": " (fork)",
     "conversation.action.forkFailed": "Fork failed",
     "conversation.action.forkSucceeded": "Forked conversation created",
+    "conversation.forkSource.label": "Derived from conversation",
+    "conversation.forkSource.missing": "The original conversation no longer exists",
     "conversation.action.editPrompt": "Edit user input",
     "conversation.action.editPromptFailed": "Edit user input failed",
     "conversation.action.cancel": "Cancel",

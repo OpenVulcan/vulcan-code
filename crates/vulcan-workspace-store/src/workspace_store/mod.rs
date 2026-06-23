@@ -63,9 +63,9 @@ pub use persistence::{
     persist_project_order_update, persist_project_pinned_and_order_update,
     persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
     persist_single_session_update, persist_workspace_snapshot,
-    remove_project_after_archiving_sessions, rename_project, rename_single_session_metadata,
-    restore_project_with_sessions, restore_single_session,
-    rollback_persisted_session_before_user_prompt, toggle_project_pinned,
+    record_persisted_session_fork_source_marker, remove_project_after_archiving_sessions,
+    rename_project, rename_single_session_metadata, restore_project_with_sessions,
+    restore_single_session, rollback_persisted_session_before_user_prompt, toggle_project_pinned,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot, load_session_display_hydration_snapshot_for_project,
@@ -215,6 +215,27 @@ pub struct SessionTaskMirrorSnapshot {
     /// Last update timestamp stored in the parent metadata mirror.
     /// 父元数据镜像中保存的最后更新时间戳。
     pub updated_at: String,
+}
+
+/// Display-only fork source data projected from segmented session metadata.
+/// 从分段会话元数据投影出的纯展示分叉来源数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionForkSourceSnapshot {
+    /// Source project tag used to locate the original conversation.
+    /// 用于定位原始会话的源项目标签。
+    pub source_project_tag: String,
+    /// Source session identifier for navigation.
+    /// 用于导航的源会话标识。
+    pub source_session_id: String,
+    /// Source conversation title captured at fork time.
+    /// 分叉时捕获的源会话标题。
+    pub source_title: String,
+    /// Last retained message id at the fork boundary.
+    /// 分叉边界处最后保留的消息标识。
+    pub anchor_message_id: Option<String>,
+    /// Fork creation timestamp.
+    /// 分叉创建时间戳。
+    pub created_at: String,
 }
 
 /// One older transcript page loaded before an already hydrated session window.
@@ -1119,6 +1140,49 @@ pub fn load_segmented_session_task_mirrors_for_project(
         return Ok(Vec::new());
     };
     load_segmented_session_task_mirrors_from_dir(&session_dir)
+}
+
+/// Loads the display-only fork source marker from one known owning project.
+/// 从一个已知所属项目加载纯展示分叉来源标记。
+///
+/// # Parameters
+/// 参数
+/// `data_root` is the Vulcan Code data root containing segmented session directories.
+/// `data_root` 是包含分段会话目录的 Vulcan Code 数据根目录。
+/// `project_id` is the known segmented project tag for the session.
+/// `project_id` 是会话已知的分段项目标签。
+/// `session_id` identifies the session whose fork source should be read.
+/// `session_id` 标识需要读取分叉来源的会话。
+///
+/// # Returns
+/// 返回值
+/// A display-only fork source marker when present.
+/// 存在时返回纯展示分叉来源标记。
+pub fn load_segmented_session_fork_source_for_project(
+    data_root: &std::path::Path,
+    project_id: &str,
+    session_id: SessionId,
+) -> Result<Option<SessionForkSourceSnapshot>, String> {
+    let session_id_text = session_id.to_string();
+    let active_dir =
+        find_segmented_session_directory(data_root, false, project_id, &session_id_text)?;
+    let session_dir = match active_dir {
+        Some(session_dir) => Some(session_dir),
+        None => find_segmented_session_directory(data_root, true, project_id, &session_id_text)?,
+    };
+    let Some(session_dir) = session_dir else {
+        return Ok(None);
+    };
+    let metadata = segmented_session_store::read_session_metadata(&session_dir)?;
+    Ok(metadata
+        .fork_source
+        .map(|source| SessionForkSourceSnapshot {
+            source_project_tag: source.source_project_tag,
+            source_session_id: source.source_session_id,
+            source_title: source.source_title,
+            anchor_message_id: source.anchor_message_id,
+            created_at: source.created_at,
+        }))
 }
 
 /// Loads lightweight child-task mirrors from one already resolved session directory.
