@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Clock3,
   Copy,
+  GitFork,
   Pencil,
 } from "lucide-react";
 
@@ -37,6 +38,7 @@ import type {
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
 import type { CommandSessionSummary, ComposerAttachmentSummary } from "@/types";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 
 // USER_PROMPT_COLLAPSE_LINE_LIMIT limits long user bubbles before the user expands them.
@@ -538,10 +540,18 @@ export function ConversationFinalAssistantMeta(props: {
   // Copies transcript text using the shell-provided clipboard path.
   // 使用外壳提供的剪贴板路径复制转录文本。
   onCopyText: (text: string) => Promise<void> | void;
+  // Creates a forked copy of the owning conversation.
+  // 创建所属会话的分叉副本。
+  onForkConversation?: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean> | boolean;
+  // Optional user message id that marks the first message excluded from the fork.
+  // 可选用户消息标识，表示分叉时第一个被排除的消息。
+  forkBeforeMessageId?: string | null;
 }) {
+  const { t } = useI18n();
   const finalAssistantRawText = finalAssistantOutputText(props.item);
   const finalAssistantTimestampMs = conversationMessageUnixMillis(props.item.sourceMessage);
   const finalAssistantTimestamp = formatShortConversationTimestamp(props.item.sourceMessage);
+  const conversationId = props.item.sourceMessage?.conversationId ?? null;
   const [finalAssistantCopied, setFinalAssistantCopied] = React.useState(false);
   const handleCopyFinalAssistantOutput = React.useCallback(async () => {
     if (!finalAssistantRawText) {
@@ -550,18 +560,35 @@ export function ConversationFinalAssistantMeta(props: {
     await props.onCopyText(finalAssistantRawText);
     setFinalAssistantCopied(true);
   }, [finalAssistantRawText, props]);
+  const handleForkConversation = React.useCallback(async () => {
+    if (!conversationId) {
+      return;
+    }
+    await props.onForkConversation?.(conversationId, props.forkBeforeMessageId ?? null);
+  }, [conversationId, props]);
   return (
     <div className="assistant-final-meta">
       {finalAssistantRawText ? (
         <button
-          aria-label={finalAssistantCopied ? "已复制最终输出原文" : "复制最终输出原文"}
+          aria-label={finalAssistantCopied ? t("conversation.action.copiedFinal") : t("conversation.action.copyFinal")}
           className="assistant-final-meta-button"
           onClick={() => void handleCopyFinalAssistantOutput()}
           onMouseLeave={() => setFinalAssistantCopied(false)}
-          title={finalAssistantCopied ? "已复制最终输出原文" : "复制最终输出原文"}
+          title={finalAssistantCopied ? t("conversation.action.copiedFinal") : t("conversation.action.copyFinal")}
           type="button"
         >
           {finalAssistantCopied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      ) : null}
+      {conversationId && props.onForkConversation ? (
+        <button
+          aria-label={t("conversation.action.fork")}
+          className="assistant-final-meta-button"
+          onClick={() => void handleForkConversation()}
+          title={t("conversation.action.fork")}
+          type="button"
+        >
+          <GitFork size={13} />
         </button>
       ) : null}
       {finalAssistantTimestamp && finalAssistantTimestampMs ? (

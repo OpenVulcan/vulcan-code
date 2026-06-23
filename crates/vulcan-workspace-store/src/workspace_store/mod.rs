@@ -55,14 +55,17 @@ pub use goal_store::{
     VulcanGoalStore,
 };
 pub use persistence::{
+    PersistedSessionForkResult, PersistedUserPromptEditDraft, PersistedUserPromptRollbackResult,
     archive_project_sessions, archive_project_with_sessions, archive_single_session,
-    archive_single_session_for_project, permanently_delete_archived_project,
+    archive_single_session_for_project, fork_persisted_session,
+    load_persisted_user_prompt_edit_draft, permanently_delete_archived_project,
     permanently_delete_archived_session, persist_collapsed_task_project_ids, persist_new_project,
     persist_project_order_update, persist_project_pinned_and_order_update,
     persist_single_session_addon_state_update, persist_single_session_runtime_state_update,
     persist_single_session_update, persist_workspace_snapshot,
     remove_project_after_archiving_sessions, rename_project, rename_single_session_metadata,
-    restore_project_with_sessions, restore_single_session, toggle_project_pinned,
+    restore_project_with_sessions, restore_single_session,
+    rollback_persisted_session_before_user_prompt, toggle_project_pinned,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot, load_session_display_hydration_snapshot_for_project,

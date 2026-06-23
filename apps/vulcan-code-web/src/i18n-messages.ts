@@ -32,6 +32,16 @@ export type TranslationKey =
   | "conversation.loading.projecting"
   | "conversation.loading.done"
   | "conversation.loading.failed"
+  | "conversation.action.copyFinal"
+  | "conversation.action.copiedFinal"
+  | "conversation.action.fork"
+  | "conversation.action.forkTitleSuffix"
+  | "conversation.action.forkFailed"
+  | "conversation.action.forkSucceeded"
+  | "conversation.action.editPrompt"
+  | "conversation.action.editPromptFailed"
+  | "conversation.action.cancel"
+  | "conversation.action.saveAndReplay"
   | "contextPanel.open"
   | "contextPanel.close"
   | "contextPanel.review"
@@ -235,6 +245,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "正在整理显示数据",
     "conversation.loading.done": "会话载入完成",
     "conversation.loading.failed": "会话正文载入失败",
+    "conversation.action.copyFinal": "复制最终输出原文",
+    "conversation.action.copiedFinal": "已复制最终输出原文",
+    "conversation.action.fork": "分叉会话",
+    "conversation.action.forkTitleSuffix": "（分叉）",
+    "conversation.action.forkFailed": "分叉失败",
+    "conversation.action.forkSucceeded": "已创建分叉会话",
+    "conversation.action.editPrompt": "编辑用户输入",
+    "conversation.action.editPromptFailed": "编辑用户输入失败",
+    "conversation.action.cancel": "取消",
+    "conversation.action.saveAndReplay": "保存并重新执行",
     "contextPanel.open": "打开右侧面板",
     "contextPanel.close": "关闭右侧面板",
     "contextPanel.review": "审核",
@@ -435,6 +455,16 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "Preparing display data",
     "conversation.loading.done": "Conversation loaded",
     "conversation.loading.failed": "Conversation body failed to load",
+    "conversation.action.copyFinal": "Copy final output source",
+    "conversation.action.copiedFinal": "Copied final output source",
+    "conversation.action.fork": "Fork conversation",
+    "conversation.action.forkTitleSuffix": " (fork)",
+    "conversation.action.forkFailed": "Fork failed",
+    "conversation.action.forkSucceeded": "Forked conversation created",
+    "conversation.action.editPrompt": "Edit user input",
+    "conversation.action.editPromptFailed": "Edit user input failed",
+    "conversation.action.cancel": "Cancel",
+    "conversation.action.saveAndReplay": "Save and replay",
     "contextPanel.open": "Open right panel",
     "contextPanel.close": "Close right panel",
     "contextPanel.review": "Review",

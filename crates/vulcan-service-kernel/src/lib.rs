@@ -90,8 +90,8 @@ use vulcan_agent_runtime::{
     },
 };
 use vulcan_context::{
-    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationPayload,
-    SessionConversationRecord, append_record, append_record_body_delta,
+    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
+    append_record_body_delta,
 };
 use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
 use vulcan_context_injection::{
@@ -189,7 +189,8 @@ use vulcan_workspace_store::{
     workspace_store::{
         GoalAccountingMode, GoalAccountingOutcome, GoalUpdate, SessionHydrationSnapshot,
         SessionTaskMirrorSnapshot, ThreadGoal, ThreadGoalStatus, VulcanGoalStore,
-        WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot,
+        WorkspaceSegmentedSessionBoundaryStore, WorkspaceSnapshot, fork_persisted_session,
+        load_persisted_user_prompt_edit_draft, rollback_persisted_session_before_user_prompt,
     },
 };
 
@@ -344,6 +345,22 @@ struct UserPromptEditSubmitRequest {
     /// 后端是否可以先停止当前运行再执行编辑。
     #[serde(default)]
     stop_running: bool,
+}
+
+/// Conversation fork request sent by the WebUI final-turn action.
+/// WebUI 最终回合操作发送的会话分叉请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationForkRequest {
+    /// Conversation id that should be copied into a new session.
+    /// 需要复制为新会话的会话标识。
+    conversation_id: String,
+    /// Localized title assigned to the forked session.
+    /// 分配给分叉会话的本地化标题。
+    title: String,
+    /// Optional user message id whose previous boundary should become the fork endpoint.
+    /// 可选用户消息标识；其上一边界将成为分叉终点。
+    before_message_id: Option<String>,
 }
 
 /// Shared AI capability vendor save request sent by the WebUI settings page.
@@ -2204,6 +2221,9 @@ async fn dispatch_service_rpc(
             service_submit_user_prompt_edit(app, state, rpc_required_param(&params, "request")?)
                 .await,
         ),
+        "service_fork_conversation" => rpc_json_result(
+            service_fork_conversation(app, state, rpc_required_param(&params, "request")?).await,
+        ),
         "service_save_session_goal" => rpc_json_result(
             service_save_session_goal(app, state, rpc_required_param(&params, "request")?).await,
         ),
@@ -3343,25 +3363,21 @@ async fn service_get_user_prompt_edit_draft(
     message_id: String,
 ) -> Result<UserPromptEditDraftSummary, String> {
     let session_id = parse_session_id(&conversation_id)
-        .ok_or_else(|| format!("无效会话标识：{conversation_id}"))?;
-    let mut guard = state
-        .lock()
-        .map_err(|error| format!("failed to lock service state: {error}"))?;
-    if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
-        return Err(String::from(
-            "当前会话仍有运行中或排队中的任务，暂时无法编辑历史输入。",
-        ));
-    }
-    let workspace = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
-    let runtime_state = workspace
-        .session_runtime_state
-        .get(&session_id)
-        .ok_or_else(|| String::from("当前会话运行态尚未载入，无法安全编辑。"))?;
-    let target = resolve_user_prompt_edit_target(runtime_state, &message_id)?;
-    validate_user_prompt_edit_tail(runtime_state, target.record_index)?;
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
+    let controller_runtime = {
+        let mut guard = state
+            .lock()
+            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
+        if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
+            return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
+        }
+        guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?
+    };
+    let target =
+        load_persisted_user_prompt_edit_draft(&controller_runtime, session_id, &message_id).await?;
     Ok(UserPromptEditDraftSummary {
         conversation_id,
         message_id,
@@ -3383,48 +3399,49 @@ async fn service_submit_user_prompt_edit(
     request: UserPromptEditSubmitRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     if request.stop_running {
-        return Err(String::from("历史输入编辑仅允许在会话完全空闲时执行。"));
+        return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
     }
     let session_id = parse_session_id(&request.conversation_id)
-        .ok_or_else(|| format!("无效会话标识：{}", request.conversation_id))?;
+        .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_INVALID_CONVERSATION"))?;
     let _validated_attachments = request
         .attachments
         .clone()
         .into_iter()
         .map(composer_attachment_summary_to_core)
         .collect::<Result<Vec<_>, _>>()?;
-    let (controller_runtime, rollback_workspace_snapshot) = {
+    let controller_runtime = {
         let mut guard = state
             .lock()
-            .map_err(|error| format!("failed to lock service state: {error}"))?;
-        let controller_runtime = guard.controller_runtime.clone().ok_or_else(|| {
-            String::from("service is still starting; controller runtime is not ready")
-        })?;
+            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
+        let controller_runtime = guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
         if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
-            return Err(String::from(
-                "当前会话已产生运行中、排队中或子代理任务，无法安全回滚编辑。",
-            ));
+            return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
         }
+        controller_runtime
+    };
+    let rollback = rollback_persisted_session_before_user_prompt(
+        &controller_runtime,
+        session_id,
+        &request.message_id,
+    )
+    .await?;
+    {
+        let mut guard = state
+            .lock()
+            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
         let workspace = guard
             .workspace_snapshot
             .as_mut()
-            .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
-        let runtime_state = workspace
-            .session_runtime_state
-            .get_mut(&session_id)
-            .ok_or_else(|| String::from("当前会话运行态尚未载入，无法安全编辑。"))?;
-        let target = resolve_user_prompt_edit_target(runtime_state, &request.message_id)?;
-        validate_user_prompt_edit_tail(runtime_state, target.record_index)?;
-        rollback_runtime_state_to_user_prompt(
-            runtime_state,
-            target.record_index,
-            target.message_index,
-        );
-        let projected_messages =
-            conversation_state_to_session_messages(&runtime_state.conversation_state);
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
         workspace
             .session_messages
-            .insert(session_id, projected_messages.clone());
+            .insert(session_id, rollback.retained_messages.clone());
+        workspace
+            .session_runtime_state
+            .insert(session_id, rollback.runtime_state);
         workspace.hydrated_session_ids.insert(session_id);
         workspace
             .session_run_phases
@@ -3435,31 +3452,18 @@ async fn service_submit_user_prompt_edit(
             .find(|session| session.id == session_id)
         {
             session.status = SessionState::Completed;
-            session.focus = String::from("已回滚到编辑后的用户输入，正在重新执行。");
-            session.last_updated_label = String::from("刚刚");
+            session.focus = String::new();
+            session.last_updated_label = String::new();
             session.updated_at = current_unix_millis_text();
         }
-        let selected_conversation_id = session_id.to_string();
         guard.workbench.messages = conversation_messages_from_session(
-            &selected_conversation_id,
-            projected_messages.as_slice(),
+            &session_id.to_string(),
+            rollback.retained_messages.as_slice(),
             false,
         );
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         guard.workbench = workbench_with_live_pending_question(&guard);
-        let rollback_workspace_snapshot = guard
-            .workspace_snapshot
-            .clone()
-            .ok_or_else(|| String::from("工作区快照尚未就绪。"))?;
-        (controller_runtime, rollback_workspace_snapshot)
-    };
-    persist_workspace_session_update(
-        Some(&state),
-        controller_runtime,
-        &rollback_workspace_snapshot,
-        session_id,
-    )
-    .await?;
+    }
     service_submit_conversation_prompt(
         app,
         state,
@@ -3477,128 +3481,75 @@ async fn service_submit_user_prompt_edit(
     .await
 }
 
-/// Resolved target data for one safe user prompt edit.
-/// 单次安全用户提示词编辑解析出的目标数据。
-#[derive(Debug, Clone)]
-struct UserPromptEditTarget {
-    /// Index of the visible user record in the canonical record stream.
-    /// 可见用户记录在规范记录流中的索引。
-    record_index: usize,
-    /// Index of the corresponding protocol message in the canonical message window.
-    /// 对应协议消息在规范消息窗口中的索引。
-    message_index: usize,
-    /// Current prompt text.
-    /// 当前提示词文本。
-    prompt: String,
-    /// Current prompt attachments.
-    /// 当前提示词附件。
-    attachments: Vec<ConversationAttachment>,
-}
-
-/// Resolves one visible user prompt record to its canonical protocol message.
-/// 将单条可见用户提示词记录解析到对应的规范协议消息。
-fn resolve_user_prompt_edit_target(
-    runtime_state: &SessionRuntimeStateEntry,
-    message_id: &str,
-) -> Result<UserPromptEditTarget, String> {
-    let record_index = runtime_state
-        .conversation_state
-        .records
-        .iter()
-        .position(|record| {
-            record.id == message_id
-                && record.visible
-                && record.kind == SessionMessageKind::User
-                && record.record_kind == SessionMessageRecordKind::Transcript
-        })
-        .ok_or_else(|| String::from("未找到可编辑的用户输入记录。"))?;
-    let message_index = runtime_state
-        .conversation_state
-        .messages
-        .iter()
-        .position(|message| message.id == message_id)
-        .ok_or_else(|| String::from("该用户输入无法与协议消息安全对应。"))?;
-    let SessionConversationPayload::UserText { text, attachments } =
-        &runtime_state.conversation_state.messages[message_index].payload
-    else {
-        return Err(String::from("该记录对应的协议消息不是用户输入。"));
+/// Forks one persisted conversation into a new idle session and opens the clone.
+/// 将一个持久化会话分叉为新的空闲会话并打开克隆。
+async fn service_fork_conversation(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: ConversationForkRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let source_session_id = parse_session_id(&request.conversation_id)
+        .ok_or_else(|| String::from("ERR_SESSION_FORK_INVALID_CONVERSATION"))?;
+    let (controller_runtime, source_session, project_id) = {
+        let mut guard = state
+            .lock()
+            .map_err(|_| String::from("ERR_SERVICE_STATE_LOCK_FAILED"))?;
+        if !webui_session_allows_user_prompt_editing(&mut guard, source_session_id) {
+            return Err(String::from("ERR_SESSION_FORK_SESSION_BUSY"));
+        }
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        let source_session = workspace
+            .sessions
+            .iter()
+            .find(|session| session.id == source_session_id)
+            .cloned()
+            .ok_or_else(|| String::from("ERR_SESSION_FORK_SOURCE_NOT_FOUND"))?;
+        let project_id = owning_project_id_for_session(workspace, source_session_id)
+            .ok_or_else(|| String::from("ERR_SESSION_FORK_PROJECT_NOT_FOUND"))?;
+        let controller_runtime = guard
+            .controller_runtime
+            .clone()
+            .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
+        (controller_runtime, source_session, project_id)
     };
-    Ok(UserPromptEditTarget {
-        record_index,
-        message_index,
-        prompt: text.clone(),
-        attachments: attachments.clone(),
-    })
-}
-
-/// Validates that no later record blocks editing of an earlier user prompt.
-/// 校验后续记录没有阻断更早用户提示词编辑。
-fn validate_user_prompt_edit_tail(
-    runtime_state: &SessionRuntimeStateEntry,
-    record_index: usize,
-) -> Result<(), String> {
-    for record in runtime_state
-        .conversation_state
-        .records
-        .iter()
-        .skip(record_index + 1)
+    let target_session_id = SessionId::new_v4();
+    let fork_title = if request.title.trim().is_empty() {
+        source_session.title.clone()
+    } else {
+        request.title.trim().to_string()
+    };
+    let fork_result = fork_persisted_session(
+        &controller_runtime,
+        &source_session,
+        &project_id,
+        target_session_id,
+        fork_title,
+    )
+    .await?;
+    if let Some(before_message_id) = request
+        .before_message_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
     {
-        if record.record_kind == SessionMessageRecordKind::CompactionSummary {
-            return Err(String::from(
-                "该输入之后已经发生上下文压缩，无法安全回滚编辑。",
-            ));
-        }
-        if record
-            .metadata
-            .as_ref()
-            .is_some_and(metadata_has_applied_change_set)
-        {
-            return Err(String::from(
-                "该输入之后已产生实际文件变更，无法安全回滚编辑。",
-            ));
-        }
-        if record
-            .metadata
-            .as_ref()
-            .is_some_and(|metadata| task_session_payload_from_tool_metadata(metadata).is_some())
-        {
-            return Err(String::from(
-                "该输入之后已产生子代理任务，无法确认其文件影响范围，不能安全回滚编辑。",
-            ));
-        }
+        rollback_persisted_session_before_user_prompt(
+            &controller_runtime,
+            fork_result.session.id,
+            before_message_id,
+        )
+        .await?;
     }
-    Ok(())
-}
-
-/// Rolls one runtime state back to just before the selected user prompt.
-/// 将单个运行态回滚到选中用户提示词之前。
-fn rollback_runtime_state_to_user_prompt(
-    runtime_state: &mut SessionRuntimeStateEntry,
-    record_index: usize,
-    message_index: usize,
-) {
-    runtime_state
-        .conversation_state
-        .records
-        .truncate(record_index);
-    runtime_state
-        .conversation_state
-        .messages
-        .truncate(message_index);
-    runtime_state.conversation_state.continuation = Default::default();
-    runtime_state.context_start_message_id = None;
-    runtime_state.last_compaction_id = None;
-    runtime_state.live_context_budget_fingerprint = None;
-    runtime_state.live_context_assembly_fingerprint = None;
-    runtime_state.anchor_context_budget_fingerprint = None;
-    runtime_state.anchor_context_assembly_fingerprint = None;
-    runtime_state.last_provider_request_preview_markdown = None;
-    runtime_state.tool_call_record_ids.clear();
-    runtime_state.last_provider_usage = None;
-    runtime_state.last_successful_provider_usage = None;
-    runtime_state.last_safe_provider_request_count = None;
-    runtime_state.active_precheck_turn_id = None;
-    runtime_state.updated_at = current_unix_millis_text();
+    let target_session_id_text = fork_result.session.id.to_string();
+    load_hydrated_session_workbench(
+        &app,
+        &state,
+        fork_result.session.id,
+        &target_session_id_text,
+    )
+    .await
 }
 
 /// Rebuilds only the ask-modal projection on the retained workbench snapshot and emits it.

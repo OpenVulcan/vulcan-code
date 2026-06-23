@@ -131,6 +131,9 @@ export function ConversationWorkspace(props: {
   // Opens one backend-backed user prompt edit flow.
   // 打开单个后端支持的用户提示词编辑流程。
   onEditUserPrompt?: (conversationId: string, messageId: string) => Promise<void> | void;
+  // Creates a forked copy of one conversation.
+  // 创建单个会话的分叉副本。
+  onForkConversation?: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean> | boolean;
   // Currently pending Plan artifact, when user confirmation is required.
   // 需要用户确认时的当前待处理计划产物。
   pendingPlanArtifact?: ConversationPlanArtifact | null;
@@ -194,6 +197,33 @@ export function ConversationWorkspace(props: {
     () => timelineItems.filter((item) => timelineItemVisibleInMainTranscript(item, props.hiddenThinkingBlockIds)),
     [props.hiddenThinkingBlockIds, timelineItems],
   );
+  // forkTargetByFinalAssistantMetaKey maps final-answer action rows to their fork rollback boundary.
+  // forkTargetByFinalAssistantMetaKey 将最终回答操作行映射到对应的分叉回滚边界。
+  const forkTargetByFinalAssistantMetaKey = React.useMemo(() => {
+    const targets = new Map<string, string | null>();
+    let latestMetaKey: string | null = null;
+    for (let index = 0; index < visibleTimelineItems.length; index += 1) {
+      const item = visibleTimelineItems[index];
+      if (item.kind === "final-assistant-meta") {
+        const metaKey = conversationTimelineItemKey(item);
+        latestMetaKey = metaKey;
+        for (let nextIndex = index + 1; nextIndex < visibleTimelineItems.length; nextIndex += 1) {
+          const nextItem = visibleTimelineItems[nextIndex];
+          if (nextItem.kind !== "item" || !nextItem.item.userMessage) {
+            continue;
+          }
+          if (nextItem.item.userMessage.editableUserPrompt) {
+            targets.set(metaKey, nextItem.item.userMessage.id);
+          }
+          break;
+        }
+      }
+    }
+    if (latestMetaKey && !targets.has(latestMetaKey)) {
+      targets.set(latestMetaKey, null);
+    }
+    return targets;
+  }, [visibleTimelineItems]);
   const timelineCacheScopeKey = props.conversation?.id ?? props.parentConversationId ?? "conversation";
   const timelineVirtualizer = useConversationTimelineVirtualWindow(
     visibleTimelineItems,
@@ -327,10 +357,14 @@ export function ConversationWorkspace(props: {
 
   const renderTimelineItem = (timelineItem: ConversationTimelineItem): React.ReactNode => {
     if (timelineItem.kind === "final-assistant-meta") {
+      const metaKey = conversationTimelineItemKey(timelineItem);
+      const forkBeforeMessageId = forkTargetByFinalAssistantMetaKey.get(metaKey);
       return (
         <ConversationFinalAssistantMeta
           item={timelineItem.item}
           onCopyText={props.onCopyText}
+          onForkConversation={forkTargetByFinalAssistantMetaKey.has(metaKey) ? props.onForkConversation : undefined}
+          forkBeforeMessageId={forkBeforeMessageId ?? null}
         />
       );
     }

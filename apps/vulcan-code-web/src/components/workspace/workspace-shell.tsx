@@ -560,6 +560,9 @@ interface WorkspaceShellProps {
     prompt: string;
     attachments: ComposerAttachmentSummary[];
   }) => Promise<boolean>;
+  // Creates a forked copy of one conversation.
+  // 创建单个会话的分叉副本。
+  onForkConversation: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean>;
   // Loads hidden tool details for transcript rows.
   // 为转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -1093,6 +1096,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         onCopyText={props.onCopyText}
         onGetUserPromptEditDraft={props.onGetUserPromptEditDraft}
         onSubmitUserPromptEdit={props.onSubmitUserPromptEdit}
+        onForkConversation={props.onForkConversation}
         onLoadToolDetail={props.onLoadToolDetail}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
         layoutStabilityKey={[

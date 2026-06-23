@@ -86,6 +86,7 @@ import {
   clearSessionGoal,
   compactSelectedConversationContext,
   editPendingPrompt,
+  forkConversation,
   getUserPromptEditDraft,
   insertPendingPrompt,
   openSubagentPanel,
@@ -1330,10 +1331,10 @@ export function WorkbenchLayout(props: {
     try {
       return await getUserPromptEditDraft(conversationId, messageId);
     } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      toast.error(i18n.t("conversation.action.editPromptFailed"));
       return null;
     }
-  }, []);
+  }, [i18n]);
 
   // handleSubmitUserPromptEdit submits one edit and merges the replay snapshot.
   // handleSubmitUserPromptEdit 提交单次编辑并合并重放后的快照。
@@ -1355,10 +1356,32 @@ export function WorkbenchLayout(props: {
       }
       return true;
     } catch (nextError) {
-      toast.error(nextError instanceof Error ? nextError.message : String(nextError));
+      toast.error(i18n.t("conversation.action.editPromptFailed"));
       return false;
     }
-  }, []);
+  }, [i18n]);
+
+  // handleForkConversation creates a persisted copy of the current conversation and opens it.
+  // handleForkConversation 创建当前会话的持久化副本并打开。
+  const handleForkConversation = React.useCallback(async (conversationId: string, beforeMessageId?: string | null): Promise<boolean> => {
+    const sourceConversation = workbenchState.conversations.find((conversation) => conversation.id === conversationId);
+    const sourceTitle = sourceConversation?.title.trim() || i18n.t("console.newConversation");
+    try {
+      const snapshot = await forkConversation({
+        conversationId,
+        title: `${sourceTitle}${i18n.t("conversation.action.forkTitleSuffix")}`,
+        beforeMessageId: beforeMessageId ?? null,
+      });
+      if (snapshot) {
+        setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
+        toast.success(i18n.t("conversation.action.forkSucceeded"));
+      }
+      return true;
+    } catch (nextError) {
+      toast.error(i18n.t("conversation.action.forkFailed"));
+      return false;
+    }
+  }, [i18n, workbenchState.conversations]);
 
   // handleSelectWorkbenchReasoningEffort persists one reasoning-effort choice through the shared service router.
   // handleSelectWorkbenchReasoningEffort 通过共享服务路由持久化单个思考档位选择。
@@ -1772,6 +1795,7 @@ export function WorkbenchLayout(props: {
             onCopyText={copyText}
             onGetUserPromptEditDraft={handleGetUserPromptEditDraft}
             onSubmitUserPromptEdit={handleSubmitUserPromptEdit}
+            onForkConversation={handleForkConversation}
             onLoadToolDetail={loadCachedConversationToolDetail}
             resolveMediaSourceUrl={localMediaSourceUrl}
             footer={(

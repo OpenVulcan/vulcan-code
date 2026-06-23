@@ -120,6 +120,19 @@ export async function submitUserPromptEdit(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_submit_user_prompt_edit", { request });
 }
 
+// forkConversation copies one persisted conversation into a new session and opens it.
+// forkConversation 将一个持久化会话复制为新会话并打开。
+export async function forkConversation(request: {
+  conversationId: string;
+  title: string;
+  beforeMessageId?: string | null;
+}): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_fork_conversation", { request });
+}
+
 // saveSessionGoal persists a user-authored goal for the current conversation.
 // saveSessionGoal 为当前会话持久化用户编写的目标。
 export async function saveSessionGoal(

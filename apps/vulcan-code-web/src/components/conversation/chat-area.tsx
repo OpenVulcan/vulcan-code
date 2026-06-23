@@ -217,6 +217,9 @@ interface ChatAreaProps {
     prompt: string;
     attachments: ComposerAttachmentSummary[];
   }) => Promise<boolean>;
+  // Creates a forked copy of one conversation.
+  // 创建单个会话的分叉副本。
+  onForkConversation: (conversationId: string, beforeMessageId?: string | null) => Promise<boolean>;
   // Loads hidden tool details for expanded transcript rows.
   // 为展开的转录行加载隐藏工具详情。
   onLoadToolDetail: (detailRef: ConversationDetailRef) => Promise<ToolDetailPayload | null>;
@@ -1165,6 +1168,7 @@ export function ChatArea(props: ChatAreaProps) {
         suppressEmptyPlaceholder={isEmptyConversation}
         onCopyText={props.onCopyText}
         onEditUserPrompt={handleEditUserPrompt}
+        onForkConversation={props.onForkConversation}
         onLoadToolDetail={props.onLoadToolDetail}
         onExtractGeneratedMediaAttachments={generatedMediaAttachmentsFromToolDetailPayload}
         resolveMediaSourceUrl={props.resolveMediaSourceUrl}
@@ -1181,20 +1185,20 @@ export function ChatArea(props: ChatAreaProps) {
       <Dialog open={Boolean(userPromptEditDraft)} onOpenChange={(open) => !open && setUserPromptEditDraft(null)}>
         <DialogContent className="user-prompt-edit-dialog">
           <DialogHeader>
-            <DialogTitle>编辑用户输入</DialogTitle>
+            <DialogTitle>{t("conversation.action.editPrompt")}</DialogTitle>
           </DialogHeader>
           <Textarea
-            aria-label="编辑用户输入"
+            aria-label={t("conversation.action.editPrompt")}
             className="user-prompt-edit-textarea"
             onChange={(event) => setUserPromptEditText(event.currentTarget.value)}
             value={userPromptEditText}
           />
           <DialogFooter>
             <Button disabled={userPromptEditSaving} onClick={() => setUserPromptEditDraft(null)} type="button" variant="secondary">
-              取消
+              {t("conversation.action.cancel")}
             </Button>
             <Button disabled={userPromptEditSaving || !userPromptEditText.trim()} onClick={() => void handleSubmitUserPromptEdit()} type="button">
-              保存并重新执行
+              {t("conversation.action.saveAndReplay")}
             </Button>
           </DialogFooter>
         </DialogContent>
