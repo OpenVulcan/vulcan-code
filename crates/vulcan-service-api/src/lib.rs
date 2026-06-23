@@ -160,6 +160,10 @@ pub struct WorkbenchSnapshot {
     /// Conversation messages shown in the main timeline.
     /// 主时间线展示的会话消息。
     pub messages: Vec<ConversationMessage>,
+    /// Hydrated conversation body windows retained by the service.
+    /// 服务端已保留的会话正文窗口。
+    #[serde(default)]
+    pub hydrated_conversation_windows: Vec<HydratedConversationWindowSummary>,
     /// Current lazy conversation body hydration progress.
     /// 当前懒加载会话正文水合进度。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -264,6 +268,22 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes one retained lazy conversation body window.
+/// 描述一个已保留的懒加载会话正文窗口。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct HydratedConversationWindowSummary {
+    /// Conversation identifier owning this retained body window.
+    /// 拥有该保留正文窗口的会话标识。
+    pub session_id: String,
+    /// Earliest loaded transcript ordinal used to request older history.
+    /// 用于继续请求更早历史的已加载最早转录序号。
+    pub earliest_ordinal: Option<i64>,
+    /// Whether older transcript turns still exist before this window.
+    /// 当前窗口之前是否仍存在更早的转录轮次。
+    pub has_more_history: bool,
 }
 
 /// Describes lazy loading progress for one conversation transcript body.

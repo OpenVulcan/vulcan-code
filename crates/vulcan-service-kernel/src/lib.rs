@@ -117,10 +117,11 @@ use vulcan_service_api::{
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
     ConversationForkSourceSummary, ConversationHistoryPageResponse, ConversationHydrationProgress,
     ConversationHydrationStatus, ConversationMessage, ConversationMessagesLoadResponse,
-    ConversationSummary, FeatureAreaSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
-    LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole,
-    PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
-    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    ConversationSummary, FeatureAreaSummary, HydratedConversationWindowSummary, KeyValueSummary,
+    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary,
+    McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
+    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
+    PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -633,6 +634,67 @@ struct HydratedSessionWorkbench {
     has_more_history: bool,
 }
 
+/// Retained pagination state for one hydrated WebUI conversation.
+/// 单个已水合 WebUI 会话的保留分页状态。
+#[derive(Debug, Clone, Copy)]
+struct HydratedConversationWindowState {
+    /// Earliest loaded transcript ordinal used to page older turns.
+    /// 用于继续分页加载更早轮次的已加载最早转录序号。
+    earliest_ordinal: Option<i64>,
+    /// Whether older transcript turns exist before the current window.
+    /// 当前窗口之前是否存在更早的转录轮次。
+    has_more_history: bool,
+}
+
+/// Converts retained window states into the WebUI API summary shape.
+/// 将保留窗口状态转换为 WebUI API 摘要结构。
+fn hydrated_conversation_window_summaries(
+    windows: &BTreeMap<SessionId, HydratedConversationWindowState>,
+) -> Vec<HydratedConversationWindowSummary> {
+    windows
+        .iter()
+        .map(|(session_id, window)| HydratedConversationWindowSummary {
+            session_id: session_id.to_string(),
+            earliest_ordinal: window.earliest_ordinal,
+            has_more_history: window.has_more_history,
+        })
+        .collect()
+}
+
+/// Synchronizes retained lazy window entries with workspace-hydrated session ids.
+/// 将保留懒加载窗口记录与工作区已水合会话标识同步。
+fn retain_hydrated_conversation_windows_for_workspace(
+    windows: &mut BTreeMap<SessionId, HydratedConversationWindowState>,
+    workspace: &WorkspaceSnapshot,
+) {
+    windows.retain(|session_id, _| workspace.hydrated_session_ids.contains(session_id));
+    for session_id in &workspace.hydrated_session_ids {
+        windows
+            .entry(*session_id)
+            .or_insert(HydratedConversationWindowState {
+                earliest_ordinal: None,
+                has_more_history: false,
+            });
+    }
+}
+
+/// Stores the pagination state for one hydrated WebUI conversation window.
+/// 保存单个已水合 WebUI 会话窗口的分页状态。
+fn remember_hydrated_conversation_window(
+    windows: &mut BTreeMap<SessionId, HydratedConversationWindowState>,
+    session_id: SessionId,
+    earliest_ordinal: Option<i64>,
+    has_more_history: bool,
+) {
+    windows.insert(
+        session_id,
+        HydratedConversationWindowState {
+            earliest_ordinal,
+            has_more_history,
+        },
+    );
+}
+
 /// Maximum loaded subagent transcript surfaces retained by the Tauri service.
 /// Tauri 服务保留的已加载子代理转录界面最大数量。
 const SUBAGENT_SURFACE_DETAIL_CACHE_LIMIT: usize = 128;
@@ -693,6 +755,9 @@ struct PreservedSessionRunState {
     /// Whether the runtime kernel still owns an active turn for this session.
     /// 运行时内核是否仍持有该会话的活动回合。
     had_active_run: bool,
+    /// Whether the previous workspace already retained a hydrated transcript window for this session.
+    /// 之前的工作区是否已经为该会话保留了已水合转录窗口。
+    had_hydrated_window: bool,
     /// Runtime state retained from memory when it contains live context.
     /// 包含实时上下文时从内存保留的运行态。
     runtime_state: Option<SessionRuntimeStateEntry>,
@@ -731,6 +796,9 @@ pub struct ServiceBridgeState {
     /// Latest workspace snapshot retained for streaming turn updates.
     /// 为流式会话轮次更新保留的最近工作区快照。
     workspace_snapshot: Option<WorkspaceSnapshot>,
+    /// Retained lazy conversation body windows keyed by session id.
+    /// 按会话标识索引的懒加载会话正文保留窗口。
+    hydrated_conversation_windows: BTreeMap<SessionId, HydratedConversationWindowState>,
     /// Long-lived shared agent runtime bridge.
     /// 长生命周期共享 Agent 运行时桥接。
     agent_runtime: Option<AgentRuntimeBridge>,
@@ -1950,6 +2018,7 @@ pub fn create_service_bridge_state(
         workbench: fallback_workbench_snapshot(&[]),
         workbench_generation: 0,
         workspace_snapshot: None,
+        hydrated_conversation_windows: BTreeMap::new(),
         agent_runtime: None,
         service_runtime: None,
         webui_service_discovery: None,
@@ -3629,6 +3698,11 @@ fn install_webui_question_runtime_event_bridge(
 /// 返回附加最新实时 ask 运行时待处理请求的保留工作台。
 fn workbench_with_live_pending_question(guard: &ServiceBridgeState) -> WorkbenchSnapshot {
     let mut workbench = guard.workbench.clone();
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() {
+        workbench.hydrated_conversation_windows =
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
+        append_hydrated_workspace_messages(&mut workbench.messages, workspace_snapshot);
+    }
     workbench.pending_question =
         pending_question_snapshot_from_agent_runtime(guard.agent_runtime.as_ref());
     workbench
@@ -3644,6 +3718,11 @@ async fn service_session_messages(
     let parsed_session_id = session_id
         .parse::<SessionId>()
         .map_err(|error| format!("invalid session id '{session_id}': {error}"))?;
+    if let Some(response) =
+        retained_hydrated_session_messages_response(&app, &state, parsed_session_id, &session_id)?
+    {
+        return Ok(response);
+    }
     emit_conversation_hydration_progress(
         &app,
         &state,
@@ -3698,6 +3777,86 @@ async fn service_session_messages(
     })
 }
 
+/// Returns a retained hydrated conversation window without re-reading persisted session files.
+/// 返回已保留的水合会话窗口，避免重新读取持久化会话文件。
+fn retained_hydrated_session_messages_response(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    parsed_session_id: SessionId,
+    session_id: &str,
+) -> Result<Option<ConversationMessagesLoadResponse>, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let (window, session_messages, allow_user_prompt_editing) = {
+        let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() else {
+            return Ok(None);
+        };
+        if !workspace_snapshot
+            .hydrated_session_ids
+            .contains(&parsed_session_id)
+        {
+            return Ok(None);
+        }
+        let Some(window) = guard
+            .hydrated_conversation_windows
+            .get(&parsed_session_id)
+            .copied()
+        else {
+            return Ok(None);
+        };
+        let Some(session_messages) = workspace_snapshot
+            .session_messages
+            .get(&parsed_session_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
+            workspace_snapshot,
+            parsed_session_id,
+            None,
+        );
+        (window, session_messages, allow_user_prompt_editing)
+    };
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_mut() {
+        workspace_snapshot.selected_session = parsed_session_id;
+    }
+    guard.active_subagent_panel = None;
+    let mut messages = conversation_messages_from_session(
+        session_id,
+        &session_messages,
+        allow_user_prompt_editing,
+    );
+    if let Some(workspace_snapshot) = guard.workspace_snapshot.as_ref() {
+        append_hydrated_workspace_messages(&mut messages, workspace_snapshot);
+    }
+    let progress = conversation_hydration_progress(
+        session_id,
+        ConversationHydrationStatus::Ready,
+        "done",
+        100,
+        "会话载入完成。",
+    );
+    guard.workbench.selected_conversation_id = Some(session_id.to_string());
+    guard.workbench.messages = messages.clone();
+    guard.workbench.hydrated_conversation_windows =
+        hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
+    guard.workbench.conversation_hydration = Some(progress.clone());
+    guard.workbench.subagent_navigation = None;
+    guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
+    let workbench = guard.workbench.clone();
+    drop(guard);
+    emit_workbench_event(app, &workbench);
+    Ok(Some(ConversationMessagesLoadResponse {
+        workbench: Box::new(workbench),
+        messages,
+        earliest_ordinal: window.earliest_ordinal,
+        has_more_history: window.has_more_history,
+        progress,
+    }))
+}
+
 /// Loads one older transcript page and merges it into the retained conversation window.
 /// 加载一页更早转录历史，并将其合并进保留的会话窗口。
 async fn service_session_history_page(
@@ -3744,6 +3903,14 @@ async fn service_session_history_page(
             parsed_session_id,
             None,
         );
+        remember_hydrated_conversation_window(
+            &mut guard.hydrated_conversation_windows,
+            parsed_session_id,
+            page.earliest_ordinal,
+            page.has_more_history,
+        );
+        guard.workbench.hydrated_conversation_windows =
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
         if guard.workbench.selected_conversation_id.as_deref() == Some(session_id.as_str()) {
             guard.workbench.messages = conversation_messages_from_session(
                 &session_id,
@@ -3946,7 +4113,7 @@ async fn load_hydrated_session_workbench(
         parsed_session_id,
     )
     .await?;
-    let (surface_messages, subagent_navigation, session_goal_summaries) = {
+    let (surface_messages, subagent_navigation, session_goal_summaries, hydrated_windows) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -3960,12 +4127,25 @@ async fn load_hydrated_session_workbench(
             preserved_workspace_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        let mut hydrated_windows = guard.hydrated_conversation_windows.clone();
+        remember_hydrated_conversation_window(
+            &mut hydrated_windows,
+            parsed_session_id,
+            earliest_ordinal,
+            has_more_history,
+        );
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut hydrated_windows,
+            &refreshed_snapshot,
+        );
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
             guard.session_goal_summaries.clone(),
+            hydrated_windows,
         )
     };
+    let hydrated_window_summaries = hydrated_conversation_window_summaries(&hydrated_windows);
     let workbench = workbench_from_runtime(
         &controller_runtime,
         agent_runtime_for_status
@@ -3983,11 +4163,13 @@ async fn load_hydrated_session_workbench(
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        guard.hydrated_conversation_windows = hydrated_windows;
         guard.workspace_snapshot = Some(refreshed_snapshot);
     }
     Ok(HydratedSessionWorkbench {
@@ -10115,11 +10297,21 @@ async fn service_select_conversation(
     );
     sync_selected_session_goal_summary_from_store(&state, controller_runtime.clone(), session_id)
         .await?;
-    let (surface_messages, subagent_navigation, session_goal_summaries, command_session_runtime) = {
+    let (
+        surface_messages,
+        subagent_navigation,
+        session_goal_summaries,
+        command_session_runtime,
+        hydrated_window_summaries,
+    ) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         guard.active_subagent_panel = None;
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &workspace_snapshot,
+        );
         if let Some(agent_runtime) = guard.agent_runtime.as_mut() {
             agent_runtime.provider_configuration = provider_configuration.clone();
         }
@@ -10132,6 +10324,7 @@ async fn service_select_conversation(
             subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
             guard.session_goal_summaries.clone(),
             command_session_runtime,
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
     let workbench = workbench_from_runtime(
@@ -10149,6 +10342,7 @@ async fn service_select_conversation(
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     {
         let mut guard = state
@@ -14199,10 +14393,15 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         pending_question,
         session_goal_summaries,
         command_session_runtime,
+        hydrated_window_summaries,
     ) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &workspace_snapshot,
+        );
         webui_trace(
             "store_workbench_lock_wait",
             format!(
@@ -14257,6 +14456,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
             pending_question,
             session_goal_summaries,
             command_session_runtime,
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
@@ -14275,6 +14475,7 @@ fn store_and_emit_workbench_snapshot_with_subagent_navigation_mode(
         logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     webui_trace(
         "store_workbench_built",
@@ -17385,15 +17586,26 @@ fn store_current_workbench_snapshot(
     // Measures active surface and subagent navigation projection.
     // 衡量活动界面与子代理导航投影耗时。
     let surface_started_at = current_unix_millis_value();
-    let (live_context_budgets, surface_messages, subagent_navigation, session_goal_summaries) = {
+    let (
+        live_context_budgets,
+        surface_messages,
+        subagent_navigation,
+        session_goal_summaries,
+        hydrated_window_summaries,
+    ) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &workspace_snapshot,
+        );
         (
             guard.live_context_budgets.clone(),
             active_surface_messages_from_workspace_and_state(&mut guard, &workspace_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &workspace_snapshot),
             guard.session_goal_summaries.clone(),
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
     webui_trace_if_slow(
@@ -17424,6 +17636,7 @@ fn store_current_workbench_snapshot(
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     webui_trace_if_slow(
         "store_current_workbench_build_slow",
@@ -22275,6 +22488,7 @@ where
         live_context_budgets,
         session_goal_summaries,
         command_session_runtime,
+        hydrated_window_summaries,
     ) = {
         let trace_lock_wait_started_at = current_unix_millis_value();
         let mut guard = state
@@ -22359,6 +22573,12 @@ where
         guard.workbench_generation = guard.workbench_generation.wrapping_add(1);
         let rebuild_generation = guard.workbench_generation;
         let returned_workspace_snapshot = workspace_snapshot.clone();
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &returned_workspace_snapshot,
+        );
+        let hydrated_window_summaries =
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows);
         guard.workspace_snapshot = Some(workspace_snapshot);
         webui_trace_if_slow(
             "workspace_mutation_commit_workspace",
@@ -22381,6 +22601,7 @@ where
             live_context_budgets,
             session_goal_summaries,
             command_session_runtime,
+            hydrated_window_summaries,
         )
     };
     let trace_workbench_started_at = current_unix_millis_value();
@@ -22399,6 +22620,7 @@ where
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     webui_trace_if_slow(
         "workspace_mutation_workbench",
@@ -23142,7 +23364,7 @@ async fn refresh_workbench_snapshot(
         selected_session_id,
     )
     .await?;
-    let (surface_messages, subagent_navigation, session_goal_summaries) = {
+    let (surface_messages, subagent_navigation, session_goal_summaries, hydrated_window_summaries) = {
         let mut guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
@@ -23156,10 +23378,15 @@ async fn refresh_workbench_snapshot(
             preserved_workspace_run_state.as_ref(),
             &mut refreshed_snapshot,
         );
+        retain_hydrated_conversation_windows_for_workspace(
+            &mut guard.hydrated_conversation_windows,
+            &refreshed_snapshot,
+        );
         (
             active_surface_messages_from_workspace_and_state(&mut guard, &refreshed_snapshot),
             subagent_navigation_snapshot_from_state(&mut guard, &refreshed_snapshot),
             guard.session_goal_summaries.clone(),
+            hydrated_conversation_window_summaries(&guard.hydrated_conversation_windows),
         )
     };
     let workbench = workbench_from_runtime(
@@ -23179,6 +23406,7 @@ async fn refresh_workbench_snapshot(
         &logs,
         &live_context_budgets,
         &session_goal_summaries,
+        &hydrated_window_summaries,
     );
     {
         let mut guard = state
@@ -23212,7 +23440,10 @@ fn capture_preserved_workspace_run_state(
         });
         let is_submitted_session = submitted_session_id == Some(previous_session.id);
         let had_active_run = active_kernel_session_ids.contains(&previous_session.id);
-        if !had_active_run && !has_pending_prompt && !is_submitted_session {
+        let had_hydrated_window = previous_snapshot
+            .hydrated_session_ids
+            .contains(&previous_session.id);
+        if !had_active_run && !has_pending_prompt && !is_submitted_session && !had_hydrated_window {
             continue;
         }
         let previous_phase = previous_snapshot
@@ -23241,6 +23472,7 @@ fn capture_preserved_workspace_run_state(
             session: previous_session.clone(),
             previous_phase,
             had_active_run,
+            had_hydrated_window,
             runtime_state: runtime_state.cloned(),
             messages: previous_snapshot
                 .session_messages
@@ -23332,6 +23564,11 @@ fn preserve_active_session_run_state(
             refreshed_snapshot
                 .session_messages
                 .insert(previous_session.id, messages);
+        }
+        if preserved_session.had_hydrated_window {
+            refreshed_snapshot
+                .hydrated_session_ids
+                .insert(previous_session.id);
         }
     }
 }
@@ -24207,6 +24444,7 @@ fn run_service_bootstrap(
         &logs,
         &BTreeMap::new(),
         &BTreeMap::new(),
+        &[],
     );
 
     if let Ok(mut guard) = state.lock() {
@@ -24487,6 +24725,7 @@ fn workbench_from_runtime(
     logs: &[String],
     live_context_budgets: &BTreeMap<SessionId, ContextBudgetSnapshot>,
     session_goal_summaries: &BTreeMap<SessionId, SessionGoalSummary>,
+    hydrated_conversation_windows: &[HydratedConversationWindowSummary],
 ) -> WorkbenchSnapshot {
     let selected_conversation_id = if workspace.selected_session == SessionId::nil() {
         None
@@ -24497,7 +24736,7 @@ fn workbench_from_runtime(
         .as_ref()
         .map(|navigation| navigation.active_conversation_id.as_str())
         .or(selected_conversation_id.as_deref());
-    let messages = active_conversation_id
+    let mut messages = active_conversation_id
         .map(|conversation_id| {
             let allow_user_prompt_editing = workspace_surface_allows_user_prompt_editing(
                 workspace,
@@ -24511,6 +24750,7 @@ fn workbench_from_runtime(
             )
         })
         .unwrap_or_default();
+    append_hydrated_workspace_messages(&mut messages, workspace);
     let selected_runtime_state = workspace
         .session_runtime_state
         .get(&workspace.selected_session);
@@ -24616,6 +24856,7 @@ fn workbench_from_runtime(
             .collect(),
         selected_conversation_id,
         messages,
+        hydrated_conversation_windows: hydrated_conversation_windows.to_vec(),
         conversation_hydration: None,
         subagent_navigation,
         tool_calls: tool_calls(),
@@ -25687,6 +25928,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         archived_conversations: Vec::new(),
         selected_conversation_id: None,
         messages: Vec::new(),
+        hydrated_conversation_windows: Vec::new(),
         conversation_hydration: None,
         subagent_navigation: None,
         tool_calls: tool_calls(),
@@ -25732,6 +25974,33 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
             .collect(),
         context_injection: None,
         context_usage: None,
+    }
+}
+
+/// Appends retained hydrated conversation bodies that are not already present in one WebUI snapshot.
+/// 追加尚未出现在 WebUI 快照中的已保留水合会话正文。
+fn append_hydrated_workspace_messages(
+    messages: &mut Vec<ConversationMessage>,
+    workspace: &WorkspaceSnapshot,
+) {
+    let mut projected_conversation_ids = messages
+        .iter()
+        .map(|message| message.conversation_id.as_str().to_string())
+        .collect::<BTreeSet<_>>();
+    for session_id in &workspace.hydrated_session_ids {
+        let conversation_id = session_id.to_string();
+        if projected_conversation_ids.contains(&conversation_id) {
+            continue;
+        }
+        let Some(session_messages) = workspace.session_messages.get(session_id) else {
+            continue;
+        };
+        messages.extend(conversation_messages_from_session(
+            &conversation_id,
+            session_messages,
+            false,
+        ));
+        projected_conversation_ids.insert(conversation_id);
     }
 }
 
@@ -32008,6 +32277,168 @@ mod tests {
         );
     }
 
+    /// Verifies hydrated idle sessions keep their retained transcript window across index refreshes.
+    /// 验证已水合的空闲会话在索引刷新后保留其转录窗口。
+    #[test]
+    fn preserve_active_session_run_state_keeps_hydrated_idle_session_context() {
+        let session_id = SessionId::new_v4();
+        let project_id = String::from("project-a");
+        let previous_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id.clone(),
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(project_id.clone()),
+                "已加载会话",
+                "已有正文",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![SessionMessageEntry::new(
+                    SessionMessageKind::Assistant,
+                    "助手",
+                    "已保留的正文",
+                )],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+        let mut refreshed_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id,
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "已加载会话",
+                "刷新索引",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        let preserved_workspace_run_state =
+            capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+        preserve_active_session_run_state(
+            preserved_workspace_run_state.as_ref(),
+            &mut refreshed_snapshot,
+        );
+
+        assert_eq!(
+            refreshed_snapshot
+                .session_messages
+                .get(&session_id)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert!(
+            refreshed_snapshot
+                .hydrated_session_ids
+                .contains(&session_id)
+        );
+    }
+
+    /// Verifies WebUI snapshots include every Rust-retained hydrated conversation body.
+    /// 验证 WebUI 快照会包含 Rust 保留的全部已水合会话正文。
+    #[test]
+    fn append_hydrated_workspace_messages_keeps_idle_loaded_conversations_visible() {
+        let active_session_id = SessionId::new_v4();
+        let idle_session_id = SessionId::new_v4();
+        let mut messages = conversation_messages_from_session(
+            &active_session_id.to_string(),
+            &[SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "助手",
+                "活动正文",
+            )],
+            false,
+        );
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([
+                (
+                    active_session_id,
+                    vec![SessionMessageEntry::new(
+                        SessionMessageKind::Assistant,
+                        "助手",
+                        "活动正文",
+                    )],
+                ),
+                (
+                    idle_session_id,
+                    vec![SessionMessageEntry::new(
+                        SessionMessageKind::Assistant,
+                        "助手",
+                        "空闲正文",
+                    )],
+                ),
+            ]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: active_session_id,
+            hydrated_session_ids: BTreeSet::from([active_session_id, idle_session_id]),
+        };
+
+        append_hydrated_workspace_messages(&mut messages, &workspace_snapshot);
+        let conversation_ids = messages
+            .iter()
+            .map(|message| message.conversation_id.as_str())
+            .collect::<BTreeSet<_>>();
+
+        assert!(conversation_ids.contains(active_session_id.to_string().as_str()));
+        assert!(conversation_ids.contains(idle_session_id.to_string().as_str()));
+    }
+
     /// Verifies stale running markers do not revive a session without an active kernel turn.
     /// 验证没有活动内核回合时过时运行标记不会复活会话。
     #[test]
@@ -32121,6 +32552,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: Some(workspace_snapshot),
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -32206,6 +32638,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -32306,6 +32739,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -32639,6 +33073,7 @@ mod tests {
                 selected_session: parent_session_id,
                 hydrated_session_ids: BTreeSet::new(),
             }),
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -33380,6 +33815,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -33465,6 +33901,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,
@@ -33555,6 +33992,7 @@ mod tests {
             workbench: fallback_workbench_snapshot(&[]),
             workbench_generation: 0,
             workspace_snapshot: None,
+            hydrated_conversation_windows: BTreeMap::new(),
             agent_runtime: None,
             service_runtime: None,
             webui_service_discovery: None,

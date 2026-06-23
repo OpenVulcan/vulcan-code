@@ -187,7 +187,6 @@ import {
   mergeWorkbenchSnapshotWithSubagentSurfaceMessageCache,
   openSubagentSurfaceForConversation,
   reorderPendingPromptSummaries,
-  workbenchDeltaConversationId,
   workbenchWithSubagentSurfaceMessageCache,
   type InflightSubagentOpenRequest,
   type SubagentRoutePreference,
@@ -272,27 +271,17 @@ export interface WorkbenchDeltaSignal {
   envelopes: WorkbenchDeltaEnvelope[];
 }
 
-// conversationIdsWithMessages returns conversation ids that already have visible message bodies in a snapshot.
-// conversationIdsWithMessages 返回快照中已经带有可见正文消息的会话标识。
-function conversationIdsWithMessages(messages: ConversationMessage[]): Set<string> {
-  return new Set(messages.map((message) => message.conversationId).filter(Boolean));
-}
-
-// mergeHydratedConversationIds returns the previous set when no new hydrated ids are discovered.
-// mergeHydratedConversationIds 在没有发现新正文会话标识时返回旧集合以避免重复触发水合。
-function mergeHydratedConversationIds(
-  current: Set<string>,
-  conversationIds: Iterable<string>,
-): Set<string> {
-  let next: Set<string> | null = null;
-  for (const conversationId of conversationIds) {
-    if (current.has(conversationId)) {
-      continue;
-    }
-    next ??= new Set(current);
-    next.add(conversationId);
-  }
-  return next ?? current;
+// conversationHistoryCursorFromWindow converts one service-retained body window into UI cursor state.
+// conversationHistoryCursorFromWindow 将单个服务端保留正文窗口转换为 UI 游标状态。
+function conversationHistoryCursorFromWindow(
+  window: NonNullable<WorkbenchSnapshot["hydratedConversationWindows"]>[number],
+  loading: boolean,
+): ConversationHistoryCursor {
+  return {
+    earliestOrdinal: window.earliestOrdinal ?? null,
+    hasMoreHistory: window.hasMoreHistory,
+    loading,
+  };
 }
 
 // WorkbenchLayout renders the WebUI workbench shell.
@@ -409,6 +398,9 @@ export function WorkbenchLayout(props: {
   // loadingConversationId stores the conversation currently loading from the service.
   // loadingConversationId 保存当前正在从服务加载正文的会话标识。
   const [loadingConversationId, setLoadingConversationId] = React.useState<string | null>(null);
+  // hydratingConversationIdsRef stores conversation ids with an active service hydration request.
+  // hydratingConversationIdsRef 保存当前已有服务端正文水合请求在途的会话标识。
+  const hydratingConversationIdsRef = React.useRef<Set<string>>(new Set());
   // conversationLoadError stores the latest conversation hydration error.
   // conversationLoadError 保存最近一次会话正文水合错误。
   const [conversationLoadError, setConversationLoadError] = React.useState<string | null>(null);
@@ -442,14 +434,9 @@ export function WorkbenchLayout(props: {
   // activeSettingsSubArea stores the selected settings sidebar page.
   // activeSettingsSubArea 保存设置侧栏当前选择的页面。
   const [activeSettingsSubArea, setActiveSettingsSubArea] = React.useState<SettingsSubAreaId>("model-providers");
-  // hydratedConversationIds stores conversations already requested from the service.
-  // hydratedConversationIds 保存已经向服务请求过正文的会话标识。
-  const [hydratedConversationIds, setHydratedConversationIds] = React.useState<Set<string>>(
-    () => conversationIdsWithMessages(props.workbench.messages),
-  );
-  // conversationHistoryCursors stores backend pagination cursors for hydrated conversation windows.
-  // conversationHistoryCursors 保存已水合会话窗口的后端分页游标。
-  const [conversationHistoryCursors, setConversationHistoryCursors] = React.useState<Record<string, ConversationHistoryCursor>>({});
+  // conversationHistoryLoadingIds stores UI-only older-history requests currently in flight.
+  // conversationHistoryLoadingIds 保存当前进行中的仅 UI 更早历史请求。
+  const [conversationHistoryLoadingIds, setConversationHistoryLoadingIds] = React.useState<Set<string>>(() => new Set());
   // activeFeature stores the selected feature summary from the complete top navigation list.
   // activeFeature 从完整顶部导航列表中保存当前选中的功能区域摘要。
   const activeFeature = localizedTopFeatureAreas.find((area) => area.id === activeArea) ?? localizedTopFeatureAreas[0];
@@ -496,6 +483,20 @@ export function WorkbenchLayout(props: {
     () => workbenchState.messages.filter((message) => message.conversationId === selectedConversationId),
     [selectedConversationId, workbenchState.messages],
   );
+  // hydratedConversationWindowById indexes Rust-retained hydrated windows for render and request decisions.
+  // hydratedConversationWindowById 为渲染与请求判断索引 Rust 保留的已水合窗口。
+  const hydratedConversationWindowById = React.useMemo(
+    () => new Map((workbenchState.hydratedConversationWindows ?? []).map((window) => [window.sessionId, window])),
+    [workbenchState.hydratedConversationWindows],
+  );
+  // selectedConversationHistoryCursor reflects Rust-retained pagination plus local request progress.
+  // selectedConversationHistoryCursor 反映 Rust 保留分页与本地请求进度。
+  const selectedConversationHistoryCursor = selectedConversationId
+    ? hydratedConversationWindowById.get(selectedConversationId)
+    : null;
+  // selectedConversationHydrated records whether the selected conversation body is already retained by Rust.
+  // selectedConversationHydrated 记录当前选中会话正文是否已经由 Rust 保留。
+  const selectedConversationHydrated = Boolean(selectedConversationHistoryCursor);
   // selectedConversationRenderItems stores parsed rows for sidebar/runtime summaries.
   // selectedConversationRenderItems 保存侧栏与运行状态摘要复用的解析行。
   const selectedConversationRenderItems = React.useMemo(
@@ -884,7 +885,6 @@ export function WorkbenchLayout(props: {
       setDraftConversation(null);
       const nextConversationId = snapshot.selectedConversationId ?? activeConversationId;
       if (nextConversationId) {
-        setHydratedConversationIds((current) => new Set(current).add(nextConversationId));
         if (selectedConversationIdRef.current === submittedSelectionId) {
           setSelectedConversationId(nextConversationId);
         }
@@ -1171,7 +1171,6 @@ export function WorkbenchLayout(props: {
           mergeWorkbenchWithLocalCaches(current, snapshot),
           subagentRoutePreferenceRef.current,
         ));
-        setHydratedConversationIds((current) => new Set(current).add(snapshot.subagentNavigation?.activeConversationId ?? taskId));
       }
       webuiClickTrace("subagent.open.result", {
         parentConversationId,
@@ -1365,11 +1364,6 @@ export function WorkbenchLayout(props: {
     try {
       const snapshot = await submitUserPromptEdit(request);
       if (snapshot) {
-        setHydratedConversationIds((current) => {
-          const next = new Set(current);
-          next.delete(request.conversationId);
-          return next;
-        });
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, snapshot));
       }
       return true;
@@ -1644,10 +1638,6 @@ export function WorkbenchLayout(props: {
       }
       return nextSelected;
     });
-    setHydratedConversationIds((current) => mergeHydratedConversationIds(
-      current,
-      conversationIdsWithMessages(props.workbench.messages),
-    ));
   }, [props.workbench]);
 
   React.useEffect(() => {
@@ -1665,12 +1655,6 @@ export function WorkbenchLayout(props: {
       ),
       subagentRoutePreferenceRef.current,
     ));
-    const conversationIds = props.workbenchDelta.envelopes
-      .map(workbenchDeltaConversationId)
-      .filter((conversationId): conversationId is string => Boolean(conversationId));
-    if (conversationIds.length > 0) {
-      setHydratedConversationIds((current) => mergeHydratedConversationIds(current, conversationIds));
-    }
   }, [props.workbenchDelta]);
 
   React.useEffect(() => {
@@ -1681,12 +1665,16 @@ export function WorkbenchLayout(props: {
       return;
     }
     const conversationId = selectedConversationId;
-    const conversationCursor = conversationHistoryCursors[conversationId];
-    if (hydratedConversationIds.has(conversationId) && conversationCursor) {
+    if (selectedConversationHydrated) {
+      setLoadingConversationId((current) => (current === conversationId ? null : current));
+      return;
+    }
+    if (hydratingConversationIdsRef.current.has(conversationId)) {
       return;
     }
 
     let cancelled = false;
+    hydratingConversationIdsRef.current.add(conversationId);
     setLoadingConversationId(conversationId);
     setConversationLoadError(null);
 
@@ -1703,22 +1691,12 @@ export function WorkbenchLayout(props: {
           conversationHydration: response.progress,
         };
         setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, hydratedWorkbench));
-        setHydratedConversationIds((current) => (
-          mergeHydratedConversationIds(current, conversationIdsWithMessages(hydratedWorkbench.messages))
-        ));
-        setConversationHistoryCursors((current) => ({
-          ...current,
-          [conversationId]: {
-            earliestOrdinal: response.earliestOrdinal ?? null,
-            hasMoreHistory: response.hasMoreHistory,
-            loading: false,
-          },
-        }));
       } catch (nextError) {
         if (!cancelled) {
           setConversationLoadError(nextError instanceof Error ? nextError.message : String(nextError));
         }
       } finally {
+        hydratingConversationIdsRef.current.delete(conversationId);
         if (!cancelled) {
           setLoadingConversationId(null);
         }
@@ -1729,50 +1707,36 @@ export function WorkbenchLayout(props: {
     return () => {
       cancelled = true;
     };
-  }, [conversationHistoryCursors, draftConversation?.id, hydratedConversationIds, mergeWorkbenchWithLocalCaches, selectedConversationId]);
+  }, [draftConversation?.id, mergeWorkbenchWithLocalCaches, selectedConversationHydrated, selectedConversationId]);
 
   // handleLoadConversationHistory requests one older turn page for the selected conversation.
   // handleLoadConversationHistory 为当前选中会话请求一页更早轮次。
   const handleLoadConversationHistory = React.useCallback(async (conversationId: string): Promise<boolean> => {
-    const cursor = conversationHistoryCursors[conversationId];
+    const window = hydratedConversationWindowById.get(conversationId);
+    const cursor = window ? conversationHistoryCursorFromWindow(window, conversationHistoryLoadingIds.has(conversationId)) : null;
     if (!cursor?.hasMoreHistory || cursor.earliestOrdinal == null || cursor.loading) {
       return false;
     }
-    setConversationHistoryCursors((current) => ({
-      ...current,
-      [conversationId]: {
-        ...cursor,
-        loading: true,
-      },
-    }));
+    setConversationHistoryLoadingIds((current) => new Set(current).add(conversationId));
     try {
       const response = await loadConversationHistoryPage(conversationId, cursor.earliestOrdinal);
       setWorkbenchState((current) => mergeWorkbenchWithLocalCaches(current, response.workbench));
-      setConversationHistoryCursors((current) => ({
-        ...current,
-        [conversationId]: {
-          earliestOrdinal: response.earliestOrdinal ?? null,
-          hasMoreHistory: response.hasMoreHistory,
-          loading: false,
-        },
-      }));
-      setHydratedConversationIds((current) => mergeHydratedConversationIds(current, [conversationId]));
+      setConversationHistoryLoadingIds((current) => {
+        const next = new Set(current);
+        next.delete(conversationId);
+        return next;
+      });
       return true;
     } catch (error) {
       console.error("Failed to load older conversation history", error);
-      setConversationHistoryCursors((current) => {
-        const currentCursor = current[conversationId] ?? cursor;
-        return {
-          ...current,
-          [conversationId]: {
-            ...currentCursor,
-            loading: false,
-          },
-        };
+      setConversationHistoryLoadingIds((current) => {
+        const next = new Set(current);
+        next.delete(conversationId);
+        return next;
       });
       return false;
     }
-  }, [conversationHistoryCursors, mergeWorkbenchWithLocalCaches]);
+  }, [conversationHistoryLoadingIds, hydratedConversationWindowById, mergeWorkbenchWithLocalCaches]);
 
   // handleComposerSlashCommand routes slash commands into existing workbench actions.
   // handleComposerSlashCommand 将 slash 指令路由到现有工作台动作。
@@ -1816,8 +1780,8 @@ export function WorkbenchLayout(props: {
             loadingConversationId={loadingConversationId}
             conversationLoadError={conversationLoadError}
             conversationHydration={workbenchState.conversationHydration ?? null}
-            conversationHasMoreHistory={selectedConversationId ? Boolean(conversationHistoryCursors[selectedConversationId]?.hasMoreHistory) : false}
-            conversationHistoryLoading={selectedConversationId ? Boolean(conversationHistoryCursors[selectedConversationId]?.loading) : false}
+            conversationHasMoreHistory={Boolean(selectedConversationHistoryCursor?.hasMoreHistory)}
+            conversationHistoryLoading={selectedConversationId ? conversationHistoryLoadingIds.has(selectedConversationId) : false}
             pinnedConversationIds={pinnedConversationIds}
             onConversationMenuAction={handleConversationMenuAction}
             onCreateConversation={handleCreateConversation}

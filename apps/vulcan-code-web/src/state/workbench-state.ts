@@ -4,6 +4,7 @@ import {
   mergeIncomingConversationMessages,
 } from "@/state/workbench-message-merge";
 import type {
+  ConversationHydrationProgress,
   ConversationMessage,
   ConversationSummary,
   PendingPromptSummary,
@@ -80,15 +81,39 @@ export function mergeWorkbenchSnapshot(
   const retainedMessages = current.messages.filter((message) => (
     !incomingConversationIds.has(message.conversationId) && !incomingMessageIds.has(message.id)
   ));
-  const selectedConversationId = current.selectedConversationId;
+  const selectedConversationId = current.selectedConversationId ?? null;
+  const conversationHydration = selectMergedConversationHydration(
+    current.conversationHydration ?? null,
+    incoming.conversationHydration ?? null,
+    selectedConversationId,
+  );
   return {
     ...incoming,
     selectedConversationId,
     expandedProjectIds,
-    conversationHydration: incoming.conversationHydration ?? current.conversationHydration ?? null,
+    conversationHydration,
     conversations: mergeConversationSummaries(current.conversations, incoming.conversations, selectedConversationId),
     messages: [...retainedMessages, ...mergedIncomingMessages],
   };
+}
+
+// selectMergedConversationHydration keeps background conversation loads from overwriting the selected load progress.
+// selectMergedConversationHydration 防止后台会话加载进度覆盖当前选中会话的加载进度。
+function selectMergedConversationHydration(
+  current: ConversationHydrationProgress | null,
+  incoming: ConversationHydrationProgress | null,
+  selectedConversationId: string | null,
+): ConversationHydrationProgress | null {
+  if (!incoming) {
+    return current;
+  }
+  if (!selectedConversationId || incoming.sessionId === selectedConversationId) {
+    return incoming;
+  }
+  if (current?.sessionId === selectedConversationId) {
+    return current;
+  }
+  return incoming;
 }
 
 // applyWorkbenchDeltaWithSubagentSurfaceMessageCache applies one partial update while keeping child transcript caches coherent.

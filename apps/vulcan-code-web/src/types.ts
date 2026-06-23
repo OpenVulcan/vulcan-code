@@ -1705,6 +1705,9 @@ export interface WorkbenchSnapshot {
   // Conversation messages.
   // 会话消息。
   messages: ConversationMessage[];
+  // Hydrated conversation body windows retained by the service.
+  // 服务端已保留的会话正文窗口。
+  hydratedConversationWindows?: HydratedConversationWindowSummary[];
   // Current lazy conversation body hydration progress.
   // 当前懒加载会话正文水合进度。
   conversationHydration?: ConversationHydrationProgress | null;
@@ -1786,6 +1789,20 @@ export interface WorkbenchSnapshot {
   // Context token usage snapshot projected from the latest execution preparation.
   // 从最近一次执行准备投影出的上下文 Token 占用快照。
   contextUsage?: ContextUsageSnapshot | null;
+}
+
+// HydratedConversationWindowSummary describes one retained lazy conversation body window.
+// HydratedConversationWindowSummary 描述一个已保留的懒加载会话正文窗口。
+export interface HydratedConversationWindowSummary {
+  // Conversation identifier owning this retained body window.
+  // 拥有该保留正文窗口的会话标识。
+  sessionId: string;
+  // Earliest loaded transcript ordinal used to request older history.
+  // 用于继续请求更早历史的已加载最早转录序号。
+  earliestOrdinal?: number | null;
+  // Whether older transcript turns still exist before this window.
+  // 当前窗口之前是否仍存在更早的转录轮次。
+  hasMoreHistory: boolean;
 }
 
 // ConversationHydrationStatus describes lazy conversation body loading state.
