@@ -199,4 +199,3 @@ Write-Host "==> Done. Binary: $OutputBinaryPath"
 if ($IsWindowsPlatform) {
     Write-Host "==> Done. Windows console helper: $OutputHelperPath"
 }
-

@@ -4355,7 +4355,7 @@ fn strip_terminal_transaction_sentinel(
     chunks: &[CommandSessionOutputChunk],
     transaction_id: &str,
 ) -> (Vec<CommandSessionOutputChunk>, Option<i32>) {
-    let sentinel_prefix = format!("__VULCAN_TERMINAL_TX_EXIT__:{transaction_id}:");
+    let sentinel_prefixes = terminal_transaction_sentinel_prefixes(transaction_id);
     let mut exit_code = None;
     let mut stripped_chunks = Vec::new();
 
@@ -4363,14 +4363,19 @@ fn strip_terminal_transaction_sentinel(
         let mut stripped_text = String::new();
         for line in chunk.text.split_inclusive('\n') {
             let line_without_newline = line.trim_end_matches(['\r', '\n']);
-            if let Some(sentinel_start) = line_without_newline.find(&sentinel_prefix) {
-                let raw_code = &line_without_newline[sentinel_start + sentinel_prefix.len()..];
+            let detection_line = strip_simple_ansi_sequences(line_without_newline);
+            if let Some((sentinel_start, sentinel_len)) =
+                find_terminal_transaction_sentinel(&detection_line, &sentinel_prefixes)
+            {
+                let raw_code = &detection_line[sentinel_start + sentinel_len..];
                 let raw_code = raw_code
                     .trim_start()
                     .chars()
                     .take_while(|ch| ch.is_ascii_digit() || *ch == '-' || *ch == '+')
                     .collect::<String>();
-                exit_code = raw_code.parse::<i32>().ok();
+                if let Ok(parsed_code) = raw_code.parse::<i32>() {
+                    exit_code = Some(parsed_code);
+                }
                 continue;
             }
             stripped_text.push_str(line);
@@ -4383,6 +4388,27 @@ fn strip_terminal_transaction_sentinel(
     }
 
     (stripped_chunks, exit_code)
+}
+
+/// Returns exact transaction sentinel prefixes accepted for append logs and screen frames.
+/// 返回追加日志与屏幕帧中可接受的精确事务哨兵前缀。
+fn terminal_transaction_sentinel_prefixes(transaction_id: &str) -> [String; 2] {
+    [
+        format!("__VULCAN_TERMINAL_TX_EXIT__:{transaction_id}:"),
+        format!("_TERMINAL_TX_EXIT__:{transaction_id}:"),
+    ]
+}
+
+/// Finds one exact transaction sentinel prefix inside a decoded terminal line.
+/// 在已解码终端行中查找一个精确事务哨兵前缀。
+fn find_terminal_transaction_sentinel(
+    line: &str,
+    sentinel_prefixes: &[String],
+) -> Option<(usize, usize)> {
+    sentinel_prefixes
+        .iter()
+        .filter_map(|prefix| line.find(prefix).map(|start| (start, prefix.len())))
+        .min_by_key(|(start, _)| *start)
 }
 
 /// Detects whether terminal output appears log-like, screen-like, or mixed.
@@ -6531,6 +6557,7 @@ mod tests {
         encode_terminal_inputs, goal_response_value, normalize_terminal_session_name,
         resolve_session_shell_behavior, resolve_shell_command_launcher,
         resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
+        strip_simple_ansi_sequences, strip_terminal_transaction_sentinel,
         terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
         terminal_output_chunks_contain_pattern, terminal_screen_text_from_chunks,
         terminal_session_args_schema, terminal_transaction_command_text,
@@ -7533,6 +7560,44 @@ mod tests {
         assert_eq!(coalesced[0].seq, 1);
         assert_eq!(coalesced[0].text, "$global");
         assert_eq!(coalesced[1].stream, CommandSessionOutputStream::Stderr);
+    }
+
+    /// Windows console screen frames should parse the transaction marker even when the visible frame loses the leading host prefix.
+    /// Windows 控制台屏幕帧即使丢失宿主前缀的可见开头，也应解析事务标记。
+    #[test]
+    fn terminal_transaction_sentinel_accepts_windows_screen_visible_suffix() {
+        let chunks = vec![CommandSessionOutputChunk {
+            seq: 3,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from(
+                "[screen #3]\n\x1b[37;40m_TERMINAL_TX_EXIT__:tx-screen:0\x1b[0m\nPS D:\\repo>",
+            ),
+        }];
+
+        let (stripped_chunks, exit_code) =
+            strip_terminal_transaction_sentinel(&chunks, "tx-screen");
+
+        assert_eq!(exit_code, Some(0));
+        assert!(stripped_chunks.iter().all(|chunk| {
+            !strip_simple_ansi_sequences(&chunk.text).contains("_TERMINAL_TX_EXIT__:tx-screen")
+        }));
+    }
+
+    /// Later echoed transaction wrapper text should not erase a previously parsed transaction exit code.
+    /// 后续回显的事务包装文本不应清空先前已解析到的事务退出码。
+    #[test]
+    fn terminal_transaction_sentinel_keeps_parsed_code_when_echo_later_matches() {
+        let chunks = vec![CommandSessionOutputChunk {
+            seq: 4,
+            stream: CommandSessionOutputStream::Stdout,
+            text: String::from(
+                "__VULCAN_TERMINAL_TX_EXIT__:tx-keep:0\nWrite-Output \"__VULCAN_TERMINAL_TX_EXIT__:tx-keep:$vulcanCode\"\n",
+            ),
+        }];
+
+        let (_stripped_chunks, exit_code) = strip_terminal_transaction_sentinel(&chunks, "tx-keep");
+
+        assert_eq!(exit_code, Some(0));
     }
 
     /// Terminal names should preserve explicit labels and fall back to compact command text when omitted.

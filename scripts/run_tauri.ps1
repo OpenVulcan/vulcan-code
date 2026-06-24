@@ -1,4 +1,4 @@
-# run_tauri.ps1 runs the new Tauri/WebUI main application.
+﻿# run_tauri.ps1 runs the new Tauri/WebUI main application.
 # run_tauri.ps1 用于运行新的 Tauri/WebUI 主应用。
 # Usage:
 # 用法：
