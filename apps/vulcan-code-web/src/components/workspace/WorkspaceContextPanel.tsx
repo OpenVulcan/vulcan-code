@@ -38,7 +38,6 @@ import type {
   WorkspaceFileReadResponse,
 } from "@/types";
 import { WorkspaceMemoryPanel } from "@/components/workspace/WorkspaceMemoryPanel";
-import { WorkspaceTerminalSessionsPanel } from "@/components/workspace/WorkspaceTerminalSessionsPanel";
 
 // LazyWorkspaceReviewPanelHost loads the heavy Git review surface only when the context rail renders it.
 // LazyWorkspaceReviewPanelHost 仅在上下文栏渲染审核页时加载较重的 Git 审核界面。
@@ -585,10 +584,6 @@ function WorkspaceContextTabContent(args: {
   if (args.activeTab.kind === "review") {
     return (
       <div className="context-tab-content review-tab-content">
-        <WorkspaceTerminalSessionsPanel
-          commandSessions={args.props.workbench.commandSessions ?? []}
-          onStopCommandSession={args.props.onStopCommandSession}
-        />
         <React.Suspense fallback={<WorkspaceReviewPanelLoading />}>
           <LazyWorkspaceReviewPanelHost
             loadWorkspaceDiffFileDetail={args.props.loadWorkspaceDiffFileDetail}

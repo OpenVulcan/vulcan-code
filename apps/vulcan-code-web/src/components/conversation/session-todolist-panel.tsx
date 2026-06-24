@@ -18,6 +18,7 @@ import {
   terminalStateClass,
   type TerminalSessionViewModel,
 } from "@/components/conversation/conversation-terminal-model";
+import { TerminalStopConfirmDialog } from "@/components/conversation/terminal-stop-confirm-dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -281,20 +282,31 @@ function ConversationSessionTerminalRow(props: {
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
 }) {
   const [stopping, setStopping] = React.useState(false);
-  const handleStop = React.useCallback(async () => {
+  const [confirmOpen, setConfirmOpen] = React.useState(false);
+  const handleStopRequest = React.useCallback(() => {
     if (!props.session.canStop || stopping) {
       return;
     }
-    if (!window.confirm(`确认强制终止终端会话？\n\n${props.session.command}`)) {
+    setConfirmOpen(true);
+  }, [props.session.canStop, stopping]);
+  const handleConfirmStop = React.useCallback(async () => {
+    if (!props.session.canStop || stopping) {
       return;
     }
     setStopping(true);
     try {
       await props.onStopCommandSession(props.session.id, props.summary?.ownerSessionId ?? null);
+      setConfirmOpen(false);
     } finally {
       setStopping(false);
     }
   }, [props, stopping]);
+  const handleConfirmOpenChange = React.useCallback((open: boolean) => {
+    if (stopping) {
+      return;
+    }
+    setConfirmOpen(open);
+  }, [stopping]);
   const tooltipText = terminalSessionTooltipText(props.session, props.summary);
   return (
     <div className="workspace-tool-panel-menu-row conversation-session-terminal-row">
@@ -313,12 +325,20 @@ function ConversationSessionTerminalRow(props: {
         aria-label="强制终止终端会话"
         className="conversation-session-terminal-stop"
         disabled={!props.session.canStop || stopping}
-        onClick={handleStop}
+        onClick={handleStopRequest}
         title={props.session.canStop ? "强制终止" : props.session.label}
         type="button"
       >
         <Square fill="currentColor" size={11} strokeWidth={0} />
       </button>
+      <TerminalStopConfirmDialog
+        command={props.session.command}
+        open={confirmOpen}
+        sessionName={props.session.name}
+        stopping={stopping}
+        onConfirm={handleConfirmStop}
+        onOpenChange={handleConfirmOpenChange}
+      />
     </div>
   );
 }

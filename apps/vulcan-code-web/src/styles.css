@@ -3646,6 +3646,41 @@ button {
   overflow-wrap: anywhere;
 }
 
+.terminal-stop-confirm-dialog {
+  max-width: min(420px, calc(100vw - 32px));
+}
+
+.terminal-stop-confirm-body {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.terminal-stop-confirm-body span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.terminal-stop-confirm-body code {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--foreground);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  max-height: 120px;
+  overflow: auto;
+  padding: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .conversation-session-todolist-explanation {
   margin: 2px 3px 1px;
   color: var(--muted-foreground);
@@ -8808,117 +8843,6 @@ button {
 
 .ask-question-answer.ignored .ask-question-answer-text {
   color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
-}
-
-.workspace-terminal-sessions-panel {
-  display: grid;
-  gap: 8px;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border);
-  background: color-mix(in oklch, var(--muted) 42%, transparent);
-}
-
-.workspace-terminal-sessions-header {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.workspace-terminal-sessions-list {
-  display: grid;
-  gap: 6px;
-}
-
-.workspace-terminal-session-row {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid color-mix(in oklch, var(--border) 72%, transparent);
-  border-radius: 8px;
-  background: color-mix(in oklch, var(--background) 80%, transparent);
-}
-
-.workspace-terminal-session-main {
-  position: relative;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-  white-space: nowrap;
-  -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 30px), transparent 100%);
-  mask-image: linear-gradient(90deg, #000 0%, #000 calc(100% - 30px), transparent 100%);
-}
-
-.workspace-terminal-session-label {
-  flex: 0 0 auto;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-
-.workspace-terminal-session-name {
-  min-width: 0;
-  flex: 0 1 auto;
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: 12px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-terminal-session-preview {
-  min-width: 0;
-  flex: 1 2 auto;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-terminal-session-stop {
-  justify-self: end;
-  width: 22px;
-  height: 22px;
-  display: inline-grid;
-  place-items: center;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: var(--muted-foreground);
-  transition: color 120ms ease, opacity 120ms ease;
-}
-
-.workspace-terminal-session-stop:not(:disabled):hover {
-  background: transparent;
-  color: var(--destructive);
-}
-
-.workspace-terminal-session-stop:disabled {
-  cursor: default;
-  opacity: 0.42;
-}
-
-.workspace-terminal-session-tooltip {
-  max-width: min(560px, calc(100vw - 48px));
-}
-
-.workspace-terminal-session-tooltip pre {
-  margin: 0;
-  color: inherit;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 
 .tool-presentation-card.file-change {
