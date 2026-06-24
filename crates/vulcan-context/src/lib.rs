@@ -27,7 +27,7 @@ pub use protocol::{
     append_assistant_text_message, append_record, append_record_body_delta,
     append_user_text_message, collect_host_visible_attachments,
     conversation_state_from_session_messages, conversation_state_to_context_records,
-    conversation_state_to_session_messages,
+    conversation_state_to_session_messages, merge_session_messages_with_conversation_state_records,
 };
 pub use request_mode::{
     ContextFullRequestReason, ContextIncrementalDisabledReason, ContextRequestMode,

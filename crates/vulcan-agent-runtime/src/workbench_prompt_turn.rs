@@ -41,7 +41,7 @@ use crate::{
     },
     conversation_protocol::{
         SessionConversationPayload, SessionConversationRecord, append_record,
-        append_user_text_message, conversation_state_to_session_messages,
+        append_user_text_message, merge_session_messages_with_conversation_state_records,
     },
     session_event_runtime::{
         append_runtime_event_projection_to_state, build_session_record_message_id,
@@ -304,10 +304,16 @@ pub fn begin_shared_prompt_turn(
     conversation_hook_runtime: &mut ConversationHookRuntime,
     input: SharedPromptTurnBeginInput<'_>,
 ) -> Result<SharedPromptTurnStart, String> {
-    let prior_session_messages = workspace_snapshot
-        .session_messages
+    let prior_dialogue_messages = workspace_snapshot
+        .session_runtime_state
         .get(&input.session_id)
-        .cloned();
+        .map(|runtime_state| {
+            merge_session_messages_with_conversation_state_records(
+                &[],
+                &runtime_state.conversation_state,
+            )
+        })
+        .filter(|messages| !messages.is_empty());
     let owning_project_id = workspace_snapshot
         .sessions
         .iter()
@@ -344,7 +350,7 @@ pub fn begin_shared_prompt_turn(
                     .disabled_ai_capability_target_selectors,
                 ai_capability_target_order_overrides: input.ai_capability_target_order_overrides,
                 owning_project_id,
-                prior_session_messages: prior_session_messages.as_deref(),
+                prior_session_messages: prior_dialogue_messages.as_deref(),
             },
         )?
     };
@@ -352,10 +358,17 @@ pub fn begin_shared_prompt_turn(
         .session_runtime_state
         .get(&input.session_id)
     {
-        workspace_snapshot.session_messages.insert(
-            input.session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
+        let merged_messages = merge_session_messages_with_conversation_state_records(
+            workspace_snapshot
+                .session_messages
+                .get(&input.session_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            &runtime_state.conversation_state,
         );
+        workspace_snapshot
+            .session_messages
+            .insert(input.session_id, merged_messages);
     }
     let initial_phase = if input.source.runs_user_prompt_precheck() {
         SessionRunPhase::MemoryRecall
@@ -365,9 +378,6 @@ pub fn begin_shared_prompt_turn(
     workspace_snapshot
         .session_run_phases
         .insert(input.session_id, initial_phase);
-    workspace_snapshot
-        .hydrated_session_ids
-        .insert(input.session_id);
     Ok(start)
 }
 
@@ -397,7 +407,9 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
         collect_builtin_manual_injection_ops_and_sanitized_prompt(input.prompt);
     let start_attachments = input.attachments.clone();
     runtime_state.ui_state.unread = false;
-    if runtime_state.conversation_state.records.is_empty() {
+    if runtime_state.conversation_state.messages.is_empty()
+        && runtime_state.conversation_state.records.is_empty()
+    {
         if let Some(messages) = input.prior_session_messages {
             runtime_state.conversation_state =
                 crate::conversation_protocol::conversation_state_from_session_messages(messages);
@@ -577,10 +589,17 @@ pub fn continue_shared_prompt_turn_after_precheck(
             .ok_or_else(|| format!("会话 `{session_id}` 缺少运行态，无法继续提示词回合。"))?;
         continue_shared_prompt_turn_after_precheck_with_runtime_state(runtime_state, input)?
     };
-    workspace_snapshot.session_messages.insert(
-        session_id,
-        conversation_state_to_session_messages(&continuation.request.conversation_state),
+    let merged_messages = merge_session_messages_with_conversation_state_records(
+        workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        &continuation.request.conversation_state,
     );
+    workspace_snapshot
+        .session_messages
+        .insert(session_id, merged_messages);
     Ok(continuation)
 }
 
@@ -968,6 +987,7 @@ mod tests {
     //! 共享提示词回合路由决策测试。
 
     use super::*;
+    use crate::conversation_protocol::conversation_state_to_session_messages;
 
     /// Begins one user-authored prompt turn used by session boundary tests.
     /// 启动一条供 会话边界测试使用的用户提示词回合。
@@ -1182,5 +1202,64 @@ mod tests {
                 .prompt
                 .contains("<hidden_host_guidance>\nPlan file: D:/workspace/docs/plan/demo.md")
         );
+    }
+
+    /// Verifies a loaded dialogue message window is not overwritten by display-only fallback rows.
+    /// 验证已加载的对话层消息窗口不会被仅显示层的回退行覆盖。
+    #[test]
+    fn begin_prompt_keeps_runtime_messages_when_records_are_empty() {
+        // runtime_state simulates a restarted session whose API context restored messages but not display records.
+        // runtime_state 模拟重启后恢复了 API 消息上下文但没有显示记录的会话。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        append_user_text_message(
+            &mut runtime_state.conversation_state,
+            "dialogue-history",
+            "对话层历史",
+            Vec::new(),
+        );
+        // display_rows simulate a visible turn window that must not become the API source of truth.
+        // display_rows 模拟不应变成 API 真相来源的可见 turn 窗口。
+        let display_rows = vec![SessionMessageEntry::new(
+            SessionMessageKind::User,
+            "用户",
+            "显示层历史",
+        )];
+        let mut hook_runtime = ConversationHookRuntime::new();
+
+        begin_shared_prompt_turn_with_runtime_state(
+            &mut runtime_state,
+            &mut hook_runtime,
+            SharedPromptTurnRuntimeBeginInput {
+                session_id: SessionId::from_u128(906),
+                session_title: "主会话",
+                workspace_path: "D:/workspace",
+                prompt_entry_id: String::from("followup-entry"),
+                prompt: "继续",
+                hidden_model_guidance: None,
+                attachments: Vec::new(),
+                append_canonical_user_message: true,
+                append_visible_user_prompt_record: true,
+                source: PendingSessionPromptSource::UserFollowup,
+                execution_mode: String::from("Build"),
+                reasoning_effort: None,
+                disabled_ai_capability_kinds: BTreeSet::new(),
+                disabled_ai_capability_target_selectors: BTreeSet::new(),
+                ai_capability_target_order_overrides: BTreeMap::new(),
+                owning_project_id: Some(String::from("project-a")),
+                prior_session_messages: Some(&display_rows),
+            },
+        )
+        .expect("prompt should start");
+
+        let bodies = runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .map(|message| match &message.payload {
+                SessionConversationPayload::UserText { text, .. } => text.as_str(),
+                _ => "",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bodies, vec!["对话层历史", "继续"]);
     }
 }

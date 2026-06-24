@@ -60,6 +60,7 @@ use vulcan_agent_runtime::{
         SessionConversationState, compact_conversation_records_after_summary,
         compact_conversation_with_summary, conversation_state_from_session_messages,
         conversation_state_to_session_messages,
+        merge_session_messages_with_conversation_state_records,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
     mcp::{McpRuntimeAccess, bootstrap_mcp_runtime_access},
@@ -120,10 +121,9 @@ use vulcan_service_api::{
     ConversationHydrationStatus, ConversationMessage, ConversationMessagesLoadResponse,
     ConversationSummary, FeatureAreaSummary, GitCommitSettingsSummary,
     HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
-    LuaSkillToolSummary, LuaSkillsCatalogSummary,
-    McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
-    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
-    PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole,
+    PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
+    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -3549,7 +3549,7 @@ async fn service_submit_user_prompt_edit(
         workspace
             .session_runtime_state
             .insert(session_id, rollback.runtime_state);
-        workspace.hydrated_session_ids.insert(session_id);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         workspace
             .session_run_phases
             .insert(session_id, SessionRunPhase::Ready);
@@ -4230,7 +4230,8 @@ fn apply_hydration_to_selected_workspace_snapshot(
             .session_runtime_state
             .insert(session_id, runtime_state);
     }
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     apply_persisted_task_mirror_statuses_to_workspace(
         controller_runtime,
         workspace_snapshot,
@@ -4669,9 +4670,21 @@ fn composer_attachment_kind_accept(kind: &ConversationAttachmentKind) -> &'stati
     }
 }
 
-/// Returns the current in-memory transcript projection for one session from a concrete workspace snapshot.
-/// 从具体工作区快照返回单个会话当前的内存转录投影。
-fn in_memory_session_messages_from_workspace(
+/// Returns the display transcript window for one session from a concrete workspace snapshot.
+/// 从具体工作区快照返回单个会话的显示层转录窗口。
+fn display_session_messages_from_workspace(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Option<Vec<SessionMessageEntry>> {
+    if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
+        return Some(filter_legacy_goal_internal_user_messages(messages.clone()));
+    }
+    dialogue_context_messages_from_workspace(workspace_snapshot, session_id)
+}
+
+/// Returns the dialogue context messages that back API requests for one session.
+/// 返回单个会话用于 API 请求的对话层上下文消息。
+fn dialogue_context_messages_from_workspace(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Option<Vec<SessionMessageEntry>> {
@@ -4681,11 +4694,36 @@ fn in_memory_session_messages_from_workspace(
             return Some(filter_legacy_goal_internal_user_messages(messages));
         }
     }
+    None
+}
+
+/// Merges one runtime dialogue state into the display transcript window for a session.
+/// 将单个运行态对话状态合并进对应会话的显示层转录窗口。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the workspace snapshot whose display layer will be updated.
+/// `workspace_snapshot` 是显示层将被更新的工作区快照。
+/// `session_id` selects the session that owns both layers.
+/// `session_id` 选择同时拥有两层状态的会话。
+/// `runtime_state` is the dialogue-layer runtime state to project into display rows.
+/// `runtime_state` 是需要投影成显示行的对话层运行态。
+fn merge_runtime_state_records_into_display_messages(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    runtime_state: &SessionRuntimeStateEntry,
+) {
+    let merged_messages = merge_session_messages_with_conversation_state_records(
+        workspace_snapshot
+            .session_messages
+            .get(&session_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]),
+        &runtime_state.conversation_state,
+    );
     workspace_snapshot
         .session_messages
-        .get(&session_id)
-        .cloned()
-        .map(filter_legacy_goal_internal_user_messages)
+        .insert(session_id, merged_messages);
 }
 
 /// Removes legacy persisted Goal internal prompts that were incorrectly stored as user messages.
@@ -4786,12 +4824,16 @@ async fn service_submit_conversation_prompt(
     // Measures retained workspace reuse without cloning the full workbench snapshot on the hot path.
     // 衡量保留工作区复用，并避免在热路径克隆完整工作台快照。
     let retained_snapshot_started_at = current_unix_millis_value();
-    let (preserved_workspace_run_state, retained_context_available, retained_workspace_snapshot) = {
+    let (
+        preserved_workspace_run_state,
+        retained_dialogue_context_available,
+        retained_workspace_snapshot,
+    ) = {
         let guard = state
             .lock()
             .map_err(|error| format!("failed to lock service state: {error}"))?;
         let active_kernel_sessions = active_kernel_session_ids(&guard);
-        let retained_context_available = submission_session_id.is_some_and(|session_id| {
+        let retained_dialogue_context_available = submission_session_id.is_some_and(|session_id| {
             guard
                 .workspace_snapshot
                 .as_ref()
@@ -4820,7 +4862,7 @@ async fn service_submit_conversation_prompt(
         );
         (
             preserved_workspace_run_state,
-            retained_context_available,
+            retained_dialogue_context_available,
             retained_workspace_snapshot,
         )
     };
@@ -4828,7 +4870,7 @@ async fn service_submit_conversation_prompt(
         "submit_prompt_retained_snapshot_slow",
         retained_snapshot_started_at,
         format!(
-            "conversation_id={} retained_context_available={retained_context_available} preserved_sessions={}",
+            "conversation_id={} retained_dialogue_context_available={retained_dialogue_context_available} preserved_sessions={}",
             conversation_id.as_deref().unwrap_or("<draft>"),
             preserved_workspace_run_state
                 .as_ref()
@@ -4848,9 +4890,7 @@ async fn service_submit_conversation_prompt(
             "disk",
         )
     };
-    if workspace_source == "retained"
-        && let Some(session_id) = submission_session_id
-    {
+    if let Some(session_id) = submission_session_id {
         hydrate_retained_submission_session_if_needed(
             controller_runtime.clone(),
             &mut workspace_snapshot,
@@ -4861,7 +4901,7 @@ async fn service_submit_conversation_prompt(
     webui_trace(
         "submit_prompt_workspace_ready",
         format!(
-            "conversation_id={} retained_context_available={retained_context_available} source={workspace_source} elapsed_ms={}",
+            "conversation_id={} retained_dialogue_context_available={retained_dialogue_context_available} source={workspace_source} elapsed_ms={}",
             conversation_id.as_deref().unwrap_or("<draft>"),
             current_unix_millis_value().saturating_sub(workspace_load_started_at)
         ),
@@ -5303,7 +5343,7 @@ async fn service_compact_selected_conversation_context(
     let full_session_messages =
         conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
     let context_messages = if full_session_messages.is_empty() {
-        in_memory_session_messages_from_workspace(&workspace_snapshot, selected_session_id)
+        dialogue_context_messages_from_workspace(&workspace_snapshot, selected_session_id)
             .unwrap_or_default()
     } else {
         full_session_messages.clone()
@@ -12301,18 +12341,25 @@ async fn hydrate_retained_submission_session_if_needed(
     if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
         return Ok(());
     }
-    let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) else {
-        return Ok(());
-    };
     let hydration_started_at = current_unix_millis_value();
-    match vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
-        controller_runtime.clone(),
-        &project_id,
-        session_id,
-        SELECTED_SESSION_TURN_LOAD_LIMIT,
-    )
-    .await
-    {
+    let hydration_result =
+        if let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) {
+            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
+                controller_runtime.clone(),
+                &project_id,
+                session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        } else {
+            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+                controller_runtime.clone(),
+                session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        };
+    match hydration_result {
         Ok(hydration) => {
             apply_submission_session_hydration(
                 &controller_runtime,
@@ -12324,10 +12371,11 @@ async fn hydrate_retained_submission_session_if_needed(
         Err(error) if is_missing_segmented_session_file_error(&error) => {}
         Err(error) => return Err(error),
     }
+    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
     webui_trace_if_slow(
         "submit_prompt_retained_session_hydration_slow",
         hydration_started_at,
-        format!("session={session_id} project_id={project_id}"),
+        format!("session={session_id}"),
     );
     Ok(())
 }
@@ -12366,7 +12414,8 @@ fn apply_submission_session_hydration(
             .session_runtime_state
             .insert(session_id, runtime_state);
     }
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     apply_persisted_task_mirror_statuses_to_workspace(
         controller_runtime,
         workspace_snapshot,
@@ -12375,8 +12424,27 @@ fn apply_submission_session_hydration(
     )
 }
 
-/// Returns whether a retained WebUI snapshot has enough session context for prompt submission.
-/// 判断保留的 WebUI 快照是否已有足够的会话上下文可直接提交提示词。
+/// Ensures a hydrated session owns concrete dialogue context for future API requests.
+/// 确保已水合会话拥有后续 API 请求所需的具体对话层上下文。
+fn ensure_hydrated_session_dialogue_context(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let Some(runtime_state) = workspace_snapshot.session_runtime_state.get(&session_id) else {
+        return Err(format!(
+            "ERR_SESSION_DIALOGUE_CONTEXT_NOT_READY: session {session_id} runtime state is missing after hydration"
+        ));
+    };
+    if !runtime_state_has_concrete_conversation_context(runtime_state) {
+        return Err(format!(
+            "ERR_SESSION_DIALOGUE_CONTEXT_NOT_READY: session {session_id} dialogue context is empty after hydration"
+        ));
+    }
+    Ok(())
+}
+
+/// Returns whether a retained WebUI snapshot has enough dialogue context for prompt submission.
+/// 判断保留的 WebUI 快照是否已有足够的对话层上下文可直接提交提示词。
 ///
 /// # Parameters
 /// 参数
@@ -12387,32 +12455,20 @@ fn apply_submission_session_hydration(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the session was hydrated or already owns concrete conversation context.
-/// 当会话已水合或已拥有具体会话上下文时返回 `true`。
+/// `true` when the session runtime state already owns concrete conversation context.
+/// 当会话运行态已拥有具体会话上下文时返回 `true`。
 fn retained_submission_snapshot_has_session_context(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> bool {
-    if workspace_snapshot
-        .hydrated_session_ids
-        .contains(&session_id)
-    {
-        return true;
-    }
-    if workspace_snapshot
-        .session_messages
-        .contains_key(&session_id)
-    {
-        return true;
-    }
     workspace_snapshot
         .session_runtime_state
         .get(&session_id)
         .is_some_and(runtime_state_has_concrete_conversation_context)
 }
 
-/// Returns whether a runtime state carries concrete conversation content rather than a shell row.
-/// 判断运行态是否携带具体会话内容，而不是仅有轻量 shell 行。
+/// Returns whether a runtime state carries provider-visible canonical dialogue messages.
+/// 判断运行态是否携带 Provider 可见的规范对话消息。
 ///
 /// # Parameters
 /// 参数
@@ -12421,13 +12477,42 @@ fn retained_submission_snapshot_has_session_context(
 ///
 /// # Returns
 /// 返回值
-/// `true` when canonical messages or visible records are already loaded.
-/// 当规范消息或可见记录已经加载时返回 `true`。
+/// `true` when canonical messages are already loaded for future API requests.
+/// 当后续 API 请求所需的规范消息已经加载时返回 `true`。
 fn runtime_state_has_concrete_conversation_context(
     runtime_state: &SessionRuntimeStateEntry,
 ) -> bool {
     !runtime_state.conversation_state.messages.is_empty()
-        || !runtime_state.conversation_state.records.is_empty()
+}
+
+/// Synchronizes the hydrated marker with concrete dialogue runtime readiness.
+/// 根据具体对话层运行态就绪情况同步水合标记。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` is the workspace snapshot whose marker set should be updated.
+/// `workspace_snapshot` 是需要更新标记集合的工作区快照。
+/// `session_id` selects the session whose hydrated marker should be synchronized.
+/// `session_id` 选择需要同步水合标记的会话。
+///
+/// # Returns
+/// 返回值
+/// `true` when the marker remains set because dialogue context exists.
+/// 当对话层上下文存在且标记保持置位时返回 `true`。
+fn sync_hydrated_session_dialogue_ready_marker(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> bool {
+    if workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .is_some_and(runtime_state_has_concrete_conversation_context)
+    {
+        workspace_snapshot.hydrated_session_ids.insert(session_id);
+        return true;
+    }
+    workspace_snapshot.hydrated_session_ids.remove(&session_id);
+    false
 }
 
 /// Ensures one WebUI session has an in-memory runtime-state document after SQLite runtime storage was removed.
@@ -12447,11 +12532,6 @@ fn ensure_webui_session_runtime_state(
     active_precheck_turn_id: Option<&str>,
 ) {
     let now = current_unix_millis_text();
-    let projected_messages = workspace_snapshot
-        .session_messages
-        .get(&session_id)
-        .cloned()
-        .map(filter_legacy_goal_internal_user_messages);
     let runtime_state = workspace_snapshot
         .session_runtime_state
         .entry(session_id)
@@ -12459,13 +12539,6 @@ fn ensure_webui_session_runtime_state(
             updated_at: now.clone(),
             ..SessionRuntimeStateEntry::default()
         });
-    if !runtime_state_has_concrete_conversation_context(runtime_state)
-        && let Some(messages) = projected_messages.as_deref()
-        && !messages.is_empty()
-    {
-        runtime_state.conversation_state = conversation_state_from_session_messages(messages);
-        runtime_state.updated_at = now.clone();
-    }
     if let Some(turn_id) = active_precheck_turn_id
         .map(str::trim)
         .filter(|turn_id| !turn_id.is_empty())
@@ -12477,13 +12550,17 @@ fn ensure_webui_session_runtime_state(
         runtime_state.active_precheck_turn_id = Some(turn_id.to_string());
         runtime_state.updated_at = now.clone();
     }
-    if runtime_state_has_concrete_conversation_context(runtime_state) {
+    let runtime_state_snapshot = if runtime_state_has_concrete_conversation_context(runtime_state) {
         sanitize_runtime_state_legacy_goal_internal_messages(runtime_state);
-        workspace_snapshot.session_messages.insert(
+        Some(runtime_state.clone())
+    } else {
+        None
+    };
+    if let Some(runtime_state_snapshot) = runtime_state_snapshot.as_ref() {
+        merge_runtime_state_records_into_display_messages(
+            workspace_snapshot,
             session_id,
-            filter_legacy_goal_internal_user_messages(conversation_state_to_session_messages(
-                &runtime_state.conversation_state,
-            )),
+            runtime_state_snapshot,
         );
     } else {
         workspace_snapshot
@@ -12491,7 +12568,7 @@ fn ensure_webui_session_runtime_state(
             .entry(session_id)
             .or_default();
     }
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
 }
 
 /// Returns whether a submitted prompt must enter the visible queue instead of starting immediately.
@@ -12805,8 +12882,7 @@ fn stop_webui_session_work(
         SessionTurnStatsStatus::Stopped,
         provider_request_count,
     );
-    let projected_messages =
-        conversation_state_to_session_messages(&runtime_state.conversation_state);
+    let runtime_state_snapshot = runtime_state.clone();
     workspace_snapshot
         .session_run_phases
         .insert(session_id, SessionRunPhase::Stopped);
@@ -12819,10 +12895,12 @@ fn stop_webui_session_work(
         session.focus = String::from("已按用户请求停止当前会话运行。");
         session.last_updated_label = String::from("刚刚");
     }
-    workspace_snapshot
-        .session_messages
-        .insert(session_id, projected_messages);
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    merge_runtime_state_records_into_display_messages(
+        workspace_snapshot,
+        session_id,
+        &runtime_state_snapshot,
+    );
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
     Ok(true)
 }
 
@@ -12941,11 +13019,13 @@ fn mark_webui_session_waiting_for_guided_prompt_dispatch(
         session.focus = String::from("已有消息接入主会话，正在等待当前系统任务处理完成后继续。");
         session.last_updated_label = String::from("刚刚");
     }
-    workspace_snapshot.session_messages.insert(
+    let runtime_state_snapshot = runtime_state.clone();
+    merge_runtime_state_records_into_display_messages(
+        workspace_snapshot,
         session_id,
-        conversation_state_to_session_messages(&runtime_state.conversation_state),
+        &runtime_state_snapshot,
     );
-    workspace_snapshot.hydrated_session_ids.insert(session_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
 }
 
 /// Builds one WebUI-originated visible pending prompt entry.
@@ -13738,8 +13818,13 @@ async fn persist_workspace_session_update_unlocked(
     let runtime_state = session_runtime_state.get(&session_id);
     let rebuilt_messages;
     let messages = if let Some(runtime_state) = runtime_state {
-        rebuilt_messages =
-            conversation_state_to_session_messages(&runtime_state.conversation_state);
+        rebuilt_messages = merge_session_messages_with_conversation_state_records(
+            session_messages
+                .get(&session_id)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            &runtime_state.conversation_state,
+        );
         rebuilt_messages.as_slice()
     } else if let Some(messages) = session_messages.get(&session_id) {
         messages.as_slice()
@@ -14334,7 +14419,9 @@ fn reasoning_selection(
 
 /// Builds the WebUI Git commit settings snapshot from the shared provider configuration.
 /// 从共享 Provider 配置构建 WebUI Git 提交设置快照。
-fn git_commit_settings(provider_configuration: &ProviderConfigurationFile) -> GitCommitSettingsSummary {
+fn git_commit_settings(
+    provider_configuration: &ProviderConfigurationFile,
+) -> GitCommitSettingsSummary {
     GitCommitSettingsSummary {
         new_branch_prefix: normalize_git_commit_new_branch_prefix(
             &provider_configuration.git_commit.new_branch_prefix,
@@ -18348,7 +18435,7 @@ fn append_stream_delta_record(
             }
         }
         workspace.session_run_phases.insert(session_id, run_phase);
-        workspace.hydrated_session_ids.insert(session_id);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         let Some(projected_entry) = projected_entry else {
             return Ok(());
         };
@@ -18739,11 +18826,13 @@ fn append_webui_context_compaction_status_message_to_workspace(
         "running",
         Some(budget_note),
     );
-    workspace.session_messages.insert(
+    let runtime_state_snapshot = runtime_state.clone();
+    merge_runtime_state_records_into_display_messages(
+        workspace,
         session_id,
-        conversation_state_to_session_messages(&runtime_state.conversation_state),
+        &runtime_state_snapshot,
     );
-    workspace.hydrated_session_ids.insert(session_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
     message_id
 }
 
@@ -18792,14 +18881,16 @@ fn append_webui_context_compaction_output_delta(
         });
         append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta);
         runtime_state.updated_at = now;
-        workspace.session_messages.insert(
+        let runtime_state_snapshot = runtime_state.clone();
+        merge_runtime_state_records_into_display_messages(
+            workspace,
             session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
+            &runtime_state_snapshot,
         );
         workspace
             .session_run_phases
             .insert(session_id, SessionRunPhase::Requesting);
-        workspace.hydrated_session_ids.insert(session_id);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
     })
     .map(|_| ())
 }
@@ -18973,9 +19064,11 @@ fn finish_webui_context_compaction_execution(
                 compaction_insert_before_message_id.as_deref(),
             );
             runtime_state.updated_at = now;
-            workspace.session_messages.insert(
+            let runtime_state_snapshot = runtime_state.clone();
+            merge_runtime_state_records_into_display_messages(
+                workspace,
                 session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
+                &runtime_state_snapshot,
             );
             workspace
                 .session_run_phases
@@ -18989,7 +19082,7 @@ fn finish_webui_context_compaction_execution(
                 session.last_updated_label = String::from("刚刚");
                 session.updated_at = current_unix_millis_text();
             }
-            workspace.hydrated_session_ids.insert(session_id);
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             agent_runtime
                 .vmm_hook_runtime
                 .replace_snapshot(build_vmm_hook_config_snapshot(
@@ -19061,9 +19154,11 @@ fn fail_webui_context_compaction_execution(
             error,
         );
         runtime_state.updated_at = now;
-        workspace.session_messages.insert(
+        let runtime_state_snapshot = runtime_state.clone();
+        merge_runtime_state_records_into_display_messages(
+            workspace,
             session_id,
-            conversation_state_to_session_messages(&runtime_state.conversation_state),
+            &runtime_state_snapshot,
         );
         workspace
             .session_run_phases
@@ -19077,7 +19172,7 @@ fn fail_webui_context_compaction_execution(
             session.last_updated_label = String::from("刚刚");
             session.updated_at = current_unix_millis_text();
         }
-        workspace.hydrated_session_ids.insert(session_id);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
     })
 }
 
@@ -19394,35 +19489,51 @@ fn append_runtime_event_projection(
     let workspace_snapshot =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
             let now = current_unix_millis_text();
-            let runtime_state = workspace
-                .session_runtime_state
-                .entry(session_id)
-                .or_insert_with(|| SessionRuntimeStateEntry {
-                    updated_at: now.clone(),
-                    ..SessionRuntimeStateEntry::default()
-                });
-            if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event) {
-                workspace.session_messages.insert(
-                    session_id,
-                    conversation_state_to_session_messages(&runtime_state.conversation_state),
-                );
-                workspace.hydrated_session_ids.insert(session_id);
-            }
-            if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
-                && runtime_state.todolist != todolist
+            // marker_sync_required defers workspace-level marker updates until the runtime-state borrow ends.
+            // marker_sync_required 将工作区级标记更新延后到运行态借用结束之后。
+            let mut marker_sync_required = false;
             {
-                runtime_state.todolist = todolist.clone();
-                runtime_state.updated_at = now.clone();
-                changed_todolist = Some(todolist);
-            }
-            if let Some(artifact) = plan_artifact_state_from_tool_finished_event(event) {
-                let mut plan_mode = runtime_state.plan_mode.clone();
-                plan_mode.artifact = Some(artifact);
-                if runtime_state.plan_mode != plan_mode {
-                    runtime_state.plan_mode = plan_mode.clone();
-                    runtime_state.updated_at = now.clone();
-                    changed_plan_mode = Some(plan_mode);
+                let runtime_state = workspace
+                    .session_runtime_state
+                    .entry(session_id)
+                    .or_insert_with(|| SessionRuntimeStateEntry {
+                        updated_at: now.clone(),
+                        ..SessionRuntimeStateEntry::default()
+                    });
+                if append_runtime_event_projection_to_state(runtime_state, session_id, &now, event)
+                {
+                    workspace.session_messages.insert(
+                        session_id,
+                        merge_session_messages_with_conversation_state_records(
+                            workspace
+                                .session_messages
+                                .get(&session_id)
+                                .map(Vec::as_slice)
+                                .unwrap_or(&[]),
+                            &runtime_state.conversation_state,
+                        ),
+                    );
+                    marker_sync_required = true;
                 }
+                if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
+                    && runtime_state.todolist != todolist
+                {
+                    runtime_state.todolist = todolist.clone();
+                    runtime_state.updated_at = now.clone();
+                    changed_todolist = Some(todolist);
+                }
+                if let Some(artifact) = plan_artifact_state_from_tool_finished_event(event) {
+                    let mut plan_mode = runtime_state.plan_mode.clone();
+                    plan_mode.artifact = Some(artifact);
+                    if runtime_state.plan_mode != plan_mode {
+                        runtime_state.plan_mode = plan_mode.clone();
+                        runtime_state.updated_at = now.clone();
+                        changed_plan_mode = Some(plan_mode);
+                    }
+                }
+            }
+            if marker_sync_required {
+                sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             }
         })?;
     if let Some(todolist) = changed_todolist {
@@ -21050,7 +21161,7 @@ fn seed_webui_subagent_task_prompt_if_needed(
                 .with_runtime_metadata(format!("session-{task_id}-subagent-prompt-{now}"), now),
         ],
     );
-    workspace_snapshot.hydrated_session_ids.insert(task_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
 }
 
 /// Appends the canonical stopped notice to a child task transcript when it is missing.
@@ -21077,7 +21188,7 @@ fn append_webui_subagent_stop_notice_if_needed(
         )
         .with_runtime_metadata(format!("session-{task_id}-subagent-stopped-{now}"), now),
     );
-    workspace_snapshot.hydrated_session_ids.insert(task_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
 }
 
 /// Links one delegate task-session payload back onto the visible WebUI parent task card.
@@ -21839,11 +21950,13 @@ fn replace_webui_subagent_task_conversation_state(
         runtime_state.conversation_state.records = preserved_records;
     }
     runtime_state.updated_at = now;
-    workspace_snapshot.session_messages.insert(
+    let runtime_state_snapshot = runtime_state.clone();
+    merge_runtime_state_records_into_display_messages(
+        workspace_snapshot,
         task_id,
-        conversation_state_to_session_messages(&runtime_state.conversation_state),
+        &runtime_state_snapshot,
     );
-    workspace_snapshot.hydrated_session_ids.insert(task_id);
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, task_id);
 }
 
 /// Hides the selected parent subagent navigation round once service-equivalent blocking work has settled.
@@ -21925,11 +22038,13 @@ fn apply_conversation_checkpoint(
             if provider_request_count > 0 {
                 runtime_state.last_safe_provider_request_count = Some(provider_request_count);
             }
-            workspace.session_messages.insert(
+            let runtime_state_snapshot = runtime_state.clone();
+            merge_runtime_state_records_into_display_messages(
+                workspace,
                 session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
+                &runtime_state_snapshot,
             );
-            workspace.hydrated_session_ids.insert(session_id);
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         })?;
     if is_main_session {
         spawn_workspace_session_runtime_state_persist_task(
@@ -22033,7 +22148,14 @@ fn apply_task_session_execution_report_to_memory_in_place(
         };
         workspace.session_messages.insert(
             session_id,
-            conversation_state_to_session_messages(&conversation_state),
+            merge_session_messages_with_conversation_state_records(
+                workspace
+                    .session_messages
+                    .get(&session_id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]),
+                &conversation_state,
+            ),
         );
         workspace.session_run_phases.insert(
             session_id,
@@ -22043,7 +22165,7 @@ fn apply_task_session_execution_report_to_memory_in_place(
                 SessionRunPhase::Failed
             },
         );
-        workspace.hydrated_session_ids.insert(session_id);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         is_success
     };
     webui_trace(
@@ -22191,10 +22313,6 @@ fn apply_execution_report_to_memory(
                     report.provider_request_count,
                 );
             }
-            workspace.session_messages.insert(
-                session_id,
-                conversation_state_to_session_messages(&runtime_state.conversation_state),
-            );
             if let Some(session) = workspace
                 .sessions
                 .iter_mut()
@@ -22210,6 +22328,12 @@ fn apply_execution_report_to_memory(
             if workspace.selected_session != session_id {
                 runtime_state.ui_state.unread = true;
             }
+            let runtime_state_snapshot = runtime_state.clone();
+            merge_runtime_state_records_into_display_messages(
+                workspace,
+                session_id,
+                &runtime_state_snapshot,
+            );
             workspace.session_run_phases.insert(
                 session_id,
                 if apply_result.is_success {
@@ -22218,7 +22342,7 @@ fn apply_execution_report_to_memory(
                     SessionRunPhase::Failed
                 },
             );
-            workspace.hydrated_session_ids.insert(session_id);
+            sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             if is_main_session {
                 agent_runtime
                     .vmm_hook_runtime
@@ -22715,15 +22839,12 @@ where
     Ok(workspace_snapshot)
 }
 
-/// Returns the selected session messages from runtime state before falling back to persisted rows.
-/// 优先从运行时状态返回当前选中会话消息，缺失时回退到持久化行。
+/// Returns the selected session display messages from the retained workspace snapshot.
+/// 从保留工作区快照返回当前选中会话的显示层消息。
 fn selected_session_messages_from_workspace(
     workspace_snapshot: &WorkspaceSnapshot,
 ) -> Option<Vec<SessionMessageEntry>> {
-    in_memory_session_messages_from_workspace(
-        workspace_snapshot,
-        workspace_snapshot.selected_session,
-    )
+    display_session_messages_from_workspace(workspace_snapshot, workspace_snapshot.selected_session)
 }
 
 /// Normalizes one subagent task state against the shared task runtime without disk fallback scans.
@@ -22890,15 +23011,14 @@ fn cache_webui_subagent_surface_detail_for_task(
             conversation_state,
         );
     }
-    let messages =
-        in_memory_session_messages_from_workspace(workspace_snapshot, task_state.task_id)
-            .unwrap_or_else(|| {
-                task_state
-                    .conversation_state
-                    .as_ref()
-                    .map(conversation_state_to_session_messages)
-                    .unwrap_or_default()
-            });
+    let messages = display_session_messages_from_workspace(workspace_snapshot, task_state.task_id)
+        .unwrap_or_else(|| {
+            task_state
+                .conversation_state
+                .as_ref()
+                .map(conversation_state_to_session_messages)
+                .unwrap_or_default()
+        });
     guard.subagent_surface_detail_cache.insert(
         task_state.task_id,
         WebuiSubagentSurfaceDetailCacheEntry {
@@ -23036,7 +23156,7 @@ fn active_surface_messages_from_workspace_and_state(
     let active_session_id = active_surface_session_id_from_state(guard, workspace_snapshot);
     if active_session_id != workspace_snapshot.selected_session
         && let Some(messages) =
-            in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+            display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         && !messages.is_empty()
     {
         return messages;
@@ -23047,7 +23167,7 @@ fn active_surface_messages_from_workspace_and_state(
     {
         return conversation_state_to_session_messages(conversation_state);
     }
-    in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+    display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         .unwrap_or_default()
 }
 
@@ -23071,7 +23191,7 @@ fn surface_messages_for_session_without_subagent_navigation_refresh(
 ) -> Vec<SessionMessageEntry> {
     if active_session_id != workspace_snapshot.selected_session
         && let Some(messages) =
-            in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+            display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         && !messages.is_empty()
     {
         return messages;
@@ -23082,7 +23202,7 @@ fn surface_messages_for_session_without_subagent_navigation_refresh(
     {
         return conversation_state_to_session_messages(conversation_state);
     }
-    in_memory_session_messages_from_workspace(workspace_snapshot, active_session_id)
+    display_session_messages_from_workspace(workspace_snapshot, active_session_id)
         .unwrap_or_default()
 }
 
@@ -23092,7 +23212,7 @@ fn webui_subagent_panel_has_recoverable_detail(
     workspace_snapshot: &WorkspaceSnapshot,
     state: &SubagentTaskPanelState,
 ) -> bool {
-    in_memory_session_messages_from_workspace(workspace_snapshot, state.task_id)
+    display_session_messages_from_workspace(workspace_snapshot, state.task_id)
         .is_some_and(|messages| !messages.is_empty())
         || subagent_task_panel_state_has_recoverable_conversation(state)
 }
@@ -31907,10 +32027,10 @@ mod tests {
         );
     }
 
-    /// Verifies WebUI can rebuild runnable runtime state from visible messages after SQLite runtime storage is removed.
-    /// 验证移除 SQLite 运行态存储后，WebUI 可从可见消息重建可运行的运行态。
+    /// Verifies WebUI restores precheck metadata without fabricating dialogue context from display rows.
+    /// 验证 WebUI 会恢复 precheck 元数据，但不会从显示行伪造对话层上下文。
     #[test]
-    fn ensure_webui_session_runtime_state_rebuilds_missing_precheck_state() {
+    fn ensure_webui_session_runtime_state_keeps_display_rows_out_of_dialogue_context() {
         let session_id = SessionId::new_v4();
         let mut workspace_snapshot = WorkspaceSnapshot {
             task_projects: Vec::new(),
@@ -31950,16 +32070,16 @@ mod tests {
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get(&session_id)
-            .expect("runtime state should be rebuilt");
+            .expect("runtime state shell should be rebuilt");
         assert_eq!(
             runtime_state.active_precheck_turn_id.as_deref(),
             Some("turn-1")
         );
-        assert!(runtime_state_has_concrete_conversation_context(
+        assert!(!runtime_state_has_concrete_conversation_context(
             runtime_state
         ));
         assert!(
-            workspace_snapshot
+            !workspace_snapshot
                 .hydrated_session_ids
                 .contains(&session_id)
         );
@@ -31970,6 +32090,280 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+    }
+
+    /// Verifies display transcript rows alone never satisfy prompt-submission dialogue context.
+    /// 验证仅有显示层转录行时不能满足提示词提交所需的对话层上下文。
+    #[test]
+    fn retained_submission_context_rejects_display_only_messages() {
+        // session_id identifies the existing conversation being submitted.
+        // session_id 标识正在提交的既有会话。
+        let session_id = SessionId::new_v4();
+        // workspace_snapshot simulates a selected conversation whose UI window was loaded but runtime context is absent.
+        // workspace_snapshot 模拟 UI 窗口已加载但运行态上下文缺失的选中会话。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "显示层会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![SessionMessageEntry::new(
+                    SessionMessageKind::Assistant,
+                    "助手",
+                    "只存在于显示层的正文",
+                )],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+
+        assert!(!retained_submission_snapshot_has_session_context(
+            &workspace_snapshot,
+            session_id
+        ));
+    }
+
+    /// Verifies display records alone never satisfy provider-visible dialogue readiness.
+    /// 验证仅有显示记录时不能满足 Provider 可见对话就绪条件。
+    #[test]
+    fn retained_submission_context_rejects_record_only_runtime_state() {
+        // session_id identifies the existing conversation being submitted.
+        // session_id 标识正在提交的既有会话。
+        let session_id = SessionId::new_v4();
+        // runtime_state simulates a projection-only state whose canonical API messages were not restored.
+        // runtime_state 模拟只恢复了投影记录但未恢复规范 API 消息的状态。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state
+            .conversation_state
+            .records
+            .push(SessionConversationRecord {
+                id: String::from("display-only-record"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("输出"),
+                body: String::from("只存在于 records 的显示正文"),
+                metadata: None,
+                created_at: String::from("1000"),
+            });
+        // workspace_snapshot carries runtime records but no canonical messages.
+        // workspace_snapshot 携带运行态 records，但不携带规范 messages。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "仅显示记录会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+
+        assert!(!retained_submission_snapshot_has_session_context(
+            &workspace_snapshot,
+            session_id
+        ));
+        assert!(ensure_hydrated_session_dialogue_context(&workspace_snapshot, session_id).is_err());
+    }
+
+    /// Verifies prompt submission accepts retained snapshots only when runtime dialogue context exists.
+    /// 验证提示词提交仅在运行态对话层上下文存在时接受保留快照。
+    #[test]
+    fn retained_submission_context_accepts_runtime_dialogue_context() {
+        // session_id identifies the existing conversation being submitted.
+        // session_id 标识正在提交的既有会话。
+        let session_id = SessionId::new_v4();
+        // runtime_state stores the concrete dialogue context used for future API requests.
+        // runtime_state 保存后续 API 请求使用的具体对话层上下文。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[SessionMessageEntry::new(
+                SessionMessageKind::User,
+                "用户",
+                "继续之前的问题",
+            )]);
+        // workspace_snapshot simulates a retained snapshot whose dialogue layer is ready.
+        // workspace_snapshot 模拟对话层已就绪的保留快照。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "对话层会话",
+                "",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        assert!(retained_submission_snapshot_has_session_context(
+            &workspace_snapshot,
+            session_id
+        ));
+    }
+
+    /// Verifies WebUI display projection prefers retained display rows over dialogue context rows.
+    /// 验证 WebUI 显示投影优先使用保留的显示层行而不是对话层上下文行。
+    #[test]
+    fn display_session_messages_prefer_display_window_over_dialogue_context() {
+        // session_id identifies the selected conversation.
+        // session_id 标识当前选中的会话。
+        let session_id = SessionId::new_v4();
+        // display_entry represents the UI transcript window loaded from segmented turn rows.
+        // display_entry 表示从分段 turn 行加载的 UI 转录窗口。
+        let display_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "显示层正文");
+        // runtime_state represents the compact dialogue context used for API requests.
+        // runtime_state 表示 API 请求使用的压缩对话层上下文。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "助手",
+                "对话层正文",
+            )]);
+        // workspace_snapshot carries both layers so the projection priority can be checked directly.
+        // workspace_snapshot 同时携带两层状态，以便直接检查投影优先级。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(session_id, vec![display_entry])]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+
+        // display_messages should preserve the UI-visible transcript body.
+        // display_messages 应保留 UI 可见转录正文。
+        let display_messages =
+            display_session_messages_from_workspace(&workspace_snapshot, session_id)
+                .expect("display messages should exist");
+        // dialogue_messages should preserve the API-facing context body.
+        // dialogue_messages 应保留 API 面向的上下文正文。
+        let dialogue_messages =
+            dialogue_context_messages_from_workspace(&workspace_snapshot, session_id)
+                .expect("dialogue messages should exist");
+
+        assert_eq!(
+            display_messages
+                .first()
+                .map(|message| message.body.as_str()),
+            Some("显示层正文")
+        );
+        assert_eq!(
+            dialogue_messages
+                .first()
+                .map(|message| message.body.as_str()),
+            Some("对话层正文")
+        );
+    }
+
+    /// Verifies hydrated sessions require concrete runtime dialogue context before being marked ready.
+    /// 验证已水合会话必须具备具体运行态对话层上下文后才能被视为就绪。
+    #[test]
+    fn hydrated_session_dialogue_context_requires_runtime_context() {
+        // session_id identifies the hydrated conversation under validation.
+        // session_id 标识正在校验的已水合会话。
+        let session_id = SessionId::new_v4();
+        // display_only_snapshot simulates a loaded UI window without runtime dialogue context.
+        // display_only_snapshot 模拟只有 UI 窗口而缺少运行态对话层上下文的状态。
+        let display_only_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![SessionMessageEntry::new(
+                    SessionMessageKind::Assistant,
+                    "助手",
+                    "显示层正文",
+                )],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        // ready_runtime_state stores concrete runtime context for the positive case.
+        // ready_runtime_state 保存正向场景所需的具体运行态上下文。
+        let mut ready_runtime_state = SessionRuntimeStateEntry::default();
+        ready_runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[SessionMessageEntry::new(
+                SessionMessageKind::User,
+                "用户",
+                "真实对话层正文",
+            )]);
+        // ready_snapshot simulates a fully hydrated session with dialogue context.
+        // ready_snapshot 模拟带有对话层上下文的完整水合会话。
+        let ready_snapshot = WorkspaceSnapshot {
+            session_runtime_state: BTreeMap::from([(session_id, ready_runtime_state)]),
+            ..display_only_snapshot.clone()
+        };
+
+        assert!(
+            ensure_hydrated_session_dialogue_context(&display_only_snapshot, session_id).is_err()
+        );
+        assert!(ensure_hydrated_session_dialogue_context(&ready_snapshot, session_id).is_ok());
     }
 
     /// Verifies draft submissions can reuse the retained workspace instead of reloading every workspace session.

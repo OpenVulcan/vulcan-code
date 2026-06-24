@@ -578,6 +578,46 @@ pub fn conversation_state_to_session_messages(
         .collect()
 }
 
+/// Merges canonical display records into an existing transcript window without dropping older display rows.
+/// 将规范显示记录合并进既有转录窗口，同时不丢弃更早的显示行。
+///
+/// # Parameters
+/// 参数
+/// `existing_messages` is the current WebUI display transcript window.
+/// `existing_messages` 是当前 WebUI 显示层转录窗口。
+/// `state` is the runtime dialogue state whose visible records should update the display window.
+/// `state` 是其可见记录需要更新显示窗口的运行态对话状态。
+///
+/// # Returns
+/// 返回值
+/// A transcript window that preserves existing rows and upserts runtime-projected rows by id.
+/// 返回按标识更新运行态投影行且保留既有行的转录窗口。
+pub fn merge_session_messages_with_conversation_state_records(
+    existing_messages: &[SessionMessageEntry],
+    state: &SessionConversationState,
+) -> Vec<SessionMessageEntry> {
+    let projected_messages = conversation_state_to_session_messages(state);
+    if projected_messages.is_empty() {
+        return existing_messages.to_vec();
+    }
+    if existing_messages.is_empty() {
+        return projected_messages;
+    }
+
+    let mut merged_messages = existing_messages.to_vec();
+    for projected_message in projected_messages {
+        if let Some(existing_message) = merged_messages
+            .iter_mut()
+            .find(|message| message.id == projected_message.id)
+        {
+            *existing_message = projected_message;
+        } else {
+            merged_messages.push(projected_message);
+        }
+    }
+    merged_messages
+}
+
 /// Projects the context-participating canonical records from the current anchor forward into transcript entries.
 /// 将从当前锚点开始参与上下文的规范记录投影为转录条目。
 pub fn conversation_state_to_context_records(
@@ -970,5 +1010,48 @@ mod tests {
             panic!("next message should remain user text");
         };
         assert_eq!(text, "continue after interruption");
+    }
+
+    /// Verifies runtime display-record projection updates rows without dropping loaded history rows.
+    /// 验证运行态显示记录投影会更新行，同时不会丢弃已加载的历史行。
+    #[test]
+    fn merge_session_messages_with_conversation_state_records_preserves_loaded_history() {
+        // existing_messages simulates the display window loaded from raw segmented turns.
+        // existing_messages 模拟从原始分段 turn 加载出的显示窗口。
+        let existing_messages = vec![
+            transcript_entry(
+                "old-user",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "之前的问题",
+                None,
+            ),
+            transcript_entry(
+                "old-assistant",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::Transcript,
+                "之前的回答",
+                None,
+            ),
+        ];
+        // runtime_state carries only the newly materialized visible record for the active turn.
+        // runtime_state 只携带当前回合新物化的可见记录。
+        let runtime_state = conversation_state_from_session_messages(&[transcript_entry(
+            "new-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "继续提问",
+            None,
+        )]);
+
+        let merged_messages = merge_session_messages_with_conversation_state_records(
+            &existing_messages,
+            &runtime_state,
+        );
+
+        assert_eq!(merged_messages.len(), 3);
+        assert_eq!(merged_messages[0].body, "之前的问题");
+        assert_eq!(merged_messages[1].body, "之前的回答");
+        assert_eq!(merged_messages[2].body, "继续提问");
     }
 }

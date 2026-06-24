@@ -13,8 +13,9 @@ use crate::{
     ExecutionRunReport,
     agent_runtime::events::{RuntimeEvent, RuntimeEventKind},
     conversation_protocol::{
-        SessionConversationRecord, SessionConversationState, append_record,
-        append_record_body_delta, append_user_text_message,
+        SessionConversationPayload, SessionConversationRecord, SessionConversationState,
+        append_assistant_text_message, append_record, append_record_body_delta,
+        append_user_text_message,
     },
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
     turn_stats::build_session_turn_stats_from_state,
@@ -1032,7 +1033,11 @@ pub fn apply_checkpoint_conversation_state(
 ) {
     let mut preserved_records = runtime_state.conversation_state.records.clone();
     merge_checkpoint_user_records(&mut preserved_records, &checkpoint_state.records);
+    let preserved_messages = runtime_state.conversation_state.messages.clone();
     runtime_state.conversation_state = checkpoint_state;
+    if runtime_state.conversation_state.messages.is_empty() && !preserved_messages.is_empty() {
+        runtime_state.conversation_state.messages = preserved_messages;
+    }
     runtime_state.conversation_state.records = preserved_records;
     runtime_state.updated_at = now.to_string();
 }
@@ -1178,6 +1183,7 @@ pub fn apply_terminal_execution_report_to_state(
     }
     let closing_record_id = if is_success {
         ensure_terminal_success_records(runtime_state, session_id, now, report);
+        ensure_terminal_success_assistant_message(runtime_state, session_id, now, report);
         append_terminal_summary_record(runtime_state, session_id, now, report)
     } else {
         append_terminal_error_record(runtime_state, session_id, now, report);
@@ -1290,6 +1296,54 @@ fn ensure_terminal_success_records(
             },
         );
     }
+}
+
+/// Ensures successful terminal output participates in future provider-visible history.
+/// 确保成功终态输出会参与后续 Provider 可见历史。
+///
+/// # Parameters
+/// 参数
+/// `runtime_state` is the session runtime state that owns canonical messages.
+/// `runtime_state` 是拥有规范消息的会话运行态。
+/// `session_id` selects the session receiving the assistant output.
+/// `session_id` 选择接收助手输出的会话。
+/// `now` is the current Unix-millis timestamp text.
+/// `now` 是当前 Unix 毫秒时间戳文本。
+/// `report` contains the terminal provider output.
+/// `report` 包含终态 Provider 输出。
+fn ensure_terminal_success_assistant_message(
+    runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    now: &str,
+    report: &ExecutionRunReport,
+) {
+    let Some(assistant_output) = report
+        .assistant_output
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return;
+    };
+    if runtime_state
+        .conversation_state
+        .messages
+        .iter()
+        .rev()
+        .any(|message| {
+            matches!(
+                &message.payload,
+                SessionConversationPayload::Assistant { text, .. } if text.trim() == assistant_output
+            )
+        })
+    {
+        return;
+    }
+    append_assistant_text_message(
+        &mut runtime_state.conversation_state,
+        format!("session-{session_id}-protocol-assistant-{now}"),
+        assistant_output.to_string(),
+    );
 }
 
 /// Appends the same hidden summary record produced by the shared session-derived skill chain.
@@ -1679,6 +1733,18 @@ mod tests {
         assert!(visible_bodies.contains(&"我需要先判断可用工具。"));
         assert!(visible_bodies.contains(&"已完成，两个工具均正常。"));
         assert!(!visible_bodies.contains(&"报告中的完整输出不应覆盖已流式记录。"));
+        let canonical_texts = runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .filter_map(|message| match &message.payload {
+                SessionConversationPayload::UserText { text, .. } => Some(text.as_str()),
+                SessionConversationPayload::Assistant { text, .. } => Some(text.as_str()),
+                SessionConversationPayload::ToolResult { .. } => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(canonical_texts.contains(&"随便调用两个工具"));
+        assert!(canonical_texts.contains(&"报告中的完整输出不应覆盖已流式记录。"));
     }
 
     /// Verifies a tool result projection preserves runtime event order instead of mutating the stored transcript order.
