@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 encoding_rs = "0.8.35"
+portable-pty = "0.9.0"
+serde.workspace = true
+serde_json.workspace = true
 sys-locale = "0.3.2"
 tokio = { version = "1.52.2", features = ["macros", "process", "io-util", "sync", "time", "rt"] }
 uuid.workspace = true

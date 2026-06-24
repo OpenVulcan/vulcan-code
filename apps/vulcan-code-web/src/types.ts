@@ -1274,6 +1274,21 @@ export interface CommandSessionSummary {
   // Effective shell label selected by the host.
   // 宿主选择的实际 shell 标签。
   shellLabel?: string | null;
+  // Concrete backend label selected by the host.
+  // 宿主选择的具体后端标签。
+  backend?: string | null;
+  // Latest terminal screen frame sequence.
+  // 最新终端屏幕帧序号。
+  screenFrameSeq?: number | null;
+  // Latest terminal screen row count.
+  // 最新终端屏幕行数。
+  screenRows?: number | null;
+  // Latest terminal screen column count.
+  // 最新终端屏幕列数。
+  screenCols?: number | null;
+  // Latest renderable terminal screen text.
+  // 最新可渲染终端屏幕内容。
+  screenText?: string | null;
   // Optional process exit code captured by the host.
   // 宿主捕获到的可选进程退出码。
   exitCode?: number | null;

@@ -145,7 +145,6 @@ import {
 } from "@/service/settings-actions-service";
 import {
   installLuaSkill,
-  installSystemAgentSkills,
   loadProjectAgentSkillOverrides,
   refreshAgentSkillsCatalog,
   refreshLuaSkillsCatalog,
@@ -757,7 +756,6 @@ export function WorkbenchLayout(props: {
       applySkillWorkbenchAction(() => setLuaSkillToolRegistrationState(skillId, localName, registrationState))
     ),
     onRefreshAgentSkills: () => applySkillWorkbenchAction(refreshAgentSkillsCatalog),
-    onInstallSystemAgentSkills: () => applySkillWorkbenchAction(installSystemAgentSkills),
     onSetAgentSkillsEnabled: handleSetAgentSkillsEnabled,
     onSetAgentSkillEnabled: handleSetAgentSkillEnabled,
   }), [applySkillWorkbenchAction, handleSetAgentSkillEnabled, handleSetAgentSkillsEnabled]);

@@ -128,6 +128,19 @@ function Invoke-TauriRun {
     exit $LASTEXITCODE
 }
 
+# Invoke-TauriBuildAndRun builds the Tauri/WebUI shell first and then starts the matching runtime mode.
+# Invoke-TauriBuildAndRun 用于先构建 Tauri/WebUI 桌面壳，再启动匹配的运行模式。
+# IsRelease controls whether both build and run steps should target release output.
+# IsRelease 用于控制构建与运行两个步骤是否都面向 release 产物。
+function Invoke-TauriBuildAndRun {
+    param(
+        [bool]$IsRelease
+    )
+
+    Invoke-TauriBuild -IsRelease $IsRelease
+    Invoke-TauriRun -IsRelease $IsRelease
+}
+
 # Invoke-DependencyInstall delegates dependency bootstrapping to the dedicated PowerShell scripts.
 # Invoke-DependencyInstall 用于把依赖初始化委托给专用的 PowerShell 脚本。
 # DependencyKind selects which dependency domain should be initialized.
@@ -179,6 +192,8 @@ function Show-Usage {
     Write-Host "Usage:"
     Write-Host "  ./make             # Tauri/WebUI debug build"
     Write-Host "  ./make build       # Tauri/WebUI debug build"
+    Write-Host "  ./make br          # build and run Tauri/WebUI debug"
+    Write-Host "  ./make br release  # build and run Tauri/WebUI release"
     Write-Host "  ./make release     # Tauri/WebUI release build"
     Write-Host "  ./make licenses    # generate Rust third-party notices for the About page"
     Write-Host "  ./make run         # run Tauri/WebUI debug build"
@@ -212,6 +227,16 @@ switch ($NormalizedMode) {
     }
     "release" {
         Invoke-TauriBuild -IsRelease $true
+    }
+    "br" {
+        if ($NormalizedVariant -eq "" -or $NormalizedVariant -eq "release") {
+            Invoke-TauriBuildAndRun -IsRelease ($NormalizedVariant -eq "release")
+        }
+        else {
+            Write-Error "Unsupported br command: '$CommandVariant'"
+            Show-Usage
+            exit 1
+        }
     }
     "licenses" {
         if (-not [string]::IsNullOrWhiteSpace($NormalizedVariant)) {

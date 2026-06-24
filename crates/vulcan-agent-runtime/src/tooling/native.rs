@@ -11,8 +11,9 @@ use crate::tool_result_format::{
 #[cfg(test)]
 use crate::tooling::command_session_runtime::DEFAULT_COMMAND_SESSION_READ_WAIT_MS;
 use crate::tooling::command_session_runtime::{
-    CommandSessionOutputChunk, CommandSessionReadOutcome, CommandSessionRuntime,
-    CommandSessionSnapshot, CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
+    CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
+    CommandSessionReadOutcome, CommandSessionRuntime, CommandSessionSnapshot,
+    CommandSessionStartRequest, DEFAULT_COMMAND_SESSION_READ_MAX_CHUNKS,
     DEFAULT_COMMAND_SESSION_STOP_WAIT_MS,
 };
 use crate::tooling::output_decode::decode_shell_output_bytes;
@@ -2226,6 +2227,30 @@ enum TerminalSessionWaitMode {
     ScreenStable,
 }
 
+/// Key encoding family used when terminal_session converts standardized key names into terminal input bytes.
+/// terminal_session 将标准化按键名转换为终端输入字节时使用的按键编码族。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum TerminalSessionKeyEncoding {
+    /// ANSI/VT escape sequences used by ordinary PTY and terminal applications.
+    /// 普通 PTY 与终端应用使用的 ANSI/VT 转义序列。
+    AnsiVt,
+    /// Windows console `msvcrt.getch()` extended-key byte pairs.
+    /// Windows 控制台 `msvcrt.getch()` 扩展键字节对。
+    WindowsConsoleGetch,
+}
+
+impl TerminalSessionKeyEncoding {
+    /// Renders one stable lowercase key-encoding label.
+    /// 渲染稳定的小写按键编码标签。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::AnsiVt => "ansi_vt",
+            Self::WindowsConsoleGetch => "windows_console_getch",
+        }
+    }
+}
+
 impl TerminalSessionWaitMode {
     /// Renders one stable lowercase wait-mode label.
     /// 渲染稳定的小写等待模式标签。
@@ -2287,6 +2312,9 @@ struct TerminalSessionToolArgs {
     /// Optional wait policy used by send/read actions.
     /// 供 send/read 动作使用的可选等待策略。
     wait_policy: Option<TerminalSessionWaitPolicy>,
+    /// Optional key encoding used when converting key/chord inputs during send.
+    /// send 时转换 key/chord 输入所使用的可选按键编码。
+    key_encoding: Option<TerminalSessionKeyEncoding>,
     /// Optional output cursor override.
     /// 可选输出游标覆盖值。
     after_seq: Option<u64>,
@@ -2362,6 +2390,30 @@ struct TerminalInterruptCleanupResult {
     /// Optional cleanup failure reason when the best-effort cleanup could not run.
     /// 尽力清理无法运行时的可选失败原因。
     failure_reason: Option<String>,
+}
+
+/// Result summary produced by one terminal wait-mode read pass.
+/// 一次终端等待模式读取过程产生的结果摘要。
+#[derive(Debug, Clone)]
+struct TerminalWaitReadResult {
+    /// Latest terminal snapshot observed by the wait pass.
+    /// 等待过程中观测到的最新终端快照。
+    snapshot: CommandSessionSnapshot,
+    /// Output chunks returned across the whole wait pass.
+    /// 整个等待过程返回的输出分片。
+    returned_chunks: Vec<CommandSessionOutputChunk>,
+    /// Whether more buffered output remains after the wait pass.
+    /// 等待过程结束后是否仍存在更多缓冲输出。
+    has_more: bool,
+    /// Milliseconds spent in the wait pass.
+    /// 等待过程消耗的毫秒数。
+    elapsed_ms: u64,
+    /// Whether the requested pattern was actually observed.
+    /// 是否实际观测到了请求的模式。
+    pattern_matched: Option<bool>,
+    /// Whether a quiet window with no new output was observed.
+    /// 是否观测到一段没有新输出的静默窗口。
+    quiet_observed: Option<bool>,
 }
 
 /// One resolved shell behavior snapshot for a command session, separating the outer launcher shell from the inferred interactive shell.
@@ -2674,7 +2726,7 @@ fn shell_session_args_schema(shell_support: &HostCommandShellSupport) -> Value {
 /// 构建原生持久终端工具面向 AI 的英文描述。
 fn terminal_session_tool_description() -> String {
     String::from(
-        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered text/paste/key/chord input, incremental output, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
+        "Operate named persistent host terminal sessions. Before using terminal_session, you must call skill(\"terminal-session\") and follow its instructions. Do not use this tool from memory. The start action requires a non-empty name. Use shell_command for isolated one-shot commands. terminal_session supports list/start/send/read/snapshot/stop, ordered text/paste/key/chord input, incremental output, native Windows console key events when available, TUI-aware output mode hints, and command transactions with per-send exit codes via wait_policy.mode=until_exit_code.",
     )
 }
 
@@ -2700,7 +2752,7 @@ fn terminal_session_args_schema(shell_support: &HostCommandShellSupport) -> Valu
             },
             "name": {
                 "type": "string",
-                "description": "Human-readable terminal name used only by `start`. Provide a short task-oriented name for every started terminal, such as `dev server`, `python repl`, or `install shell`, so UI rows and later `list` calls are easy to understand."
+                "description": "Required for `start`; ignored by other actions. Provide a non-empty short task-oriented terminal name such as `dev server`, `python repl`, or `install shell`, so UI rows and later `list` calls are easy to understand."
             },
             "terminal_session_id": {
                 "type": "string",
@@ -2746,7 +2798,7 @@ fn terminal_session_args_schema(shell_support: &HostCommandShellSupport) -> Valu
                             "type": "object",
                             "properties": {
                                 "kind": { "type": "string", "enum": ["key"] },
-                                "key": { "type": "string", "description": "Standard key name such as Enter, Tab, Esc, ArrowDown, Home, End, PageUp, PageDown, or F1." }
+                                "key": { "type": "string", "description": "Standard key name such as Enter, Tab, Esc, ArrowDown, Home, End, PageUp, PageDown, Insert, Delete, or F1-F12. The key_encoding field controls whether navigation/function keys use ANSI VT bytes or Windows msvcrt.getch byte pairs." }
                             },
                             "required": ["kind", "key"],
                             "additionalProperties": false
@@ -2781,6 +2833,11 @@ fn terminal_session_args_schema(shell_support: &HostCommandShellSupport) -> Valu
                 },
                 "required": ["mode"],
                 "additionalProperties": false
+            },
+            "key_encoding": {
+                "type": "string",
+                "enum": ["ansi_vt", "windows_console_getch"],
+                "description": "Optional key encoding for send key/chord inputs. Omit this field on Windows native console sessions to deliver real Console KEY_EVENT input for msvcrt.getch() and Console.ReadKey(). Set ansi_vt explicitly when a Windows native console session must feed stdin/VT readers such as sys.stdin.read(1). Use windows_console_getch only for explicit byte-oriented compatibility cases."
             },
             "after_seq": {
                 "type": "integer",
@@ -2904,6 +2961,7 @@ fn terminal_session_default_name(command_text: &str) -> String {
 
 /// Normalizes a user-provided terminal name, falling back to the start command when empty.
 /// 规范化用户提供的终端名称，并在为空时回退到启动命令。
+#[cfg(test)]
 fn normalize_terminal_session_name(raw_name: Option<&str>, command_text: &str) -> String {
     let candidate = raw_name
         .map(str::trim)
@@ -2911,6 +2969,20 @@ fn normalize_terminal_session_name(raw_name: Option<&str>, command_text: &str) -
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| terminal_session_default_name(command_text));
     candidate.chars().take(80).collect()
+}
+
+/// Requires and normalizes the explicit terminal name provided by a start request.
+/// 要求并规范化 start 请求显式提供的终端名称。
+fn require_terminal_session_start_name(raw_name: Option<&str>) -> Result<String, NativeToolError> {
+    let candidate = raw_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            NativeToolError::new(
+                "The `start` action for terminal_session requires a non-empty `name`.",
+            )
+        })?;
+    Ok(candidate.chars().take(80).collect())
 }
 
 /// Returns the runtime-stored terminal name or a stable fallback for historical sessions.
@@ -2959,15 +3031,20 @@ fn stdin_payload_has_trailing_newline(text: &str) -> bool {
 fn encode_terminal_inputs(
     inputs: &[TerminalSessionInput],
     interactive_newline: &str,
-) -> Result<String, NativeToolError> {
-    let mut encoded = String::new();
+    key_encoding: TerminalSessionKeyEncoding,
+) -> Result<Vec<u8>, NativeToolError> {
+    let mut encoded = Vec::new();
     for input in inputs {
         match input {
             TerminalSessionInput::Text { text } | TerminalSessionInput::Paste { text } => {
-                encoded.push_str(text);
+                encoded.extend_from_slice(text.as_bytes());
             }
             TerminalSessionInput::Key { key } => {
-                encoded.push_str(terminal_key_sequence(key, interactive_newline)?);
+                encoded.extend_from_slice(&terminal_key_sequence(
+                    key,
+                    interactive_newline,
+                    key_encoding,
+                )?);
             }
             TerminalSessionInput::Chord {
                 key,
@@ -2976,13 +3053,14 @@ fn encode_terminal_inputs(
                 shift,
                 meta,
             } => {
-                encoded.push_str(&terminal_chord_sequence(
+                encoded.extend_from_slice(&terminal_chord_sequence(
                     key,
                     ctrl.unwrap_or(false),
                     alt.unwrap_or(false),
                     shift.unwrap_or(false),
                     meta.unwrap_or(false),
                     interactive_newline,
+                    key_encoding,
                 )?);
             }
         }
@@ -2990,41 +3068,168 @@ fn encode_terminal_inputs(
     Ok(encoded)
 }
 
+/// Converts terminal-session inputs into backend-neutral structured input events.
+/// 将终端会话输入转换为后端无关的结构化输入事件。
+fn terminal_input_events_from_inputs(
+    inputs: &[TerminalSessionInput],
+) -> Vec<CommandSessionInputEvent> {
+    inputs
+        .iter()
+        .map(|input| match input {
+            TerminalSessionInput::Text { text } => {
+                CommandSessionInputEvent::Text { text: text.clone() }
+            }
+            TerminalSessionInput::Paste { text } => {
+                CommandSessionInputEvent::Paste { text: text.clone() }
+            }
+            TerminalSessionInput::Key { key } => CommandSessionInputEvent::Key { key: key.clone() },
+            TerminalSessionInput::Chord {
+                key,
+                ctrl,
+                alt,
+                shift,
+                meta,
+            } => CommandSessionInputEvent::Chord {
+                key: key.clone(),
+                ctrl: ctrl.unwrap_or(false),
+                alt: alt.unwrap_or(false),
+                shift: shift.unwrap_or(false),
+                meta: meta.unwrap_or(false),
+            },
+        })
+        .collect()
+}
+
+/// Converts terminal-session inputs into WindowsConsole events for the requested key encoding.
+/// 根据请求的按键编码将终端会话输入转换为 WindowsConsole 事件。
+fn windows_console_input_events_from_inputs(
+    inputs: &[TerminalSessionInput],
+    interactive_newline: &str,
+    requested_key_encoding: Option<TerminalSessionKeyEncoding>,
+) -> Result<Vec<CommandSessionInputEvent>, NativeToolError> {
+    match requested_key_encoding {
+        None => Ok(terminal_input_events_from_inputs(inputs)),
+        Some(TerminalSessionKeyEncoding::AnsiVt) => {
+            let encoded = encode_terminal_inputs(
+                inputs,
+                interactive_newline,
+                TerminalSessionKeyEncoding::AnsiVt,
+            )?;
+            let text = String::from_utf8(encoded).map_err(|error| {
+                NativeToolError::new(format!(
+                    "ANSI VT terminal input contained invalid UTF-8: {error}"
+                ))
+            })?;
+            Ok(vec![CommandSessionInputEvent::Text { text }])
+        }
+        Some(TerminalSessionKeyEncoding::WindowsConsoleGetch) => Err(NativeToolError::new(
+            "`windows_console_getch` is only for byte-oriented compatibility backends. Omit `key_encoding` for Windows native console sessions, or use `ansi_vt` for stdin/VT readers.",
+        )),
+    }
+}
+
+/// Returns the effective key encoding label reported for one send action.
+/// 返回一次 send 动作报告的有效按键编码标签。
+fn terminal_effective_key_encoding_label(
+    backend: CommandSessionBackend,
+    requested_key_encoding: Option<TerminalSessionKeyEncoding>,
+) -> &'static str {
+    if backend == CommandSessionBackend::WindowsConsole && requested_key_encoding.is_none() {
+        "native_console"
+    } else {
+        requested_key_encoding
+            .unwrap_or(TerminalSessionKeyEncoding::AnsiVt)
+            .as_str()
+    }
+}
+
 /// Returns the terminal sequence for one standardized key.
 /// 返回一个标准化按键对应的终端序列。
-fn terminal_key_sequence<'a>(
+fn terminal_key_sequence(
     key: &str,
-    interactive_newline: &'a str,
-) -> Result<&'a str, NativeToolError> {
+    interactive_newline: &str,
+    key_encoding: TerminalSessionKeyEncoding,
+) -> Result<Vec<u8>, NativeToolError> {
+    if key_encoding == TerminalSessionKeyEncoding::WindowsConsoleGetch {
+        return terminal_windows_getch_key_sequence(key, interactive_newline);
+    }
     match key {
-        "Enter" => Ok(interactive_newline),
-        "Tab" => Ok("\t"),
-        "Esc" | "Escape" => Ok("\x1b"),
-        "Backspace" => Ok("\x08"),
-        "Delete" => Ok("\x1b[3~"),
-        "ArrowUp" => Ok("\x1b[A"),
-        "ArrowDown" => Ok("\x1b[B"),
-        "ArrowRight" => Ok("\x1b[C"),
-        "ArrowLeft" => Ok("\x1b[D"),
-        "Home" => Ok("\x1b[H"),
-        "End" => Ok("\x1b[F"),
-        "PageUp" => Ok("\x1b[5~"),
-        "PageDown" => Ok("\x1b[6~"),
-        "Insert" => Ok("\x1b[2~"),
-        "F1" => Ok("\x1bOP"),
-        "F2" => Ok("\x1bOQ"),
-        "F3" => Ok("\x1bOR"),
-        "F4" => Ok("\x1bOS"),
-        "F5" => Ok("\x1b[15~"),
-        "F6" => Ok("\x1b[17~"),
-        "F7" => Ok("\x1b[18~"),
-        "F8" => Ok("\x1b[19~"),
-        "F9" => Ok("\x1b[20~"),
-        "F10" => Ok("\x1b[21~"),
-        "F11" => Ok("\x1b[23~"),
-        "F12" => Ok("\x1b[24~"),
+        "Enter" => Ok(interactive_newline.as_bytes().to_vec()),
+        "Tab" => Ok(b"\t".to_vec()),
+        "Esc" | "Escape" => Ok(vec![0x1b]),
+        "Backspace" => Ok(vec![0x08]),
+        "Delete" => Ok(b"\x1b[3~".to_vec()),
+        "ArrowUp" => Ok(b"\x1b[A".to_vec()),
+        "ArrowDown" => Ok(b"\x1b[B".to_vec()),
+        "ArrowRight" => Ok(b"\x1b[C".to_vec()),
+        "ArrowLeft" => Ok(b"\x1b[D".to_vec()),
+        "Home" => Ok(b"\x1b[H".to_vec()),
+        "End" => Ok(b"\x1b[F".to_vec()),
+        "PageUp" => Ok(b"\x1b[5~".to_vec()),
+        "PageDown" => Ok(b"\x1b[6~".to_vec()),
+        "Insert" => Ok(b"\x1b[2~".to_vec()),
+        "F1" => Ok(b"\x1bOP".to_vec()),
+        "F2" => Ok(b"\x1bOQ".to_vec()),
+        "F3" => Ok(b"\x1bOR".to_vec()),
+        "F4" => Ok(b"\x1bOS".to_vec()),
+        "F5" => Ok(b"\x1b[15~".to_vec()),
+        "F6" => Ok(b"\x1b[17~".to_vec()),
+        "F7" => Ok(b"\x1b[18~".to_vec()),
+        "F8" => Ok(b"\x1b[19~".to_vec()),
+        "F9" => Ok(b"\x1b[20~".to_vec()),
+        "F10" => Ok(b"\x1b[21~".to_vec()),
+        "F11" => Ok(b"\x1b[23~".to_vec()),
+        "F12" => Ok(b"\x1b[24~".to_vec()),
         _ => Err(NativeToolError::new(format!(
             "Unsupported terminal key `{key}`. Call skill(\"terminal-session\") and use a documented key name."
+        ))),
+    }
+}
+
+/// Returns the Windows console getch byte sequence for one standardized key.
+/// 返回一个标准化按键对应的 Windows 控制台 getch 字节序列。
+fn terminal_windows_getch_key_sequence(
+    key: &str,
+    interactive_newline: &str,
+) -> Result<Vec<u8>, NativeToolError> {
+    match key {
+        "Enter" => Ok(interactive_newline.as_bytes().to_vec()),
+        "Tab" => Ok(vec![b'\t']),
+        "Esc" | "Escape" => Ok(vec![0x1b]),
+        "Backspace" => Ok(vec![0x08]),
+        "ArrowUp" | "ArrowDown" | "ArrowRight" | "ArrowLeft" | "Home" | "End" | "PageUp"
+        | "PageDown" | "Insert" | "Delete" | "F1" | "F2" | "F3" | "F4" | "F5" | "F6" | "F7"
+        | "F8" | "F9" | "F10" | "F11" | "F12"
+            if cfg!(windows) =>
+        {
+            Err(NativeToolError::new(format!(
+                "The current byte-oriented terminal backend cannot synthesize console extended key `{key}` for msvcrt.getch(). Use the Windows native console backend or send a documented text shortcut such as 1/2/3, Enter, Esc, or q."
+            )))
+        }
+        "ArrowUp" => Ok(vec![0xe0, b'H']),
+        "ArrowDown" => Ok(vec![0xe0, b'P']),
+        "ArrowRight" => Ok(vec![0xe0, b'M']),
+        "ArrowLeft" => Ok(vec![0xe0, b'K']),
+        "Home" => Ok(vec![0xe0, b'G']),
+        "End" => Ok(vec![0xe0, b'O']),
+        "PageUp" => Ok(vec![0xe0, b'I']),
+        "PageDown" => Ok(vec![0xe0, b'Q']),
+        "Insert" => Ok(vec![0xe0, b'R']),
+        "Delete" => Ok(vec![0xe0, b'S']),
+        "F1" => Ok(vec![0x00, b';']),
+        "F2" => Ok(vec![0x00, b'<']),
+        "F3" => Ok(vec![0x00, b'=']),
+        "F4" => Ok(vec![0x00, b'>']),
+        "F5" => Ok(vec![0x00, b'?']),
+        "F6" => Ok(vec![0x00, b'@']),
+        "F7" => Ok(vec![0x00, b'A']),
+        "F8" => Ok(vec![0x00, b'B']),
+        "F9" => Ok(vec![0x00, b'C']),
+        "F10" => Ok(vec![0x00, b'D']),
+        "F11" => Ok(vec![0xe0, 0x85]),
+        "F12" => Ok(vec![0xe0, 0x86]),
+        _ => Err(NativeToolError::new(format!(
+            "Unsupported Windows console getch key `{key}`. Use Enter, Tab, Esc, Backspace, or text shortcuts."
         ))),
     }
 }
@@ -3038,14 +3243,15 @@ fn terminal_chord_sequence(
     shift: bool,
     meta: bool,
     interactive_newline: &str,
-) -> Result<String, NativeToolError> {
+    key_encoding: TerminalSessionKeyEncoding,
+) -> Result<Vec<u8>, NativeToolError> {
     if shift && key == "Tab" && !ctrl && !alt && !meta {
-        return Ok(String::from("\x1b[Z"));
+        return Ok(b"\x1b[Z".to_vec());
     }
 
-    let mut sequence = String::new();
+    let mut sequence = Vec::new();
     if alt || meta {
-        sequence.push('\x1b');
+        sequence.push(0x1b);
     }
     if ctrl {
         let normalized = key.trim().to_ascii_lowercase();
@@ -3054,14 +3260,18 @@ fn terminal_chord_sequence(
             return Err(NativeToolError::new("Chord key cannot be empty."));
         };
         if chars.next().is_none() && ch.is_ascii_alphabetic() {
-            sequence.push(((ch as u8) & 0x1f) as char);
+            sequence.push((ch as u8) & 0x1f);
             return Ok(sequence);
         }
         return Err(NativeToolError::new(format!(
             "Unsupported Ctrl chord `{key}`. Use a single alphabetic key such as c, d, z, l, or r."
         )));
     }
-    sequence.push_str(terminal_key_sequence(key, interactive_newline)?);
+    sequence.extend_from_slice(&terminal_key_sequence(
+        key,
+        interactive_newline,
+        key_encoding,
+    )?);
     Ok(sequence)
 }
 
@@ -3172,6 +3382,70 @@ fn terminal_wait_budget_ms(wait_policy: Option<&TerminalSessionWaitPolicy>) -> O
     })
 }
 
+/// Returns the effective quiet window used by quiet-style terminal waits.
+/// 返回静默类终端等待使用的有效静默窗口。
+fn terminal_wait_quiet_window_ms(wait_policy: Option<&TerminalSessionWaitPolicy>) -> u64 {
+    wait_policy
+        .and_then(|policy| policy.quiet_ms)
+        .unwrap_or(300)
+        .clamp(50, 5_000)
+}
+
+/// Returns the trimmed pattern requested by one wait policy.
+/// 返回一份等待策略请求的裁剪后模式。
+fn terminal_wait_pattern_text(wait_policy: Option<&TerminalSessionWaitPolicy>) -> Option<String> {
+    wait_policy
+        .and_then(|policy| policy.pattern.as_deref())
+        .map(str::trim)
+        .filter(|pattern| !pattern.is_empty())
+        .map(String::from)
+}
+
+/// Reports whether the returned terminal chunks contain a literal pattern.
+/// 判断返回的终端分片是否包含一个字面量模式。
+fn terminal_output_chunks_contain_pattern(
+    chunks: &[CommandSessionOutputChunk],
+    pattern: &str,
+) -> bool {
+    chunks.iter().any(|chunk| chunk.text.contains(pattern))
+        || chunks
+            .iter()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<String>()
+            .contains(pattern)
+}
+
+/// Returns the newline sequence used to submit generated terminal commands through PTY input.
+/// 返回通过 PTY 输入提交宿主生成终端命令时使用的换行序列。
+fn terminal_generated_command_newline(shell_label: &str) -> &'static str {
+    terminal_session_pty_newline(shell_label)
+}
+
+/// Returns the PTY-facing newline sequence used by generated terminal key/control input.
+/// 返回宿主生成的终端按键或控制输入面向 PTY 使用的换行序列。
+fn terminal_session_pty_newline(shell_label: &str) -> &'static str {
+    let lower_shell = shell_label.to_ascii_lowercase();
+    if cfg!(windows)
+        && (lower_shell.contains("pwsh")
+            || lower_shell.contains("powershell")
+            || lower_shell.contains("cmd"))
+    {
+        "\r"
+    } else {
+        shell_specific_newline(shell_label)
+    }
+}
+
+/// Returns the default backend used by terminal_session on the current host.
+/// 返回当前宿主上 terminal_session 使用的默认后端。
+fn default_terminal_session_backend() -> CommandSessionBackend {
+    if cfg!(windows) {
+        CommandSessionBackend::WindowsConsole
+    } else {
+        CommandSessionBackend::Pty
+    }
+}
+
 /// Reports whether one input list can be safely wrapped as a command transaction.
 /// 判断一组输入能否安全包装为命令事务。
 fn terminal_transaction_command_text(
@@ -3207,6 +3481,19 @@ fn terminal_transaction_command_text(
         ));
     }
     Ok(command)
+}
+
+/// Validates that a terminal is clean enough to start one command transaction.
+/// 校验终端状态是否足够干净，可以启动一条命令事务。
+fn validate_terminal_transaction_start(
+    snapshot: &CommandSessionSnapshot,
+) -> Result<(), NativeToolError> {
+    if snapshot.pending_stdin_line {
+        return Err(NativeToolError::new(
+            "`until_exit_code` cannot run while the terminal has a pending input line. Send Ctrl+C or submit/clear the current line before starting a command transaction.",
+        ));
+    }
+    Ok(())
 }
 
 /// Wraps one shell command so the host can observe the transaction exit code.
@@ -4076,8 +4363,14 @@ fn strip_terminal_transaction_sentinel(
         let mut stripped_text = String::new();
         for line in chunk.text.split_inclusive('\n') {
             let line_without_newline = line.trim_end_matches(['\r', '\n']);
-            if let Some(raw_code) = line_without_newline.trim().strip_prefix(&sentinel_prefix) {
-                exit_code = raw_code.trim().parse::<i32>().ok();
+            if let Some(sentinel_start) = line_without_newline.find(&sentinel_prefix) {
+                let raw_code = &line_without_newline[sentinel_start + sentinel_prefix.len()..];
+                let raw_code = raw_code
+                    .trim_start()
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_digit() || *ch == '-' || *ch == '+')
+                    .collect::<String>();
+                exit_code = raw_code.parse::<i32>().ok();
                 continue;
             }
             stripped_text.push_str(line);
@@ -4215,6 +4508,36 @@ fn terminal_controls_hint_line(output_mode: &str) -> Option<&'static str> {
     }
 }
 
+/// Builds backend-specific terminal input capability metadata.
+/// 构建后端特定的终端输入能力元数据。
+fn terminal_input_capabilities(snapshot: &CommandSessionSnapshot) -> Value {
+    match snapshot.backend {
+        CommandSessionBackend::WindowsConsole => json!({
+            "text": true,
+            "paste": true,
+            "key": true,
+            "chord": true,
+            "native_console_events": true,
+            "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Delete", "F1"],
+        }),
+        CommandSessionBackend::Pty => json!({
+            "text": true,
+            "paste": true,
+            "key": true,
+            "chord": true,
+            "native_console_events": false,
+            "common_keys": ["Enter", "Tab", "Esc", "ArrowUp", "ArrowDown"],
+        }),
+        CommandSessionBackend::Pipe => json!({
+            "text": true,
+            "paste": true,
+            "key": false,
+            "chord": false,
+            "native_console_events": false,
+        }),
+    }
+}
+
 /// Builds one model-visible text render input for terminal-session actions.
 /// 为终端会话动作构建一份模型可见文本渲染输入。
 fn build_terminal_session_render_input(
@@ -4234,6 +4557,7 @@ fn build_terminal_session_render_input(
         format!("Owner session: {}", snapshot.owner_session_id),
         format!("Command: {}", snapshot.command),
         format!("Shell: {}", snapshot.shell_label),
+        format!("Backend: {}", snapshot.backend.as_str()),
         format!(
             "Working directory: {}",
             normalized_workspace_path_text_from_path(&snapshot.cwd)
@@ -4265,7 +4589,10 @@ fn build_terminal_session_render_input(
                 .unwrap_or_else(|| String::from("unknown"))
         ));
     }
-    let screen_text = terminal_screen_text_from_chunks(output_mode, returned_chunks);
+    let screen_text = snapshot
+        .screen_text
+        .clone()
+        .or_else(|| terminal_screen_text_from_chunks(output_mode, returned_chunks));
     if screen_text.is_some() {
         lines.push(String::from("Screen text: present"));
     }
@@ -4319,7 +4646,10 @@ fn build_terminal_session_host_payload(
     transaction: Option<&TerminalTransactionResult>,
     extra_fields: Value,
 ) -> Value {
-    let screen_text = terminal_screen_text_from_chunks(output_mode, returned_chunks);
+    let screen_text = snapshot
+        .screen_text
+        .clone()
+        .or_else(|| terminal_screen_text_from_chunks(output_mode, returned_chunks));
     let mut payload = json!({
         "action": action.as_str(),
         "owner_session_id": snapshot.owner_session_id.to_string(),
@@ -4330,12 +4660,19 @@ fn build_terminal_session_host_payload(
         "cwd": normalized_workspace_path_text_from_path(&snapshot.cwd),
         "shell": snapshot.shell_label.clone(),
         "launcher_shell": snapshot.launcher_shell_label.clone(),
+        "backend": snapshot.backend.as_str(),
+        "input_capabilities": terminal_input_capabilities(snapshot),
         "status": snapshot.status.as_str(),
         "exit_code": snapshot.exit_code,
         "stdout_bytes": snapshot.stdout_bytes,
         "stderr_bytes": snapshot.stderr_bytes,
         "last_seq": snapshot.last_seq,
         "pending_stdin_line": snapshot.pending_stdin_line,
+        "screen_frame_seq": snapshot.screen_frame_seq,
+        "screen_size": {
+            "rows": snapshot.screen_rows,
+            "cols": snapshot.screen_cols,
+        },
         "failure_reason": snapshot.failure_reason.clone(),
         "output_overflowed": output_overflowed,
         "output_mode": output_mode,
@@ -4390,6 +4727,177 @@ async fn read_terminal_session_output_for_ai(
         )
         .await
         .map_err(NativeToolError::new)
+}
+
+/// Peeks terminal output without advancing the AI-facing cursor.
+/// 窥视终端输出，但不推进面向 AI 的读取游标。
+async fn peek_terminal_session_output_for_ai(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    after_seq: Option<u64>,
+    read_from_start: bool,
+    wait_for_output_ms: Option<u64>,
+    max_chunks: Option<usize>,
+) -> Result<CommandSessionReadOutcome, NativeToolError> {
+    command_session_runtime
+        .peek_session_for_ai(
+            owner_session_id,
+            terminal_session_id,
+            after_seq,
+            read_from_start,
+            wait_for_output_ms,
+            max_chunks,
+        )
+        .await
+        .map_err(NativeToolError::new)
+}
+
+/// Returns remaining milliseconds for one bounded terminal wait loop.
+/// 返回一次有界终端等待循环的剩余毫秒数。
+fn remaining_terminal_wait_ms(started_at: Instant, wait_budget_ms: u64) -> u64 {
+    wait_budget_ms.saturating_sub(started_at.elapsed().as_millis() as u64)
+}
+
+/// Reads terminal output according to the requested wait policy.
+/// 按请求的等待策略读取终端输出。
+async fn read_terminal_session_output_with_wait(
+    command_session_runtime: &Arc<CommandSessionRuntime>,
+    owner_session_id: SessionId,
+    terminal_session_id: SessionId,
+    after_seq: Option<u64>,
+    read_from_start: bool,
+    wait_policy: Option<&TerminalSessionWaitPolicy>,
+    max_chunks: Option<usize>,
+) -> Result<TerminalWaitReadResult, NativeToolError> {
+    let wait_mode = terminal_wait_mode(wait_policy);
+    let wait_budget_ms = terminal_wait_budget_ms(wait_policy).unwrap_or(0);
+    let started_at = Instant::now();
+
+    if wait_mode == TerminalSessionWaitMode::ReturnImmediately {
+        let read_outcome = read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            after_seq,
+            read_from_start,
+            Some(0),
+            max_chunks,
+        )
+        .await?;
+        return Ok(TerminalWaitReadResult {
+            snapshot: read_outcome.snapshot,
+            returned_chunks: read_outcome.returned_chunks,
+            has_more: read_outcome.has_more,
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            pattern_matched: None,
+            quiet_observed: None,
+        });
+    }
+
+    if wait_mode == TerminalSessionWaitMode::UntilPattern {
+        let pattern = terminal_wait_pattern_text(wait_policy);
+        let mut returned_chunks = Vec::new();
+        let mut has_more = false;
+        let mut latest_outcome = read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            after_seq,
+            read_from_start,
+            Some(wait_budget_ms.min(500)),
+            max_chunks,
+        )
+        .await?;
+        returned_chunks.extend(latest_outcome.returned_chunks.clone());
+        has_more |= latest_outcome.has_more;
+        let mut pattern_matched = pattern.as_deref().is_some_and(|pattern| {
+            terminal_output_chunks_contain_pattern(&returned_chunks, pattern)
+        });
+
+        while !pattern_matched && remaining_terminal_wait_ms(started_at, wait_budget_ms) > 0 {
+            if latest_outcome.snapshot.status.as_str() != "running" {
+                break;
+            }
+            let remaining_ms = remaining_terminal_wait_ms(started_at, wait_budget_ms);
+            latest_outcome = read_terminal_session_output_for_ai(
+                command_session_runtime,
+                owner_session_id,
+                terminal_session_id,
+                None,
+                false,
+                Some(remaining_ms.min(500)),
+                max_chunks,
+            )
+            .await?;
+            returned_chunks.extend(latest_outcome.returned_chunks.clone());
+            has_more |= latest_outcome.has_more;
+            pattern_matched = pattern.as_deref().is_some_and(|pattern| {
+                terminal_output_chunks_contain_pattern(&returned_chunks, pattern)
+            });
+            if latest_outcome.returned_chunks.is_empty() && remaining_ms <= 500 {
+                break;
+            }
+        }
+
+        return Ok(TerminalWaitReadResult {
+            snapshot: latest_outcome.snapshot,
+            returned_chunks,
+            has_more,
+            elapsed_ms: started_at.elapsed().as_millis() as u64,
+            pattern_matched: Some(pattern_matched),
+            quiet_observed: None,
+        });
+    }
+
+    let quiet_ms = terminal_wait_quiet_window_ms(wait_policy);
+    let mut returned_chunks = Vec::new();
+    let mut has_more = false;
+    let mut quiet_observed = false;
+    let mut latest_outcome = read_terminal_session_output_for_ai(
+        command_session_runtime,
+        owner_session_id,
+        terminal_session_id,
+        after_seq,
+        read_from_start,
+        Some(quiet_ms.min(wait_budget_ms)),
+        max_chunks,
+    )
+    .await?;
+    loop {
+        has_more |= latest_outcome.has_more;
+        if latest_outcome.returned_chunks.is_empty() {
+            quiet_observed = true;
+            break;
+        }
+        returned_chunks.extend(latest_outcome.returned_chunks.clone());
+        if latest_outcome.snapshot.status.as_str() != "running" {
+            break;
+        }
+        let remaining_ms = remaining_terminal_wait_ms(started_at, wait_budget_ms);
+        if remaining_ms == 0 {
+            break;
+        }
+        latest_outcome = read_terminal_session_output_for_ai(
+            command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            None,
+            false,
+            Some(quiet_ms.min(remaining_ms)),
+            max_chunks,
+        )
+        .await?;
+    }
+
+    Ok(TerminalWaitReadResult {
+        snapshot: latest_outcome.snapshot,
+        returned_chunks,
+        has_more,
+        elapsed_ms: started_at.elapsed().as_millis() as u64,
+        pattern_matched: None,
+        quiet_observed: Some(quiet_observed),
+    })
 }
 
 /// Drains residual output after Ctrl+C until the terminal is quiet or the bounded budget expires.
@@ -4759,7 +5267,7 @@ async fn execute_terminal_session_start_action(
     let shell_behavior = resolve_session_shell_behavior(command_text, &launcher_shell_label);
     let requested_shell_selector = normalize_shell_selector(parsed_args.shell.as_deref());
     validate_terminal_session_start_shell_policy(parsed_args.shell.as_deref(), &shell_behavior)?;
-    let session_name = normalize_terminal_session_name(parsed_args.name.as_deref(), command_text);
+    let session_name = require_terminal_session_start_name(parsed_args.name.as_deref())?;
     let snapshot = command_session_runtime
         .start_session(CommandSessionStartRequest {
             owner_session_id,
@@ -4767,7 +5275,7 @@ async fn execute_terminal_session_start_action(
             command: command_text.to_string(),
             shell_label: shell_behavior.interactive_shell_label.clone(),
             launcher_shell_label: shell_behavior.launcher_shell_label.clone(),
-            interactive_newline: shell_specific_newline(
+            interactive_newline: terminal_session_pty_newline(
                 shell_behavior.interactive_shell_label.as_str(),
             )
             .to_string(),
@@ -4776,6 +5284,7 @@ async fn execute_terminal_session_start_action(
             launcher_args,
             initial_stdin: None,
             initial_stdin_append_newline: false,
+            backend: default_terminal_session_backend(),
         })
         .await
         .map_err(NativeToolError::new)?;
@@ -4858,46 +5367,74 @@ async fn execute_terminal_session_read_like_action(
             .unwrap_or_else(|| Path::new(".")),
     );
     let read_from_start = parsed_args.read_from_start.unwrap_or(false);
-    let wait_budget = if matches!(action, TerminalSessionToolAction::Snapshot) {
-        Some(0)
+    let wait_result = if matches!(action, TerminalSessionToolAction::Snapshot) {
+        let read_outcome = peek_terminal_session_output_for_ai(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            parsed_args.after_seq,
+            true,
+            Some(0),
+            parsed_args.max_chunks,
+        )
+        .await?;
+        TerminalWaitReadResult {
+            snapshot: read_outcome.snapshot,
+            returned_chunks: Vec::new(),
+            has_more: read_outcome.has_more,
+            elapsed_ms: 0,
+            pattern_matched: None,
+            quiet_observed: None,
+        }
     } else {
-        terminal_wait_budget_ms(parsed_args.wait_policy.as_ref())
+        read_terminal_session_output_with_wait(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            parsed_args.after_seq,
+            read_from_start,
+            parsed_args.wait_policy.as_ref(),
+            parsed_args.max_chunks,
+        )
+        .await?
     };
-    let read_outcome = read_terminal_session_output_for_ai(
-        &command_session_runtime,
-        owner_session_id,
-        terminal_session_id,
-        parsed_args.after_seq,
-        matches!(action, TerminalSessionToolAction::Snapshot) || read_from_start,
-        wait_budget,
-        parsed_args.max_chunks,
-    )
-    .await?;
-    let session_name = terminal_session_name_for_snapshot(&read_outcome.snapshot);
-    let returned_chunks = if matches!(action, TerminalSessionToolAction::Snapshot) {
-        Vec::new()
-    } else {
-        read_outcome.returned_chunks.clone()
-    };
-    let returned_chunks = coalesce_terminal_output_chunks(returned_chunks);
+    let session_name = terminal_session_name_for_snapshot(&wait_result.snapshot);
+    let returned_chunks = coalesce_terminal_output_chunks(wait_result.returned_chunks.clone());
     let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
     let render_input = build_terminal_session_render_input(
         action,
-        &read_outcome.snapshot,
+        &wait_result.snapshot,
         &session_name,
         &returned_chunks,
-        read_outcome.has_more,
+        wait_result.has_more,
         output_mode,
         None,
-        vec![format!(
-            "Wait mode: {}",
-            terminal_wait_mode(parsed_args.wait_policy.as_ref()).as_str()
-        )],
+        vec![
+            format!(
+                "Wait mode: {}",
+                terminal_wait_mode(parsed_args.wait_policy.as_ref()).as_str()
+            ),
+            format!("Wait elapsed: {} ms", wait_result.elapsed_ms),
+            format!(
+                "Pattern matched: {}",
+                wait_result
+                    .pattern_matched
+                    .map(|matched| matched.to_string())
+                    .unwrap_or_else(|| String::from("n/a"))
+            ),
+            format!(
+                "Quiet observed: {}",
+                wait_result
+                    .quiet_observed
+                    .map(|observed| observed.to_string())
+                    .unwrap_or_else(|| String::from("n/a"))
+            ),
+        ],
     );
     let budget = default_shell_command_budget_snapshot();
     let host_payload = build_terminal_session_host_payload(
         action,
-        &read_outcome.snapshot,
+        &wait_result.snapshot,
         &session_name,
         &returned_chunks,
         shell_command_output_exceeds_inline_budget(&render_input, &budget),
@@ -4909,7 +5446,11 @@ async fn execute_terminal_session_read_like_action(
             "requested_after_seq": parsed_args.after_seq.unwrap_or(0),
             "read_from_start": read_from_start,
             "returned_chunk_count": returned_chunks.len(),
-            "has_more": read_outcome.has_more,
+            "has_more": wait_result.has_more,
+            "wait_elapsed_ms": wait_result.elapsed_ms,
+            "pattern_matched": wait_result.pattern_matched,
+            "quiet_observed": wait_result.quiet_observed,
+            "snapshot_advanced_ai_cursor": !matches!(action, TerminalSessionToolAction::Snapshot),
         }),
     );
     let model_output = render_tool_result_text(
@@ -4959,18 +5500,44 @@ async fn execute_terminal_session_send_action(
     }
     let wait_mode = terminal_wait_mode(parsed_args.wait_policy.as_ref());
     let interactive_newline = shell_specific_newline(before_snapshot.shell_label.as_str());
-    let mut encoded_input = encode_terminal_inputs(&inputs, interactive_newline)?;
+    let requested_key_encoding = parsed_args.key_encoding;
+    let key_encoding = requested_key_encoding.unwrap_or(TerminalSessionKeyEncoding::AnsiVt);
+    let key_encoding_label =
+        terminal_effective_key_encoding_label(before_snapshot.backend, requested_key_encoding);
+    let uses_structured_input = before_snapshot.backend == CommandSessionBackend::WindowsConsole;
+    let mut structured_input = if uses_structured_input {
+        Some(windows_console_input_events_from_inputs(
+            &inputs,
+            interactive_newline,
+            requested_key_encoding,
+        )?)
+    } else {
+        None
+    };
+    let mut encoded_input = if uses_structured_input {
+        Vec::new()
+    } else {
+        encode_terminal_inputs(&inputs, interactive_newline, key_encoding)?
+    };
     let interrupt_requested = terminal_inputs_request_interrupt(&inputs);
     let mut transaction = None;
     if wait_mode == TerminalSessionWaitMode::UntilExitCode {
+        validate_terminal_transaction_start(&before_snapshot)?;
         let command = terminal_transaction_command_text(&inputs)?;
         let transaction_id = Uuid::new_v4().to_string();
-        encoded_input = wrap_terminal_transaction_command(
+        let wrapped_command = wrap_terminal_transaction_command(
             &command,
             before_snapshot.shell_label.as_str(),
             transaction_id.as_str(),
-            interactive_newline,
+            terminal_generated_command_newline(before_snapshot.shell_label.as_str()),
         )?;
+        if uses_structured_input {
+            structured_input = Some(vec![CommandSessionInputEvent::Text {
+                text: wrapped_command,
+            }]);
+        } else {
+            encoded_input = wrapped_command.into_bytes();
+        }
         transaction = Some(TerminalTransactionResult {
             id: transaction_id,
             command,
@@ -4980,10 +5547,21 @@ async fn execute_terminal_session_send_action(
             ended_seq: None,
         });
     }
-    let write_outcome = command_session_runtime
-        .write_session(owner_session_id, terminal_session_id, encoded_input, false)
-        .await
-        .map_err(NativeToolError::new)?;
+    let write_outcome = if uses_structured_input {
+        command_session_runtime
+            .write_session_input_events(
+                owner_session_id,
+                terminal_session_id,
+                structured_input.unwrap_or_default(),
+            )
+            .await
+            .map_err(NativeToolError::new)?
+    } else {
+        command_session_runtime
+            .write_session_bytes(owner_session_id, terminal_session_id, encoded_input)
+            .await
+            .map_err(NativeToolError::new)?
+    };
     let requested_wait_budget =
         terminal_wait_budget_ms(parsed_args.wait_policy.as_ref()).unwrap_or(0);
     let wait_budget = requested_wait_budget;
@@ -4992,79 +5570,95 @@ async fn execute_terminal_session_send_action(
     let mut interrupt_cleanup_elapsed_ms = 0u64;
     let mut interrupt_cleanup_discarded_chunks = 0usize;
     let mut interrupt_cleanup_failure: Option<String> = None;
-    let (read_snapshot, returned_chunks, has_more) =
-        if let Some(transaction_ref) = transaction.as_mut() {
-            let (read_outcome, stripped_chunks, exit_code) = read_terminal_transaction_output(
-                &command_session_runtime,
-                owner_session_id,
-                terminal_session_id,
-                before_snapshot.last_seq,
-                wait_budget,
-                parsed_args.max_chunks,
-                transaction_ref.id.as_str(),
-            )
-            .await?;
-            transaction_ref.exit_code = exit_code;
-            transaction_ref.status = if exit_code.is_some() {
-                String::from("completed")
-            } else {
-                String::from("timeout")
-            };
-            transaction_ref.ended_seq = read_outcome
-                .returned_chunks
-                .last()
-                .map(|chunk| chunk.seq)
-                .or(Some(read_outcome.snapshot.last_seq));
-            (
-                read_outcome.snapshot,
-                stripped_chunks,
-                read_outcome.has_more,
-            )
-        } else if interrupt_requested {
-            let drain_result = drain_terminal_interrupt_output(
-                &command_session_runtime,
-                owner_session_id,
-                terminal_session_id,
-                before_snapshot.last_seq,
-                parsed_args.max_chunks,
-            )
-            .await?;
-            interrupt_drain_elapsed_ms = drain_result.elapsed_ms;
-            interrupt_drain_discarded_chunks = drain_result.discarded_chunk_count;
-            let cleanup_result = cleanup_terminal_interrupt_input_line(
-                &command_session_runtime,
-                owner_session_id,
-                terminal_session_id,
-                drain_result.snapshot.clone(),
-                interactive_newline,
-                parsed_args.max_chunks,
-            )
-            .await;
-            interrupt_cleanup_elapsed_ms = cleanup_result.elapsed_ms;
-            interrupt_cleanup_discarded_chunks = cleanup_result.discarded_chunk_count;
-            interrupt_cleanup_failure = cleanup_result.failure_reason.clone();
-            (
-                cleanup_result.snapshot,
-                drain_result.returned_chunks,
-                drain_result.has_more || cleanup_result.has_more,
-            )
+    let response_wait_started_at = Instant::now();
+    let (
+        read_snapshot,
+        returned_chunks,
+        has_more,
+        wait_elapsed_ms,
+        pattern_matched,
+        quiet_observed,
+    ) = if let Some(transaction_ref) = transaction.as_mut() {
+        let (read_outcome, stripped_chunks, exit_code) = read_terminal_transaction_output(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            before_snapshot.last_seq,
+            wait_budget,
+            parsed_args.max_chunks,
+            transaction_ref.id.as_str(),
+        )
+        .await?;
+        transaction_ref.exit_code = exit_code;
+        transaction_ref.status = if exit_code.is_some() {
+            String::from("completed")
         } else {
-            let read_outcome = read_terminal_session_output_for_ai(
-                &command_session_runtime,
-                owner_session_id,
-                terminal_session_id,
-                Some(before_snapshot.last_seq),
-                false,
-                Some(wait_budget),
-                parsed_args.max_chunks,
-            )
-            .await?;
-            (
-                read_outcome.snapshot,
-                read_outcome.returned_chunks,
-                read_outcome.has_more,
-            )
+            String::from("timeout")
         };
+        transaction_ref.ended_seq = read_outcome
+            .returned_chunks
+            .last()
+            .map(|chunk| chunk.seq)
+            .or(Some(read_outcome.snapshot.last_seq));
+        (
+            read_outcome.snapshot,
+            stripped_chunks,
+            read_outcome.has_more,
+            response_wait_started_at.elapsed().as_millis() as u64,
+            None,
+            None,
+        )
+    } else if interrupt_requested {
+        let drain_result = drain_terminal_interrupt_output(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            before_snapshot.last_seq,
+            parsed_args.max_chunks,
+        )
+        .await?;
+        interrupt_drain_elapsed_ms = drain_result.elapsed_ms;
+        interrupt_drain_discarded_chunks = drain_result.discarded_chunk_count;
+        let cleanup_result = cleanup_terminal_interrupt_input_line(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            drain_result.snapshot.clone(),
+            interactive_newline,
+            parsed_args.max_chunks,
+        )
+        .await;
+        interrupt_cleanup_elapsed_ms = cleanup_result.elapsed_ms;
+        interrupt_cleanup_discarded_chunks = cleanup_result.discarded_chunk_count;
+        interrupt_cleanup_failure = cleanup_result.failure_reason.clone();
+        (
+            cleanup_result.snapshot,
+            drain_result.returned_chunks,
+            drain_result.has_more || cleanup_result.has_more,
+            interrupt_drain_elapsed_ms.saturating_add(interrupt_cleanup_elapsed_ms),
+            None,
+            None,
+        )
+    } else {
+        let wait_result = read_terminal_session_output_with_wait(
+            &command_session_runtime,
+            owner_session_id,
+            terminal_session_id,
+            Some(before_snapshot.last_seq),
+            false,
+            parsed_args.wait_policy.as_ref(),
+            parsed_args.max_chunks,
+        )
+        .await?;
+        (
+            wait_result.snapshot,
+            wait_result.returned_chunks,
+            wait_result.has_more,
+            wait_result.elapsed_ms,
+            wait_result.pattern_matched,
+            wait_result.quiet_observed,
+        )
+    };
     let returned_chunks = coalesce_terminal_output_chunks(returned_chunks);
     let (output_mode, confidence, reason) = detect_terminal_output_mode(&returned_chunks);
     let spill_root = resolve_shell_command_spill_root(
@@ -5090,8 +5684,22 @@ async fn execute_terminal_session_send_action(
         transaction.as_ref(),
         vec![
             format!("Inputs: {input_labels}"),
+            format!("Key encoding: {key_encoding_label}"),
             format!("Bytes written: {}", write_outcome.bytes_written),
             format!("Wait mode: {}", wait_mode.as_str()),
+            format!("Wait elapsed: {wait_elapsed_ms} ms"),
+            format!(
+                "Pattern matched: {}",
+                pattern_matched
+                    .map(|matched| matched.to_string())
+                    .unwrap_or_else(|| String::from("n/a"))
+            ),
+            format!(
+                "Quiet observed: {}",
+                quiet_observed
+                    .map(|observed| observed.to_string())
+                    .unwrap_or_else(|| String::from("n/a"))
+            ),
             format!(
                 "Interrupt drain: {}",
                 if interrupt_requested { "yes" } else { "no" }
@@ -5119,8 +5727,12 @@ async fn execute_terminal_session_send_action(
         transaction.as_ref(),
         json!({
             "input_labels": input_labels,
+            "key_encoding": key_encoding_label,
             "bytes_written": write_outcome.bytes_written,
             "wait_mode": wait_mode.as_str(),
+            "wait_elapsed_ms": wait_elapsed_ms,
+            "pattern_matched": pattern_matched,
+            "quiet_observed": quiet_observed,
             "interrupt_drain_ms": interrupt_drain_elapsed_ms,
             "interrupt_drain_discarded_chunks": interrupt_drain_discarded_chunks,
             "interrupt_cleanup_ms": interrupt_cleanup_elapsed_ms,
@@ -5323,6 +5935,7 @@ async fn execute_shell_session_start_action(
             launcher_args,
             initial_stdin,
             initial_stdin_append_newline: append_newline,
+            backend: CommandSessionBackend::Pipe,
         })
         .await
         .map_err(NativeToolError::new)?;
@@ -5693,6 +6306,9 @@ async fn execute_prompt_skill_detail_tool(
     let config = PromptSkillsGlobalConfig {
         enabled: true,
         user_skill_root: request.prompt_skill_user_root.clone(),
+        system_skill_root: Some(
+            vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory(),
+        ),
         default_skill_state: PromptSkillState::Enabled,
         skill_overrides: BTreeMap::new(),
     };
@@ -5905,18 +6521,21 @@ fn vmm_memory_delete_native_error(error: vulcan_vmm::VmmClientError) -> NativeTo
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandSessionOutputChunk, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
-        TerminalSessionInput, ThreadGoal, ThreadGoalStatus, build_agent_list_tool,
-        build_mcp_server_list_tool, build_shell_command_tool, build_shell_session_tool,
-        build_skill_list_tool, build_submit_plan_tool, build_terminal_session_tool,
-        build_todolist_tool, build_workspace_describe_tool, coalesce_terminal_output_chunks,
-        display_submit_plan_path, effective_start_append_newline, goal_response_value,
-        normalize_terminal_session_name, resolve_session_shell_behavior,
-        resolve_shell_command_launcher, resolve_shell_command_working_directory,
-        shell_command_args_schema, shell_specific_newline, terminal_inputs_request_interrupt,
-        terminal_interrupt_drain_chunk_is_visible, terminal_screen_text_from_chunks,
+        CommandSessionBackend, CommandSessionInputEvent, CommandSessionOutputChunk,
+        CommandSessionSnapshot, NativeToolExecutionRequest, SUBMIT_PLAN_MARKER,
+        TerminalSessionInput, TerminalSessionKeyEncoding, ThreadGoal, ThreadGoalStatus,
+        build_agent_list_tool, build_mcp_server_list_tool, build_shell_command_tool,
+        build_shell_session_tool, build_skill_list_tool, build_submit_plan_tool,
+        build_terminal_session_tool, build_todolist_tool, build_workspace_describe_tool,
+        coalesce_terminal_output_chunks, display_submit_plan_path, effective_start_append_newline,
+        encode_terminal_inputs, goal_response_value, normalize_terminal_session_name,
+        resolve_session_shell_behavior, resolve_shell_command_launcher,
+        resolve_shell_command_working_directory, shell_command_args_schema, shell_specific_newline,
+        terminal_inputs_request_interrupt, terminal_interrupt_drain_chunk_is_visible,
+        terminal_output_chunks_contain_pattern, terminal_screen_text_from_chunks,
         terminal_session_args_schema, terminal_transaction_command_text,
         validate_shell_session_start_stdin_policy, validate_terminal_session_start_shell_policy,
+        validate_terminal_transaction_start, windows_console_input_events_from_inputs,
         wrap_terminal_transaction_command,
     };
     use crate::agent_runtime::config::{
@@ -5924,7 +6543,9 @@ mod tests {
         RuntimeSkillDefinition, RuntimeSkillKind,
     };
     use crate::tooling::CommandSessionRuntime;
-    use crate::tooling::command_session_runtime::CommandSessionOutputStream;
+    use crate::tooling::command_session_runtime::{
+        CommandSessionOutputStream, CommandSessionStatus,
+    };
     use crate::tooling::shell_host::{
         DetectedHostCommandShell, HostCommandShell, HostCommandShellSupport,
     };
@@ -6782,6 +7403,89 @@ mod tests {
         ]));
     }
 
+    /// Terminal key encoding should keep ANSI VT as the default while allowing explicit Windows getch bytes.
+    /// 终端按键编码应保持 ANSI VT 为默认，同时允许显式 Windows getch 字节。
+    #[test]
+    fn terminal_key_encoding_supports_ansi_and_windows_getch_extended_keys() {
+        let ansi = encode_terminal_inputs(
+            &[
+                TerminalSessionInput::Key {
+                    key: String::from("ArrowDown"),
+                },
+                TerminalSessionInput::Key {
+                    key: String::from("Delete"),
+                },
+                TerminalSessionInput::Key {
+                    key: String::from("F12"),
+                },
+            ],
+            "\r\n",
+            TerminalSessionKeyEncoding::AnsiVt,
+        )
+        .expect("encode ansi keys");
+        assert_eq!(ansi, b"\x1b[B\x1b[3~\x1b[24~");
+
+        let windows_getch_single_byte = encode_terminal_inputs(
+            &[TerminalSessionInput::Key {
+                key: String::from("Esc"),
+            }],
+            "\r\n",
+            TerminalSessionKeyEncoding::WindowsConsoleGetch,
+        )
+        .expect("encode windows getch single-byte key");
+        assert_eq!(windows_getch_single_byte, vec![0x1b]);
+
+        let windows_getch_arrow = encode_terminal_inputs(
+            &[TerminalSessionInput::Key {
+                key: String::from("ArrowDown"),
+            }],
+            "\r\n",
+            TerminalSessionKeyEncoding::WindowsConsoleGetch,
+        );
+        if cfg!(windows) {
+            assert!(
+                windows_getch_arrow
+                    .expect_err("byte-oriented backend should reject getch extended keys")
+                    .message
+                    .contains("cannot synthesize console extended key")
+            );
+        } else {
+            assert_eq!(windows_getch_arrow.expect("encode arrow"), vec![0xe0, b'P']);
+        }
+    }
+
+    /// Explicit ANSI VT encoding on WindowsConsole should convert keys to text escape sequences instead of native key events.
+    /// WindowsConsole 上显式 ANSI VT 编码应把按键转换为文本转义序列，而不是原生按键事件。
+    #[test]
+    fn windows_console_explicit_ansi_vt_uses_text_escape_sequence() {
+        let events = windows_console_input_events_from_inputs(
+            &[TerminalSessionInput::Key {
+                key: String::from("ArrowDown"),
+            }],
+            "\r\n",
+            Some(TerminalSessionKeyEncoding::AnsiVt),
+        )
+        .expect("convert ansi vt input");
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            CommandSessionInputEvent::Text { text } => assert_eq!(text, "\x1b[B"),
+            other => panic!("expected text event, got {other:?}"),
+        }
+
+        let native_events = windows_console_input_events_from_inputs(
+            &[TerminalSessionInput::Key {
+                key: String::from("ArrowDown"),
+            }],
+            "\r\n",
+            None,
+        )
+        .expect("convert native input");
+        assert!(matches!(
+            &native_events[0],
+            CommandSessionInputEvent::Key { key } if key == "ArrowDown"
+        ));
+    }
+
     /// Interrupt drain should hide pure control fragments while keeping visible prompt or output text.
     /// 中断排空应隐藏纯控制片段，同时保留可见的提示符或输出文本。
     #[test]
@@ -6856,6 +7560,184 @@ mod tests {
         .expect_err("paste input should not be accepted for exit-code transactions");
 
         assert!(error.message.contains("cannot be used with paste"));
+    }
+
+    /// Terminal command transactions should reject dirty interactive state before wrapper injection.
+    /// 终端命令事务应在注入包装命令前拒绝脏交互状态。
+    #[test]
+    fn terminal_transaction_rejects_pending_input_line() {
+        let snapshot = CommandSessionSnapshot {
+            command_session_id: Uuid::from_u128(0x51),
+            display_name: Some(String::from("dirty shell")),
+            owner_session_id: Uuid::from_u128(0x52),
+            command: String::from("pwsh -NoLogo"),
+            shell_label: String::from("pwsh"),
+            launcher_shell_label: String::from("pwsh"),
+            cwd: PathBuf::from(r"D:\openvulcan\vulcan-code"),
+            backend: CommandSessionBackend::Pty,
+            status: CommandSessionStatus::Running,
+            exit_code: None,
+            failure_reason: None,
+            stdout_bytes: 0,
+            stderr_bytes: 0,
+            last_seq: 7,
+            pending_stdin_line: true,
+            screen_frame_seq: None,
+            screen_rows: None,
+            screen_cols: None,
+            screen_text: None,
+        };
+
+        let error = validate_terminal_transaction_start(&snapshot)
+            .expect_err("pending input line should reject command transactions");
+        assert!(error.message.contains("pending input line"));
+    }
+
+    /// Literal readiness matching should work within one chunk and across chunk boundaries.
+    /// 字面量就绪匹配应同时支持单个分片内与跨分片边界的内容。
+    #[test]
+    fn terminal_pattern_matching_checks_joined_output_chunks() {
+        let chunks = vec![
+            CommandSessionOutputChunk {
+                seq: 1,
+                stream: CommandSessionOutputStream::Stdout,
+                text: String::from("REA"),
+            },
+            CommandSessionOutputChunk {
+                seq: 2,
+                stream: CommandSessionOutputStream::Stdout,
+                text: String::from("DY\n"),
+            },
+        ];
+
+        assert!(terminal_output_chunks_contain_pattern(&chunks, "READY"));
+        assert!(!terminal_output_chunks_contain_pattern(&chunks, "MISSING"));
+    }
+
+    /// PowerShell terminal transactions should not leave the interactive shell in continuation mode.
+    /// PowerShell 终端事务不应让交互式 shell 停留在续行模式。
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn terminal_powershell_transaction_leaves_shell_usable() {
+        let runtime = Arc::new(CommandSessionRuntime::new());
+        let tool = build_terminal_session_tool(Arc::clone(&runtime), test_shell_support());
+        let owner_session_id = Uuid::from_u128(0x7001);
+        let start_result = tool
+            .invoke(NativeToolExecutionRequest {
+                arguments: json!({
+                    "action": "start",
+                    "name": "transaction regression",
+                    "command": "pwsh -NoLogo -NoProfile",
+                    "shell": "pwsh"
+                }),
+                session_id: Some(owner_session_id),
+                workspace_root: None,
+                controller_runtime: None,
+                spill_root: None,
+                enabled_prompt_skill_names: Vec::new(),
+                prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
+            })
+            .await
+            .expect("terminal start should execute");
+        let terminal_session_id = start_result
+            .host_result
+            .as_ref()
+            .and_then(|result| result.payload["terminal_session_id"].as_str())
+            .expect("terminal id should exist")
+            .to_string();
+
+        let transaction_result = tool
+            .invoke(NativeToolExecutionRequest {
+                arguments: json!({
+                    "action": "send",
+                    "terminal_session_id": terminal_session_id,
+                    "inputs": [{ "kind": "text", "text": "Write-Output 'txn_test'\n" }],
+                    "wait_policy": { "mode": "until_exit_code", "max_wait_ms": 10000 }
+                }),
+                session_id: Some(owner_session_id),
+                workspace_root: None,
+                controller_runtime: None,
+                spill_root: None,
+                enabled_prompt_skill_names: Vec::new(),
+                prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
+            })
+            .await
+            .expect("transaction send should execute");
+        let transaction_output = transaction_result
+            .model_output
+            .as_str()
+            .expect("transaction output should render");
+        let transaction_payload = &transaction_result
+            .host_result
+            .as_ref()
+            .expect("host result")
+            .payload;
+        assert_eq!(
+            transaction_payload["transaction"]["exit_code"],
+            json!(0),
+            "transaction output was: {transaction_output}\npayload was: {transaction_payload}"
+        );
+
+        let followup_result = tool
+            .invoke(NativeToolExecutionRequest {
+                arguments: json!({
+                    "action": "send",
+                    "terminal_session_id": terminal_session_id,
+                    "inputs": [{ "kind": "text", "text": "Write-Output 'after_tx'\n" }],
+                    "wait_policy": {
+                        "mode": "until_pattern",
+                        "pattern": "after_tx",
+                        "max_wait_ms": 10000
+                    }
+                }),
+                session_id: Some(owner_session_id),
+                workspace_root: None,
+                controller_runtime: None,
+                spill_root: None,
+                enabled_prompt_skill_names: Vec::new(),
+                prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
+            })
+            .await
+            .expect("follow-up send should execute");
+        let followup_output = followup_result
+            .model_output
+            .as_str()
+            .expect("follow-up output should render");
+        assert!(
+            followup_output.contains("after_tx"),
+            "follow-up output was: {followup_output}"
+        );
+        assert_eq!(
+            followup_result
+                .host_result
+                .as_ref()
+                .expect("host result")
+                .payload["pattern_matched"],
+            json!(true)
+        );
+
+        let _ = tool
+            .invoke(NativeToolExecutionRequest {
+                arguments: json!({
+                    "action": "stop",
+                    "terminal_session_id": terminal_session_id
+                }),
+                session_id: Some(owner_session_id),
+                workspace_root: None,
+                controller_runtime: None,
+                spill_root: None,
+                enabled_prompt_skill_names: Vec::new(),
+                prompt_skill_user_root: None,
+                project_vmm: VmmConfigLayer::default(),
+                session_vmm: VmmConfigLayer::default(),
+            })
+            .await;
     }
 
     /// PowerShell transaction wrapping should report non-terminating cmdlet errors as a failed transaction.

@@ -174,6 +174,9 @@ pub struct PromptSkillsGlobalConfig {
     /// Optional user skill root override.
     /// 可选用户技能根目录覆盖值。
     pub user_skill_root: Option<PathBuf>,
+    /// Optional system skill root override.
+    /// 可选系统技能根目录覆盖值。
+    pub system_skill_root: Option<PathBuf>,
     /// Default state used when no per-skill override exists.
     /// 不存在单技能覆盖时使用的默认状态。
     pub default_skill_state: PromptSkillState,
@@ -189,6 +192,7 @@ impl Default for PromptSkillsGlobalConfig {
         Self {
             enabled: true,
             user_skill_root: None,
+            system_skill_root: None,
             default_skill_state: PromptSkillState::Enabled,
             skill_overrides: BTreeMap::new(),
         }
@@ -323,7 +327,10 @@ pub fn configured_user_skill_root(config: &PromptSkillsGlobalConfig) -> PathBuf 
 /// Resolves the host-managed system prompt skill root for one user root.
 /// 根据给定用户根目录解析宿主管理系统提示词技能根目录。
 pub fn configured_system_skill_root(config: &PromptSkillsGlobalConfig) -> PathBuf {
-    configured_user_skill_root(config).join(SYSTEM_SKILL_DIR_NAME)
+    config
+        .system_skill_root
+        .clone()
+        .unwrap_or_else(default_system_skill_root)
 }
 
 /// Loads prompt skills from the configured user directory only.

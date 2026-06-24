@@ -12,6 +12,7 @@ members = [
     "crates/vulcan-service-runtime",
     "crates/vulcan-change-set",
     "crates/vulcan-host-tools",
+    "crates/vulcan-windows-console-helper",
     "crates/vulcan-provider-config",
     "crates/vulcan-runtime-assets",
     "crates/vulcan-workbench-model",

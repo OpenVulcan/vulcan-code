@@ -129,15 +129,6 @@ export async function refreshAgentSkillsCatalog(): Promise<WorkbenchSnapshot> {
   return serviceClient.request<WorkbenchSnapshot>("service_refresh_agent_skills_catalog");
 }
 
-// installSystemAgentSkills syncs bundled system Agent Skills.
-// installSystemAgentSkills 同步内置系统 Agent Skills。
-export async function installSystemAgentSkills(): Promise<WorkbenchSnapshot> {
-  if (!hasServiceRuntime()) {
-    return browserFallbackSnapshot();
-  }
-  return serviceClient.request<WorkbenchSnapshot>("service_install_system_agent_skills");
-}
-
 // setAgentSkillsEnabled persists the global Agent Skills switch.
 // setAgentSkillsEnabled 持久化 Agent Skills 全局开关。
 export async function setAgentSkillsEnabled(enabled: boolean): Promise<AgentSkillsCatalogSummary> {

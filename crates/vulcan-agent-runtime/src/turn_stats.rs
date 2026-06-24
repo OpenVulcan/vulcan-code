@@ -48,6 +48,11 @@ pub fn build_session_turn_stats_from_state(
     if turn_records.is_empty() {
         return None;
     }
+    let turn_start_user_record = turn_records.iter().find(|record| {
+        matches!(record.kind, SessionMessageKind::User)
+            && record.visible
+            && record.record_kind == SessionMessageRecordKind::Transcript
+    });
     let visible_user_record_count_before_turn = records[..start_index]
         .iter()
         .filter(|record| {
@@ -56,11 +61,15 @@ pub fn build_session_turn_stats_from_state(
                 && record.record_kind == SessionMessageRecordKind::Transcript
         })
         .count();
-    let turn_start_message_index = canonical_turn_start_message_index(
-        conversation_state,
-        visible_user_record_count_before_turn,
-    )
-    .unwrap_or(0);
+    let turn_start_message_index = turn_start_user_record
+        .and_then(|user_record| {
+            canonical_turn_start_message_index(
+                conversation_state,
+                visible_user_record_count_before_turn,
+                user_record,
+            )
+        })
+        .unwrap_or(conversation_state.messages.len());
     let turn_messages = &conversation_state.messages[turn_start_message_index..];
 
     let mut stats = SessionTurnStats {
@@ -176,16 +185,94 @@ pub fn build_session_turn_stats_from_state(
 fn canonical_turn_start_message_index(
     conversation_state: &SessionConversationState,
     visible_user_record_count_before_turn: usize,
+    user_record: &SessionConversationRecord,
 ) -> Option<usize> {
     let user_message_indexes = canonical_user_message_indexes_for_turn_mapping(conversation_state);
     if user_message_indexes.is_empty() {
         return None;
     }
 
-    user_message_indexes
+    if let Some(candidate_index) = user_message_indexes
         .get(visible_user_record_count_before_turn)
         .copied()
-        .or_else(|| user_message_indexes.last().copied())
+        && message_created_at_matches_record(
+            &conversation_state.messages[candidate_index],
+            user_record,
+        )
+    {
+        return Some(candidate_index);
+    }
+
+    canonical_user_message_index_for_record(conversation_state, &user_message_indexes, user_record)
+}
+
+/// Resolves one canonical user message by the visible transcript record that opened the turn.
+/// 通过打开当前轮次的可见转录记录解析对应的规范用户消息。
+fn canonical_user_message_index_for_record(
+    conversation_state: &SessionConversationState,
+    user_message_indexes: &[usize],
+    user_record: &SessionConversationRecord,
+) -> Option<usize> {
+    let created_at = user_record.created_at.trim();
+    if !created_at.is_empty() {
+        let matching_indexes = user_message_indexes
+            .iter()
+            .copied()
+            .filter(|index| conversation_state.messages[*index].id.contains(created_at))
+            .collect::<Vec<_>>();
+        if matching_indexes.len() == 1 {
+            return matching_indexes.first().copied();
+        }
+    }
+
+    let matching_indexes = user_message_indexes
+        .iter()
+        .copied()
+        .filter(|index| {
+            canonical_user_message_matches_record(&conversation_state.messages[*index], user_record)
+        })
+        .collect::<Vec<_>>();
+    (matching_indexes.len() == 1).then(|| matching_indexes[0])
+}
+
+/// Returns whether one canonical user message and visible record describe the same user input.
+/// 返回单条规范用户消息与可见记录是否描述同一条用户输入。
+fn canonical_user_message_matches_record(
+    message: &SessionConversationMessage,
+    user_record: &SessionConversationRecord,
+) -> bool {
+    let SessionConversationPayload::UserText { text, .. } = &message.payload else {
+        return false;
+    };
+    if message_created_at_matches_record(message, user_record) {
+        return true;
+    }
+    canonical_user_record_text(user_record).is_some_and(|record_text| record_text == text)
+}
+
+/// Returns whether the local protocol message id contains the visible record timestamp.
+/// 返回本地协议消息标识是否包含可见记录时间戳。
+fn message_created_at_matches_record(
+    message: &SessionConversationMessage,
+    user_record: &SessionConversationRecord,
+) -> bool {
+    let created_at = user_record.created_at.trim();
+    !created_at.is_empty() && message.id.contains(created_at)
+}
+
+/// Reads the canonical user text preserved on a visible user transcript record.
+/// 读取可见用户转录记录上保留的规范用户文本。
+fn canonical_user_record_text(user_record: &SessionConversationRecord) -> Option<&str> {
+    user_record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| {
+            metadata
+                .get("canonical_user_text")
+                .or_else(|| metadata.get("canonical_text"))
+        })
+        .and_then(Value::as_str)
+        .or_else(|| Some(user_record.body.as_str()))
 }
 
 /// Returns the canonical user-message indexes used to align visible transcript turns back onto the canonical conversation window.
@@ -270,4 +357,357 @@ fn parse_unix_millis_text(value: &str) -> Option<u128> {
         return None;
     }
     trimmed.parse::<u128>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use vulcan_core::types::ProviderUsageSnapshot;
+
+    use super::*;
+    use crate::conversation_protocol::{SessionConversationMessage, SessionConversationToolCall};
+
+    /// Builds one visible transcript user record for turn-boundary tests.
+    /// 为轮次边界测试构建一条可见用户转录记录。
+    fn user_record(id: &str, created_at: &str, body: &str) -> SessionConversationRecord {
+        SessionConversationRecord {
+            id: id.to_string(),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("用户指令"),
+            body: body.to_string(),
+            metadata: None,
+            created_at: created_at.to_string(),
+        }
+    }
+
+    /// Builds one hidden summary record that closes a logical turn.
+    /// 构建一条用于闭合逻辑轮次的隐藏摘要记录。
+    fn summary_record(id: &str, created_at: &str) -> SessionConversationRecord {
+        SessionConversationRecord {
+            id: id.to_string(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::SummaryOutput,
+            visible: false,
+            title: String::from("Summary"),
+            body: String::from("summary"),
+            metadata: None,
+            created_at: created_at.to_string(),
+        }
+    }
+
+    /// Builds one visible turn-stats record that separates completed turns.
+    /// 构建一条用于分隔已完成轮次的可见统计记录。
+    fn turn_stats_record(id: &str, created_at: &str) -> SessionConversationRecord {
+        SessionConversationRecord {
+            id: id.to_string(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::TurnStats,
+            visible: true,
+            title: String::from("Turn Stats · completed"),
+            body: String::from("stats"),
+            metadata: None,
+            created_at: created_at.to_string(),
+        }
+    }
+
+    /// Builds one canonical user message with the provided local identifier and text.
+    /// 使用指定本地标识与文本构建一条规范用户消息。
+    fn user_message(id: &str, text: &str) -> SessionConversationMessage {
+        SessionConversationMessage {
+            id: id.to_string(),
+            payload: SessionConversationPayload::UserText {
+                text: text.to_string(),
+                attachments: Vec::new(),
+            },
+        }
+    }
+
+    /// Builds one canonical assistant message carrying usage and one optional tool call.
+    /// 构建一条携带用量与可选工具调用的规范助手消息。
+    fn assistant_message(
+        id: &str,
+        usage: ProviderUsageSnapshot,
+        include_tool_call: bool,
+    ) -> SessionConversationMessage {
+        SessionConversationMessage {
+            id: id.to_string(),
+            payload: SessionConversationPayload::Assistant {
+                text: String::from("assistant output"),
+                reasoning: String::new(),
+                provider_message_id: None,
+                provider_message_state: None,
+                usage: Some(usage),
+                tool_calls: include_tool_call
+                    .then(|| SessionConversationToolCall {
+                        id: String::from("tool-item-1"),
+                        tool_call_id: Some(String::from("tool-call-1")),
+                        tool_name: String::from("vulcan_file_list"),
+                        arguments: json!({}),
+                    })
+                    .into_iter()
+                    .collect(),
+            },
+        }
+    }
+
+    /// Verifies an unaligned current turn never inherits historical canonical usage or tool calls.
+    /// 验证无法对齐的当前轮次不会继承历史规范用量或工具调用。
+    #[test]
+    fn current_turn_stats_do_not_inherit_historical_canonical_messages() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-1000", "上一轮"),
+                assistant_message(
+                    "session-1-protocol-assistant-1001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(1000),
+                        output_tokens: Some(200),
+                        total_tokens: Some(1200),
+                        cached_input_tokens: Some(800),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    true,
+                ),
+            ],
+            records: vec![
+                user_record("user-previous", "1000", "上一轮"),
+                summary_record("summary-previous", "1002"),
+                turn_stats_record("stats-previous", "1003"),
+                user_record("user-current", "2000", "当前无工具"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 0);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 0);
+        assert_eq!(stats.output_tokens, 0);
+        assert_eq!(stats.total_tokens, 0);
+        assert_eq!(stats.cached_input_tokens, None);
+    }
+
+    /// Verifies display/runtime layer separation does not map the current record to the first historical user.
+    /// 验证显示层与运行层分离时不会把当前记录映射到首个历史用户。
+    #[test]
+    fn current_turn_stats_align_current_record_when_records_only_hold_active_turn() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-1000", "上一轮"),
+                assistant_message(
+                    "session-1-protocol-assistant-1001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(1000),
+                        output_tokens: Some(200),
+                        total_tokens: Some(1200),
+                        cached_input_tokens: Some(800),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    true,
+                ),
+                user_message("session-1-protocol-user-2000", "当前无工具"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(40),
+                        output_tokens: Some(12),
+                        total_tokens: Some(52),
+                        cached_input_tokens: Some(16),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-current", "2000", "当前无工具"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 40);
+        assert_eq!(stats.output_tokens, 12);
+        assert_eq!(stats.total_tokens, 52);
+        assert_eq!(stats.cached_input_tokens, Some(16));
+    }
+
+    /// Verifies repeated user text does not let a historical user satisfy the ordinal candidate.
+    /// 验证重复用户文本不会让历史用户通过序号候选校验。
+    #[test]
+    fn current_turn_stats_reject_historical_candidate_with_repeated_user_text() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-1000", "继续"),
+                assistant_message(
+                    "session-1-protocol-assistant-1001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(900),
+                        output_tokens: Some(300),
+                        total_tokens: Some(1200),
+                        cached_input_tokens: Some(700),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    true,
+                ),
+                user_message("session-1-protocol-user-2000", "继续"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(30),
+                        output_tokens: Some(9),
+                        total_tokens: Some(39),
+                        cached_input_tokens: Some(12),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-current", "2000", "继续"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 30);
+        assert_eq!(stats.output_tokens, 9);
+        assert_eq!(stats.total_tokens, 39);
+        assert_eq!(stats.cached_input_tokens, Some(12));
+    }
+
+    /// Verifies interleaved user prompt records stay inside the original running turn.
+    /// 验证中途插入的用户提示词记录仍属于原始运行轮次。
+    #[test]
+    fn current_turn_stats_keep_interleaved_user_prompts_inside_same_turn() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-1000", "上一轮"),
+                assistant_message(
+                    "session-1-protocol-assistant-1001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(500),
+                        output_tokens: Some(100),
+                        total_tokens: Some(600),
+                        cached_input_tokens: Some(400),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    true,
+                ),
+                user_message("session-1-protocol-user-2000", "当前任务"),
+                user_message("session-1-protocol-user-2001", "中途补充"),
+                assistant_message(
+                    "session-1-protocol-assistant-2002",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(80),
+                        output_tokens: Some(20),
+                        total_tokens: Some(100),
+                        cached_input_tokens: Some(30),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-current", "2000", "当前任务"),
+                user_record("user-interleaved", "2001", "中途补充"),
+                summary_record(closing_record_id, "2003"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 80);
+        assert_eq!(stats.output_tokens, 20);
+        assert_eq!(stats.total_tokens, 100);
+        assert_eq!(stats.cached_input_tokens, Some(30));
+    }
+
+    /// Verifies compacted windows can still align the current user by the shared creation timestamp.
+    /// 验证压缩后的窗口仍可通过共享创建时间对齐当前用户。
+    #[test]
+    fn compacted_current_turn_stats_align_by_user_record_timestamp() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-2000", "当前有输出"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(50),
+                        output_tokens: Some(25),
+                        total_tokens: Some(75),
+                        cached_input_tokens: Some(10),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-previous", "1000", "上一轮"),
+                summary_record("summary-previous", "1002"),
+                turn_stats_record("stats-previous", "1003"),
+                user_record("user-current", "2000", "当前有输出"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 50);
+        assert_eq!(stats.output_tokens, 25);
+        assert_eq!(stats.total_tokens, 75);
+        assert_eq!(stats.cached_input_tokens, Some(10));
+    }
 }

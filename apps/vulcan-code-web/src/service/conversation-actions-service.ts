@@ -1,5 +1,6 @@
 import type { AiCapabilityKind } from "@/components/composer/composer-model";
 import type {
+  CommandSessionSummary,
   ComposerAttachmentSummary,
   PendingPromptSummary,
   UserPromptEditDraftSummary,
@@ -87,6 +88,69 @@ export async function stopCommandSession(commandSessionId: string, ownerSessionI
   return serviceClient.request<WorkbenchSnapshot>("service_stop_command_session", {
     commandSessionId,
     ownerSessionId: ownerSessionId ?? null,
+  });
+}
+
+// getCommandSessionSnapshot reads one live command-session snapshot without refreshing the full workbench.
+// getCommandSessionSnapshot 读取单条实时命令会话快照，但不刷新完整工作台。
+export async function getCommandSessionSnapshot(
+  commandSessionId: string,
+  ownerSessionId?: string | null,
+): Promise<CommandSessionSummary | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<CommandSessionSummary>("service_get_command_session_snapshot", {
+    commandSessionId,
+    ownerSessionId: ownerSessionId ?? null,
+  });
+}
+
+// TerminalInputEvent describes one structured terminal input sent through the service runtime.
+// TerminalInputEvent 描述一条通过服务运行时发送的结构化终端输入。
+export type TerminalInputEvent =
+  | { kind: "text"; text: string }
+  | { kind: "paste"; text: string }
+  | { kind: "key"; key: string }
+  | { kind: "chord"; key: string; ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean };
+
+// sendCommandSessionInput sends structured input events to one live terminal session.
+// sendCommandSessionInput 向单条实时终端会话发送结构化输入事件。
+export async function sendCommandSessionInput(
+  commandSessionId: string,
+  ownerSessionId: string | null | undefined,
+  inputs: TerminalInputEvent[],
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_send_command_session_input", {
+    request: {
+      commandSessionId,
+      ownerSessionId: ownerSessionId ?? null,
+      inputs,
+    },
+  });
+}
+
+// resizeCommandSession resizes one live terminal session.
+// resizeCommandSession 调整单条实时终端会话尺寸。
+export async function resizeCommandSession(
+  commandSessionId: string,
+  ownerSessionId: string | null | undefined,
+  rows: number,
+  cols: number,
+): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_resize_command_session", {
+    request: {
+      commandSessionId,
+      ownerSessionId: ownerSessionId ?? null,
+      rows,
+      cols,
+    },
   });
 }
 

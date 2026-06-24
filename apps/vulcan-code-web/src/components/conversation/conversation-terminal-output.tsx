@@ -38,6 +38,14 @@ interface TerminalAnsiState {
   underline: boolean;
 }
 
+// TerminalAnsiParseOptions controls context-specific ANSI rendering behavior.
+// TerminalAnsiParseOptions 控制特定场景下的 ANSI 渲染行为。
+interface TerminalAnsiParseOptions {
+  // Treat SGR black background as the surrounding terminal default instead of a painted span.
+  // 将 SGR 黑色背景视为周围终端默认背景，而不是绘制成 span 背景。
+  suppressBlackBackground?: boolean;
+}
+
 // TerminalOutputView renders terminal text with safe ANSI SGR styling.
 // TerminalOutputView 使用安全的 ANSI SGR 样式渲染终端文本。
 export function TerminalOutputView(props: {
@@ -50,13 +58,37 @@ export function TerminalOutputView(props: {
   // Empty-state label used when text is blank.
   // 文本为空时使用的空状态文案。
   emptyText?: string;
+  // Optional keyboard handler for interactive terminal surfaces.
+  // 交互式终端表面使用的可选键盘处理器。
+  onKeyDown?: React.KeyboardEventHandler<HTMLPreElement>;
+  // Optional focus tab index for interactive terminal surfaces.
+  // 交互式终端表面使用的可选聚焦 tab 序号。
+  tabIndex?: number;
+  // Whether black ANSI background should be treated as the terminal surface default.
+  // 是否将黑色 ANSI 背景视为终端表面的默认背景。
+  suppressBlackBackground?: boolean;
 }) {
-  const tokens = React.useMemo(() => parseAnsiTerminalOutput(props.text), [props.text]);
+  const tokens = React.useMemo(
+    () => parseAnsiTerminalOutput(props.text, { suppressBlackBackground: props.suppressBlackBackground }),
+    [props.suppressBlackBackground, props.text],
+  );
   if (tokens.length === 0) {
-    return <pre className={cn("terminal-output-view", props.className)}>{props.emptyText ?? "无输出"}</pre>;
+    return (
+      <pre
+        className={cn("terminal-output-view", props.className)}
+        onKeyDown={props.onKeyDown}
+        tabIndex={props.tabIndex}
+      >
+        {props.emptyText ?? "无输出"}
+      </pre>
+    );
   }
   return (
-    <pre className={cn("terminal-output-view", props.className)}>
+    <pre
+      className={cn("terminal-output-view", props.className)}
+      onKeyDown={props.onKeyDown}
+      tabIndex={props.tabIndex}
+    >
       {tokens.map((token, index) => (
         <span className={token.className || undefined} key={index} style={token.style}>
           {token.text}
@@ -68,7 +100,7 @@ export function TerminalOutputView(props: {
 
 // parseAnsiTerminalOutput converts ANSI SGR sequences into safe React token data.
 // parseAnsiTerminalOutput 将 ANSI SGR 序列转换为安全的 React 片段数据。
-export function parseAnsiTerminalOutput(text: string): TerminalOutputToken[] {
+export function parseAnsiTerminalOutput(text: string, options: TerminalAnsiParseOptions = {}): TerminalOutputToken[] {
   const tokens: TerminalOutputToken[] = [];
   const state = initialAnsiState();
   let buffer = "";
@@ -88,7 +120,7 @@ export function parseAnsiTerminalOutput(text: string): TerminalOutputToken[] {
     flushAnsiBuffer(tokens, buffer, state);
     buffer = "";
     if (csiMatch[2] === "m") {
-      applySgrCodes(state, parseSgrCodes(csiMatch[1] ?? ""));
+      applySgrCodes(state, parseSgrCodes(csiMatch[1] ?? ""), options);
     }
     index += csiMatch[0].length;
   }
@@ -142,11 +174,13 @@ function parseSgrCodes(raw: string): number[] {
 
 // applySgrCodes mutates the active ANSI state for one SGR instruction list.
 // applySgrCodes 根据一组 SGR 指令更新当前 ANSI 状态。
-function applySgrCodes(state: TerminalAnsiState, codes: number[]): void {
+function applySgrCodes(state: TerminalAnsiState, codes: number[], options: TerminalAnsiParseOptions): void {
   for (let index = 0; index < codes.length; index += 1) {
     const code = codes[index] ?? 0;
     if (code === 0) {
       Object.assign(state, initialAnsiState());
+    } else if (code === 40 && options.suppressBlackBackground) {
+      state.backgroundColor = undefined;
     } else if (code === 1) {
       state.bold = true;
     } else if (code === 2) {

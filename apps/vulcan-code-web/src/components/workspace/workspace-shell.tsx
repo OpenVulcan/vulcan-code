@@ -969,15 +969,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           <RefreshCw className={skillHeaderBusyAction === "agent-refresh" ? "spin" : undefined} size={15} />
           <span>{skillHeaderBusyAction === "agent-refresh" ? t("skills.action.refreshing") : t("skills.action.refresh")}</span>
         </button>
-        <button
-          className="skill-action-button secondary"
-          disabled={skillHeaderBusyAction !== null}
-          onClick={() => void runSkillHeaderAction("agent-sync", props.skillActions.onInstallSystemAgentSkills)}
-          type="button"
-        >
-          <PackagePlus className={skillHeaderBusyAction === "agent-sync" ? "spin" : undefined} size={15} />
-          <span>{skillHeaderBusyAction === "agent-sync" ? t("skills.action.syncing") : t("skills.action.syncSystem")}</span>
-        </button>
       </div>
     );
   }, [props.activeSkillSubArea, props.skillActions, runSkillHeaderAction, skillHeaderBusyAction, t]);

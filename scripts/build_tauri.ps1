@@ -1,4 +1,4 @@
-# build_tauri.ps1 builds the new Tauri/WebUI main application.
+﻿# build_tauri.ps1 builds the new Tauri/WebUI main application.
 # build_tauri.ps1 用于构建新的 Tauri/WebUI 主应用。
 # Usage:
 # 用法：
@@ -41,26 +41,85 @@ $WebAppDir = Join-Path $ProjectDir "apps\vulcan-code-web"
 # TauriAppDir 指向 Tauri 桌面壳 crate。
 $TauriAppDir = Join-Path $ProjectDir "apps\vulcan-code-tauri"
 
+# IsWindowsPlatform records whether the current build target is the Windows host platform.
+# IsWindowsPlatform 记录当前构建目标是否为 Windows 宿主平台。
+$IsWindowsPlatform = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+
+# SourceConfigDir points at the repository-owned packaged configuration templates.
+# SourceConfigDir 指向仓库持有的打包配置模板目录。
+$SourceConfigDir = Join-Path $ProjectDir "config"
+
+# SourceResourcesDir points at the repository-owned runtime resource catalog.
+# SourceResourcesDir 指向仓库持有的运行时资源目录。
+$SourceResourcesDir = Join-Path $ProjectDir "crates\vulcan-runtime-assets\resources"
+
+# SourceSystemPromptSkillsDir points at repository-owned system Agent Skills.
+# SourceSystemPromptSkillsDir 指向仓库持有的系统 Agent Skills 目录。
+$SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skills\src\assets\system"
+
 Set-Location $ProjectDir
 
-if (-not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
-    Write-Host "==> Installing WebUI dependencies..."
-    pnpm --dir $WebAppDir install
-}
+# Copy-DirectoryContents overlays one source directory onto one output directory.
+# Copy-DirectoryContents 用于把一个源目录覆盖同步到一个输出目录。
+# SourceDirectory is the directory whose immediate children should be copied.
+# SourceDirectory 表示需要复制其直接子项的源目录。
+# DestinationDirectory is the output directory that receives the copied children.
+# DestinationDirectory 表示接收复制子项的输出目录。
+# Clean removes the existing destination before copying.
+# Clean 表示复制前先删除已有目标目录。
+# This function returns no value and throws when the source directory is unavailable.
+# 此函数不返回值，并在源目录不可用时抛出异常。
+function Copy-DirectoryContents {
+    param(
+        [string]$SourceDirectory,
+        [string]$DestinationDirectory,
+        [switch]$Clean
+    )
 
-Write-Host "==> Building WebUI..."
-pnpm --dir $WebAppDir run build
-if ($LASTEXITCODE -ne 0) {
-    exit $LASTEXITCODE
+    if (-not (Test-Path -LiteralPath $SourceDirectory -PathType Container)) {
+        throw "Missing source directory: $SourceDirectory"
+    }
+
+    if ($Clean -and (Test-Path -LiteralPath $DestinationDirectory)) {
+        Remove-Item -LiteralPath $DestinationDirectory -Recurse -Force
+    }
+
+    New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    Get-ChildItem -LiteralPath $SourceDirectory -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $DestinationDirectory -Recurse -Force
+    }
 }
 
 if ($Release) {
+    if (-not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
+        Write-Host "==> Installing WebUI dependencies..."
+        pnpm --dir $WebAppDir install
+    }
+
+    # Release builds package the static WebUI assets into the desktop shell.
+    # Release 构建会把静态 WebUI 产物打包进桌面壳。
+    Write-Host "==> Building WebUI for release..."
+    pnpm --dir $WebAppDir run build
+    if ($LASTEXITCODE -ne 0) {
+        exit $LASTEXITCODE
+    }
+
     Write-Host "==> Building Tauri shell release..."
-    cargo build -p vulcan-code-tauri --release
+    if ($IsWindowsPlatform) {
+        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper --release
+    }
+    else {
+        cargo build -p vulcan-code-tauri --release
+    }
 }
 else {
     Write-Host "==> Building Tauri shell debug..."
-    cargo build -p vulcan-code-tauri
+    if ($IsWindowsPlatform) {
+        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper
+    }
+    else {
+        cargo build -p vulcan-code-tauri
+    }
 }
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
@@ -73,9 +132,71 @@ $ProfileName = if ($Release) { "release" } else { "debug" }
 # BinaryFileName stores the platform-specific Tauri shell binary name.
 # BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
 $BinaryFileName = "vulcan-code-tauri"
-if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+if ($IsWindowsPlatform) {
     $BinaryFileName = "vulcan-code-tauri.exe"
 }
 
 $BuiltBinaryPath = Join-Path $ProjectDir "target\$ProfileName\$BinaryFileName"
-Write-Host "==> Done. Binary: $BuiltBinaryPath"
+
+# HelperFileName stores the platform-specific Windows console helper binary name.
+# HelperFileName 保存平台相关的 Windows 控制台 helper 二进制名称。
+$HelperFileName = "vulcan-windows-console-helper"
+if ($IsWindowsPlatform) {
+    $HelperFileName = "vulcan-windows-console-helper.exe"
+}
+
+# BuiltHelperPath stores the helper executable built for the same Cargo profile as the shell.
+# BuiltHelperPath 保存与桌面壳相同 Cargo profile 构建出的 helper 可执行文件。
+$BuiltHelperPath = Join-Path $ProjectDir "target\$ProfileName\$HelperFileName"
+
+# OutputBinDir stores the stable runtime binary output directory used by make run.
+# OutputBinDir 保存 make run 使用的稳定运行时二进制输出目录。
+$OutputBinDir = Join-Path $ProjectDir "output\bin"
+
+# OutputBinaryPath stores the copied executable path that users and run scripts should launch.
+# OutputBinaryPath 保存用户与运行脚本应启动的已复制可执行文件路径。
+$OutputBinaryPath = Join-Path $OutputBinDir $BinaryFileName
+
+# OutputHelperPath stores the copied Windows console helper beside the shell binary.
+# OutputHelperPath 保存复制到桌面壳旁边的 Windows 控制台 helper。
+$OutputHelperPath = Join-Path $OutputBinDir $HelperFileName
+
+# OutputConfigDir stores the packaged configuration read by output/bin runtime launches.
+# OutputConfigDir 保存 output/bin 运行时启动读取的打包配置目录。
+$OutputConfigDir = Join-Path $ProjectDir "output\config"
+
+# OutputResourcesDir stores the packaged resource catalog read by output/bin runtime launches.
+# OutputResourcesDir 保存 output/bin 运行时启动读取的打包资源目录。
+$OutputResourcesDir = Join-Path $ProjectDir "output\resources"
+
+# OutputSystemPromptSkillsDir stores packaged system Agent Skills read directly by the runtime.
+# OutputSystemPromptSkillsDir 保存运行时直接读取的打包系统 Agent Skills。
+$OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\system"
+
+if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
+    throw "Built Tauri binary was not found: $BuiltBinaryPath"
+}
+if ($IsWindowsPlatform -and -not (Test-Path -LiteralPath $BuiltHelperPath)) {
+    throw "Built Windows console helper was not found: $BuiltHelperPath"
+}
+
+New-Item -ItemType Directory -Path $OutputBinDir -Force | Out-Null
+Copy-Item -LiteralPath $BuiltBinaryPath -Destination $OutputBinaryPath -Force
+if ($IsWindowsPlatform) {
+    Copy-Item -LiteralPath $BuiltHelperPath -Destination $OutputHelperPath -Force
+}
+
+Write-Host "==> Syncing packaged config..."
+Copy-DirectoryContents -SourceDirectory $SourceConfigDir -DestinationDirectory $OutputConfigDir
+
+Write-Host "==> Syncing packaged resources..."
+Copy-DirectoryContents -SourceDirectory $SourceResourcesDir -DestinationDirectory $OutputResourcesDir
+
+Write-Host "==> Syncing packaged system Agent Skills..."
+Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -DestinationDirectory $OutputSystemPromptSkillsDir -Clean
+
+Write-Host "==> Done. Binary: $OutputBinaryPath"
+if ($IsWindowsPlatform) {
+    Write-Host "==> Done. Windows console helper: $OutputHelperPath"
+}
+

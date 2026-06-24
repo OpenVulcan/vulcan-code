@@ -43,8 +43,36 @@ $WebAppDirPattern = "*$WebAppDir*"
 
 Set-Location $ProjectDir
 
-# PnpmCommand resolves the pnpm executable used for frontend commands.
-# PnpmCommand 解析前端命令使用的 pnpm 可执行文件。
+# BinaryFileName stores the platform-specific Tauri shell binary name.
+# BinaryFileName 保存平台相关的 Tauri 桌面壳二进制名称。
+$BinaryFileName = "vulcan-code-tauri"
+if ([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)) {
+    $BinaryFileName = "vulcan-code-tauri.exe"
+}
+
+# OutputBinDir stores the stable runtime binary output directory produced by make build.
+# OutputBinDir 保存 make build 产出的稳定运行时二进制输出目录。
+$OutputBinDir = Join-Path $ProjectDir "output\bin"
+
+# OutputBinaryPath stores the exact executable that this script launches.
+# OutputBinaryPath 保存本脚本启动的确切可执行文件路径。
+$OutputBinaryPath = Join-Path $OutputBinDir $BinaryFileName
+
+if (-not (Test-Path -LiteralPath $OutputBinaryPath)) {
+    # BuildCommand tells the user which build mode should produce the missing runtime executable.
+    # BuildCommand 告知用户应使用哪种构建模式产出缺失的运行时可执行文件。
+    $BuildCommand = if ($Release) { "./make.ps1 build release" } else { "./make.ps1 build" }
+    throw "Missing built Tauri binary: $OutputBinaryPath. Run $BuildCommand first."
+}
+
+if ($Release) {
+    Write-Host "==> Running Vulcan Code Tauri release from output/bin..."
+    & $OutputBinaryPath
+    exit $LASTEXITCODE
+}
+
+# PnpmCommand resolves the pnpm executable used for the debug frontend dev server.
+# PnpmCommand 解析 debug 前端开发服务器使用的 pnpm 可执行文件。
 $PnpmCommand = Get-Command "pnpm.cmd" -ErrorAction SilentlyContinue
 if (-not $PnpmCommand) {
     $PnpmCommand = Get-Command "pnpm" -ErrorAction SilentlyContinue
@@ -58,21 +86,13 @@ if (-not (Test-Path -LiteralPath (Join-Path $WebAppDir "node_modules"))) {
     & $PnpmCommand.Source --dir $WebAppDir install
 }
 
-if ($Release) {
-    Write-Host "==> Building WebUI for release run..."
-    & $PnpmCommand.Source --dir $WebAppDir run build
-    if ($LASTEXITCODE -ne 0) {
-        exit $LASTEXITCODE
-    }
-
-    Write-Host "==> Running Vulcan Code Tauri release..."
-    cargo run -p vulcan-code-tauri --release
-    exit $LASTEXITCODE
-}
-
 # ViteProcess stores the background frontend dev server process for the debug Tauri shell.
 # ViteProcess 保存 debug Tauri 桌面壳使用的前端开发服务器后台进程。
 $ViteProcess = $null
+
+# RunExitCode defaults to failure until the output binary exits with a concrete status.
+# RunExitCode 在 output 二进制返回明确状态前默认表示失败。
+$RunExitCode = 1
 
 # ViteStartedProcessIds records existing WebUI node processes before launch.
 # ViteStartedProcessIds 记录启动前已经存在的 WebUI node 进程。
@@ -112,8 +132,8 @@ try {
         throw "WebUI dev server did not become ready at http://127.0.0.1:5173"
     }
 
-    Write-Host "==> Running Vulcan Code Tauri debug..."
-    cargo run -p vulcan-code-tauri
+    Write-Host "==> Running Vulcan Code Tauri debug from output/bin..."
+    & $OutputBinaryPath
     $RunExitCode = $LASTEXITCODE
 }
 finally {

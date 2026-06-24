@@ -3544,7 +3544,7 @@ button {
 .conversation-session-terminal-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   width: 100%;
@@ -3598,7 +3598,7 @@ button {
   font-size: 11px;
 }
 
-.conversation-session-terminal-stop {
+.conversation-session-terminal-action {
   justify-self: end;
   flex: 0 0 auto;
   height: 22px;
@@ -3617,18 +3617,23 @@ button {
   transition: color 120ms ease, opacity 120ms ease;
 }
 
-.conversation-session-terminal-stop svg {
+.conversation-session-terminal-action svg {
   flex: 0 0 auto;
   height: 13px;
   width: 13px;
 }
 
-.conversation-session-terminal-stop:not(:disabled):hover {
+.conversation-session-terminal-action:not(:disabled):hover {
+  color: var(--foreground);
+  background: transparent;
+}
+
+.conversation-session-terminal-stop-button:not(:disabled):hover {
   color: var(--destructive);
   background: transparent;
 }
 
-.conversation-session-terminal-stop:disabled {
+.conversation-session-terminal-action:disabled {
   opacity: 0.45;
   cursor: default;
 }
@@ -3645,6 +3650,25 @@ button {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.conversation-session-terminal-screen-dialog {
+  width: min(920px, calc(100vw - 32px));
+  max-width: min(920px, calc(100vw - 32px));
+}
+
+.conversation-session-terminal-screen-frame {
+  height: clamp(320px, calc(100vh - 220px), 640px);
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  background: #050505;
+  color: #f4f4f5;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
 }
 
 .terminal-stop-confirm-dialog {
@@ -4003,7 +4027,7 @@ button {
 
 .workspace-tool-panel-menu-row.conversation-session-terminal-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 22px;
+  grid-template-columns: minmax(0, 1fr) 22px 22px;
   cursor: default;
 }
 
@@ -8959,6 +8983,15 @@ button {
 
 .terminal-output-view {
   color: var(--muted-foreground);
+}
+
+.terminal-output-view.conversation-session-terminal-screen-frame {
+  background: #050505;
+  color: #f4f4f5;
+  height: clamp(320px, calc(100vh - 220px), 640px);
+  font-size: 12px;
+  white-space: pre;
+  overflow-wrap: normal;
 }
 
 .terminal-ansi-bold {

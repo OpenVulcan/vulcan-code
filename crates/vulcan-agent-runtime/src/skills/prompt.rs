@@ -15,6 +15,9 @@ pub fn global_config_from_persisted(
     vulcan_prompt_skills::PromptSkillsGlobalConfig {
         enabled: config.enabled,
         user_skill_root: config.user_skill_root.clone(),
+        system_skill_root: Some(
+            vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory(),
+        ),
         default_skill_state: state_from_persisted(config.default_skill_state),
         skill_overrides,
     }

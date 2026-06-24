@@ -79,7 +79,7 @@ use vulcan_agent_runtime::{
         apply_terminal_execution_report_to_state, collapse_streaming_thinking_in_state,
     },
     stream_runtime_run_with_intervention,
-    tooling::CommandSessionRuntime,
+    tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
     turn_stats::build_session_turn_stats_from_state,
     workbench_ai_capability_router::{
         WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
@@ -2208,9 +2208,6 @@ async fn dispatch_service_rpc(
         "service_refresh_agent_skills_catalog" => {
             rpc_json_result(service_refresh_agent_skills_catalog(state).await)
         }
-        "service_install_system_agent_skills" => {
-            rpc_json_result(service_install_system_agent_skills(state).await)
-        }
         "service_set_agent_skills_enabled" => rpc_json_result(
             service_set_agent_skills_enabled(state, rpc_required_param(&params, "enabled")?).await,
         ),
@@ -2311,6 +2308,22 @@ async fn dispatch_service_rpc(
                 rpc_optional_param(&params, "ownerSessionId")?,
             )
             .await,
+        ),
+        "service_get_command_session_snapshot" => rpc_json_result(
+            service_get_command_session_snapshot(
+                state,
+                rpc_required_param(&params, "commandSessionId")?,
+                rpc_optional_param(&params, "ownerSessionId")?,
+            )
+            .await,
+        ),
+        "service_send_command_session_input" => rpc_json_result(
+            service_send_command_session_input(app, state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
+        "service_resize_command_session" => rpc_json_result(
+            service_resize_command_session(app, state, rpc_required_param(&params, "request")?)
+                .await,
         ),
         "service_get_user_prompt_edit_draft" => rpc_json_result(
             service_get_user_prompt_edit_draft(
@@ -3109,58 +3122,6 @@ async fn service_refresh_agent_skills_catalog(
     state: SharedServiceBridgeState,
 ) -> Result<WorkbenchSnapshot, String> {
     refresh_workbench_snapshot(state).await
-}
-
-/// Installs embedded system Agent Skills and refreshes the WebUI snapshot.
-/// 安装内置系统 Agent Skills 并刷新 WebUI 快照。
-async fn service_install_system_agent_skills(
-    state: SharedServiceBridgeState,
-) -> Result<WorkbenchSnapshot, String> {
-    let configuration = provider_configuration_from_state(&state)?;
-    let runtime_config = vulcan_agent_runtime::skills::prompt::global_config_from_persisted(
-        &configuration.prompt_skills,
-    );
-    let source_root = vulcan_runtime_assets::resolve_system_prompt_skills_resource_directory();
-    if system_prompt_skills_source_covers_embedded_inventory(&source_root) {
-        vulcan_prompt_skills::install_system_prompt_skills_from_source(
-            source_root,
-            vulcan_prompt_skills::configured_system_skill_root(&runtime_config),
-        )
-    } else {
-        vulcan_prompt_skills::install_embedded_system_prompt_skills(&runtime_config)
-    }
-    .map_err(|error| {
-        format!(
-            "同步系统 Agent Skills 失败（{}）：{}",
-            error.path.display(),
-            error.message
-        )
-    })?;
-    refresh_workbench_snapshot(state).await
-}
-
-/// Returns whether a packaged system Agent Skills resource directory covers every embedded skill.
-/// 返回打包系统 Agent Skills 资源目录是否覆盖当前所有内嵌技能。
-fn system_prompt_skills_source_covers_embedded_inventory(source_root: &Path) -> bool {
-    if !source_root.is_dir() {
-        return false;
-    }
-
-    let Ok(entries) = fs::read_dir(source_root) else {
-        return false;
-    };
-    let packaged_names = entries
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            (path.is_dir() && path.join(vulcan_prompt_skills::SKILL_FILE_NAME).is_file())
-                .then(|| entry.file_name().to_string_lossy().to_string())
-        })
-        .collect::<BTreeSet<_>>();
-
-    vulcan_prompt_skills::embedded_system_skill_names()
-        .into_iter()
-        .all(|name| packaged_names.contains(&name))
 }
 
 /// Persists the Agent Skills global switch and refreshes only the Agent Skills catalog.
@@ -5598,6 +5559,161 @@ async fn service_stop_command_session(
     agent_runtime
         .command_session_runtime
         .stop_session(owner_session_id, command_session_id, Some(1500))
+        .await?;
+    let workspace_snapshot =
+        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    store_current_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &agent_runtime,
+        workspace_snapshot,
+    )
+}
+
+/// Reads one live command-session snapshot without rebuilding the full WebUI workbench.
+/// 读取单条实时命令会话快照，但不重建完整 WebUI 工作台。
+async fn service_get_command_session_snapshot(
+    state: SharedServiceBridgeState,
+    command_session_id: String,
+    owner_session_id: Option<String>,
+) -> Result<CommandSessionSummary, String> {
+    let (_, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let command_session_id = command_session_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid command session id '{command_session_id}': {error}"))?;
+    let snapshot = agent_runtime
+        .command_session_runtime
+        .try_snapshot_session_by_id(command_session_id)
+        .ok_or_else(|| {
+            format!("Command session `{command_session_id}` was not found in the live runtime.")
+        })?;
+    if let Some(owner_session_id) = owner_session_id {
+        let owner_session_id = owner_session_id
+            .parse::<SessionId>()
+            .map_err(|error| format!("invalid owner session id '{owner_session_id}': {error}"))?;
+        if snapshot.owner_session_id != owner_session_id {
+            return Err(format!(
+                "Command session `{command_session_id}` does not belong to owner `{owner_session_id}`."
+            ));
+        }
+    }
+    Ok(command_session_summary_from_snapshot(snapshot))
+}
+
+/// Request body for sending structured input to one live command session.
+/// 向单条实时命令会话发送结构化输入的请求体。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandSessionInputRequest {
+    /// Target command session identifier.
+    /// 目标命令会话标识。
+    command_session_id: String,
+    /// Optional owner conversation/session identifier.
+    /// 可选归属会话标识。
+    owner_session_id: Option<String>,
+    /// Ordered terminal input events.
+    /// 保序终端输入事件。
+    inputs: Vec<CommandSessionInputEvent>,
+}
+
+/// Request body for resizing one live command session.
+/// 调整单条实时命令会话尺寸的请求体。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandSessionResizeRequest {
+    /// Target command session identifier.
+    /// 目标命令会话标识。
+    command_session_id: String,
+    /// Optional owner conversation/session identifier.
+    /// 可选归属会话标识。
+    owner_session_id: Option<String>,
+    /// Desired terminal row count.
+    /// 期望终端行数。
+    rows: u16,
+    /// Desired terminal column count.
+    /// 期望终端列数。
+    cols: u16,
+}
+
+/// Resolves command-session ids and owner ids for service terminal actions.
+/// 为服务终端动作解析命令会话标识与归属标识。
+fn resolve_service_command_session_ids(
+    agent_runtime: &AgentRuntimeBridge,
+    command_session_id: String,
+    owner_session_id: Option<String>,
+) -> Result<(SessionId, SessionId), String> {
+    let command_session_id = command_session_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("invalid command session id '{command_session_id}': {error}"))?;
+    let owner_session_id = match owner_session_id {
+        Some(owner_session_id) => owner_session_id
+            .parse::<SessionId>()
+            .map_err(|error| format!("invalid owner session id '{owner_session_id}': {error}"))?,
+        None => agent_runtime
+            .command_session_runtime
+            .try_snapshot_session_by_id(command_session_id)
+            .map(|snapshot| snapshot.owner_session_id)
+            .ok_or_else(|| {
+                format!("Command session `{command_session_id}` was not found in the live runtime.")
+            })?,
+    };
+    Ok((command_session_id, owner_session_id))
+}
+
+/// Sends structured input to one live command session and rebuilds the WebUI snapshot.
+/// 向单条实时命令会话发送结构化输入并重建 WebUI 快照。
+async fn service_send_command_session_input(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: CommandSessionInputRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (command_session_id, owner_session_id) = resolve_service_command_session_ids(
+        &agent_runtime,
+        request.command_session_id,
+        request.owner_session_id,
+    )?;
+    agent_runtime
+        .command_session_runtime
+        .write_session_input_events(owner_session_id, command_session_id, request.inputs)
+        .await?;
+    let workspace_snapshot =
+        current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    store_current_workbench_snapshot(
+        &app,
+        &state,
+        &controller_runtime,
+        &agent_runtime,
+        workspace_snapshot,
+    )
+}
+
+/// Resizes one live command session and rebuilds the WebUI snapshot.
+/// 调整单条实时命令会话大小并重建 WebUI 快照。
+async fn service_resize_command_session(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: CommandSessionResizeRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let (controller_runtime, agent_runtime, _, _, _, _) = runtime_parts_from_state(&state)?;
+    let (command_session_id, owner_session_id) = resolve_service_command_session_ids(
+        &agent_runtime,
+        request.command_session_id,
+        request.owner_session_id,
+    )?;
+    agent_runtime
+        .command_session_runtime
+        .resize_session(
+            owner_session_id,
+            command_session_id,
+            request.rows,
+            request.cols,
+        )
         .await?;
     let workspace_snapshot =
         current_workspace_snapshot_from_shared_state(&state)?.ok_or_else(|| {
@@ -27198,6 +27314,11 @@ fn command_sessions(
         owner_session_id: None,
         cwd: None,
         shell_label: None,
+        backend: None,
+        screen_frame_seq: None,
+        screen_rows: None,
+        screen_cols: None,
+        screen_text: None,
         exit_code: None,
         failure_reason: None,
         lost: false,
@@ -27223,6 +27344,11 @@ fn command_session_summary_from_snapshot(
         owner_session_id: Some(snapshot.owner_session_id.to_string()),
         cwd: Some(snapshot.cwd.display().to_string()),
         shell_label: Some(snapshot.shell_label),
+        backend: Some(snapshot.backend.as_str().to_string()),
+        screen_frame_seq: snapshot.screen_frame_seq,
+        screen_rows: snapshot.screen_rows,
+        screen_cols: snapshot.screen_cols,
+        screen_text: snapshot.screen_text,
         exit_code: snapshot.exit_code,
         failure_reason: snapshot.failure_reason,
         lost: false,

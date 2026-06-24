@@ -864,6 +864,7 @@ fn append_shared_user_prompt_record_with_attachments(
     attachments: Vec<ConversationAttachment>,
 ) {
     runtime_state.ui_state.unread = false;
+    runtime_state.last_safe_provider_request_count = None;
     let message_id = format!("session-{session_id}-protocol-user-{now}");
     append_user_text_message(
         &mut runtime_state.conversation_state,

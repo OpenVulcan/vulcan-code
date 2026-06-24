@@ -163,8 +163,6 @@ export type TranslationKey =
   | "skills.action.refresh"
   | "skills.action.refreshing"
   | "skills.action.installLua"
-  | "skills.action.syncSystem"
-  | "skills.action.syncing"
   | "skills.action.install"
   | "skills.action.installing"
   | "skills.action.cancel"
@@ -384,8 +382,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.action.refresh": "刷新",
     "skills.action.refreshing": "刷新中",
     "skills.action.installLua": "安装 LuaSkills",
-    "skills.action.syncSystem": "同步系统技能",
-    "skills.action.syncing": "同步中",
     "skills.action.install": "安装",
     "skills.action.installing": "安装中",
     "skills.action.cancel": "取消",
@@ -602,8 +598,6 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "skills.action.refresh": "Refresh",
     "skills.action.refreshing": "Refreshing",
     "skills.action.installLua": "Install LuaSkills",
-    "skills.action.syncSystem": "Sync System Skills",
-    "skills.action.syncing": "Syncing",
     "skills.action.install": "Install",
     "skills.action.installing": "Installing",
     "skills.action.cancel": "Cancel",

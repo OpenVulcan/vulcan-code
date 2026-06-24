@@ -2395,6 +2395,26 @@ pub struct CommandSessionSummary {
     /// 宿主选择的稳定 shell 标签。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_label: Option<String>,
+    /// Concrete backend label reported by the host runtime.
+    /// 宿主运行时报告的具体后端标签。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    /// Latest screen frame sequence reported by frame-capable terminal sessions.
+    /// 具备屏幕帧能力的终端会话报告的最新屏幕帧序号。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_frame_seq: Option<u64>,
+    /// Latest terminal row count reported by frame-capable terminal sessions.
+    /// 具备屏幕帧能力的终端会话报告的最新终端行数。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_rows: Option<u16>,
+    /// Latest terminal column count reported by frame-capable terminal sessions.
+    /// 具备屏幕帧能力的终端会话报告的最新终端列数。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_cols: Option<u16>,
+    /// Latest renderable screen text reported by frame-capable terminal sessions.
+    /// 具备屏幕帧能力的终端会话报告的最新可渲染屏幕内容。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub screen_text: Option<String>,
     /// Optional process exit code captured by the host.
     /// 宿主捕获到的可选进程退出码。
     #[serde(skip_serializing_if = "Option::is_none")]

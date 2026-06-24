@@ -24,9 +24,6 @@ export interface SkillActionProps {
   // Refreshes prompt-based Agent Skills.
   // 刷新基于提示词的 Agent Skills。
   onRefreshAgentSkills: () => Promise<void>
-  // Syncs bundled system Agent Skills.
-  // 同步内置系统 Agent Skills。
-  onInstallSystemAgentSkills: () => Promise<void>
   // Toggles the global Agent Skills switch.
   // 切换 Agent Skills 全局开关。
   onSetAgentSkillsEnabled: (enabled: boolean) => Promise<void>
@@ -41,7 +38,7 @@ export type SkillSubAreaId = "lua" | "agent"
 
 // SkillHeaderBusyActionId identifies one title-bar skill action currently showing feedback.
 // SkillHeaderBusyActionId 标识当前正在标题栏展示反馈的技能动作。
-export type SkillHeaderBusyActionId = "lua-refresh" | "agent-refresh" | "agent-sync"
+export type SkillHeaderBusyActionId = "lua-refresh" | "agent-refresh"
 
 // SkillHeaderSummary describes the active skill page header copy.
 // SkillHeaderSummary 描述当前技能页标题文案。
