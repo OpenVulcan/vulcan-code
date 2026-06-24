@@ -12,7 +12,7 @@ use crate::model::{
     PendingPromptPanelEntry, PendingPromptPanelEntryState, SessionAddonNamespace,
     SessionAddonState, SessionRuntimeControls,
 };
-use vulcan_context::SessionMessageKind;
+use vulcan_context::{SessionConversationRecord, SessionMessageKind};
 use vulcan_session_boundary::{
     SessionBoundaryEvent, SessionBoundaryEventKind, SessionEventScope, SessionEventVisibility,
     SessionLifecycleBeginRequest, SessionLifecycleFinishRequest, SessionLifecycleHook,
@@ -205,6 +205,172 @@ fn lightweight_state_startup_load_rehydrates_conversation_from_segmented_jsonl()
     assert_eq!(
         restored_runtime_state.conversation_state.records[1].body,
         assistant_message.body
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies records-only runtime state still replays provider-visible messages from segmented JSONL.
+/// 验证仅有 records 的运行态仍会从分段 JSONL 重放 Provider 可见消息。
+#[test]
+fn records_only_state_startup_load_rehydrates_provider_messages_from_segmented_jsonl() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-workspace-record-only-replay-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7012);
+    let session_dir = create_segmented_session(
+        &root,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-context"),
+            created_date: String::from("2026-06-24"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-context")),
+            title: Some(String::from("record only replay")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create session");
+    let user_message = SessionMessageEntry {
+        id: String::from("message-user"),
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::Transcript,
+        visible: true,
+        title: String::from("User"),
+        body: String::from("之前的问题"),
+        metadata: None,
+        created_at: String::from("101"),
+    };
+    let assistant_message = SessionMessageEntry {
+        id: String::from("message-assistant"),
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::AssistantOutput,
+        visible: true,
+        title: String::from("AI"),
+        body: String::from("之前的回答"),
+        metadata: None,
+        created_at: String::from("102"),
+    };
+    append_segmented_session_message_update(
+        &session_dir,
+        &[user_message.clone(), assistant_message.clone()],
+    )
+    .expect("append transcript");
+    let mut records_only_runtime_state = SessionRuntimeStateEntry {
+        active_model_id: Some(String::from("model-alpha")),
+        conversation_state: SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: String::from("display-only-record"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("AI"),
+                body: String::from("仅显示记录"),
+                metadata: None,
+                created_at: String::from("99"),
+            }],
+            continuation: Default::default(),
+        },
+        updated_at: String::from("103"),
+        ..SessionRuntimeStateEntry::default()
+    };
+
+    hydrate_runtime_state_from_segmented_replay_if_missing(
+        session_id,
+        &session_dir,
+        &mut records_only_runtime_state,
+    )
+    .expect("rehydrate runtime state");
+
+    assert_eq!(
+        records_only_runtime_state.active_model_id.as_deref(),
+        Some("model-alpha")
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.messages.len(),
+        2
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.records.len(),
+        2
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.records[0].body,
+        user_message.body
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.records[1].body,
+        assistant_message.body
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// Verifies records-only runtime state is preserved when no segmented dialogue replay exists.
+/// 验证没有分段对话可重放时会保留仅有 records 的运行态。
+#[test]
+fn records_only_state_without_replay_preserves_existing_records() {
+    let root = std::env::temp_dir().join(format!(
+        "vulcan-workspace-record-only-no-replay-test-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = SessionId::from_u128(7013);
+    let session_dir = create_segmented_session(
+        &root,
+        SegmentedSessionCreateRequest {
+            session_id: session_id.to_string(),
+            project_tag: String::from("project-context"),
+            created_date: String::from("2026-06-24"),
+            created_at: String::from("100"),
+            project_id: Some(String::from("project-context")),
+            title: Some(String::from("record only no replay")),
+            title_source: Some(String::from("test")),
+            segment_policy: SegmentPolicy::default(),
+        },
+    )
+    .expect("create session");
+    let mut records_only_runtime_state = SessionRuntimeStateEntry {
+        conversation_state: SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: String::from("display-only-record"),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::AssistantOutput,
+                visible: true,
+                title: String::from("AI"),
+                body: String::from("仅显示记录"),
+                metadata: None,
+                created_at: String::from("99"),
+            }],
+            continuation: Default::default(),
+        },
+        updated_at: String::from("103"),
+        ..SessionRuntimeStateEntry::default()
+    };
+
+    hydrate_runtime_state_from_segmented_replay_if_missing(
+        session_id,
+        &session_dir,
+        &mut records_only_runtime_state,
+    )
+    .expect("rehydrate runtime state");
+
+    assert!(
+        records_only_runtime_state
+            .conversation_state
+            .messages
+            .is_empty()
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.records.len(),
+        1
+    );
+    assert_eq!(
+        records_only_runtime_state.conversation_state.records[0].body,
+        "仅显示记录"
     );
 
     let _ = std::fs::remove_dir_all(root);

@@ -691,7 +691,7 @@ fn hydrate_runtime_state_from_segmented_replay_if_missing(
     session_dir: &std::path::Path,
     runtime_state: &mut SessionRuntimeStateEntry,
 ) -> Result<(), String> {
-    if runtime_state_has_concrete_conversation_context(runtime_state) {
+    if runtime_state_has_provider_dialogue_context(runtime_state) {
         return Ok(());
     }
     let Some(replay) = replay_segmented_session_context(session_dir)? else {
@@ -716,13 +716,10 @@ fn hydrate_runtime_state_from_segmented_replay_if_missing(
     Ok(())
 }
 
-/// Returns whether a runtime state already carries concrete transcript context.
-/// 返回运行态是否已经携带具体转录上下文。
-fn runtime_state_has_concrete_conversation_context(
-    runtime_state: &SessionRuntimeStateEntry,
-) -> bool {
+/// Returns whether a runtime state already carries provider-visible canonical dialogue messages.
+/// 判断运行态是否已经携带 Provider 可见的规范对话消息。
+fn runtime_state_has_provider_dialogue_context(runtime_state: &SessionRuntimeStateEntry) -> bool {
     !runtime_state.conversation_state.messages.is_empty()
-        || !runtime_state.conversation_state.records.is_empty()
 }
 
 /// Builds the default empty workspace snapshot used before any real project has been added.
