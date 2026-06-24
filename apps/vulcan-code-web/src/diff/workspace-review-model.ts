@@ -66,8 +66,8 @@ export function activeWorkbenchSurfaceId(workbench: WorkbenchSnapshot, selectedC
   return parentConversationId;
 }
 
-// selectedConversationProjectId returns the project id for the currently visible conversation or draft.
-// selectedConversationProjectId 返回当前可见会话或草稿所属的项目标识。
+// selectedConversationProjectId returns the explicit project id for the currently visible conversation or draft.
+// selectedConversationProjectId 返回当前可见会话或草稿的明确项目标识。
 export function selectedConversationProjectId(
   workbench: WorkbenchSnapshot,
   selectedConversationId: string | null | undefined,
@@ -82,14 +82,14 @@ export function selectedConversationProjectId(
     ? workbench.conversations.find((item) => item.id === activeSurfaceId)
       ?? workbench.conversations.find((item) => item.id === parentConversationId)
     : null;
-  if (conversation?.projectId) {
-    return conversation.projectId;
+  if (!conversation?.projectId) {
+    return null;
   }
-  return conversation ? projectForConversation(workbench, conversation)?.id ?? null : workbench.projects[0]?.id ?? null;
+  return workbench.projects.some((project) => project.id === conversation.projectId) ? conversation.projectId : null;
 }
 
-// selectedConversationWorkspacePath returns the project path for the currently visible conversation or draft.
-// selectedConversationWorkspacePath 返回当前可见会话或草稿所属的项目路径。
+// selectedConversationWorkspacePath returns the explicit project path for the currently visible conversation or draft.
+// selectedConversationWorkspacePath 返回当前可见会话或草稿的明确项目路径。
 export function selectedConversationWorkspacePath(
   workbench: WorkbenchSnapshot,
   selectedConversationId: string | null | undefined,
@@ -101,24 +101,26 @@ export function selectedConversationWorkspacePath(
   const activeSurfaceId = activeWorkbenchSurfaceId(workbench, selectedConversationId);
   const parentConversationId = selectedConversationId ?? workbench.selectedConversationId ?? null;
   if (!activeSurfaceId) {
-    return workbench.projects[0]?.path ?? null;
+    return null;
   }
   const conversation = workbench.conversations.find((item) => item.id === activeSurfaceId)
     ?? workbench.conversations.find((item) => item.id === parentConversationId);
   if (!conversation) {
-    return workbench.projects[0]?.path ?? null;
+    return null;
   }
   return projectForConversation(workbench, conversation)?.path ?? null;
 }
 
-// projectForConversation resolves a conversation owner project with the first project as fallback.
-// projectForConversation 解析会话所属项目，并使用首个项目作为兜底。
+// projectForConversation resolves a conversation owner project only from an explicit project id.
+// projectForConversation 仅从明确项目标识解析会话所属项目。
 function projectForConversation(
   workbench: WorkbenchSnapshot,
   conversation: ConversationSummary,
 ): ProjectSummary | null {
-  const fallbackProject = workbench.projects[0] ?? null;
-  return workbench.projects.find((project) => project.id === conversation.projectId) ?? fallbackProject;
+  if (!conversation.projectId) {
+    return null;
+  }
+  return workbench.projects.find((project) => project.id === conversation.projectId) ?? null;
 }
 
 // diffSnapshotFromWorkspaceResponseAsync converts backend Git response through the worker-only parser.

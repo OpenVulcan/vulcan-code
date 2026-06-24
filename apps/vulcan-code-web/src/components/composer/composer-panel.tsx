@@ -420,7 +420,7 @@ export function ComposerPanel(props: {
   const [aiCapabilityTargetOrder, setAiCapabilityTargetOrder] = React.useState<Map<AiCapabilityKind, string[]>>(() => new Map());
   // reasoningEffort stores the backend-synchronized reasoning-effort selection.
   // reasoningEffort 保存与后端同步的思考档位选择。
-  const [reasoningEffort, setReasoningEffort] = React.useState("x-high");
+  const [reasoningEffort, setReasoningEffort] = React.useState("");
   // isComposerRunning stores the local send/stop preview state.
   // isComposerRunning 保存输入区发送/停止的本地预览状态。
   const [isComposerRunning, setIsComposerRunning] = React.useState(false);
@@ -523,6 +523,14 @@ export function ComposerPanel(props: {
   // serviceSelectedReasoningEffort mirrors the active backend-selected effort when available.
   // serviceSelectedReasoningEffort 在可用时镜像后端选中的生效思考档位。
   const serviceSelectedReasoningEffort = props.reasoningSelection?.selectedEffort;
+  // submittedReasoningEffort is non-null only when the backend selector confirms the value.
+  // submittedReasoningEffort 仅在后端选择器确认该值时才为非空。
+  const submittedReasoningEffort = React.useMemo(() => {
+    if (!props.reasoningSelection?.options.some((option) => option.value === reasoningEffort)) {
+      return null;
+    }
+    return reasoningEffort;
+  }, [props.reasoningSelection, reasoningEffort]);
 
   React.useEffect(() => {
     if (serviceSelectedReasoningEffort && serviceSelectedReasoningEffort !== reasoningEffort) {
@@ -644,7 +652,7 @@ export function ComposerPanel(props: {
         prompt,
         attachments: submittedAttachments,
         executionMode,
-        reasoningEffort,
+        reasoningEffort: submittedReasoningEffort,
         disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
         disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
         aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
@@ -674,7 +682,7 @@ export function ComposerPanel(props: {
     } finally {
       setIsComposerRunning(false);
     }
-  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, reasoningEffort]);
+  }, [aiCapabilityTargetOrder, attachments, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, draftInput, executionMode, isComposerRunning, props, submittedReasoningEffort]);
 
   // handleComposerStop stops the active backend conversation without consuming draft text.
   // handleComposerStop 在不消费草稿文本的前提下停止活跃后端会话。
@@ -828,7 +836,7 @@ export function ComposerPanel(props: {
               prompt: objective,
               attachments: [],
               executionMode,
-              reasoningEffort,
+              reasoningEffort: submittedReasoningEffort,
               disabledAiCapabilityKinds: Array.from(disabledAiCapabilityKinds),
               disabledAiCapabilityTargetSelectors: Array.from(disabledAiCapabilityTargetSelectors),
               aiCapabilityTargetOrderOverrides: serializeAiCapabilityTargetOrder(aiCapabilityTargetOrder),
@@ -844,7 +852,7 @@ export function ComposerPanel(props: {
     } finally {
       setGoalSaving(false);
     }
-  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, reasoningEffort, visibleSessionGoal]);
+  }, [aiCapabilityTargetOrder, disabledAiCapabilityKinds, disabledAiCapabilityTargetSelectors, executionMode, goalDialogMode, goalObjectiveDraft, goalTokenBudgetDraft, isComposerRunning, props, submittedReasoningEffort, visibleSessionGoal]);
 
   // handleGoalStatusToggle pauses or resumes the current goal.
   // handleGoalStatusToggle 暂停或恢复当前目标。

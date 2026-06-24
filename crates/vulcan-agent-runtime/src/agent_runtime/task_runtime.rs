@@ -2501,12 +2501,11 @@ fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value, String> {
             "`spawn_agent` arguments must be a JSON object.",
         ));
     };
-    let prompt = string_field(&map, &["message", "prompt", "instructions"]).ok_or_else(|| {
+    let prompt = string_field(&map, &["message"]).ok_or_else(|| {
         String::from("`spawn_agent` requires `message` with the child-agent instruction.")
     })?;
-    let task_id = string_field(&map, &["task_name", "task_id", "name"]);
-    let agent_type = string_field(&map, &["agent_type", "agent", "subagent"]);
-    let agent_profile = string_field(&map, &["agent_profile", "profile", "subagent_profile_id"]);
+    let task_id = string_field(&map, &["task_name"]);
+    let agent_type = string_field(&map, &["agent_type"]);
     let description = string_field(&map, &["description"])
         .or_else(|| task_id.clone())
         .or_else(|| build_task_prompt_preview(&prompt));
@@ -2520,15 +2519,6 @@ fn task_tool_args_from_spawn_agent_args(args: Value) -> Result<Value, String> {
     }
     if let Some(agent_type) = agent_type {
         task_args.insert(String::from("subagent"), Value::String(agent_type));
-    }
-    if let Some(agent_profile) = agent_profile {
-        task_args.insert(
-            String::from("profile"),
-            Value::String(agent_profile.clone()),
-        );
-        task_args
-            .entry(String::from("subagent"))
-            .or_insert(Value::String(agent_profile));
     }
     for key in [
         "inherit_parent_config",
@@ -2576,12 +2566,9 @@ fn parse_subagent_message_tool_arguments(
     let Value::Object(map) = args else {
         return Err(format!("`{tool_name}` arguments must be a JSON object."));
     };
-    let target = string_field(
-        &map,
-        &["target", "task_name", "task_id", "agent_id", "name"],
-    )
-    .ok_or_else(|| format!("`{tool_name}` requires `target`."))?;
-    let message = string_field(&map, &["message", "prompt", "instructions"])
+    let target = string_field(&map, &["target"])
+        .ok_or_else(|| format!("`{tool_name}` requires `target`."))?;
+    let message = string_field(&map, &["message"])
         .ok_or_else(|| format!("`{tool_name}` requires `message`."))?;
     let target = normalize_public_task_identifier(&target)?;
     if message.trim().is_empty() {
@@ -5894,6 +5881,37 @@ mod tests {
                 "tools": ["image_generation"]
             })
         );
+    }
+
+    /// Rejects alias-only spawn arguments that are not part of the tool schema.
+    /// 拒绝未出现在工具 Schema 中的 spawn_agent 别名参数。
+    #[test]
+    fn spawn_agent_arguments_reject_alias_only_message() {
+        let error = task_tool_args_from_spawn_agent_args(json!({
+            "prompt": "Generate a lake image and return the file path.",
+            "task_id": "image-worker-a"
+        }))
+        .expect_err("alias-only spawn arguments should be rejected");
+
+        assert!(error.contains("message"));
+    }
+
+    /// Rejects alias-only child-agent message arguments that are not part of the tool schema.
+    /// 拒绝未出现在工具 Schema 中的子代理消息别名参数。
+    #[test]
+    fn subagent_message_arguments_reject_alias_only_target_and_message() {
+        let error = match parse_subagent_message_tool_arguments(
+            json!({
+                "task_id": "image-worker-a",
+                "prompt": "Continue the image task."
+            }),
+            "send_message",
+        ) {
+            Ok(_) => panic!("alias-only message arguments should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains("target") || error.contains("message"));
     }
 
     /// Builds a resolved TaskSession configuration for controller-config tests.

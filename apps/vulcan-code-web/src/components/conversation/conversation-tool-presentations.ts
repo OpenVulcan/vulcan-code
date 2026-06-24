@@ -941,7 +941,7 @@ function lineEntries(value: unknown, kind: "insert" | "delete"): FileChangeDiffR
 function nativeVulcanFileOperation(blocks: ToolExecutionConversationBlock[]): Exclude<FileChangeOperation, "mixed"> | null {
   const names = blocks.flatMap((block) => [
     block.toolName,
-    metadataString(block.rawMetadata, ["tool_name", "toolName", "name", "tool.name", "payload.tool", "host_result.payload.tool", "hostResult.payload.tool"]),
+    metadataString(block.rawMetadata, ["tool_name"]),
   ]).filter(Boolean) as string[];
   const normalized = names.map(normalizeToolName).join(" ");
   if (normalized.includes("vulcan_file_create")) return "create";
@@ -968,13 +968,13 @@ function collectArgumentPaths(value: unknown, paths: string[]): void {
   if (!args) {
     return;
   }
-  const file = stringValue(args.file) ?? stringValue(args.path);
+  const file = stringValue(args.file);
   if (file) {
     paths.push(file);
   }
   for (const item of arrayValue(args.files)) {
     const object = objectValue(item);
-    const path = stringValue(object?.file) ?? stringValue(object?.path);
+    const path = stringValue(object?.file);
     if (path) {
       paths.push(path);
     }
@@ -999,19 +999,7 @@ function firstChangeSetPayload(blocks: ToolExecutionConversationBlock[]): Record
 // argumentsFromMetadata reads tool arguments from known transcript metadata shapes.
 // argumentsFromMetadata 从已知转录 metadata 形态读取工具参数。
 function argumentsFromMetadata(metadata: unknown): unknown {
-  return metadataValue(metadata, [
-    "arguments",
-    "args",
-    "input",
-    "payload.arguments",
-    "payload.args",
-    "payload.input",
-    "tool.arguments",
-    "host_result.arguments",
-    "hostResult.arguments",
-    "host_result.payload.arguments",
-    "hostResult.payload.arguments",
-  ]);
+  return metadataValue(metadata, ["arguments"]);
 }
 
 // errorRowsFromBlocks converts a failed tool payload into expandable error rows.

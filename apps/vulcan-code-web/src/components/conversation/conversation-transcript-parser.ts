@@ -11,9 +11,7 @@ import type {
 } from "@/components/conversation/conversation-model";
 import {
   conversationBlockHasToolEvidence,
-  extractToolNameFromText,
   extractToolResultIdFromText,
-  extractToolStatusFromText,
   metadataToolFailureStatus,
   normalizeToolDisplayState,
   structuredKindLooksLikeToolBlock,
@@ -104,45 +102,21 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
   const attributes: Record<string, string> = {};
   const toolName = metadataString(message.metadata, [
     "tool_name",
-    "toolName",
     "host_result.tool_name",
     "hostResult.toolName",
-    "host_result.payload.tool_name",
-    "hostResult.payload.toolName",
-    "payload.tool_name",
-    "payload.toolName",
-    "tool.name",
-    "payload.tool",
-    "host_result.payload.tool",
-    "hostResult.payload.tool",
-    "tool",
-    "name",
-  ]) ?? extractToolNameFromText(message.title ?? "");
+  ]);
   const toolCallId = metadataString(message.metadata, [
     "tool_call_id",
-    "toolCallId",
     "host_result.tool_call_id",
     "hostResult.toolCallId",
-    "host_result.payload.tool_call_id",
-    "hostResult.payload.toolCallId",
-    "payload.tool_call_id",
-    "payload.toolCallId",
   ]);
   const toolResultId = metadataString(message.metadata, [
-    "result.tool_result_id",
-    "result.toolResultId",
     "tool_result_id",
-    "toolResultId",
     "host_result.tool_result_id",
     "hostResult.toolResultId",
-    "host_result.payload.tool_result_id",
-    "hostResult.payload.toolResultId",
-    "payload.tool_result_id",
-    "payload.toolResultId",
   ]);
   const commandSessionId = metadataString(message.metadata, [
     "command_session_id",
-    "commandSessionId",
     "host_result.command_session_id",
     "hostResult.commandSessionId",
     "host_result.payload.command_session_id",
@@ -160,27 +134,17 @@ function structuredMessageAttributes(message: ConversationMessage): Record<strin
   }
   const taskSessionStatus = taskSessionId ? metadataString(message.metadata, [
       "tool_display_state",
-      "toolDisplayState",
       "display_state",
-      "displayState",
-      "payload.execution_status",
-      "payload.executionStatus",
       "host_result.payload.execution_status",
       "hostResult.payload.executionStatus",
     ]) : null;
   const explicitStatus = metadataString(message.metadata, [
       "result.status",
       "tool_display_state",
-      "toolDisplayState",
       "display_state",
-      "displayState",
-      "payload.execution_status",
-      "payload.executionStatus",
       "host_result.payload.execution_status",
       "hostResult.payload.executionStatus",
       "status",
-      "state",
-      "payload.status",
       "host_result.status",
       "hostResult.status",
     ]);
@@ -385,21 +349,17 @@ function hasLegacyThinkingBlockMarker(source: string): boolean {
     || /(?:类型|kind|type)\s*[:：=]\s*(?:thinking|思考过程|思考)/i.test(source);
 }
 
-// detectToolAttributes extracts compact metadata from legacy tool text.
-// detectToolAttributes 从旧版工具文本中提取紧凑元数据。
+// detectToolAttributes extracts only explicit legacy identifiers from tool text.
+// detectToolAttributes 仅从旧版工具文本中提取显式标识。
 function detectToolAttributes(source: string): Record<string, string> {
   const attributes: Record<string, string> = {};
-  const toolName = extractToolNameFromText(source);
   const toolCallId = source.match(/tool_call_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
   const toolResultId = extractToolResultIdFromText(source);
   const commandSessionId = source.match(/command_session_id["'`:\s=]+([A-Za-z0-9_.:-]+)/i)?.[1];
-  const status = extractToolStatusFromText(source);
   const hasToolMarker = hasLegacyToolCallBlockMarker(source) || hasLegacyToolResultBlockMarker(source);
-  if (toolName) attributes.tool_name = toolName;
   if (toolCallId) attributes.tool_call_id = toolCallId;
   if (toolResultId) attributes.tool_result_id = toolResultId;
   if (commandSessionId) attributes.command_session_id = commandSessionId;
-  if (status) attributes.status = status;
   if (hasToolMarker) attributes.tool_evidence = "true";
   return attributes;
 }
@@ -426,7 +386,7 @@ function conversationSpecialBlock(
   attributes: Record<string, string>,
   rawMetadata?: unknown,
 ): ConversationBlock {
-  const toolName = attributes.tool_name ?? attributes.name ?? extractToolNameFromText(attributes.title ?? "");
+  const toolName = attributes.tool_name;
   const title = attributes.title ?? blockTitle(kind, toolName);
   const mediaAttachments = generatedMediaAttachmentsFromMetadata(rawMetadata);
   const toolEvidence = conversationBlockHasToolEvidence(kind, attributes, rawMetadata);
@@ -444,7 +404,7 @@ function conversationSpecialBlock(
   const compactionInsertBeforeMessageId = metadataString(rawMetadata, ["context_compaction_insert_before_message_id"]);
   const status = mediaAttachments.length > 0
     ? "completed"
-    : normalizeToolDisplayState(attributes.status ?? attributes.state ?? extractToolStatusFromText(body));
+    : normalizeToolDisplayState(attributes.status);
   return {
     id: `${messageId}-${kind}-${index}`,
     kind,
@@ -470,58 +430,15 @@ function conversationSpecialBlock(
   };
 }
 
-// planArtifactAttributesFromMetadata extracts the submit_plan payload from tool-result metadata.
-// planArtifactAttributesFromMetadata 从工具结果元数据中提取 submit_plan 载荷。
+// planArtifactAttributesFromMetadata extracts a submitted Plan from host_result metadata.
+// planArtifactAttributesFromMetadata 从 host_result 元数据中提取已提交计划。
 function planArtifactAttributesFromMetadata(metadata: unknown): { name: string; path: string; content: string; updatedAt: string } | null {
   const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
   if (hostKind === "plan_artifact") {
     const payload = metadataValue(metadata, ["host_result.payload", "hostResult.payload", "payload"]);
     return planArtifactAttributesFromPayload(payload);
   }
-  const toolName = metadataString(metadata, ["tool_name", "toolName", "host_result.payload.tool_name", "hostResult.payload.toolName"]);
-  if (toolName !== "submit_plan") {
-    return null;
-  }
-  if (!submitPlanFallbackLooksSuccessful(metadata)) {
-    return null;
-  }
-  const payload = metadataValue(metadata, ["arguments", "args", "input"]);
-  const detailRecordId = metadataString(metadata, [
-    "result.detail_ref.record_id",
-    "result.detailRef.recordId",
-    "result.record_id",
-    "result.recordId",
-  ]) ?? "";
-  const artifact = planArtifactAttributesFromPayload(payload);
-  return artifact ? { ...artifact, updatedAt: artifact.updatedAt || detailRecordId } : null;
-}
-
-// submitPlanFallbackLooksSuccessful rejects failed submit_plan calls before using their arguments as a Plan card.
-// submitPlanFallbackLooksSuccessful 在使用 submit_plan 参数生成计划卡前排除失败调用。
-function submitPlanFallbackLooksSuccessful(metadata: unknown): boolean {
-  const status = metadataString(metadata, [
-    "status",
-    "result.status",
-    "tool_display_state",
-    "toolDisplayState",
-    "host_result.status",
-    "hostResult.status",
-  ])?.toLowerCase();
-  if (status && ["failed", "failure", "error", "errored", "stopped"].includes(status)) {
-    return false;
-  }
-  const resultText = metadataString(metadata, [
-    "result.model_output",
-    "result.modelOutput",
-    "model_output",
-    "modelOutput",
-    "output",
-    "result.output",
-    "result.message",
-    "message",
-    "summary",
-  ])?.toLowerCase() ?? "";
-  return !/tool [`']?submit_plan[`']? failed|submit_plan failed|reason:|failed\.|error/.test(resultText);
+  return null;
 }
 
 // planArtifactAttributesFromPayload extracts one submitted Plan from a host payload-like object.

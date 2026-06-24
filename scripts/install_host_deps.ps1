@@ -175,15 +175,7 @@ function Install-VldbControllerBinary {
     if (-not $localArchivePath) {
         $release = Get-ReleaseByTagOrNull -Repo $VldbControllerRepo -TagName $tagName
         if (-not $release) {
-            if (Test-Path -LiteralPath $binaryDest) {
-                Write-Warning ("vldb-controller release assets are not published for tag {0}. Reusing the existing local binary at {1} and refreshing the install marker." -f $tagName, $binaryDest)
-                Get-ChildItem -Path $VldbControllerDir -Filter ".installed-*" -File -ErrorAction SilentlyContinue |
-                    Remove-Item -Force -ErrorAction SilentlyContinue
-                New-Item -ItemType File -Path $markerFile -Force | Out-Null
-                return
-            }
-
-            throw ("vldb-controller tag '{0}' currently has no GitHub Release host binary asset. Please download the artifact '{1}' manually and place it under third_party (or one direct child directory) before rerunning." -f $tagName, $assetName)
+            throw ("vldb-controller tag '{0}' currently has no GitHub Release host binary asset. Please download the artifact '{1}' manually and place it under third_party (or one direct child directory) before rerunning. Existing local binaries are not reused for a different target tag because their version cannot be proven from this install path." -f $tagName, $assetName)
         }
 
         $asset = $release.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1

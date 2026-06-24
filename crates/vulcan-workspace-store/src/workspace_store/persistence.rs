@@ -37,6 +37,8 @@ pub async fn persist_workspace_snapshot(
         .iter()
         .map(|project| project.id.clone())
         .collect::<BTreeSet<_>>();
+    let active_owner_map = session_owner_map_from_projects(&snapshot.task_projects);
+    let archived_owner_map = session_owner_map_from_projects(&snapshot.archived_task_projects);
     let all_projects = snapshot
         .task_projects
         .iter()
@@ -55,9 +57,11 @@ pub async fn persist_workspace_snapshot(
     persist_segmented_snapshot_session_stores(
         &controller,
         &snapshot.sessions,
+        &active_owner_map,
         &snapshot.session_messages,
         &snapshot.session_runtime_state,
         &snapshot.archived_sessions,
+        &archived_owner_map,
         &snapshot.archived_session_messages,
         &snapshot.archived_session_runtime_state,
         &snapshot.hydrated_session_ids,
@@ -83,19 +87,13 @@ async fn persist_session_index_snapshot(
     let active_owner_map = session_owner_map_from_projects(&snapshot.task_projects);
     let archived_owner_map = session_owner_map_from_projects(&snapshot.archived_task_projects);
     for session in &snapshot.sessions {
-        let (project_id, sort_order) = active_owner_map
-            .get(&session.id)
-            .cloned()
-            .or_else(|| session.project_id.clone().map(|project_id| (project_id, 0)))
-            .unwrap_or_else(|| (String::from("untagged"), 0));
+        let (project_id, sort_order) =
+            required_session_project_owner(&active_owner_map, session, "活动会话索引持久化")?;
         upsert_session_index_row(controller, session, &project_id, false, sort_order, None).await?;
     }
     for session in &snapshot.archived_sessions {
-        let (project_id, sort_order) = archived_owner_map
-            .get(&session.id)
-            .cloned()
-            .or_else(|| session.project_id.clone().map(|project_id| (project_id, 0)))
-            .unwrap_or_else(|| (String::from("untagged"), 0));
+        let (project_id, sort_order) =
+            required_session_project_owner(&archived_owner_map, session, "归档会话索引持久化")?;
         upsert_session_index_row(controller, session, &project_id, true, sort_order, None).await?;
     }
     Ok(())
@@ -106,9 +104,11 @@ async fn persist_session_index_snapshot(
 async fn persist_segmented_snapshot_session_stores(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
+    active_owner_map: &BTreeMap<SessionId, (String, usize)>,
     session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     archived_sessions: &[SessionSummary],
+    archived_owner_map: &BTreeMap<SessionId, (String, usize)>,
     archived_session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     archived_session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     hydrated_session_ids: &BTreeSet<SessionId>,
@@ -118,6 +118,7 @@ async fn persist_segmented_snapshot_session_stores(
         controller,
         sessions,
         false,
+        active_owner_map,
         session_messages,
         session_runtime_state,
         hydrated_session_ids,
@@ -128,6 +129,7 @@ async fn persist_segmented_snapshot_session_stores(
         controller,
         archived_sessions,
         true,
+        archived_owner_map,
         archived_session_messages,
         archived_session_runtime_state,
         hydrated_session_ids,
@@ -142,6 +144,7 @@ async fn persist_segmented_snapshot_session_group(
     controller: &ControllerRuntimeHandle,
     sessions: &[SessionSummary],
     archived: bool,
+    session_owner_map: &BTreeMap<SessionId, (String, usize)>,
     session_messages: &BTreeMap<SessionId, Vec<SessionMessageEntry>>,
     session_runtime_state: &BTreeMap<SessionId, SessionRuntimeStateEntry>,
     hydrated_session_ids: &BTreeSet<SessionId>,
@@ -170,10 +173,17 @@ async fn persist_segmented_snapshot_session_group(
         } else {
             stored_messages.as_slice()
         };
+        let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
+            warnings.push(format!(
+                "跳过缺少明确项目归属的分段会话同步：session={}",
+                session.id
+            ));
+            continue;
+        };
         if let Err(error) = persist_segmented_session_tail_update(
             controller,
             session,
-            session.project_id.as_deref().unwrap_or("untagged"),
+            project_id,
             archived,
             effective_messages,
             runtime_state,
@@ -432,7 +442,7 @@ pub async fn restore_single_session(
                 .find(|project| project.session_ids.contains(&session.id))
                 .map(|project| project.id.as_str())
         })
-        .unwrap_or("untagged");
+        .ok_or_else(|| format!("恢复会话失败：未找到会话所属项目：{}", session.id))?;
     restore_segmented_session_directory_for_project_if_present(&controller, project_id, session)?;
     upsert_session_index_row(&controller, session, project_id, false, 0, None).await?;
     let _ = task_projects;
@@ -1592,6 +1602,21 @@ fn session_owner_map_from_projects(
         .collect()
 }
 
+/// Returns the explicit project owner for one session or fails without inventing a project.
+/// 返回单个会话的显式项目归属，缺失时失败且不构造项目。
+fn required_session_project_owner(
+    session_owner_map: &BTreeMap<SessionId, (String, usize)>,
+    session: &SessionSummary,
+    operation: &str,
+) -> Result<(String, usize), String> {
+    session_owner_map.get(&session.id).cloned().ok_or_else(|| {
+        format!(
+            "{operation}失败：未找到会话所属项目，拒绝写入占位项目。session={}",
+            session.id
+        )
+    })
+}
+
 /// Builds one non-fatal warning describing that segmented session persistence lagged behind a successful snapshot save.
 /// 构建一条非致命告警，用于描述分段会话持久化落后于一次成功的快照保存。
 fn segmented_session_persist_warning(operation: &str, session_count: usize, error: &str) -> String {
@@ -1744,5 +1769,36 @@ mod tests {
             &session_messages,
             &hydrated_session_ids
         ));
+    }
+
+    /// Verifies bulk persistence rejects explicit session project ids when project membership is missing.
+    /// 验证批量持久化在项目成员关系缺失时会拒绝会话自身项目标识回退。
+    #[test]
+    fn required_session_project_owner_rejects_session_project_id_without_membership() {
+        let session = test_session_summary(SessionId::from_u128(501), "explicit-project", "Loose");
+        let owner_map = BTreeMap::new();
+
+        let error = required_session_project_owner(&owner_map, &session, "测试索引")
+            .expect_err("missing project membership should fail");
+
+        assert!(error.contains("未找到会话所属项目"));
+        assert!(error.contains(&session.id.to_string()));
+    }
+
+    /// Verifies bulk persistence reads project ownership only from project membership.
+    /// 验证批量持久化只从项目成员关系读取项目归属。
+    #[test]
+    fn required_session_project_owner_returns_project_membership() {
+        let session_id = SessionId::from_u128(502);
+        let session = test_session_summary(session_id, "stale-project", "Owned");
+        let mut owner_map = BTreeMap::new();
+        owner_map.insert(session_id, (String::from("owner-project"), 7));
+
+        let (project_id, sort_order) =
+            required_session_project_owner(&owner_map, &session, "测试索引")
+                .expect("project membership should resolve");
+
+        assert_eq!(project_id, "owner-project");
+        assert_eq!(sort_order, 7);
     }
 }

@@ -63,7 +63,6 @@ import {
 import type {
   ConversationBlock,
   ConversationPlanArtifact,
-  ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
 import type { DraftConversationSelection } from "@/components/workspace/workspace-resizable-body";
 import { cn } from "@/lib/utils";
@@ -367,7 +366,7 @@ export function ChatArea(props: ChatAreaProps) {
   // showConversationLoadingOnly 仅在水合期间没有可展示缓存消息时为真。
   const showConversationLoadingOnly = isLoading && messages.length === 0 && !props.conversationLoadError;
   const selectedProject = selectedConversation ? projectForConversation(props.workbench, selectedConversation) : null;
-  const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? "当前项目";
+  const emptyProjectName = props.selectedDraftConversation?.projectName ?? selectedProject?.name ?? t("conversation.unlinkedProject");
   const isEmptyConversation = Boolean(
     props.selectedDraftConversation
       || (!activeSubagentTask && selectedConversation && !showConversationLoadingOnly && !props.conversationLoadError && messages.length === 0),
@@ -428,9 +427,8 @@ export function ChatArea(props: ChatAreaProps) {
     if (!artifact) {
       return null;
     }
-    const fallbackArtifact = latestSubmittedPlanArtifact(renderItems, artifact.name);
-    const content = artifact.content?.trim() ? artifact.content : fallbackArtifact?.content;
-    if (!content?.trim()) {
+    const content = artifact.content;
+    if (typeof content !== "string" || !content.trim()) {
       return null;
     }
     return {
@@ -439,7 +437,7 @@ export function ChatArea(props: ChatAreaProps) {
       content,
       updatedAt: artifact.updatedAt,
     };
-  }, [activeSubagentTask, isEmptyConversation, props.workbench.sessionPlanMode?.artifact, renderItems]);
+  }, [activeSubagentTask, isEmptyConversation, props.workbench.sessionPlanMode?.artifact]);
   // conversationStreamSignature changes when streamed content grows inside existing transcript rows.
   // conversationStreamSignature 在现有转录行内部的流式内容增长时变化。
   const conversationStreamSignature = React.useMemo(
@@ -1088,7 +1086,7 @@ export function ChatArea(props: ChatAreaProps) {
       hiddenModelGuidance: planArtifactExecuteHiddenGuidance(artifact),
       attachments: [],
       executionMode: "build",
-      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? "x-high",
+      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? null,
       disabledAiCapabilityKinds: [],
       disabledAiCapabilityTargetSelectors: [],
       aiCapabilityTargetOrderOverrides: {},
@@ -1111,7 +1109,7 @@ export function ChatArea(props: ChatAreaProps) {
       hiddenModelGuidance: planArtifactSuggestHiddenGuidance(artifact),
       attachments: [],
       executionMode: "plan",
-      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? "x-high",
+      reasoningEffort: props.workbench.reasoningSelection?.selectedEffort ?? null,
       disabledAiCapabilityKinds: [],
       disabledAiCapabilityTargetSelectors: [],
       aiCapabilityTargetOrderOverrides: {},
@@ -1311,23 +1309,6 @@ export function ChatArea(props: ChatAreaProps) {
       )}
     </div>
   );
-}
-
-// latestSubmittedPlanArtifact finds the newest submitted Plan block in the current transcript.
-// latestSubmittedPlanArtifact 在当前转录中查找最新提交的计划块。
-function latestSubmittedPlanArtifact(
-  renderItems: ConversationRenderItem[],
-  name: string,
-): ConversationPlanArtifact | null {
-  for (const item of [...renderItems].reverse()) {
-    for (const block of [...item.blocks].reverse()) {
-      const artifact = block.planArtifact;
-      if (artifact && artifact.name === name && artifact.content.trim()) {
-        return artifact;
-      }
-    }
-  }
-  return null;
 }
 
 // planArtifactExecuteVisiblePrompt preserves the user-visible execution text while adding optional note text naturally.

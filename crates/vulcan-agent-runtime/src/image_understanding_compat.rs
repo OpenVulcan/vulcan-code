@@ -191,19 +191,12 @@ fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvoc
     })?;
     let target = object
         .get("target")
-        .or_else(|| object.get("provider"))
-        .or_else(|| object.get("provider_target"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     let image = object
         .get("image")
-        .or_else(|| object.get("attachment"))
-        .or_else(|| object.get("file"))
-        .or_else(|| object.get("path"))
-        .or_else(|| object.get("local_path"))
-        .or_else(|| object.get("file_name"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -213,8 +206,6 @@ fn parse_understand_image_invocation(args: Value) -> Result<UnderstandImageInvoc
         .to_string();
     let prompt = object
         .get("prompt")
-        .or_else(|| object.get("question"))
-        .or_else(|| object.get("query"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -571,20 +562,33 @@ mod tests {
         }
     }
 
-    /// Parses common argument aliases into one stable image-understanding invocation.
-    /// 将常见参数别名解析为稳定的图片理解调用。
+    /// Parses the schema-declared image-understanding argument names.
+    /// 解析 Schema 声明的图片理解参数名称。
     #[test]
-    fn parse_understand_image_invocation_accepts_common_argument_shapes() {
+    fn parse_understand_image_invocation_accepts_schema_argument_names() {
         let invocation = parse_understand_image_invocation(json!({
-            "provider": "minimax/minimax",
-            "attachment": "screen.png",
-            "question": "What text appears in the image?"
+            "target": "minimax/minimax",
+            "image": "screen.png",
+            "prompt": "What text appears in the image?"
         }))
         .expect("arguments should parse");
 
         assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.image, "screen.png");
         assert_eq!(invocation.prompt, "What text appears in the image?");
+    }
+
+    /// Rejects alias-only image-understanding arguments that are absent from the schema.
+    /// 拒绝未出现在 Schema 中的图片理解别名参数。
+    #[test]
+    fn parse_understand_image_invocation_rejects_alias_only_image() {
+        let error = parse_understand_image_invocation(json!({
+            "attachment": "screen.png",
+            "question": "What text appears in the image?"
+        }))
+        .expect_err("alias-only image should be rejected");
+
+        assert!(error.contains("image"));
     }
 
     /// Resolves resource ids and full local image paths while retaining legacy selector compatibility.

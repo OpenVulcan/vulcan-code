@@ -20,7 +20,7 @@ export async function submitConversationPrompt(
   hiddenModelGuidance: string | undefined,
   attachments: ComposerAttachmentSummary[],
   executionMode: string,
-  reasoningEffort: string,
+  reasoningEffort: string | null,
   disabledAiCapabilityKinds: AiCapabilityKind[],
   disabledAiCapabilityTargetSelectors: string[],
   aiCapabilityTargetOrderOverrides: Record<string, string[]>,

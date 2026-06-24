@@ -225,6 +225,10 @@ export function ModelCapabilityDialog(props: {
   const [attachment, setAttachment] = React.useState(false)
   const [inputModalities, setInputModalities] = React.useState<Set<string>>(() => new Set(["text"]))
   const [outputModalities, setOutputModalities] = React.useState<Set<string>>(() => new Set(["text"]))
+  const [reasoningTouched, setReasoningTouched] = React.useState(false)
+  const [attachmentTouched, setAttachmentTouched] = React.useState(false)
+  const [inputModalitiesTouched, setInputModalitiesTouched] = React.useState(false)
+  const [outputModalitiesTouched, setOutputModalitiesTouched] = React.useState(false)
   const [contextLimit, setContextLimit] = React.useState("")
   const [inputLimit, setInputLimit] = React.useState("")
   const [outputLimit, setOutputLimit] = React.useState("")
@@ -233,8 +237,12 @@ export function ModelCapabilityDialog(props: {
     const model = props.target?.model
     setReasoning(model?.reasoning ?? false)
     setAttachment(model?.attachment ?? false)
-    setInputModalities(new Set((model?.inputModalities?.length ? model.inputModalities : ["text"]).map((item) => item.toLowerCase())))
-    setOutputModalities(new Set((model?.outputModalities?.length ? model.outputModalities : ["text"]).map((item) => item.toLowerCase())))
+    setInputModalities(new Set((model?.inputModalities ?? []).map((item) => item.toLowerCase())))
+    setOutputModalities(new Set((model?.outputModalities ?? []).map((item) => item.toLowerCase())))
+    setReasoningTouched(false)
+    setAttachmentTouched(false)
+    setInputModalitiesTouched(false)
+    setOutputModalitiesTouched(false)
     setContextLimit(model?.contextLimit ? String(model.contextLimit) : "")
     setInputLimit(model?.inputLimit ? String(model.inputLimit) : "")
     setOutputLimit(model?.outputLimit ? String(model.outputLimit) : "")
@@ -242,6 +250,11 @@ export function ModelCapabilityDialog(props: {
   }, [props.target])
   const toggleModality = React.useCallback((kind: "input" | "output", value: string, checked: boolean) => {
     const setter = kind === "input" ? setInputModalities : setOutputModalities
+    if (kind === "input") {
+      setInputModalitiesTouched(true)
+    } else {
+      setOutputModalitiesTouched(true)
+    }
     setter((current) => {
       const next = new Set(current)
       if (checked) {
@@ -256,20 +269,21 @@ export function ModelCapabilityDialog(props: {
     if (!props.target) {
       return
     }
+    const model = props.target.model
     await props.actions.onSaveProviderModelOverride({
       providerId: props.target.provider.id,
       modelId: props.target.model.id,
-      reasoning,
-      attachment,
+      reasoning: reasoningTouched || typeof model.reasoning === "boolean" ? reasoning : null,
+      attachment: attachmentTouched || typeof model.attachment === "boolean" ? attachment : null,
       contextLimit: nullablePositiveInteger(contextLimit),
       inputLimit: nullablePositiveInteger(inputLimit),
       outputLimit: nullablePositiveInteger(outputLimit),
-      inputModalities: Array.from(inputModalities),
-      outputModalities: Array.from(outputModalities),
+      inputModalities: inputModalitiesTouched || Boolean(model.inputModalities?.length) ? Array.from(inputModalities) : null,
+      outputModalities: outputModalitiesTouched || Boolean(model.outputModalities?.length) ? Array.from(outputModalities) : null,
       reasoningProfileJson: reasoningProfileJson.trim() || null,
     })
     props.onOpenChange(false)
-  }, [attachment, contextLimit, inputLimit, inputModalities, outputLimit, outputModalities, props, reasoning, reasoningProfileJson])
+  }, [attachment, attachmentTouched, contextLimit, inputLimit, inputModalities, inputModalitiesTouched, outputLimit, outputModalities, outputModalitiesTouched, props, reasoning, reasoningProfileJson, reasoningTouched])
   const model = props.target?.model
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -280,8 +294,8 @@ export function ModelCapabilityDialog(props: {
         </DialogHeader>
         <div className="model-capability-form">
           <div className="settings-card-actions">
-            <label className="settings-check-row inline"><input checked={reasoning} onChange={(event) => setReasoning(event.target.checked)} type="checkbox" />{text("声明支持思考 / 推理", "Supports reasoning")}</label>
-            <label className="settings-check-row inline"><input checked={attachment} onChange={(event) => setAttachment(event.target.checked)} type="checkbox" />{text("声明附件标记", "Supports attachments")}</label>
+            <label className="settings-check-row inline"><input checked={reasoning} onChange={(event) => { setReasoningTouched(true); setReasoning(event.target.checked) }} type="checkbox" />{text("声明支持思考 / 推理", "Supports reasoning")}</label>
+            <label className="settings-check-row inline"><input checked={attachment} onChange={(event) => { setAttachmentTouched(true); setAttachment(event.target.checked) }} type="checkbox" />{text("声明附件标记", "Supports attachments")}</label>
           </div>
           <fieldset className="settings-modality-box">
             <legend>{text("输入能力", "Input capability")}</legend>

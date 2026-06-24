@@ -150,19 +150,14 @@ pub fn task_session_arguments_from_tool_metadata(metadata: &Value) -> Option<&Va
     metadata.get("arguments")
 }
 
-/// Returns the best-effort caller-facing task identifier attached to one task card from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化载荷元数据或进行中工具参数中返回一条最佳努力的调用方面向任务标识。
+/// Returns the caller-facing task identifier from structured task-session payloads or the declared `spawn_agent.task_name` argument.
+/// 从结构化 task-session 载荷或已声明的 `spawn_agent.task_name` 参数中返回调用方面向任务标识。
 pub fn task_session_declared_task_id_from_tool_metadata(metadata: &Value) -> Option<&str> {
     task_session_payload_from_tool_metadata(metadata)
         .and_then(task_session_public_id_from_payload)
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| {
-                    arguments
-                        .get("task_name")
-                        .or_else(|| arguments.get("task_id"))
-                        .or_else(|| arguments.get("name"))
-                })
+                .and_then(|arguments| arguments.get("task_name"))
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -184,8 +179,8 @@ pub fn task_session_execution_status_from_tool_metadata(metadata: &Value) -> Opt
         })
 }
 
-/// Returns one trimmed task-session prompt text extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 提示词文本。
+/// Returns one trimmed task-session prompt from structured task-session payloads or the declared `spawn_agent.message` argument.
+/// 从结构化 task-session 载荷或已声明的 `spawn_agent.message` 参数中返回裁剪后的提示词。
 pub fn task_session_prompt_text_from_tool_metadata(metadata: &Value) -> Option<&str> {
     task_session_payload_from_tool_metadata(metadata)
         .and_then(|payload| payload.get("prompt"))
@@ -193,14 +188,14 @@ pub fn task_session_prompt_text_from_tool_metadata(metadata: &Value) -> Option<&
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| arguments.get("message").or_else(|| arguments.get("prompt")))
+                .and_then(|arguments| arguments.get("message"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
 }
 
-/// Returns one trimmed task-session description extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 描述文本。
+/// Returns one trimmed task-session description from structured task-session payloads or the declared `spawn_agent.description` argument.
+/// 从结构化 task-session 载荷或已声明的 `spawn_agent.description` 参数中返回裁剪后的任务描述。
 pub fn task_session_description_from_tool_metadata(metadata: &Value) -> Option<&str> {
     task_session_payload_from_tool_metadata(metadata)
         .and_then(|payload| payload.get("description"))
@@ -214,8 +209,8 @@ pub fn task_session_description_from_tool_metadata(metadata: &Value) -> Option<&
         })
 }
 
-/// Returns one trimmed task-session subagent label extracted from either persisted payload metadata or in-flight tool arguments.
-/// 从持久化 payload 元数据或进行中工具参数中提取一段裁剪后的 task-session 子代理标签。
+/// Returns one trimmed task-session subagent label from structured task-session payloads or the declared `spawn_agent.agent_type` argument.
+/// 从结构化 task-session 载荷或已声明的 `spawn_agent.agent_type` 参数中返回裁剪后的子代理标签。
 pub fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str> {
     task_session_payload_from_tool_metadata(metadata)
         .and_then(|payload| payload.get("subagent"))
@@ -223,12 +218,7 @@ pub fn task_session_subagent_from_tool_metadata(metadata: &Value) -> Option<&str
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
             task_session_arguments_from_tool_metadata(metadata)
-                .and_then(|arguments| {
-                    arguments
-                        .get("agent_type")
-                        .or_else(|| arguments.get("agent_profile"))
-                        .or_else(|| arguments.get("subagent"))
-                })
+                .and_then(|arguments| arguments.get("agent_type"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
         })
@@ -416,8 +406,8 @@ fn task_session_payload_execution_rank_from_metadata_object(
 ///
 /// # Returns
 /// 返回值
-/// A higher score for a better match, or zero when the payload does not match.
-/// 返回更高分代表更好匹配；不匹配时返回零。
+/// A positive exact-identity score, or zero when the payload does not match.
+/// 返回正数精确身份分；不匹配时返回零。
 pub fn task_session_message_match_score(metadata: &Value, payload: &Value) -> usize {
     let payload_internal_task_id = task_session_internal_id_from_payload(payload);
     let metadata_internal_task_id = task_session_payload_from_tool_metadata(metadata)
@@ -434,41 +424,7 @@ pub fn task_session_message_match_score(metadata: &Value, payload: &Value) -> us
     {
         return usize::MAX.saturating_sub(1);
     }
-
-    let payload_prompt = payload
-        .get("prompt")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-    let payload_description = payload
-        .get("description")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-    let payload_subagent = payload
-        .get("subagent")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty());
-
-    let mut score = 0usize;
-    if payload_prompt
-        .zip(task_session_prompt_text_from_tool_metadata(metadata))
-        .is_some_and(|(left, right)| left == right)
-    {
-        score += 4;
-    }
-    if payload_description
-        .zip(task_session_description_from_tool_metadata(metadata))
-        .is_some_and(|(left, right)| left == right)
-    {
-        score += 2;
-    }
-    if payload_subagent
-        .zip(task_session_subagent_from_tool_metadata(metadata))
-        .is_some_and(|(left, right)| left == right)
-    {
-        score += 1;
-    }
-
-    score
+    0
 }
 
 /// Finds the best parent task-card message id for one task-session payload across projected messages and canonical records.
@@ -1259,8 +1215,8 @@ mod tests {
         assert_eq!(state.run_state, SubagentTaskRunState::Running);
     }
 
-    /// Verifies in-flight task arguments and persisted payloads share one metadata helper surface.
-    /// 验证进行中的 task 参数与持久化 payload 会共用同一套元数据辅助入口。
+    /// Verifies in-flight task arguments read only the declared `spawn_agent` schema fields.
+    /// 验证进行中的 task 参数只读取已声明的 `spawn_agent` schema 字段。
     #[test]
     fn extracts_task_session_fields_from_payload_or_arguments() {
         let payload_metadata = json!({
@@ -1277,10 +1233,10 @@ mod tests {
         let argument_metadata = json!({
         "tool_name": "spawn_agent",
             "arguments": {
-                "task_id": "public-b",
-                "prompt": "执行测试",
+                "task_name": "public-b",
+                "message": "执行测试",
                 "description": "测试",
-                "subagent": "tester",
+                "agent_type": "tester",
             },
         });
 
@@ -1293,8 +1249,49 @@ mod tests {
             Some("public-b")
         );
         assert_eq!(
+            task_session_prompt_text_from_tool_metadata(&argument_metadata),
+            Some("执行测试")
+        );
+        assert_eq!(
+            task_session_description_from_tool_metadata(&argument_metadata),
+            Some("测试")
+        );
+        assert_eq!(
             task_session_subagent_from_tool_metadata(&argument_metadata),
             Some("tester")
+        );
+    }
+
+    /// Verifies legacy alias-only spawn-agent arguments are not treated as task-session fields.
+    /// 验证仅包含旧别名的 spawn_agent 参数不会被当作 task-session 字段读取。
+    #[test]
+    fn ignores_alias_only_task_session_arguments() {
+        let argument_metadata = json!({
+            "tool_name": "spawn_agent",
+            "arguments": {
+                "task_id": "public-b",
+                "name": "public-c",
+                "prompt": "执行测试",
+                "subagent": "tester",
+                "agent_profile": "profile",
+            },
+        });
+
+        assert_eq!(
+            task_session_declared_task_id_from_tool_metadata(&argument_metadata),
+            None
+        );
+        assert_eq!(
+            task_session_prompt_text_from_tool_metadata(&argument_metadata),
+            None
+        );
+        assert_eq!(
+            task_session_description_from_tool_metadata(&argument_metadata),
+            None
+        );
+        assert_eq!(
+            task_session_subagent_from_tool_metadata(&argument_metadata),
+            None
         );
     }
 
@@ -1335,8 +1332,8 @@ mod tests {
         assert_eq!(state.subagent_label, "图片子代理（image-worker）");
     }
 
-    /// Verifies the shared task-card lookup prefers canonical record matches over weaker projected-message matches.
-    /// 验证共享 task 卡片查找会优先选择规范记录中的强匹配，而不是投影消息里的弱匹配。
+    /// Verifies the shared task-card lookup ignores prompt-only candidates and keeps exact identity matches.
+    /// 验证共享 task 卡片查找会忽略仅 prompt 相同的候选项，并保留精确身份匹配。
     #[test]
     fn finds_task_session_tool_message_id_across_messages_and_records() {
         let task_session_id = SessionId::new_v4();
@@ -1355,7 +1352,7 @@ mod tests {
             metadata: Some(json!({
                 "tool_name": "spawn_agent",
                 "arguments": {
-                    "prompt": "执行审核"
+                    "message": "执行审核"
                 }
             })),
             created_at: String::from("1"),
@@ -1386,6 +1383,38 @@ mod tests {
         );
 
         assert_eq!(message_id.as_deref(), Some("record-exact"));
+    }
+
+    /// Verifies task-card lookup rejects text-only matches when no task identity is present.
+    /// 验证缺少任务身份时，task 卡片查找会拒绝仅文本相同的匹配。
+    #[test]
+    fn rejects_prompt_only_task_session_message_match() {
+        let payload = json!({
+            "prompt": "执行审核",
+        });
+        let message = SessionMessageEntry {
+            id: String::from("message-prompt-only"),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::ToolCallOutput,
+            visible: true,
+            title: String::from("task"),
+            body: String::new(),
+            metadata: Some(json!({
+                "tool_name": "spawn_agent",
+                "arguments": {
+                    "message": "执行审核"
+                }
+            })),
+            created_at: String::from("1"),
+        };
+
+        let message_id = find_task_session_tool_message_id_for_payload(
+            [&message].into_iter(),
+            [].into_iter(),
+            &payload,
+        );
+
+        assert_eq!(message_id, None);
     }
 
     /// Verifies newly written stopped task metadata keeps only an index and summary.

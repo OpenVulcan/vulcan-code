@@ -642,9 +642,9 @@ function ContextInjectionLookupDialog(props: {
             <div className="context-injection-turn-list">
               {turnEntries.map((turn, index) => (
                 <article className="context-injection-turn-entry" key={index}>
-                  <strong>TURNID:{String(turn.turnId ?? turn.turn_id ?? props.state.target.turnId)}</strong>
-                  <span>用户：{String(turn.userQuestion ?? turn.user_question ?? "")}</span>
-                  <span>助手：{String(turn.assistantAnswer ?? turn.assistant_answer ?? "")}</span>
+                  <strong>TURNID:{String(turn.turnId ?? props.state.target.turnId)}</strong>
+                  <span>用户：{String(turn.userQuestion ?? "")}</span>
+                  <span>助手：{String(turn.assistantAnswer ?? "")}</span>
                   {turn.detail ? <pre>{String(turn.detail)}</pre> : null}
                 </article>
               ))}
@@ -664,8 +664,7 @@ function contextInjectionMemoryId(item: ContextInjectionItemSummary): number {
   if (typeof item.memoryId === "number" && Number.isFinite(item.memoryId)) {
     return item.memoryId;
   }
-  const match = item.detail.match(/记忆 ID：\s*(\d+)/);
-  return match ? Number(match[1]) : 0;
+  return 0;
 }
 
 // contextInjectionTurnId returns the durable VMM turn id for one visible item.
@@ -674,8 +673,7 @@ function contextInjectionTurnId(item: ContextInjectionItemSummary): number {
   if (typeof item.turnId === "number" && Number.isFinite(item.turnId)) {
     return item.turnId;
   }
-  const match = item.detail.match(/TURN_ID:(\d+)/);
-  return match ? Number(match[1]) : 0;
+  return 0;
 }
 
 // contextInjectionDedupeKey returns one stable item key when the backend provides it.
@@ -705,8 +703,7 @@ function contextInjectionScoreLabel(item: ContextInjectionItemSummary): string |
   if (typeof item.scoreLabel === "string" && item.scoreLabel.trim()) {
     return item.scoreLabel.trim();
   }
-  const match = item.detail.match(/相关性：\s*([^\s\n]+)/u);
-  return match?.[1]?.trim() || null;
+  return null;
 }
 
 // contextInjectionScoreTone maps a relevance score to a compact visual tone.
@@ -806,7 +803,7 @@ function contextInjectionLookupTurns(result: VmmMemoryActionResult | undefined):
 // vmmDeletedMemoryIds 从删除动作响应中提取已删除标识集合。
 function vmmDeletedMemoryIds(response: unknown): Set<number> {
   const object = typeof response === "object" && response !== null ? response as Record<string, unknown> : {};
-  const values = object.deletedMemoryIds ?? object.deleted_memory_ids;
+  const values = object.deletedMemoryIds;
   if (!Array.isArray(values)) {
     return new Set();
   }

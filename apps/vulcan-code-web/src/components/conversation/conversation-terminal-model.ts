@@ -65,8 +65,8 @@ export function terminalSummaryById(summaries: CommandSessionSummary[]): Map<str
   return new Map(summaries.map((summary) => [summary.id, summary]));
 }
 
-// terminalVisualState maps raw runtime status text into a stable UI state.
-// terminalVisualState 将原始运行时状态文本映射为稳定 UI 状态。
+// terminalVisualState maps the backend command-session lifecycle label into a stable UI state.
+// terminalVisualState 将后端命令会话生命周期标签映射为稳定 UI 状态。
 export function terminalVisualState(
   status: string | null | undefined,
   exitCode: number | null,
@@ -76,28 +76,18 @@ export function terminalVisualState(
     return "lost";
   }
   const normalized = (status ?? "").trim().toLowerCase();
-  if (normalized.includes("wait") || normalized.includes("input") || normalized.includes("stdin")) {
-    return "waiting";
+  switch (normalized) {
+    case "running":
+      return "running";
+    case "completed":
+      return exitCode === null || exitCode === 0 ? "success" : "failed";
+    case "failed":
+      return "failed";
+    case "stopped":
+      return "stopped";
+    default:
+      return "unknown";
   }
-  if (normalized.includes("run") || normalized.includes("active") || normalized.includes("start")) {
-    return "running";
-  }
-  if (normalized.includes("stop") || normalized.includes("cancel") || normalized.includes("kill") || normalized.includes("terminat")) {
-    return "stopped";
-  }
-  if (normalized.includes("lost") || normalized.includes("missing") || normalized.includes("disconnect")) {
-    return "lost";
-  }
-  if (normalized.includes("fail") || normalized.includes("error")) {
-    return "failed";
-  }
-  if (normalized.includes("complete") || normalized.includes("success") || normalized.includes("done") || normalized.includes("exit")) {
-    return exitCode === null || exitCode === 0 ? "success" : "failed";
-  }
-  if (typeof exitCode === "number") {
-    return exitCode === 0 ? "success" : "failed";
-  }
-  return "unknown";
 }
 
 // terminalStateLabel returns the Chinese label for a normalized terminal state.

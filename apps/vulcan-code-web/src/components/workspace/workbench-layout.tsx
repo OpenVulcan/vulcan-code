@@ -859,8 +859,11 @@ export function WorkbenchLayout(props: {
     const activeProjectId =
       selectedDraftConversation?.projectId
       ?? selectedConversation?.projectId
-      ?? workbenchState.projects[0]?.id
       ?? null;
+    if (!activeProjectId) {
+      toast.error("当前会话没有明确关联项目，无法发送。");
+      return false;
+    }
     const activeConversationId = selectedDraftConversation
       ? null
       : selectedConversation?.id ?? null;
@@ -902,11 +905,14 @@ export function WorkbenchLayout(props: {
     const activeProjectId =
       selectedDraftConversation?.projectId
       ?? selectedConversation?.projectId
-      ?? workbenchState.projects[0]?.id
       ?? null;
     const activeConversationId = selectedDraftConversation
       ? null
       : selectedConversation?.id ?? null;
+    if (!activeProjectId) {
+      toast.error("当前会话没有明确关联项目，无法保存 AI 能力设置。");
+      return false;
+    }
     if (!activeConversationId) {
       toast.error("请先创建或选择一个会话，再保存 AI 能力设置。");
       return false;

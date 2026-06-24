@@ -197,8 +197,8 @@ pub fn resolve_model_capabilities(
     ResolvedModelCapabilities {
         credential_env_keys: normalize_environment_key_list(&definition.credential_env_keys),
         supports_reasoning: model.and_then(|entry| entry.reasoning).unwrap_or(false),
-        supports_tool_call: model.and_then(|entry| entry.tool_call).unwrap_or(true),
-        supports_temperature: model.and_then(|entry| entry.temperature).unwrap_or(true),
+        supports_tool_call: model.and_then(|entry| entry.tool_call).unwrap_or(false),
+        supports_temperature: model.and_then(|entry| entry.temperature).unwrap_or(false),
         supports_attachment: model.and_then(|entry| entry.attachment).unwrap_or(false),
         status: model.and_then(|entry| trimmed_option(entry.status.as_deref())),
         family: model.and_then(|entry| trimmed_option(entry.family.as_deref())),
@@ -545,7 +545,7 @@ fn inferred_provider_ai_tool_declarations(
     definition: &SupportedProviderDefinition,
     model: Option<&ModelChoice>,
 ) -> Vec<AiToolDeclaration> {
-    let model_accepts_text = model.is_none_or(|model| {
+    let model_accepts_text = model.is_some_and(|model| {
         model.output_modalities.is_empty()
             || model
                 .output_modalities
@@ -555,7 +555,7 @@ fn inferred_provider_ai_tool_declarations(
     if !model_accepts_text {
         return Vec::new();
     }
-    let model_accepts_tools = model.is_none_or(|model| model.tool_call.unwrap_or(true));
+    let model_accepts_tools = model.is_some_and(|model| model.tool_call.unwrap_or(false));
     if !model_accepts_tools {
         return Vec::new();
     }
@@ -977,8 +977,28 @@ mod tests {
         let mut definition = test_provider_definition();
         definition.id = String::from("openai");
         definition.runtime = ProviderRuntimeKind::OpenAi;
+        let model = ModelChoice {
+            id: String::from("gpt-5"),
+            name: String::from("GPT-5"),
+            default_enabled: true,
+            status: None,
+            family: None,
+            release_date: None,
+            context_limit: None,
+            input_limit: None,
+            output_limit: None,
+            reasoning: None,
+            tool_call: Some(true),
+            temperature: None,
+            attachment: None,
+            interleaved: None,
+            reasoning_profile: None,
+            ai_tools: Vec::new(),
+            input_modalities: vec![String::from("text")],
+            output_modalities: vec![String::from("text")],
+        };
 
-        let capabilities = resolve_model_capabilities(&definition, None);
+        let capabilities = resolve_model_capabilities(&definition, Some(&model));
         let web_search = capabilities
             .ai_tools
             .iter()
@@ -989,6 +1009,24 @@ mod tests {
         assert_eq!(
             web_search.native_tool_type.as_deref(),
             Some("web_search_preview")
+        );
+    }
+
+    /// Does not infer provider-native web search when the model entry is missing.
+    /// 模型条目缺失时不推导 Provider 原生网页搜索能力。
+    #[test]
+    fn resolve_model_capabilities_does_not_infer_native_web_search_without_model() {
+        let mut definition = test_provider_definition();
+        definition.id = String::from("openai");
+        definition.runtime = ProviderRuntimeKind::OpenAi;
+
+        let capabilities = resolve_model_capabilities(&definition, None);
+
+        assert!(
+            capabilities
+                .ai_tools
+                .iter()
+                .all(|tool| tool.kind != AiToolKind::WebSearch)
         );
     }
 
@@ -1084,7 +1122,27 @@ mod tests {
         let mut definition = test_provider_definition();
         definition.id = String::from("openai");
         definition.runtime = ProviderRuntimeKind::OpenAi;
-        let mut capabilities = resolve_model_capabilities(&definition, None);
+        let model = ModelChoice {
+            id: String::from("gpt-5"),
+            name: String::from("GPT-5"),
+            default_enabled: true,
+            status: None,
+            family: None,
+            release_date: None,
+            context_limit: None,
+            input_limit: None,
+            output_limit: None,
+            reasoning: None,
+            tool_call: Some(true),
+            temperature: None,
+            attachment: None,
+            interleaved: None,
+            reasoning_profile: None,
+            ai_tools: Vec::new(),
+            input_modalities: vec![String::from("text")],
+            output_modalities: vec![String::from("text")],
+        };
+        let mut capabilities = resolve_model_capabilities(&definition, Some(&model));
         let configuration = PersistedAiToolConfiguration {
             web_search: PersistedWebSearchConfiguration {
                 mode: WebSearchRoutingMode::ThirdPartyFirst,

@@ -183,17 +183,6 @@ function findAppendMessageBodyReplacementIndex(
   if (stableIndex >= 0) {
     return stableIndex;
   }
-  for (let index = messages.length - 1; index > lastUserIndex; index -= 1) {
-    const message = messages[index];
-    if (
-      message?.conversationId === delta.conversationId
-      && message.id !== candidate.id
-      && isAssistantOutputMessage(message)
-      && assistantOutputsLookLikeSameStream(candidate, message)
-    ) {
-      return index;
-    }
-  }
   return -1;
 }
 
@@ -255,25 +244,6 @@ function isAssistantOutputMessage(message: ConversationMessage): boolean {
     && message.body.trim().length > 0;
 }
 
-// assistantOutputsLookLikeSameStream compares two assistant rows using their overlapping streamed body.
-// assistantOutputsLookLikeSameStream 通过重叠的流式正文比较两条助手行是否属于同一输出。
-function assistantOutputsLookLikeSameStream(left: ConversationMessage, right: ConversationMessage): boolean {
-  if (left.conversationId !== right.conversationId) {
-    return false;
-  }
-  const leftBody = left.body.trim();
-  const rightBody = right.body.trim();
-  if (!leftBody || !rightBody) {
-    return false;
-  }
-  if (leftBody === rightBody || leftBody.includes(rightBody) || rightBody.includes(leftBody)) {
-    return true;
-  }
-  const shorterLength = Math.min(leftBody.length, rightBody.length);
-  const prefixLength = Math.min(96, shorterLength);
-  return shorterLength >= 16 && leftBody.slice(0, prefixLength) === rightBody.slice(0, prefixLength);
-}
-
 // appendStreamingTextDelta appends provider deltas without guessing textual overlap.
 // appendStreamingTextDelta 追加 Provider 增量文本，不猜测文本重叠。
 function appendStreamingTextDelta(current: string, incoming: string): string {
@@ -330,10 +300,14 @@ export function mergeIncomingConversationMessages(
   }
   const incomingOutput = latestAssistantOutputAfterLastUser(incomingMessages);
   if (incomingOutput) {
-    if (assistantOutputCoversStreamedOutput(incomingOutput, latestCurrentOutput)) {
+    if (incomingOutput.conversationId === latestCurrentOutput.conversationId
+      && incomingOutput.id === latestCurrentOutput.id
+      && incomingOutput.body.length >= latestCurrentOutput.body.length) {
       return incomingMessages;
     }
-    if (assistantOutputCoversStreamedOutput(latestCurrentOutput, incomingOutput)) {
+    if (incomingOutput.conversationId === latestCurrentOutput.conversationId
+      && incomingOutput.id === latestCurrentOutput.id
+      && latestCurrentOutput.body.length > incomingOutput.body.length) {
       return replaceIncomingAssistantOutput(incomingMessages, incomingOutput.id, latestCurrentOutput);
     }
   }
@@ -361,16 +335,6 @@ function latestAssistantOutputAfterLastUser(messages: ConversationMessage[]): Co
       isAssistantOutputMessage(message)
       && conversationMessageCreatedAtValue(message) >= lastUserTime
     )) ?? null;
-}
-
-// assistantOutputCoversStreamedOutput checks whether a durable output already supersedes a streamed output.
-// assistantOutputCoversStreamedOutput 判断持久化输出是否已经覆盖临时流式输出。
-function assistantOutputCoversStreamedOutput(incoming: ConversationMessage, streamed: ConversationMessage): boolean {
-  const incomingBody = incoming.body.trim();
-  const streamedBody = streamed.body.trim();
-  return incomingBody === streamedBody
-    || incomingBody.includes(streamedBody)
-    || (incomingBody.length >= streamedBody.length && incomingBody.startsWith(streamedBody.slice(0, Math.min(96, streamedBody.length))));
 }
 
 // incomingConversationHasTerminalStats detects whether the backend has already published turn completion records.
@@ -407,10 +371,6 @@ function replaceIncomingAssistantOutput(
 function insertCarriedStreamingOutput(messages: ConversationMessage[], output: ConversationMessage): ConversationMessage[] {
   if (messages.some((message) => message.id === output.id)) {
     return messages;
-  }
-  const duplicateIndex = messages.findIndex((message) => isAssistantOutputMessage(message) && assistantOutputsLookLikeSameStream(message, output));
-  if (duplicateIndex >= 0) {
-    return messages.map((message, index) => (index === duplicateIndex ? output : message));
   }
   const insertIndex = messages.findIndex((message) => {
     const recordKind = normalizedRecordKind(message.recordKind);

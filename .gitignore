@@ -30,6 +30,7 @@ target
 /output
 /docs/plan/
 /docs/completed/
+/docs/reports/
 .codex_tmp*
 
 # Local task board state.

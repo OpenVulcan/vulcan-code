@@ -33,7 +33,7 @@ export function blockTitle(kind: ConversationBlockKind, toolName?: string): stri
 // blockHasToolExecutionEvidence checks that a special block really belongs to a tool execution.
 // blockHasToolExecutionEvidence 检查特殊块确实属于一次工具执行。
 function blockHasToolExecutionEvidence(block: ConversationBlock): boolean {
-  if (block.toolEvidence || block.toolCallId || block.toolResultId || block.commandSessionId || block.taskSessionId || block.toolName) {
+  if (block.toolEvidence || block.toolCallId || block.toolResultId || block.commandSessionId || block.taskSessionId) {
     return true;
   }
   const hostKind = metadataString(block.rawMetadata, [

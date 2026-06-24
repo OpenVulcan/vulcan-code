@@ -97,17 +97,37 @@ export function ProjectSidebar(props: {
   // projectDragSensors enables pointer dragging only after a small movement threshold.
   // projectDragSensors 仅在达到小幅移动阈值后启用指针拖拽。
   const projectDragSensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  // projectIds stores the explicit project identifiers available in this snapshot.
+  // projectIds 保存当前快照中明确存在的项目标识。
+  const projectIds = React.useMemo(() => new Set(props.projects.map((project) => project.id)), [props.projects]);
+  // projectsById resolves conversation project icons without changing conversation data.
+  // projectsById 在不改变会话数据的情况下解析会话所属项目图标。
+  const projectsById = React.useMemo(() => {
+    return new Map(props.projects.map((project) => [project.id, project]));
+  }, [props.projects]);
   // conversationsByProject groups conversations beneath their owning project folder.
   // conversationsByProject 将会话归组到所属项目文件夹下。
   const conversationsByProject = React.useMemo(() => {
-    const fallbackProjectId = props.projects[0]?.id ?? "default-project";
     return props.conversations.reduce<Record<string, ConversationSummary[]>>((groups, conversation) => {
-      const projectId = conversation.projectId ?? fallbackProjectId;
+      const projectId = conversation.projectId;
+      if (!projectId || !projectIds.has(projectId)) {
+        return groups;
+      }
       groups[projectId] = groups[projectId] ?? [];
       groups[projectId].push(conversation);
       return groups;
     }, {});
-  }, [props.conversations, props.projects]);
+  }, [projectIds, props.conversations]);
+  // unlinkedConversations keeps conversations without a valid project owner in a diagnostic group.
+  // unlinkedConversations 将没有有效项目归属的会话保留在诊断分组中。
+  const unlinkedConversations = React.useMemo(() => {
+    return props.conversations.filter((conversation) => {
+      if (props.pinnedConversationIds.has(conversation.id)) {
+        return false;
+      }
+      return !conversation.projectId || !projectIds.has(conversation.projectId);
+    });
+  }, [projectIds, props.conversations, props.pinnedConversationIds]);
   // sortedConversationsByProject keeps the service-provided recency order for each project.
   // sortedConversationsByProject 保留服务端提供的项目内最近活动顺序。
   const sortedConversationsByProject = React.useMemo(() => {
@@ -118,11 +138,6 @@ export function ProjectSidebar(props: {
   const pinnedConversations = React.useMemo(() => {
     return props.conversations.filter((conversation) => props.pinnedConversationIds.has(conversation.id));
   }, [props.conversations, props.pinnedConversationIds]);
-  // projectsById resolves pinned conversation project icons without changing conversation data.
-  // projectsById 在不改变会话数据的情况下解析置顶会话所属项目图标。
-  const projectsById = React.useMemo(() => {
-    return new Map(props.projects.map((project) => [project.id, project]));
-  }, [props.projects]);
   // pinnedProjects mirrors the WebUI task tree section split.
   // pinnedProjects 对齐 WebUI 任务树中的置顶分区拆分。
   const pinnedProjects = React.useMemo(() => props.projects.filter((project) => project.pinned), [props.projects]);
@@ -337,6 +352,14 @@ export function ProjectSidebar(props: {
               ) : null}
             </SidebarMenu>
           </SidebarGroup>
+        {unlinkedConversations.length > 0 ? (
+          <SidebarGroup className="project-section unlinked-conversation-section">
+            {renderProjectGroupLabel(t("sidebar.unlinkedConversations"), <Folder size={15} />)}
+            <SidebarMenu className="unlinked-conversation-list">
+              {unlinkedConversations.map((conversation) => renderConversationRow(conversation))}
+            </SidebarMenu>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
       <SidebarFooter>
         <SidebarUserMenu onOpenSettings={() => props.onSelectArea("settings")} />

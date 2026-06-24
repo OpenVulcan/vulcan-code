@@ -24,9 +24,9 @@ export interface ComposerSubmission {
   // Composer execution mode selected by the user.
   // 用户选择的输入区执行模式。
   executionMode: string;
-  // Reasoning effort selected by the user.
-  // 用户选择的思考档位。
-  reasoningEffort: string;
+  // Backend-confirmed reasoning effort selected by the user.
+  // 用户选择且已由后端确认的思考档位。
+  reasoningEffort: string | null;
   // Runtime-disabled AI capability keys for the current prompt.
   // 当前提示词运行时禁用的 AI 能力键。
   disabledAiCapabilityKinds: AiCapabilityKind[];

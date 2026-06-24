@@ -30,9 +30,9 @@ async function loadConversationToolDetail(detailRef: ConversationDetailRef): Pro
   });
 }
 
-// conversationDetailRefCacheKey builds a stable cache key for one hidden tool detail reference.
-// conversationDetailRefCacheKey 为单条隐藏工具详情引用构建稳定缓存键。
-function conversationDetailRefCacheKey(detailRef: ConversationDetailRef): string {
+// conversationDetailRefCacheKey builds a stable cache key only when the hidden detail reference has a concrete locator.
+// conversationDetailRefCacheKey 仅在隐藏详情引用包含具体定位字段时构建稳定缓存键。
+function conversationDetailRefCacheKey(detailRef: ConversationDetailRef): string | null {
   const locator = detailRef.recordId
     ? `record:${detailRef.recordId}`
     : detailRef.seq != null
@@ -41,7 +41,10 @@ function conversationDetailRefCacheKey(detailRef: ConversationDetailRef): string
         ? `tool:${detailRef.toolCallId}`
         : detailRef.messageIndex != null
           ? `message:${detailRef.messageIndex}`
-          : "unknown";
+          : null;
+  if (!locator) {
+    return null;
+  }
   return `${detailRef.sessionId}:${locator}`;
 }
 
@@ -51,6 +54,9 @@ export async function loadCachedConversationToolDetail(
   detailRef: ConversationDetailRef,
 ): Promise<ToolDetailPayload | null> {
   const cacheKey = conversationDetailRefCacheKey(detailRef);
+  if (!cacheKey) {
+    return null;
+  }
   if (conversationToolDetailPayloadCache.has(cacheKey)) {
     return conversationToolDetailPayloadCache.get(cacheKey) ?? null;
   }

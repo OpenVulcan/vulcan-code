@@ -683,7 +683,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         if (session.id === "vldb-controller") {
           return false;
         }
-        return session.ownerSessionId ? session.ownerSessionId === props.selectedConversationId : true;
+        return session.ownerSessionId === props.selectedConversationId;
       });
     },
     [hasSelectedChatConversation, props.selectedConversationId, props.workbench.commandSessions],

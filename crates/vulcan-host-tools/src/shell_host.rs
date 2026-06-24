@@ -625,6 +625,6 @@ mod tests {
         let error = support
             .resolve_requested_shell(Some("powershell"))
             .expect_err("unsupported explicit shell should fail");
-        assert!(error.contains("未检测到"));
+        assert!(error.contains("No available launcher for shell `powershell` was detected"));
     }
 }

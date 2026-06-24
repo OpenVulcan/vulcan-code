@@ -28,7 +28,7 @@ export function activeStreamingThinkingBlock(
 // conversationRuntimeCue 解析显示在输入区上方的紧凑运行状态提示。
 export function conversationRuntimeCue(
   conversation: ConversationSummary | undefined,
-  renderItems: ConversationRenderItem[],
+  _renderItems: ConversationRenderItem[],
   t: ReturnType<typeof useI18n>["t"],
 ): RuntimeCue | null {
   if (!conversation) {
@@ -37,20 +37,9 @@ export function conversationRuntimeCue(
   if (conversation.status.toLowerCase() !== "running") {
     return null;
   }
-  const normalizedPhase = normalizedSessionRunPhase(conversation.runPhase);
-  const lastMeaningfulBlock = lastMeaningfulAssistantBlock(renderItems);
   const phaseCue = sessionRunPhaseCue(conversation.runPhase, t);
   if (phaseCue) {
     return phaseCue;
-  }
-  if (normalizedPhase && !sessionRunPhaseCanUseFallbackCue(normalizedPhase)) {
-    return null;
-  }
-  if (!lastMeaningfulBlock) {
-    return { kind: "default", text: t("runtime.memoryRecall") };
-  }
-  if (blockLooksLikeMemoryRecall(lastMeaningfulBlock)) {
-    return { kind: "default", text: t("runtime.memoryRecall") };
   }
   return null;
 }
@@ -137,32 +126,6 @@ function sessionRunPhaseCue(
     return null;
   }
   return { kind: "default", text: t("runtime.requesting") };
-}
-
-// sessionRunPhaseCanUseFallbackCue decides whether legacy running sessions may infer a main-window cue.
-// sessionRunPhaseCanUseFallbackCue 判断旧式 running 会话是否允许推断主窗口运行提示。
-function sessionRunPhaseCanUseFallbackCue(normalizedPhase: string): boolean {
-  return normalizedPhase === "running";
-}
-
-// lastMeaningfulAssistantBlock returns the newest non-stat assistant/system block for state inference.
-// lastMeaningfulAssistantBlock 返回用于状态推断的最新非统计助手或系统块。
-function lastMeaningfulAssistantBlock(renderItems: ConversationRenderItem[]): ConversationBlock | null {
-  const blocks = renderItems
-    .filter((item) => item.role !== "user")
-    .flatMap((item) => item.blocks);
-  return [...blocks].reverse().find((block) => block.kind !== "turn-stats") ?? null;
-}
-
-// blockLooksLikeMemoryRecall detects VMM and memory-oriented runtime blocks.
-// blockLooksLikeMemoryRecall 检测 VMM 与记忆相关的运行时块。
-function blockLooksLikeMemoryRecall(block: ConversationBlock): boolean {
-  const source = `${block.title}\n${block.summary}\n${block.toolName ?? ""}\n${block.body}`.toLowerCase();
-  return source.includes("vmm")
-    || source.includes("memory")
-    || source.includes("记忆")
-    || source.includes("画像")
-    || source.includes("recall");
 }
 
 // blockLooksLikeSubagentTool detects session child-agent coordination tools.

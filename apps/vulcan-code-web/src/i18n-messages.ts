@@ -32,6 +32,7 @@ export type TranslationKey =
   | "conversation.loading.projecting"
   | "conversation.loading.done"
   | "conversation.loading.failed"
+  | "conversation.unlinkedProject"
   | "conversation.history.loadMore"
   | "conversation.history.loading"
   | "conversation.action.copyFinal"
@@ -62,6 +63,7 @@ export type TranslationKey =
   | "sidebar.console"
   | "sidebar.pinned"
   | "sidebar.projects"
+  | "sidebar.unlinkedConversations"
   | "sidebar.addProject"
   | "sidebar.noProjects"
   | "sidebar.waitingWorkspace"
@@ -249,6 +251,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "正在整理显示数据",
     "conversation.loading.done": "会话载入完成",
     "conversation.loading.failed": "会话正文载入失败",
+    "conversation.unlinkedProject": "未关联项目",
     "conversation.history.loadMore": "加载更多历史",
     "conversation.history.loading": "正在加载历史",
     "conversation.action.copyFinal": "复制最终输出原文",
@@ -279,6 +282,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sidebar.console": "工作台",
     "sidebar.pinned": "置顶",
     "sidebar.projects": "项目",
+    "sidebar.unlinkedConversations": "未关联项目",
     "sidebar.addProject": "添加项目",
     "sidebar.noProjects": "暂无项目",
     "sidebar.waitingWorkspace": "等待 Workspace 快照载入",
@@ -463,6 +467,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.loading.projecting": "Preparing display data",
     "conversation.loading.done": "Conversation loaded",
     "conversation.loading.failed": "Conversation body failed to load",
+    "conversation.unlinkedProject": "Unlinked project",
     "conversation.history.loadMore": "Load more history",
     "conversation.history.loading": "Loading history",
     "conversation.action.copyFinal": "Copy final output source",
@@ -493,6 +498,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "sidebar.console": "Workspace",
     "sidebar.pinned": "Pinned",
     "sidebar.projects": "Projects",
+    "sidebar.unlinkedConversations": "Unlinked conversations",
     "sidebar.addProject": "Add project",
     "sidebar.noProjects": "No projects",
     "sidebar.waitingWorkspace": "Waiting for Workspace snapshot",

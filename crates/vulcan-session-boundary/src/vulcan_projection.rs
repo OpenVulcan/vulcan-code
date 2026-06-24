@@ -49,7 +49,7 @@ pub fn session_boundary_event_to_vulcan_record(
         return None;
     }
     let role = session_visible_role_for_event(event)?;
-    let text = session_boundary_event_display_text(event);
+    let text = session_boundary_event_display_text(event)?;
     let (kind, record_kind, title) = match (role, event.kind) {
         (SessionVisibleRole::User, SessionBoundaryEventKind::UserInput) => (
             SessionMessageKind::User,
@@ -149,23 +149,24 @@ fn session_visible_role_for_event(event: &SessionBoundaryEvent) -> Option<Sessio
     }
 }
 
-/// Extracts display text from the known session boundary event payload fields.
-/// 从已知 会话边界事件载荷字段中提取展示文本。
-fn session_boundary_event_display_text(event: &SessionBoundaryEvent) -> String {
-    for key in ["text", "message", "display_text", "summary"] {
-        if let Some(text) = event.payload.get(key).and_then(Value::as_str)
-            && !text.trim().is_empty()
-        {
-            return text.to_string();
+/// Extracts display text from the exact payload field defined for each projected event kind.
+/// 从每类可投影事件定义的精确载荷字段中提取展示文本。
+fn session_boundary_event_display_text(event: &SessionBoundaryEvent) -> Option<String> {
+    match event.kind {
+        SessionBoundaryEventKind::UserInput => session_boundary_payload_text(event, "prompt"),
+        SessionBoundaryEventKind::AgentMessage => {
+            let text = session_boundary_payload_text(event, "text");
+            if text.is_some() || !session_boundary_event_tool_calls(event).is_empty() {
+                return Some(text.unwrap_or_default());
+            }
+            None
         }
+        SessionBoundaryEventKind::ItemStarted | SessionBoundaryEventKind::ItemCompleted => {
+            session_boundary_tool_name(event)?;
+            Some(session_boundary_payload_text(event, "text").unwrap_or_default())
+        }
+        _ => None,
     }
-    if matches!(event.kind, SessionBoundaryEventKind::ItemStarted) {
-        return format!("Calling {} tool.", session_boundary_tool_name(event));
-    }
-    if matches!(event.kind, SessionBoundaryEventKind::ItemCompleted) {
-        return format!("{} tool completed.", session_boundary_tool_name(event));
-    }
-    String::new()
 }
 
 /// Builds stable Vulcan record metadata for a projected session boundary event.
@@ -204,37 +205,49 @@ fn session_boundary_event_tool_calls(
     };
     tool_calls
         .iter()
-        .enumerate()
-        .map(|(index, call)| SessionConversationToolCall {
-            id: call
+        .filter_map(|call| {
+            let id = call
                 .get("id")
                 .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .unwrap_or_else(|| format!("{}-tool-call-{index}", event.event_id)),
-            tool_call_id: call
-                .get("tool_call_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            tool_name: call
+                .filter(|value| !value.trim().is_empty())?;
+            let tool_name = call
                 .get("tool_name")
                 .and_then(Value::as_str)
-                .unwrap_or("tool")
-                .to_string(),
-            arguments: call.get("arguments").cloned().unwrap_or(Value::Null),
+                .filter(|value| !value.trim().is_empty())?;
+            Some(SessionConversationToolCall {
+                id: id.to_string(),
+                tool_call_id: call
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned),
+                tool_name: tool_name.to_string(),
+                arguments: call.get("arguments").cloned().unwrap_or(Value::Null),
+            })
         })
         .collect()
 }
 
-/// Returns the best-effort tool name attached to an item event.
-/// 返回条目事件携带的最佳努力工具名称。
-fn session_boundary_tool_name(event: &SessionBoundaryEvent) -> String {
+/// Returns the explicit tool name attached to an item event.
+/// 返回条目事件携带的显式工具名称。
+fn session_boundary_tool_name(event: &SessionBoundaryEvent) -> Option<String> {
     event
         .payload
         .get("tool_name")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or("tool")
-        .to_string()
+        .map(ToOwned::to_owned)
+}
+
+/// Reads one non-empty string payload field by its exact schema key.
+/// 按精确 schema 键读取单个非空字符串载荷字段。
+fn session_boundary_payload_text(event: &SessionBoundaryEvent, key: &str) -> Option<String> {
+    event
+        .payload
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
@@ -286,7 +299,7 @@ mod tests {
                 SessionBoundaryEventKind::UserInput,
                 SessionEventScope::Turn,
                 SessionEventVisibility::Visible,
-                json!({ "text": "hello" }),
+                json!({ "prompt": "hello" }),
             ),
         ]);
 
@@ -297,6 +310,24 @@ mod tests {
             SessionMessageRecordKind::AssistantOutput
         );
         assert_eq!(projection.conversation_state.messages.len(), 2);
+    }
+
+    /// Verifies alias-only user input payloads are not projected as valid transcript records.
+    /// 验证仅包含别名字段的用户输入载荷不会投影为有效转录记录。
+    #[test]
+    fn rejects_alias_only_user_input_payload_text() {
+        let thread_id = SessionNodeId::new_v4();
+        let projection = boundary_events_to_vulcan_conversation_state(&[event(
+            thread_id,
+            1,
+            SessionBoundaryEventKind::UserInput,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            json!({ "text": "hello" }),
+        )]);
+
+        assert!(projection.conversation_state.records.is_empty());
+        assert!(projection.conversation_state.messages.is_empty());
     }
 
     /// Verifies hidden events and child-agent scoped events are excluded from the main surface.
@@ -347,5 +378,55 @@ mod tests {
             SessionMessageRecordKind::ToolResultOutput
         );
         assert!(projection.conversation_state.messages.is_empty());
+    }
+
+    /// Verifies tool item events without a real tool name are not projected as placeholder tools.
+    /// 验证缺少真实工具名的工具条目事件不会投影为占位工具。
+    #[test]
+    fn skips_tool_item_events_without_tool_name() {
+        let thread_id = SessionNodeId::new_v4();
+        let projection = boundary_events_to_vulcan_conversation_state(&[event(
+            thread_id,
+            1,
+            SessionBoundaryEventKind::ItemCompleted,
+            SessionEventScope::Item,
+            SessionEventVisibility::Visible,
+            json!({ "text": "done" }),
+        )]);
+
+        assert!(projection.conversation_state.records.is_empty());
+        assert!(projection.conversation_state.messages.is_empty());
+    }
+
+    /// Verifies assistant tool-call projection keeps only calls with explicit ids and names.
+    /// 验证助手工具调用投影只保留带显式标识和名称的调用项。
+    #[test]
+    fn assistant_tool_calls_require_explicit_id_and_tool_name() {
+        let thread_id = SessionNodeId::new_v4();
+        let projection = boundary_events_to_vulcan_conversation_state(&[event(
+            thread_id,
+            1,
+            SessionBoundaryEventKind::AgentMessage,
+            SessionEventScope::Turn,
+            SessionEventVisibility::Visible,
+            json!({
+                "tool_calls": [
+                    { "id": "call-1", "tool_call_id": "provider-call-1", "tool_name": "read_file", "arguments": { "path": "Cargo.toml" } },
+                    { "tool_call_id": "provider-call-2", "tool_name": "write_file", "arguments": {} },
+                    { "id": "call-3", "tool_call_id": "provider-call-3", "arguments": {} }
+                ]
+            }),
+        )]);
+
+        assert_eq!(projection.conversation_state.records.len(), 1);
+        assert_eq!(projection.conversation_state.messages.len(), 1);
+        let SessionConversationPayload::Assistant { tool_calls, .. } =
+            &projection.conversation_state.messages[0].payload
+        else {
+            panic!("assistant tool-call payload should be projected");
+        };
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0].id, "call-1");
+        assert_eq!(tool_calls[0].tool_name, "read_file");
     }
 }

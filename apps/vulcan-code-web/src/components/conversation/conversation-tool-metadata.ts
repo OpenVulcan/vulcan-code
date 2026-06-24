@@ -7,20 +7,19 @@ import {
 } from "@/components/conversation/conversation-metadata";
 import type { ConversationBlockKind } from "@/components/conversation/conversation-model";
 
-// genericToolNameLabels lists localized labels that are headings rather than actual tool names.
-// genericToolNameLabels 列出只是标题而不是实际工具名的本地化标签。
-const genericToolNameLabels = new Set(["工具调用", "工具返回", "Tool Call", "Tool Result", "Raw Tool Result"]);
-
 // taskSessionIdFromToolMetadata extracts the routed child task-session id from host task metadata.
 // taskSessionIdFromToolMetadata 从宿主 task 元数据中提取路由用的子任务会话标识。
 export function taskSessionIdFromToolMetadata(metadata: unknown): string | null {
+  const hostKind = metadataString(metadata, ["host_result.kind", "hostResult.kind", "kind"]);
+  if (hostKind === "task_session") {
+    return metadataString(metadata, [
+      "host_result.payload.task_session_id",
+      "hostResult.payload.taskSessionId",
+      "task_session_id",
+    ]);
+  }
   return metadataString(metadata, [
-    "payload.task_session_id",
-    "payload.taskSessionId",
-    "host_result.payload.task_session_id",
-    "hostResult.payload.taskSessionId",
     "task_session_id",
-    "taskSessionId",
   ]);
 }
 
@@ -31,8 +30,7 @@ export function metadataToolFailureStatus(metadata: unknown): string | null {
   if (hostKind === "tool_error") {
     return "failed";
   }
-  const payloadStatus = metadataString(metadata, ["payload.status", "status"]);
-  return payloadStatus === "failed" || payloadStatus === "error" ? "failed" : null;
+  return null;
 }
 
 // turnStatsStatus reads the compact turn-stats terminal status.
@@ -88,47 +86,6 @@ export function extractToolResultIdFromText(source: string): string | null {
   return null;
 }
 
-// extractToolNameFromText recovers a tool name from legacy localized titles and Markdown bodies.
-// extractToolNameFromText 从旧版本地化标题与 Markdown 正文中恢复工具名称。
-export function extractToolNameFromText(source: string): string | null {
-  const normalized = source.replace(/\r\n/g, "\n");
-  const patterns = [
-    /##\s*Tool Call\s*\n+\s*`([^`]+)`/im,
-    /##\s*Tool Result\s*\n+\s*`([^`]+)`/im,
-    /tool_name["'`:\s=]+([A-Za-z0-9_.:-]+)/i,
-    /"tool_name"\s*:\s*"([^"]+)"/i,
-    /"toolName"\s*:\s*"([^"]+)"/i,
-    /工具调用\s*[·:：]\s*[A-Za-z0-9_.:-]+\s*[·:：]\s*([A-Za-z0-9_.:-]+)/,
-    /(?:工具调用|工具返回)\s*[·:：]?\s*([A-Za-z0-9_.:-]+)/,
-    /调用\s+([A-Za-z0-9_.:-]+)\s+工具/,
-    /Tool (?:Call|Result)\s+([A-Za-z0-9_.:-]+)/i,
-    /Call\s+([A-Za-z0-9_.:-]+)/i,
-  ];
-  for (const pattern of patterns) {
-    const value = normalized.match(pattern)?.[1]?.trim();
-    if (value && !genericToolNameLabels.has(value)) {
-      return value;
-    }
-  }
-  return null;
-}
-
-// extractToolStatusFromText recovers a display state from legacy tool output text.
-// extractToolStatusFromText 从旧版工具输出文本中恢复显示状态。
-export function extractToolStatusFromText(source: string): string | null {
-  const normalized = source.toLowerCase();
-  if (/失败|报错|错误|failed|error|panic|exit code\s*-\d|退出码\s*-\d/i.test(source)) {
-    return "failed";
-  }
-  if (/已完成|完成|completed|success|succeeded/i.test(source)) {
-    return "completed";
-  }
-  if (/运行中|进行中|running|pending|in progress/i.test(normalized)) {
-    return "running";
-  }
-  return null;
-}
-
 // normalizeToolDisplayState maps provider and host state words into WebUI display states.
 // normalizeToolDisplayState 将 Provider 与宿主状态词映射为 WebUI 展示状态。
 export function normalizeToolDisplayState(status?: string | null): string | undefined {
@@ -139,22 +96,13 @@ export function normalizeToolDisplayState(status?: string | null): string | unde
   if (normalized === "failed" || normalized === "error" || normalized === "errored" || normalized === "failure") {
     return "failed";
   }
-  if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded" || normalized === "ready") {
+  if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
   if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted") {
     return "stopped";
   }
-  if (normalized === "running" || normalized === "pending" || normalized === "preview" || normalized === "in_progress") {
-    return "running";
-  }
-  if (status.includes("失败") || status.includes("错误")) {
-    return "failed";
-  }
-  if (status.includes("完成") || status.includes("成功")) {
-    return "completed";
-  }
-  if (status.includes("运行") || status.includes("进行")) {
+  if (normalized === "running" || normalized === "pending" || normalized === "in_progress") {
     return "running";
   }
   return status.trim();
@@ -169,7 +117,7 @@ export function structuredKindLooksLikeToolBlock(kind: ConversationBlockKind): b
 // structuredMessageHasToolEvidence prevents assistant prose from being misrendered as a failed tool row.
 // structuredMessageHasToolEvidence 防止助手正文被误渲染为失败工具行。
 export function structuredMessageHasToolEvidence(message: ConversationMessage, attributes: Record<string, string>): boolean {
-  if (attributes.tool_evidence === "true" || attributes.tool_name || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
+  if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
     return true;
   }
   const hostKind = metadataString(message.metadata, [
@@ -180,19 +128,7 @@ export function structuredMessageHasToolEvidence(message: ConversationMessage, a
   if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
     return true;
   }
-  const payloadTool = metadataString(message.metadata, [
-    "payload.tool",
-    "host_result.payload.tool",
-    "hostResult.payload.tool",
-    "payload.tool_name",
-    "host_result.payload.tool_name",
-    "hostResult.payload.toolName",
-  ]);
-  if (payloadTool) {
-    return true;
-  }
-  const title = message.title ?? "";
-  return /调用\s+\S+\s+工具|工具调用|工具返回|Tool Call|Tool Result|Command Session|命令会话/i.test(title);
+  return false;
 }
 
 // conversationBlockHasToolEvidence separates real tool metadata from prose-derived display text.
@@ -208,9 +144,6 @@ export function conversationBlockHasToolEvidence(
   if (attributes.tool_evidence === "true" || attributes.tool_call_id || attributes.tool_result_id || attributes.command_session_id || attributes.task_session_id) {
     return true;
   }
-  if (attributes.tool_name || attributes.name) {
-    return true;
-  }
   const hostKind = metadataString(rawMetadata, [
     "host_result.kind",
     "hostResult.kind",
@@ -219,14 +152,7 @@ export function conversationBlockHasToolEvidence(
   if (hostKind && ["tool_error", "tool_result", "tool_call", "task_session", "command_session", "command_run", "change_set"].includes(hostKind)) {
     return true;
   }
-  return Boolean(metadataString(rawMetadata, [
-    "payload.tool",
-    "host_result.payload.tool",
-    "hostResult.payload.tool",
-    "payload.tool_name",
-    "host_result.payload.tool_name",
-    "hostResult.payload.toolName",
-  ]));
+  return false;
 }
 
 // toolMetadataContainsReturnPayload returns whether a tool result carries an API-level returned payload.
@@ -236,8 +162,8 @@ export function toolMetadataContainsReturnPayload(metadata: unknown, body?: stri
     return true;
   }
   return Boolean(
-    metadataString(metadata, ["tool_result_id", "toolResultId", "payload.tool_result_id", "payload.toolResultId"])
-      ?? metadataValue(metadata, ["host_result", "hostResult", "payload"]),
+    metadataString(metadata, ["tool_result_id"])
+      ?? metadataValue(metadata, ["host_result", "hostResult"]),
   );
 }
 

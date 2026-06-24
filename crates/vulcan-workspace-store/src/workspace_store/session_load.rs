@@ -1124,6 +1124,11 @@ mod tests {
         visibility: SessionEventVisibility,
         text: &str,
     ) -> super::super::segmented_session_store::SegmentedSessionEventLine {
+        let display_payload = if matches!(kind, SessionBoundaryEventKind::UserInput) {
+            json!({ "prompt": text })
+        } else {
+            json!({ "text": text })
+        };
         super::super::segmented_session_store::SegmentedSessionEventLine {
             seq,
             timestamp: (1000 + seq).to_string(),
@@ -1137,7 +1142,7 @@ mod tests {
                 "scope": SessionEventScope::Turn,
                 "visibility": visibility,
                 "sequence": seq,
-                "payload": { "text": text },
+                "payload": display_payload,
             }),
         }
     }
@@ -1211,7 +1216,7 @@ mod tests {
                 101,
             )
             .with_turn_id("turn-1")
-            .with_payload(json!({ "text": "用户归档前输入" })),
+            .with_payload(json!({ "prompt": "用户归档前输入" })),
             SessionBoundaryEvent::new(
                 "turn-1-agent",
                 thread_id,

@@ -1223,6 +1223,7 @@ mod tests {
                 Arc::new(CommandSessionRecord {
                     command_session_id,
                     owner_session_id,
+                    display_name: None,
                     command: String::from("echo live"),
                     shell_label: String::from("pwsh"),
                     launcher_shell_label: String::from("pwsh"),

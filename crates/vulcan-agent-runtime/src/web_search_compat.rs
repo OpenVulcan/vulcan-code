@@ -205,15 +205,12 @@ fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvocation, Strin
         .ok_or_else(|| String::from("web_search 参数必须是 JSON 对象。"))?;
     let target = object
         .get("target")
-        .or_else(|| object.get("provider"))
-        .or_else(|| object.get("provider_target"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     let query = object
         .get("query")
-        .or_else(|| object.get("q"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -221,10 +218,9 @@ fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvocation, Strin
         .to_string();
     let max_results = object
         .get("max_results")
-        .or_else(|| object.get("maxResults"))
-        .or_else(|| object.get("limit"))
-        .or_else(|| object.get("count"))
-        .and_then(parse_positive_usize)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| *value > 0)
         .map(|value| value.clamp(1, 20));
 
     Ok(WebSearchInvocation {
@@ -232,19 +228,6 @@ fn parse_web_search_invocation(args: Value) -> Result<WebSearchInvocation, Strin
         query,
         max_results,
     })
-}
-
-/// Parses a positive usize from a permissive JSON value.
-/// 从宽松 JSON 值中解析正整数。
-fn parse_positive_usize(value: &Value) -> Option<usize> {
-    match value {
-        Value::Number(number) => number
-            .as_u64()
-            .and_then(|value| usize::try_from(value).ok()),
-        Value::String(text) => text.trim().parse::<usize>().ok(),
-        _ => None,
-    }
-    .filter(|value| *value > 0)
 }
 
 /// Executes one provider-specific search request.
@@ -1741,20 +1724,32 @@ mod tests {
     use crate::provider_config::{PersistedWebSearchProviderEntry, WebSearchProviderKind};
     use serde_json::json;
 
-    /// Parses both snake-case and camel-case result count arguments.
-    /// 同时解析蛇形与驼峰形式的结果数量参数。
+    /// Parses the schema-declared web-search argument names.
+    /// 解析 Schema 声明的网页搜索参数名称。
     #[test]
-    fn parse_web_search_invocation_accepts_common_argument_shapes() {
+    fn parse_web_search_invocation_accepts_schema_argument_names() {
         let invocation = parse_web_search_invocation(json!({
             "target": "minimax/minimax",
             "query": "vulcan code",
-            "maxResults": "8"
+            "max_results": 8
         }))
         .expect("arguments should parse");
 
         assert_eq!(invocation.target.as_deref(), Some("minimax/minimax"));
         assert_eq!(invocation.query, "vulcan code");
         assert_eq!(invocation.max_results, Some(8));
+    }
+
+    /// Rejects alias-only web-search arguments that are absent from the schema.
+    /// 拒绝未出现在 Schema 中的网页搜索别名参数。
+    #[test]
+    fn parse_web_search_invocation_rejects_alias_only_query() {
+        let error = parse_web_search_invocation(json!({
+            "q": "vulcan code"
+        }))
+        .expect_err("alias-only query should be rejected");
+
+        assert!(error.contains("query"));
     }
 
     /// Exposes a strict schema with the stable `query` field required.

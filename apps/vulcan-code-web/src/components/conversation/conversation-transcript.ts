@@ -346,14 +346,13 @@ function latestToolMergeInstanceKey(state: ToolMergeProjectionState, baseKeys: s
   return createToolMergeInstanceKey(state, baseKeys);
 }
 
-// toolMergeBaseKeysForBlock resolves stable grouping keys from precise ids to the tool-name fallback.
-// toolMergeBaseKeysForBlock 按精确标识到工具名回退的顺序解析基础分组键。
+// toolMergeBaseKeysForBlock resolves stable grouping keys from precise ids.
+// toolMergeBaseKeysForBlock 按精确标识解析稳定分组键。
 function toolMergeBaseKeysForBlock(block: ConversationBlock): string[] {
   const keys = [
     block.toolCallId ? `call:${block.toolCallId}` : null,
     block.commandSessionId ? `command:${block.commandSessionId}` : null,
     block.toolResultId ? toolCallIdFromToolResultId(block.toolResultId) : null,
-    block.toolName ? `name:${block.toolName}` : null,
   ];
   return keys.filter((key): key is string => Boolean(key));
 }

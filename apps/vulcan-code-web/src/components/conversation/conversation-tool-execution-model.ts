@@ -11,7 +11,7 @@ export function buildToolExecutionDetailBody(blocks: ToolExecutionConversationBl
   return blocks
     .map((block) => {
       const sections = [`## ${toolBlockTitle(block.kind, block.toolName)}`];
-      const argumentsValue = metadataValue(block.rawMetadata, ["arguments", "payload.arguments"]);
+      const argumentsValue = metadataValue(block.rawMetadata, ["arguments"]);
       if (argumentsValue !== undefined) {
         sections.push(`### Arguments\n\n\`\`\`json\n${JSON.stringify(argumentsValue, null, 2)}\n\`\`\``);
       }
@@ -59,7 +59,7 @@ export function toolExecutionSummary(blocks: ToolExecutionConversationBlock[], s
 // toolExecutionName 从合并后的调用与返回块中解析最佳人类可见工具名。
 export function toolExecutionName(blocks: ToolExecutionConversationBlock[]): string | null {
   for (const block of blocks) {
-    const name = block.toolName ?? extractToolNameFromText(block.title);
+    const name = block.toolName;
     if (name) {
       return name;
     }
@@ -74,21 +74,7 @@ export function toolExecutionIdentifier(blocks: ToolExecutionConversationBlock[]
     const identifier = block.toolCallId
       ?? block.toolResultId
       ?? block.commandSessionId
-      ?? block.taskSessionId
-      ?? metadataString(block.rawMetadata, [
-        "tool_call_id",
-        "toolCallId",
-        "payload.tool_call_id",
-        "payload.toolCallId",
-        "host_result.payload.tool_call_id",
-        "hostResult.payload.toolCallId",
-        "task_session_id",
-        "taskSessionId",
-        "payload.task_session_id",
-        "payload.taskSessionId",
-        "host_result.payload.task_session_id",
-        "hostResult.payload.taskSessionId",
-      ]);
+      ?? block.taskSessionId;
     if (identifier) {
       return shortenToolExecutionIdentifier(identifier);
     }
@@ -137,28 +123,20 @@ function shortenToolExecutionIdentifier(identifier: string): string {
 // toolExecutionErrorPreview 从元数据或正文中提取紧凑失败原因。
 export function toolExecutionErrorPreview(blocks: ToolExecutionConversationBlock[]): string | null {
   for (const block of blocks) {
+    const hostKind = metadataString(block.rawMetadata, ["host_result.kind", "hostResult.kind"]);
+    const hostErrorPaths = hostKind === "tool_error"
+      ? ["host_result.payload.message", "hostResult.payload.message", "host_result.payload.error", "hostResult.payload.error", "host_result.payload.reason", "hostResult.payload.reason"]
+      : [];
     const metadataError = metadataString(block.rawMetadata, [
       "result.error",
       "result.reason",
-      "host_result.payload.message",
-      "hostResult.payload.message",
-      "host_result.payload.error",
-      "hostResult.payload.error",
-      "host_result.payload.reason",
-      "hostResult.payload.reason",
-      "payload.message",
-      "payload.error",
-      "payload.reason",
-      "message",
-      "error",
-      "reason",
+      ...hostErrorPaths,
     ]);
     if (metadataError) {
       return compactToolExecutionErrorPreview(metadataError);
     }
   }
-  const failedBlock = blocks.find((block) => normalizeToolDisplayState(block.status) === "failed")
-    ?? blocks.find((block) => /失败|报错|错误|failed|error|panic/i.test(block.body));
+  const failedBlock = blocks.find((block) => normalizeToolDisplayState(block.status) === "failed");
   const preview = failedBlock?.body || failedBlock?.summary;
   return preview ? compactToolExecutionErrorPreview(preview) : null;
 }
@@ -349,50 +327,16 @@ function normalizeToolDisplayState(status?: string | null): string | undefined {
   if (normalized === "failed" || normalized === "error" || normalized === "errored" || normalized === "failure") {
     return "failed";
   }
-  if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded" || normalized === "ready") {
+  if (normalized === "completed" || normalized === "complete" || normalized === "success" || normalized === "succeeded") {
     return "completed";
   }
   if (normalized === "stopped" || normalized === "cancelled" || normalized === "canceled" || normalized === "aborted") {
     return "stopped";
   }
-  if (normalized === "running" || normalized === "pending" || normalized === "preview" || normalized === "in_progress") {
-    return "running";
-  }
-  if (status.includes("失败") || status.includes("错误")) {
-    return "failed";
-  }
-  if (status.includes("完成") || status.includes("成功")) {
-    return "completed";
-  }
-  if (status.includes("运行") || status.includes("进行")) {
+  if (normalized === "running" || normalized === "pending" || normalized === "in_progress") {
     return "running";
   }
   return status.trim();
-}
-
-// extractToolNameFromText recovers a tool name from legacy localized titles and Markdown bodies.
-// extractToolNameFromText 从旧版本地化标题与 Markdown 正文中恢复工具名称。
-function extractToolNameFromText(source: string): string | null {
-  const normalized = source.replace(/\r\n/g, "\n");
-  const patterns = [
-    /##\s*Tool Call\s*\n+\s*`([^`]+)`/im,
-    /##\s*Tool Result\s*\n+\s*`([^`]+)`/im,
-    /tool_name["'`:\s=]+([A-Za-z0-9_.:-]+)/i,
-    /"tool_name"\s*:\s*"([^"]+)"/i,
-    /"toolName"\s*:\s*"([^"]+)"/i,
-    /工具调用\s*[·:：]\s*[A-Za-z0-9_.:-]+\s*[·:：]\s*([A-Za-z0-9_.:-]+)/,
-    /(?:工具调用|工具返回)\s*[·:：]?\s*([A-Za-z0-9_.:-]+)/,
-    /调用\s+([A-Za-z0-9_.:-]+)\s+工具/,
-    /Tool (?:Call|Result)\s+([A-Za-z0-9_.:-]+)/i,
-    /Call\s+([A-Za-z0-9_.:-]+)/i,
-  ];
-  for (const pattern of patterns) {
-    const value = normalized.match(pattern)?.[1]?.trim();
-    if (value && !genericToolNameLabels.has(value)) {
-      return value;
-    }
-  }
-  return null;
 }
 
 // compactTextPreview returns one short single-line preview for cards and modal headers.
@@ -408,7 +352,3 @@ function compactTextPreview(source: string): string {
   }
   return text.length > 140 ? `${text.slice(0, 140)}...` : text;
 }
-
-// genericToolNameLabels lists localized labels that are headings rather than actual tool names.
-// genericToolNameLabels 列出只是标题而不是实际工具名的本地化标签。
-const genericToolNameLabels = new Set(["工具调用", "工具返回", "Tool Call", "Tool Result", "Raw Tool Result"]);

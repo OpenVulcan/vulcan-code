@@ -3248,9 +3248,9 @@ async fn service_run_vmm_memory_action(
     if request.action.trim() == "suppress_context_injection_item" {
         return service_suppress_context_injection_item(state, request).await;
     }
-    let (layer, management_user_ref, management_project_ref, session_id) =
+    let (layer, management_user_ref, management_project_ref) =
         vmm_action_context(&state, &request)?;
-    let action = parse_vmm_memory_action(&request, session_id)?;
+    let action = parse_vmm_memory_action(&request)?;
     let request_preview = vmm_action_request_preview(&action)?;
     let outcome = vulcan_service_runtime::vmm_management::run_vmm_workbench_action(
         action,
@@ -11345,7 +11345,7 @@ fn parse_luaskill_tool_registration_state(
 fn vmm_action_context(
     state: &SharedServiceBridgeState,
     request: &VmmMemoryActionRequest,
-) -> Result<(vulcan_vmm::VmmConfigLayer, String, String, Option<String>), String> {
+) -> Result<(vulcan_vmm::VmmConfigLayer, String, String), String> {
     let (provider_configuration, workspace_snapshot) = {
         let guard = state
             .lock()
@@ -11361,8 +11361,6 @@ fn vmm_action_context(
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
         (provider_configuration, workspace_snapshot)
     };
-    let selected_session = selected_workspace_session(&workspace_snapshot);
-    let session_id = selected_session.map(|session| session.id.to_string());
     let scope = request.scope.trim().to_ascii_lowercase();
     if scope == "project" {
         let project = vmm_request_project_scope(&workspace_snapshot, request.project_id.as_deref())
@@ -11382,12 +11380,7 @@ fn vmm_action_context(
             .or_else(|| project_layer.project_id.map(|value| value.to_string()))
             .or_else(|| layer.project_id.map(|value| value.to_string()))
             .unwrap_or_default();
-        return Ok((
-            layer,
-            management_user_ref,
-            management_project_ref,
-            session_id,
-        ));
+        return Ok((layer, management_user_ref, management_project_ref));
     }
     let layer = provider_configuration.vmm;
     let management_user_ref = vmm_payload_text(&request.payload, "userRef")
@@ -11396,12 +11389,7 @@ fn vmm_action_context(
     let management_project_ref = vmm_payload_text(&request.payload, "projectRef")
         .or_else(|| layer.project_id.map(|value| value.to_string()))
         .unwrap_or_default();
-    Ok((
-        layer,
-        management_user_ref,
-        management_project_ref,
-        session_id,
-    ))
+    Ok((layer, management_user_ref, management_project_ref))
 }
 
 /// Converts an effective VMM configuration into a standalone action layer.
@@ -11439,7 +11427,6 @@ fn vmm_action_layer_from_effective(
 /// 将单个 WebUI VMM 动作请求解析为运行时动作枚举。
 fn parse_vmm_memory_action(
     request: &VmmMemoryActionRequest,
-    selected_session_id: Option<String>,
 ) -> Result<vulcan_service_runtime::vmm_management::VmmWorkbenchAction, String> {
     let payload = &request.payload;
     match request.action.trim() {
@@ -11523,8 +11510,7 @@ fn parse_vmm_memory_action(
         "write_memories" => Ok(
             vulcan_service_runtime::vmm_management::VmmWorkbenchAction::WriteMemories {
                 session_id: vmm_payload_text(payload, "sessionId")
-                    .or(selected_session_id)
-                    .unwrap_or_else(|| String::from("webui-vmm-memory")),
+                    .ok_or_else(|| String::from("WriteMemories 缺少明确的 sessionId。"))?,
                 item: vulcan_vmm::WriteMemoryItem {
                     scope_level: vmm_payload_i32(payload, "scopeLevel").unwrap_or(2),
                     abstract_text: vmm_payload_text(payload, "abstractText").unwrap_or_default(),
@@ -29567,7 +29553,9 @@ fn webui_git_index_blob_ids(repository_root: &Path, paths: &[String]) -> BTreeMa
             let Some(oid) = metadata_parts.next() else {
                 continue;
             };
-            let stage = metadata_parts.next().unwrap_or("0");
+            let Some(stage) = metadata_parts.next() else {
+                continue;
+            };
             if stage != "0" {
                 continue;
             }

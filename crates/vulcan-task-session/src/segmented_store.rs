@@ -870,7 +870,12 @@ fn append_main_session_task_link_event(
     );
     let task_metadata_file = format!("{task_dir}/{SEGMENTED_METADATA_FILE}");
     let task_projection = main_session_task_metadata_projection(root_session_dir, &task_dir)
-        .unwrap_or_else(|_| TaskMetadataProjection::fallback());
+        .map_err(|error| {
+            SessionStoreError::new(format!(
+                "Failed to read child task metadata for parent mirror `{}` at `{task_metadata_file}`: {error}",
+                event.task_session_id
+            ))
+        })?;
     let task_active_segment = format!("{task_dir}/{}", task_projection.active_segment);
     let kind = match event.kind {
         TaskInvocationEventKind::TaskCreated | TaskInvocationEventKind::TaskStarted => {
@@ -931,25 +936,6 @@ struct TaskMetadataProjection {
     /// Agent profile payload recorded by the child task metadata.
     /// 子任务元数据记录的代理画像载荷。
     agent_profile: Value,
-}
-
-impl TaskMetadataProjection {
-    /// Builds a strict fallback used only when parent-link metadata cannot be read.
-    /// 构建仅在无法读取父关联元数据时使用的严格回退投影。
-    fn fallback() -> Self {
-        Self {
-            active_segment: "s001.jsonl".to_string(),
-            line_count: 0,
-            agent_kind: "main_clone".to_string(),
-            agent_profile: json!({
-                "agent_id": null,
-                "agent_name": null,
-                "agent_md_path": null,
-                "prompt_source": "main_clone",
-                "inherit_parent_config": true
-            }),
-        }
-    }
 }
 
 /// Reads the child task metadata projection used by parent-link payloads.
@@ -1778,5 +1764,42 @@ mod tests {
         assert_eq!(task_mirror["line_count"], 3);
         assert_eq!(task_mirror["agent_kind"], "main_clone");
         assert!(task_mirror["agent_profile"].is_object());
+    }
+
+    /// Verifies parent task mirrors fail explicitly when the child metadata document is missing.
+    /// 验证子任务元数据文档缺失时父级任务镜像会显式失败。
+    #[test]
+    fn parent_task_link_rejects_missing_child_metadata() {
+        let root = test_root("parent_task_link_rejects_missing_child_metadata");
+        let root_session_id = SessionNodeId::new_v4();
+        let task_session_id = SessionNodeId::new_v4();
+        create_root_session_metadata(&root, root_session_id);
+        let parent = ParentSessionRef::MainSession { root_session_id };
+
+        let result = append_main_session_task_link_event(
+            &root,
+            &TaskInvocationEvent {
+                event_id: "task-created".to_string(),
+                root_session_id,
+                parent,
+                task_session_id,
+                sequence: 0,
+                kind: TaskInvocationEventKind::TaskCreated,
+                status: TaskSessionStatus::Created,
+                prompt: None,
+                timestamp_ms: 300,
+                payload: json!({ "display_title": "Missing metadata task" }),
+            },
+        );
+
+        let error = result.expect_err("missing task metadata should fail");
+        assert!(error.message.contains("Failed to read child task metadata"));
+        assert!(error.message.contains(&task_session_id.to_string()));
+        let root_metadata = read_required_json::<Value>(&root.join(SEGMENTED_METADATA_FILE))
+            .expect("root metadata");
+        assert!(root_metadata["tasks"].as_array().is_some_and(Vec::is_empty));
+        let root_lines =
+            read_json_lines::<SegmentedEventLine>(&root.join("s001.jsonl")).expect("root lines");
+        assert_eq!(root_lines.len(), 1);
     }
 }

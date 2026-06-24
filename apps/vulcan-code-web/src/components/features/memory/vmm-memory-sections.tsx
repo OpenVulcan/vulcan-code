@@ -240,7 +240,7 @@ export function renderVmmSectionDetail(props: VmmSectionRenderProps) {
         <div className="vmm-action-row">
           <VmmActionButton busy={props.busyAction === "search_memory_events"} icon={<Search size={15} />} label="SearchMemoryEvents" onClick={() => props.onRunAction("search_memory_events", { queries: props.searchQueries, topK: props.searchTopK })} />
           <VmmActionButton busy={props.busyAction === "get_turn_details"} icon={<FileText size={15} />} label="GetTurnDetails" onClick={() => props.onRunAction("get_turn_details", { turnIds: props.turnIds })} />
-          <VmmActionButton busy={props.busyAction === "write_memories"} icon={<Database size={15} />} label="WriteMemories" onClick={() => props.onRunAction("write_memories", { abstractText: props.writeAbstract, details: props.writeDetails, scopeLevel: props.writeScopeLevel, category: props.writeCategory, priority: props.writePriority, memoryLevel: props.writeMemoryLevel })} />
+          <VmmActionButton busy={props.busyAction === "write_memories"} icon={<Database size={15} />} label="WriteMemories" onClick={() => props.onRunAction("write_memories", { sessionId: props.snapshot.selectedConversationId ?? null, abstractText: props.writeAbstract, details: props.writeDetails, scopeLevel: props.writeScopeLevel, category: props.writeCategory, priority: props.writePriority, memoryLevel: props.writeMemoryLevel })} />
           <VmmActionButton danger busy={props.busyAction === "delete_memories"} icon={<Trash2 size={15} />} label="DeleteMemories" onClick={() => props.onRunAction("delete_memories", { memoryIds: props.deleteMemoryIds, reason: props.deleteReason })} />
         </div>
         <VmmToolResult

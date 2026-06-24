@@ -55,9 +55,9 @@ pub fn normalize_provider_user_input_for_model(
         );
         let api_supports_attachment =
             provider_api_family_supports_attachment_kind(api_family, attachment.kind.clone());
-        let model_supports_attachment = capabilities.is_none_or(|capabilities| {
-            capabilities.supports_attachment_kind(attachment.kind.clone())
-        });
+        let model_supports_attachment = capabilities
+            .map(|capabilities| capabilities.supports_attachment_kind(attachment.kind.clone()))
+            .unwrap_or(true);
 
         if attachment_is_replayable && api_supports_attachment && model_supports_attachment {
             supported_attachments.push(attachment);
@@ -254,8 +254,8 @@ mod tests {
         }
     }
 
-    /// Degrades unsupported video input into explicit fallback text for Anthropic-compatible request assembly.
-    /// 为 Anthropic 兼容请求组装把不受支持的视频输入降级为显式回退文本。
+    /// Degrades only API-unsupported attachments when the legacy wrapper has no model capability snapshot.
+    /// 当旧包装入口没有模型能力快照时只降级 API 不支持的附件。
     #[test]
     fn normalize_provider_user_input_degrades_unsupported_attachments() {
         let normalized = normalize_provider_user_input(
@@ -272,8 +272,13 @@ mod tests {
         );
 
         assert_eq!(normalized.attachments.len(), 1);
+        assert_eq!(
+            normalized.attachments[0].kind,
+            ConversationAttachmentKind::Pdf
+        );
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.contains("Cannot read \"demo.mp4\""));
+        assert!(normalized.text.contains("this API path"));
     }
 
     /// Degrades API-supported attachments when the selected model does not declare the matching input modality.
@@ -298,6 +303,26 @@ mod tests {
         assert!(normalized.attachments.is_empty());
         assert_eq!(normalized.downgraded_attachments.len(), 1);
         assert!(normalized.text.contains("selected model"));
+    }
+
+    /// Keeps API-supported attachments when model capabilities are unavailable.
+    /// 当模型能力不可用时保留 API 已支持的附件。
+    #[test]
+    fn normalize_provider_user_input_keeps_api_supported_attachments_without_model_capabilities() {
+        let normalized = normalize_provider_user_input_for_model(
+            ProviderApiFamily::OpenAiChatCompatible,
+            None,
+            "请看图",
+            &[test_attachment(
+                ConversationAttachmentKind::Image,
+                "demo.png",
+                "image/png",
+            )],
+        );
+
+        assert_eq!(normalized.attachments.len(), 1);
+        assert!(normalized.downgraded_attachments.is_empty());
+        assert_eq!(normalized.text, "请看图");
     }
 
     /// Bridges image attachments into the host `understand_image` tool when the API path supports images but the selected model does not.

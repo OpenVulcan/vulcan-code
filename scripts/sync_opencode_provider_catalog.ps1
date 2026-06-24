@@ -284,7 +284,7 @@ function Resolve-ProviderRuntime {
         return [string]$Script:RuntimeOverridesByNpmPackage[$packageName]
     }
 
-    return "openai-compatible"
+    throw "Unable to resolve provider runtime for '$ProviderId' with npm package '$packageName'. Add an explicit provider id or npm package runtime mapping before synchronizing this provider."
 }
 
 function New-BaseUrlConfig {

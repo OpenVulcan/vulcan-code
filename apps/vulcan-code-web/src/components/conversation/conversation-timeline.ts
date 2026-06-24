@@ -49,7 +49,7 @@ export function projectConversationTimelineItems(
     const planArtifactItems = latestPlanArtifactRenderItems(currentTurn.bodyItems);
     const bodyItems = currentTurn.bodyItems.filter((item) => !isPlanArtifactRenderItem(item));
     const finalItem = !running && !stopped ? popFinalAssistantItem(bodyItems) : null;
-    const processItems = dedupeProcessAssistantMarkdownItems(bodyItems.filter((item) => !isTurnStatsRenderItem(item)));
+    const processItems = bodyItems.filter((item) => !isTurnStatsRenderItem(item));
     const turnUserItem = currentTurn.userItem;
     const shouldDefaultCollapse = Boolean(turnUserItem) && Boolean(finalItem) && !running && !stopped && turnStartIdsWithLaterTurn.has(turnUserItem?.id ?? "");
     const startedAtMs = conversationMessageUnixMillis(currentTurn.anchorItem.sourceMessage ?? currentTurn.anchorItem.userMessage);
@@ -337,61 +337,6 @@ function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRen
     }
   }
   return null;
-}
-
-// dedupeProcessAssistantMarkdownItems hides repeated short assistant prose inside one turn process group.
-// dedupeProcessAssistantMarkdownItems 隐藏同一轮处理过程中的重复短助手正文。
-function dedupeProcessAssistantMarkdownItems(items: ConversationRenderItem[]): ConversationRenderItem[] {
-  const hiddenIndexes = new Set<number>();
-  for (let index = 0; index < items.length; index += 1) {
-    const item = items[index];
-    const body = processAssistantMarkdownBody(item);
-    if (!body) {
-      continue;
-    }
-    for (let nextIndex = index + 1; nextIndex < items.length; nextIndex += 1) {
-      const nextBody = processAssistantMarkdownBody(items[nextIndex]);
-      if (!nextBody) {
-        continue;
-      }
-      if (assistantMarkdownProcessBodyCoveredByLater(body, nextBody)) {
-        hiddenIndexes.add(index);
-        break;
-      }
-    }
-  }
-  return items.filter((_, index) => !hiddenIndexes.has(index));
-}
-
-// processAssistantMarkdownBody returns the plain Markdown body for assistant prose rows only.
-// processAssistantMarkdownBody 仅返回助手正文行的 Markdown 正文。
-function processAssistantMarkdownBody(item: ConversationRenderItem | undefined): string | null {
-  const block = item?.blocks.length === 1 ? item.blocks[0] : undefined;
-  if (!block || item?.role !== "assistant" || block.kind !== "markdown") {
-    return null;
-  }
-  const body = block.body.trim();
-  return body ? body : null;
-}
-
-// assistantMarkdownProcessBodyCoveredByLater detects duplicate or superseded streamed process prose.
-// assistantMarkdownProcessBodyCoveredByLater 检测重复或已被后续流式正文覆盖的过程正文。
-function assistantMarkdownProcessBodyCoveredByLater(body: string, laterBody: string): boolean {
-  const normalizedBody = normalizeProcessAssistantText(body);
-  const normalizedLaterBody = normalizeProcessAssistantText(laterBody);
-  if (!normalizedBody || !normalizedLaterBody) {
-    return false;
-  }
-  if (normalizedBody === normalizedLaterBody) {
-    return true;
-  }
-  return normalizedBody.length <= 240 && normalizedLaterBody.includes(normalizedBody);
-}
-
-// normalizeProcessAssistantText normalizes prose for duplicate checks without changing display content.
-// normalizeProcessAssistantText 规范化正文以便去重检查，但不改变显示内容。
-function normalizeProcessAssistantText(source: string): string {
-  return source.replace(/\s+/g, " ").trim();
 }
 
 // turnStatsDurationMs reads the total turn duration from structured turn statistics.

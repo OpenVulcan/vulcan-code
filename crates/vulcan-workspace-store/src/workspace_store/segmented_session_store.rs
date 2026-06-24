@@ -3884,74 +3884,14 @@ fn replacement_history_to_session_messages(
         return Ok(conversation_state_to_session_messages(&state));
     }
     if let Some(messages_value) = value.get("messages") {
-        if let Ok(messages) =
-            serde_json::from_value::<Vec<SessionMessageEntry>>(messages_value.clone())
-        {
-            return Ok(messages);
-        }
-        if let Ok(state) = serde_json::from_value::<SessionConversationState>(value.clone()) {
-            return Ok(conversation_state_to_session_messages(&state));
-        }
+        return serde_json::from_value::<Vec<SessionMessageEntry>>(messages_value.clone())
+            .map_err(|error| format!("invalid replacement_history.messages: {error}"));
     }
-    if let Ok(messages) = serde_json::from_value::<Vec<SessionMessageEntry>>(value.clone()) {
-        return Ok(messages);
-    }
-    let Some(items) = value.as_array() else {
-        return Ok(Vec::new());
-    };
-    Ok(items
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| replacement_history_item_to_message(index, item))
-        .collect())
-}
-
-/// Converts one loose replacement-history item into a transcript message.
-/// 将单个宽松 replacement-history 条目转换为转录消息。
-fn replacement_history_item_to_message(index: usize, item: &Value) -> Option<SessionMessageEntry> {
-    let object = item.as_object()?;
-    let role = object
-        .get("role")
-        .or_else(|| object.get("kind"))
-        .and_then(Value::as_str)
-        .unwrap_or("assistant");
-    let content = object
-        .get("content")
-        .or_else(|| object.get("body"))
-        .or_else(|| object.get("text"))
-        .and_then(Value::as_str)?
-        .to_string();
-    let kind = if role.eq_ignore_ascii_case("user") {
-        SessionMessageKind::User
-    } else {
-        SessionMessageKind::Assistant
-    };
-    let mut message = SessionMessageEntry::new(
-        kind,
-        if matches!(kind, SessionMessageKind::User) {
-            "用户指令"
-        } else {
-            "AI"
-        },
-        content,
-    );
-    message.id = object
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("replacement-history-{index:06}"));
-    message.record_kind = if matches!(kind, SessionMessageKind::User) {
-        SessionMessageRecordKind::Transcript
-    } else {
-        SessionMessageRecordKind::AssistantOutput
-    };
-    message.created_at = object
-        .get("created_at")
-        .or_else(|| object.get("timestamp"))
-        .and_then(Value::as_str)
-        .unwrap_or("0")
-        .to_string();
-    Some(message)
+    serde_json::from_value::<Vec<SessionMessageEntry>>(value.clone()).map_err(|error| {
+        format!(
+            "replacement_history must be a conversation state or session message array: {error}"
+        )
+    })
 }
 
 /// Assigns stable turn indexes to one ordered segmented transcript slice.
@@ -7234,6 +7174,13 @@ mod tests {
         };
         let session_dir =
             create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        let summary_message = serde_json::to_value(test_message(
+            "summary-message",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "summary",
+        ))
+        .expect("serialize replacement history message");
         append_segmented_session_events(
             &session_dir,
             &[
@@ -7245,9 +7192,7 @@ mod tests {
                     timestamp: "2026-06-06T10:02:00Z".to_string(),
                     kind: SegmentedSessionEventKind::Compacted,
                     payload: json!({
-                        "replacement_history": [
-                            { "role": "system", "content": "summary" }
-                        ]
+                        "replacement_history": [summary_message]
                     }),
                     turn_index: Some(2),
                 },
@@ -7271,7 +7216,7 @@ mod tests {
         let anchor = scan.anchor.expect("expected compaction anchor");
         assert_eq!(anchor.compaction_seq, 2);
         assert_eq!(anchor.segment_file, "s002.jsonl");
-        assert_eq!(anchor.replacement_history[0]["content"], "summary");
+        assert_eq!(anchor.replacement_history[0]["body"], "summary");
         assert_eq!(scan.suffix.len(), 2);
         assert_eq!(scan.suffix[0].seq, 3);
         assert_eq!(scan.suffix[1].seq, 4);
@@ -7329,6 +7274,13 @@ mod tests {
         let session_dir =
             create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
                 .expect("create session");
+        let compressed_message = serde_json::to_value(test_message(
+            "compressed-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "compressed",
+        ))
+        .expect("serialize replacement history message");
         append_segmented_session_events(
             &session_dir,
             &[
@@ -7336,9 +7288,7 @@ mod tests {
                     timestamp: "2026-06-06T10:01:00Z".to_string(),
                     kind: SegmentedSessionEventKind::Compacted,
                     payload: json!({
-                        "replacement_history": [
-                            { "role": "assistant", "content": "compressed" }
-                        ]
+                        "replacement_history": [compressed_message]
                     }),
                     turn_index: Some(1),
                 },
@@ -7395,6 +7345,20 @@ mod tests {
         let session_dir =
             create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
                 .expect("create session");
+        let summary_user = serde_json::to_value(test_message(
+            "summary-user",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "compressed prompt",
+        ))
+        .expect("serialize summary user");
+        let summary_assistant = serde_json::to_value(test_message(
+            "summary-assistant",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "compressed answer",
+        ))
+        .expect("serialize summary assistant");
         append_segmented_session_events(
             &session_dir,
             &[
@@ -7402,20 +7366,7 @@ mod tests {
                     timestamp: "10".to_string(),
                     kind: SegmentedSessionEventKind::Compacted,
                     payload: json!({
-                        "replacement_history": [
-                            {
-                                "id": "summary-user",
-                                "role": "user",
-                                "content": "compressed prompt",
-                                "created_at": "10"
-                            },
-                            {
-                                "id": "summary-assistant",
-                                "role": "assistant",
-                                "content": "compressed answer",
-                                "created_at": "11"
-                            }
-                        ]
+                        "replacement_history": [summary_user, summary_assistant]
                     }),
                     turn_index: Some(0),
                 },
@@ -7492,6 +7443,28 @@ mod tests {
                 .updated_at
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty())
+        );
+    }
+
+    /// Verifies loose replacement-history items are rejected instead of defaulting missing fields.
+    /// 验证宽松 replacement-history 条目会被拒绝，而不是为缺失字段生成默认值。
+    #[test]
+    fn replacement_history_rejects_loose_items_without_session_message_shape() {
+        let loose_history = json!([
+            {
+                "role": "assistant",
+                "content": "loose summary",
+                "created_at": "10"
+            }
+        ]);
+
+        let error = replacement_history_to_session_messages(&loose_history)
+            .expect_err("loose replacement history must fail");
+
+        assert!(
+            error.contains(
+                "replacement_history must be a conversation state or session message array"
+            )
         );
     }
 }
