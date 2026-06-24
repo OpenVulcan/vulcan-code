@@ -4,7 +4,7 @@
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionEventKind,
     append_segmented_session_message_update, create_segmented_session,
-    read_segmented_session_event_window, read_state,
+    ensure_runtime_log_from_segmented_context, read_segmented_session_event_window, read_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -127,10 +127,10 @@ fn session_addon_state_write_does_not_rewrite_segmented_state_document() {
     );
 }
 
-/// Verifies lightweight state.json startup loading restores transcript context from segmented JSONL.
-/// 验证轻量 state.json 启动加载会从分段 JSONL 恢复转录上下文。
+/// Verifies session hydration restores transcript context from segmented JSONL.
+/// 验证会话水合会从分段 JSONL 恢复转录上下文。
 #[test]
-fn lightweight_state_startup_load_rehydrates_conversation_from_segmented_jsonl() {
+fn session_hydration_rebuilds_runtime_log_from_segmented_jsonl() {
     let root = std::env::temp_dir().join(format!(
         "vulcan-workspace-session-store-test-{}",
         uuid::Uuid::new_v4()
@@ -175,45 +175,27 @@ fn lightweight_state_startup_load_rehydrates_conversation_from_segmented_jsonl()
         &[user_message.clone(), assistant_message.clone()],
     )
     .expect("append transcript");
-    let lightweight_runtime_state = SessionRuntimeStateEntry {
-        active_model_id: Some(String::from("model-alpha")),
-        updated_at: String::from("103"),
-        ..SessionRuntimeStateEntry::default()
-    };
-    let state_document =
-        state_document_from_runtime_state(&session_id.to_string(), &lightweight_runtime_state)
-            .expect("build lightweight state");
-    write_state(&session_dir, &state_document).expect("write lightweight state");
+    let restored_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)
+        .expect("rehydrate runtime log")
+        .expect("conversation state");
 
-    let mut restored_runtime_state = lightweight_runtime_state;
-    hydrate_runtime_state_from_segmented_replay_if_missing(
-        session_id,
-        &session_dir,
-        &mut restored_runtime_state,
-    )
-    .expect("rehydrate runtime state");
-
+    assert_eq!(restored_conversation_state.records.len(), 2);
     assert_eq!(
-        restored_runtime_state.active_model_id.as_deref(),
-        Some("model-alpha")
-    );
-    assert_eq!(restored_runtime_state.conversation_state.records.len(), 2);
-    assert_eq!(
-        restored_runtime_state.conversation_state.records[0].body,
+        restored_conversation_state.records[0].body,
         user_message.body
     );
     assert_eq!(
-        restored_runtime_state.conversation_state.records[1].body,
+        restored_conversation_state.records[1].body,
         assistant_message.body
     );
 
     let _ = std::fs::remove_dir_all(root);
 }
 
-/// Verifies records-only runtime state still replays provider-visible messages from segmented JSONL.
-/// 验证仅有 records 的运行态仍会从分段 JSONL 重放 Provider 可见消息。
+/// Verifies records-only runtime state can receive provider-visible messages from session hydration.
+/// 验证仅有 records 的运行态可以从会话水合获得 Provider 可见消息。
 #[test]
-fn records_only_state_startup_load_rehydrates_provider_messages_from_segmented_jsonl() {
+fn records_only_state_session_hydration_rebuilds_provider_messages_from_segmented_jsonl() {
     let root = std::env::temp_dir().join(format!(
         "vulcan-workspace-record-only-replay-test-{}",
         uuid::Uuid::new_v4()
@@ -278,12 +260,10 @@ fn records_only_state_startup_load_rehydrates_provider_messages_from_segmented_j
         ..SessionRuntimeStateEntry::default()
     };
 
-    hydrate_runtime_state_from_segmented_replay_if_missing(
-        session_id,
-        &session_dir,
-        &mut records_only_runtime_state,
-    )
-    .expect("rehydrate runtime state");
+    let restored_conversation_state = ensure_runtime_log_from_segmented_context(&session_dir)
+        .expect("rehydrate runtime log")
+        .expect("conversation state");
+    records_only_runtime_state.conversation_state = restored_conversation_state;
 
     assert_eq!(
         records_only_runtime_state.active_model_id.as_deref(),
@@ -332,7 +312,7 @@ fn records_only_state_without_replay_preserves_existing_records() {
         },
     )
     .expect("create session");
-    let mut records_only_runtime_state = SessionRuntimeStateEntry {
+    let records_only_runtime_state = SessionRuntimeStateEntry {
         conversation_state: SessionConversationState {
             messages: Vec::new(),
             records: vec![SessionConversationRecord {
@@ -351,12 +331,10 @@ fn records_only_state_without_replay_preserves_existing_records() {
         ..SessionRuntimeStateEntry::default()
     };
 
-    hydrate_runtime_state_from_segmented_replay_if_missing(
-        session_id,
-        &session_dir,
-        &mut records_only_runtime_state,
-    )
-    .expect("rehydrate runtime state");
+    let restored_conversation_state =
+        ensure_runtime_log_from_segmented_context(&session_dir).expect("rehydrate runtime log");
+
+    assert!(restored_conversation_state.is_none());
 
     assert!(
         records_only_runtime_state

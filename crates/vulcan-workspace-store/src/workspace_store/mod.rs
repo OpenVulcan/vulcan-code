@@ -45,8 +45,7 @@ use self::segmented_session_store::{
     find_segmented_session_directory, find_segmented_session_directory_by_id,
     load_session_boundary_state, patch_segmented_session_metadata, read_runtime_log_lines,
     read_segmented_session_event_window, read_state, record_runtime_audit_event,
-    record_runtime_injection_applied, replace_session_boundary_state,
-    replay_segmented_session_context, segmented_session_directory,
+    record_runtime_injection_applied, replace_session_boundary_state, segmented_session_directory,
     state_document_from_runtime_state, write_state,
 };
 use self::session_addon_store::read_session_addon_state;
@@ -547,11 +546,6 @@ async fn load_workspace_snapshot_with_runtime_state(
                     {
                         runtime_state.updated_at = state_document.updated_at;
                     }
-                    hydrate_runtime_state_from_segmented_replay_if_missing(
-                        session_id,
-                        &session_dir,
-                        &mut runtime_state,
-                    )?;
                     Some(runtime_state)
                 }
             } else {
@@ -682,44 +676,6 @@ fn sanitize_loaded_runtime_state_for_fresh_process(
     runtime_state: &mut SessionRuntimeStateEntry,
 ) -> bool {
     runtime_state.active_precheck_turn_id.take().is_some()
-}
-
-/// Rehydrates the canonical conversation state from segmented JSONL when state.json is intentionally lightweight.
-/// 当 state.json 按设计只保存轻量运行态时，从分段 JSONL 回填规范会话状态。
-fn hydrate_runtime_state_from_segmented_replay_if_missing(
-    session_id: SessionId,
-    session_dir: &std::path::Path,
-    runtime_state: &mut SessionRuntimeStateEntry,
-) -> Result<(), String> {
-    if runtime_state_has_provider_dialogue_context(runtime_state) {
-        return Ok(());
-    }
-    let Some(replay) = replay_segmented_session_context(session_dir)? else {
-        return Ok(());
-    };
-    runtime_state.conversation_state = replay.conversation_state;
-    if runtime_state.last_compaction_id.is_none() {
-        runtime_state.last_compaction_id = replay.last_compaction_id;
-    }
-    if runtime_state.context_start_message_id.is_none() {
-        runtime_state.context_start_message_id = replay.context_start_message_id;
-    }
-    if runtime_state.updated_at.trim().is_empty() {
-        if let Some(updated_at) = replay.updated_at {
-            runtime_state.updated_at = updated_at;
-        }
-    }
-    let _ = session_load::repair_duplicate_conversation_record_ids(
-        session_id,
-        &mut runtime_state.conversation_state,
-    );
-    Ok(())
-}
-
-/// Returns whether a runtime state already carries provider-visible canonical dialogue messages.
-/// 判断运行态是否已经携带 Provider 可见的规范对话消息。
-fn runtime_state_has_provider_dialogue_context(runtime_state: &SessionRuntimeStateEntry) -> bool {
-    !runtime_state.conversation_state.messages.is_empty()
 }
 
 /// Builds the default empty workspace snapshot used before any real project has been added.
