@@ -2,6 +2,7 @@ import * as React from "react"
 import {
   Archive,
   FileText,
+  GitCommitHorizontal,
   PackagePlus,
   ScrollText,
   SlidersHorizontal,
@@ -10,6 +11,7 @@ import {
 import { PanelTitle, StatusPill } from "@/components/shared/status"
 import { Badge } from "@/components/ui/badge"
 import { useI18n } from "@/i18n"
+import type { SettingsActionProps } from "@/components/features/settings/settings-action-types"
 import type {
   ComposerAttachmentCapabilitySummary,
   ComposerSlashCommandSummary,
@@ -17,6 +19,76 @@ import type {
   ProjectSummary,
   WorkbenchSnapshot,
 } from "@/types"
+
+// DEFAULT_COMMIT_BRANCH_PREFIX mirrors the service default for empty Git commit settings.
+// DEFAULT_COMMIT_BRANCH_PREFIX 对齐服务端空 Git 提交设置的默认值。
+const DEFAULT_COMMIT_BRANCH_PREFIX = "vulcan/"
+
+// GitCommitSettingsArea renders local Git commit dialog preferences.
+// GitCommitSettingsArea 渲染 Git 提交弹窗偏好。
+export function GitCommitSettingsArea(props: {
+  // Service-backed settings actions.
+  // 服务端设置操作。
+  actions: SettingsActionProps
+  // Workbench snapshot that carries the shared Git commit configuration.
+  // 携带共享 Git 提交配置的工作台快照。
+  workbench: WorkbenchSnapshot
+}) {
+  const { locale } = useI18n()
+  const text = React.useCallback((zh: string, en: string) => localizedLiteral(locale, zh, en), [locale])
+  const branchPrefix = props.workbench.gitCommit?.newBranchPrefix ?? DEFAULT_COMMIT_BRANCH_PREFIX
+  const [draftPrefix, setDraftPrefix] = React.useState(branchPrefix)
+  const [saveState, setSaveState] = React.useState<"idle" | "saving" | "saved">("idle")
+
+  React.useEffect(() => {
+    setDraftPrefix(branchPrefix)
+  }, [branchPrefix])
+
+  const normalizedDraftPrefix = normalizeGitCommitBranchPrefix(draftPrefix)
+  const saveDraft = React.useCallback(async () => {
+    setSaveState("saving")
+    await props.actions.onSaveGitCommitSettings({ newBranchPrefix: draftPrefix })
+    setSaveState("saved")
+    window.setTimeout(() => setSaveState("idle"), 1200)
+  }, [draftPrefix, props.actions])
+
+  return (
+    <section className="panel full-height settings-detail-panel">
+      <PanelTitle icon={<GitCommitHorizontal size={17} />} title={text("Git 提交", "Git commit")} />
+      <div className="settings-form-grid">
+        <label className="settings-form-field">
+          <span>{text("新分支默认前缀", "Default new-branch prefix")}</span>
+          <input
+            className="settings-input"
+            onChange={(event) => setDraftPrefix(event.currentTarget.value)}
+            placeholder={DEFAULT_COMMIT_BRANCH_PREFIX}
+            value={draftPrefix}
+          />
+        </label>
+        <article className="settings-card">
+          <StatusPill status="ready" label={text("已生效", "active")} />
+          <strong>{normalizedDraftPrefix}</strong>
+          <p>{text("仅当前分支没有命名空间时使用；已有命名空间的分支会沿用当前命名空间。", "Used only when the current branch has no namespace; namespaced branches keep their current namespace.")}</p>
+        </article>
+        <div className="settings-card-actions">
+          <button className="skill-action-button" disabled={saveState === "saving"} onClick={() => void saveDraft()} type="button">
+            {saveState === "saving" ? text("保存中", "Saving") : saveState === "saved" ? text("已保存", "Saved") : text("保存", "Save")}
+          </button>
+        </div>
+      </div>
+    </section>
+  )
+}
+
+// normalizeGitCommitBranchPrefix mirrors the service-side prefix normalization for preview text.
+// normalizeGitCommitBranchPrefix 对齐服务端前缀归一化逻辑以显示预览文本。
+function normalizeGitCommitBranchPrefix(value: string): string {
+  const trimmedValue = value.trim()
+  if (!trimmedValue) {
+    return DEFAULT_COMMIT_BRANCH_PREFIX
+  }
+  return trimmedValue.endsWith("/") ? trimmedValue : `${trimmedValue}/`
+}
 
 // PromptComposerSettingsArea renders composer command and capability settings status.
 // PromptComposerSettingsArea 渲染输入区指令与能力设置状态。

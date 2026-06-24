@@ -23,6 +23,7 @@ export type SettingsSubAreaId =
   | "ai-music-cover"
   | "mcp-servers"
   | "runtime-diagnostics"
+  | "git-commit"
   | "prompt-composer"
   | "about-licenses"
   | "archived-restore";
@@ -1738,6 +1739,9 @@ export interface WorkbenchSnapshot {
   // Backend-resolved reasoning selector view for the active model.
   // 后端根据当前激活模型解析出的思考选择器视图。
   reasoningSelection?: ReasoningSelectionSummary | null;
+  // Git commit dialog settings resolved from the shared service configuration.
+  // 从共享服务配置解析出的 Git 提交弹窗设置。
+  gitCommit?: GitCommitSettingsSummary;
   // AI capability route summaries for the composer quick controls.
   // 输入区快捷控制使用的 AI 能力路由摘要。
   aiCapabilities?: AiCapabilitySummary[];
@@ -1789,6 +1793,14 @@ export interface WorkbenchSnapshot {
   // Context token usage snapshot projected from the latest execution preparation.
   // 从最近一次执行准备投影出的上下文 Token 占用快照。
   contextUsage?: ContextUsageSnapshot | null;
+}
+
+// GitCommitSettingsSummary describes Git commit dialog settings projected by the service.
+// GitCommitSettingsSummary 描述服务端投影出的 Git 提交弹窗设置。
+export interface GitCommitSettingsSummary {
+  // Default namespace prefix used when the current branch has no namespace.
+  // 当前分支没有命名空间时使用的默认命名空间前缀。
+  newBranchPrefix: string;
 }
 
 // HydratedConversationWindowSummary describes one retained lazy conversation body window.

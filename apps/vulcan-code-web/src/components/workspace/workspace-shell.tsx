@@ -18,6 +18,7 @@ import {
   parseConversationBlocks,
 } from "@/components/conversation/conversation-transcript";
 import { dispatchConversationLayoutWillChange } from "@/components/conversation/conversation-layout-events";
+import { terminalSessionViewModel } from "@/components/conversation/conversation-terminal-model";
 import {
   activeSkillHeaderSummary,
   type SkillActionProps,
@@ -688,6 +689,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     },
     [hasSelectedChatConversation, props.selectedConversationId, props.workbench.commandSessions],
   );
+  // visibleSessionTerminalSessions mirrors the terminal panel's own render filter.
+  // visibleSessionTerminalSessions 对齐终端面板自身的可渲染过滤条件。
+  const visibleSessionTerminalSessions = React.useMemo(
+    () => sessionTerminalSessions
+      .map(terminalSessionViewModel)
+      .filter((session) => session.canStop || session.state === "lost" || session.state === "waiting"),
+    [sessionTerminalSessions],
+  );
   // effectiveRightPanelOpen suppresses stale right-panel state while a draft conversation is selected.
   // effectiveRightPanelOpen 在选中新建草稿会话时屏蔽残留的右侧面板状态。
   const effectiveRightPanelOpen = hasSelectedChatConversation && rightPanelOpen;
@@ -822,10 +831,10 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
     ? props.workbench.sessionTodolist
     : null;
-  // sessionToolPanelVisible opens the floating chat tool panel for Git review or terminal sessions only.
-  // sessionToolPanelVisible 仅在存在 Git 审查或终端会话时打开会话浮动工具面板。
+  // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
+  // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
-    Boolean(sessionReviewSummary?.branchName) || sessionTerminalSessions.length > 0
+    Boolean(sessionReviewSummary && sessionReviewSummary.changedFiles > 0) || visibleSessionTerminalSessions.length > 0
   );
 
   React.useEffect(() => {
@@ -861,11 +870,27 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
         setSessionReviewSummary(null);
         return;
       }
+      // branchNames keeps the concrete Git branch labels returned by the review snapshot.
+      // branchNames 保存审查快照返回的真实 Git 分支标签。
+      const branchNames = (primarySnapshot?.branches ?? []).map((branch) => branch.name);
+      // unstagedSnapshot keeps the working-tree diff counts used by the commit popover gate.
+      // unstagedSnapshot 保存提交浮层门禁使用的工作区 diff 计数。
+      const unstagedSnapshot = unstagedResult.status === "fulfilled" ? unstagedResult.value : null;
+      // stagedSnapshot keeps the index diff counts used when unstaged changes are excluded.
+      // stagedSnapshot 保存排除未暂存变更时使用的暂存区 diff 计数。
+      const stagedSnapshot = stagedResult.status === "fulfilled" ? stagedResult.value : null;
       setSessionReviewSummary({
         additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
         branchName,
+        branchNames,
         changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
         deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
+        stagedAdditions: stagedSnapshot?.additions ?? 0,
+        stagedChangedFiles: stagedSnapshot?.changedFiles ?? 0,
+        stagedDeletions: stagedSnapshot?.deletions ?? 0,
+        unstagedAdditions: unstagedSnapshot?.additions ?? 0,
+        unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
+        unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
       });
     };
     void loadSessionReviewSummary().catch(() => {
@@ -1117,8 +1142,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           props.selectedDraftConversation?.id ?? "persisted",
           sessionTodolist ? "todolist-progress" : "no-todolist-progress",
           props.workbench.sessionGoal ? `goal-${props.workbench.sessionGoal.status}` : "no-goal",
-          sessionReviewSummary?.branchName ? "review-summary" : "no-review-summary",
-          sessionTerminalSessions.length > 0 ? `terminal-${sessionTerminalSessions.length}` : "no-terminal",
+          sessionReviewSummary && sessionReviewSummary.changedFiles > 0 ? "review-summary" : "no-review-summary",
+          visibleSessionTerminalSessions.length > 0 ? `terminal-${visibleSessionTerminalSessions.length}` : "no-terminal",
           sessionToolPanelVisible && sessionToolExpanded ? "review-expanded" : "review-collapsed",
           effectiveRightPanelOpen ? "context-open" : "context-closed",
           rightPanelFloating ? "context-floating" : "context-docked",
@@ -1138,6 +1163,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: sessionToolPanelVisible ? (
         <ConversationSessionTodolistPanel
+          commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
           terminalSessions={sessionTerminalSessions}

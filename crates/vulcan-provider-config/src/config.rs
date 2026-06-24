@@ -28,6 +28,77 @@ const UNSUPPORTED_PROVIDER_IDS: &[&str] = &[
     "vercel",
 ];
 
+/// Default namespace prefix for new Git commit branches created from non-namespaced branches.
+/// 基于无命名空间分支创建 Git 提交新分支时使用的默认命名空间前缀。
+pub const DEFAULT_GIT_COMMIT_NEW_BRANCH_PREFIX: &str = "vulcan/";
+
+/// Returns the default Git commit new-branch namespace prefix.
+/// 返回 Git 提交新分支命名空间的默认前缀。
+fn default_git_commit_new_branch_prefix() -> String {
+    String::from(DEFAULT_GIT_COMMIT_NEW_BRANCH_PREFIX)
+}
+
+/// Returns whether a Git commit new-branch prefix is still the default value.
+/// 返回 Git 提交新分支前缀是否仍为默认值。
+fn git_commit_new_branch_prefix_is_default(value: &str) -> bool {
+    value == DEFAULT_GIT_COMMIT_NEW_BRANCH_PREFIX
+}
+
+/// Normalizes one Git commit branch prefix into a non-empty namespace prefix.
+/// 将单个 Git 提交分支前缀归一化为非空命名空间前缀。
+pub fn normalize_git_commit_new_branch_prefix(value: &str) -> String {
+    let trimmed_value = value.trim();
+    if trimmed_value.is_empty() {
+        return String::from(DEFAULT_GIT_COMMIT_NEW_BRANCH_PREFIX);
+    }
+    if trimmed_value.ends_with('/') {
+        trimmed_value.to_string()
+    } else {
+        format!("{trimmed_value}/")
+    }
+}
+
+/// Persisted Git commit dialog behavior stored in the shared Vulcan configuration file.
+/// 存储在共享 Vulcan 配置文件中的 Git 提交弹窗行为配置。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersistedGitCommitConfiguration {
+    /// Default namespace prefix for new branches created from non-namespaced branches.
+    /// 基于无命名空间分支创建新分支时使用的默认命名空间前缀。
+    #[serde(
+        default = "default_git_commit_new_branch_prefix",
+        skip_serializing_if = "git_commit_new_branch_prefix_is_default"
+    )]
+    pub new_branch_prefix: String,
+}
+
+impl Default for PersistedGitCommitConfiguration {
+    /// Builds the default Git commit dialog configuration.
+    /// 构建默认 Git 提交弹窗配置。
+    fn default() -> Self {
+        Self {
+            new_branch_prefix: default_git_commit_new_branch_prefix(),
+        }
+    }
+}
+
+impl PersistedGitCommitConfiguration {
+    /// Returns whether every Git commit setting is still at its default value.
+    /// 返回全部 Git 提交设置是否仍处于默认值。
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Normalizes the persisted Git commit configuration in place.
+    /// 就地归一化持久化的 Git 提交配置。
+    pub fn normalize(&mut self) -> bool {
+        let normalized_prefix = normalize_git_commit_new_branch_prefix(&self.new_branch_prefix);
+        let changed = normalized_prefix != self.new_branch_prefix;
+        self.new_branch_prefix = normalized_prefix;
+        changed
+    }
+}
+
 /// Field identifiers rendered in the provider configuration form.
 /// 渲染在供应商配置表单中的字段标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1754,6 +1825,14 @@ pub struct ProviderConfigurationFile {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_command_shell: Option<String>,
+    /// Persisted Git commit dialog behavior.
+    /// 持久化的 Git 提交弹窗行为。
+    #[serde(
+        default,
+        rename = "gitCommit",
+        skip_serializing_if = "PersistedGitCommitConfiguration::is_default"
+    )]
+    pub git_commit: PersistedGitCommitConfiguration,
     /// Remembered OpenRouter endpoint route selections keyed by the exact OpenRouter model identifier.
     /// 以精确 OpenRouter 模型标识为键记忆的 OpenRouter 端点路由选择集合。
     #[serde(
@@ -2669,6 +2748,7 @@ fn normalize_provider_configuration_for_save(
         entry.models.clear();
     }
     normalized.luaskills.normalize();
+    normalized.git_commit.normalize();
     normalized
 }
 

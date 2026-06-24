@@ -55,6 +55,14 @@ export interface ProviderModelOverrideSaveRequest {
   reasoningProfileJson: string | null
 }
 
+// GitCommitSettingsSaveRequest describes one Git commit settings submission.
+// GitCommitSettingsSaveRequest 描述一次 Git 提交设置提交。
+export interface GitCommitSettingsSaveRequest {
+  // Default namespace prefix used when the current branch has no namespace.
+  // 当前分支没有命名空间时使用的默认命名空间前缀。
+  newBranchPrefix: string
+}
+
 // AiCapabilityVendorSaveRequest describes one shared AI capability vendor submission.
 // AiCapabilityVendorSaveRequest 描述单次共享 AI 能力供应商提交。
 export interface AiCapabilityVendorSaveRequest {
@@ -194,6 +202,9 @@ export interface SettingsActionProps {
   // Saves one provider model capability override.
   // 保存单个 Provider 模型能力覆盖。
   onSaveProviderModelOverride: (request: ProviderModelOverrideSaveRequest) => Promise<void>
+  // Saves Git commit dialog settings.
+  // 保存 Git 提交弹窗设置。
+  onSaveGitCommitSettings: (request: GitCommitSettingsSaveRequest) => Promise<void>
   // Saves one shared AI capability vendor.
   // 保存单个共享 AI 能力供应商。
   onSaveAiCapabilityVendor: (request: AiCapabilityVendorSaveRequest) => Promise<void>

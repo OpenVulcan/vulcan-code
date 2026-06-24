@@ -138,6 +138,7 @@ export type TranslationKey =
   | "settings.aiMusicCover"
   | "settings.mcpServers"
   | "settings.runtimeDiagnostics"
+  | "settings.gitCommit"
   | "settings.promptComposer"
   | "settings.aboutLicenses"
   | "settings.archivedRestore"
@@ -155,6 +156,7 @@ export type TranslationKey =
   | "settings.aiMusicCover.description"
   | "settings.mcpServers.description"
   | "settings.runtimeDiagnostics.description"
+  | "settings.gitCommit.description"
   | "settings.promptComposer.description"
   | "settings.aboutLicenses.description"
   | "settings.archivedRestore.description"
@@ -357,6 +359,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover": "音乐翻唱",
     "settings.mcpServers": "MCP 服务器",
     "settings.runtimeDiagnostics": "运行诊断",
+    "settings.gitCommit": "Git 提交",
     "settings.promptComposer": "提示词组合",
     "settings.aboutLicenses": "关于与许可证",
     "settings.archivedRestore": "归档恢复",
@@ -374,6 +377,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "音乐翻唱能力的启用状态与可用目标。",
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
     "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
+    "settings.gitCommit.description": "提交弹窗的新分支命名前缀与默认分支名规则。",
     "settings.promptComposer.description": "输入区 slash 指令、附件能力与推理选择。",
     "settings.aboutLicenses.description": "应用版本、许可证入口与合规说明。",
     "settings.archivedRestore.description": "归档项目与会话恢复入口。",
@@ -573,6 +577,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover": "Music cover",
     "settings.mcpServers": "MCP servers",
     "settings.runtimeDiagnostics": "Runtime diagnostics",
+    "settings.gitCommit": "Git commit",
     "settings.promptComposer": "Prompt composer",
     "settings.aboutLicenses": "About and licenses",
     "settings.archivedRestore": "Archived restore",
@@ -590,6 +595,7 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.aiMusicCover.description": "Music-cover capability state and available targets.",
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
     "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
+    "settings.gitCommit.description": "New-branch naming prefix and default branch-name rules for the commit dialog.",
     "settings.promptComposer.description": "Composer slash commands, attachment capability, and reasoning selection.",
     "settings.aboutLicenses.description": "Application version, license entry points, and compliance notes.",
     "settings.archivedRestore.description": "Archived project and conversation restore entry.",

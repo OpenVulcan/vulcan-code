@@ -9,6 +9,7 @@ import { McpSettingsArea } from "@/components/features/settings/mcp-settings-are
 import {
   AboutLicensesSettingsArea,
   ArchivedRestoreSettingsArea,
+  GitCommitSettingsArea,
   PromptComposerSettingsArea,
 } from "@/components/features/settings/misc-settings-areas";
 import {
@@ -132,6 +133,9 @@ export function SettingsFeatureContent(props: SettingsFeatureContentProps) {
   }
   if (props.activeSettingsSubArea === "runtime-diagnostics") {
     return <LogsArea startup={props.startup} logs={props.workbench.logs} />;
+  }
+  if (props.activeSettingsSubArea === "git-commit") {
+    return <GitCommitSettingsArea actions={props.actions} workbench={props.workbench} />;
   }
   if (props.activeSettingsSubArea === "prompt-composer") {
     return (

@@ -3439,6 +3439,7 @@ button {
 }
 
 .conversation-session-review-section {
+  position: relative;
   margin-top: 0;
 }
 
@@ -4083,6 +4084,265 @@ button {
   grid-template-columns: 18px minmax(0, 1fr) auto;
   width: 100%;
   height: 28px;
+}
+
+.conversation-session-commit-trigger.workspace-tool-panel-menu-row {
+  cursor: pointer;
+}
+
+.conversation-session-commit-trigger.workspace-tool-panel-menu-row.active {
+  background: color-mix(in oklch, var(--muted) 76%, transparent);
+}
+
+.conversation-session-commit-dialog {
+  width: min(420px, calc(100vw - 40px));
+  max-width: min(420px, calc(100vw - 40px));
+  gap: 0;
+  border-radius: 18px;
+  padding: 0;
+}
+
+.conversation-session-commit-panel {
+  min-height: 286px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 14px;
+}
+
+.conversation-session-commit-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-right: 34px;
+}
+
+.conversation-session-commit-target {
+  position: relative;
+  min-width: 0;
+}
+
+.conversation-session-commit-target-button {
+  min-width: 0;
+  max-width: 230px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted-foreground);
+  padding: 0 7px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.conversation-session-commit-target-button:hover,
+.conversation-session-commit-target-button[aria-expanded="true"] {
+  background: color-mix(in oklch, var(--muted) 72%, transparent);
+  color: var(--foreground);
+}
+
+.conversation-session-commit-target-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-commit-branch-menu {
+  position: absolute;
+  z-index: 46;
+  top: calc(100% + 6px);
+  left: 0;
+  width: 164px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: 0 12px 32px color-mix(in oklch, black 14%, transparent);
+  padding: 7px;
+}
+
+.conversation-session-commit-branch-menu-title {
+  color: var(--muted-foreground);
+  padding: 2px 8px 4px;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.conversation-session-commit-branch-option {
+  min-width: 0;
+  height: 28px;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--foreground);
+  padding: 0 7px;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+}
+
+.conversation-session-commit-branch-option:hover {
+  background: color-mix(in oklch, var(--muted) 76%, transparent);
+}
+
+.conversation-session-commit-branch-option span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-commit-plus-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.conversation-session-commit-delta,
+.conversation-session-commit-empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.conversation-session-commit-delta .added {
+  color: #238636;
+}
+
+.conversation-session-commit-delta .removed {
+  color: #da3633;
+}
+
+.conversation-session-commit-branch-input,
+.conversation-session-commit-message {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  padding: 0 2px;
+  font-size: 13px;
+  line-height: 1.5;
+  outline: none;
+}
+
+.conversation-session-commit-branch-input {
+  height: 24px;
+  color: var(--foreground);
+}
+
+.conversation-session-commit-message {
+  min-height: 58px;
+  resize: none;
+}
+
+.conversation-session-commit-branch-input::placeholder,
+.conversation-session-commit-message::placeholder {
+  color: color-mix(in oklch, var(--muted-foreground) 82%, transparent);
+}
+
+.conversation-session-commit-checkbox {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.2;
+  user-select: none;
+}
+
+.conversation-session-commit-checkbox.disabled {
+  color: color-mix(in oklch, var(--muted-foreground) 55%, transparent);
+  cursor: default;
+}
+
+.conversation-session-commit-checkbox input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--foreground);
+}
+
+.conversation-session-commit-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.conversation-session-commit-action {
+  min-width: 0;
+  width: 100%;
+  height: 31px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--foreground);
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.conversation-session-commit-action:hover:not(:disabled),
+.conversation-session-commit-action.primary {
+  background: color-mix(in oklch, var(--muted) 74%, transparent);
+}
+
+.conversation-session-commit-action:disabled {
+  color: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+  cursor: not-allowed;
+}
+
+.conversation-session-commit-action span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-session-commit-action kbd {
+  min-width: 48px;
+  justify-self: end;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--muted-foreground) 18%, transparent);
+  color: var(--muted-foreground);
+  padding: 1px 7px;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  text-align: center;
 }
 
 .workspace-skills-header-actions {

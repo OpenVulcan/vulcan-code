@@ -203,6 +203,10 @@ pub struct WorkbenchSnapshot {
     /// 根据当前激活 Provider 与模型解析出的思考选择器视图。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_selection: Option<ReasoningSelectionSummary>,
+    /// Git commit dialog settings resolved from the shared configuration file.
+    /// 从共享配置文件解析出的 Git 提交弹窗设置。
+    #[serde(default)]
+    pub git_commit: GitCommitSettingsSummary,
     /// AI capability route summaries shown by the composer quick controls.
     /// 输入区快捷控制展示的 AI 能力路由摘要。
     #[serde(default)]
@@ -268,6 +272,26 @@ pub struct WorkbenchSnapshot {
     /// 从最近一次执行准备投影出的上下文 Token 占用快照。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsageSnapshot>,
+}
+
+/// Describes Git commit dialog settings projected to WebUI clients.
+/// 描述投影给 WebUI 客户端的 Git 提交弹窗设置。
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCommitSettingsSummary {
+    /// Default namespace prefix used when the current branch has no namespace.
+    /// 当前分支没有命名空间时使用的默认命名空间前缀。
+    pub new_branch_prefix: String,
+}
+
+impl Default for GitCommitSettingsSummary {
+    /// Builds the WebUI default Git commit settings summary.
+    /// 构建 WebUI 默认 Git 提交设置摘要。
+    fn default() -> Self {
+        Self {
+            new_branch_prefix: String::from("vulcan/"),
+        }
+    }
 }
 
 /// Describes one retained lazy conversation body window.

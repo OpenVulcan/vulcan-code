@@ -121,6 +121,15 @@ export async function saveProviderModelOverride(request: {
   return serviceClient.request<WorkbenchSnapshot>("service_save_provider_model_override", { request });
 }
 
+// saveGitCommitSettings persists Git commit settings through the desktop service.
+// saveGitCommitSettings 通过桌面服务持久化 Git 提交设置。
+export async function saveGitCommitSettings(request: { newBranchPrefix: string }): Promise<WorkbenchSnapshot | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<WorkbenchSnapshot>("service_save_git_commit_settings", { request });
+}
+
 // saveAiCapabilityVendor persists one shared AI capability vendor.
 // saveAiCapabilityVendor 持久化单个共享 AI 能力供应商。
 export async function saveAiCapabilityVendor(request: {

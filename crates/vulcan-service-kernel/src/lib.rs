@@ -69,6 +69,7 @@ use vulcan_agent_runtime::{
     provider_config::{
         self, PersistedAiToolConfiguration, PersistedModelOverrideEntry, ProviderConfigurationFile,
         ProviderRuntimeKind, ReasoningEffortLevel, ReasoningProfileConfig,
+        normalize_git_commit_new_branch_prefix,
     },
     provider_input_normalizer::normalize_provider_user_input_for_model,
     session_event_runtime::{
@@ -117,8 +118,9 @@ use vulcan_service_api::{
     ContextInjectionItemSummary, ContextInjectionSnapshot, ContextUsageSnapshot,
     ConversationForkSourceSummary, ConversationHistoryPageResponse, ConversationHydrationProgress,
     ConversationHydrationStatus, ConversationMessage, ConversationMessagesLoadResponse,
-    ConversationSummary, FeatureAreaSummary, HydratedConversationWindowSummary, KeyValueSummary,
-    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary,
+    ConversationSummary, FeatureAreaSummary, GitCommitSettingsSummary,
+    HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
+    LuaSkillToolSummary, LuaSkillsCatalogSummary,
     McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
     PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
     PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
@@ -324,6 +326,16 @@ struct ProviderModelSecondaryRouteRequest {
     /// Optional route selection; `None` clears the route back to Auto.
     /// 可选路由选择；`None` 表示清除为 Auto。
     route: Option<ProviderModelSecondaryRouteSelection>,
+}
+
+/// Git commit settings save request sent by the WebUI settings page.
+/// WebUI 设置页发送的 Git 提交设置保存请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitSettingsSaveRequest {
+    /// Default namespace prefix used when the current branch has no namespace.
+    /// 当前分支没有命名空间时使用的默认命名空间前缀。
+    new_branch_prefix: String,
 }
 
 /// User prompt edit submit request sent by the WebUI transcript action.
@@ -2481,6 +2493,10 @@ async fn dispatch_service_rpc(
                 rpc_required_param(&params, "request")?,
             )
             .await,
+        ),
+        "service_save_git_commit_settings" => rpc_json_result(
+            service_save_git_commit_settings(app, state, rpc_required_param(&params, "request")?)
+                .await,
         ),
         "service_save_ai_capability_vendor" => rpc_json_result(
             service_save_ai_capability_vendor(app, state, rpc_required_param(&params, "request")?)
@@ -7466,6 +7482,35 @@ fn normalize_model_override_text_list(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Saves Git commit dialog settings from the WebUI settings page.
+/// 从 WebUI 设置页保存 Git 提交弹窗设置。
+async fn service_save_git_commit_settings(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    request: GitCommitSettingsSaveRequest,
+) -> Result<WorkbenchSnapshot, String> {
+    let normalized_prefix = normalize_git_commit_new_branch_prefix(&request.new_branch_prefix);
+    let workbench = {
+        let mut guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let agent_runtime = guard
+            .agent_runtime
+            .as_mut()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
+        let mut next_configuration = agent_runtime.provider_configuration.clone();
+        next_configuration.git_commit.new_branch_prefix = normalized_prefix;
+        next_configuration.git_commit.normalize();
+        provider_config::save_configuration_file(&next_configuration)
+            .map_err(|error| format!("保存 Git 提交设置失败：{error}"))?;
+        agent_runtime.provider_configuration = next_configuration.clone();
+        refresh_settings_projection_locked(&mut guard, &next_configuration, None);
+        guard.workbench.clone()
+    };
+    emit_workbench_event(&app, &workbench);
+    Ok(workbench)
+}
+
 /// Saves one shared AI capability vendor from the WebUI settings page.
 /// 从 WebUI 设置页保存单个共享 AI 能力供应商。
 async fn service_save_ai_capability_vendor(
@@ -10797,6 +10842,7 @@ fn refresh_settings_projection_locked(
     guard.workbench.providers = providers(provider_configuration);
     guard.workbench.mcp_servers = mcp_servers(provider_configuration);
     guard.workbench.reasoning_selection = reasoning_selection(provider_configuration);
+    guard.workbench.git_commit = git_commit_settings(provider_configuration);
     let ai_capability_model_capabilities =
         active_provider_configuration_model_capabilities(provider_configuration);
     guard.workbench.ai_capabilities = ai_capabilities(
@@ -14284,6 +14330,16 @@ fn reasoning_selection(
         selected_effort: reasoning_effort_wire_value(view.selected_effort).to_string(),
         note: view.note,
     })
+}
+
+/// Builds the WebUI Git commit settings snapshot from the shared provider configuration.
+/// 从共享 Provider 配置构建 WebUI Git 提交设置快照。
+fn git_commit_settings(provider_configuration: &ProviderConfigurationFile) -> GitCommitSettingsSummary {
+    GitCommitSettingsSummary {
+        new_branch_prefix: normalize_git_commit_new_branch_prefix(
+            &provider_configuration.git_commit.new_branch_prefix,
+        ),
+    }
 }
 
 /// Creates a readable generated session title from the submitted prompt.
@@ -24854,6 +24910,7 @@ fn workbench_from_runtime(
         providers: providers(provider_configuration),
         mcp_servers: mcp_servers(provider_configuration),
         reasoning_selection: reasoning_selection(provider_configuration),
+        git_commit: git_commit_settings(provider_configuration),
         ai_capabilities: ai_capabilities(
             selected_ai_tool_configuration,
             ai_capability_model_capabilities.as_ref(),
@@ -25929,6 +25986,7 @@ fn fallback_workbench_snapshot(logs: &[String]) -> WorkbenchSnapshot {
         providers: providers(&ProviderConfigurationFile::default()),
         mcp_servers: mcp_servers(&ProviderConfigurationFile::default()),
         reasoning_selection: reasoning_selection(&ProviderConfigurationFile::default()),
+        git_commit: git_commit_settings(&ProviderConfigurationFile::default()),
         ai_capabilities: ai_capabilities(&ProviderConfigurationFile::default().ai_tools, None),
         default_ai_capabilities: ai_capabilities(
             &ProviderConfigurationFile::default().ai_tools,

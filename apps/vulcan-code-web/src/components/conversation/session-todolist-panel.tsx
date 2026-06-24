@@ -1,8 +1,11 @@
 import React from "react";
 import {
+  Check,
   CheckCircle2,
+  ChevronDown,
   Circle,
   ClipboardList,
+  CloudUpload,
   FileDiff,
   GitBranch,
   GitCommitHorizontal,
@@ -19,6 +22,13 @@ import {
   type TerminalSessionViewModel,
 } from "@/components/conversation/conversation-terminal-model";
 import { TerminalStopConfirmDialog } from "@/components/conversation/terminal-stop-confirm-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import {
   Tooltip,
   TooltipContent,
@@ -41,6 +51,9 @@ export interface ConversationSessionReviewSummary {
   // Current checked-out branch name.
   // 当前检出的分支名称。
   branchName: string | null;
+  // Known Git branch names from the review snapshot.
+  // 审核快照中已知的 Git 分支名称。
+  branchNames: string[];
   // Combined uncommitted added line count.
   // 未提交变更合计新增行数。
   additions: number;
@@ -50,7 +63,29 @@ export interface ConversationSessionReviewSummary {
   // Combined uncommitted changed file count.
   // 未提交变更合计文件数。
   changedFiles: number;
+  // Changed file count that is already staged in the Git index.
+  // 已经进入 Git 暂存区的变更文件数。
+  stagedChangedFiles: number;
+  // Added line count that is already staged in the Git index.
+  // 已经进入 Git 暂存区的新增行数。
+  stagedAdditions: number;
+  // Deleted line count that is already staged in the Git index.
+  // 已经进入 Git 暂存区的删除行数。
+  stagedDeletions: number;
+  // Changed file count that still lives in the working tree.
+  // 仍位于工作区未暂存状态的变更文件数。
+  unstagedChangedFiles: number;
+  // Added line count that still lives in the working tree.
+  // 仍位于工作区未暂存状态的新增行数。
+  unstagedAdditions: number;
+  // Deleted line count that still lives in the working tree.
+  // 仍位于工作区未暂存状态的删除行数。
+  unstagedDeletions: number;
 }
+
+// ConversationSessionCommitTarget identifies where the local commit draft would land.
+// ConversationSessionCommitTarget 标识本地提交草稿的目标分支位置。
+type ConversationSessionCommitTarget = "current" | "new";
 
 // ConversationSessionTodolistPanel renders the session todolist inside the main conversation surface.
 // ConversationSessionTodolistPanel 在主会话界面内渲染当前会话的 todolist。
@@ -61,6 +96,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Current Git review summary projected from the selected workspace.
   // 从当前选中工作区投影出的 Git 审查摘要。
   reviewSummary: ConversationSessionReviewSummary | null;
+  // Shared Git commit new-branch prefix projected from service configuration.
+  // 从服务端配置投影出的共享 Git 提交新分支前缀。
+  commitBranchPrefix: string;
   // Current terminal sessions owned by the selected conversation.
   // 当前选中会话拥有的终端会话集合。
   terminalSessions: CommandSessionSummary[];
@@ -192,6 +230,7 @@ export function ConversationSessionTodolistPanel(props: {
     >
       {props.reviewSummary ? (
         <ConversationSessionReviewSection
+          commitBranchPrefix={props.commitBranchPrefix}
           reviewSummary={props.reviewSummary}
           onCollapse={() => requestExpandedChange(false)}
           onOpenReviewChanges={props.onOpenReviewChanges}
@@ -379,6 +418,9 @@ function terminalSessionTooltipText(
 // ConversationSessionReviewSection renders compact Git review information above progress.
 // ConversationSessionReviewSection 在进程上方渲染紧凑 Git 审查信息。
 function ConversationSessionReviewSection(props: {
+  // Shared Git commit new-branch prefix projected from service configuration.
+  // 从服务端配置投影出的共享 Git 提交新分支前缀。
+  commitBranchPrefix: string;
   // Review summary rendered by this section.
   // 当前区域渲染的审查摘要。
   reviewSummary: ConversationSessionReviewSummary;
@@ -389,6 +431,10 @@ function ConversationSessionReviewSection(props: {
   // 折叠当前展开的会话工具面板。
   onCollapse: () => void;
 }) {
+  // commitPanelOpen stores whether the local commit draft surface is visible.
+  // commitPanelOpen 保存本地提交草稿界面是否可见。
+  const [commitPanelOpen, setCommitPanelOpen] = React.useState(false);
+
   return (
     <section className="conversation-session-tool-section conversation-session-review-section">
       <div className="conversation-session-tool-section-title with-action">
@@ -415,12 +461,217 @@ function ConversationSessionReviewSection(props: {
             <span>{conversationSessionBranchDisplayName(props.reviewSummary.branchName)}</span>
           </div>
         ) : null}
-        <div className="workspace-tool-panel-menu-row conversation-session-review-row">
-          <GitCommitHorizontal size={15} />
-          <span>提交</span>
-        </div>
+        <Dialog open={commitPanelOpen} onOpenChange={setCommitPanelOpen}>
+          <DialogTrigger asChild>
+            <button
+              aria-expanded={commitPanelOpen}
+              className={cn(
+                "workspace-tool-panel-menu-row conversation-session-review-row conversation-session-commit-trigger",
+                commitPanelOpen && "active",
+              )}
+              type="button"
+            >
+              <GitCommitHorizontal size={15} />
+              <span>提交或推送</span>
+            </button>
+          </DialogTrigger>
+          <DialogContent className="conversation-session-commit-dialog">
+            <DialogTitle className="sr-only">提交或推送</DialogTitle>
+            <DialogDescription className="sr-only">
+              选择提交目标、填写提交信息，并根据 Git 变更状态启用提交操作。
+            </DialogDescription>
+            <ConversationSessionCommitPanel
+              commitBranchPrefix={props.commitBranchPrefix}
+              reviewSummary={props.reviewSummary}
+            />
+          </DialogContent>
+        </Dialog>
       </div>
     </section>
+  );
+}
+
+// ConversationSessionCommitPanel renders the visual-only commit draft surface.
+// ConversationSessionCommitPanel 渲染仅界面状态的提交草稿浮层。
+function ConversationSessionCommitPanel(props: {
+  // Shared Git commit new-branch prefix projected from service configuration.
+  // 从服务端配置投影出的共享 Git 提交新分支前缀。
+  commitBranchPrefix: string;
+  // Review summary used to gate local commit actions.
+  // 用于限制本地提交动作的审核摘要。
+  reviewSummary: ConversationSessionReviewSummary;
+}) {
+  // includeUnstaged stores whether unstaged working tree changes are included by default.
+  // includeUnstaged 保存默认是否包含工作区未暂存变更。
+  const [includeUnstaged, setIncludeUnstaged] = React.useState(props.reviewSummary.unstagedChangedFiles > 0);
+  // target stores whether the draft points at the current branch or a new branch.
+  // target 保存草稿指向当前分支还是新分支。
+  const [target, setTarget] = React.useState<ConversationSessionCommitTarget>("current");
+  // branchMenuOpen stores the lightweight branch target menu state.
+  // branchMenuOpen 保存轻量分支目标菜单状态。
+  const [branchMenuOpen, setBranchMenuOpen] = React.useState(false);
+  // branchName stores the editable new branch name shown by the visual draft.
+  // branchName 保存界面草稿中展示的可编辑新分支名。
+  const [branchName, setBranchName] = React.useState("");
+  // branchNameEdited tracks whether the user has overridden the generated branch name.
+  // branchNameEdited 标记用户是否已经覆盖自动生成的分支名。
+  const [branchNameEdited, setBranchNameEdited] = React.useState(false);
+  // commitMessage stores the manually typed commit message draft.
+  // commitMessage 保存用户手动输入的提交信息草稿。
+  const [commitMessage, setCommitMessage] = React.useState("");
+  const currentBranchName = props.reviewSummary.branchName
+    ? conversationSessionBranchDisplayName(props.reviewSummary.branchName)
+    : "当前分支";
+  const defaultNewBranchName = React.useMemo(
+    () => conversationSessionDefaultNewBranchName(currentBranchName, props.reviewSummary.branchNames, props.commitBranchPrefix),
+    [currentBranchName, props.commitBranchPrefix, props.reviewSummary.branchNames],
+  );
+  const hasStagedChanges = props.reviewSummary.stagedChangedFiles > 0;
+  const hasUnstagedChanges = props.reviewSummary.unstagedChangedFiles > 0;
+  const hasIncludedChanges = hasStagedChanges || (includeUnstaged && hasUnstagedChanges);
+  const includedAdditions = props.reviewSummary.stagedAdditions
+    + (includeUnstaged ? props.reviewSummary.unstagedAdditions : 0);
+  const includedDeletions = props.reviewSummary.stagedDeletions
+    + (includeUnstaged ? props.reviewSummary.unstagedDeletions : 0);
+  const hasValidCommitTarget = target === "current" || branchName.trim().length > 0;
+  const includeUnstagedDisabled = !hasUnstagedChanges;
+  const effectiveTargetLabel = target === "new" ? (branchName.trim() || "新分支") : currentBranchName;
+  const newBranchPlaceholder = `推荐：${defaultNewBranchName}`;
+
+  React.useEffect(() => {
+    if (!hasUnstagedChanges) {
+      setIncludeUnstaged(false);
+    }
+  }, [hasUnstagedChanges]);
+
+  React.useEffect(() => {
+    if (target === "new" && !branchNameEdited) {
+      setBranchName(defaultNewBranchName);
+    }
+  }, [branchNameEdited, defaultNewBranchName, target]);
+
+  return (
+    <div className="conversation-session-commit-panel">
+      <div className="conversation-session-commit-header">
+        <div className="conversation-session-commit-target">
+          <button
+            aria-expanded={branchMenuOpen}
+            className="conversation-session-commit-target-button"
+            onClick={() => setBranchMenuOpen((current) => !current)}
+            type="button"
+          >
+            <GitBranch size={14} />
+            <span>{effectiveTargetLabel}</span>
+            <ChevronDown size={13} />
+          </button>
+          {branchMenuOpen ? (
+            <div className="conversation-session-commit-branch-menu">
+              <span className="conversation-session-commit-branch-menu-title">提交到</span>
+              <button
+                className="conversation-session-commit-branch-option"
+                onClick={() => {
+                  setTarget("current");
+                  setBranchMenuOpen(false);
+                }}
+                type="button"
+              >
+                <GitBranch size={14} />
+                <span>{currentBranchName}</span>
+                {target === "current" ? <Check size={14} /> : null}
+              </button>
+              <button
+                className="conversation-session-commit-branch-option"
+                onClick={() => {
+                  setTarget("new");
+                  setBranchName(defaultNewBranchName);
+                  setBranchNameEdited(false);
+                  setBranchMenuOpen(false);
+                }}
+                type="button"
+              >
+                <PlusIcon />
+                <span>新分支</span>
+                {target === "new" ? <Check size={14} /> : null}
+              </button>
+            </div>
+          ) : null}
+        </div>
+        {hasIncludedChanges ? (
+          <strong className="conversation-session-commit-delta">
+            <span className="added">+{includedAdditions}</span>
+            <span className="removed">-{includedDeletions}</span>
+          </strong>
+        ) : (
+          <strong className="conversation-session-commit-empty">无更改</strong>
+        )}
+      </div>
+      {target === "new" ? (
+        <input
+          aria-label="新分支名称"
+          className="conversation-session-commit-branch-input"
+          onChange={(event) => {
+            setBranchNameEdited(true);
+            setBranchName(event.currentTarget.value);
+          }}
+          placeholder={newBranchPlaceholder}
+          value={branchName}
+        />
+      ) : null}
+      <textarea
+        aria-label="提交信息"
+        className="conversation-session-commit-message"
+        onChange={(event) => setCommitMessage(event.currentTarget.value)}
+        placeholder="提交信息（留空将自动生成）..."
+        rows={2}
+        value={commitMessage}
+      />
+      <label className={cn("conversation-session-commit-checkbox", includeUnstagedDisabled && "disabled")}>
+        <input
+          checked={includeUnstaged}
+          disabled={includeUnstagedDisabled}
+          onChange={(event) => setIncludeUnstaged(event.currentTarget.checked)}
+          type="checkbox"
+        />
+        <span>包含未暂存的更改</span>
+      </label>
+      <div className="conversation-session-commit-actions">
+        <button
+          className="conversation-session-commit-action primary"
+          disabled={!hasIncludedChanges || !hasValidCommitTarget}
+          type="button"
+        >
+          <GitCommitHorizontal size={15} />
+          <span>提交</span>
+          <kbd>Ctrl+↵</kbd>
+        </button>
+        <button
+          className="conversation-session-commit-action"
+          disabled={!hasIncludedChanges || !hasValidCommitTarget}
+          type="button"
+        >
+          <CloudUpload size={15} />
+          <span>提交并推送</span>
+        </button>
+        <button
+          className="conversation-session-commit-action"
+          disabled
+          type="button"
+        >
+          <CloudUpload size={15} />
+          <span>推送</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// PlusIcon renders the compact plus mark used by the branch target menu.
+// PlusIcon 渲染分支目标菜单中使用的紧凑加号。
+function PlusIcon() {
+  return (
+    <svg aria-hidden="true" className="conversation-session-commit-plus-icon" viewBox="0 0 16 16">
+      <path d="M8 3.5v9M3.5 8h9" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
+    </svg>
   );
 }
 
@@ -507,4 +758,31 @@ function conversationSessionBranchDisplayName(name: string): string {
     .replace(/^refs\/heads\//, "")
     .replace(/^refs\/remotes\//, "");
   return shortName.startsWith("origin/") ? shortName.slice("origin/".length) : shortName;
+}
+
+// conversationSessionDefaultNewBranchName builds the first unused recommended commit branch name.
+// conversationSessionDefaultNewBranchName 生成第一个未占用的推荐提交分支名。
+function conversationSessionDefaultNewBranchName(currentBranchName: string, branchNames: string[], configuredPrefix: string): string {
+  const normalizedCurrentBranch = conversationSessionNormalizeBranchName(currentBranchName);
+  const existingBranches = new Set(branchNames.map(conversationSessionNormalizeBranchName));
+  existingBranches.add(normalizedCurrentBranch);
+  const slashIndex = normalizedCurrentBranch.lastIndexOf("/");
+  const branchNamespace = slashIndex >= 0 ? normalizedCurrentBranch.slice(0, slashIndex + 1) : configuredPrefix;
+  const branchLeafName = slashIndex >= 0 ? normalizedCurrentBranch.slice(slashIndex + 1) : normalizedCurrentBranch;
+  const baseBranchName = `${branchNamespace}${branchLeafName}`;
+  if (!existingBranches.has(baseBranchName)) {
+    return baseBranchName;
+  }
+  for (let suffix = 2; ; suffix += 1) {
+    const candidateBranchName = `${baseBranchName}${suffix}`;
+    if (!existingBranches.has(candidateBranchName)) {
+      return candidateBranchName;
+    }
+  }
+}
+
+// conversationSessionNormalizeBranchName normalizes Git ref labels before branch-name comparison.
+// conversationSessionNormalizeBranchName 在分支名比较前归一化 Git 引用标签。
+function conversationSessionNormalizeBranchName(name: string): string {
+  return conversationSessionBranchDisplayName(name).trim();
 }

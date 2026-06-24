@@ -282,23 +282,25 @@ export function WorkspaceResizableBody(props: {
   );
   // renderedMainContent lets registered page panels share one adaptive layout implementation.
   // renderedMainContent 让页面注册面板共用同一套自适应布局实现。
-  const renderedMainContent = (props.toolPanels ?? []).reduceRight<React.ReactNode>((content, panel) => (
-    <AdaptiveToolPanel
-      className={panel.className}
-      contentClassName={panel.contentClassName}
-      contentShellClassName={panel.contentShellClassName}
-      expanded={panel.expanded}
-      inlineGap={panel.inlineGap}
-      minContentWidth={panel.minContentWidth}
-      onLayoutModeWillChange={panel.onLayoutModeWillChange}
-      panel={panel.panel}
-      panelWidth={panel.panelWidth}
-      reserveGap={panel.reserveGap}
-      side={panel.side}
-    >
-      {content}
-    </AdaptiveToolPanel>
-  ), mainContent);
+  const renderedMainContent = (props.toolPanels ?? [])
+    .filter((panel) => Boolean(panel.panel))
+    .reduceRight<React.ReactNode>((content, panel) => (
+      <AdaptiveToolPanel
+        className={panel.className}
+        contentClassName={panel.contentClassName}
+        contentShellClassName={panel.contentShellClassName}
+        expanded={panel.expanded}
+        inlineGap={panel.inlineGap}
+        minContentWidth={panel.minContentWidth}
+        onLayoutModeWillChange={panel.onLayoutModeWillChange}
+        panel={panel.panel}
+        panelWidth={panel.panelWidth}
+        reserveGap={panel.reserveGap}
+        side={panel.side}
+      >
+        {content}
+      </AdaptiveToolPanel>
+    ), mainContent);
 
   return (
     <div className={cn("workspace-resizable-body-shell", rightPanelTransition.mounted && rightPanelTransition.floating && "has-floating-context")}>
