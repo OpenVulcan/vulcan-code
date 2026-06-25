@@ -1723,6 +1723,7 @@ fn stored_runtime_state_row_to_entry(row: StoredRuntimeStateRow) -> SessionRunti
             .and_then(parse_vmm_profile_sync_from_json)
             .unwrap_or_default(),
         last_compaction_id: row.last_compaction_id,
+        auto_compaction_consecutive_failures: 0,
         context_start_message_id: row.context_start_message_id,
         live_context_budget_fingerprint: None,
         live_context_assembly_fingerprint: None,

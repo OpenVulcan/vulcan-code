@@ -37,29 +37,19 @@ pub fn build_session_turn_stats_from_state(
         .unwrap_or(0);
     let start_index = records[boundary_index..=closing_index]
         .iter()
-        .position(|record| {
-            matches!(record.kind, SessionMessageKind::User)
-                && record.visible
-                && record.record_kind == SessionMessageRecordKind::Transcript
-        })
+        .position(|record| record_starts_user_turn(record))
         .map(|offset| boundary_index + offset)
         .unwrap_or(boundary_index);
     let turn_records = &records[start_index..=closing_index];
     if turn_records.is_empty() {
         return None;
     }
-    let turn_start_user_record = turn_records.iter().find(|record| {
-        matches!(record.kind, SessionMessageKind::User)
-            && record.visible
-            && record.record_kind == SessionMessageRecordKind::Transcript
-    });
+    let turn_start_user_record = turn_records
+        .iter()
+        .find(|record| record_starts_user_turn(record));
     let visible_user_record_count_before_turn = records[..start_index]
         .iter()
-        .filter(|record| {
-            matches!(record.kind, SessionMessageKind::User)
-                && record.visible
-                && record.record_kind == SessionMessageRecordKind::Transcript
-        })
+        .filter(|record| record_starts_user_turn(record))
         .count();
     let turn_start_message_index = turn_start_user_record
         .and_then(|user_record| {
@@ -178,6 +168,23 @@ pub fn build_session_turn_stats_from_state(
     });
 
     Some(stats)
+}
+
+/// Returns whether one visible transcript row starts a user-authored turn.
+/// 返回单条可见转录行是否开启用户编写轮次。
+fn record_starts_user_turn(record: &SessionConversationRecord) -> bool {
+    if !matches!(record.kind, SessionMessageKind::User)
+        || !record.visible
+        || record.record_kind != SessionMessageRecordKind::Transcript
+    {
+        return false;
+    }
+    record
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("starts_user_turn"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// Resolves the canonical message index where the active turn begins by matching visible user transcript rows.
@@ -380,6 +387,22 @@ mod tests {
             metadata: None,
             created_at: created_at.to_string(),
         }
+    }
+
+    /// Builds one visible interrupt user record folded into the active turn process.
+    /// 构建一条折叠进当前轮次过程的可见插队用户记录。
+    fn interrupt_user_record(id: &str, created_at: &str, body: &str) -> SessionConversationRecord {
+        let mut record = user_record(id, created_at, body);
+        record.metadata = Some(json!({
+            "source": "user_interrupt",
+            "starts_user_turn": false,
+            "turn_process": true,
+            "collapsed_by_default": true,
+            "editable": false,
+            "canonical_text": body,
+            "canonical_user_text": body,
+        }));
+        record
     }
 
     /// Builds one hidden summary record that closes a logical turn.
@@ -643,7 +666,7 @@ mod tests {
             ],
             records: vec![
                 user_record("user-current", "2000", "当前任务"),
-                user_record("user-interleaved", "2001", "中途补充"),
+                interrupt_user_record("user-interleaved", "2001", "中途补充"),
                 summary_record(closing_record_id, "2003"),
             ],
             continuation: Default::default(),
@@ -663,6 +686,66 @@ mod tests {
         assert_eq!(stats.output_tokens, 20);
         assert_eq!(stats.total_tokens, 100);
         assert_eq!(stats.cached_input_tokens, Some(30));
+    }
+
+    /// Verifies prior interrupt user messages do not shift the next turn's canonical alignment.
+    /// 验证上一轮插队用户消息不会挤偏下一轮的规范消息对齐。
+    #[test]
+    fn current_turn_stats_ignore_prior_interrupts_when_aligning_new_turn() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-1000", "上一轮"),
+                user_message("session-1-protocol-user-1001", "上一轮插队"),
+                assistant_message(
+                    "session-1-protocol-assistant-1002",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(500),
+                        output_tokens: Some(100),
+                        total_tokens: Some(600),
+                        cached_input_tokens: Some(400),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    true,
+                ),
+                user_message("session-1-protocol-user-2000", "当前任务"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(70),
+                        output_tokens: Some(14),
+                        total_tokens: Some(84),
+                        cached_input_tokens: Some(21),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-previous", "1000", "上一轮"),
+                interrupt_user_record("user-previous-interrupt", "1001", "上一轮插队"),
+                summary_record("summary-previous", "1003"),
+                turn_stats_record("stats-previous", "1004"),
+                user_record("user-current", "2000", "当前任务"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+
+        let stats = build_session_turn_stats_from_state(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.tool_call_count, 0);
+        assert_eq!(stats.input_tokens, 70);
+        assert_eq!(stats.output_tokens, 14);
+        assert_eq!(stats.total_tokens, 84);
+        assert_eq!(stats.cached_input_tokens, Some(21));
     }
 
     /// Verifies compacted windows can still align the current user by the shared creation timestamp.

@@ -58,14 +58,22 @@ fn context_compaction_prompt_helpers_share_one_source() {
     let request_prompt = build_context_compaction_request_prompt();
     let developer_segment = build_context_compaction_developer_segment();
 
-    assert!(request_prompt.contains("Summarize the earlier session context"));
+    assert!(request_prompt.contains("Create a detailed continuation summary"));
+    assert!(request_prompt.contains("Tool calls will be rejected"));
+    assert!(request_prompt.contains("<analysis>"));
+    assert!(request_prompt.contains("<summary>"));
     assert!(request_prompt.contains("<previous-summary>"));
     assert!(request_prompt.contains("durable memory"));
     assert!(request_prompt.contains("minimal rewriting"));
     assert!(request_prompt.contains("context added after the previous summary"));
+    assert!(request_prompt.contains("All User Messages"));
+    assert!(request_prompt.contains("Problem Solving"));
+    assert!(request_prompt.contains("Optional Next Step"));
     assert!(
         developer_segment.contains("Internal host task: summarize earlier conversation context")
     );
+    assert!(developer_segment.contains("Return exactly one <analysis> block"));
+    assert!(developer_segment.contains("Tool calls will be rejected"));
     assert!(!request_prompt.is_empty());
     assert!(!developer_segment.is_empty());
 }

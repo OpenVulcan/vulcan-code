@@ -417,8 +417,8 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
     }
     let append_canonical_user_message =
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
-    let append_visible_user_prompt_record =
-        input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
+    let append_visible_user_prompt_record = input.append_visible_user_prompt_record
+        && input.source.appends_visible_user_prompt_record();
     if append_canonical_user_message && append_visible_user_prompt_record {
         append_shared_user_prompt_record_with_attachments(
             runtime_state,
@@ -426,6 +426,7 @@ pub fn begin_shared_prompt_turn_with_runtime_state(
             &now,
             &sanitized_prompt,
             input.attachments.clone(),
+            input.source,
         );
     } else if append_canonical_user_message {
         append_user_text_message(
@@ -505,8 +506,8 @@ fn prompt_turn_boundary_events(
     let timestamp_ms = unix_millis_text_to_u64(now);
     let append_canonical_user_message =
         input.append_canonical_user_message && input.source.persists_canonical_user_message();
-    let append_visible_user_prompt_record =
-        input.append_visible_user_prompt_record && input.source.starts_user_parent_turn();
+    let append_visible_user_prompt_record = input.append_visible_user_prompt_record
+        && input.source.appends_visible_user_prompt_record();
     let user_input_visibility = if append_visible_user_prompt_record {
         SessionEventVisibility::Visible
     } else {
@@ -525,6 +526,9 @@ fn prompt_turn_boundary_events(
     .with_payload(serde_json::json!({
         "prompt_entry_id": &input.prompt_entry_id,
         "source": input.source,
+        "starts_user_turn": input.source.starts_user_parent_turn(),
+        "turn_process": input.source.folds_into_active_turn_process(),
+        "editable": input.source.allows_user_prompt_edit(),
         "execution_mode": &input.execution_mode,
         "workspace_path": input.workspace_path,
         "session_title": input.session_title,
@@ -544,6 +548,10 @@ fn prompt_turn_boundary_events(
         "attachments": attachments,
         "source": input.source,
         "canonical": append_canonical_user_message,
+        "starts_user_turn": input.source.starts_user_parent_turn(),
+        "turn_process": input.source.folds_into_active_turn_process(),
+        "collapsed_by_default": input.source.folds_into_active_turn_process(),
+        "editable": input.source.allows_user_prompt_edit(),
     }));
     vec![turn_started, user_input]
 }
@@ -825,7 +833,11 @@ fn patch_latest_prechecked_user_prompt_record(
         })
     {
         record.body = build_shared_user_prompt_transcript_body(prompt, attachments);
-        record.metadata = build_shared_user_prompt_transcript_metadata(prompt, attachments);
+        record.metadata = build_shared_user_prompt_transcript_metadata(
+            prompt,
+            attachments,
+            PendingSessionPromptSource::UserFollowup,
+        );
         if let Some(metadata) = record.metadata.as_mut()
             && let Some(object) = metadata.as_object_mut()
         {
@@ -856,12 +868,15 @@ fn patch_latest_prechecked_user_prompt_record(
 /// `prompt` 是用户编写的规范文本。
 /// `attachments` are the structured prompt attachments.
 /// `attachments` 是提示词携带的结构化附件。
+/// `source` is the prompt source that defines turn and edit semantics.
+/// `source` 是定义轮次与编辑语义的提示词来源。
 fn append_shared_user_prompt_record_with_attachments(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     now: &str,
     prompt: &str,
     attachments: Vec<ConversationAttachment>,
+    source: PendingSessionPromptSource,
 ) {
     runtime_state.ui_state.unread = false;
     runtime_state.last_safe_provider_request_count = None;
@@ -886,7 +901,7 @@ fn append_shared_user_prompt_record_with_attachments(
             visible: true,
             title: String::from("用户指令"),
             body: build_shared_user_prompt_transcript_body(prompt, &attachments),
-            metadata: build_shared_user_prompt_transcript_metadata(prompt, &attachments),
+            metadata: build_shared_user_prompt_transcript_metadata(prompt, &attachments, source),
             created_at: now.to_string(),
         },
     );
@@ -947,6 +962,8 @@ pub fn build_shared_user_prompt_transcript_body(
 /// `prompt` 是用户编写的规范文本。
 /// `attachments` are the structured prompt attachments.
 /// `attachments` 是提示词携带的结构化附件。
+/// `source` is the prompt source that defines turn and edit semantics.
+/// `source` 是定义轮次与编辑语义的提示词来源。
 ///
 /// # Returns
 /// 返回值
@@ -955,16 +972,31 @@ pub fn build_shared_user_prompt_transcript_body(
 pub fn build_shared_user_prompt_transcript_metadata(
     prompt: &str,
     attachments: &[ConversationAttachment],
+    source: PendingSessionPromptSource,
 ) -> Option<Value> {
-    if attachments.is_empty() {
-        return None;
-    }
-    let serialized_attachments = serde_json::to_value(attachments).ok()?;
-    Some(serde_json::json!({
+    let serialized_attachments = (!attachments.is_empty())
+        .then(|| serde_json::to_value(attachments))
+        .transpose()
+        .ok()
+        .flatten();
+    let mut metadata = serde_json::json!({
         "canonical_text": prompt,
         "canonical_user_text": prompt,
-        "transcript_attachments": serialized_attachments,
-    }))
+        "source": source,
+        "starts_user_turn": source.starts_user_parent_turn(),
+        "turn_process": source.folds_into_active_turn_process(),
+        "collapsed_by_default": source.folds_into_active_turn_process(),
+        "editable": source.allows_user_prompt_edit(),
+    });
+    if let Some(serialized_attachments) = serialized_attachments
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(
+            String::from("transcript_attachments"),
+            serialized_attachments,
+        );
+    }
+    Some(metadata)
 }
 
 /// Returns the current Unix timestamp in milliseconds as text.

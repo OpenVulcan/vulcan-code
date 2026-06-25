@@ -1291,6 +1291,32 @@ mod tests {
         assert_eq!(descriptor_ids, definition_ids);
     }
 
+    /// Verifies context-compaction preparation clears every provider-visible tool snapshot.
+    /// 验证上下文压缩准备阶段会清空所有 Provider 可见工具快照。
+    #[test]
+    fn prepare_execution_hides_tools_for_context_compaction_purpose() {
+        let config = test_provider_config();
+        let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+            &config,
+            &AgentProfileCatalog::default(),
+            None,
+            Some(configured_mcp_runtime_access(&config)),
+        );
+        let mut request = test_execution_preparation_request();
+        request.prompt_purpose = ExecutionPromptPurpose::ContextCompaction;
+        request.runtime_policy = ExecutionRuntimePolicy::context_compaction();
+        request.execution_scope = ExecutionScope::ContextCompaction {
+            node_id: SessionNodeId::from(request.session_id),
+        };
+        request.execution_mode = String::from("Compaction");
+
+        let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+            .expect("context compaction preparation should still resolve");
+
+        assert!(prepared.preparation.tool_descriptors.is_empty());
+        assert!(prepared.tool_snapshot.resolved_tool_definitions.is_empty());
+    }
+
     /// Builds one provider configuration that can resolve a provider blueprint without touching the network.
     /// 构建一份无需访问网络即可解析 Provider 蓝图的供应商配置。
     fn test_provider_config() -> ProviderConfigurationFile {

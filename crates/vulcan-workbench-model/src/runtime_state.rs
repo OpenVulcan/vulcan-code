@@ -156,6 +156,22 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Returns whether one usize value is zero for serde skip helpers.
+/// 为 serde 跳过辅助函数判断单个 usize 值是否为零。
+///
+/// # Parameters
+/// 参数
+/// `value` is the usize reference to inspect.
+/// `value` 是需要检查的 usize 引用。
+///
+/// # Returns
+/// 返回值
+/// `true` when the referenced value is zero.
+/// 当引用的值为零时返回 `true`。
+fn is_zero_usize(value: &usize) -> bool {
+    *value == 0
+}
+
 /// Stable source kind attached to one pending session prompt queue entry.
 /// 附着在单条待发送会话提示词队列项上的稳定来源类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -184,24 +200,42 @@ impl PendingSessionPromptSource {
     /// `true` for user prompts that should reset parent-round UI affordances.
     /// 对应应重置父级轮次界面的用户提示词时返回 `true`。
     pub fn starts_user_parent_turn(self) -> bool {
-        matches!(self, Self::UserFollowup | Self::UserInterrupt)
+        matches!(self, Self::UserFollowup)
     }
 
     /// Returns whether this source should be persisted as canonical user-authored conversation text.
     /// 返回该来源是否应作为用户编写的规范会话文本持久化。
     pub fn persists_canonical_user_message(self) -> bool {
-        self.starts_user_parent_turn()
+        matches!(self, Self::UserFollowup | Self::UserInterrupt)
+    }
+
+    /// Returns whether this source should append a visible user transcript record.
+    /// 返回该来源是否应追加可见用户转录记录。
+    pub fn appends_visible_user_prompt_record(self) -> bool {
+        matches!(self, Self::UserFollowup | Self::UserInterrupt)
     }
 
     /// Returns whether this source should run user-prompt precheck hooks.
     /// 返回该来源是否应该运行用户提示词 precheck hook。
     pub fn runs_user_prompt_precheck(self) -> bool {
-        self.starts_user_parent_turn()
+        matches!(self, Self::UserFollowup)
     }
 
     /// Returns whether this source should close the logical user-authored turn.
     /// 返回该来源是否应该闭合用户编写的逻辑回合。
     pub fn runs_completed_turn_hooks(self) -> bool {
+        self.starts_user_parent_turn()
+    }
+
+    /// Returns whether this source is process input folded into the active user turn.
+    /// 返回该来源是否属于折叠进当前用户轮次过程的输入。
+    pub fn folds_into_active_turn_process(self) -> bool {
+        matches!(self, Self::UserInterrupt)
+    }
+
+    /// Returns whether this source allows destructive user-prompt editing.
+    /// 返回该来源是否允许破坏性用户提示词编辑。
+    pub fn allows_user_prompt_edit(self) -> bool {
         self.starts_user_parent_turn()
     }
 }
@@ -1809,6 +1843,23 @@ mod tests {
             PendingSessionPromptSource::UserFollowup
         );
     }
+
+    /// Verifies prompt sources keep user follow-ups and interrupts in different turn roles.
+    /// 验证提示词来源会将用户跟进与插队提示词保持在不同轮次角色中。
+    #[test]
+    fn prompt_source_semantics_separate_followup_and_interrupt_turns() {
+        assert!(PendingSessionPromptSource::UserFollowup.starts_user_parent_turn());
+        assert!(PendingSessionPromptSource::UserFollowup.runs_user_prompt_precheck());
+        assert!(PendingSessionPromptSource::UserFollowup.allows_user_prompt_edit());
+        assert!(PendingSessionPromptSource::UserFollowup.appends_visible_user_prompt_record());
+
+        assert!(!PendingSessionPromptSource::UserInterrupt.starts_user_parent_turn());
+        assert!(!PendingSessionPromptSource::UserInterrupt.runs_user_prompt_precheck());
+        assert!(!PendingSessionPromptSource::UserInterrupt.allows_user_prompt_edit());
+        assert!(PendingSessionPromptSource::UserInterrupt.persists_canonical_user_message());
+        assert!(PendingSessionPromptSource::UserInterrupt.appends_visible_user_prompt_record());
+        assert!(PendingSessionPromptSource::UserInterrupt.folds_into_active_turn_process());
+    }
 }
 
 /// One persisted VMM PostAction writeback retry entry.
@@ -1954,6 +2005,10 @@ pub struct SessionRuntimeStateEntry {
     /// Latest compaction identifier attached to the session.
     /// 附着在该会话上的最近一次压缩标识。
     pub last_compaction_id: Option<String>,
+    /// Consecutive automatic context-compaction failures observed for this session.
+    /// 该会话连续自动上下文压缩失败次数。
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub auto_compaction_consecutive_failures: usize,
     /// Current message identifier used as the next context reconstruction anchor.
     /// 当前用作下一轮上下文重建锚点的消息标识。
     pub context_start_message_id: Option<String>,

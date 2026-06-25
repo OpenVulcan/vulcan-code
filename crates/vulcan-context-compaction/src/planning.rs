@@ -10,6 +10,10 @@ use vulcan_prompt_composer::build_context_compaction_request_prompt;
 
 const PREVIOUS_SUMMARY_START_TAG: &str = "<previous-summary>";
 const PREVIOUS_SUMMARY_END_TAG: &str = "</previous-summary>";
+const MODEL_ANALYSIS_START_TAG: &str = "<analysis>";
+const MODEL_ANALYSIS_END_TAG: &str = "</analysis>";
+const MODEL_SUMMARY_START_TAG: &str = "<summary>";
+const MODEL_SUMMARY_END_TAG: &str = "</summary>";
 const LEGACY_SUMMARY_PREFIX: &str = "Earlier context summary:\n";
 const LEGACY_SUMMARY_SUFFIX: &str = "\n\nContinue from the newer messages below";
 
@@ -49,6 +53,9 @@ pub struct CompactionPlanInput<'a> {
     /// Optional current context-start message identifier used as the compaction input anchor.
     /// 作为压缩输入锚点使用的可选当前上下文起始消息标识。
     pub context_start_message_id: Option<&'a str>,
+    /// Optional inclusive source message identifier used for manual partial `up_to` compaction.
+    /// 用于手动 partial `up_to` 压缩的可选闭区间源消息标识。
+    pub source_until_message_id: Option<&'a str>,
     /// Policy controlling the retained tail and pruning behavior for this compaction pass.
     /// 控制本次压缩保留尾部与剪枝行为的策略。
     pub policy: ContextCompactionPolicy,
@@ -126,7 +133,13 @@ pub fn plan_context_compaction(input: CompactionPlanInput<'_>) -> Option<Compact
         .cloned()
         .collect::<Vec<_>>();
 
-    let retained_tail_start = recent_tail_start_index(&context_candidates, input.policy);
+    let retained_tail_start = match input.source_until_message_id {
+        Some(source_until_message_id) => context_candidates
+            .iter()
+            .position(|message| message.id == source_until_message_id)
+            .map(|index| index.saturating_add(1))?,
+        None => recent_tail_start_index(&context_candidates, input.policy),
+    };
     if retained_tail_start == 0 {
         return None;
     }
@@ -227,6 +240,42 @@ pub fn extract_compaction_previous_summary(summary_body: &str) -> String {
     summary_body.trim().to_string()
 }
 
+/// Extracts the durable summary payload from one model compaction response.
+/// 从单次模型压缩响应中提取可持久化的摘要正文。
+///
+/// # Parameters
+/// # 参数
+/// `summary_text` is the raw assistant output returned by the internal compaction request.
+/// `summary_text` 是内部压缩请求返回的原始助手输出。
+///
+/// # Returns
+/// # 返回值
+/// A non-empty durable summary body, or `None` when the tagged protocol is missing required durable content.
+/// 返回非空的持久摘要正文；当标签协议缺少必需的持久内容时返回 `None`。
+pub fn extract_compaction_model_summary(summary_text: &str) -> Option<String> {
+    let contains_analysis = summary_text.contains(MODEL_ANALYSIS_START_TAG);
+    let contains_summary = summary_text.contains(MODEL_SUMMARY_START_TAG);
+    let stripped_analysis = strip_tagged_sections(
+        summary_text,
+        MODEL_ANALYSIS_START_TAG,
+        MODEL_ANALYSIS_END_TAG,
+    );
+    let summary_payload = if contains_summary {
+        extract_tagged_section(
+            &stripped_analysis,
+            MODEL_SUMMARY_START_TAG,
+            MODEL_SUMMARY_END_TAG,
+        )?
+    } else if contains_analysis {
+        return None;
+    } else {
+        stripped_analysis
+    };
+    let extracted = extract_compaction_previous_summary(&summary_payload);
+    let normalized = extracted.trim().to_string();
+    (!normalized.is_empty()).then_some(normalized)
+}
+
 /// Normalizes one compaction summary into a non-empty plain-text block before it becomes the synthetic continuation prompt body.
 /// 在把压缩总结转换为合成续写提示词正文之前，将其规范化为非空纯文本块。
 fn normalize_compaction_summary_text(summary_text: &str) -> String {
@@ -237,6 +286,60 @@ fn normalize_compaction_summary_text(summary_text: &str) -> String {
     } else {
         trimmed.to_string()
     }
+}
+
+/// Extracts the first payload enclosed by one exact tag pair.
+/// 提取第一段由精确标签对包裹的正文。
+///
+/// # Parameters
+/// # 参数
+/// `text` is the source text to scan.
+/// `text` 是要扫描的源文本。
+/// `start_tag` is the exact opening tag to find.
+/// `start_tag` 是要查找的精确起始标签。
+/// `end_tag` is the exact closing tag to find.
+/// `end_tag` 是要查找的精确结束标签。
+///
+/// # Returns
+/// # 返回值
+/// The trimmed payload from the first complete tag pair, or `None` when no complete pair exists.
+/// 返回第一组完整标签内裁剪后的正文；当不存在完整标签对时返回 `None`。
+fn extract_tagged_section(text: &str, start_tag: &str, end_tag: &str) -> Option<String> {
+    let (_, after_start) = text.split_once(start_tag)?;
+    let (section, _) = after_start.split_once(end_tag)?;
+    Some(section.trim().to_string())
+}
+
+/// Removes every complete section enclosed by one exact tag pair.
+/// 移除每一段由精确标签对包裹的完整正文。
+///
+/// # Parameters
+/// # 参数
+/// `text` is the source text to rewrite.
+/// `text` 是要改写的源文本。
+/// `start_tag` is the exact opening tag that starts removable sections.
+/// `start_tag` 是可移除段落的精确起始标签。
+/// `end_tag` is the exact closing tag that ends removable sections.
+/// `end_tag` 是可移除段落的精确结束标签。
+///
+/// # Returns
+/// # 返回值
+/// The source text with every complete tagged section removed and surrounding whitespace trimmed.
+/// 返回移除所有完整标签段并裁剪外侧空白后的源文本。
+fn strip_tagged_sections(text: &str, start_tag: &str, end_tag: &str) -> String {
+    let mut remaining = text;
+    let mut stripped = String::new();
+    while let Some((before, after_start)) = remaining.split_once(start_tag) {
+        stripped.push_str(before);
+        let Some((_, after_end)) = after_start.split_once(end_tag) else {
+            stripped.push_str(start_tag);
+            stripped.push_str(after_start);
+            return stripped.trim().to_string();
+        };
+        remaining = after_end;
+    }
+    stripped.push_str(remaining);
+    stripped.trim().to_string()
 }
 
 /// Builds one prompt-shaped compaction result from an already prepared summary text and one planned compaction window.
@@ -655,6 +758,50 @@ mod tests {
         );
     }
 
+    /// Verifies model compaction output persists only the durable summary section.
+    /// 验证模型压缩输出只会持久化可延续的摘要段落。
+    #[test]
+    fn extract_compaction_model_summary_strips_analysis_block() {
+        let output = "<analysis>\n逐条检查上下文。\n</analysis>\n<summary>\nPrimary Request and Intent:\n- 继续实现上下文压缩升级。\n</summary>";
+
+        assert_eq!(
+            extract_compaction_model_summary(output),
+            Some(String::from(
+                "Primary Request and Intent:\n- 继续实现上下文压缩升级。"
+            ))
+        );
+    }
+
+    /// Verifies analysis-only model output is rejected instead of becoming durable memory.
+    /// 验证只有分析草稿的模型输出会被拒绝而不是成为持久记忆。
+    #[test]
+    fn extract_compaction_model_summary_rejects_analysis_only_output() {
+        let output = "<analysis>\n只有草稿，没有摘要。\n</analysis>";
+
+        assert_eq!(extract_compaction_model_summary(output), None);
+    }
+
+    /// Verifies tagged model output ignores non-durable text outside summary.
+    /// 验证带标签的模型输出会忽略摘要之外的非持久文本。
+    #[test]
+    fn extract_compaction_model_summary_ignores_text_outside_summary() {
+        let output = "draft preface\n<analysis>\n草稿。\n</analysis>\nleaked note\n<summary>\nNext Step:\n- 继续验证。\n</summary>\ntrailing note";
+
+        assert_eq!(
+            extract_compaction_model_summary(output),
+            Some(String::from("Next Step:\n- 继续验证。"))
+        );
+    }
+
+    /// Verifies tagged model output without a summary block is rejected.
+    /// 验证带标签但缺少摘要段的模型输出会被拒绝。
+    #[test]
+    fn extract_compaction_model_summary_rejects_tagged_output_without_summary() {
+        let output = "draft preface\n<analysis>\n草稿。\n</analysis>\nleaked note";
+
+        assert_eq!(extract_compaction_model_summary(output), None);
+    }
+
     /// Verifies legacy continuation prompts still expose only their summary payload.
     /// 验证旧版续写提示词仍然只会暴露其中的摘要正文。
     #[test]
@@ -698,6 +845,7 @@ mod tests {
             messages: &messages,
             all_messages: &messages,
             context_start_message_id: Some("summary-1"),
+            source_until_message_id: None,
             policy: ContextCompactionPolicy::default(),
         })
         .expect("chained context should still produce a compaction plan");
@@ -709,5 +857,57 @@ mod tests {
                 .any(|message| message.id == "summary-1"
                     && message.record_kind == SessionMessageRecordKind::CompactionSummary)
         );
+    }
+
+    /// Verifies explicit partial source boundaries override the automatic retained-tail cut.
+    /// 验证明示 partial 源边界会覆盖自动保留尾部切分点。
+    #[test]
+    fn plan_context_compaction_respects_explicit_source_until_message_id() {
+        let messages = vec![
+            test_context_message(
+                "user-0",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "旧用户请求",
+            ),
+            test_context_message(
+                "assistant-0",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "旧助手回答",
+            ),
+            test_context_message(
+                "user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "保留的新用户请求",
+            ),
+            test_context_message(
+                "assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "保留的新助手回答",
+            ),
+        ];
+
+        let plan = plan_context_compaction(CompactionPlanInput {
+            session_label: "test-session",
+            messages: &messages,
+            all_messages: &messages,
+            context_start_message_id: None,
+            source_until_message_id: Some("assistant-0"),
+            policy: ContextCompactionPolicy::default(),
+        })
+        .expect("explicit source boundary should produce a compaction plan");
+
+        assert_eq!(plan.source_until_message_id.as_deref(), Some("assistant-0"));
+        assert_eq!(
+            plan.source_messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-0", "assistant-0"]
+        );
+        assert_eq!(plan.retained_tail_start_turn_index, Some(1));
     }
 }

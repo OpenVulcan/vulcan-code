@@ -74,6 +74,22 @@ pub fn stream_runtime_run_with_intervention(
     )
 }
 
+/// Streams one provider run from a launch payload that has already completed preparation.
+/// 从一份已经完成准备的启动载荷继续流式执行一次 Provider 调用。
+///
+/// # Parameters
+/// # 参数
+/// `config` is the provider configuration used for the prepared launch.
+/// `config` 是该已准备启动载荷使用的 Provider 配置。
+/// `launch` is the prepared runtime-stream payload.
+/// `launch` 是已准备完成的运行时流启动载荷。
+/// `prompt_intervention` optionally injects host guidance at safe tool boundaries.
+/// `prompt_intervention` 可选地在安全工具边界注入宿主引导。
+///
+/// # Returns
+/// # 返回值
+/// A stream of execution events for the prepared provider run.
+/// 返回该已准备 Provider 执行的执行事件流。
 /// Streams one real provider run from an already prepared MCP runtime access surface.
 /// 根据一份已经准备好的 MCP 运行时访问面流式执行一次真实 Provider 调用。
 fn stream_runtime_run_with_access(

@@ -5,8 +5,8 @@ use serde_json::json;
 use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
-    SessionId, SessionMessageKind, SessionMessageRecordKind, SessionRuntimeStateEntry,
-    SessionTurnStatsStatus,
+    PendingSessionPromptSource, SessionId, SessionMessageKind, SessionMessageRecordKind,
+    SessionRuntimeStateEntry, SessionTurnStatsStatus,
 };
 
 use crate::{
@@ -100,16 +100,31 @@ fn build_user_prompt_record_metadata(
     prompt: &str,
     attachments: &[ConversationAttachment],
 ) -> Option<serde_json::Value> {
-    if attachments.is_empty() {
-        return None;
-    }
-    let serialized_attachments = serde_json::to_value(attachments).ok()?;
-    Some(json!({
+    let source = PendingSessionPromptSource::UserFollowup;
+    let serialized_attachments = (!attachments.is_empty())
+        .then(|| serde_json::to_value(attachments))
+        .transpose()
+        .ok()
+        .flatten();
+    let mut metadata = json!({
         "canonical_text": prompt,
         "canonical_user_text": prompt,
-        "attachments": serialized_attachments.clone(),
-        "transcript_attachments": serialized_attachments,
-    }))
+        "source": source,
+        "starts_user_turn": source.starts_user_parent_turn(),
+        "turn_process": source.folds_into_active_turn_process(),
+        "collapsed_by_default": source.folds_into_active_turn_process(),
+        "editable": source.allows_user_prompt_edit(),
+    });
+    if let Some(serialized_attachments) = serialized_attachments
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(String::from("attachments"), serialized_attachments.clone());
+        object.insert(
+            String::from("transcript_attachments"),
+            serialized_attachments,
+        );
+    }
+    Some(metadata)
 }
 
 /// Appends or extends one streaming transcript record inside the background state.

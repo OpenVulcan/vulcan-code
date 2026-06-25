@@ -25,6 +25,7 @@ use std::sync::Arc;
 use vulcan_context::conversation_state_from_session_messages;
 use vulcan_context_compaction::{
     CompactionPlan, CompactionResult, build_compaction_request_prompt,
+    extract_compaction_model_summary,
 };
 
 /// Immutable request payload required to execute one prompt-based compaction job.
@@ -338,6 +339,8 @@ fn finalize_prompt_compaction_report(
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .ok_or_else(|| build_prompt_compaction_failure_message(model_label, &report))?;
+        let summary_text = extract_compaction_model_summary(summary_text)
             .ok_or_else(|| build_prompt_compaction_failure_message(model_label, &report))?;
         return Ok(PromptCompactionExecution {
             compaction_result: CompactionResult::from_model_summary(plan, summary_text),

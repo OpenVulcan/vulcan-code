@@ -335,6 +335,18 @@ pub struct ContextInjectionState {
     pub groups: BTreeMap<String, InjectionStateGroup>,
 }
 
+/// Result counters produced when expired transient injections are removed.
+/// 移除已失效临时注入时产出的结果计数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InjectionPruneReport {
+    /// Number of transient injection items removed because their TTL has expired.
+    /// 因 TTL 已失效而被移除的临时注入内容项数量。
+    pub removed_item_count: usize,
+    /// Number of groups removed after their last item was pruned.
+    /// 最后一条内容项被裁剪后随之移除的分组数量。
+    pub removed_group_count: usize,
+}
+
 impl ContextInjectionState {
     /// Returns whether the state contains no active injection items.
     /// 返回该状态是否不包含任何活动注入内容项。
@@ -487,6 +499,46 @@ impl ContextInjectionState {
                 .retain(|_, item| item.remaining_turns.is_none_or(|turns| turns > 0));
         }
         self.remove_empty_groups();
+    }
+
+    /// Removes transient items whose remaining TTL is already exhausted and reports the pruning counters.
+    /// 移除剩余 TTL 已经耗尽的临时注入内容项，并返回裁剪计数。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// An `InjectionPruneReport` describing removed item and group counts.
+    /// 返回描述已移除内容项与分组数量的 `InjectionPruneReport`。
+    pub fn prune_expired_transient_items(&mut self) -> InjectionPruneReport {
+        let before_group_count = self.groups.len();
+        let mut removed_item_count = 0usize;
+        for group in self.groups.values_mut() {
+            if group.kind != InjectionKind::Transient {
+                continue;
+            }
+            let before_item_count = group.items.len();
+            group
+                .items
+                .retain(|_, item| item.remaining_turns.is_none_or(|turns| turns > 0));
+            removed_item_count += before_item_count.saturating_sub(group.items.len());
+        }
+        self.remove_empty_groups();
+        InjectionPruneReport {
+            removed_item_count,
+            removed_group_count: before_group_count.saturating_sub(self.groups.len()),
+        }
+    }
+
+    /// Returns a cloned injection state after removing expired transient items from the clone only.
+    /// 返回只在克隆对象中移除已失效临时注入内容项后的注入状态。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A pruned cloned state plus the pruning report, leaving the original state unchanged.
+    /// 返回已裁剪的克隆状态和裁剪报告，同时保持原始状态不变。
+    pub fn clone_pruned_for_compaction(&self) -> (Self, InjectionPruneReport) {
+        let mut cloned = self.clone();
+        let report = cloned.prune_expired_transient_items();
+        (cloned, report)
     }
 
     /// Applies one conversation-compaction event according to each item's effective policy.
@@ -1190,6 +1242,54 @@ mod tests {
 
         state.consume_turn("turn-2", "4");
         assert!(state.groups.is_empty());
+    }
+
+    /// Verifies expired transient injections are removed before compaction drafts are rendered.
+    /// 验证已失效临时注入会在压缩候选状态渲染前被移除。
+    #[test]
+    fn prune_expired_transient_items_removes_only_expired_transient_items() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(transient_insert("expired", "expired memory", 1), "1");
+        state.apply_insert(transient_insert("active", "active memory", 2), "1");
+        state.apply_insert(persistent_insert("profile_delta", "profile memory"), "1");
+        let expired_item = state
+            .groups
+            .get_mut("vmm_inject")
+            .and_then(|group| {
+                group
+                    .items
+                    .values_mut()
+                    .find(|item| item.content == "expired memory")
+            })
+            .expect("expired item");
+        expired_item.remaining_turns = Some(0);
+        let report = state.prune_expired_transient_items();
+
+        assert_eq!(report.removed_item_count, 1);
+        assert_eq!(report.removed_group_count, 0);
+        let transient_group = state.groups.get("vmm_inject").expect("transient group");
+        assert_eq!(transient_group.items.len(), 1);
+        assert!(state.groups.contains_key("profile_delta"));
+    }
+
+    /// Verifies compaction pruning can be evaluated without mutating the original state.
+    /// 验证压缩裁剪可以在不修改原始状态的情况下完成评估。
+    #[test]
+    fn clone_pruned_for_compaction_keeps_original_state_unchanged() {
+        let mut state = ContextInjectionState::default();
+        state.apply_insert(transient_insert("expired", "expired memory", 1), "1");
+        let expired_item = state
+            .groups
+            .get_mut("vmm_inject")
+            .and_then(|group| group.items.values_mut().next())
+            .expect("expired item");
+        expired_item.remaining_turns = Some(0);
+
+        let (pruned, report) = state.clone_pruned_for_compaction();
+
+        assert_eq!(report.removed_item_count, 1);
+        assert!(state.groups.contains_key("vmm_inject"));
+        assert!(pruned.groups.is_empty());
     }
 
     #[test]

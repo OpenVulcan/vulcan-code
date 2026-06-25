@@ -76,6 +76,85 @@ pub fn compact_conversation_with_summary(
     state.continuation.updated_at = Some(updated_at.into());
 }
 
+/// Rewrites the active canonical window using the planner's exact covered-source boundary.
+/// 使用规划器给出的精确源覆盖边界改写当前活动规范窗口。
+///
+/// # Parameters
+/// # 参数
+/// `state` is the canonical conversation window to rewrite.
+/// `state` 是需要改写的规范会话窗口。
+/// `summary_message_id` is the hidden summary message identifier inserted as the new context anchor.
+/// `summary_message_id` 是作为新上下文锚点插入的隐藏摘要消息标识。
+/// `summary_kind` controls whether the synthetic summary is projected as user or assistant text.
+/// `summary_kind` 控制合成摘要按用户文本还是助手文本投影。
+/// `summary_body` is the durable continuation summary.
+/// `summary_body` 是持久续写摘要。
+/// `updated_at` is the continuation timestamp written after the rewrite.
+/// `updated_at` 是改写后写入 continuation 的时间戳。
+/// `source_until_message_id` is the inclusive source boundary covered by the summary.
+/// `source_until_message_id` 是摘要覆盖的闭区间源边界。
+/// `policy` is the fallback policy used when the boundary is absent or stale.
+/// `policy` 是边界缺失或过期时使用的回退策略。
+pub fn compact_conversation_with_summary_until(
+    state: &mut SessionConversationState,
+    summary_message_id: impl Into<String>,
+    summary_kind: SessionMessageKind,
+    summary_body: impl Into<String>,
+    updated_at: impl Into<String>,
+    source_until_message_id: Option<&str>,
+    policy: ContextCompactionPolicy,
+) {
+    let summary_text = summary_body.into();
+    let summary_message = summary_conversation_message(
+        summary_message_id.into(),
+        summary_kind,
+        summary_text.clone(),
+    );
+    let retained_tail = source_until_message_id
+        .and_then(|source_until_message_id| {
+            state
+                .messages
+                .iter()
+                .position(|message| message.id == source_until_message_id)
+                .map(|index| state.messages[index.saturating_add(1)..].to_vec())
+        })
+        .unwrap_or_else(|| canonical_recent_tail_messages(&state.messages, policy));
+    let mut compacted_messages = Vec::with_capacity(retained_tail.len() + 1);
+    compacted_messages.push(summary_message);
+    compacted_messages.extend(retained_tail);
+    state.messages = compacted_messages;
+    state.continuation.last_provider_message_id = None;
+    state.continuation.updated_at = Some(updated_at.into());
+}
+
+/// Builds the synthetic canonical summary message inserted by one compaction rewrite.
+/// 构建一次压缩改写插入的合成规范摘要消息。
+fn summary_conversation_message(
+    id: String,
+    summary_kind: SessionMessageKind,
+    summary_text: String,
+) -> SessionConversationMessage {
+    SessionConversationMessage {
+        id,
+        payload: match summary_kind {
+            SessionMessageKind::User => SessionConversationPayload::UserText {
+                text: summary_text,
+                attachments: Vec::new(),
+            },
+            SessionMessageKind::Assistant | SessionMessageKind::Error => {
+                SessionConversationPayload::Assistant {
+                    text: summary_text,
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                }
+            }
+        },
+    }
+}
+
 /// Compacts canonical records after summary creation so old tool details stop inflating persistence.
 /// 在摘要创建后压缩规范记录，避免旧工具细节继续放大持久化体积。
 pub fn compact_conversation_records_after_summary(
@@ -573,6 +652,59 @@ mod tests {
                 }
             }
         }))
+    }
+
+    /// Verifies planner source boundaries control the retained canonical tail exactly.
+    /// 验证规划器源边界会精确控制保留的规范尾部。
+    #[test]
+    fn compact_conversation_with_summary_until_keeps_messages_after_source_boundary() {
+        let mut state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("old-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("旧问题"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("old-assistant"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("旧回答"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("tail-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("继续任务"),
+                        attachments: Vec::new(),
+                    },
+                },
+            ],
+            ..SessionConversationState::default()
+        };
+
+        compact_conversation_with_summary_until(
+            &mut state,
+            "summary-1",
+            SessionMessageKind::Assistant,
+            "旧上下文摘要",
+            "1780000000000",
+            Some("old-assistant"),
+            ContextCompactionPolicy::default(),
+        );
+
+        let ids = state
+            .messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["summary-1", "tail-user"]);
     }
 
     /// Verifies compaction keeps the newest tool-call turn structurally replayable even when the result is large.

@@ -28,6 +28,7 @@ use vulcan_agent_runtime::{
     agent_runtime::{
         context_injection_runtime::{
             context_injection_panel_cards_for_kind,
+            core_provider_context_injection_from_state_for_turn,
             remove_legacy_vmm_profile_context_injection_state,
         },
         conversation_hooks::{
@@ -58,7 +59,7 @@ use vulcan_agent_runtime::{
     },
     conversation_protocol::{
         SessionConversationState, compact_conversation_records_after_summary,
-        compact_conversation_with_summary, conversation_state_from_session_messages,
+        compact_conversation_with_summary_until, conversation_state_from_session_messages,
         conversation_state_to_session_messages,
         merge_session_messages_with_conversation_state_records,
     },
@@ -98,7 +99,7 @@ use vulcan_context::{
 use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
 use vulcan_context_injection::{
     ContextInjectionState, InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem,
-    InjectionKind, InjectionPanelCard,
+    InjectionKind, InjectionPanelCard, InjectionPruneReport,
 };
 use vulcan_core::controller::VulcanCoreController;
 use vulcan_core::types::{
@@ -205,6 +206,15 @@ const SESSION_AI_CAPABILITY_UPDATE_INJECTION_TAG: &str = "session_ai_capability_
 /// Stable dedupe key that replaces stale AI capability update notices in the current context window.
 /// 用于在当前上下文窗口内替换旧 AI 能力变更通知的稳定去重键。
 const SESSION_AI_CAPABILITY_UPDATE_DEDUPE_KEY: &str = "session_ai_capability_update:latest";
+/// Metadata trigger label for user-requested manual context compaction.
+/// 用户手动触发上下文压缩的元数据触发标签。
+const MANUAL_CONTEXT_COMPACTION_TRIGGER: &str = "manual_slash";
+/// Metadata trigger label for host-initiated budget auto-compaction.
+/// 宿主因预算触发自动上下文压缩的元数据触发标签。
+const AUTO_CONTEXT_COMPACTION_TRIGGER: &str = "auto_budget";
+/// Maximum consecutive automatic compaction failures before the session circuit breaker opens.
+/// 会话自动压缩熔断前允许的最大连续失败次数。
+const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;
 
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
@@ -3439,6 +3449,17 @@ async fn service_get_user_prompt_edit_draft(
         if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
             return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
         }
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        if !workspace_user_prompt_message_allows_destructive_edit(
+            workspace,
+            session_id,
+            &message_id,
+        ) {
+            return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
+        }
         guard
             .controller_runtime
             .clone()
@@ -3487,6 +3508,17 @@ async fn service_submit_user_prompt_edit(
             .ok_or_else(|| String::from("ERR_CONTROLLER_RUNTIME_NOT_READY"))?;
         if !webui_session_allows_user_prompt_editing(&mut guard, session_id) {
             return Err(String::from("ERR_USER_PROMPT_EDIT_SESSION_BUSY"));
+        }
+        let workspace = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("ERR_WORKSPACE_SNAPSHOT_NOT_READY"))?;
+        if !workspace_user_prompt_message_allows_destructive_edit(
+            workspace,
+            session_id,
+            &request.message_id,
+        ) {
+            return Err(String::from("ERR_USER_PROMPT_EDIT_NOT_EDITABLE"));
         }
         controller_runtime
     };
@@ -5317,6 +5349,7 @@ async fn service_compact_selected_conversation_context(
         messages: &context_messages,
         all_messages: &full_session_messages,
         context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
+        source_until_message_id: None,
         policy: Default::default(),
     }) else {
         return Err(String::from("当前会话暂时没有可压缩的历史上下文。"));
@@ -5332,6 +5365,7 @@ async fn service_compact_selected_conversation_context(
         &mut workspace_snapshot,
         selected_session_id,
         &budget_note,
+        MANUAL_CONTEXT_COMPACTION_TRIGGER,
     );
     workspace_snapshot
         .session_run_phases
@@ -5379,6 +5413,7 @@ async fn service_compact_selected_conversation_context(
         previous_phase,
         status_message_id,
         budget_note,
+        MANUAL_CONTEXT_COMPACTION_TRIGGER.to_string(),
         plan,
     )?;
     Ok(workbench)
@@ -15298,6 +15333,307 @@ fn mark_webui_precheck_continuation_failed(
     Ok(())
 }
 
+/// Automatically compacts an over-budget WebUI session before the provider request is sent.
+/// 在 Provider 请求发出前自动压缩超预算的 WebUI 会话。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits visible status updates for the compaction section.
+/// `app` 为压缩分段发出可见状态更新。
+/// `state` owns retained workspace state.
+/// `state` 持有保留的工作区状态。
+/// `controller_runtime` persists compaction results.
+/// `controller_runtime` 持久化压缩结果。
+/// `agent_runtime` provides compaction model/runtime dependencies.
+/// `agent_runtime` 提供压缩模型与运行时依赖。
+/// `request` is the original user-turn execution request.
+/// `request` 是原始用户回合执行请求。
+/// `preparation` contains the final provider-facing budget snapshot.
+/// `preparation` 包含最终 Provider 可见预算快照。
+///
+/// # Returns
+/// # 返回值
+/// `Some` with a refreshed request when compaction succeeded, `None` when not needed.
+/// 压缩成功时返回刷新后的请求；不需要压缩时返回 `None`。
+async fn maybe_auto_compact_webui_session_before_provider_request(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    agent_runtime: &AgentRuntimeBridge,
+    request: &ExecutionPreparationRequest,
+    preparation: &ExecutionPreparation,
+) -> Result<Option<ExecutionPreparationRequest>, String> {
+    if request.prompt_purpose != ExecutionPromptPurpose::UserTurn {
+        return Ok(None);
+    }
+    let Some(context_budget) = preparation.context_budget.as_ref() else {
+        return Ok(None);
+    };
+    if !context_budget.should_compact() {
+        return Ok(None);
+    }
+    let session_id = request.session_id;
+    let budget_note = context_budget.summary_note();
+    webui_trace(
+        "stream_auto_compaction_needed",
+        format!(
+            "session={session_id} severity={:?} usage={}",
+            context_budget.severity,
+            context_budget.usage_label()
+        ),
+    );
+
+    let mut previous_phase = SessionRunPhase::Preparing;
+    let mut status_message_id = String::new();
+    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+        previous_phase = workspace
+            .session_run_phases
+            .get(&session_id)
+            .copied()
+            .unwrap_or(SessionRunPhase::Preparing);
+        status_message_id = append_webui_context_compaction_status_message_to_workspace(
+            workspace,
+            session_id,
+            &budget_note,
+            AUTO_CONTEXT_COMPACTION_TRIGGER,
+        );
+        workspace
+            .session_run_phases
+            .insert(session_id, SessionRunPhase::Preparing);
+        if let Some(session) = workspace
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            session.status = SessionState::Running;
+            session.last_updated_label = String::from("刚刚");
+            session.updated_at = current_unix_millis_text();
+        }
+    })?;
+
+    if webui_auto_context_compaction_failure_count(state, session_id)
+        >= MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES
+    {
+        let error = format!(
+            "自动上下文压缩已连续失败 {MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES} 次，本次请求已停止，避免覆盖或反复改写当前会话状态。"
+        );
+        persist_failed_webui_context_compaction(
+            app,
+            state,
+            controller_runtime,
+            session_id,
+            previous_phase,
+            &status_message_id,
+            &budget_note,
+            AUTO_CONTEXT_COMPACTION_TRIGGER,
+            &error,
+        )?;
+        return Err(error);
+    }
+
+    let plan = match webui_auto_context_compaction_plan_from_state(state, session_id) {
+        Ok(plan) => plan,
+        Err(error) => {
+            persist_failed_webui_context_compaction(
+                app,
+                state,
+                controller_runtime,
+                session_id,
+                previous_phase,
+                &status_message_id,
+                &budget_note,
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+                &error,
+            )?;
+            return Err(error);
+        }
+    };
+    let job_request =
+        match build_webui_context_compaction_job_request(state, agent_runtime, session_id, plan) {
+            Ok(request) => request,
+            Err(error) => {
+                persist_failed_webui_context_compaction(
+                    app,
+                    state,
+                    controller_runtime,
+                    session_id,
+                    previous_phase,
+                    &status_message_id,
+                    &budget_note,
+                    AUTO_CONTEXT_COMPACTION_TRIGGER,
+                    &error,
+                )?;
+                return Err(error);
+            }
+        };
+    let terminal_result = stream_webui_context_compaction_execution(
+        app,
+        state,
+        job_request,
+        session_id,
+        &status_message_id,
+        &budget_note,
+        AUTO_CONTEXT_COMPACTION_TRIGGER,
+    )
+    .await;
+    match terminal_result {
+        Ok(execution) => {
+            let snapshot = finish_webui_context_compaction_execution(
+                app,
+                state,
+                agent_runtime,
+                session_id,
+                previous_phase,
+                &status_message_id,
+                &budget_note,
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+                execution,
+            )?;
+            spawn_workspace_session_persist_task(
+                state.clone(),
+                controller_runtime.clone(),
+                snapshot,
+                session_id,
+                Some(String::from("auto_context_compaction")),
+            );
+            refreshed_execution_request_after_context_compaction(state, request).map(Some)
+        }
+        Err(error) => {
+            persist_failed_webui_context_compaction(
+                app,
+                state,
+                controller_runtime,
+                session_id,
+                previous_phase,
+                &status_message_id,
+                &budget_note,
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+                &error,
+            )?;
+            Err(error)
+        }
+    }
+}
+
+/// Returns the current consecutive automatic compaction failure count for one session.
+/// 返回单个会话当前连续自动压缩失败次数。
+fn webui_auto_context_compaction_failure_count(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> usize {
+    current_workspace_snapshot_from_shared_state(state)
+        .ok()
+        .flatten()
+        .and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .map(|runtime_state| runtime_state.auto_compaction_consecutive_failures)
+        })
+        .unwrap_or_default()
+}
+
+/// Builds the exact auto-compaction plan from the retained canonical conversation state.
+/// 从保留的规范会话状态构建精确的自动压缩计划。
+fn webui_auto_context_compaction_plan_from_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<CompactionPlan, String> {
+    let workspace_snapshot =
+        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    let runtime_state_snapshot = workspace_snapshot
+        .session_runtime_state
+        .get(&session_id)
+        .cloned()
+        .unwrap_or_default();
+    let full_session_messages =
+        conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
+    let context_messages = if full_session_messages.is_empty() {
+        dialogue_context_messages_from_workspace(&workspace_snapshot, session_id)
+            .unwrap_or_default()
+    } else {
+        full_session_messages.clone()
+    };
+    if context_messages.is_empty() {
+        return Err(String::from(
+            "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
+        ));
+    }
+    plan_context_compaction(CompactionPlanInput {
+        session_label: &session_id.to_string(),
+        messages: &context_messages,
+        all_messages: &full_session_messages,
+        context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
+        source_until_message_id: None,
+        policy: Default::default(),
+    })
+    .ok_or_else(|| {
+        String::from("自动上下文压缩没有找到满足策略的可压缩区间，已停止本次请求以避免预算溢出。")
+    })
+}
+
+/// Rebuilds an execution request after a successful compaction commit.
+/// 在压缩提交成功后重建执行请求。
+fn refreshed_execution_request_after_context_compaction(
+    state: &SharedServiceBridgeState,
+    request: &ExecutionPreparationRequest,
+) -> Result<ExecutionPreparationRequest, String> {
+    let workspace_snapshot =
+        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
+    let runtime_state = workspace_snapshot
+        .session_runtime_state
+        .get(&request.session_id)
+        .ok_or_else(|| String::from("自动上下文压缩完成后未找到会话运行时状态。"))?;
+    let mut refreshed = request.clone();
+    refreshed.conversation_state = runtime_state.conversation_state.clone();
+    let turn_marker = refreshed
+        .boundary_events
+        .first()
+        .and_then(|event| event.turn_id.clone());
+    refreshed.context_injection = core_provider_context_injection_from_state_for_turn(
+        &runtime_state.context_injection_state,
+        turn_marker.as_deref(),
+    );
+    Ok(refreshed)
+}
+
+/// Persists and projects one failed automatic or manual compaction attempt.
+/// 持久化并投影一次失败的自动或手动压缩尝试。
+fn persist_failed_webui_context_compaction(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    controller_runtime: &ControllerRuntimeHandle,
+    session_id: SessionId,
+    previous_phase: SessionRunPhase,
+    section_id: &str,
+    budget_note: &str,
+    trigger: &str,
+    error: &str,
+) -> Result<(), String> {
+    let snapshot = fail_webui_context_compaction_execution(
+        app,
+        state,
+        session_id,
+        previous_phase,
+        section_id,
+        budget_note,
+        trigger,
+        error,
+    )?;
+    spawn_workspace_session_persist_task(
+        state.clone(),
+        controller_runtime.clone(),
+        snapshot,
+        session_id,
+        Some(String::from("context_compaction_failed")),
+    );
+    Ok(())
+}
+
 /// Spawns one background task that forwards agent runtime stream events into the WebUI state.
 /// 启动一个后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
 fn spawn_agent_stream_task(
@@ -15306,6 +15642,41 @@ fn spawn_agent_stream_task(
     controller_runtime: ControllerRuntimeHandle,
     agent_runtime: AgentRuntimeBridge,
     request: ExecutionPreparationRequest,
+) {
+    spawn_agent_stream_task_with_auto_compaction_state(
+        app,
+        state,
+        controller_runtime,
+        agent_runtime,
+        request,
+        false,
+    );
+}
+
+/// Spawns one background task that forwards agent runtime stream events with per-request auto-compaction state.
+/// 启动一个携带单请求自动压缩状态的后台任务，将 Agent 运行时流事件转发到 WebUI 状态。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits workbench snapshots and runtime stream projections.
+/// `app` 发出工作台快照与运行时流投影。
+/// `state` owns retained service state and active stream handles.
+/// `state` 持有保留的服务状态与活跃流句柄。
+/// `controller_runtime` persists provider checkpoints and terminal session state.
+/// `controller_runtime` 持久化 Provider 检查点与终态会话状态。
+/// `agent_runtime` provides provider, tool, hook, and compaction runtimes.
+/// `agent_runtime` 提供 Provider、工具、hook 与压缩运行时。
+/// `request` is the prepared execution request for the current user turn.
+/// `request` 是当前用户回合的待执行请求。
+/// `auto_compaction_already_attempted` prevents repeated automatic compaction loops for one user request.
+/// `auto_compaction_already_attempted` 防止单个用户请求反复进入自动压缩循环。
+fn spawn_agent_stream_task_with_auto_compaction_state(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    request: ExecutionPreparationRequest,
+    auto_compaction_already_attempted: bool,
 ) {
     let session_id = request.session_id;
     webui_trace("stream_task_spawn", format!("session={session_id}"));
@@ -15340,7 +15711,7 @@ fn spawn_agent_stream_task(
             Arc::clone(&agent_runtime.question_runtime),
             Arc::clone(&agent_runtime.command_session_runtime),
             Arc::clone(&agent_runtime.token_budget_runtime),
-            request,
+            request.clone(),
             Some(prompt_intervention),
         ));
 
@@ -15400,6 +15771,60 @@ fn spawn_agent_stream_task(
                         &preparation,
                     ) {
                         eprintln!("[webui-service] apply preparation failed: {error}");
+                    }
+                    let auto_compaction_result = if auto_compaction_already_attempted {
+                        Ok(None)
+                    } else {
+                        maybe_auto_compact_webui_session_before_provider_request(
+                            &app,
+                            &task_state,
+                            &controller_runtime,
+                            &agent_runtime,
+                            &request,
+                            &preparation,
+                        )
+                        .await
+                    };
+                    match auto_compaction_result {
+                        Ok(Some(updated_request)) => {
+                            webui_trace(
+                                "stream_auto_compaction_restarting",
+                                format!("session={session_id}"),
+                            );
+                            if let Ok(mut guard) = task_state.lock() {
+                                guard.active_stream_tasks.remove(&session_id);
+                            }
+                            spawn_agent_stream_task_with_auto_compaction_state(
+                                app,
+                                task_state,
+                                controller_runtime,
+                                agent_runtime,
+                                updated_request,
+                                true,
+                            );
+                            return;
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            eprintln!(
+                                "[webui-service] automatic context compaction failed before provider request: {error}"
+                            );
+                            if let Ok(mut guard) = task_state.lock() {
+                                guard.active_stream_tasks.remove(&session_id);
+                                finish_webui_session_kernel_turn(
+                                    &mut guard,
+                                    session_id,
+                                    TurnTerminalStatus::Failed,
+                                );
+                            }
+                            let _ = apply_session_phase(
+                                &app,
+                                &task_state,
+                                session_id,
+                                SessionRunPhase::Failed,
+                            );
+                            return;
+                        }
                     }
                 }
                 ExecutionStreamEvent::ProviderRequestCheckpoint {
@@ -17672,7 +18097,9 @@ async fn maybe_prepare_next_webui_pending_prompt(
                 hidden_model_guidance: entry.hidden_model_guidance.as_deref(),
                 attachments: entry.attachments,
                 append_canonical_user_message: entry.source.persists_canonical_user_message(),
-                append_visible_user_prompt_record: entry.source.starts_user_parent_turn(),
+                append_visible_user_prompt_record: entry
+                    .source
+                    .appends_visible_user_prompt_record(),
                 source: entry.source,
                 execution_mode: String::from("build"),
                 reasoning_effort: Some(runtime_options.reasoning_effort),
@@ -18657,21 +19084,35 @@ fn conversation_message_from_session_entry(
     }
 }
 
-/// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
-/// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
-fn spawn_webui_context_compaction_task(
-    app: ServiceEventEmitter,
-    state: SharedServiceBridgeState,
-    controller_runtime: ControllerRuntimeHandle,
-    agent_runtime: AgentRuntimeBridge,
+/// Builds the shared prompt-compaction job request for manual and automatic WebUI compaction.
+/// 为手动与自动 WebUI 压缩构建共享的提示词压缩任务请求。
+///
+/// # Parameters
+/// # 参数
+/// `state` provides the latest workspace snapshot used for session-local tool configuration.
+/// `state` 提供用于会话级工具配置的最新工作区快照。
+/// `agent_runtime` provides provider, tool, MCP, and runtime handles.
+/// `agent_runtime` 提供 Provider、工具、MCP 与运行时句柄。
+/// `session_id` selects the session being compacted.
+/// `session_id` 选择正在压缩的会话。
+/// `plan` identifies the exact message range to summarize.
+/// `plan` 标识需要总结的精确消息范围。
+///
+/// # Returns
+/// # 返回值
+/// A ready compaction job request, or an explicit runtime-readiness error.
+/// 返回可直接执行的压缩任务请求；或返回明确的运行时就绪错误。
+fn build_webui_context_compaction_job_request(
+    state: &SharedServiceBridgeState,
+    agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
-    previous_phase: SessionRunPhase,
-    status_message_id: String,
-    budget_note: String,
     plan: CompactionPlan,
-) -> Result<(), String> {
-    let mcp_runtime_access = agent_runtime.mcp_runtime.clone();
-    let workspace_snapshot = current_workspace_snapshot_from_shared_state(&state)
+) -> Result<PromptCompactionJobRequest, String> {
+    let mcp_runtime_access = agent_runtime
+        .mcp_runtime
+        .clone()
+        .ok_or_else(|| String::from("上下文压缩运行时未就绪，无法发起模型总结请求。"))?;
+    let workspace_snapshot = current_workspace_snapshot_from_shared_state(state)
         .ok()
         .flatten();
     let workspace_path = workspace_snapshot
@@ -18689,11 +19130,11 @@ fn spawn_webui_context_compaction_task(
             .clone()
         })
         .unwrap_or_else(|| agent_runtime.ai_tool_configuration.clone());
-    let request = mcp_runtime_access.map(|mcp_runtime_access| PromptCompactionJobRequest {
+    Ok(PromptCompactionJobRequest {
         session_id,
-        session_title: current_session_title_from_state(&state, session_id),
+        session_title: current_session_title_from_state(state, session_id),
         workspace_path,
-        plan: plan.clone(),
+        plan,
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_label: agent_runtime.provider_configuration.model.clone(),
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
@@ -18706,56 +19147,121 @@ fn spawn_webui_context_compaction_task(
         question_runtime: Arc::clone(&agent_runtime.question_runtime),
         command_session_runtime: Arc::clone(&agent_runtime.command_session_runtime),
         token_budget_runtime: Arc::clone(&agent_runtime.token_budget_runtime),
-    });
+    })
+}
+
+/// Streams one prompt-compaction request and mirrors provider deltas into WebUI state.
+/// 流式执行一次提示词压缩请求，并将 Provider 增量镜像到 WebUI 状态。
+///
+/// # Parameters
+/// # 参数
+/// `app` emits WebUI workbench updates.
+/// `app` 发出 WebUI 工作台更新。
+/// `state` owns the retained workspace snapshot.
+/// `state` 持有保留的工作区快照。
+/// `request` is the ready compaction job request.
+/// `request` 是已就绪的压缩任务请求。
+/// `session_id` selects the compacted session.
+/// `session_id` 选择被压缩的会话。
+/// `section_id` identifies the visible compaction status section.
+/// `section_id` 标识可见压缩状态分段。
+/// `budget_note` describes the triggering context budget.
+/// `budget_note` 描述触发压缩的上下文预算。
+/// `trigger` labels the manual or automatic compaction source.
+/// `trigger` 标记手动或自动压缩来源。
+///
+/// # Returns
+/// # 返回值
+/// The terminal compaction execution when a durable summary was produced.
+/// 当产出持久摘要时返回终态压缩执行结果。
+async fn stream_webui_context_compaction_execution(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    request: PromptCompactionJobRequest,
+    session_id: SessionId,
+    section_id: &str,
+    budget_note: &str,
+    trigger: &str,
+) -> Result<PromptCompactionExecution, String> {
+    let mut record_ids = SessionStreamingRecordIds::default();
+    let mut output_message_id: Option<String> = None;
+    let mut terminal_result = None;
+    let mut stream = Box::pin(stream_prompt_compaction_job(request));
+    while let Some(event) = stream.next().await {
+        match event {
+            PromptCompactionStreamEvent::Stream(event) => {
+                if let Err(error) = apply_webui_context_compaction_stream_event(
+                    app,
+                    state,
+                    session_id,
+                    section_id,
+                    budget_note,
+                    trigger,
+                    &mut record_ids,
+                    &mut output_message_id,
+                    event,
+                ) {
+                    eprintln!(
+                        "[webui-service] context compaction stream projection failed: {error}"
+                    );
+                }
+            }
+            PromptCompactionStreamEvent::Finished(result) => {
+                terminal_result = Some(result.and_then(|execution| {
+                    if execution.fallback_used {
+                        return Err(format!(
+                            "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。",
+                            execution.provider_request_count
+                        ));
+                    }
+                    Ok(execution)
+                }));
+                break;
+            }
+        }
+    }
+    terminal_result
+        .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")))
+}
+
+/// Spawns the selected-session context-compaction stream and mirrors it into WebUI state.
+/// 启动当前会话的上下文压缩流，并将流式事件镜像到 WebUI 状态。
+fn spawn_webui_context_compaction_task(
+    app: ServiceEventEmitter,
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    agent_runtime: AgentRuntimeBridge,
+    session_id: SessionId,
+    previous_phase: SessionRunPhase,
+    status_message_id: String,
+    budget_note: String,
+    trigger: String,
+    plan: CompactionPlan,
+) -> Result<(), String> {
+    let request = build_webui_context_compaction_job_request(
+        &state,
+        &agent_runtime,
+        session_id,
+        plan.clone(),
+    );
     let task_state = state.clone();
     let task_app = app.clone();
     let handle = spawn_service_task(async move {
-        let mut record_ids = SessionStreamingRecordIds::default();
-        let mut output_message_id: Option<String> = None;
-        let mut terminal_result = request.is_none().then(|| {
-            Err(String::from(
-                "上下文压缩运行时未就绪，无法发起模型总结请求。",
-            ))
-        });
-
-        if let Some(request) = request {
-            let mut stream = Box::pin(stream_prompt_compaction_job(request));
-            while let Some(event) = stream.next().await {
-                match event {
-                    PromptCompactionStreamEvent::Stream(event) => {
-                        if let Err(error) = apply_webui_context_compaction_stream_event(
-                            &task_app,
-                            &task_state,
-                            session_id,
-                            &status_message_id,
-                            &budget_note,
-                            &mut record_ids,
-                            &mut output_message_id,
-                            event,
-                        ) {
-                            eprintln!(
-                                "[webui-service] context compaction stream projection failed: {error}"
-                            );
-                        }
-                    }
-                    PromptCompactionStreamEvent::Finished(result) => {
-                        terminal_result = Some(result.and_then(|execution| {
-                            if execution.fallback_used {
-                                return Err(format!(
-                                    "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。请重新触发 /compact。",
-                                    execution.provider_request_count
-                                ));
-                            }
-                            Ok(execution)
-                        }));
-                        break;
-                    }
-                }
+        let terminal_result = match request {
+            Ok(request) => {
+                stream_webui_context_compaction_execution(
+                    &task_app,
+                    &task_state,
+                    request,
+                    session_id,
+                    &status_message_id,
+                    &budget_note,
+                    &trigger,
+                )
+                .await
             }
-        }
-
-        let terminal_result = terminal_result
-            .unwrap_or_else(|| Err(String::from("模型总结流提前结束，已取消本次提示词压缩。")));
+            Err(error) => Err(error),
+        };
         let terminal_status = if terminal_result.is_ok() {
             TurnTerminalStatus::Completed
         } else {
@@ -18774,6 +19280,7 @@ fn spawn_webui_context_compaction_task(
                 previous_phase,
                 &status_message_id,
                 &budget_note,
+                &trigger,
                 execution,
             ),
             Err(error) => fail_webui_context_compaction_execution(
@@ -18783,6 +19290,7 @@ fn spawn_webui_context_compaction_task(
                 previous_phase,
                 &status_message_id,
                 &budget_note,
+                &trigger,
                 &error,
             ),
         };
@@ -18822,6 +19330,7 @@ fn apply_webui_context_compaction_stream_event(
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     record_ids: &mut SessionStreamingRecordIds,
     output_message_id: &mut Option<String>,
     event: ExecutionStreamEvent,
@@ -18856,6 +19365,7 @@ fn apply_webui_context_compaction_stream_event(
                 session_id,
                 section_id,
                 budget_note,
+                trigger,
                 output_message_id,
                 &delta,
             )
@@ -18903,12 +19413,105 @@ fn context_compaction_budget_note_from_state(
         .unwrap_or_else(|| String::from("当前未提供预算快照"))
 }
 
+/// Immutable baseline captured before a compaction draft is built.
+/// 构建压缩候选状态前捕获的不可变基线。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WebuiContextCompactionBaseline {
+    /// Number of canonical provider messages in the active state.
+    /// 活跃状态中的规范 Provider 消息数量。
+    message_count: usize,
+    /// Number of canonical transcript records in the active state.
+    /// 活跃状态中的规范转录记录数量。
+    record_count: usize,
+    /// Latest canonical provider message id in the active state.
+    /// 活跃状态中最新的规范 Provider 消息标识。
+    last_message_id: Option<String>,
+    /// Latest canonical transcript record id in the active state.
+    /// 活跃状态中最新的规范转录记录标识。
+    last_record_id: Option<String>,
+    /// Context-start anchor active when the draft was built.
+    /// 构建候选状态时生效的上下文起始锚点。
+    context_start_message_id: Option<String>,
+}
+
+impl WebuiContextCompactionBaseline {
+    /// Captures the current active runtime state shape used to validate a later draft commit.
+    /// 捕获当前活跃运行时状态形态，用于校验后续候选状态提交。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `runtime_state` is the active session runtime state before draft construction begins.
+    /// `runtime_state` 是候选状态构建开始前的活跃会话运行时状态。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// A compact baseline containing state shape and anchor identifiers.
+    /// 返回包含状态形态与锚点标识的紧凑基线。
+    fn capture(runtime_state: &SessionRuntimeStateEntry) -> Self {
+        Self {
+            message_count: runtime_state.conversation_state.messages.len(),
+            record_count: runtime_state.conversation_state.records.len(),
+            last_message_id: runtime_state
+                .conversation_state
+                .messages
+                .last()
+                .map(|message| message.id.clone()),
+            last_record_id: runtime_state
+                .conversation_state
+                .records
+                .last()
+                .map(|record| record.id.clone()),
+            context_start_message_id: runtime_state.context_start_message_id.clone(),
+        }
+    }
+
+    /// Returns whether the active runtime state still matches this baseline.
+    /// 返回活跃运行时状态是否仍匹配该基线。
+    ///
+    /// # Parameters
+    /// # 参数
+    /// `runtime_state` is the active runtime state checked immediately before draft commit.
+    /// `runtime_state` 是候选状态提交前立即检查的活跃运行时状态。
+    ///
+    /// # Returns
+    /// # 返回值
+    /// `true` when the active state has not changed in ways that would make the draft stale.
+    /// 当活跃状态未发生会使候选状态过期的变化时返回 `true`。
+    fn matches(&self, runtime_state: &SessionRuntimeStateEntry) -> bool {
+        self == &Self::capture(runtime_state)
+    }
+}
+
+/// Candidate compaction state prepared before it is atomically committed.
+/// 原子提交前准备好的候选压缩状态。
+struct WebuiContextCompactionDraft {
+    /// Baseline that must still match before the draft may replace active state.
+    /// 候选状态替换活跃状态前必须仍然匹配的基线。
+    baseline: WebuiContextCompactionBaseline,
+    /// Fully rewritten runtime state candidate.
+    /// 已完整改写的运行时状态候选。
+    runtime_state: SessionRuntimeStateEntry,
+    /// Checkpoint that should be appended only after the runtime state is accepted.
+    /// 仅在运行时状态被接受后追加的检查点。
+    checkpoint: vulcan_context::SessionCompactionEntry,
+    /// Optional runtime audit event produced when persistent injections are folded.
+    /// 持久注入被折叠时产出的可选运行时审计事件。
+    injection_merge_event: Option<vulcan_context::RuntimeInjectionMergedEvent>,
+    /// Timestamp used for the optional injection merge audit event.
+    /// 可选注入合并审计事件使用的时间戳。
+    injection_merge_timestamp: String,
+    /// Report describing expired transient injection pruning.
+    /// 描述过期临时注入裁剪情况的报告。
+    ttl_prune_report: InjectionPruneReport,
+}
+
 /// Appends the visible start boundary for one WebUI context-compaction section.
 /// 为 WebUI 上下文压缩分段追加可见开始边界。
 fn append_webui_context_compaction_status_message_to_workspace(
     workspace: &mut WorkspaceSnapshot,
     session_id: SessionId,
     budget_note: &str,
+    trigger: &str,
 ) -> String {
     let now = current_unix_millis_text();
     let runtime_state = workspace
@@ -18928,7 +19531,7 @@ fn append_webui_context_compaction_status_message_to_workspace(
         metadata: Some(json!({
             "context_compaction_status": true,
             "context_compaction_state": "running",
-            "context_compaction_trigger": "manual_slash",
+            "context_compaction_trigger": trigger,
             "context_compaction_budget_note": budget_note,
         })),
         created_at: String::new(),
@@ -18941,6 +19544,7 @@ fn append_webui_context_compaction_status_message_to_workspace(
         "start",
         "running",
         Some(budget_note),
+        trigger,
     );
     let runtime_state_snapshot = runtime_state.clone();
     merge_runtime_state_records_into_display_messages(
@@ -18960,6 +19564,7 @@ fn append_webui_context_compaction_output_delta(
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     output_message_id: &mut Option<String>,
     delta: &str,
 ) -> Result<(), String> {
@@ -18988,7 +19593,7 @@ fn append_webui_context_compaction_output_delta(
                     "context_compaction_section_id": section_id,
                     "context_compaction_role": "body",
                     "context_compaction_state": "running",
-                    "context_compaction_trigger": "manual_slash",
+                    "context_compaction_trigger": trigger,
                     "context_compaction_budget_note": budget_note,
                 })),
                 created_at: String::new(),
@@ -19011,6 +19616,170 @@ fn append_webui_context_compaction_output_delta(
     .map(|_| ())
 }
 
+/// Builds one validated WebUI compaction draft without mutating the active runtime state.
+/// 在不修改活跃运行时状态的情况下构建一份已校验的 WebUI 压缩候选状态。
+///
+/// # Parameters
+/// # 参数
+/// `active_runtime_state` is the current session runtime state used as the immutable draft source.
+/// `active_runtime_state` 是作为不可变候选来源使用的当前会话运行时状态。
+/// `session_id` identifies the session that will receive the draft if commit validation succeeds.
+/// `session_id` 标识在提交校验通过后接收候选状态的会话。
+/// `section_id` identifies the visible compaction status section being completed.
+/// `section_id` 标识正在完成的可见压缩状态分段。
+/// `budget_note` is the human-readable context budget note attached to status records.
+/// `budget_note` 是附加到状态记录的人类可读上下文预算说明。
+/// `provider_request_count` is the number of provider requests used to produce the summary.
+/// `provider_request_count` 是生成摘要时使用的 Provider 请求数量。
+/// `summary_body` is the durable summary body already extracted from the model response.
+/// `summary_body` 是已从模型响应中提取出的持久摘要正文。
+/// `execution` is the terminal prompt-compaction execution result carrying checkpoint metadata.
+/// `execution` 是携带检查点元数据的终态提示词压缩执行结果。
+///
+/// # Returns
+/// # 返回值
+/// A complete draft that can replace active state atomically, or an error explaining why no commit should occur.
+/// 返回可原子替换活跃状态的完整候选状态；或返回说明不应提交的错误。
+fn build_webui_context_compaction_draft(
+    active_runtime_state: &SessionRuntimeStateEntry,
+    session_id: SessionId,
+    section_id: &str,
+    budget_note: &str,
+    trigger: &str,
+    provider_request_count: usize,
+    summary_body: &str,
+    execution: &PromptCompactionExecution,
+) -> Result<WebuiContextCompactionDraft, String> {
+    if summary_body.trim().is_empty() {
+        return Err(String::from("压缩摘要为空，已拒绝提交候选状态。"));
+    }
+    let baseline = WebuiContextCompactionBaseline::capture(active_runtime_state);
+    let mut draft_runtime_state = active_runtime_state.clone();
+    let now = current_unix_millis_text();
+    ensure_webui_context_compaction_summary_body_for_state(
+        &mut draft_runtime_state,
+        session_id,
+        section_id,
+        "completed",
+        budget_note,
+        trigger,
+        summary_body,
+    );
+    let summary_entry = SessionMessageEntry {
+        id: String::new(),
+        kind: execution.compaction_result.summary_record.kind,
+        record_kind: execution.compaction_result.summary_record.record_kind,
+        visible: false,
+        title: execution.compaction_result.summary_record.title.clone(),
+        body: summary_body.to_string(),
+        metadata: None,
+        created_at: String::new(),
+    };
+    let summary_message_id = append_webui_session_message_entry_to_state(
+        &mut draft_runtime_state,
+        session_id,
+        summary_entry,
+    );
+    let compaction_insert_before_message_id =
+        first_visible_user_record_id_after_context_compaction_section(
+            &draft_runtime_state.conversation_state,
+            section_id,
+        );
+    let mut checkpoint = execution
+        .compaction_result
+        .materialize_checkpoint(summary_message_id.clone());
+    checkpoint.context_budget_fingerprint =
+        draft_runtime_state.live_context_budget_fingerprint.clone();
+    checkpoint.context_assembly_fingerprint = draft_runtime_state
+        .live_context_assembly_fingerprint
+        .clone();
+    draft_runtime_state.last_compaction_id = Some(checkpoint.id.clone());
+    draft_runtime_state.context_start_message_id = checkpoint.context_start_message_id.clone();
+    draft_runtime_state.anchor_context_budget_fingerprint =
+        checkpoint.context_budget_fingerprint.clone();
+    draft_runtime_state.anchor_context_assembly_fingerprint =
+        checkpoint.context_assembly_fingerprint.clone();
+
+    let previous_persistent_fingerprint =
+        persistent_injection_fingerprint(&draft_runtime_state.context_injection_state);
+    let (mut pruned_injection_state, ttl_prune_report) = draft_runtime_state
+        .context_injection_state
+        .clone_pruned_for_compaction();
+    pruned_injection_state.apply_compaction();
+    let merged_baseline_fingerprint = persistent_injection_fingerprint(&pruned_injection_state);
+    let source_node_ids = persistent_injection_source_node_ids(&pruned_injection_state);
+    draft_runtime_state.context_injection_state = pruned_injection_state;
+    let injection_merge_event = if previous_persistent_fingerprint.is_some()
+        || merged_baseline_fingerprint.is_some()
+        || !source_node_ids.is_empty()
+    {
+        Some(vulcan_context::RuntimeInjectionMergedEvent {
+            turn_id: None,
+            merge_id: format!("injection-merge-{session_id}-{}", checkpoint.id),
+            compaction_id: Some(checkpoint.id.clone()),
+            previous_persistent_fingerprint,
+            merged_baseline_fingerprint,
+            source_node_ids,
+        })
+    } else {
+        None
+    };
+
+    compact_conversation_with_summary_until(
+        &mut draft_runtime_state.conversation_state,
+        summary_message_id.clone(),
+        execution.compaction_result.summary_record.kind,
+        summary_body.to_string(),
+        checkpoint.created_at.clone(),
+        execution
+            .compaction_result
+            .source_until_message_id
+            .as_deref(),
+        execution.compaction_result.policy,
+    );
+    compact_conversation_records_after_summary(
+        &mut draft_runtime_state.conversation_state,
+        &summary_message_id,
+        execution.compaction_result.policy,
+    );
+    set_webui_context_compaction_section_metadata_in_state(
+        &mut draft_runtime_state,
+        section_id,
+        section_id,
+        "start",
+        "completed",
+        Some(budget_note),
+        trigger,
+    );
+    set_webui_context_compaction_insert_before_metadata_in_state(
+        &mut draft_runtime_state,
+        section_id,
+        compaction_insert_before_message_id.as_deref(),
+    );
+    update_webui_context_compaction_body_state(&mut draft_runtime_state, section_id, "completed");
+    append_webui_context_compaction_end_message_to_state(
+        &mut draft_runtime_state,
+        session_id,
+        section_id,
+        budget_note,
+        trigger,
+        provider_request_count,
+        compaction_insert_before_message_id.as_deref(),
+    );
+    if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+        draft_runtime_state.auto_compaction_consecutive_failures = 0;
+    }
+    draft_runtime_state.updated_at = now.clone();
+    Ok(WebuiContextCompactionDraft {
+        baseline,
+        runtime_state: draft_runtime_state,
+        checkpoint,
+        injection_merge_event,
+        injection_merge_timestamp: now,
+        ttl_prune_report,
+    })
+}
+
 /// Applies the terminal compaction result, writes its checkpoint, and closes the visible status section.
 /// 应用终态压缩结果、写入检查点，并关闭可见状态分段。
 fn finish_webui_context_compaction_execution(
@@ -19021,9 +19790,15 @@ fn finish_webui_context_compaction_execution(
     previous_phase: SessionRunPhase,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     execution: PromptCompactionExecution,
 ) -> Result<WorkspaceSnapshot, String> {
     if execution.fallback_used {
+        let retry_hint = if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+            "自动压缩未完成，已停止本次请求以避免预算溢出。"
+        } else {
+            "请重新触发 /compact。"
+        };
         return fail_webui_context_compaction_execution(
             app,
             state,
@@ -19031,9 +19806,10 @@ fn finish_webui_context_compaction_execution(
             previous_phase,
             section_id,
             budget_note,
+            trigger,
             &format!(
-                "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。请重新触发 /compact。",
-                execution.provider_request_count
+                "API 未返回可用压缩结果，本次上下文压缩已失败。Provider 请求：{}。{retry_hint}",
+                execution.provider_request_count,
             ),
         );
     }
@@ -19067,10 +19843,11 @@ fn finish_webui_context_compaction_execution(
     }
     let mut injection_merge_event = None;
     let mut injection_merge_timestamp = String::new();
+    let mut ttl_prune_report = InjectionPruneReport::default();
+    let mut draft_error: Option<String> = None;
     let workspace =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
             let now = current_unix_millis_text();
-            injection_merge_timestamp = now.clone();
             let runtime_state = workspace
                 .session_runtime_state
                 .entry(session_id)
@@ -19078,108 +19855,38 @@ fn finish_webui_context_compaction_execution(
                     updated_at: now.clone(),
                     ..SessionRuntimeStateEntry::default()
                 });
-            ensure_webui_context_compaction_summary_body_for_state(
+            let draft = match build_webui_context_compaction_draft(
                 runtime_state,
                 session_id,
                 section_id,
-                "completed",
                 budget_note,
+                trigger,
+                provider_request_count,
                 &summary_body,
-            );
-            let summary_entry = SessionMessageEntry {
-                id: String::new(),
-                kind: execution.compaction_result.summary_record.kind,
-                record_kind: execution.compaction_result.summary_record.record_kind,
-                visible: false,
-                title: execution.compaction_result.summary_record.title.clone(),
-                body: summary_body.clone(),
-                metadata: None,
-                created_at: String::new(),
+                &execution,
+            ) {
+                Ok(draft) => draft,
+                Err(error) => {
+                    draft_error = Some(error);
+                    return;
+                }
             };
-            let summary_message_id = append_webui_session_message_entry_to_state(
-                runtime_state,
-                session_id,
-                summary_entry,
-            );
-            let compaction_insert_before_message_id =
-                first_visible_user_record_id_after_context_compaction_section(
-                    &runtime_state.conversation_state,
-                    section_id,
-                );
-            let mut checkpoint = execution
-                .compaction_result
-                .materialize_checkpoint(summary_message_id.clone());
-            checkpoint.context_budget_fingerprint =
-                runtime_state.live_context_budget_fingerprint.clone();
-            checkpoint.context_assembly_fingerprint =
-                runtime_state.live_context_assembly_fingerprint.clone();
-            runtime_state.last_compaction_id = Some(checkpoint.id.clone());
-            runtime_state.context_start_message_id = checkpoint.context_start_message_id.clone();
-            runtime_state.anchor_context_budget_fingerprint =
-                checkpoint.context_budget_fingerprint.clone();
-            runtime_state.anchor_context_assembly_fingerprint =
-                checkpoint.context_assembly_fingerprint.clone();
-            let previous_persistent_fingerprint =
-                persistent_injection_fingerprint(&runtime_state.context_injection_state);
-            runtime_state.context_injection_state.apply_compaction();
-            let merged_baseline_fingerprint =
-                persistent_injection_fingerprint(&runtime_state.context_injection_state);
-            let source_node_ids =
-                persistent_injection_source_node_ids(&runtime_state.context_injection_state);
-            if previous_persistent_fingerprint.is_some()
-                || merged_baseline_fingerprint.is_some()
-                || !source_node_ids.is_empty()
-            {
-                injection_merge_event = Some(vulcan_context::RuntimeInjectionMergedEvent {
-                    turn_id: None,
-                    merge_id: format!("injection-merge-{session_id}-{}", checkpoint.id),
-                    compaction_id: Some(checkpoint.id.clone()),
-                    previous_persistent_fingerprint,
-                    merged_baseline_fingerprint,
-                    source_node_ids,
-                });
+            if !draft.baseline.matches(runtime_state) {
+                draft_error = Some(String::from(
+                    "上下文压缩候选状态基线失配，已保留当前会话状态并取消提交。",
+                ));
+                return;
             }
-            compact_conversation_with_summary(
-                &mut runtime_state.conversation_state,
-                summary_message_id.clone(),
-                execution.compaction_result.summary_record.kind,
-                summary_body.clone(),
-                checkpoint.created_at.clone(),
-                execution.compaction_result.policy,
-            );
-            compact_conversation_records_after_summary(
-                &mut runtime_state.conversation_state,
-                &summary_message_id,
-                execution.compaction_result.policy,
-            );
+            injection_merge_event = draft.injection_merge_event.clone();
+            injection_merge_timestamp = draft.injection_merge_timestamp.clone();
+            ttl_prune_report = draft.ttl_prune_report;
+            let checkpoint = draft.checkpoint;
+            *runtime_state = draft.runtime_state;
             workspace
                 .session_compactions
                 .entry(session_id)
                 .or_default()
                 .push(checkpoint);
-            set_webui_context_compaction_section_metadata_in_state(
-                runtime_state,
-                section_id,
-                section_id,
-                "start",
-                "completed",
-                Some(budget_note),
-            );
-            set_webui_context_compaction_insert_before_metadata_in_state(
-                runtime_state,
-                section_id,
-                compaction_insert_before_message_id.as_deref(),
-            );
-            update_webui_context_compaction_body_state(runtime_state, section_id, "completed");
-            append_webui_context_compaction_end_message_to_state(
-                runtime_state,
-                session_id,
-                section_id,
-                budget_note,
-                provider_request_count,
-                compaction_insert_before_message_id.as_deref(),
-            );
-            runtime_state.updated_at = now;
             let runtime_state_snapshot = runtime_state.clone();
             merge_runtime_state_records_into_display_messages(
                 workspace,
@@ -19206,6 +19913,27 @@ fn finish_webui_context_compaction_execution(
                     workspace,
                 ));
         })?;
+    if let Some(error) = draft_error {
+        return fail_webui_context_compaction_execution(
+            app,
+            state,
+            session_id,
+            previous_phase,
+            section_id,
+            budget_note,
+            trigger,
+            &error,
+        );
+    }
+    if ttl_prune_report.removed_item_count > 0 || ttl_prune_report.removed_group_count > 0 {
+        webui_trace(
+            "context_compaction_pruned_expired_injections",
+            format!(
+                "session={session_id} items={} groups={}",
+                ttl_prune_report.removed_item_count, ttl_prune_report.removed_group_count
+            ),
+        );
+    }
     if let (Some(controller_runtime), Some(event)) =
         (runtime_backup_controller.as_ref(), injection_merge_event)
         && let Err(error) = record_webui_runtime_injection_merged(
@@ -19224,7 +19952,7 @@ fn finish_webui_context_compaction_execution(
         hook_runtime.record_compacted(
             session_id,
             owning_project_id_for_session(&workspace, session_id),
-            "manual_slash",
+            trigger,
             false,
             provider_request_count,
             &summary_body,
@@ -19242,6 +19970,7 @@ fn fail_webui_context_compaction_execution(
     previous_phase: SessionRunPhase,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     error: &str,
 ) -> Result<WorkspaceSnapshot, String> {
     with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
@@ -19260,6 +19989,7 @@ fn fail_webui_context_compaction_execution(
             "start",
             "failed",
             Some(budget_note),
+            trigger,
         );
         update_webui_context_compaction_body_state(runtime_state, section_id, "failed");
         append_webui_context_compaction_failed_message_to_state(
@@ -19267,8 +19997,14 @@ fn fail_webui_context_compaction_execution(
             session_id,
             section_id,
             budget_note,
+            trigger,
             error,
         );
+        if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+            runtime_state.auto_compaction_consecutive_failures = runtime_state
+                .auto_compaction_consecutive_failures
+                .saturating_add(1);
+        }
         runtime_state.updated_at = now;
         let runtime_state_snapshot = runtime_state.clone();
         merge_runtime_state_records_into_display_messages(
@@ -19300,6 +20036,7 @@ fn ensure_webui_context_compaction_summary_body_for_state(
     section_id: &str,
     state_label: &str,
     budget_note: &str,
+    trigger: &str,
     summary_body: &str,
 ) {
     let has_body = runtime_state
@@ -19336,7 +20073,7 @@ fn ensure_webui_context_compaction_summary_body_for_state(
             "context_compaction_section_id": section_id,
             "context_compaction_role": "body",
             "context_compaction_state": state_label,
-            "context_compaction_trigger": "manual_slash",
+            "context_compaction_trigger": trigger,
             "context_compaction_budget_note": budget_note,
         })),
         created_at: String::new(),
@@ -19351,10 +20088,11 @@ fn append_webui_context_compaction_failed_message_to_state(
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     error: &str,
 ) {
     let body = format!(
-        "触发方式：手动 /compact\n预算：{budget_note}\n错误：{error}\n说明：API 压缩未完成，未改写上下文锚点；后续请求仍沿用原上下文窗口。请重新触发 /compact。"
+        "触发方式：{trigger}\n预算：{budget_note}\n错误：{error}\n说明：API 压缩未完成，未改写上下文锚点；后续请求仍沿用原上下文窗口。"
     );
     let entry = SessionMessageEntry {
         id: String::new(),
@@ -19368,7 +20106,7 @@ fn append_webui_context_compaction_failed_message_to_state(
             "context_compaction_section_id": section_id,
             "context_compaction_role": "end",
             "context_compaction_state": "failed",
-            "context_compaction_trigger": "manual_slash",
+            "context_compaction_trigger": trigger,
             "context_compaction_budget_note": budget_note,
         })),
         created_at: String::new(),
@@ -19383,6 +20121,7 @@ fn append_webui_context_compaction_end_message_to_state(
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
+    trigger: &str,
     _provider_request_count: usize,
     insert_before_message_id: Option<&str>,
 ) {
@@ -19391,7 +20130,7 @@ fn append_webui_context_compaction_end_message_to_state(
         "context_compaction_section_id": section_id,
         "context_compaction_role": "end",
         "context_compaction_state": "completed",
-        "context_compaction_trigger": "manual_slash",
+        "context_compaction_trigger": trigger,
         "context_compaction_budget_note": budget_note,
     });
     if let (Some(insert_before_message_id), Some(object)) =
@@ -19485,6 +20224,7 @@ fn set_webui_context_compaction_section_metadata_in_state(
     role: &str,
     state_label: &str,
     budget_note: Option<&str>,
+    trigger: &str,
 ) -> bool {
     let Some(record) = runtime_state
         .conversation_state
@@ -19503,10 +20243,7 @@ fn set_webui_context_compaction_section_metadata_in_state(
         );
         object.insert(String::from("context_compaction_role"), json!(role));
         object.insert(String::from("context_compaction_state"), json!(state_label));
-        object.insert(
-            String::from("context_compaction_trigger"),
-            json!("manual_slash"),
-        );
+        object.insert(String::from("context_compaction_trigger"), json!(trigger));
         if let Some(budget_note) = budget_note {
             object.insert(
                 String::from("context_compaction_budget_note"),
@@ -26030,11 +26767,7 @@ fn editable_user_prompt_message_ids_from_entries(
 ) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
     for (index, message) in messages.iter().enumerate() {
-        if message.kind != SessionMessageKind::User
-            || message.record_kind != SessionMessageRecordKind::Transcript
-            || !message.visible
-            || message.id.trim().is_empty()
-        {
+        if !session_entry_allows_user_prompt_edit(message) {
             continue;
         }
         if messages[index + 1..]
@@ -26046,6 +26779,51 @@ fn editable_user_prompt_message_ids_from_entries(
         result.insert(message.id.clone());
     }
     result
+}
+
+/// Returns whether one workspace snapshot allows editing the selected user prompt.
+/// 返回单个工作区快照是否允许编辑所选用户提示词。
+fn workspace_user_prompt_message_allows_destructive_edit(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    message_id: &str,
+) -> bool {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .is_some_and(|messages| {
+            editable_user_prompt_message_ids_from_entries(messages).contains(message_id)
+        })
+}
+
+/// Returns whether one user transcript entry is a normal editable turn opener.
+/// 返回单条用户转录项是否是常规且可编辑的轮次开启项。
+fn session_entry_allows_user_prompt_edit(message: &SessionMessageEntry) -> bool {
+    if message.kind != SessionMessageKind::User
+        || message.record_kind != SessionMessageRecordKind::Transcript
+        || !message.visible
+        || message.id.trim().is_empty()
+    {
+        return false;
+    }
+    message
+        .metadata
+        .as_ref()
+        .is_none_or(|metadata| metadata_allows_user_prompt_edit(metadata))
+}
+
+/// Returns whether transcript metadata permits destructive user-prompt editing.
+/// 返回转录元数据是否允许破坏性用户提示词编辑。
+fn metadata_allows_user_prompt_edit(metadata: &Value) -> bool {
+    let starts_user_turn = metadata
+        .get("starts_user_turn")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let editable = metadata
+        .get("editable")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    starts_user_turn && editable
 }
 
 /// Returns whether one later transcript entry makes earlier user-prompt editing unsafe.
@@ -30920,6 +31698,118 @@ mod tests {
         let ids = editable_user_prompt_message_ids_from_entries(&[user, preview_change]);
 
         assert!(ids.contains("user-preview"));
+    }
+
+    /// Verifies interrupt prompt records are folded into the turn and cannot be edited.
+    /// 验证插队提示词记录会折叠进轮次过程且不可编辑。
+    #[test]
+    fn user_prompt_edit_gate_rejects_interrupt_prompt_records() {
+        let regular_user = SessionMessageEntry::new(SessionMessageKind::User, "", "regular")
+            .with_runtime_metadata("user-regular", "1780000000000");
+        let mut interrupt_user =
+            SessionMessageEntry::new(SessionMessageKind::User, "", "interrupt")
+                .with_runtime_metadata("user-interrupt", "1780000000001");
+        interrupt_user.metadata = Some(json!({
+            "source": "user_interrupt",
+            "starts_user_turn": false,
+            "turn_process": true,
+            "collapsed_by_default": true,
+            "editable": false,
+        }));
+
+        let ids = editable_user_prompt_message_ids_from_entries(&[regular_user, interrupt_user]);
+
+        assert!(ids.contains("user-regular"));
+        assert!(!ids.contains("user-interrupt"));
+    }
+
+    /// Verifies compaction draft creation prunes expired transient injections without mutating active state.
+    /// 验证压缩候选状态会裁剪过期临时注入且不会修改活跃状态。
+    #[test]
+    fn webui_context_compaction_draft_prunes_expired_transient_injections_transactionally() {
+        let session_id = SessionId::new_v4();
+        let messages = vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "请实现上下文压缩")
+                .with_runtime_metadata("user-1", "1780000000000"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "已开始实现")
+                .with_runtime_metadata("assistant-1", "1780000000001"),
+        ];
+        let mut active_runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&messages),
+            live_context_budget_fingerprint: Some(String::from("budget-live")),
+            live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        active_runtime_state.context_injection_state.apply_insert(
+            InjectionInsert::single(
+                InjectionKind::Transient,
+                "vmm_inject",
+                "Transient memory",
+                "expired transient memory",
+                Some(1),
+            ),
+            "turn-1",
+        );
+        let expired_item = active_runtime_state
+            .context_injection_state
+            .groups
+            .get_mut("vmm_inject")
+            .and_then(|group| group.items.values_mut().next())
+            .expect("expired transient injection item should exist");
+        expired_item.remaining_turns = Some(0);
+        let plan = CompactionPlan {
+            source_messages: vec![messages[0].clone()],
+            source_until_message_id: Some(String::from("user-1")),
+            source_until_turn_index: Some(0),
+            retained_tail_start_turn_index: Some(1),
+            compaction_id: String::from("test-compaction"),
+            created_at: String::from("1780000000100"),
+            policy: vulcan_context::ContextCompactionPolicy::default(),
+        };
+        let execution = PromptCompactionExecution {
+            compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
+                &plan,
+                "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            ),
+            fallback_used: false,
+            provider_request_count: 1,
+        };
+
+        let draft = build_webui_context_compaction_draft(
+            &active_runtime_state,
+            session_id,
+            "section-test",
+            "预算快照",
+            MANUAL_CONTEXT_COMPACTION_TRIGGER,
+            1,
+            "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            &execution,
+        )
+        .expect("draft should be built from a valid summary");
+
+        assert_eq!(draft.ttl_prune_report.removed_item_count, 1);
+        assert!(
+            active_runtime_state
+                .context_injection_state
+                .groups
+                .contains_key("vmm_inject"),
+            "active runtime state must remain untouched"
+        );
+        assert!(
+            draft
+                .runtime_state
+                .context_injection_state
+                .groups
+                .get("vmm_inject")
+                .is_none(),
+            "draft runtime state should remove expired transient injections"
+        );
+        assert!(active_runtime_state.context_start_message_id.is_none());
+        assert!(draft.runtime_state.context_start_message_id.is_some());
+        assert_eq!(
+            draft.checkpoint.context_budget_fingerprint.as_deref(),
+            Some("budget-live")
+        );
     }
 
     /// Verifies OpenRouter endpoint records are normalized into secondary route choices.

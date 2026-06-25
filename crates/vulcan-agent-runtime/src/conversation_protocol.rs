@@ -33,6 +33,45 @@ pub fn compact_conversation_with_summary(
     );
 }
 
+/// Rewrites the active canonical window using one compaction summary and the planner source boundary.
+/// 使用一条压缩摘要与规划器源边界改写当前活动规范窗口。
+///
+/// # Parameters
+/// # 参数
+/// `state` is the canonical conversation window to rewrite.
+/// `state` 是需要改写的规范会话窗口。
+/// `summary_message_id` is the hidden summary message identifier inserted as the new context anchor.
+/// `summary_message_id` 是作为新上下文锚点插入的隐藏摘要消息标识。
+/// `summary_kind` controls the synthetic summary message role.
+/// `summary_kind` 控制合成摘要消息角色。
+/// `summary_body` is the durable continuation summary.
+/// `summary_body` 是持久续写摘要。
+/// `updated_at` is written to the continuation metadata.
+/// `updated_at` 会写入 continuation 元数据。
+/// `source_until_message_id` is the inclusive source boundary covered by the summary.
+/// `source_until_message_id` 是摘要覆盖的闭区间源边界。
+/// `policy` is the fallback tail policy when the boundary is unavailable.
+/// `policy` 是边界不可用时的回退尾部策略。
+pub fn compact_conversation_with_summary_until(
+    state: &mut SessionConversationState,
+    summary_message_id: impl Into<String>,
+    summary_kind: crate::model::SessionMessageKind,
+    summary_body: impl Into<String>,
+    updated_at: impl Into<String>,
+    source_until_message_id: Option<&str>,
+    policy: ContextCompactionPolicy,
+) {
+    vulcan_context_compaction::compact_conversation_with_summary_until(
+        state,
+        summary_message_id,
+        summary_kind,
+        summary_body,
+        updated_at,
+        source_until_message_id,
+        policy,
+    );
+}
+
 /// Compacts canonical records after summary creation so old tool details stop inflating persistence.
 /// 在摘要创建后压缩规范记录，避免旧工具细节继续放大持久化体积。
 pub fn compact_conversation_records_after_summary(

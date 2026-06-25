@@ -90,9 +90,9 @@ impl Default for ContextCompactionPolicy {
         Self {
             auto: true,
             prune: true,
-            tail_turns: 1,
-            preserve_recent_tokens: 2_048,
-            reserved: 2_048,
+            tail_turns: 3,
+            preserve_recent_tokens: 10_000,
+            reserved: 8_192,
         }
     }
 }

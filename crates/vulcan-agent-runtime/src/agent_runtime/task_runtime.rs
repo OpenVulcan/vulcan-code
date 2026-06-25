@@ -5043,6 +5043,7 @@ async fn run_task_session_context_compaction(
         messages: &messages,
         all_messages: &messages,
         context_start_message_id: context_document.compaction_anchor.as_deref(),
+        source_until_message_id: None,
         policy: task_context_compaction_policy_from_snapshot(
             &resolved_config.effective_config.context_compaction,
         ),
