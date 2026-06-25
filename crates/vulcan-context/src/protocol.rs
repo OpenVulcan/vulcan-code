@@ -578,6 +578,157 @@ pub fn conversation_state_to_session_messages(
         .collect()
 }
 
+/// Projects provider-visible runtime messages for compaction planning.
+/// 为压缩规划投影 Provider 可见的运行态消息。
+///
+/// # Parameters
+/// 参数
+/// `state` is the canonical conversation state owned by the session runtime.
+/// `state` 是会话运行时持有的规范会话状态。
+///
+/// # Returns
+/// 返回值
+/// Returns entries derived only from `state.messages`; display records are intentionally ignored.
+/// 仅返回从 `state.messages` 派生的条目；显示记录会被有意忽略。
+pub fn conversation_state_to_compaction_source_messages(
+    state: &SessionConversationState,
+) -> Vec<SessionMessageEntry> {
+    state
+        .messages
+        .iter()
+        .map(conversation_message_to_compaction_source_message)
+        .collect()
+}
+
+/// Converts one provider-visible protocol message into a compaction-only transcript entry.
+/// 将一条 Provider 可见协议消息转换为仅供压缩使用的转录条目。
+fn conversation_message_to_compaction_source_message(
+    message: &SessionConversationMessage,
+) -> SessionMessageEntry {
+    match &message.payload {
+        SessionConversationPayload::UserText { text, attachments } => {
+            compaction_user_text_message(message.id.clone(), text, attachments)
+        }
+        SessionConversationPayload::Assistant {
+            text,
+            reasoning,
+            tool_calls,
+            ..
+        } => compaction_assistant_message(message.id.clone(), text, reasoning, tool_calls),
+        SessionConversationPayload::ToolResult {
+            tool_result_id,
+            tool_call_id,
+            text,
+        } => compaction_tool_result_message(
+            message.id.clone(),
+            tool_result_id,
+            tool_call_id.as_deref(),
+            text,
+        ),
+    }
+}
+
+/// Builds one compaction-only user transcript entry from canonical user text.
+/// 根据规范用户文本构建一条仅供压缩使用的用户转录条目。
+fn compaction_user_text_message(
+    id: String,
+    text: &str,
+    attachments: &[ConversationAttachment],
+) -> SessionMessageEntry {
+    let mut parts = Vec::new();
+    let text = text.trim();
+    if !text.is_empty() {
+        parts.push(text.to_string());
+    }
+    if !attachments.is_empty() {
+        parts.push(compaction_attachment_list_text(attachments));
+    }
+    SessionMessageEntry {
+        id,
+        kind: SessionMessageKind::User,
+        record_kind: SessionMessageRecordKind::Transcript,
+        visible: true,
+        title: String::from("USER"),
+        body: parts.join("\n\n"),
+        metadata: None,
+        created_at: String::new(),
+    }
+}
+
+/// Builds one compaction-only assistant transcript entry from canonical assistant output.
+/// 根据规范助手输出构建一条仅供压缩使用的助手转录条目。
+fn compaction_assistant_message(
+    id: String,
+    text: &str,
+    reasoning: &str,
+    tool_calls: &[SessionConversationToolCall],
+) -> SessionMessageEntry {
+    let body = if tool_calls.is_empty() {
+        let mut parts = Vec::new();
+        push_non_empty_text_part(&mut parts, text);
+        push_labeled_non_empty_part(&mut parts, "reasoning", reasoning);
+        parts.join("\n\n")
+    } else {
+        historical_tool_call_text(text, reasoning, tool_calls)
+    };
+    SessionMessageEntry {
+        id,
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::AssistantOutput,
+        visible: true,
+        title: String::from("AI"),
+        body,
+        metadata: None,
+        created_at: String::new(),
+    }
+}
+
+/// Builds one compaction-only tool-result transcript entry from canonical tool output.
+/// 根据规范工具输出构建一条仅供压缩使用的工具结果转录条目。
+fn compaction_tool_result_message(
+    id: String,
+    tool_result_id: &str,
+    tool_call_id: Option<&str>,
+    text: &str,
+) -> SessionMessageEntry {
+    let mut parts = Vec::new();
+    push_labeled_non_empty_part(&mut parts, "tool_result_id", tool_result_id);
+    if let Some(tool_call_id) = tool_call_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        parts.push(format!("tool_call_id: {tool_call_id}"));
+    }
+    push_non_empty_text_part(&mut parts, text);
+    SessionMessageEntry {
+        id,
+        kind: SessionMessageKind::Assistant,
+        record_kind: SessionMessageRecordKind::ToolResultOutput,
+        visible: true,
+        title: String::from("TOOL RESULT"),
+        body: parts.join("\n\n"),
+        metadata: None,
+        created_at: String::new(),
+    }
+}
+
+/// Builds the compact attachment list appended to compaction-only user text.
+/// 构建追加到仅供压缩使用的用户文本后的紧凑附件列表。
+fn compaction_attachment_list_text(attachments: &[ConversationAttachment]) -> String {
+    let mut lines = vec![String::from("[Attachments]")];
+    for attachment in attachments {
+        let mut parts = vec![attachment.kind.display_label().to_string()];
+        if !attachment.file_name.trim().is_empty() {
+            parts.push(attachment.file_name.clone());
+        }
+        if !attachment.local_path.trim().is_empty() {
+            parts.push(attachment.local_path.clone());
+        }
+        lines.push(format!("- {}", parts.join(": ")));
+    }
+    lines.join("\n")
+}
+
 /// Merges canonical display records into an existing transcript window without dropping older display rows.
 /// 将规范显示记录合并进既有转录窗口，同时不丢弃更早的显示行。
 ///
@@ -1053,5 +1204,99 @@ mod tests {
         assert_eq!(merged_messages[0].body, "之前的问题");
         assert_eq!(merged_messages[1].body, "之前的回答");
         assert_eq!(merged_messages[2].body, "继续提问");
+    }
+
+    /// Verifies compaction planning projects runtime-log messages.
+    /// 验证压缩规划会投影运行时日志消息。
+    #[test]
+    fn compaction_source_projects_runtime_messages() {
+        let state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("user-runtime-1"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("运行时用户问题"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("assistant-runtime-1"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("运行时助手回答"),
+                        reasoning: String::from("简短推理"),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: None,
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: Vec::new(),
+            continuation: SessionProviderContinuationState::default(),
+        };
+
+        let messages = conversation_state_to_compaction_source_messages(&state);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, "user-runtime-1");
+        assert_eq!(messages[0].kind, SessionMessageKind::User);
+        assert!(messages[0].body.contains("运行时用户问题"));
+        assert_eq!(messages[1].kind, SessionMessageKind::Assistant);
+        assert!(messages[1].body.contains("运行时助手回答"));
+        assert!(messages[1].body.contains("简短推理"));
+    }
+
+    /// Verifies display records cannot become compaction source messages.
+    /// 验证显示记录不能成为压缩来源消息。
+    #[test]
+    fn compaction_source_ignores_display_records() {
+        let mut state = SessionConversationState {
+            messages: vec![SessionConversationMessage {
+                id: String::from("runtime-user"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("运行时正文"),
+                    attachments: Vec::new(),
+                },
+            }],
+            records: Vec::new(),
+            continuation: SessionProviderContinuationState::default(),
+        };
+        state.records.push(SessionConversationRecord {
+            id: String::from("record-user"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("USER"),
+            body: String::from("记录流正文"),
+            metadata: None,
+            created_at: String::new(),
+        });
+
+        let messages = conversation_state_to_compaction_source_messages(&state);
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, "runtime-user");
+        assert_eq!(messages[0].body, "运行时正文");
+    }
+
+    /// Verifies record-only states do not produce compaction sources.
+    /// 验证仅有记录流的状态不会产出压缩来源。
+    #[test]
+    fn compaction_source_rejects_record_only_state() {
+        let mut state = SessionConversationState::default();
+        state.records.push(SessionConversationRecord {
+            id: String::from("record-user"),
+            kind: SessionMessageKind::User,
+            record_kind: SessionMessageRecordKind::Transcript,
+            visible: true,
+            title: String::from("USER"),
+            body: String::from("记录流正文"),
+            metadata: None,
+            created_at: String::new(),
+        });
+
+        let messages = conversation_state_to_compaction_source_messages(&state);
+
+        assert!(messages.is_empty());
     }
 }

@@ -39,7 +39,7 @@ use time::OffsetDateTime;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::AbortHandle;
 use uuid::Uuid;
-use vulcan_context::{ContextCompactionPolicy, conversation_state_to_session_messages};
+use vulcan_context::{ContextCompactionPolicy, conversation_state_to_compaction_source_messages};
 use vulcan_context_compaction::{CompactionPlanInput, plan_context_compaction};
 use vulcan_core::types::{
     ControllerConfig as CoreControllerConfig, ConversationSnapshot as CoreConversationSnapshot,
@@ -5034,7 +5034,7 @@ async fn run_task_session_context_compaction(
     let conversation_state: SessionConversationState =
         serde_json::from_value(context_document.conversation_state.clone())
             .map_err(|error| error.to_string())?;
-    let messages = conversation_state_to_session_messages(&conversation_state);
+    let messages = conversation_state_to_compaction_source_messages(&conversation_state);
     if messages.is_empty() {
         return Ok(None);
     }
@@ -5062,6 +5062,7 @@ async fn run_task_session_context_compaction(
         session_title: request.display_title.clone(),
         workspace_path: context.request_template.workspace_path.clone(),
         plan,
+        input_budget: None,
         provider_configuration,
         model_label,
         reasoning_effort: context.request_template.reasoning_effort,

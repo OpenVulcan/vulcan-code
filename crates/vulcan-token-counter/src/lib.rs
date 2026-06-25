@@ -5,7 +5,7 @@ use std::{
     any::Any,
     collections::HashMap,
     fmt,
-    panic::{AssertUnwindSafe, catch_unwind},
+    panic::{self, AssertUnwindSafe, catch_unwind},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock},
 };
@@ -485,6 +485,10 @@ const OPENAI_COMPATIBLE_PROXY_MULTIPLIER: f64 = 1.03;
 /// 完全未知模型名称使用的安全倍率。
 const UNKNOWN_MODEL_MULTIPLIER: f64 = 1.15;
 
+/// Global guard used while suppressing tokie's noisy internal panic hook output.
+/// 在抑制 tokie 内部 panic hook 噪声输出时使用的全局保护锁。
+static TOKIE_COUNT_PANIC_HOOK_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
 /// Loaded tokenizer implementation for one OpenAI base encoding.
 /// 单个 OpenAI 基础编码已加载的 tokenizer 实现。
 enum LoadedOpenAiTokenizer {
@@ -554,12 +558,37 @@ impl LoadedOpenAiTokenizer {
 /// The token count, or a diagnostic string when `tokie` panics during counting.
 /// Token 数；当 `tokie` 在统计期间 panic 时返回诊断字符串。
 fn safe_count_tokie_tokens(tokenizer: &TokieTokenizer, text: &str) -> Result<usize, String> {
-    catch_unwind(AssertUnwindSafe(|| tokenizer.count_tokens(text))).map_err(|payload| {
+    run_tokie_count_with_quiet_panic_hook(|| tokenizer.count_tokens(text)).map_err(|payload| {
         format!(
             "tokie tokenizer panicked: {}",
             panic_payload_message(&payload)
         )
     })
+}
+
+/// Runs one tokie count closure while hiding tokenizer-internal panic-hook noise.
+/// 在隐藏 tokenizer 内部 panic hook 噪声的同时运行单次 tokie 统计闭包。
+///
+/// # Parameters
+/// 参数
+/// `count` is the exact tokenizer operation that may panic inside tokie or pretokie.
+/// `count` 是可能在 tokie 或 pretokie 内部 panic 的精确 tokenizer 操作。
+///
+/// # Returns
+/// 返回值
+/// The closure result, or the captured panic payload when counting fails.
+/// 返回闭包结果；统计失败时返回捕获到的 panic 载荷。
+fn run_tokie_count_with_quiet_panic_hook<F>(count: F) -> Result<usize, Box<dyn Any + Send>>
+where
+    F: FnOnce() -> usize,
+{
+    let lock = TOKIE_COUNT_PANIC_HOOK_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result = catch_unwind(AssertUnwindSafe(count));
+    panic::set_hook(previous_hook);
+    result
 }
 
 /// Converts one panic payload into a compact diagnostic string.
@@ -2015,5 +2044,44 @@ impl ResourceLoader for LocalOpenAiResourceLoader {
                 path.display()
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        panic,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    use super::run_tokie_count_with_quiet_panic_hook;
+
+    /// Verifies tokie panic containment suppresses hook output and restores the previous hook.
+    /// 验证 tokie panic 隔离会抑制 hook 输出并恢复先前的 hook。
+    #[test]
+    fn tokie_quiet_panic_hook_suppresses_and_restores_hook() {
+        let observed = Arc::new(AtomicUsize::new(0));
+        let previous_hook = panic::take_hook();
+        let hook_observed = Arc::clone(&observed);
+        panic::set_hook(Box::new(move |_| {
+            hook_observed.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let result = run_tokie_count_with_quiet_panic_hook(|| {
+            panic!("hidden tokie panic");
+        });
+        assert!(result.is_err());
+        assert_eq!(observed.load(Ordering::SeqCst), 0);
+
+        let visible_result = panic::catch_unwind(|| {
+            panic!("visible test panic");
+        });
+        assert!(visible_result.is_err());
+        assert_eq!(observed.load(Ordering::SeqCst), 1);
+
+        panic::set_hook(previous_hook);
     }
 }

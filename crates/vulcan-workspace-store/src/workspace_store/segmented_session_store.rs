@@ -1856,6 +1856,45 @@ pub(super) fn append_segmented_session_message_update(
     }
 }
 
+/// Appends caller-verified new display messages after the persisted transcript tail.
+/// 在已持久化转录尾部之后追加调用方已确认的新显示消息。
+pub(super) fn append_segmented_session_message_suffix(
+    session_dir: &Path,
+    messages: &[SessionMessageEntry],
+) -> Result<Vec<SegmentedSessionEventLine>, String> {
+    if messages.is_empty() {
+        return Ok(Vec::new());
+    }
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    let mut metadata = read_session_metadata(session_dir)?;
+    let first_new_index = usize::try_from(metadata.message_count).map_err(to_store_error)?;
+    let mut new_message_ids = BTreeSet::new();
+    for (offset, message) in messages.iter().enumerate() {
+        let message_id = stable_segmented_message_id(first_new_index + offset, message);
+        if !new_message_ids.insert(message_id.clone()) {
+            return Err(format!(
+                "Segmented session suffix append rejected duplicate message `{message_id}` after message index {first_new_index}."
+            ));
+        }
+    }
+    let turn_indexes = assign_segmented_tail_message_turn_indexes(&metadata, messages);
+    let mut events = messages
+        .iter()
+        .enumerate()
+        .zip(turn_indexes)
+        .map(|((offset, message), turn_index)| {
+            segmented_event_input_from_message(first_new_index + offset, message, turn_index)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    backfill_tool_detail_ref_sequences(&mut events, metadata.next_global_seq);
+    let appended_lines = append_events_with_metadata(session_dir, &mut metadata, &events)?;
+    advance_segmented_message_checkpoint_with_suffix(&mut metadata, first_new_index, messages)?;
+    write_metadata(session_dir, &metadata)?;
+    Ok(appended_lines)
+}
+
 /// Appends a rollback marker followed by the full replacement transcript.
 /// 追加回滚标记，然后写入完整替换转录。
 fn append_segmented_session_replacement(
@@ -2056,6 +2095,22 @@ fn update_segmented_message_checkpoint(
     } else {
         metadata.last_message_id = None;
         metadata.last_message_fingerprint = None;
+    }
+    Ok(())
+}
+
+/// Advances the persisted transcript checkpoint after suffix-only append.
+/// 在仅追加尾部消息后推进已持久化转录检查点。
+fn advance_segmented_message_checkpoint_with_suffix(
+    metadata: &mut SegmentedSessionMetadata,
+    first_new_index: usize,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    metadata.message_count = first_new_index.saturating_add(messages.len()) as u64;
+    if let Some((offset, message)) = messages.iter().enumerate().next_back() {
+        let index = first_new_index + offset;
+        metadata.last_message_id = Some(stable_segmented_message_id(index, message));
+        metadata.last_message_fingerprint = Some(segmented_message_fingerprint(message)?);
     }
     Ok(())
 }
@@ -5535,6 +5590,68 @@ mod tests {
         );
         assert_eq!(replay_messages[0].body, "edited prompt");
         assert_eq!(replay_messages.len(), 1);
+    }
+
+    /// Verifies caller-confirmed suffix append never creates a rollback replacement.
+    /// 验证调用方确认的尾部追加不会创建回滚替换。
+    #[test]
+    fn append_message_suffix_extends_tail_without_rollback_replacement() {
+        let root = test_root("append_message_suffix_extends_tail_without_rollback_replacement");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let original_messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "first answer",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &original_messages)
+            .expect("append original messages");
+        let suffix_messages = vec![
+            test_message(
+                "m-compaction-start",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::CompactionStatus,
+                "",
+            ),
+            test_message(
+                "m-compaction-end",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::CompactionStatus,
+                "",
+            ),
+        ];
+
+        let suffix_lines = append_segmented_session_message_suffix(&session_dir, &suffix_messages)
+            .expect("append suffix messages");
+
+        assert_eq!(suffix_lines.len(), suffix_messages.len());
+        assert!(
+            suffix_lines
+                .iter()
+                .all(|line| line.kind != SegmentedSessionEventKind::ThreadRolledBack)
+        );
+        assert_eq!(
+            suffix_lines[0]
+                .payload
+                .get("message_index")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        let metadata: SegmentedSessionMetadata =
+            read_required_json(&session_dir.join(SEGMENTED_METADATA_FILE))
+                .expect("read suffix metadata");
+        assert_eq!(metadata.message_count, 4);
+        assert_eq!(metadata.latest_rollback_seq, None);
     }
 
     /// Verifies prompt-edit rewinds physically truncate later events without a rollback marker.

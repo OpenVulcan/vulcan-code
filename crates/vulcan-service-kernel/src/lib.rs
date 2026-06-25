@@ -60,7 +60,7 @@ use vulcan_agent_runtime::{
     conversation_protocol::{
         SessionConversationState, compact_conversation_records_after_summary,
         compact_conversation_with_summary_until, conversation_state_from_session_messages,
-        conversation_state_to_session_messages,
+        conversation_state_to_compaction_source_messages, conversation_state_to_session_messages,
         merge_session_messages_with_conversation_state_records,
     },
     luaskills_runtime::LuaSkillsRuntimeHandle,
@@ -96,7 +96,10 @@ use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
     append_record_body_delta,
 };
-use vulcan_context_compaction::{CompactionPlan, CompactionPlanInput, plan_context_compaction};
+use vulcan_context_compaction::{
+    CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
+    CompactionPlanInput, plan_context_compaction,
+};
 use vulcan_context_injection::{
     ContextInjectionState, InjectionCompactionPolicy, InjectionInsert, InjectionInsertItem,
     InjectionKind, InjectionPanelCard, InjectionPruneReport,
@@ -215,6 +218,12 @@ const AUTO_CONTEXT_COMPACTION_TRIGGER: &str = "auto_budget";
 /// Maximum consecutive automatic compaction failures before the session circuit breaker opens.
 /// 会话自动压缩熔断前允许的最大连续失败次数。
 const MAX_CONSECUTIVE_AUTO_COMPACTION_FAILURES: usize = 3;
+/// Fixed input-token reserve kept free when deciding whether compaction input must be clone-pruned.
+/// 判断压缩输入是否必须进行克隆剪枝时保留的固定输入 Token 安全阈值。
+const CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 30_000;
+/// Minimum allowed reserve for compaction-input pruning decisions.
+/// 压缩输入剪枝决策允许使用的最低安全阈值。
+const MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS: usize = 20_000;
 
 use vulcan_service_runtime::luaskills_bridge::{TauriLuaSkillsCatalog, TauriLuaSkillsHandle};
 use vulcan_service_runtime::mcp_bridge::{TauriMcpRuntimeCatalog, TauriMcpRuntimeHandle};
@@ -4672,12 +4681,12 @@ fn display_session_messages_from_workspace(
     if let Some(messages) = workspace_snapshot.session_messages.get(&session_id) {
         return Some(filter_legacy_goal_internal_user_messages(messages.clone()));
     }
-    dialogue_context_messages_from_workspace(workspace_snapshot, session_id)
+    display_record_messages_from_workspace(workspace_snapshot, session_id)
 }
 
-/// Returns the dialogue context messages that back API requests for one session.
-/// 返回单个会话用于 API 请求的对话层上下文消息。
-fn dialogue_context_messages_from_workspace(
+/// Returns display-record messages for fallback rendering without deriving from runtime-only messages.
+/// 返回用于显示回退的记录流消息，不从仅运行态消息派生。
+fn display_record_messages_from_workspace(
     workspace_snapshot: &WorkspaceSnapshot,
     session_id: SessionId,
 ) -> Option<Vec<SessionMessageEntry>> {
@@ -5327,26 +5336,27 @@ async fn service_compact_selected_conversation_context(
         current_workspace_snapshot_from_state(&state)?.ok_or_else(|| {
             String::from("service is still starting; workspace snapshot is not ready")
         })?;
+    hydrate_selected_session_runtime_if_needed(
+        controller_runtime.clone(),
+        &mut workspace_snapshot,
+        selected_session_id,
+    )
+    .await?;
     ensure_webui_session_runtime_state(&mut workspace_snapshot, selected_session_id, None);
     let runtime_state_snapshot = workspace_snapshot
         .session_runtime_state
         .get(&selected_session_id)
         .cloned()
         .unwrap_or_default();
-    let full_session_messages =
-        conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
-    let context_messages = if full_session_messages.is_empty() {
-        dialogue_context_messages_from_workspace(&workspace_snapshot, selected_session_id)
-            .unwrap_or_default()
-    } else {
-        full_session_messages.clone()
-    };
-    if context_messages.is_empty() {
+    let full_session_messages = conversation_state_to_compaction_source_messages(
+        &runtime_state_snapshot.conversation_state,
+    );
+    if full_session_messages.is_empty() {
         return Err(String::from("当前会话暂时没有可压缩的历史上下文。"));
     }
     let Some(plan) = plan_context_compaction(CompactionPlanInput {
         session_label: &selected_session_id.to_string(),
-        messages: &context_messages,
+        messages: &full_session_messages,
         all_messages: &full_session_messages,
         context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
         source_until_message_id: None,
@@ -10527,6 +10537,12 @@ async fn service_select_conversation(
         return refresh_workbench_snapshot(state).await;
     }
     workspace_snapshot.selected_session = session_id;
+    hydrate_selected_session_runtime_if_needed(
+        controller_runtime.clone(),
+        &mut workspace_snapshot,
+        session_id,
+    )
+    .await?;
     restore_webui_runtime_controls_for_session(
         &mut provider_configuration,
         workspace_snapshot.session_runtime_state.get(&session_id),
@@ -12531,6 +12547,97 @@ async fn hydrate_retained_submission_session_if_needed(
     Ok(())
 }
 
+/// Hydrates the selected session runtime context when the retained snapshot has no dialogue memory.
+/// 当保留快照缺少对话记忆时，水合选中会话的运行态上下文。
+///
+/// # Parameters
+/// 参数
+/// `controller_runtime` owns the workspace-store runtime bridge.
+/// `controller_runtime` 持有工作区存储运行时桥。
+/// `workspace_snapshot` is the retained WebUI workspace snapshot that receives runtime memory.
+/// `workspace_snapshot` 是接收运行态记忆的保留 WebUI 工作区快照。
+/// `session_id` selects the session whose runtime JSONL should be hydrated.
+/// `session_id` 选择需要从运行时 JSONL 水合的会话。
+///
+/// # Returns
+/// 返回值
+/// `Ok(())` after runtime context exists or a concrete hydration error has been reported.
+/// 当运行态上下文已存在或已报告明确水合错误后返回 `Ok(())`。
+async fn hydrate_selected_session_runtime_if_needed(
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+) -> Result<(), String> {
+    if retained_submission_snapshot_has_session_context(workspace_snapshot, session_id) {
+        return Ok(());
+    }
+    let hydration_result =
+        if let Some(project_id) = owning_project_id_for_session(workspace_snapshot, session_id) {
+            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot_for_project(
+                controller_runtime.clone(),
+                &project_id,
+                session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        } else {
+            vulcan_workspace_store::workspace_store::load_session_hydration_snapshot(
+                controller_runtime.clone(),
+                session_id,
+                SELECTED_SESSION_TURN_LOAD_LIMIT,
+            )
+            .await
+        };
+    match hydration_result {
+        Ok(hydration) => {
+            apply_selected_session_runtime_hydration(workspace_snapshot, session_id, hydration);
+        }
+        Err(error) if is_missing_segmented_session_file_error(&error) => {}
+        Err(error) => return Err(error),
+    }
+    ensure_hydrated_session_dialogue_context(workspace_snapshot, session_id)?;
+    Ok(())
+}
+
+/// Applies a selected-session hydration snapshot without replacing an existing display window.
+/// 应用选中会话水合快照，同时不替换已有显示窗口。
+///
+/// # Parameters
+/// 参数
+/// `workspace_snapshot` receives the hydrated runtime context.
+/// `workspace_snapshot` 接收水合后的运行态上下文。
+/// `session_id` selects the hydrated session.
+/// `session_id` 选择被水合的会话。
+/// `hydration` contains runtime JSONL and optional display-window data.
+/// `hydration` 包含运行时 JSONL 与可选显示窗口数据。
+///
+/// # Returns
+/// 返回值
+/// Applies the runtime context and hydration marker without returning a fallible result.
+/// 应用运行态上下文与水合标记，不返回可失败结果。
+fn apply_selected_session_runtime_hydration(
+    workspace_snapshot: &mut WorkspaceSnapshot,
+    session_id: SessionId,
+    hydration: SessionHydrationSnapshot,
+) {
+    if !workspace_snapshot
+        .session_messages
+        .contains_key(&session_id)
+    {
+        let messages = filter_legacy_goal_internal_user_messages(hydration.messages);
+        workspace_snapshot
+            .session_messages
+            .insert(session_id, messages);
+    }
+    if let Some(mut runtime_state) = hydration.runtime_state {
+        sanitize_runtime_state_legacy_goal_internal_messages(&mut runtime_state);
+        workspace_snapshot
+            .session_runtime_state
+            .insert(session_id, runtime_state);
+    }
+    sync_hydrated_session_dialogue_ready_marker(workspace_snapshot, session_id);
+}
+
 /// Applies one session hydration snapshot to the submit workspace snapshot.
 /// 将单个会话水合快照应用到提交工作区快照。
 ///
@@ -14168,6 +14275,111 @@ fn spawn_workspace_session_runtime_state_persist_task(
     });
 }
 
+/// Persists completed context-compaction display markers and runtime state without rewriting transcript history.
+/// 持久化已完成上下文压缩显示标记与运行态，同时不重写转录历史。
+fn spawn_context_compaction_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    section_id: String,
+    reason: Option<String>,
+) {
+    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
+        return;
+    }
+    let persist_version = match next_webui_session_persist_version(&state, session_id) {
+        Ok(version) => version,
+        Err(error) => {
+            eprintln!("[webui-service] context-compaction persist version failed: {error}");
+            return;
+        }
+    };
+    spawn_service_task(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
+            return;
+        }
+        let display_messages = context_compaction_section_display_messages(
+            &workspace_snapshot,
+            session_id,
+            &section_id,
+        );
+        if let Err(error) =
+            vulcan_workspace_store::workspace_store::append_single_session_transcript_suffix(
+                controller_runtime.clone(),
+                session_id,
+                &display_messages,
+            )
+            .await
+        {
+            let reason_label = reason.as_deref().unwrap_or("context_compaction");
+            eprintln!(
+                "[webui-service] background context-compaction transcript suffix persist failed ({reason_label}): {error}"
+            );
+        }
+        let Some(runtime_state) = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .cloned()
+            .or_else(|| {
+                workspace_snapshot
+                    .archived_session_runtime_state
+                    .get(&session_id)
+                    .cloned()
+            })
+        else {
+            return;
+        };
+        if let Err(error) =
+            vulcan_workspace_store::workspace_store::persist_single_session_runtime_state_update(
+                controller_runtime,
+                session_id,
+                &runtime_state,
+            )
+            .await
+        {
+            let reason_label = reason.as_deref().unwrap_or("context_compaction");
+            eprintln!(
+                "[webui-service] background context-compaction runtime-state persist failed ({reason_label}): {error}"
+            );
+        }
+    });
+}
+
+/// Returns the visible display rows that belong to one context-compaction section.
+/// 返回归属于单个上下文压缩分段的可见显示行。
+fn context_compaction_section_display_messages(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    section_id: &str,
+) -> Vec<SessionMessageEntry> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .into_iter()
+        .flat_map(|messages| messages.iter())
+        .filter(|message| context_compaction_message_belongs_to_section(message, section_id))
+        .cloned()
+        .collect()
+}
+
+/// Returns whether one display row belongs to the requested context-compaction section.
+/// 返回单条显示行是否归属于请求的上下文压缩分段。
+fn context_compaction_message_belongs_to_section(
+    message: &SessionMessageEntry,
+    section_id: &str,
+) -> bool {
+    message.id == section_id
+        || message
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("context_compaction_section_id"))
+            .and_then(Value::as_str)
+            == Some(section_id)
+}
+
 /// Spawns a background write for one session addon-state document.
 /// 为单个会话附属状态文档启动后台写入任务。
 ///
@@ -15489,11 +15701,12 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
                 AUTO_CONTEXT_COMPACTION_TRIGGER,
                 execution,
             )?;
-            spawn_workspace_session_persist_task(
+            spawn_context_compaction_persist_task(
                 state.clone(),
                 controller_runtime.clone(),
                 snapshot,
                 session_id,
+                status_message_id.clone(),
                 Some(String::from("auto_context_compaction")),
             );
             refreshed_execution_request_after_context_compaction(state, request).map(Some)
@@ -15548,22 +15761,17 @@ fn webui_auto_context_compaction_plan_from_state(
         .get(&session_id)
         .cloned()
         .unwrap_or_default();
-    let full_session_messages =
-        conversation_state_to_session_messages(&runtime_state_snapshot.conversation_state);
-    let context_messages = if full_session_messages.is_empty() {
-        dialogue_context_messages_from_workspace(&workspace_snapshot, session_id)
-            .unwrap_or_default()
-    } else {
-        full_session_messages.clone()
-    };
-    if context_messages.is_empty() {
+    let full_session_messages = conversation_state_to_compaction_source_messages(
+        &runtime_state_snapshot.conversation_state,
+    );
+    if full_session_messages.is_empty() {
         return Err(String::from(
             "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
         ));
     }
     plan_context_compaction(CompactionPlanInput {
         session_label: &session_id.to_string(),
-        messages: &context_messages,
+        messages: &full_session_messages,
         all_messages: &full_session_messages,
         context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
         source_until_message_id: None,
@@ -19135,6 +19343,7 @@ fn build_webui_context_compaction_job_request(
         session_title: current_session_title_from_state(state, session_id),
         workspace_path,
         plan,
+        input_budget: context_compaction_input_budget_from_state(state, session_id),
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_label: agent_runtime.provider_configuration.model.clone(),
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
@@ -19295,11 +19504,12 @@ fn spawn_webui_context_compaction_task(
             ),
         };
         match finish_result {
-            Ok(snapshot) => spawn_workspace_session_persist_task(
+            Ok(snapshot) => spawn_context_compaction_persist_task(
                 task_state,
                 controller_runtime,
                 snapshot,
                 session_id,
+                status_message_id.clone(),
                 Some(String::from("context_compaction")),
             ),
             Err(error) => {
@@ -19411,6 +19621,39 @@ fn context_compaction_budget_note_from_state(
         .and_then(|guard| guard.live_context_budgets.get(&session_id).cloned())
         .map(|budget| budget.summary_note())
         .unwrap_or_else(|| String::from("当前未提供预算快照"))
+}
+
+/// Builds the target compaction input budget from the latest live context budget snapshot.
+/// 根据最新实时上下文预算快照构建目标压缩输入预算。
+///
+/// # Parameters
+/// # 参数
+/// `state` is the shared service bridge state containing live budget snapshots.
+/// `state` 是包含实时预算快照的共享服务桥接状态。
+/// `session_id` identifies the session whose live context budget should be read.
+/// `session_id` 标识需要读取实时上下文预算的会话。
+///
+/// # Returns
+/// # 返回值
+/// Returns a target input budget when the live snapshot has a context limit; otherwise returns `None`.
+/// 当实时快照包含上下文上限时返回目标输入预算，否则返回 `None`。
+fn context_compaction_input_budget_from_state(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Option<CompactionInputBudget> {
+    let safety_reserve_tokens = CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS
+        .max(MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS);
+    state
+        .lock()
+        .ok()
+        .and_then(|guard| guard.live_context_budgets.get(&session_id).cloned())
+        .and_then(|budget| budget.context_limit)
+        .map(|context_limit| CompactionInputBudget {
+            target_input_budget_tokens: context_limit
+                .saturating_sub(safety_reserve_tokens)
+                .max(1usize),
+            safety_reserve_tokens,
+        })
 }
 
 /// Immutable baseline captured before a compaction draft is built.
@@ -19680,11 +19923,6 @@ fn build_webui_context_compaction_draft(
         session_id,
         summary_entry,
     );
-    let compaction_insert_before_message_id =
-        first_visible_user_record_id_after_context_compaction_section(
-            &draft_runtime_state.conversation_state,
-            section_id,
-        );
     let mut checkpoint = execution
         .compaction_result
         .materialize_checkpoint(summary_message_id.clone());
@@ -19751,11 +19989,6 @@ fn build_webui_context_compaction_draft(
         Some(budget_note),
         trigger,
     );
-    set_webui_context_compaction_insert_before_metadata_in_state(
-        &mut draft_runtime_state,
-        section_id,
-        compaction_insert_before_message_id.as_deref(),
-    );
     update_webui_context_compaction_body_state(&mut draft_runtime_state, section_id, "completed");
     append_webui_context_compaction_end_message_to_state(
         &mut draft_runtime_state,
@@ -19764,7 +19997,7 @@ fn build_webui_context_compaction_draft(
         budget_note,
         trigger,
         provider_request_count,
-        compaction_insert_before_message_id.as_deref(),
+        execution.input_prune_report.as_ref(),
     );
     if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
         draft_runtime_state.auto_compaction_consecutive_failures = 0;
@@ -20116,14 +20349,31 @@ fn append_webui_context_compaction_failed_message_to_state(
 
 /// Appends the terminal visible boundary for one compaction section.
 /// 追加单个压缩分段的终止可见边界。
+///
+/// # Parameters
+/// # 参数
+/// `runtime_state` is the draft runtime state being prepared for commit.
+/// `runtime_state` 是正在准备提交的候选运行时状态。
+/// `session_id` identifies the session receiving the visible boundary.
+/// `session_id` 标识接收可见边界的会话。
+/// `section_id` is the visible compaction section identifier.
+/// `section_id` 是可见压缩分段标识。
+/// `budget_note` is the budget text captured when compaction started.
+/// `budget_note` 是压缩启动时捕获的预算文本。
+/// `trigger` records whether compaction was manual or automatic.
+/// `trigger` 记录压缩是手动触发还是自动触发。
+/// `provider_request_count` is the total provider request count across successful and failed attempts.
+/// `provider_request_count` 是成功与失败尝试累计的 Provider 请求次数。
+/// `input_prune_report` is the optional clone-only pruning report for the successful attempt.
+/// `input_prune_report` 是成功尝试对应的可选仅克隆剪枝报告。
 fn append_webui_context_compaction_end_message_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
     section_id: &str,
     budget_note: &str,
     trigger: &str,
-    _provider_request_count: usize,
-    insert_before_message_id: Option<&str>,
+    provider_request_count: usize,
+    input_prune_report: Option<&CompactionInputPruneReport>,
 ) {
     let mut metadata = json!({
         "context_compaction_status": true,
@@ -20132,13 +20382,23 @@ fn append_webui_context_compaction_end_message_to_state(
         "context_compaction_state": "completed",
         "context_compaction_trigger": trigger,
         "context_compaction_budget_note": budget_note,
+        "context_compaction_provider_request_count": provider_request_count,
     });
-    if let (Some(insert_before_message_id), Some(object)) =
-        (insert_before_message_id, metadata.as_object_mut())
-    {
+    if let (Some(report), Some(object)) = (input_prune_report, metadata.as_object_mut()) {
         object.insert(
-            String::from("context_compaction_insert_before_message_id"),
-            json!(insert_before_message_id),
+            String::from("context_compaction_input_prune_report"),
+            json!({
+                "mode": context_compaction_input_prune_mode_label(report.mode),
+                "target_input_budget_tokens": report.target_input_budget_tokens,
+                "safety_reserve_tokens": report.safety_reserve_tokens,
+                "original_token_estimate": report.original_token_estimate,
+                "pruned_token_estimate": report.pruned_token_estimate,
+                "pruned_tool_output_count": report.pruned_tool_output_count,
+                "preserved_tool_output_count": report.preserved_tool_output_count,
+                "dropped_source_message_count": report.dropped_source_message_count,
+                "truncated_source_message_count": report.truncated_source_message_count,
+                "still_exceeds_budget": report.still_exceeds_budget,
+            }),
         );
     }
     let entry = SessionMessageEntry {
@@ -20147,71 +20407,66 @@ fn append_webui_context_compaction_end_message_to_state(
         record_kind: SessionMessageRecordKind::CompactionStatus,
         visible: true,
         title: String::from("上下文已压缩"),
-        body: String::new(),
+        body: context_compaction_end_message_body(input_prune_report),
         metadata: Some(metadata),
         created_at: String::new(),
     };
     append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
 }
 
-/// Finds the next visible user prompt after the visible context-compaction section started.
-/// 查找可见上下文压缩分段开始后出现的下一条可见用户提示词。
-fn first_visible_user_record_id_after_context_compaction_section(
-    state: &SessionConversationState,
-    section_id: &str,
-) -> Option<String> {
-    let mut after_section = false;
-    for record in &state.records {
-        if after_section
-            && record.visible
-            && matches!(record.kind, SessionMessageKind::User)
-            && record.record_kind == SessionMessageRecordKind::Transcript
-        {
-            return Some(record.id.clone());
+/// Builds the visible terminal note for one completed context-compaction section.
+/// 构建单个已完成上下文压缩分段的可见终端说明。
+///
+/// # Parameters
+/// # 参数
+/// `input_prune_report` is the optional clone-only pruning report for the successful compaction input.
+/// `input_prune_report` 是成功压缩输入对应的可选仅克隆剪枝报告。
+///
+/// # Returns
+/// # 返回值
+/// Returns an empty body when no pruning happened, or a concise visible note when pruning happened.
+/// 未发生剪枝时返回空正文，发生剪枝时返回简洁的可见说明。
+fn context_compaction_end_message_body(
+    input_prune_report: Option<&CompactionInputPruneReport>,
+) -> String {
+    let Some(report) = input_prune_report else {
+        return String::new();
+    };
+    format!(
+        "运行层输入已按目标窗口进行仅克隆修剪；显示层历史内容保持不变。\n模式：{}\n估算 Token：{} -> {}\n工具结果：修剪 {} 条，完整保留 {} 条\n源消息：丢弃旧分段内 {} 条，截断 {} 条\n安全阈值：{} Token\n{}",
+        context_compaction_input_prune_mode_label(report.mode),
+        report.original_token_estimate,
+        report.pruned_token_estimate,
+        report.pruned_tool_output_count,
+        report.preserved_tool_output_count,
+        report.dropped_source_message_count,
+        report.truncated_source_message_count,
+        report.safety_reserve_tokens,
+        if report.still_exceeds_budget {
+            "提示：修剪后估算仍超过目标输入预算，摘要由模型返回结果决定是否提交。"
+        } else {
+            "提示：修剪后估算已进入目标输入预算。"
         }
-        if record.id == section_id
-            || record
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("context_compaction_section_id"))
-                .and_then(Value::as_str)
-                == Some(section_id)
-        {
-            after_section = true;
-        }
-    }
-    None
+    )
 }
 
-/// Adds the WebUI-only insertion boundary metadata to retained compaction section rows.
-/// 为保留下来的压缩分段行补充仅供 WebUI 使用的插入边界元数据。
-fn set_webui_context_compaction_insert_before_metadata_in_state(
-    runtime_state: &mut SessionRuntimeStateEntry,
-    section_id: &str,
-    insert_before_message_id: Option<&str>,
-) {
-    let Some(insert_before_message_id) = insert_before_message_id else {
-        return;
-    };
-    for record in &mut runtime_state.conversation_state.records {
-        let belongs_to_section = record.id == section_id
-            || record
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.get("context_compaction_section_id"))
-                .and_then(Value::as_str)
-                == Some(section_id);
-        if !belongs_to_section {
-            continue;
-        }
-        let mut metadata = record.metadata.take().unwrap_or_else(|| json!({}));
-        if let Some(object) = metadata.as_object_mut() {
-            object.insert(
-                String::from("context_compaction_insert_before_message_id"),
-                json!(insert_before_message_id),
-            );
-        }
-        record.metadata = Some(metadata);
+/// Returns the stable metadata label for one context-compaction input pruning mode.
+/// 返回上下文压缩输入剪枝模式的稳定元数据标签。
+///
+/// # Parameters
+/// # 参数
+/// `mode` is the clone-only pruning mode reported by the compaction runtime.
+/// `mode` 是压缩运行时报告的仅克隆剪枝模式。
+///
+/// # Returns
+/// # 返回值
+/// Returns a stable snake_case label suitable for metadata and user-facing diagnostics.
+/// 返回适用于元数据与用户侧诊断的稳定 snake_case 标签。
+fn context_compaction_input_prune_mode_label(mode: CompactionInputPruneMode) -> &'static str {
+    match mode {
+        CompactionInputPruneMode::None => "none",
+        CompactionInputPruneMode::RequiredForWindowDowngrade => "required_for_window_downgrade",
+        CompactionInputPruneMode::RetryAfterFailure => "retry_after_failure",
     }
 }
 
@@ -23692,14 +23947,6 @@ where
     Ok(workspace_snapshot)
 }
 
-/// Returns the selected session display messages from the retained workspace snapshot.
-/// 从保留工作区快照返回当前选中会话的显示层消息。
-fn selected_session_messages_from_workspace(
-    workspace_snapshot: &WorkspaceSnapshot,
-) -> Option<Vec<SessionMessageEntry>> {
-    display_session_messages_from_workspace(workspace_snapshot, workspace_snapshot.selected_session)
-}
-
 /// Normalizes one subagent task state against the shared task runtime without disk fallback scans.
 /// 根据共享任务运行时归一化单条子代理任务状态，且不执行磁盘回退扫描。
 fn normalize_webui_subagent_task_state(
@@ -24333,45 +24580,26 @@ async fn refresh_workbench_snapshot(
     );
     let selected_session_id = refreshed_snapshot.selected_session;
     if selected_session_id != SessionId::nil() {
-        if selected_session_messages_from_workspace(&refreshed_snapshot).is_none() {
-            let hydration_snapshot = match load_selected_session_hydration(
-                controller_runtime.clone(),
-                selected_session_id,
-            )
-            .await
-            {
-                Ok(snapshot) => snapshot,
-                Err(error) if is_missing_segmented_session_file_error(&error) => None,
-                Err(error) => return Err(error),
-            };
-            if let Some(hydration) = hydration_snapshot {
-                apply_hydration_to_selected_workspace_snapshot(
-                    &controller_runtime,
-                    &mut refreshed_snapshot,
-                    selected_session_id,
-                    hydration,
+        hydrate_selected_session_runtime_if_needed(
+            controller_runtime.clone(),
+            &mut refreshed_snapshot,
+            selected_session_id,
+        )
+        .await?;
+        apply_persisted_task_mirror_statuses_to_workspace(
+            &controller_runtime,
+            &mut refreshed_snapshot,
+            selected_session_id,
+            |task_id| {
+                webui_subagent_task_has_live_run(
                     agent_runtime_for_status
                         .as_ref()
                         .map(|runtime| &runtime.task_runtime),
-                    &live_listener_task_ids,
-                )?;
-            }
-        } else {
-            apply_persisted_task_mirror_statuses_to_workspace(
-                &controller_runtime,
-                &mut refreshed_snapshot,
-                selected_session_id,
-                |task_id| {
-                    webui_subagent_task_has_live_run(
-                        agent_runtime_for_status
-                            .as_ref()
-                            .map(|runtime| &runtime.task_runtime),
-                        live_listener_task_ids.contains(&task_id),
-                        task_id,
-                    )
-                },
-            )?;
-        }
+                    live_listener_task_ids.contains(&task_id),
+                    task_id,
+                )
+            },
+        )?;
     }
     sync_selected_session_goal_summary_from_store(
         &state,
@@ -24453,12 +24681,19 @@ fn capture_preserved_workspace_run_state(
             !runtime_state.ui_state.pending_prompt_queue.is_empty()
                 || !runtime_state.ui_state.pending_prompt_panel_queue.is_empty()
         });
+        let had_runtime_context =
+            runtime_state.is_some_and(runtime_state_has_concrete_conversation_context);
         let is_submitted_session = submitted_session_id == Some(previous_session.id);
         let had_active_run = active_kernel_session_ids.contains(&previous_session.id);
         let had_hydrated_window = previous_snapshot
             .hydrated_session_ids
             .contains(&previous_session.id);
-        if !had_active_run && !has_pending_prompt && !is_submitted_session && !had_hydrated_window {
+        if !had_active_run
+            && !has_pending_prompt
+            && !is_submitted_session
+            && !had_hydrated_window
+            && !had_runtime_context
+        {
             continue;
         }
         let previous_phase = previous_snapshot
@@ -24561,6 +24796,7 @@ fn preserve_active_session_run_state(
                 .session_run_phases
                 .insert(previous_session.id, preserved_phase);
         }
+        let mut inserted_runtime_context = false;
         if let Some(mut runtime_state) = preserved_session.runtime_state.clone() {
             if let Some(refreshed_runtime_state) = refreshed_snapshot
                 .session_runtime_state
@@ -24571,6 +24807,8 @@ fn preserve_active_session_run_state(
                 runtime_state.conversation_state =
                     refreshed_runtime_state.conversation_state.clone();
             }
+            inserted_runtime_context =
+                runtime_state_has_concrete_conversation_context(&runtime_state);
             refreshed_snapshot
                 .session_runtime_state
                 .insert(previous_session.id, runtime_state);
@@ -24580,7 +24818,7 @@ fn preserve_active_session_run_state(
                 .session_messages
                 .insert(previous_session.id, messages);
         }
-        if preserved_session.had_hydrated_window {
+        if preserved_session.had_hydrated_window || inserted_runtime_context {
             refreshed_snapshot
                 .hydrated_session_ids
                 .insert(previous_session.id);
@@ -24670,24 +24908,6 @@ fn is_provider_tool_boundary_runtime_event(event: &RuntimeEvent) -> bool {
         event.kind,
         RuntimeEventKind::ToolStarted | RuntimeEventKind::ToolFinished
     ) && (event.title.starts_with("工具调用 · ") || event.title.starts_with("工具返回 · "))
-}
-
-/// Loads the selected session transcript window when a selected session exists.
-/// 在存在选中会话时加载其转录窗口。
-async fn load_selected_session_hydration(
-    controller_runtime: ControllerRuntimeHandle,
-    selected_session_id: SessionId,
-) -> Result<Option<SessionHydrationSnapshot>, String> {
-    if selected_session_id == SessionId::nil() {
-        return Ok(None);
-    }
-    vulcan_workspace_store::workspace_store::load_session_display_hydration_snapshot(
-        controller_runtime,
-        selected_session_id,
-        SELECTED_SESSION_TURN_LOAD_LIMIT,
-    )
-    .await
-    .map(Some)
 }
 
 /// Returns whether a hydration failure is caused by missing segmented session files.
@@ -25384,7 +25604,7 @@ fn run_service_bootstrap(
         )
     });
 
-    let workspace_snapshot = bootstrap_step(
+    let mut workspace_snapshot = bootstrap_step(
         runtime.block_on(
             vulcan_workspace_store::workspace_store::load_or_seed_workspace_index(
                 controller_runtime.clone(),
@@ -25393,6 +25613,18 @@ fn run_service_bootstrap(
         "workspace",
         "Workspace",
     )?;
+    let selected_session_id = workspace_snapshot.selected_session;
+    if selected_session_id != SessionId::nil() {
+        bootstrap_step(
+            runtime.block_on(hydrate_selected_session_runtime_if_needed(
+                controller_runtime.clone(),
+                &mut workspace_snapshot,
+                selected_session_id,
+            )),
+            "workspace",
+            "Workspace",
+        )?;
+    }
     let vmm_hook_snapshot =
         build_vmm_hook_config_snapshot(&provider_configuration, &workspace_snapshot);
     agent_runtime
@@ -25401,7 +25633,6 @@ fn run_service_bootstrap(
     agent_runtime
         .vmm_hook_runtime
         .replace_snapshot(vmm_hook_snapshot);
-    let selected_session_id = workspace_snapshot.selected_session;
     logs.push(format!(
         "[webui-service] workspace loaded: projects={} sessions={} selected={}",
         workspace_snapshot.task_projects.len(),
@@ -31590,6 +31821,9 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_agent_runtime::conversation_protocol::{
+        SessionConversationMessage, SessionConversationPayload,
+    };
     use vulcan_agent_runtime::provider_capabilities::ResolvedAiToolCapability;
     use vulcan_provider_config::config::AiToolPolicy;
 
@@ -31773,6 +32007,7 @@ mod tests {
             ),
             fallback_used: false,
             provider_request_count: 1,
+            input_prune_report: None,
         };
 
         let draft = build_webui_context_compaction_draft(
@@ -31810,6 +32045,101 @@ mod tests {
             draft.checkpoint.context_budget_fingerprint.as_deref(),
             Some("budget-live")
         );
+    }
+
+    /// Verifies completed compaction markers are not anchored back into older visible turns.
+    /// 验证已完成压缩标记不会被锚回更早的可见轮次。
+    #[test]
+    fn webui_context_compaction_draft_keeps_status_markers_unanchored() {
+        let session_id = SessionId::new_v4();
+        let section_id = String::from("section-test");
+        let section = SessionMessageEntry {
+            id: section_id.clone(),
+            kind: SessionMessageKind::Assistant,
+            record_kind: SessionMessageRecordKind::CompactionStatus,
+            visible: true,
+            title: String::from("上下文正在压缩"),
+            body: String::new(),
+            metadata: Some(json!({
+                "context_compaction_status": true,
+                "context_compaction_section_id": section_id.clone(),
+                "context_compaction_role": "start",
+                "context_compaction_state": "running",
+            })),
+            created_at: String::from("1780000000002"),
+        };
+        let messages = vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "用户", "压缩前问题")
+                .with_runtime_metadata("user-before", "1780000000000"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "压缩前回答")
+                .with_runtime_metadata("assistant-before", "1780000000001"),
+            section,
+            SessionMessageEntry::new(SessionMessageKind::User, "用户", "压缩后继续提问")
+                .with_runtime_metadata("user-after", "1780000000003"),
+        ];
+        let active_runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&messages),
+            live_context_budget_fingerprint: Some(String::from("budget-live")),
+            live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let plan = CompactionPlan {
+            source_messages: vec![messages[0].clone()],
+            source_until_message_id: Some(String::from("user-before")),
+            source_until_turn_index: Some(0),
+            retained_tail_start_turn_index: Some(1),
+            compaction_id: String::from("test-compaction-unanchored"),
+            created_at: String::from("1780000000100"),
+            policy: vulcan_context::ContextCompactionPolicy::default(),
+        };
+        let execution = PromptCompactionExecution {
+            compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
+                &plan,
+                "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            ),
+            fallback_used: false,
+            provider_request_count: 1,
+            input_prune_report: None,
+        };
+
+        let draft = build_webui_context_compaction_draft(
+            &active_runtime_state,
+            session_id,
+            &section_id,
+            "预算快照",
+            MANUAL_CONTEXT_COMPACTION_TRIGGER,
+            1,
+            "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            &execution,
+        )
+        .expect("draft should be built from a valid summary");
+
+        let section_records = draft
+            .runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .filter(|record| {
+                record.id == section_id
+                    || record
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                        .and_then(Value::as_str)
+                        == Some(section_id.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            section_records.len() >= 2,
+            "completed compaction should keep visible section rows"
+        );
+        assert!(section_records.iter().all(|record| {
+            record
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("context_compaction_insert_before_message_id"))
+                .is_none()
+        }));
     }
 
     /// Verifies OpenRouter endpoint records are normalized into secondary route choices.
@@ -33308,11 +33638,14 @@ mod tests {
         let display_messages =
             display_session_messages_from_workspace(&workspace_snapshot, session_id)
                 .expect("display messages should exist");
-        // dialogue_messages should preserve the API-facing context body.
-        // dialogue_messages 应保留 API 面向的上下文正文。
-        let dialogue_messages =
-            dialogue_context_messages_from_workspace(&workspace_snapshot, session_id)
-                .expect("dialogue messages should exist");
+        // compaction_messages should preserve the runtime context body.
+        // compaction_messages 应保留运行态上下文正文。
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should exist");
+        let compaction_messages =
+            conversation_state_to_compaction_source_messages(&runtime_state.conversation_state);
 
         assert_eq!(
             display_messages
@@ -33321,10 +33654,198 @@ mod tests {
             Some("显示层正文")
         );
         assert_eq!(
-            dialogue_messages
+            compaction_messages
                 .first()
                 .map(|message| message.body.as_str()),
             Some("对话层正文")
+        );
+    }
+
+    /// Verifies runtime-log hydrated messages can back compaction without display records.
+    /// 验证运行时日志水合消息在没有显示记录时也能支撑压缩。
+    #[test]
+    fn compaction_source_accepts_runtime_log_messages_without_records() {
+        // session_id identifies the runtime-log hydrated conversation.
+        // session_id 标识运行时日志水合出的会话。
+        let session_id = SessionId::new_v4();
+        // runtime_state simulates runtime/r001.jsonl hydration where records are intentionally absent.
+        // runtime_state 模拟 runtime/r001.jsonl 水合结果，其中 records 有意为空。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state.messages = vec![
+            SessionConversationMessage {
+                id: String::from("runtime-user-1"),
+                payload: SessionConversationPayload::UserText {
+                    text: String::from("运行时日志里的用户问题"),
+                    attachments: Vec::new(),
+                },
+            },
+            SessionConversationMessage {
+                id: String::from("runtime-assistant-1"),
+                payload: SessionConversationPayload::Assistant {
+                    text: String::from("运行时日志里的助手回答"),
+                    reasoning: String::new(),
+                    provider_message_id: None,
+                    provider_message_state: None,
+                    usage: None,
+                    tool_calls: Vec::new(),
+                },
+            },
+        ];
+        // workspace_snapshot carries no display rows for the positive runtime-only case.
+        // workspace_snapshot 不携带显示行，用于验证运行态独立可用。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should exist");
+        let messages =
+            conversation_state_to_compaction_source_messages(&runtime_state.conversation_state);
+
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].id, "runtime-user-1");
+        assert!(messages[0].body.contains("运行时日志里的用户问题"));
+        assert!(messages[1].body.contains("运行时日志里的助手回答"));
+    }
+
+    /// Verifies runtime-only compaction sources do not become display fallback rows.
+    /// 验证仅运行态压缩来源不会变成显示层回退行。
+    #[test]
+    fn display_session_messages_do_not_project_runtime_only_context() {
+        // session_id identifies a runtime-only hydrated conversation.
+        // session_id 标识只有运行态已水合的会话。
+        let session_id = SessionId::new_v4();
+        // runtime_state carries provider-visible messages but no display records.
+        // runtime_state 携带 Provider 可见消息但不携带显示记录。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+            id: String::from("runtime-user-1"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("只能用于运行态的正文"),
+                attachments: Vec::new(),
+            },
+        }];
+        // workspace_snapshot intentionally has no session_messages row for the display layer.
+        // workspace_snapshot 有意不携带显示层 session_messages 行。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        assert!(display_session_messages_from_workspace(&workspace_snapshot, session_id).is_none());
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should exist");
+        assert!(
+            !conversation_state_to_compaction_source_messages(&runtime_state.conversation_state)
+                .is_empty()
+        );
+    }
+
+    /// Verifies manual-compaction hydration preserves an already loaded display window.
+    /// 验证手动压缩水合会保留已加载的显示窗口。
+    #[test]
+    fn context_compaction_runtime_hydration_preserves_existing_display_window() {
+        // session_id identifies the selected conversation being compacted.
+        // session_id 标识正在压缩的选中会话。
+        let session_id = SessionId::new_v4();
+        // display_entry represents the already-loaded s001 display layer.
+        // display_entry 表示已经加载的 s001 显示层。
+        let display_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "已有显示层正文")
+                .with_runtime_metadata("display-entry", "1000");
+        // hydrated_display_entry represents the lazy hydration window that must not overwrite display_entry.
+        // hydrated_display_entry 表示不应覆盖 display_entry 的懒加载显示窗口。
+        let hydrated_display_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "水合显示正文")
+                .with_runtime_metadata("hydrated-display-entry", "1001");
+        // runtime_state represents the runtime/r001 JSONL conversation state.
+        // runtime_state 表示 runtime/r001 JSONL 对应的会话运行态。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+            id: String::from("runtime-user-1"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("运行态正文"),
+                attachments: Vec::new(),
+            },
+        }];
+        let hydration = SessionHydrationSnapshot {
+            session_id,
+            messages: vec![hydrated_display_entry],
+            tool_detail_messages: Vec::new(),
+            compactions: Vec::new(),
+            runtime_state: Some(runtime_state),
+            earliest_ordinal: None,
+            has_more_history: false,
+        };
+        // workspace_snapshot already has the display layer but lacks runtime context.
+        // workspace_snapshot 已有显示层但缺少运行态上下文。
+        let mut workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(session_id, vec![display_entry])]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        apply_selected_session_runtime_hydration(&mut workspace_snapshot, session_id, hydration);
+
+        assert_eq!(
+            workspace_snapshot
+                .session_messages
+                .get(&session_id)
+                .and_then(|messages| messages.first())
+                .map(|message| message.body.as_str()),
+            Some("已有显示层正文")
+        );
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime state should exist");
+        let runtime_messages =
+            conversation_state_to_compaction_source_messages(&runtime_state.conversation_state);
+        assert_eq!(runtime_messages[0].body, "运行态正文");
+        assert!(
+            workspace_snapshot
+                .hydrated_session_ids
+                .contains(&session_id)
         );
     }
 
@@ -33829,6 +34350,108 @@ mod tests {
                 .map(Vec::len),
             Some(1)
         );
+        assert!(
+            refreshed_snapshot
+                .hydrated_session_ids
+                .contains(&session_id)
+        );
+    }
+
+    /// Verifies concrete runtime dialogue context survives an index refresh even when the marker is absent.
+    /// 验证即使水合标记缺失，具体运行态对话上下文也会在索引刷新后保留。
+    #[test]
+    fn preserve_active_session_run_state_keeps_runtime_context_without_hydrated_marker() {
+        let session_id = SessionId::new_v4();
+        let project_id = String::from("project-a");
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state.messages = vec![SessionConversationMessage {
+            id: String::from("runtime-user-1"),
+            payload: SessionConversationPayload::UserText {
+                text: String::from("新对话的运行态正文"),
+                attachments: Vec::new(),
+            },
+        }];
+        let previous_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id.clone(),
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(project_id.clone()),
+                "新对话",
+                "已有运行态",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::from([(session_id, runtime_state)]),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::new(),
+        };
+        let mut refreshed_snapshot = WorkspaceSnapshot {
+            task_projects: vec![TaskProjectSummary::new(
+                project_id,
+                "Project A",
+                "D:/project-a",
+                false,
+                0,
+                None,
+                None,
+                vec![session_id],
+            )],
+            archived_task_projects: Vec::new(),
+            sessions: vec![SessionSummary::new(
+                session_id,
+                Some(String::from("project-a")),
+                "新对话",
+                "刷新索引",
+                SessionState::Completed,
+                0,
+                0,
+                "刚刚",
+            )],
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::new(),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: SessionId::nil(),
+            hydrated_session_ids: BTreeSet::new(),
+        };
+
+        let preserved_workspace_run_state =
+            capture_preserved_workspace_run_state(Some(&previous_snapshot), &BTreeSet::new(), None);
+        preserve_active_session_run_state(
+            preserved_workspace_run_state.as_ref(),
+            &mut refreshed_snapshot,
+        );
+
+        let runtime_state = refreshed_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .expect("runtime context should survive refresh");
+        assert_eq!(runtime_state.conversation_state.messages.len(), 1);
         assert!(
             refreshed_snapshot
                 .hydrated_session_ids

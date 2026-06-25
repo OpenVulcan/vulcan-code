@@ -5,9 +5,12 @@ mod planning;
 mod rewrite;
 
 pub use planning::{
-    CompactionPlan, CompactionPlanInput, CompactionResult, CompactionSummaryRecord,
+    CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
+    CompactionPlanInput, CompactionResult, CompactionSummaryRecord, PreparedCompactionSource,
     build_compaction_continuation_prompt, build_compaction_request_prompt,
-    extract_compaction_model_summary, extract_compaction_previous_summary, plan_context_compaction,
+    estimate_compaction_source_tokens, extract_compaction_model_summary,
+    extract_compaction_previous_summary, plan_context_compaction,
+    prepare_compaction_source_for_target_budget,
 };
 pub use rewrite::{
     compact_conversation_records_after_summary, compact_conversation_with_summary,

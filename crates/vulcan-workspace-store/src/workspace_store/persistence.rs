@@ -5,16 +5,16 @@
 
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
-    SegmentedSessionForkSource, append_segmented_session_message_update,
-    archive_segmented_session_by_created_date, archive_segmented_session_by_id,
-    create_segmented_session_in_location, delete_segmented_session_by_created_date,
-    delete_segmented_session_by_id, find_segmented_session_directory,
-    find_segmented_session_directory_by_id, fork_segmented_session_directory,
-    patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
-    replay_segmented_session_context, restore_segmented_session_by_created_date,
-    segmented_session_directory, state_document_from_runtime_state,
-    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
-    write_segmented_session_fork_source, write_state,
+    SegmentedSessionForkSource, append_segmented_session_message_suffix,
+    append_segmented_session_message_tail, archive_segmented_session_by_created_date,
+    archive_segmented_session_by_id, create_segmented_session_in_location,
+    delete_segmented_session_by_created_date, delete_segmented_session_by_id,
+    find_segmented_session_directory, find_segmented_session_directory_by_id,
+    fork_segmented_session_directory, patch_segmented_session_metadata,
+    rebuild_runtime_log_from_conversation_state, replay_segmented_session_context,
+    restore_segmented_session_by_created_date, segmented_session_directory,
+    state_document_from_runtime_state, sync_runtime_log_from_conversation_state,
+    truncate_segmented_session_before_message, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -284,6 +284,25 @@ pub async fn persist_single_session_runtime_state_update(
     persist_segmented_session_runtime_state_checkpoint(&controller, session_id, runtime_state)
         .await?;
 
+    Ok(())
+}
+
+/// Appends new visible transcript suffix rows for one existing segmented session.
+/// 为一个既有分段会话追加新的可见转录尾部行。
+pub async fn append_single_session_transcript_suffix(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let Some(session_dir) =
+        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
+    else {
+        return Ok(());
+    };
+    append_segmented_session_message_suffix(&session_dir, messages)?;
     Ok(())
 }
 
@@ -965,7 +984,12 @@ async fn persist_segmented_session_tail_update(
     let session_id_text = session.id.to_string();
     let session_dir =
         ensure_segmented_session_directory_for_locator(controller, &session_id_text, &locator)?;
-    append_segmented_session_message_update(&session_dir, messages)?;
+    let transcript_tail_error = match append_segmented_session_message_tail(&session_dir, messages)
+    {
+        Ok(_) => None,
+        Err(error) if error.contains("non-tail transcript change") => Some(error),
+        Err(error) => return Err(error),
+    };
     if let Some(runtime_state) = runtime_state {
         let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
         write_state(&session_dir, &state_document)?;
@@ -974,6 +998,9 @@ async fn persist_segmented_session_tail_update(
             &runtime_state.conversation_state,
             &runtime_state.updated_at,
         )?;
+    }
+    if let Some(error) = transcript_tail_error {
+        return Err(error);
     }
     Ok(())
 }
