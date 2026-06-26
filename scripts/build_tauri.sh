@@ -96,9 +96,9 @@ if [ "$Release" = "1" ]; then
 
     echo "==> Building Tauri shell release..."
     if [ "$IsWindowsPlatform" = "1" ]; then
-        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper --release
+        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper --release --features custom-protocol
     else
-        cargo build -p vulcan-code-tauri --release
+        cargo build -p vulcan-code-tauri --release --features custom-protocol
     fi
 else
     echo "==> Building Tauri shell debug..."

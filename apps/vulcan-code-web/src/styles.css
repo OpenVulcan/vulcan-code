@@ -77,8 +77,7 @@ button {
 .loading-screen {
   min-height: 100vh;
   display: grid;
-  place-content: center;
-  gap: 12px;
+  place-items: center;
   color: var(--muted-foreground);
   padding: 24px;
 }
@@ -438,75 +437,85 @@ button {
   backdrop-filter: blur(10px);
 }
 
-.startup-progress-card {
-  width: min(520px, calc(100vw - 48px));
+.startup-progress-panel {
+  width: min(420px, calc(100vw - 48px));
   display: grid;
-  gap: 18px;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: color-mix(in oklch, var(--card) 96%, transparent);
-  color: var(--foreground);
-  padding: 20px;
-  box-shadow: 0 24px 72px color-mix(in oklch, var(--foreground) 14%, transparent);
+  justify-items: center;
+  gap: 72px;
+  transform: translateY(-4vh);
 }
 
-.startup-progress-heading {
+.startup-logo-stage {
+  width: 96px;
+  height: 96px;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr);
-  align-items: center;
+  place-items: center;
+  transform: translateY(-10px);
+}
+
+.startup-logo-mark {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 34px;
+  font-weight: 850;
+  line-height: 1;
+  box-shadow: 0 18px 52px color-mix(in oklch, var(--foreground) 13%, transparent);
+}
+
+.startup-logo-mark::after {
+  content: "";
+  position: absolute;
+  inset: -45%;
+  background: linear-gradient(115deg, transparent 35%, color-mix(in oklch, var(--primary-foreground) 62%, transparent) 48%, transparent 61%);
+  transform: translateX(-115%) rotate(8deg);
+  animation: startup-logo-sweep 1.9s ease-in-out infinite;
+}
+
+.startup-progress-content {
+  width: min(420px, 100%);
+  display: grid;
   gap: 12px;
-}
-
-.startup-progress-heading > div,
-.startup-progress-step > div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
+  transform: translateY(24px);
 }
 
 .startup-progress-heading strong {
-  font-size: 16px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 0.92rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.startup-progress-heading span,
-.startup-progress-step span {
+.startup-progress-message {
+  min-height: 18px;
+  margin: 0;
+  overflow: hidden;
   color: var(--muted-foreground);
   font-size: 12px;
   line-height: 1.45;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.startup-progress-steps {
-  display: grid;
-  gap: 8px;
-}
+@keyframes startup-logo-sweep {
+  0%,
+  32% {
+    transform: translateX(-115%) rotate(8deg);
+  }
 
-.startup-progress-step {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--muted);
-  padding: 10px 11px;
-}
-
-.startup-progress-step.running {
-  border-color: color-mix(in oklch, var(--primary) 42%, var(--border));
-  background: color-mix(in oklch, var(--primary) 8%, var(--muted));
-}
-
-.startup-progress-step.ready {
-  background: color-mix(in oklch, oklch(0.72 0.15 150) 7%, var(--muted));
-}
-
-.startup-progress-step.warning,
-.startup-progress-step.error {
-  background: color-mix(in oklch, var(--destructive) 8%, var(--muted));
-}
-
-.startup-progress-step strong {
-  font-size: 13px;
+  68%,
+  100% {
+    transform: translateX(115%) rotate(8deg);
+  }
 }
 
 .without-console-sidebar .workspace {

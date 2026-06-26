@@ -106,10 +106,10 @@ if ($Release) {
 
     Write-Host "==> Building Tauri shell release..."
     if ($IsWindowsPlatform) {
-        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper --release
+        cargo build -p vulcan-code-tauri -p vulcan-windows-console-helper --release --features custom-protocol
     }
     else {
-        cargo build -p vulcan-code-tauri --release
+        cargo build -p vulcan-code-tauri --release --features custom-protocol
     }
 }
 else {

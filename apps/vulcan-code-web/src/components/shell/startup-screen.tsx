@@ -1,11 +1,5 @@
-import { StatusIcon } from "@/components/shared/status";
-import { Spinner } from "@/components/ui/spinner";
-import { cn } from "@/lib/utils";
 import type { StartupSnapshot, StartupStepSnapshot } from "@/types";
-import {
-  Activity,
-  CircleAlert,
-} from "lucide-react";
+import { CircleAlert } from "lucide-react";
 
 // LoadingScreen renders the earliest frontend loading state.
 // LoadingScreen 渲染最早期的前端加载状态。
@@ -16,14 +10,7 @@ export function LoadingScreen(props: {
 }) {
   return (
     <main className="loading-screen">
-      {props.startup ? (
-        <StartupProgressCard startup={props.startup} />
-      ) : (
-        <>
-          <Activity className="spin" size={28} />
-          <span>正在连接 Vulcan Core Service...</span>
-        </>
-      )}
+      <StartupProgressPanel startup={props.startup ?? null} />
     </main>
   );
 }
@@ -37,54 +24,43 @@ export function StartupOverlay(props: {
 }) {
   return (
     <div className="startup-overlay" role="status" aria-live="polite" aria-busy="true">
-      <StartupProgressCard startup={props.startup} />
+      <StartupProgressPanel startup={props.startup} />
     </div>
   );
 }
 
-// StartupProgressCard renders the blocking runtime bootstrap progress.
-// StartupProgressCard 渲染阻塞式运行时启动进度。
-function StartupProgressCard(props: {
-  // Latest service startup snapshot.
-  // 最近一次服务启动快照。
-  startup: StartupSnapshot;
+// StartupProgressPanel renders the centered bootstrap logo and progress bar.
+// StartupProgressPanel 渲染居中的启动 Logo 与进度条。
+function StartupProgressPanel(props: {
+  // Latest service startup snapshot, or null while the service endpoint is still being discovered.
+  // 最近一次服务启动快照；服务端点仍在发现时为 null。
+  startup: StartupSnapshot | null;
 }) {
   // activeStep selects the current startup row for the progress headline.
   // activeStep 选择当前启动步骤作为进度标题。
-  const activeStep = activeStartupStep(props.startup.steps);
+  const activeStep = props.startup ? activeStartupStep(props.startup.steps) : null;
+  // percent converts startup step states into the same bounded progress model used by conversation loading.
+  // percent 将启动步骤状态转换为会话加载同款的有界进度模型。
+  const percent = startupProgressPercent(props.startup);
+  // message shows the current startup phase without expanding the full step list.
+  // message 展示当前启动阶段，而不展开完整步骤列表。
+  const message = activeStep?.message ?? (props.startup ? "正在加载项目与会话索引" : "正在连接 Vulcan Core Service");
   return (
-    <section className="startup-progress-card" aria-live="polite" aria-busy={!props.startup.ready}>
-      <div className="startup-progress-heading">
-        <Spinner className="size-5" />
-        <div>
-          <strong>{activeStep ? `正在加载 ${activeStep.label}` : "正在加载 Vulcan 运行时"}</strong>
-          <span>{activeStep?.message ?? "正在加载 VLDB、LuaSkills 与 Token 预算运行时。"}</span>
-        </div>
+    <section className="startup-progress-panel" aria-live="polite" aria-busy={!props.startup?.ready}>
+      <div className="startup-logo-stage" aria-hidden="true">
+        <span className="startup-logo-mark">V</span>
       </div>
-      <div className="startup-progress-steps">
-        {props.startup.steps.map((step) => (
-          <StartupProgressStep key={step.id} step={step} />
-        ))}
+      <div className="startup-progress-content">
+        <div className="conversation-loading-heading startup-progress-heading">
+          <strong>{activeStep ? `正在加载 ${activeStep.label}` : "正在加载 Workspace"}</strong>
+          <span>{Math.round(percent)}%</span>
+        </div>
+        <div className="conversation-loading-bar startup-progress-bar" aria-label="正在加载 Workspace" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+          <div className="conversation-loading-bar-value" style={{ width: `${percent}%` }} />
+        </div>
+        <p className="startup-progress-message">{message}</p>
       </div>
     </section>
-  );
-}
-
-// StartupProgressStep renders one runtime bootstrap row.
-// StartupProgressStep 渲染单个运行时启动步骤行。
-function StartupProgressStep(props: {
-  // Step snapshot displayed by this row.
-  // 此行展示的步骤快照。
-  step: StartupStepSnapshot;
-}) {
-  return (
-    <div className={cn("startup-progress-step", props.step.status)}>
-      {props.step.status === "running" ? <Spinner className="size-4" /> : <StatusIcon status={props.step.status} />}
-      <div>
-        <strong>{props.step.label}</strong>
-        <span>{props.step.message ?? "等待状态更新"}</span>
-      </div>
-    </div>
   );
 }
 
@@ -94,6 +70,31 @@ function activeStartupStep(steps: StartupStepSnapshot[]): StartupStepSnapshot | 
   return steps.find((step) => step.status === "running")
     ?? steps.find((step) => step.status === "pending")
     ?? null;
+}
+
+// startupProgressPercent maps startup step states to a stable bounded progress percentage.
+// startupProgressPercent 将启动步骤状态映射为稳定的有界进度百分比。
+function startupProgressPercent(startup: StartupSnapshot | null): number {
+  if (!startup) {
+    return 8;
+  }
+  if (startup.ready) {
+    return 100;
+  }
+  const total = startup.steps.length;
+  if (total === 0) {
+    return 8;
+  }
+  const completed = startup.steps.reduce((sum, step) => {
+    if (step.status === "ready" || step.status === "warning") {
+      return sum + 1;
+    }
+    if (step.status === "running") {
+      return sum + 0.5;
+    }
+    return sum;
+  }, 0);
+  return Math.max(8, Math.min(96, (completed / total) * 100));
 }
 
 // ErrorScreen renders a startup failure.

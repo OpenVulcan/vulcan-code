@@ -3028,8 +3028,8 @@ fn service_static_text_response(status: u16, message: &str) -> ServiceStaticResp
 ///
 /// # Returns
 /// 返回值
-/// `true` for trusted Tauri origins and loopback HTTP origins.
-/// 对受信任的 Tauri 来源和回环 HTTP 来源返回 `true`。
+/// `true` for trusted Tauri origins, the Windows Tauri HTTP origin, and loopback HTTP origins.
+/// 对受信任的 Tauri 来源、Windows Tauri HTTP 来源和回环 HTTP 来源返回 `true`。
 pub fn webui_service_origin_text_is_allowed(origin: &str) -> bool {
     let Some((scheme, remainder)) = origin.split_once("://") else {
         return false;
@@ -3045,6 +3045,9 @@ pub fn webui_service_origin_text_is_allowed(origin: &str) -> bool {
     }
     if scheme != "http" && scheme != "https" {
         return false;
+    }
+    if host.eq_ignore_ascii_case("tauri.localhost") {
+        return true;
     }
     matches!(
         host.to_ascii_lowercase().as_str(),
@@ -3687,6 +3690,8 @@ mod tests {
             "http://127.0.0.1:5173",
             "http://[::1]:5173",
             "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
         ] {
             assert!(webui_service_origin_text_is_allowed(origin));
         }
@@ -3696,6 +3701,8 @@ mod tests {
             "https://evil.localhost.example",
             "file://localhost",
             "tauri://example.com",
+            "http://evil.tauri.localhost",
+            "http://not-tauri.localhost",
         ] {
             assert!(!webui_service_origin_text_is_allowed(origin));
         }

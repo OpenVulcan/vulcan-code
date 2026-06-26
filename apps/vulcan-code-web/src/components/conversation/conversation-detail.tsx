@@ -21,6 +21,8 @@ import {
   type GeneratedMediaAttachment,
 } from "@/components/media/generated-media";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { parseUnifiedDiffAsync } from "@/diff/diff-parse-worker-client";
+import { hasRenderableDiff } from "@/diff/parseDiff";
 
 // LazyDiffReviewPanel loads the heavy diff review renderer only for diff detail modals.
 // LazyDiffReviewPanel 仅在 diff 详情弹窗中加载较重的 diff 审核渲染器。
@@ -266,10 +268,6 @@ export function ConversationDetailModal(props: {
 // parseDiffDetailBodyAsync loads diff parsing helpers only for diff detail modals.
 // parseDiffDetailBodyAsync 仅为 diff 详情弹窗按需加载 diff 解析辅助模块。
 async function parseDiffDetailBodyAsync(diffBody: string): Promise<DiffPanelSnapshot | null> {
-  const [{ hasRenderableDiff }, { parseUnifiedDiffAsync }] = await Promise.all([
-    import("@/diff/parseDiff"),
-    import("@/diff/diff-parse-worker-client"),
-  ]);
   if (!hasRenderableDiff(diffBody)) {
     return null;
   }

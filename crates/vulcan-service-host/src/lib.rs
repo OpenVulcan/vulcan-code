@@ -331,8 +331,8 @@ async fn webui_service_events_ws_handler(
     })
 }
 
-/// Returns whether one browser WebSocket handshake carries an allowed Origin header.
-/// 返回单个浏览器 WebSocket 握手是否携带允许的 Origin 请求头。
+/// Returns whether one browser WebSocket handshake carries an allowed or host-omitted Origin header.
+/// 返回单个浏览器 WebSocket 握手是否携带允许来源，或由宿主省略 Origin 请求头。
 ///
 /// # Parameters
 /// 参数
@@ -341,11 +341,11 @@ async fn webui_service_events_ws_handler(
 ///
 /// # Returns
 /// 返回值
-/// `true` when the Origin header exists and points to an allowed loopback origin.
-/// 当 Origin 请求头存在且指向允许的回环来源时返回 `true`。
+/// `true` when Origin is absent for a token-protected WebView handshake or points to an allowed loopback origin.
+/// 当受令牌保护的 WebView 握手省略 Origin，或 Origin 指向允许的回环来源时返回 `true`。
 fn webui_service_headers_origin_is_allowed(headers: &AxumHeaderMap) -> bool {
     let origin = headers.get("origin").and_then(|value| value.to_str().ok());
-    webui_service_required_origin_text_is_allowed(origin)
+    origin.is_none_or(|value| webui_service_required_origin_text_is_allowed(Some(value)))
 }
 
 /// Returns whether one browser service request carries the current instance token.
@@ -594,5 +594,42 @@ mod tests {
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["result"]["method"], "workbench.snapshot");
         assert_eq!(payload["result"]["params"]["projectId"], "p1");
+    }
+
+    /// Verifies token-protected WebSocket handshakes tolerate host WebViews that omit Origin.
+    /// 验证受令牌保护的 WebSocket 握手兼容省略 Origin 的宿主 WebView。
+    #[test]
+    fn browser_events_allows_missing_origin() {
+        let headers = AxumHeaderMap::new();
+
+        assert!(webui_service_headers_origin_is_allowed(&headers));
+    }
+
+    /// Verifies hostile WebSocket origins are still rejected.
+    /// 验证恶意 WebSocket 来源仍会被拒绝。
+    #[test]
+    fn browser_events_rejects_disallowed_origin() {
+        let mut headers = AxumHeaderMap::new();
+        headers.insert("origin", "https://example.com".parse().unwrap());
+
+        assert!(!webui_service_headers_origin_is_allowed(&headers));
+    }
+
+    /// Verifies missing Origin does not bypass the WebSocket service token check.
+    /// 验证缺少 Origin 不会绕过 WebSocket 服务令牌检查。
+    #[test]
+    fn browser_events_still_requires_service_token_without_origin() {
+        let headers = AxumHeaderMap::new();
+
+        assert!(!webui_service_request_token_is_valid(
+            &headers,
+            None,
+            "test-token",
+        ));
+        assert!(webui_service_request_token_is_valid(
+            &headers,
+            Some("token=test-token"),
+            "test-token",
+        ));
     }
 }

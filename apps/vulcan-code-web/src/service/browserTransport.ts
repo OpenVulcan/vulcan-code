@@ -122,6 +122,7 @@ export class BrowserServiceTransport implements ServiceTransport {
     if (!payload.ok) {
       throw new Error(payload.error?.message || "Browser service RPC failed.");
     }
+    emitBrowserServiceConnectionStatus("connected");
     return payload.result as T;
   }
 

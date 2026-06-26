@@ -60,35 +60,39 @@ help:
 	@echo "  make deps-host     # install host dependencies"
 	@echo "  make deps-lua      # install Lua dependencies"
 
-# build routes the default debug build command.
-# build 路由默认 debug 构建命令。
+# build routes debug by default, or release when the release companion goal is present.
+# build 默认路由 debug，存在 release 伴随目标时路由 release。
 build:
-	$(call route-command,build)
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),build release,build))
 
 # build-release routes the explicit release build command.
 # build-release 路由显式 release 构建命令。
 build-release:
 	$(call route-command,build release)
 
-# release routes the short release build command.
-# release 路由短形式 release 构建命令。
+# release routes the short release build command or becomes a companion no-op for paired goals.
+# release 路由短形式 release 构建命令，或在组合目标中作为伴随空操作。
 release:
+ifneq ($(filter build build-release run run-release br br-release,$(MAKECMDGOALS)),)
+	@:
+else
 	$(call route-command,release)
+endif
 
-# run routes the debug runtime command.
-# run 路由 debug 运行命令。
+# run routes debug by default, or release when the release companion goal is present.
+# run 默认路由 debug，存在 release 伴随目标时路由 release。
 run:
-	$(call route-command,run)
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),run release,run))
 
 # run-release routes the release runtime command.
 # run-release 路由 release 运行命令。
 run-release:
 	$(call route-command,run release)
 
-# br routes the debug build-and-run command.
-# br 路由 debug 构建并运行命令。
+# br routes debug by default, or release when the release companion goal is present.
+# br 默认路由 debug，存在 release 伴随目标时路由 release。
 br:
-	$(call route-command,br)
+	$(call route-command,$(if $(filter release,$(MAKECMDGOALS)),br release,br))
 
 # br-release routes the release build-and-run command.
 # br-release 路由 release 构建并运行命令。
