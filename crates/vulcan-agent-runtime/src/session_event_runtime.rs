@@ -1634,7 +1634,15 @@ mod tests {
             visible: true,
             title: String::from("用户输入"),
             body: String::from("不需要配图了"),
-            metadata: None,
+            metadata: Some(json!({
+                "canonical_text": "不需要配图了",
+                "canonical_user_text": "不需要配图了",
+                "source": "user_interrupt",
+                "starts_user_turn": false,
+                "turn_process": true,
+                "collapsed_by_default": true,
+                "editable": false,
+            })),
             created_at: String::from("1102"),
         });
 
@@ -1655,6 +1663,40 @@ mod tests {
                 "不需要配图了",
                 "后续请求已经开始输出。"
             ]
+        );
+        let guided_record = runtime_state
+            .conversation_state
+            .records
+            .iter()
+            .find(|record| record.id == "core-guided-user-record")
+            .expect("guided user record should be merged");
+        let guided_metadata = guided_record
+            .metadata
+            .as_ref()
+            .expect("guided user record metadata should be preserved");
+        assert_eq!(
+            guided_metadata
+                .get("source")
+                .and_then(serde_json::Value::as_str),
+            Some("user_interrupt")
+        );
+        assert_eq!(
+            guided_metadata
+                .get("starts_user_turn")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            guided_metadata
+                .get("turn_process")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            guided_metadata
+                .get("editable")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
         );
     }
 

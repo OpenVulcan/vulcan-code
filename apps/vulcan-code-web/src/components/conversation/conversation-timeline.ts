@@ -4,6 +4,7 @@ import type {
   ConversationTimelineItem,
 } from "@/components/conversation/conversation-model";
 import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
+import { metadataValue } from "@/components/conversation/conversation-metadata";
 
 // projectConversationTimelineItems groups each user turn into a visible processing shell.
 // projectConversationTimelineItems 将每个用户轮次分组成可见处理过程外壳。
@@ -101,6 +102,15 @@ export function projectConversationTimelineItems(
         currentTurn = { userItem: item, anchorItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
         continue;
       }
+      if (isTurnStartUserRenderItem(item) || inferredTurnStartUserRenderItem(item, currentTurn.bodyItems)) {
+        flushTurn(false);
+        currentTurn = { userItem: item, anchorItem: item, bodyItems: [], guidanceItems: [], statsItem: null };
+        continue;
+      }
+      if (isTurnProcessUserRenderItem(item)) {
+        currentTurn.bodyItems.push(item);
+        continue;
+      }
       currentTurn.guidanceItems.push(item);
       continue;
     }
@@ -151,6 +161,51 @@ function timelineCanStartImplicitProcessTurn(
 // isContextCompactionRenderItem 判断单条投影行是否只是上下文压缩状态块。
 function isContextCompactionRenderItem(item: ConversationRenderItem): boolean {
   return item.blocks.some(isContextCompactionBlock);
+}
+
+// isTurnProcessUserRenderItem returns whether one user row belongs inside the process chronology.
+// isTurnProcessUserRenderItem 返回单条用户行是否属于过程时间线内部。
+function isTurnProcessUserRenderItem(item: ConversationRenderItem): boolean {
+  if (item.role !== "user") {
+    return false;
+  }
+  return metadataValue(item.userMessage?.metadata ?? item.sourceMessage?.metadata, ["turn_process"]) === true;
+}
+
+// isTurnStartUserRenderItem returns whether one user row starts a normal user turn.
+// isTurnStartUserRenderItem 返回单条用户行是否开启常规用户轮次。
+function isTurnStartUserRenderItem(item: ConversationRenderItem): boolean {
+  if (item.role !== "user") {
+    return false;
+  }
+  const metadata = item.userMessage?.metadata ?? item.sourceMessage?.metadata;
+  return metadataValue(metadata, ["starts_user_turn"]) === true
+    && metadataValue(metadata, ["turn_process"]) !== true;
+}
+
+// inferredTurnStartUserRenderItem preserves legacy and incremental rows before turn metadata arrives.
+// inferredTurnStartUserRenderItem 在轮次 metadata 到达前保留旧记录与增量行的常规分组。
+function inferredTurnStartUserRenderItem(
+  item: ConversationRenderItem,
+  currentTurnBodyItems: ConversationRenderItem[],
+): boolean {
+  if (item.role !== "user" || isTurnProcessUserRenderItem(item) || hasExplicitTurnStartMetadata(item)) {
+    return false;
+  }
+  return currentTurnBodyItems.some(isAssistantMarkdownRenderItem);
+}
+
+// hasExplicitTurnStartMetadata returns whether a row already carries authoritative turn-start metadata.
+// hasExplicitTurnStartMetadata 返回单条记录是否已经携带权威的轮次起点 metadata。
+function hasExplicitTurnStartMetadata(item: ConversationRenderItem): boolean {
+  const value = metadataValue(item.userMessage?.metadata ?? item.sourceMessage?.metadata, ["starts_user_turn"]);
+  return value === true || value === false;
+}
+
+// isAssistantMarkdownRenderItem returns whether a row is the visible assistant answer shape.
+// isAssistantMarkdownRenderItem 返回单条记录是否为可见助手回答形态。
+function isAssistantMarkdownRenderItem(item: ConversationRenderItem): boolean {
+  return item.role === "assistant" && item.blocks.length === 1 && item.blocks[0]?.kind === "markdown";
 }
 
 // lastTimelineRenderItem returns the latest concrete transcript item already emitted.
@@ -287,12 +342,22 @@ function conversationTurnStartUserIds(renderItems: ConversationRenderItem[]): st
   const turnStartIds: string[] = [];
   let hasOpenTurn = false;
   let currentTurnHasStats = false;
+  let currentTurnBodyItems: ConversationRenderItem[] = [];
   for (const item of renderItems) {
     if (item.role === "user") {
-      if (!hasOpenTurn || currentTurnHasStats) {
+      if (isTurnProcessUserRenderItem(item)) {
+        continue;
+      }
+      if (
+        !hasOpenTurn
+        || currentTurnHasStats
+        || isTurnStartUserRenderItem(item)
+        || inferredTurnStartUserRenderItem(item, currentTurnBodyItems)
+      ) {
         turnStartIds.push(item.id);
         hasOpenTurn = true;
         currentTurnHasStats = false;
+        currentTurnBodyItems = [];
       }
       continue;
     }
@@ -301,7 +366,10 @@ function conversationTurnStartUserIds(renderItems: ConversationRenderItem[]): st
     }
     if (isTurnStatsRenderItem(item)) {
       currentTurnHasStats = true;
+      currentTurnBodyItems = [];
+      continue;
     }
+    currentTurnBodyItems.push(item);
   }
   return turnStartIds;
 }
@@ -331,7 +399,7 @@ function latestPlanArtifactRenderItems(items: ConversationRenderItem[]): Convers
 function popFinalAssistantItem(items: ConversationRenderItem[]): ConversationRenderItem | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.role === "assistant" && item.blocks.length === 1 && item.blocks[0]?.kind === "markdown") {
+    if (isAssistantMarkdownRenderItem(item)) {
       items.splice(index, 1);
       return item;
     }

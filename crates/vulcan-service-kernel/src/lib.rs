@@ -13381,6 +13381,7 @@ fn insert_webui_pending_prompt_into_internal_queue(
         entry_id,
         internal_entry_id,
         created_at,
+        PendingSessionPromptSource::UserInterrupt,
     )
     .map_err(|error| match error {
         PendingPromptQueueRouteError::MissingPanelEntry => {
@@ -13400,7 +13401,7 @@ fn insert_webui_pending_prompt_into_internal_queue(
             entry_id,
             project_id,
             workspace_path.to_string(),
-            PendingSessionPromptSource::UserFollowup,
+            PendingSessionPromptSource::UserInterrupt,
             &internal_entry.prompt,
         );
     }

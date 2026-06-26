@@ -641,6 +641,7 @@ pub fn pending_session_prompt_entry_from_panel_entry(
     panel_entry: &PendingPromptPanelEntry,
     internal_entry_id: String,
     created_at: String,
+    source: PendingSessionPromptSource,
 ) -> PendingSessionPromptEntry {
     PendingSessionPromptEntry {
         id: internal_entry_id,
@@ -650,7 +651,7 @@ pub fn pending_session_prompt_entry_from_panel_entry(
         attachments: panel_entry.attachments.clone(),
         model_reference: panel_entry.model_reference.clone(),
         runtime_options: panel_entry.runtime_options.clone(),
-        source: PendingSessionPromptSource::UserFollowup,
+        source,
         task_id: None,
         panel_entry_id: Some(panel_entry.id.clone()),
         created_at,
@@ -1002,6 +1003,8 @@ impl SessionTranscriptUiState {
 /// `internal_entry_id` 是分配给新内部条目的稳定标识。
 /// `created_at` is the creation timestamp for the internal entry.
 /// `created_at` 是内部条目的创建时间。
+/// `source` is the dispatch role assigned to the internal prompt entry.
+/// `source` 是分配给内部提示词条目的分发角色。
 ///
 /// # Returns
 /// 返回值
@@ -1012,6 +1015,7 @@ pub fn route_pending_prompt_panel_entry_into_internal_queue(
     panel_entry_id: &str,
     internal_entry_id: String,
     created_at: String,
+    source: PendingSessionPromptSource,
 ) -> Result<PendingPromptQueueRouteOutcome, PendingPromptQueueRouteError> {
     let Some(panel_index) = ui_state
         .pending_prompt_panel_queue
@@ -1029,8 +1033,12 @@ pub fn route_pending_prompt_panel_entry_into_internal_queue(
         return Err(PendingPromptQueueRouteError::InternalQueueFull);
     }
     let panel_entry = ui_state.pending_prompt_panel_queue[panel_index].clone();
-    let internal_entry =
-        pending_session_prompt_entry_from_panel_entry(&panel_entry, internal_entry_id, created_at);
+    let internal_entry = pending_session_prompt_entry_from_panel_entry(
+        &panel_entry,
+        internal_entry_id,
+        created_at,
+        source,
+    );
     ui_state.pending_prompt_queue.push(internal_entry.clone());
     if let Some(panel_entry) = ui_state.pending_prompt_panel_queue.get_mut(panel_index) {
         panel_entry.state = PendingPromptPanelEntryState::Inserted;
@@ -1074,6 +1082,7 @@ pub fn take_next_pending_prompt_entry(
         &panel_entry,
         fallback_internal_entry_id,
         fallback_created_at,
+        PendingSessionPromptSource::UserFollowup,
     ))
 }
 
@@ -1638,6 +1647,7 @@ mod tests {
             "a",
             String::from("internal-a"),
             String::from("1001"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route first guidance prompt");
         route_pending_prompt_panel_entry_into_internal_queue(
@@ -1645,6 +1655,7 @@ mod tests {
             "b",
             String::from("internal-b"),
             String::from("1002"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route second guidance prompt");
 
@@ -1655,6 +1666,8 @@ mod tests {
 
         assert_eq!(first.panel_entry_id.as_deref(), Some("a"));
         assert_eq!(second.panel_entry_id.as_deref(), Some("b"));
+        assert_eq!(first.source, PendingSessionPromptSource::UserInterrupt);
+        assert_eq!(second.source, PendingSessionPromptSource::UserInterrupt);
     }
 
     /// Verifies runtime guidance drains consecutive inserted panel-linked prompts without consuming passive internal work.
@@ -1671,6 +1684,7 @@ mod tests {
             "a",
             String::from("internal-a"),
             String::from("1001"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route first guidance prompt");
         route_pending_prompt_panel_entry_into_internal_queue(
@@ -1678,6 +1692,7 @@ mod tests {
             "b",
             String::from("internal-b"),
             String::from("1002"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route second guidance prompt");
         ui_state
@@ -1711,6 +1726,7 @@ mod tests {
             "a",
             String::from("internal-a"),
             String::from("1001"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route guidance prompt");
         let context = PendingPromptDispatchContext {
@@ -1748,6 +1764,7 @@ mod tests {
             "a",
             String::from("internal-a"),
             String::from("1001"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route guidance prompt");
         let context = PendingPromptDispatchContext {
@@ -1789,6 +1806,7 @@ mod tests {
             "a",
             String::from("internal-a"),
             String::from("1001"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route first guidance prompt");
         route_pending_prompt_panel_entry_into_internal_queue(
@@ -1796,6 +1814,7 @@ mod tests {
             "b",
             String::from("internal-b"),
             String::from("1002"),
+            PendingSessionPromptSource::UserInterrupt,
         )
         .expect("route second guidance prompt");
 

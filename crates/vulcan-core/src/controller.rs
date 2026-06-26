@@ -709,6 +709,32 @@ impl VulcanCoreController {
         prompt: &str,
         attachments: Vec<ConversationAttachment>,
     ) -> String {
+        let metadata = user_turn_record_metadata(prompt, &attachments);
+        self.append_user_turn_with_metadata(prompt, attachments, metadata)
+    }
+
+    /// Appends one user turn with caller-provided transcript metadata.
+    /// 使用调用方提供的转录元数据追加单个用户回合。
+    ///
+    /// # Parameters
+    /// 参数
+    /// `prompt` is the canonical user text appended to provider-visible history.
+    /// `prompt` 是追加到 Provider 可见历史中的规范用户文本。
+    /// `attachments` are structured attachments attached to the same user turn.
+    /// `attachments` 是附着到同一用户回合的结构化附件。
+    /// `metadata` is the exact visible transcript metadata stored on the user record.
+    /// `metadata` 是存储在用户可见转录记录上的精确元数据。
+    ///
+    /// # Returns
+    /// 返回值
+    /// The generated provider-visible message id.
+    /// 返回生成的 Provider 可见消息标识。
+    fn append_user_turn_with_metadata(
+        &mut self,
+        prompt: &str,
+        attachments: Vec<ConversationAttachment>,
+        metadata: Option<Value>,
+    ) -> String {
         let message_id = self.next_local_id("user-message");
         let record_id = self.next_local_id("user-record");
         let timestamp = current_unix_millis_text();
@@ -726,7 +752,7 @@ impl VulcanCoreController {
             visible: true,
             title: String::from("用户指令"),
             body: prompt.to_string(),
-            metadata: user_turn_record_metadata(prompt, &attachments),
+            metadata,
             created_at: timestamp,
         });
         message_id
@@ -771,7 +797,8 @@ impl VulcanCoreController {
         if trimmed_prompt.is_empty() && attachments.is_empty() {
             return None;
         }
-        Some(self.append_user_turn(trimmed_prompt, attachments))
+        let metadata = interjected_user_turn_record_metadata(trimmed_prompt, &attachments);
+        Some(self.append_user_turn_with_metadata(trimmed_prompt, attachments, metadata))
     }
 
     /// Returns whether the controller still needs to append one new user turn instead of reusing the host-preseeded latest user prompt.
@@ -963,6 +990,50 @@ fn user_turn_record_metadata(
         "attachments": serialized_attachments.clone(),
         "transcript_attachments": serialized_attachments,
     }))
+}
+
+/// Builds transcript metadata for one controller-owned interjected user turn.
+/// 为控制器持有的插队用户回合构建转录元数据。
+///
+/// # Parameters
+/// 参数
+/// `prompt` is the canonical interjected user text stored in the provider-visible message.
+/// `prompt` 是存入 Provider 可见消息中的规范插队用户文本。
+/// `attachments` are the structured attachments attached to the same interjected user turn.
+/// `attachments` 是附着到同一插队用户回合的结构化附件。
+///
+/// # Returns
+/// 返回值
+/// Metadata marking the row as a non-editable active-turn process input.
+/// 返回将该行标记为不可编辑的当前轮次过程输入的元数据。
+fn interjected_user_turn_record_metadata(
+    prompt: &str,
+    attachments: &[ConversationAttachment],
+) -> Option<Value> {
+    let serialized_attachments = (!attachments.is_empty())
+        .then(|| serde_json::to_value(attachments))
+        .transpose()
+        .ok()
+        .flatten();
+    let mut metadata = json!({
+        "canonical_text": prompt,
+        "canonical_user_text": prompt,
+        "source": "user_interrupt",
+        "starts_user_turn": false,
+        "turn_process": true,
+        "collapsed_by_default": true,
+        "editable": false,
+    });
+    if let Some(serialized_attachments) = serialized_attachments
+        && let Some(object) = metadata.as_object_mut()
+    {
+        object.insert(String::from("attachments"), serialized_attachments.clone());
+        object.insert(
+            String::from("transcript_attachments"),
+            serialized_attachments,
+        );
+    }
+    Some(metadata)
 }
 
 /// Derives the starting local identifier counter from the current snapshot sizes.
@@ -1819,6 +1890,11 @@ mod tests {
                     ..
                 }) if title == "用户指令"
                     && metadata.get("canonical_user_text").and_then(Value::as_str) == Some("不需要配图了")
+                    && metadata.get("source").and_then(Value::as_str) == Some("user_interrupt")
+                    && metadata.get("starts_user_turn").and_then(Value::as_bool) == Some(false)
+                    && metadata.get("turn_process").and_then(Value::as_bool) == Some(true)
+                    && metadata.get("collapsed_by_default").and_then(Value::as_bool) == Some(true)
+                    && metadata.get("editable").and_then(Value::as_bool) == Some(false)
                     && metadata.get("transcript_attachments").is_some()
             ));
 
@@ -1832,6 +1908,35 @@ mod tests {
                 }) if text == "不需要配图了" && attachments == &vec![guided_attachment]
             ));
         });
+    }
+
+    /// Verifies no-attachment interjected user turns still carry process metadata.
+    /// 验证无附件插队用户回合仍然携带过程元数据。
+    #[test]
+    fn interjected_user_turn_without_attachments_keeps_process_metadata() {
+        let mut controller =
+            VulcanCoreController::new(build_test_config(4), ConversationSnapshot::default());
+
+        let message_id = controller
+            .append_interjected_user_turn_with_attachments("停止当前循环", Vec::new())
+            .expect("interjected message id");
+
+        assert!(message_id.starts_with("user-message-"));
+        assert!(matches!(
+            controller.snapshot().records.last(),
+            Some(ConversationRecord {
+                title,
+                metadata: Some(metadata),
+                ..
+            }) if title == "用户指令"
+                && metadata.get("canonical_user_text").and_then(Value::as_str) == Some("停止当前循环")
+                && metadata.get("source").and_then(Value::as_str) == Some("user_interrupt")
+                && metadata.get("starts_user_turn").and_then(Value::as_bool) == Some(false)
+                && metadata.get("turn_process").and_then(Value::as_bool) == Some(true)
+                && metadata.get("collapsed_by_default").and_then(Value::as_bool) == Some(true)
+                && metadata.get("editable").and_then(Value::as_bool) == Some(false)
+                && metadata.get("transcript_attachments").is_none()
+        ));
     }
 
     /// Delays host guidance until every tool result in the current provider batch has been appended.

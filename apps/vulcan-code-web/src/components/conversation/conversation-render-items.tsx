@@ -37,6 +37,7 @@ import type {
   ConversationProcessRenderItem,
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
+import { metadataValue } from "@/components/conversation/conversation-metadata";
 import type { CommandSessionSummary, ComposerAttachmentSummary } from "@/types";
 import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
@@ -140,6 +141,7 @@ export function ConversationProcessGroup(props: {
   const collapsed = props.collapsedOverride ?? props.process.defaultCollapsed;
   const visibleGuidanceItems = props.process.guidanceItems.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
   const visibleProcessItems = props.process.items.filter((item) => !renderItemHiddenByThinkingDisplay(item, props.hiddenThinkingBlockIds));
+  const visibleCollapsedProcessUserItems = collapsed ? visibleProcessItems.filter(isTurnProcessUserRenderItem) : [];
   const streamingProcessItemId = props.process.running ? visibleProcessItems.at(-1)?.id ?? null : null;
   const liveDurationMs = props.process.running
     ? Math.max(0, props.nowMs - (props.process.startedAtMs ?? fallbackStartedAtMsRef.current))
@@ -175,6 +177,38 @@ export function ConversationProcessGroup(props: {
       </button>
       <div className="work-process-guidance">
         {visibleGuidanceItems.map((item) => (
+          <ConversationRenderItemView
+            autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
+            hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
+            expandedToolPresentationIds={props.expandedToolPresentationIds}
+            workspacePath={props.workspacePath}
+            commandSessions={props.commandSessions}
+            item={item}
+            itemStreaming={false}
+            key={item.id}
+            parentConversationId={props.parentConversationId}
+            sessionRunning={props.sessionRunning}
+            expandedUserPromptIds={props.expandedUserPromptIds}
+            onCopyText={props.onCopyText}
+            onEditUserPrompt={props.onEditUserPrompt}
+            onOpenDetail={props.onOpenDetail}
+            onOpenMedia={props.onOpenMedia}
+            onOpenSubagentPanel={props.onOpenSubagentPanel}
+            pendingPlanArtifact={props.pendingPlanArtifact}
+            onPlanArtifactExecute={props.onPlanArtifactExecute}
+            onPlanArtifactSuggest={props.onPlanArtifactSuggest}
+            onPlanArtifactCancel={props.onPlanArtifactCancel}
+            onToolPresentationExpandedChange={props.onToolPresentationExpandedChange}
+            onUserPromptExpandedChange={props.onUserPromptExpandedChange}
+            resolveComposerAttachmentMedia={props.resolveComposerAttachmentMedia}
+            resolveMediaSourceUrl={props.resolveMediaSourceUrl}
+            onLoadToolDetail={props.onLoadToolDetail}
+            onExtractGeneratedMediaAttachments={props.onExtractGeneratedMediaAttachments}
+            onTrace={props.onTrace}
+            forceEagerMarkdown
+          />
+        ))}
+        {visibleCollapsedProcessUserItems.map((item) => (
           <ConversationRenderItemView
             autoExpandThinkingBlockId={props.autoExpandThinkingBlockId}
             hiddenThinkingBlockIds={props.hiddenThinkingBlockIds}
@@ -250,6 +284,15 @@ export function ConversationProcessGroup(props: {
       </ConversationMeasuredCollapse>
     </section>
   );
+}
+
+// isTurnProcessUserRenderItem returns whether one user row should stay visible while its process is collapsed.
+// isTurnProcessUserRenderItem 返回单条用户行是否应在过程折叠时保持可见。
+function isTurnProcessUserRenderItem(item: ConversationRenderItem): boolean {
+  if (item.role !== "user") {
+    return false;
+  }
+  return metadataValue(item.userMessage?.metadata ?? item.sourceMessage?.metadata, ["turn_process"]) === true;
 }
 
 // ConversationRenderItemView renders one projected transcript item.
