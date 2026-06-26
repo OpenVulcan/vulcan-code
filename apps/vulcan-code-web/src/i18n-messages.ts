@@ -47,6 +47,34 @@ export type TranslationKey =
   | "conversation.action.editPromptFailed"
   | "conversation.action.cancel"
   | "conversation.action.saveAndReplay"
+  | "contextCompaction.title.running"
+  | "contextCompaction.title.completed"
+  | "contextCompaction.title.failed"
+  | "contextCompaction.generating"
+  | "contextCompaction.thinkingLabel"
+  | "contextCompaction.thinkingActive"
+  | "contextCompaction.emptyThinking"
+  | "contextCompaction.failed.trigger"
+  | "contextCompaction.failed.error"
+  | "contextCompaction.failed.note"
+  | "contextCompaction.trigger.manual"
+  | "contextCompaction.trigger.auto"
+  | "contextCompaction.progress.prepareInput"
+  | "contextCompaction.progress.buildRequest"
+  | "contextCompaction.progress.prepareRuntime"
+  | "contextCompaction.progress.runtimeReady"
+  | "contextCompaction.progress.prepared"
+  | "contextCompaction.progress.requestReady"
+  | "contextCompaction.progress.providerCheckpoint"
+  | "contextCompaction.progress.providerLoweringRepair"
+  | "contextCompaction.progress.wireRequestReady"
+  | "contextCompaction.progress.requestStarted"
+  | "contextCompaction.progress.thinkingDelta"
+  | "contextCompaction.progress.outputDelta"
+  | "contextCompaction.progress.prepareExecution"
+  | "contextCompaction.progress.executionReady"
+  | "contextCompaction.progress.bootstrapRuntime"
+  | "contextCompaction.progress.unknown"
   | "contextPanel.open"
   | "contextPanel.close"
   | "contextPanel.review"
@@ -266,6 +294,34 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.editPromptFailed": "编辑用户输入失败",
     "conversation.action.cancel": "取消",
     "conversation.action.saveAndReplay": "保存并重新执行",
+    "contextCompaction.title.running": "上下文正在压缩",
+    "contextCompaction.title.completed": "上下文已压缩",
+    "contextCompaction.title.failed": "上下文压缩失败",
+    "contextCompaction.generating": "正在生成上下文压缩总结。",
+    "contextCompaction.thinkingLabel": "思考过程",
+    "contextCompaction.thinkingActive": "正在思考",
+    "contextCompaction.emptyThinking": "暂无思考内容",
+    "contextCompaction.failed.trigger": "触发方式",
+    "contextCompaction.failed.error": "错误",
+    "contextCompaction.failed.note": "API 压缩未完成，未改写上下文锚点；后续请求仍沿用原上下文窗口。",
+    "contextCompaction.trigger.manual": "手动",
+    "contextCompaction.trigger.auto": "自动",
+    "contextCompaction.progress.prepareInput": "正在准备压缩输入。",
+    "contextCompaction.progress.buildRequest": "已准备压缩输入，正在构建模型总结请求。",
+    "contextCompaction.progress.prepareRuntime": "正在准备独立压缩运行时与工具快照。",
+    "contextCompaction.progress.runtimeReady": "压缩运行时已准备完成，正在启动 Provider 请求。",
+    "contextCompaction.progress.prepared": "模型请求准备完成。",
+    "contextCompaction.progress.requestReady": "模型请求快照已构建，正在转换为 Provider 载荷。",
+    "contextCompaction.progress.providerCheckpoint": "已记录 Provider 请求检查点。",
+    "contextCompaction.progress.providerLoweringRepair": "Provider 请求转换已执行兼容性修复。",
+    "contextCompaction.progress.wireRequestReady": "Provider 请求载荷已构建，准备发送。",
+    "contextCompaction.progress.requestStarted": "Provider 请求已发送，正在等待首个输出。",
+    "contextCompaction.progress.thinkingDelta": "模型已开始输出思考内容。",
+    "contextCompaction.progress.outputDelta": "模型已开始生成压缩总结。",
+    "contextCompaction.progress.prepareExecution": "正在准备压缩执行环境与工具快照。",
+    "contextCompaction.progress.executionReady": "压缩执行环境已准备完成，正在启动运行时。",
+    "contextCompaction.progress.bootstrapRuntime": "正在启动独立压缩运行时。",
+    "contextCompaction.progress.unknown": "正在执行上下文压缩。",
     "contextPanel.open": "打开右侧面板",
     "contextPanel.close": "关闭右侧面板",
     "contextPanel.review": "审核",
@@ -482,6 +538,34 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "conversation.action.editPromptFailed": "Edit user input failed",
     "conversation.action.cancel": "Cancel",
     "conversation.action.saveAndReplay": "Save and replay",
+    "contextCompaction.title.running": "Compacting context",
+    "contextCompaction.title.completed": "Context compacted",
+    "contextCompaction.title.failed": "Context compaction failed",
+    "contextCompaction.generating": "Generating the context compaction summary.",
+    "contextCompaction.thinkingLabel": "Thinking",
+    "contextCompaction.thinkingActive": "Thinking",
+    "contextCompaction.emptyThinking": "No thinking content yet",
+    "contextCompaction.failed.trigger": "Trigger",
+    "contextCompaction.failed.error": "Error",
+    "contextCompaction.failed.note": "API compaction did not complete, so the context anchor was not changed. Future requests will keep using the original context window.",
+    "contextCompaction.trigger.manual": "Manual",
+    "contextCompaction.trigger.auto": "Automatic",
+    "contextCompaction.progress.prepareInput": "Preparing compaction input.",
+    "contextCompaction.progress.buildRequest": "Compaction input is ready; building the model summary request.",
+    "contextCompaction.progress.prepareRuntime": "Preparing the isolated compaction runtime and tool snapshot.",
+    "contextCompaction.progress.runtimeReady": "The compaction runtime is ready; starting the provider request.",
+    "contextCompaction.progress.prepared": "The model request is prepared.",
+    "contextCompaction.progress.requestReady": "The model request snapshot is built; converting it to the provider payload.",
+    "contextCompaction.progress.providerCheckpoint": "Recorded the provider request checkpoint.",
+    "contextCompaction.progress.providerLoweringRepair": "Applied provider request compatibility repair.",
+    "contextCompaction.progress.wireRequestReady": "The provider request payload is ready to send.",
+    "contextCompaction.progress.requestStarted": "The provider request has been sent; waiting for the first output.",
+    "contextCompaction.progress.thinkingDelta": "The model has started streaming thinking content.",
+    "contextCompaction.progress.outputDelta": "The model has started generating the compaction summary.",
+    "contextCompaction.progress.prepareExecution": "Preparing the compaction execution environment and tool snapshot.",
+    "contextCompaction.progress.executionReady": "The compaction execution environment is ready; starting the runtime.",
+    "contextCompaction.progress.bootstrapRuntime": "Starting the isolated compaction runtime.",
+    "contextCompaction.progress.unknown": "Context compaction is running.",
     "contextPanel.open": "Open right panel",
     "contextPanel.close": "Close right panel",
     "contextPanel.review": "Review",

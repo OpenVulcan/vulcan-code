@@ -62,6 +62,12 @@ enum SegmentedWindowSourcePreference {
     RawTurnOnly,
 }
 
+/// Returns the display-preserving source preference for ordinary session hydration.
+/// 返回普通会话水合使用的保留展示行来源策略。
+fn default_session_hydration_window_source_preference() -> SegmentedWindowSourcePreference {
+    SegmentedWindowSourcePreference::RawTurnOnly
+}
+
 /// Lazily loads the recent transcript window and lightweight runtime state for one session.
 /// 为单个会话懒加载最近转录窗口与轻量运行时状态。
 pub async fn load_session_hydration_snapshot(
@@ -75,7 +81,7 @@ pub async fn load_session_hydration_snapshot(
         session_id,
         requested_limit,
         locator,
-        SegmentedWindowSourcePreference::SessionBoundaryFirst,
+        default_session_hydration_window_source_preference(),
     )
     .await
 }
@@ -93,7 +99,7 @@ pub async fn load_session_display_hydration_snapshot(
         session_id,
         requested_limit,
         locator,
-        SegmentedWindowSourcePreference::RawTurnOnly,
+        default_session_hydration_window_source_preference(),
     )
     .await
 }
@@ -128,7 +134,7 @@ pub async fn load_session_hydration_snapshot_for_project(
         session_id,
         requested_limit,
         locator,
-        SegmentedWindowSourcePreference::SessionBoundaryFirst,
+        default_session_hydration_window_source_preference(),
     )
     .await
 }
@@ -1179,6 +1185,16 @@ mod tests {
         assert_eq!(window.messages[1].body, "助手输出");
         assert_eq!(window.earliest_ordinal, Some(1));
         assert!(window.boundary_conversation_state.is_some());
+    }
+
+    /// Verifies ordinary startup hydration preserves display events instead of preferring boundary projection.
+    /// 验证普通启动水合会保留展示事件，而不是优先使用边界投影。
+    #[test]
+    fn default_session_hydration_prefers_raw_display_turns() {
+        assert_eq!(
+            default_session_hydration_window_source_preference(),
+            SegmentedWindowSourcePreference::RawTurnOnly
+        );
     }
 
     /// Verifies archived and restored session directories still hydrate display text from session boundary events.

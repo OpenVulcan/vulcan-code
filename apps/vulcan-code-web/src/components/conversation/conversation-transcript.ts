@@ -233,10 +233,11 @@ function mergeContextCompactionBlocks(blocks: ConversationBlock[], block: Conver
 // contextCompactionRoleOrder 返回合并压缩行的展示顺序。
 function contextCompactionRoleOrder(role?: string): number {
   if (role === "start") return 0;
-  if (role === "thinking") return 1;
-  if (role === "body") return 2;
-  if (role === "end") return 3;
-  return 4;
+  if (role === "progress") return 1;
+  if (role === "thinking") return 2;
+  if (role === "body") return 3;
+  if (role === "end") return 4;
+  return 5;
 }
 
 // findToolMergeItem resolves an existing tool execution row from instance-scoped merge keys.

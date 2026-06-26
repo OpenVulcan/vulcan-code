@@ -22,7 +22,10 @@ use crate::tooling::CommandSessionRuntime;
 use async_stream::stream;
 use futures_util::{StreamExt, stream::Stream};
 use std::sync::Arc;
-use vulcan_context::conversation_state_from_session_messages;
+use vulcan_context::{
+    SessionConversationState, conversation_state_from_session_messages,
+    conversation_state_to_compaction_source_messages,
+};
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
     CompactionResult, build_compaction_request_prompt, estimate_compaction_source_tokens,
@@ -49,9 +52,18 @@ pub struct PromptCompactionJobRequest {
     /// Planned compaction window whose source messages should be summarized.
     /// 其源消息需要被总结的已规划压缩窗口。
     pub plan: CompactionPlan,
+    /// Full runtime conversation cloned before any visible compaction status rows are inserted.
+    /// 插入任何可见压缩状态行之前克隆的完整运行时会话。
+    pub full_context_state: SessionConversationState,
     /// Optional target input budget used to decide clone-only pruning for window downgrades.
     /// 用于判断窗口降级时是否执行仅克隆剪枝的可选目标输入预算。
     pub input_budget: Option<CompactionInputBudget>,
+    /// Latest observed provider input tokens used before local estimates when deciding downgrade.
+    /// 判断是否降级时优先于本地估算使用的最近一次 Provider 实测输入 Token。
+    pub observed_input_tokens: Option<usize>,
+    /// Latest live budget input estimate used when provider feedback is unavailable.
+    /// Provider 反馈不可用时使用的最近一次实时预算输入估算。
+    pub estimated_input_tokens: Option<usize>,
     /// Provider configuration already adjusted to the intended provider/model snapshot.
     /// 已经调整到目标供应商/模型快照的 Provider 配置。
     pub provider_configuration: ProviderConfigurationFile,
@@ -103,9 +115,18 @@ pub struct PromptCompactionFoundationJobRequest {
     /// Planned compaction window whose source messages should be summarized.
     /// 其源消息需要被总结的已规划压缩窗口。
     pub plan: CompactionPlan,
+    /// Full runtime conversation cloned before any visible compaction status rows are inserted.
+    /// 插入任何可见压缩状态行之前克隆的完整运行时会话。
+    pub full_context_state: SessionConversationState,
     /// Optional target input budget used to decide clone-only pruning for window downgrades.
     /// 用于判断窗口降级时是否执行仅克隆剪枝的可选目标输入预算。
     pub input_budget: Option<CompactionInputBudget>,
+    /// Latest observed provider input tokens used before local estimates when deciding downgrade.
+    /// 判断是否降级时优先于本地估算使用的最近一次 Provider 实测输入 Token。
+    pub observed_input_tokens: Option<usize>,
+    /// Latest live budget input estimate used when provider feedback is unavailable.
+    /// Provider 反馈不可用时使用的最近一次实时预算输入估算。
+    pub estimated_input_tokens: Option<usize>,
     /// Provider configuration already adjusted to the intended provider/model snapshot.
     /// 已经调整到目标供应商/模型快照的 Provider 配置。
     pub provider_configuration: ProviderConfigurationFile,
@@ -144,10 +165,22 @@ pub struct PromptCompactionExecution {
     pub input_prune_report: Option<CompactionInputPruneReport>,
 }
 
+/// Lightweight progress update emitted before buffered model output is committed.
+/// 在缓冲的模型输出提交前发出的轻量进度更新。
+#[derive(Debug, Clone)]
+pub struct PromptCompactionProgressEvent {
+    /// Stable machine-readable progress stage.
+    /// 稳定的机器可读进度阶段。
+    pub stage: String,
+}
+
 /// Incremental event emitted while one prompt-compaction request is running.
 /// 单次提示词压缩请求运行期间发出的增量事件。
 #[derive(Debug, Clone)]
 pub enum PromptCompactionStreamEvent {
+    /// Progress update that is safe to show even if the current attempt later retries.
+    /// 即使当前尝试随后重试也可以安全展示的进度更新。
+    Progress(PromptCompactionProgressEvent),
     /// A normal execution stream event that should be mirrored into transcript UI or task logs.
     /// 应镜像到转录界面或任务日志中的普通执行流事件。
     Stream(ExecutionStreamEvent),
@@ -156,13 +189,61 @@ pub enum PromptCompactionStreamEvent {
     Finished(Result<PromptCompactionExecution, String>),
 }
 
+/// Builds a prompt-compaction progress stream item.
+/// 构建一条提示词压缩进度流事件。
+fn prompt_compaction_progress(stage: impl Into<String>) -> PromptCompactionStreamEvent {
+    PromptCompactionStreamEvent::Progress(PromptCompactionProgressEvent {
+        stage: stage.into(),
+    })
+}
+
+/// Projects safe runtime lifecycle events into compaction progress updates.
+/// 将安全的运行时生命周期事件投影为压缩进度更新。
+fn prompt_compaction_progress_for_runtime_event(
+    event: &ExecutionStreamEvent,
+) -> Option<PromptCompactionStreamEvent> {
+    match event {
+        ExecutionStreamEvent::Prepared(_) => Some(prompt_compaction_progress("prepared")),
+        ExecutionStreamEvent::RequestReady { .. } => {
+            Some(prompt_compaction_progress("request_ready"))
+        }
+        ExecutionStreamEvent::ProviderRequestCheckpoint { .. } => {
+            Some(prompt_compaction_progress("provider_checkpoint"))
+        }
+        ExecutionStreamEvent::ProviderLoweringRepair { .. } => {
+            Some(prompt_compaction_progress("provider_lowering_repair"))
+        }
+        ExecutionStreamEvent::WireRequestReady { .. } => {
+            Some(prompt_compaction_progress("wire_request_ready"))
+        }
+        ExecutionStreamEvent::RequestStarted { .. } => {
+            Some(prompt_compaction_progress("request_started"))
+        }
+        ExecutionStreamEvent::ThinkingDelta { .. } => {
+            Some(prompt_compaction_progress("thinking_delta"))
+        }
+        ExecutionStreamEvent::OutputDelta { .. } => {
+            Some(prompt_compaction_progress("output_delta"))
+        }
+        ExecutionStreamEvent::RuntimeEvent { .. }
+        | ExecutionStreamEvent::ConversationCheckpoint { .. }
+        | ExecutionStreamEvent::ThinkingCompleted { .. }
+        | ExecutionStreamEvent::Finished(_) => None,
+    }
+}
+
 /// Streams one prompt-based compaction job and exposes the model's thinking/output before applying the final compaction result.
 /// 以流式方式执行单次提示词压缩任务，并在应用最终压缩结果前暴露模型思考与输出。
 pub fn stream_prompt_compaction_job(
     request: PromptCompactionJobRequest,
 ) -> impl Stream<Item = PromptCompactionStreamEvent> + Send + 'static {
     stream! {
-        let mut prune_mode = initial_compaction_prune_mode(&request.plan, request.input_budget);
+        let mut prune_mode = initial_compaction_prune_mode(
+            &request.full_context_state,
+            request.input_budget,
+            request.observed_input_tokens,
+            request.estimated_input_tokens,
+        );
         let mut full_fidelity_attempts = 0usize;
         let mut pruned_attempts = 0usize;
         let mut provider_request_count = 0usize;
@@ -172,13 +253,19 @@ pub fn stream_prompt_compaction_job(
             } else {
                 pruned_attempts = pruned_attempts.saturating_add(1);
             }
+            yield prompt_compaction_progress("prepare_input");
             let prepared_source = prepared_compaction_source_for_attempt(
                 &request.plan,
+                &request.full_context_state,
                 request.input_budget,
                 prune_mode,
             );
-            let source_conversation_state =
-                conversation_state_from_session_messages(&prepared_source.source_messages);
+            yield prompt_compaction_progress("build_request");
+            let source_conversation_state = compaction_attempt_conversation_state(
+                &request.full_context_state,
+                &prepared_source.source_messages,
+                prune_mode,
+            );
             let launch_request = build_prompt_compaction_launch_request(
                 request.session_id,
                 &request.session_title,
@@ -188,6 +275,7 @@ pub fn stream_prompt_compaction_job(
                 source_conversation_state,
             );
 
+            yield prompt_compaction_progress("prepare_runtime");
             let launch = prepare_runtime_stream_launch(
                 &request.provider_configuration,
                 &request.agent_profile_catalog,
@@ -202,7 +290,10 @@ pub fn stream_prompt_compaction_job(
             .await;
 
             let launch = match launch {
-                Ok(launch) => launch,
+                Ok(launch) => {
+                    yield prompt_compaction_progress("runtime_ready");
+                    launch
+                }
                 Err(report) => {
                     let error = build_prompt_compaction_failure_message(
                         request.model_label.as_deref(),
@@ -262,6 +353,10 @@ pub fn stream_prompt_compaction_job(
                         }
                     }
                     event => {
+                        if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
+                        {
+                            yield progress;
+                        }
                         attempt_events.push(event);
                     }
                 }
@@ -297,7 +392,12 @@ pub fn stream_prompt_compaction_foundation_job(
     request: PromptCompactionFoundationJobRequest,
 ) -> impl Stream<Item = PromptCompactionStreamEvent> + Send + 'static {
     stream! {
-        let mut prune_mode = initial_compaction_prune_mode(&request.plan, request.input_budget);
+        let mut prune_mode = initial_compaction_prune_mode(
+            &request.full_context_state,
+            request.input_budget,
+            request.observed_input_tokens,
+            request.estimated_input_tokens,
+        );
         let mut full_fidelity_attempts = 0usize;
         let mut pruned_attempts = 0usize;
         let mut provider_request_count = 0usize;
@@ -307,13 +407,19 @@ pub fn stream_prompt_compaction_foundation_job(
             } else {
                 pruned_attempts = pruned_attempts.saturating_add(1);
             }
+            yield prompt_compaction_progress("prepare_input");
             let prepared_source = prepared_compaction_source_for_attempt(
                 &request.plan,
+                &request.full_context_state,
                 request.input_budget,
                 prune_mode,
             );
-            let source_conversation_state =
-                conversation_state_from_session_messages(&prepared_source.source_messages);
+            yield prompt_compaction_progress("build_request");
+            let source_conversation_state = compaction_attempt_conversation_state(
+                &request.full_context_state,
+                &prepared_source.source_messages,
+                prune_mode,
+            );
             let launch_request = build_prompt_compaction_launch_request(
                 request.session_id,
                 &request.session_title,
@@ -323,13 +429,17 @@ pub fn stream_prompt_compaction_foundation_job(
                 source_conversation_state,
             );
 
+            yield prompt_compaction_progress("prepare_execution");
             let prepared = match prepare_execution_with_tool_snapshot(
                 &request.foundation,
                 request.luaskills_runtime.clone(),
                 &request.provider_configuration,
                 &launch_request,
             ) {
-                Ok(prepared) => prepared,
+                Ok(prepared) => {
+                    yield prompt_compaction_progress("execution_ready");
+                    prepared
+                }
                 Err(error) => {
                     let error = format!("Prompt compaction preparation failed: {error}");
                     match next_compaction_retry_mode(
@@ -352,6 +462,7 @@ pub fn stream_prompt_compaction_foundation_job(
                     }
                 }
             };
+            yield prompt_compaction_progress("bootstrap_runtime");
             let bootstrap = bootstrap_runtime_stream(
                 &request.foundation,
                 request.luaskills_runtime.clone(),
@@ -361,7 +472,10 @@ pub fn stream_prompt_compaction_foundation_job(
             )
             .await;
             let bootstrap = match bootstrap {
-                Ok(bootstrap) => bootstrap,
+                Ok(bootstrap) => {
+                    yield prompt_compaction_progress("runtime_ready");
+                    bootstrap
+                }
                 Err(error) => {
                     let error = format!("Prompt compaction bootstrap failed: {error}");
                     match next_compaction_retry_mode(
@@ -419,6 +533,10 @@ pub fn stream_prompt_compaction_foundation_job(
                         }
                     }
                     event => {
+                        if let Some(progress) = prompt_compaction_progress_for_runtime_event(&event)
+                        {
+                            yield progress;
+                        }
                         attempt_events.push(event);
                     }
                 }
@@ -463,14 +581,22 @@ pub fn stream_prompt_compaction_foundation_job(
 /// Returns a pruning mode that either keeps full input or requires clone-only window-downgrade pruning.
 /// 返回保留完整输入或要求仅克隆窗口降级剪枝的剪枝模式。
 fn initial_compaction_prune_mode(
-    plan: &CompactionPlan,
+    full_context_state: &SessionConversationState,
     input_budget: Option<CompactionInputBudget>,
+    observed_input_tokens: Option<usize>,
+    estimated_input_tokens: Option<usize>,
 ) -> CompactionInputPruneMode {
     let Some(input_budget) = input_budget else {
         return CompactionInputPruneMode::None;
     };
-    let source_token_estimate = estimate_compaction_source_tokens(&plan.source_messages);
-    if source_token_estimate > input_budget.target_input_budget_tokens {
+    let input_tokens = observed_input_tokens
+        .or(estimated_input_tokens)
+        .unwrap_or_else(|| {
+            estimate_compaction_source_tokens(&conversation_state_to_compaction_source_messages(
+                full_context_state,
+            ))
+        });
+    if input_tokens > input_budget.target_input_budget_tokens {
         CompactionInputPruneMode::RequiredForWindowDowngrade
     } else {
         CompactionInputPruneMode::None
@@ -495,9 +621,13 @@ fn initial_compaction_prune_mode(
 /// 返回拥有所有权的已准备源消息及其剪枝报告，不会修改计划。
 fn prepared_compaction_source_for_attempt(
     plan: &CompactionPlan,
+    full_context_state: &SessionConversationState,
     input_budget: Option<CompactionInputBudget>,
     prune_mode: CompactionInputPruneMode,
 ) -> vulcan_context_compaction::PreparedCompactionSource {
+    if prune_mode == CompactionInputPruneMode::None {
+        return unpruned_full_context_compaction_source(full_context_state, input_budget);
+    }
     let Some(input_budget) = input_budget else {
         let source_token_estimate = estimate_compaction_source_tokens(&plan.source_messages);
         return vulcan_context_compaction::PreparedCompactionSource {
@@ -522,6 +652,48 @@ fn prepared_compaction_source_for_attempt(
         plan.policy,
         prune_mode,
     )
+}
+
+/// Builds the full-fidelity source used by the fast compaction path.
+/// 构建快速压缩路径使用的完整保真来源。
+fn unpruned_full_context_compaction_source(
+    full_context_state: &SessionConversationState,
+    input_budget: Option<CompactionInputBudget>,
+) -> vulcan_context_compaction::PreparedCompactionSource {
+    let source_messages = conversation_state_to_compaction_source_messages(full_context_state);
+    let source_token_estimate = estimate_compaction_source_tokens(&source_messages);
+    vulcan_context_compaction::PreparedCompactionSource {
+        source_messages,
+        prune_report: CompactionInputPruneReport {
+            mode: CompactionInputPruneMode::None,
+            target_input_budget_tokens: input_budget
+                .map(|budget| budget.target_input_budget_tokens)
+                .unwrap_or_default(),
+            safety_reserve_tokens: input_budget
+                .map(|budget| budget.safety_reserve_tokens)
+                .unwrap_or_default(),
+            original_token_estimate: source_token_estimate,
+            pruned_token_estimate: source_token_estimate,
+            pruned_tool_output_count: 0,
+            preserved_tool_output_count: 0,
+            dropped_source_message_count: 0,
+            truncated_source_message_count: 0,
+            still_exceeds_budget: false,
+        },
+    }
+}
+
+/// Returns the conversation state for one compaction attempt.
+/// 返回单次压缩尝试使用的会话状态。
+fn compaction_attempt_conversation_state(
+    full_context_state: &SessionConversationState,
+    source_messages: &[vulcan_context::SessionMessageEntry],
+    prune_mode: CompactionInputPruneMode,
+) -> SessionConversationState {
+    if prune_mode == CompactionInputPruneMode::None {
+        return full_context_state.clone();
+    }
+    conversation_state_from_session_messages(source_messages)
 }
 
 /// Selects the next retry mode after a prompt-compaction attempt fails.
@@ -744,6 +916,92 @@ mod tests {
             target_input_budget_tokens: 100,
             safety_reserve_tokens: 30_000,
         }
+    }
+
+    /// Builds one transcript message entry for compaction helper tests.
+    /// 为压缩辅助函数测试构建一条转录消息。
+    fn test_message(id: &str, body: &str) -> vulcan_context::SessionMessageEntry {
+        vulcan_context::SessionMessageEntry::new(vulcan_context::SessionMessageKind::User, "", body)
+            .with_runtime_metadata(id, "t1")
+    }
+
+    /// Builds one minimal compaction plan from selected source messages.
+    /// 从选定源消息构建一个最小压缩计划。
+    fn test_plan(source_messages: Vec<vulcan_context::SessionMessageEntry>) -> CompactionPlan {
+        CompactionPlan {
+            source_messages,
+            source_until_message_id: None,
+            source_until_turn_index: None,
+            retained_tail_start_turn_index: None,
+            compaction_id: String::from("compaction-test"),
+            created_at: String::from("t1"),
+            policy: Default::default(),
+        }
+    }
+
+    /// Verifies the fast path uses the full cloned runtime conversation, not the planned source window.
+    /// 验证快速路径使用完整克隆运行时会话，而不是计划源窗口。
+    #[test]
+    fn full_fidelity_attempt_uses_full_context_state() {
+        let old_message = test_message("old-user", "old context");
+        let tail_message = test_message("tail-user", "recent tail");
+        let full_context_state =
+            conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()]);
+        let plan = test_plan(vec![old_message]);
+        let prepared = prepared_compaction_source_for_attempt(
+            &plan,
+            &full_context_state,
+            Some(test_budget()),
+            CompactionInputPruneMode::None,
+        );
+        let attempt_state = compaction_attempt_conversation_state(
+            &full_context_state,
+            &prepared.source_messages,
+            CompactionInputPruneMode::None,
+        );
+
+        assert_eq!(
+            attempt_state.messages.len(),
+            full_context_state.messages.len()
+        );
+        assert_eq!(prepared.source_messages.len(), 2);
+        assert_eq!(prepared.prune_report.mode, CompactionInputPruneMode::None);
+    }
+
+    /// Verifies observed provider usage decides initial downgrade before local estimates.
+    /// 验证 Provider 实测用量优先于本地估算决定初始降级。
+    #[test]
+    fn observed_usage_drives_initial_downgrade_decision() {
+        let full_context_state =
+            conversation_state_from_session_messages(&[test_message("small-user", "small")]);
+
+        assert_eq!(
+            initial_compaction_prune_mode(
+                &full_context_state,
+                Some(test_budget()),
+                Some(101),
+                Some(1),
+            ),
+            CompactionInputPruneMode::RequiredForWindowDowngrade
+        );
+    }
+
+    /// Verifies live budget estimates are used when provider usage is unavailable.
+    /// 验证 Provider 用量不可用时使用实时预算估算。
+    #[test]
+    fn budget_estimate_drives_initial_downgrade_without_observed_usage() {
+        let full_context_state =
+            conversation_state_from_session_messages(&[test_message("small-user", "small")]);
+
+        assert_eq!(
+            initial_compaction_prune_mode(
+                &full_context_state,
+                Some(test_budget()),
+                None,
+                Some(101),
+            ),
+            CompactionInputPruneMode::RequiredForWindowDowngrade
+        );
     }
 
     /// Verifies explicit context-overflow failures skip full-fidelity retries.

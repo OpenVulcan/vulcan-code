@@ -61,11 +61,11 @@ pub use persistence::{
     permanently_delete_archived_project, permanently_delete_archived_session,
     persist_collapsed_task_project_ids, persist_new_project, persist_project_order_update,
     persist_project_pinned_and_order_update, persist_single_session_addon_state_update,
-    persist_single_session_runtime_state_update, persist_single_session_update,
-    persist_workspace_snapshot, record_persisted_session_fork_source_marker,
-    remove_project_after_archiving_sessions, rename_project, rename_single_session_metadata,
-    restore_project_with_sessions, restore_single_session,
-    rollback_persisted_session_before_user_prompt, toggle_project_pinned,
+    persist_single_session_runtime_state_update, persist_single_session_transcript_messages,
+    persist_single_session_update, persist_workspace_snapshot,
+    record_persisted_session_fork_source_marker, remove_project_after_archiving_sessions,
+    rename_project, rename_single_session_metadata, restore_project_with_sessions,
+    restore_single_session, rollback_persisted_session_before_user_prompt, toggle_project_pinned,
 };
 pub use session_load::{
     load_session_display_hydration_snapshot, load_session_display_hydration_snapshot_for_project,

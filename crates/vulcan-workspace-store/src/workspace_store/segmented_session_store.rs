@@ -2183,6 +2183,9 @@ pub(super) fn read_segmented_session_turn_window(
     }
     let metadata = read_session_metadata(session_dir)?;
     let cursor = before_seq.unwrap_or(u64::MAX);
+    // Rollback replacement lines define the durable transcript boundary for display reads.
+    // 回滚替换行定义展示读取时持久转录的有效边界。
+    let rollback_floor_seq = metadata.latest_rollback_seq;
     let mut window = Vec::new();
     let mut seen_turn_indexes = BTreeSet::new();
     for segment in metadata.segments.iter().rev() {
@@ -2192,6 +2195,9 @@ pub(super) fn read_segmented_session_turn_window(
         let lines = read_segment_event_lines(&session_dir.join(&segment.file))?;
         for line in lines.into_iter().rev() {
             if line.seq >= cursor {
+                continue;
+            }
+            if rollback_floor_seq.is_some_and(|seq| line.seq <= seq) {
                 continue;
             }
             let Some(turn_index) = segmented_line_turn_index(&line) else {
@@ -5548,7 +5554,7 @@ mod tests {
                 .filter(|line| line.payload.get("message").is_some())
                 .map(|line| line.payload["message_id"].as_str().unwrap_or_default())
                 .collect::<Vec<_>>(),
-            vec!["m-user-1", "m-assistant-1", "m-user-1"]
+            vec!["m-user-1"]
         );
         let latest_messages =
             segmented_lines_to_session_messages(&latest_window.lines).expect("project messages");
@@ -5557,7 +5563,7 @@ mod tests {
                 .iter()
                 .map(|message| message.body.as_str())
                 .collect::<Vec<_>>(),
-            vec!["first prompt", "first answer", "edited prompt"]
+            vec!["edited prompt"]
         );
         assert!(!latest_window.has_more_history);
         let latest_event_window =
@@ -5574,14 +5580,6 @@ mod tests {
         let previous_window = read_segmented_session_turn_window(&session_dir, earliest_seq, 1)
             .expect("read previous window");
         assert!(previous_window.lines.is_empty());
-        let previous_event_window =
-            read_segmented_session_event_window(&session_dir, earliest_seq, 10)
-                .expect("read previous event window");
-        assert!(
-            previous_event_window
-                .iter()
-                .all(|line| line.payload.get("message").is_none())
-        );
 
         let replay =
             replay_segmented_session_context(&session_dir).expect("replay segmented context");
@@ -5860,14 +5858,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             latest_message_ids,
-            vec![
-                "m-user-1",
-                "m-assistant-1",
-                "m-assistant-removed",
-                "m-user-1",
-                "m-assistant-1",
-                "m-assistant-removed",
-            ]
+            vec!["m-user-1", "m-assistant-1", "m-assistant-removed"]
         );
     }
 

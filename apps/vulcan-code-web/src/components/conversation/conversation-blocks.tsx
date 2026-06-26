@@ -11,7 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useI18n } from "@/i18n";
+import { useI18n, type TranslationKey } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { GeneratedMediaAttachment } from "@/components/media/generated-media";
 import {
@@ -19,6 +19,7 @@ import {
   useConversationMeasuredExpansion,
 } from "@/components/conversation/conversation-measured-collapse";
 import { MarkdownMessage } from "@/components/conversation/conversation-markdown";
+import { metadataString } from "@/components/conversation/conversation-metadata";
 import { formatWorkProcessDuration } from "@/components/conversation/conversation-timeline";
 
 // ConversationDisplayBlock contains the transcript fields needed by extracted display blocks.
@@ -51,6 +52,12 @@ export interface ConversationDisplayBlock {
   // Optional context-compaction state.
   // 可选上下文压缩状态。
   compactionState?: string;
+  // Optional context-compaction trigger label.
+  // 可选上下文压缩触发来源标签。
+  compactionTrigger?: string;
+  // Optional context-compaction budget note.
+  // 可选上下文压缩预算摘要。
+  compactionBudgetNote?: string;
   // Optional raw transcript metadata used by specialized display rows.
   // 专用展示行使用的可选原始转录元数据。
   rawMetadata?: unknown;
@@ -66,7 +73,11 @@ export function ContextCompactionBlock(props: {
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
+  const { t } = useI18n();
   const startBlock = props.blocks.find((block) => block.compactionRole === "start") ?? props.blocks[0];
+  // progressBlocks contains diagnostic progress lines emitted before final summary text is available.
+  // progressBlocks 包含最终总结文本可用前发出的诊断进度行。
+  const progressBlocks = props.blocks.filter((block) => block.compactionRole === "progress");
   const thinkingBlocks = props.blocks.filter((block) => block.compactionRole === "thinking" && block.kind === "thinking");
   const bodyBlock = props.blocks.find((block) => block.compactionRole === "body");
   const endBlock = props.blocks.find((block) => block.compactionRole === "end");
@@ -89,9 +100,13 @@ export function ContextCompactionBlock(props: {
     }
   }, [running, setExpanded, startBlock?.compactionSectionId, startBlock?.id]);
 
-  const title = running ? (startBlock?.title ?? "上下文正在压缩") : (endBlock?.title ?? "上下文已压缩");
-  const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? endBlock?.body?.trim() ?? "" : "");
-  const hasExpandedContent = thinkingBlocks.length > 0 || Boolean(detailBody);
+  const title = displayStatus === "failed"
+    ? t("contextCompaction.title.failed")
+    : running
+      ? t("contextCompaction.title.running")
+      : t("contextCompaction.title.completed");
+  const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
+  const hasExpandedContent = progressBlocks.length > 0 || thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
     <section className={cn("context-compaction-block", displayStatus, expanded && "expanded")}>
@@ -111,12 +126,22 @@ export function ContextCompactionBlock(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
         <div className="context-compaction-body">
+          {progressBlocks.map((block) => {
+            // content keeps progress rendering stable when the record is still being appended.
+            // content 在记录仍持续追加时保持进度渲染稳定。
+            const content = localizedContextCompactionProgress(block, t);
+            return content ? (
+              <div className="context-compaction-progress" key={block.id}>
+                <MarkdownMessage content={content} eager onOpenMedia={props.onOpenMedia} />
+              </div>
+            ) : null;
+          })}
           {thinkingBlocks.map((block) => {
-            const content = block.body.trim() || block.summary || "暂无思考内容";
+            const content = block.body.trim() || block.summary || t("contextCompaction.emptyThinking");
             return (
               <div className="context-compaction-thinking thinking-block" key={block.id}>
                 <div className="thinking-body">
-                  <MarkdownMessage content={`**Thinking:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
+                  <MarkdownMessage content={`**${t("contextCompaction.thinkingLabel")}:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
                 </div>
               </div>
             );
@@ -124,13 +149,97 @@ export function ContextCompactionBlock(props: {
           {detailBody ? (
             <MarkdownMessage content={detailBody} onOpenMedia={props.onOpenMedia} />
           ) : !hasExpandedContent ? (
-            <span>正在生成上下文压缩总结。</span>
+            <span>{t("contextCompaction.generating")}</span>
           ) : null}
           <div className="context-compaction-end-line" aria-hidden="true" />
         </div>
       </ConversationMeasuredCollapse>
     </section>
   );
+}
+
+// localizedContextCompactionProgress maps host progress stages to frontend locale text.
+// localizedContextCompactionProgress 将宿主进度阶段映射为前端当前语言文本。
+function localizedContextCompactionProgress(
+  block: ConversationDisplayBlock,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  const stage = metadataString(block.rawMetadata, ["context_compaction_progress_stage"]) ?? block.body.trim();
+  const key = contextCompactionProgressKey(stage);
+  return `- ${t(key)}`;
+}
+
+// contextCompactionProgressKey returns the localization key for one compaction progress stage.
+// contextCompactionProgressKey 返回单个压缩进度阶段对应的本地化键。
+function contextCompactionProgressKey(stage: string): TranslationKey {
+  switch (stage) {
+    case "prepare_input":
+      return "contextCompaction.progress.prepareInput";
+    case "build_request":
+      return "contextCompaction.progress.buildRequest";
+    case "prepare_runtime":
+      return "contextCompaction.progress.prepareRuntime";
+    case "runtime_ready":
+      return "contextCompaction.progress.runtimeReady";
+    case "prepared":
+      return "contextCompaction.progress.prepared";
+    case "request_ready":
+      return "contextCompaction.progress.requestReady";
+    case "provider_checkpoint":
+      return "contextCompaction.progress.providerCheckpoint";
+    case "provider_lowering_repair":
+      return "contextCompaction.progress.providerLoweringRepair";
+    case "wire_request_ready":
+      return "contextCompaction.progress.wireRequestReady";
+    case "request_started":
+      return "contextCompaction.progress.requestStarted";
+    case "thinking_delta":
+      return "contextCompaction.progress.thinkingDelta";
+    case "output_delta":
+      return "contextCompaction.progress.outputDelta";
+    case "prepare_execution":
+      return "contextCompaction.progress.prepareExecution";
+    case "execution_ready":
+      return "contextCompaction.progress.executionReady";
+    case "bootstrap_runtime":
+      return "contextCompaction.progress.bootstrapRuntime";
+    default:
+      return "contextCompaction.progress.unknown";
+  }
+}
+
+// contextCompactionFailedDetail builds localized failure copy from structured metadata.
+// contextCompactionFailedDetail 根据结构化元数据构建本地化失败说明。
+function contextCompactionFailedDetail(
+  block: ConversationDisplayBlock | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  if (!block) {
+    return t("contextCompaction.failed.note");
+  }
+  const trigger = localizedContextCompactionTrigger(
+    metadataString(block.rawMetadata, ["context_compaction_trigger"]) ?? block.compactionTrigger,
+    t,
+  );
+  const error = metadataString(block.rawMetadata, ["context_compaction_error"]) ?? block.body.trim();
+  const lines = [`**${t("contextCompaction.failed.trigger")}:** ${trigger}`];
+  if (error) {
+    lines.push(`**${t("contextCompaction.failed.error")}:** ${error}`);
+  }
+  lines.push(t("contextCompaction.failed.note"));
+  return lines.join("\n");
+}
+
+// localizedContextCompactionTrigger returns the frontend-localized trigger label.
+// localizedContextCompactionTrigger 返回前端本地化后的触发方式标签。
+function localizedContextCompactionTrigger(
+  trigger: string | undefined,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  if (trigger === "auto") {
+    return t("contextCompaction.trigger.auto");
+  }
+  return t("contextCompaction.trigger.manual");
 }
 
 // ThinkingBlock renders thinking content directly inside the transcript.
@@ -152,7 +261,8 @@ export function ThinkingBlock(props: {
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
-  const content = props.block.body.trim() || props.block.summary || "暂无思考内容";
+  const { t } = useI18n();
+  const content = props.block.body.trim() || props.block.summary || t("contextCompaction.emptyThinking");
   const shouldAutoExpand = props.streaming || props.autoExpanded;
   const collapseId = `thinking:${props.block.id}`;
   const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, shouldAutoExpand);
@@ -173,7 +283,7 @@ export function ThinkingBlock(props: {
     wasStreamingRef.current = props.streaming;
   }, [props.streaming, setExpanded, shouldAutoExpand]);
 
-  const durationLabel = props.streaming ? "正在思考" : thinkingDurationLabel(props.block);
+  const durationLabel = props.streaming ? t("contextCompaction.thinkingActive") : thinkingDurationLabel(props.block);
 
   return (
     <section className={cn("thinking-block", expanded && "expanded")}>
@@ -187,7 +297,7 @@ export function ThinkingBlock(props: {
       >
         <span className="thinking-toggle-label">
           <BrainCircuit size={15} />
-          <strong>思考过程</strong>
+          <strong>{t("contextCompaction.thinkingLabel")}</strong>
           {durationLabel ? <span>{durationLabel}</span> : null}
         </span>
         {expanded ? (

@@ -6,15 +6,16 @@
 use super::segmented_session_store::{
     SegmentPolicy, SegmentedSessionCreateRequest, SegmentedSessionForkRequest,
     SegmentedSessionForkSource, append_segmented_session_message_suffix,
-    append_segmented_session_message_tail, archive_segmented_session_by_created_date,
-    archive_segmented_session_by_id, create_segmented_session_in_location,
-    delete_segmented_session_by_created_date, delete_segmented_session_by_id,
-    find_segmented_session_directory, find_segmented_session_directory_by_id,
-    fork_segmented_session_directory, patch_segmented_session_metadata,
-    rebuild_runtime_log_from_conversation_state, replay_segmented_session_context,
-    restore_segmented_session_by_created_date, segmented_session_directory,
-    state_document_from_runtime_state, sync_runtime_log_from_conversation_state,
-    truncate_segmented_session_before_message, write_segmented_session_fork_source, write_state,
+    append_segmented_session_message_tail, append_segmented_session_message_update,
+    archive_segmented_session_by_created_date, archive_segmented_session_by_id,
+    create_segmented_session_in_location, delete_segmented_session_by_created_date,
+    delete_segmented_session_by_id, find_segmented_session_directory,
+    find_segmented_session_directory_by_id, fork_segmented_session_directory,
+    patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
+    replay_segmented_session_context, restore_segmented_session_by_created_date,
+    segmented_session_directory, state_document_from_runtime_state,
+    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
+    write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -22,6 +23,7 @@ use crate::conversation_protocol::{
     SessionConversationPayload, conversation_state_to_session_messages,
 };
 use vulcan_context::SessionMessageKind;
+use vulcan_context::merge_session_messages_with_conversation_state_records;
 use vulcan_core::types::ConversationAttachment;
 
 /// Persists the current visible workspace snapshot back into the controller-backed SQLite database.
@@ -160,19 +162,13 @@ async fn persist_segmented_snapshot_session_group(
         ) {
             continue;
         }
-        let rebuilt_messages;
         let stored_messages = session_messages.get(&session.id).unwrap_or(&empty_messages);
-        let effective_messages = if let Some(runtime_state) = runtime_state {
-            rebuilt_messages =
-                conversation_state_to_session_messages(&runtime_state.conversation_state);
-            if rebuilt_messages.is_empty() && !stored_messages.is_empty() {
-                stored_messages.as_slice()
-            } else {
-                rebuilt_messages.as_slice()
-            }
-        } else {
-            stored_messages.as_slice()
-        };
+        let rebuilt_messages = runtime_state.map(|runtime_state| {
+            effective_session_messages_for_persistence(stored_messages, runtime_state)
+        });
+        let effective_messages = rebuilt_messages
+            .as_deref()
+            .unwrap_or_else(|| stored_messages.as_slice());
         let Some((project_id, _sort_order)) = session_owner_map.get(&session.id) else {
             warnings.push(format!(
                 "跳过缺少明确项目归属的分段会话同步：session={}",
@@ -231,18 +227,9 @@ pub async fn persist_single_session_update(
 
     let sessions = std::slice::from_ref(session);
     let archived_sessions = Vec::<SessionSummary>::new();
-    let rebuilt_messages;
-    let effective_messages = if let Some(runtime_state) = runtime_state {
-        rebuilt_messages =
-            conversation_state_to_session_messages(&runtime_state.conversation_state);
-        if rebuilt_messages.is_empty() && !messages.is_empty() {
-            messages
-        } else {
-            rebuilt_messages.as_slice()
-        }
-    } else {
-        messages
-    };
+    let rebuilt_messages = runtime_state
+        .map(|runtime_state| effective_session_messages_for_persistence(messages, runtime_state));
+    let effective_messages = rebuilt_messages.as_deref().unwrap_or(messages);
     let _ = (sessions, archived_sessions, compactions);
     upsert_session_index_row(
         &controller,
@@ -304,6 +291,63 @@ pub async fn append_single_session_transcript_suffix(
     };
     append_segmented_session_message_suffix(&session_dir, messages)?;
     Ok(())
+}
+
+/// Persists the complete visible transcript window without touching runtime state.
+/// 持久化完整可见转录窗口，且不触碰运行态。
+///
+/// # Parameters
+/// # 参数
+/// `controller` is the workspace data-plane controller handle.
+/// `controller` 是工作区数据平面控制器句柄。
+/// `session_id` identifies the segmented session receiving the transcript update.
+/// `session_id` 标识接收转录更新的分段会话。
+/// `messages` is the complete visible transcript window retained by the WebUI.
+/// `messages` 是 WebUI 当前保留的完整可见转录窗口。
+///
+/// # Returns
+/// # 返回值
+/// Returns `Ok(())` after the transcript tail or replacement boundary is persisted.
+/// 写入转录尾部或替换边界后返回 `Ok(())`。
+pub async fn persist_single_session_transcript_messages(
+    controller: ControllerRuntimeHandle,
+    session_id: SessionId,
+    messages: &[SessionMessageEntry],
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let Some(session_dir) =
+        find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
+    else {
+        return Ok(());
+    };
+    append_segmented_session_message_update(&session_dir, messages)?;
+    Ok(())
+}
+
+/// Builds the visible transcript slice persisted together with runtime checkpoints.
+/// 构建与运行态检查点一起持久化的可见转录切片。
+///
+/// # Parameters
+/// # 参数
+/// `stored_messages` is the WebUI display window already retained by the caller.
+/// `stored_messages` 是调用方已保留的 WebUI 显示窗口。
+/// `runtime_state` is the latest canonical runtime state whose display records should be upserted.
+/// `runtime_state` 是需要增量合并显示记录的最新规范运行态。
+///
+/// # Returns
+/// # 返回值
+/// Returns display messages that preserve existing visible history while refreshing runtime-owned rows.
+/// 返回既保留既有可见历史又刷新运行态显示行的消息列表。
+fn effective_session_messages_for_persistence(
+    stored_messages: &[SessionMessageEntry],
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Vec<SessionMessageEntry> {
+    merge_session_messages_with_conversation_state_records(
+        stored_messages,
+        &runtime_state.conversation_state,
+    )
 }
 
 /// Persists one session addon document without rewriting transcript or runtime-state documents.
@@ -1796,6 +1840,68 @@ mod tests {
             &session_messages,
             &hydrated_session_ids
         ));
+    }
+
+    /// Verifies runtime-state persistence preserves caller-retained display rows.
+    /// 验证运行态持久化会保留调用方持有的显示行。
+    #[test]
+    fn effective_session_messages_for_persistence_preserves_display_history() {
+        // user_entry represents a visible prompt already present in the WebUI transcript.
+        // user_entry 表示 WebUI 转录中已经存在的可见提示词。
+        let mut user_entry =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "循环调用工具");
+        user_entry.id = String::from("user-1");
+        // tool_entry represents process detail that compacted runtime state no longer contains.
+        // tool_entry 表示压缩后运行态已不再包含的过程细节。
+        let mut tool_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "", "已执行 sleep 5");
+        tool_entry.id = String::from("tool-1");
+        tool_entry.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        // interrupt_entry represents interjected user content that must remain visible after reload.
+        // interrupt_entry 表示重载后必须继续可见的插队用户内容。
+        let mut interrupt_entry =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "不用继续了");
+        interrupt_entry.id = String::from("interrupt-1");
+        interrupt_entry.metadata = Some(serde_json::json!({
+            "source": "user_interrupt",
+            "starts_user_turn": false,
+            "turn_process": true,
+            "editable": false,
+        }));
+        // runtime_state simulates a compacted provider context containing only the summary.
+        // runtime_state 模拟只包含摘要的压缩后 Provider 上下文。
+        let mut runtime_state = SessionRuntimeStateEntry::default();
+        runtime_state.conversation_state =
+            conversation_state_from_session_messages(&[SessionMessageEntry::new(
+                SessionMessageKind::Assistant,
+                "上下文摘要",
+                "已总结旧过程",
+            )]);
+        // stored_messages is the full visible transcript retained by the service layer.
+        // stored_messages 是 service 层保留的完整可见转录。
+        let stored_messages = vec![
+            user_entry.clone(),
+            tool_entry.clone(),
+            interrupt_entry.clone(),
+        ];
+
+        // messages should keep visible history and append or refresh runtime-owned summary rows.
+        // messages 应保留可见历史，并追加或刷新运行态拥有的摘要行。
+        let messages =
+            effective_session_messages_for_persistence(stored_messages.as_slice(), &runtime_state);
+
+        assert!(messages.iter().any(|message| message.id == user_entry.id));
+        assert!(messages.iter().any(|message| message.id == tool_entry.id));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.id == interrupt_entry.id)
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.body.contains("已总结旧过程"))
+        );
     }
 
     /// Verifies bulk persistence rejects explicit session project ids when project membership is missing.

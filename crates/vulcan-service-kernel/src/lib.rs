@@ -37,8 +37,8 @@ use vulcan_agent_runtime::{
         },
         events::{RuntimeEvent, RuntimeEventKind},
         prompt_compaction::{
-            PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionStreamEvent,
-            stream_prompt_compaction_job,
+            PromptCompactionExecution, PromptCompactionJobRequest, PromptCompactionProgressEvent,
+            PromptCompactionStreamEvent, stream_prompt_compaction_job,
         },
         prompt_composer_runtime::{
             invalidate_runtime_prompt_luaskill_catalog_cache,
@@ -899,6 +899,9 @@ pub struct ServiceBridgeState {
     /// Latest background persistence version keyed by session id.
     /// 按会话标识索引的最新后台持久化版本。
     session_persist_versions: BTreeMap<SessionId, u64>,
+    /// Latest live transcript persistence version keyed by session id.
+    /// 按会话标识索引的最新运行中转录持久化版本。
+    session_transcript_persist_versions: BTreeMap<SessionId, u64>,
     /// Latest addon persistence version keyed by session id and addon namespace.
     /// 按会话标识与附属状态命名空间索引的最新附属状态持久化版本。
     session_addon_persist_versions: BTreeMap<(SessionId, SessionAddonNamespace), u64>,
@@ -2073,6 +2076,7 @@ pub fn create_service_bridge_state(
         active_stream_tasks: BTreeMap::new(),
         session_runtime_kernels: BTreeMap::new(),
         session_persist_versions: BTreeMap::new(),
+        session_transcript_persist_versions: BTreeMap::new(),
         session_addon_persist_versions: BTreeMap::new(),
     }))
 }
@@ -5348,24 +5352,19 @@ async fn service_compact_selected_conversation_context(
         .get(&selected_session_id)
         .cloned()
         .unwrap_or_default();
-    let full_session_messages = conversation_state_to_compaction_source_messages(
+    let plan = webui_context_compaction_plan_from_conversation_state(
+        selected_session_id,
         &runtime_state_snapshot.conversation_state,
-    );
-    if full_session_messages.is_empty() {
-        return Err(String::from("当前会话暂时没有可压缩的历史上下文。"));
-    }
-    let Some(plan) = plan_context_compaction(CompactionPlanInput {
-        session_label: &selected_session_id.to_string(),
-        messages: &full_session_messages,
-        all_messages: &full_session_messages,
-        context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
-        source_until_message_id: None,
-        policy: Default::default(),
-    }) else {
-        return Err(String::from("当前会话暂时没有可压缩的历史上下文。"));
-    };
+        runtime_state_snapshot.context_start_message_id.as_deref(),
+        "当前会话暂时没有可压缩的历史上下文。",
+    )?;
 
-    let budget_note = context_compaction_budget_note_from_state(&state, selected_session_id);
+    let budget_note = context_compaction_budget_note_from_state(
+        &state,
+        selected_session_id,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+    );
     let previous_phase = workspace_snapshot
         .session_run_phases
         .get(&selected_session_id)
@@ -5425,6 +5424,7 @@ async fn service_compact_selected_conversation_context(
         budget_note,
         MANUAL_CONTEXT_COMPACTION_TRIGGER.to_string(),
         plan,
+        runtime_state_snapshot.conversation_state.clone(),
     )?;
     Ok(workbench)
 }
@@ -14276,6 +14276,66 @@ fn spawn_workspace_session_runtime_state_persist_task(
     });
 }
 
+/// Spawns a background write for the current visible transcript without touching runtime state.
+/// 为当前可见转录启动后台写入，且不触碰运行态。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the live transcript persistence version table.
+/// `state` 持有运行中转录持久化版本表。
+/// `controller_runtime` provides workspace persistence.
+/// `controller_runtime` 提供工作区持久化能力。
+/// `workspace_snapshot` is the current workspace snapshot containing display rows.
+/// `workspace_snapshot` 是包含显示行的当前工作区快照。
+/// `session_id` selects the session transcript to persist.
+/// `session_id` 选择要持久化的会话转录。
+/// `reason` is an optional diagnostic label for logs.
+/// `reason` 是用于日志的可选诊断标签。
+fn spawn_workspace_session_transcript_persist_task(
+    state: SharedServiceBridgeState,
+    controller_runtime: ControllerRuntimeHandle,
+    workspace_snapshot: WorkspaceSnapshot,
+    session_id: SessionId,
+    reason: Option<String>,
+) {
+    if !workspace_snapshot_contains_regular_session(&workspace_snapshot, session_id) {
+        return;
+    }
+    let display_messages = display_session_messages_from_workspace(&workspace_snapshot, session_id)
+        .unwrap_or_default();
+    if display_messages.is_empty() {
+        return;
+    }
+    let persist_version = match next_webui_session_transcript_persist_version(&state, session_id) {
+        Ok(version) => version,
+        Err(error) => {
+            eprintln!("[webui-service] live transcript persist version failed: {error}");
+            return;
+        }
+    };
+    spawn_service_task(async move {
+        let persist_lock = webui_workspace_persist_lock();
+        let _persist_guard = persist_lock.lock().await;
+        if !webui_session_transcript_persist_version_is_current(&state, session_id, persist_version)
+        {
+            return;
+        }
+        if let Err(error) =
+            vulcan_workspace_store::workspace_store::persist_single_session_transcript_messages(
+                controller_runtime,
+                session_id,
+                &display_messages,
+            )
+            .await
+        {
+            let reason_label = reason.as_deref().unwrap_or("live_transcript");
+            eprintln!(
+                "[webui-service] background live transcript persist failed ({reason_label}): {error}"
+            );
+        }
+    });
+}
+
 /// Persists completed context-compaction display markers and runtime state without rewriting transcript history.
 /// 持久化已完成上下文压缩显示标记与运行态，同时不重写转录历史。
 fn spawn_context_compaction_persist_task(
@@ -14302,13 +14362,13 @@ fn spawn_context_compaction_persist_task(
         if !webui_session_persist_version_is_current(&state, session_id, persist_version) {
             return;
         }
-        let display_messages = context_compaction_section_display_messages(
+        let display_messages = context_compaction_complete_display_messages(
             &workspace_snapshot,
             session_id,
             &section_id,
         );
         if let Err(error) =
-            vulcan_workspace_store::workspace_store::append_single_session_transcript_suffix(
+            vulcan_workspace_store::workspace_store::persist_single_session_transcript_messages(
                 controller_runtime.clone(),
                 session_id,
                 &display_messages,
@@ -14317,7 +14377,7 @@ fn spawn_context_compaction_persist_task(
         {
             let reason_label = reason.as_deref().unwrap_or("context_compaction");
             eprintln!(
-                "[webui-service] background context-compaction transcript suffix persist failed ({reason_label}): {error}"
+                "[webui-service] background context-compaction transcript persist failed ({reason_label}): {error}"
             );
         }
         let Some(runtime_state) = workspace_snapshot
@@ -14347,6 +14407,28 @@ fn spawn_context_compaction_persist_task(
             );
         }
     });
+}
+
+/// Returns the complete visible display window that must survive runtime compaction.
+/// 返回必须在运行态压缩后仍可保留的完整可见显示窗口。
+fn context_compaction_complete_display_messages(
+    workspace_snapshot: &WorkspaceSnapshot,
+    session_id: SessionId,
+    section_id: &str,
+) -> Vec<SessionMessageEntry> {
+    workspace_snapshot
+        .session_messages
+        .get(&session_id)
+        .or_else(|| {
+            workspace_snapshot
+                .archived_session_messages
+                .get(&session_id)
+        })
+        .cloned()
+        .filter(|messages| !messages.is_empty())
+        .unwrap_or_else(|| {
+            context_compaction_section_display_messages(workspace_snapshot, session_id, section_id)
+        })
 }
 
 /// Returns the visible display rows that belong to one context-compaction section.
@@ -14559,6 +14641,68 @@ fn invalidate_webui_session_persist_version(
 ) -> Result<(), String> {
     let _ = next_webui_session_persist_version(state, session_id)?;
     Ok(())
+}
+
+/// Allocates the next live transcript persistence version for one WebUI session.
+/// 为一个 WebUI 会话分配下一次运行中转录持久化版本。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the per-session live transcript persistence version table.
+/// `state` 持有按会话归属的运行中转录持久化版本表。
+/// `session_id` selects the session whose transcript is being persisted.
+/// `session_id` 选择正在持久化转录的会话。
+///
+/// # Returns
+/// # 返回值
+/// The version assigned to the new live transcript persistence task.
+/// 返回分配给新运行中转录持久化任务的版本。
+fn next_webui_session_transcript_persist_version(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<u64, String> {
+    let mut guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let next_version = guard
+        .session_transcript_persist_versions
+        .get(&session_id)
+        .copied()
+        .unwrap_or_default()
+        .saturating_add(1);
+    guard
+        .session_transcript_persist_versions
+        .insert(session_id, next_version);
+    Ok(next_version)
+}
+
+/// Returns whether a live transcript persistence task is still current for its session.
+/// 判断某个运行中转录持久化任务是否仍是其会话的最新任务。
+///
+/// # Parameters
+/// # 参数
+/// `state` owns the per-session live transcript persistence version table.
+/// `state` 持有按会话归属的运行中转录持久化版本表。
+/// `session_id` selects the session being persisted.
+/// `session_id` 选择正在持久化的会话。
+/// `persist_version` is the task-local transcript persistence version.
+/// `persist_version` 是任务本地转录持久化版本。
+///
+/// # Returns
+/// # 返回值
+/// `true` when the transcript task may write to disk.
+/// 当该转录任务可以写入磁盘时返回 `true`。
+fn webui_session_transcript_persist_version_is_current(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    persist_version: u64,
+) -> bool {
+    state.lock().ok().and_then(|guard| {
+        guard
+            .session_transcript_persist_versions
+            .get(&session_id)
+            .copied()
+    }) == Some(persist_version)
 }
 
 /// Allocates the next background addon persistence version for one session namespace.
@@ -15596,6 +15740,16 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
         ),
     );
 
+    let full_context_state = request.conversation_state.clone();
+    let context_start_message_id = current_workspace_snapshot_from_shared_state(state)
+        .ok()
+        .flatten()
+        .and_then(|workspace| {
+            workspace
+                .session_runtime_state
+                .get(&session_id)
+                .and_then(|runtime_state| runtime_state.context_start_message_id.clone())
+        });
     let mut previous_phase = SessionRunPhase::Preparing;
     let mut status_message_id = String::new();
     with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
@@ -15644,7 +15798,12 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
         return Err(error);
     }
 
-    let plan = match webui_auto_context_compaction_plan_from_state(state, session_id) {
+    let plan = match webui_context_compaction_plan_from_conversation_state(
+        session_id,
+        &full_context_state,
+        context_start_message_id.as_deref(),
+        "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
+    ) {
         Ok(plan) => plan,
         Err(error) => {
             persist_failed_webui_context_compaction(
@@ -15661,24 +15820,29 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
             return Err(error);
         }
     };
-    let job_request =
-        match build_webui_context_compaction_job_request(state, agent_runtime, session_id, plan) {
-            Ok(request) => request,
-            Err(error) => {
-                persist_failed_webui_context_compaction(
-                    app,
-                    state,
-                    controller_runtime,
-                    session_id,
-                    previous_phase,
-                    &status_message_id,
-                    &budget_note,
-                    AUTO_CONTEXT_COMPACTION_TRIGGER,
-                    &error,
-                )?;
-                return Err(error);
-            }
-        };
+    let job_request = match build_webui_context_compaction_job_request(
+        state,
+        agent_runtime,
+        session_id,
+        plan,
+        full_context_state,
+    ) {
+        Ok(request) => request,
+        Err(error) => {
+            persist_failed_webui_context_compaction(
+                app,
+                state,
+                controller_runtime,
+                session_id,
+                previous_phase,
+                &status_message_id,
+                &budget_note,
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+                &error,
+            )?;
+            return Err(error);
+        }
+    };
     let terminal_result = stream_webui_context_compaction_execution(
         app,
         state,
@@ -15747,40 +15911,28 @@ fn webui_auto_context_compaction_failure_count(
         .unwrap_or_default()
 }
 
-/// Builds the exact auto-compaction plan from the retained canonical conversation state.
-/// 从保留的规范会话状态构建精确的自动压缩计划。
-fn webui_auto_context_compaction_plan_from_state(
-    state: &SharedServiceBridgeState,
+/// Builds a compaction plan from a specific pre-status conversation snapshot.
+/// 从指定的状态节点插入前会话快照构建压缩计划。
+fn webui_context_compaction_plan_from_conversation_state(
     session_id: SessionId,
+    conversation_state: &SessionConversationState,
+    context_start_message_id: Option<&str>,
+    empty_error: &str,
 ) -> Result<CompactionPlan, String> {
-    let workspace_snapshot =
-        current_workspace_snapshot_from_shared_state(state)?.ok_or_else(|| {
-            String::from("service is still starting; workspace snapshot is not ready")
-        })?;
-    let runtime_state_snapshot = workspace_snapshot
-        .session_runtime_state
-        .get(&session_id)
-        .cloned()
-        .unwrap_or_default();
-    let full_session_messages = conversation_state_to_compaction_source_messages(
-        &runtime_state_snapshot.conversation_state,
-    );
+    let full_session_messages =
+        conversation_state_to_compaction_source_messages(conversation_state);
     if full_session_messages.is_empty() {
-        return Err(String::from(
-            "自动上下文压缩未找到可压缩的历史上下文，已停止本次请求以避免预算溢出。",
-        ));
+        return Err(empty_error.to_string());
     }
     plan_context_compaction(CompactionPlanInput {
         session_label: &session_id.to_string(),
         messages: &full_session_messages,
         all_messages: &full_session_messages,
-        context_start_message_id: runtime_state_snapshot.context_start_message_id.as_deref(),
+        context_start_message_id,
         source_until_message_id: None,
         policy: Default::default(),
     })
-    .ok_or_else(|| {
-        String::from("自动上下文压缩没有找到满足策略的可压缩区间，已停止本次请求以避免预算溢出。")
-    })
+    .ok_or_else(|| empty_error.to_string())
 }
 
 /// Rebuilds an execution request after a successful compaction commit.
@@ -19129,6 +19281,7 @@ fn append_stream_delta_record(
         return Ok(());
     }
     let conversation_id = session_id.to_string();
+    let mut transcript_persist_snapshot: Option<WorkspaceSnapshot> = None;
     let event = {
         let mut guard = state
             .lock()
@@ -19185,6 +19338,9 @@ fn append_stream_delta_record(
             } else {
                 messages.push(projected_entry.clone());
             }
+            if is_new_message {
+                transcript_persist_snapshot = Some(workspace.clone());
+            }
         }
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -19232,6 +19388,17 @@ fn append_stream_delta_record(
         "workbench_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
+    if let Some(workspace_snapshot) = transcript_persist_snapshot
+        && let Ok(controller_runtime) = controller_runtime_from_state(state)
+    {
+        spawn_workspace_session_transcript_persist_task(
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot,
+            session_id,
+            Some(String::from("stream_delta")),
+        );
+    }
     Ok(())
 }
 
@@ -19316,6 +19483,7 @@ fn build_webui_context_compaction_job_request(
     agent_runtime: &AgentRuntimeBridge,
     session_id: SessionId,
     plan: CompactionPlan,
+    full_context_state: SessionConversationState,
 ) -> Result<PromptCompactionJobRequest, String> {
     let mcp_runtime_access = agent_runtime
         .mcp_runtime
@@ -19339,12 +19507,25 @@ fn build_webui_context_compaction_job_request(
             .clone()
         })
         .unwrap_or_else(|| agent_runtime.ai_tool_configuration.clone());
+    let budget_snapshot = context_compaction_budget_snapshot_from_state(
+        state,
+        session_id,
+        &agent_runtime.provider_configuration,
+        &agent_runtime.ai_tool_configuration,
+    );
     Ok(PromptCompactionJobRequest {
         session_id,
         session_title: current_session_title_from_state(state, session_id),
         workspace_path,
         plan,
-        input_budget: context_compaction_input_budget_from_state(state, session_id),
+        full_context_state,
+        input_budget: context_compaction_input_budget_from_snapshot(budget_snapshot.as_ref()),
+        observed_input_tokens: context_compaction_observed_input_tokens_from_snapshot(
+            budget_snapshot.as_ref(),
+        ),
+        estimated_input_tokens: context_compaction_estimated_input_tokens_from_snapshot(
+            budget_snapshot.as_ref(),
+        ),
         provider_configuration: agent_runtime.provider_configuration.clone(),
         model_label: agent_runtime.provider_configuration.model.clone(),
         reasoning_effort: active_reasoning_selection_effort(&agent_runtime.provider_configuration)
@@ -19399,6 +19580,21 @@ async fn stream_webui_context_compaction_execution(
     let mut stream = Box::pin(stream_prompt_compaction_job(request));
     while let Some(event) = stream.next().await {
         match event {
+            PromptCompactionStreamEvent::Progress(progress) => {
+                if let Err(error) = append_webui_context_compaction_progress(
+                    app,
+                    state,
+                    session_id,
+                    section_id,
+                    budget_note,
+                    trigger,
+                    &progress,
+                ) {
+                    eprintln!(
+                        "[webui-service] context compaction progress projection failed: {error}"
+                    );
+                }
+            }
             PromptCompactionStreamEvent::Stream(event) => {
                 if let Err(error) = apply_webui_context_compaction_stream_event(
                     app,
@@ -19447,12 +19643,14 @@ fn spawn_webui_context_compaction_task(
     budget_note: String,
     trigger: String,
     plan: CompactionPlan,
+    full_context_state: SessionConversationState,
 ) -> Result<(), String> {
     let request = build_webui_context_compaction_job_request(
         &state,
         &agent_runtime,
         session_id,
         plan.clone(),
+        full_context_state,
     );
     let task_state = state.clone();
     let task_app = app.clone();
@@ -19615,46 +19813,114 @@ fn current_session_title_from_state(
 fn context_compaction_budget_note_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
 ) -> String {
-    state
-        .lock()
-        .ok()
-        .and_then(|guard| guard.live_context_budgets.get(&session_id).cloned())
-        .map(|budget| budget.summary_note())
-        .unwrap_or_else(|| String::from("当前未提供预算快照"))
+    context_compaction_budget_snapshot_from_state(
+        state,
+        session_id,
+        provider_configuration,
+        ai_tool_configuration,
+    )
+    .map(|budget| budget.summary_note())
+    .unwrap_or_else(|| String::from("当前未提供预算快照"))
 }
 
-/// Builds the target compaction input budget from the latest live context budget snapshot.
-/// 根据最新实时上下文预算快照构建目标压缩输入预算。
+/// Returns the best available budget snapshot for compaction decisions.
+/// 返回用于压缩决策的最佳可用预算快照。
 ///
 /// # Parameters
 /// # 参数
-/// `state` is the shared service bridge state containing live budget snapshots.
-/// `state` 是包含实时预算快照的共享服务桥接状态。
-/// `session_id` identifies the session whose live context budget should be read.
-/// `session_id` 标识需要读取实时上下文预算的会话。
+/// `state` is the shared service bridge state containing live and persisted runtime snapshots.
+/// `state` 是包含实时与持久运行态快照的共享服务桥接状态。
+/// `session_id` identifies the session whose context budget should be read.
+/// `session_id` 标识需要读取上下文预算的会话。
+/// `provider_configuration` resolves model catalog limits when only historical usage exists.
+/// `provider_configuration` 在只有历史用量时解析模型目录限制。
+/// `ai_tool_configuration` resolves effective model capability overrides.
+/// `ai_tool_configuration` 解析生效模型能力覆盖。
 ///
 /// # Returns
 /// # 返回值
-/// Returns a target input budget when the live snapshot has a context limit; otherwise returns `None`.
-/// 当实时快照包含上下文上限时返回目标输入预算，否则返回 `None`。
-fn context_compaction_input_budget_from_state(
+/// Returns the live snapshot enriched with the latest historical provider usage when available.
+/// 返回实时快照，并在可用时合并最近一次历史 Provider 用量。
+fn context_compaction_budget_snapshot_from_state(
     state: &SharedServiceBridgeState,
     session_id: SessionId,
+    provider_configuration: &ProviderConfigurationFile,
+    ai_tool_configuration: &PersistedAiToolConfiguration,
+) -> Option<ContextBudgetSnapshot> {
+    let (live_budget, runtime_state) = state
+        .lock()
+        .ok()
+        .map(|guard| {
+            (
+                guard.live_context_budgets.get(&session_id).cloned(),
+                guard
+                    .workspace_snapshot
+                    .as_ref()
+                    .and_then(|workspace| workspace.session_runtime_state.get(&session_id))
+                    .cloned(),
+            )
+        })
+        .unwrap_or_default();
+    let historical_budget = runtime_state.as_ref().and_then(|runtime_state| {
+        historical_context_budget_snapshot_from_runtime_state(
+            runtime_state,
+            provider_configuration,
+            ai_tool_configuration,
+        )
+    });
+    live_budget
+        .map(|mut live_budget| {
+            if live_budget.observed_usage.is_none() {
+                if let Some(usage) = historical_budget
+                    .as_ref()
+                    .and_then(|budget| budget.observed_usage.as_ref())
+                {
+                    apply_observed_usage_to_context_budget(&mut live_budget, usage);
+                }
+            }
+            live_budget
+        })
+        .or(historical_budget)
+}
+
+/// Builds the target compaction input budget from one context budget snapshot.
+/// 根据上下文预算快照构建目标压缩输入预算。
+fn context_compaction_input_budget_from_snapshot(
+    budget: Option<&ContextBudgetSnapshot>,
 ) -> Option<CompactionInputBudget> {
     let safety_reserve_tokens = CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS
         .max(MIN_CONTEXT_COMPACTION_INPUT_SAFETY_RESERVE_TOKENS);
-    state
-        .lock()
-        .ok()
-        .and_then(|guard| guard.live_context_budgets.get(&session_id).cloned())
-        .and_then(|budget| budget.context_limit)
+    budget
+        .and_then(|budget| budget.context_limit.or(budget.effective_input_limit))
         .map(|context_limit| CompactionInputBudget {
             target_input_budget_tokens: context_limit
                 .saturating_sub(safety_reserve_tokens)
                 .max(1usize),
             safety_reserve_tokens,
         })
+}
+
+/// Returns the latest provider-observed input tokens for compaction downgrade decisions.
+/// 返回用于压缩降级判断的最近一次 Provider 实测输入 Token。
+fn context_compaction_observed_input_tokens_from_snapshot(
+    budget: Option<&ContextBudgetSnapshot>,
+) -> Option<usize> {
+    budget.and_then(|budget| {
+        budget.observed_usage.as_ref().and_then(|usage| {
+            vulcan_context::observed_input_tokens_from_usage(Some(usage)).or(usage.total_tokens)
+        })
+    })
+}
+
+/// Returns the latest budget-estimated input tokens when provider feedback is unavailable.
+/// 当 Provider 反馈不可用时返回最近一次预算估算输入 Token。
+fn context_compaction_estimated_input_tokens_from_snapshot(
+    budget: Option<&ContextBudgetSnapshot>,
+) -> Option<usize> {
+    budget.map(|budget| budget.estimated_input_tokens)
 }
 
 /// Immutable baseline captured before a compaction draft is built.
@@ -19770,7 +20036,7 @@ fn append_webui_context_compaction_status_message_to_workspace(
         kind: SessionMessageKind::Assistant,
         record_kind: SessionMessageRecordKind::CompactionStatus,
         visible: true,
-        title: String::from("上下文正在压缩"),
+        title: String::from("context_compaction.running"),
         body: String::new(),
         metadata: Some(json!({
             "context_compaction_status": true,
@@ -19830,7 +20096,7 @@ fn append_webui_context_compaction_output_delta(
                 kind: SessionMessageKind::Assistant,
                 record_kind: SessionMessageRecordKind::CompactionStatus,
                 visible: true,
-                title: String::from("上下文总结"),
+                title: String::from("context_compaction.summary"),
                 body: String::new(),
                 metadata: Some(json!({
                     "context_compaction_status": true,
@@ -19845,6 +20111,113 @@ fn append_webui_context_compaction_output_delta(
             append_webui_session_message_entry_to_state(runtime_state, session_id, entry)
         });
         append_record_body_delta(&mut runtime_state.conversation_state, message_id, delta);
+        runtime_state.updated_at = now;
+        let runtime_state_snapshot = runtime_state.clone();
+        merge_runtime_state_records_into_display_messages(
+            workspace,
+            session_id,
+            &runtime_state_snapshot,
+        );
+        workspace
+            .session_run_phases
+            .insert(session_id, SessionRunPhase::Requesting);
+        sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
+    })
+    .map(|_| ())
+}
+
+/// Appends one visible progress line to the running context-compaction status section.
+/// 向正在运行的上下文压缩状态分段追加一条可见进度行。
+fn append_webui_context_compaction_progress(
+    app: &ServiceEventEmitter,
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+    section_id: &str,
+    budget_note: &str,
+    trigger: &str,
+    progress: &PromptCompactionProgressEvent,
+) -> Result<(), String> {
+    let progress_stage = progress.stage.trim();
+    if progress_stage.is_empty() {
+        return Ok(());
+    }
+    let line = progress_stage.to_string();
+    with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
+        let now = current_unix_millis_text();
+        let runtime_state = workspace
+            .session_runtime_state
+            .entry(session_id)
+            .or_insert_with(|| SessionRuntimeStateEntry {
+                updated_at: now.clone(),
+                ..SessionRuntimeStateEntry::default()
+            });
+        let existing_progress =
+            runtime_state
+                .conversation_state
+                .records
+                .iter_mut()
+                .find(|record| {
+                    record
+                        .metadata
+                        .as_ref()
+                        .and_then(|metadata| metadata.get("context_compaction_section_id"))
+                        .and_then(Value::as_str)
+                        == Some(section_id)
+                        && record
+                            .metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.get("context_compaction_role"))
+                            .and_then(Value::as_str)
+                            == Some("progress")
+                });
+        match existing_progress {
+            Some(record) => {
+                if !record.body.lines().any(|existing| existing == line) {
+                    if !record.body.trim().is_empty() {
+                        record.body.push('\n');
+                    }
+                    record.body.push_str(&line);
+                }
+                if let Some(metadata) = record.metadata.as_mut().and_then(Value::as_object_mut) {
+                    metadata.insert(
+                        String::from("context_compaction_progress_stage"),
+                        json!(progress.stage),
+                    );
+                    metadata.insert(String::from("context_compaction_state"), json!("running"));
+                }
+            }
+            None => {
+                let entry = SessionMessageEntry {
+                    id: String::new(),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::CompactionStatus,
+                    visible: true,
+                    title: String::from("context_compaction.progress"),
+                    body: line,
+                    metadata: Some(json!({
+                        "context_compaction_status": true,
+                        "context_compaction_section_id": section_id,
+                        "context_compaction_role": "progress",
+                        "context_compaction_state": "running",
+                        "context_compaction_trigger": trigger,
+                        "context_compaction_budget_note": budget_note,
+                        "context_compaction_progress_stage": progress.stage,
+                    })),
+                    created_at: String::new(),
+                };
+                let message_id =
+                    append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+                set_webui_context_compaction_section_metadata_in_state(
+                    runtime_state,
+                    &message_id,
+                    section_id,
+                    "progress",
+                    "running",
+                    Some(budget_note),
+                    trigger,
+                );
+            }
+        }
         runtime_state.updated_at = now;
         let runtime_state_snapshot = runtime_state.clone();
         merge_runtime_state_records_into_display_messages(
@@ -20300,7 +20673,7 @@ fn ensure_webui_context_compaction_summary_body_for_state(
         kind: SessionMessageKind::Assistant,
         record_kind: SessionMessageRecordKind::CompactionStatus,
         visible: true,
-        title: String::from("上下文总结"),
+        title: String::from("context_compaction.summary"),
         body: summary_body.to_string(),
         metadata: Some(json!({
             "context_compaction_status": true,
@@ -20325,16 +20698,13 @@ fn append_webui_context_compaction_failed_message_to_state(
     trigger: &str,
     error: &str,
 ) {
-    let body = format!(
-        "触发方式：{trigger}\n预算：{budget_note}\n错误：{error}\n说明：API 压缩未完成，未改写上下文锚点；后续请求仍沿用原上下文窗口。"
-    );
     let entry = SessionMessageEntry {
         id: String::new(),
         kind: SessionMessageKind::Assistant,
         record_kind: SessionMessageRecordKind::CompactionStatus,
         visible: true,
-        title: String::from("上下文压缩失败"),
-        body,
+        title: String::from("context_compaction.failed"),
+        body: String::new(),
         metadata: Some(json!({
             "context_compaction_status": true,
             "context_compaction_section_id": section_id,
@@ -20342,6 +20712,7 @@ fn append_webui_context_compaction_failed_message_to_state(
             "context_compaction_state": "failed",
             "context_compaction_trigger": trigger,
             "context_compaction_budget_note": budget_note,
+            "context_compaction_error": error,
         })),
         created_at: String::new(),
     };
@@ -20407,7 +20778,7 @@ fn append_webui_context_compaction_end_message_to_state(
         kind: SessionMessageKind::Assistant,
         record_kind: SessionMessageRecordKind::CompactionStatus,
         visible: true,
-        title: String::from("上下文已压缩"),
+        title: String::from("context_compaction.completed"),
         body: context_compaction_end_message_body(input_prune_report),
         metadata: Some(metadata),
         created_at: String::new(),
@@ -20428,27 +20799,9 @@ fn append_webui_context_compaction_end_message_to_state(
 /// Returns an empty body when no pruning happened, or a concise visible note when pruning happened.
 /// 未发生剪枝时返回空正文，发生剪枝时返回简洁的可见说明。
 fn context_compaction_end_message_body(
-    input_prune_report: Option<&CompactionInputPruneReport>,
+    _input_prune_report: Option<&CompactionInputPruneReport>,
 ) -> String {
-    let Some(report) = input_prune_report else {
-        return String::new();
-    };
-    format!(
-        "运行层输入已按目标窗口进行仅克隆修剪；显示层历史内容保持不变。\n模式：{}\n估算 Token：{} -> {}\n工具结果：修剪 {} 条，完整保留 {} 条\n源消息：丢弃旧分段内 {} 条，截断 {} 条\n安全阈值：{} Token\n{}",
-        context_compaction_input_prune_mode_label(report.mode),
-        report.original_token_estimate,
-        report.pruned_token_estimate,
-        report.pruned_tool_output_count,
-        report.preserved_tool_output_count,
-        report.dropped_source_message_count,
-        report.truncated_source_message_count,
-        report.safety_reserve_tokens,
-        if report.still_exceeds_budget {
-            "提示：修剪后估算仍超过目标输入预算，摘要由模型返回结果决定是否提交。"
-        } else {
-            "提示：修剪后估算已进入目标输入预算。"
-        }
-    )
+    String::new()
 }
 
 /// Returns the stable metadata label for one context-compaction input pruning mode.
@@ -20595,6 +20948,7 @@ fn append_runtime_event_projection(
     }
     let mut changed_todolist: Option<SessionTodolistState> = None;
     let mut changed_plan_mode: Option<SessionPlanModeState> = None;
+    let mut transcript_changed = false;
     let workspace_snapshot =
         with_workspace_mutation_preserving_subagent_navigation(app, state, |workspace| {
             let now = current_unix_millis_text();
@@ -20623,6 +20977,7 @@ fn append_runtime_event_projection(
                         ),
                     );
                     marker_sync_required = true;
+                    transcript_changed = true;
                 }
                 if let Some(todolist) = todolist_state_from_tool_finished_event(event, &now)
                     && runtime_state.todolist != todolist
@@ -20645,6 +21000,16 @@ fn append_runtime_event_projection(
                 sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
             }
         })?;
+    if transcript_changed {
+        let controller_runtime = controller_runtime_from_state(state)?;
+        spawn_workspace_session_transcript_persist_task(
+            state.clone(),
+            controller_runtime,
+            workspace_snapshot.clone(),
+            session_id,
+            Some(String::from("runtime_event_projection")),
+        );
+    }
     if let Some(todolist) = changed_todolist {
         let controller_runtime = controller_runtime_from_state(state)?;
         let updated_at = todolist
@@ -23156,6 +23521,13 @@ fn apply_conversation_checkpoint(
             sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
         })?;
     if is_main_session {
+        spawn_workspace_session_transcript_persist_task(
+            state.clone(),
+            controller_runtime.clone(),
+            workspace_snapshot.clone(),
+            session_id,
+            Some(String::from("conversation_checkpoint_transcript")),
+        );
         spawn_workspace_session_runtime_state_persist_task(
             state.clone(),
             controller_runtime.clone(),
@@ -33662,6 +34034,93 @@ mod tests {
         );
     }
 
+    /// Verifies context compaction persistence keeps the complete visible transcript window.
+    /// 验证上下文压缩持久化会保留完整可见转录窗口。
+    #[test]
+    fn context_compaction_complete_display_messages_preserve_visible_history() {
+        // session_id identifies the conversation being compacted.
+        // session_id 标识正在压缩的会话。
+        let session_id = SessionId::new_v4();
+        // section_id identifies the visible compaction status section.
+        // section_id 标识可见压缩状态分段。
+        let section_id = String::from("compaction-section-1");
+        // user_entry represents the original user prompt that must remain after reload.
+        // user_entry 表示重载后必须保留的原始用户提示词。
+        let mut user_entry =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "循环调用工具");
+        user_entry.id = String::from("user-1");
+        // tool_entry represents visible work-process detail that runtime compaction may remove.
+        // tool_entry 表示运行态压缩可能移除的可见工作过程细节。
+        let mut tool_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "", "已执行 sleep 5");
+        tool_entry.id = String::from("tool-1");
+        tool_entry.record_kind = SessionMessageRecordKind::ToolCallOutput;
+        // interrupt_entry represents an interjected user input inside the same turn.
+        // interrupt_entry 表示同一轮过程里的插队用户输入。
+        let mut interrupt_entry =
+            SessionMessageEntry::new(SessionMessageKind::User, "用户指令", "不用继续了");
+        interrupt_entry.id = String::from("interrupt-1");
+        interrupt_entry.metadata = Some(json!({
+            "source": "user_interrupt",
+            "starts_user_turn": false,
+            "turn_process": true,
+            "editable": false,
+        }));
+        // compaction_entry represents the status row that belongs to the compaction section.
+        // compaction_entry 表示归属于压缩分段的状态行。
+        let mut compaction_entry =
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "上下文已压缩", "");
+        compaction_entry.id = section_id.clone();
+        compaction_entry.record_kind = SessionMessageRecordKind::CompactionStatus;
+        // workspace_snapshot carries the full WebUI display layer retained at compaction finish.
+        // workspace_snapshot 携带压缩完成时保留的完整 WebUI 显示层。
+        let workspace_snapshot = WorkspaceSnapshot {
+            task_projects: Vec::new(),
+            archived_task_projects: Vec::new(),
+            sessions: Vec::new(),
+            archived_sessions: Vec::new(),
+            session_messages: BTreeMap::from([(
+                session_id,
+                vec![
+                    user_entry.clone(),
+                    tool_entry.clone(),
+                    interrupt_entry.clone(),
+                    compaction_entry.clone(),
+                ],
+            )]),
+            archived_session_messages: BTreeMap::new(),
+            session_compactions: BTreeMap::new(),
+            archived_session_compactions: BTreeMap::new(),
+            session_runtime_state: BTreeMap::new(),
+            archived_session_runtime_state: BTreeMap::new(),
+            session_run_phases: BTreeMap::new(),
+            expanded_task_projects: BTreeSet::new(),
+            selected_session: session_id,
+            hydrated_session_ids: BTreeSet::from([session_id]),
+        };
+
+        // messages should include process and interjection rows, not only compaction rows.
+        // messages 应包含过程与插队行，而不是只有压缩行。
+        let messages = context_compaction_complete_display_messages(
+            &workspace_snapshot,
+            session_id,
+            &section_id,
+        );
+
+        assert_eq!(messages.len(), 4);
+        assert!(messages.iter().any(|message| message.id == tool_entry.id));
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.id == interrupt_entry.id)
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|message| message.id == compaction_entry.id)
+        );
+    }
+
     /// Verifies runtime-log hydrated messages can back compaction without display records.
     /// 验证运行时日志水合消息在没有显示记录时也能支撑压缩。
     #[test]
@@ -34656,6 +35115,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         }));
         let report = ExecutionRunReport {
@@ -34757,6 +35217,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
@@ -34876,6 +35337,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
@@ -34971,6 +35433,45 @@ mod tests {
         assert!(
             !webui_detached_parent_event_should_persist_terminal_projection(false, true, false)
         );
+    }
+
+    /// Verifies live transcript persistence versioning does not invalidate session persistence.
+    /// 验证运行中转录持久化版本不会使会话持久化版本失效。
+    #[test]
+    fn live_transcript_persist_version_is_independent_from_session_persist_version() {
+        // session_id identifies the session whose persistence lanes are compared.
+        // session_id 标识需要比较持久化通道的会话。
+        let session_id = SessionId::new_v4();
+        // state carries independent version tables for session and live transcript writes.
+        // state 携带会话写入与运行中转录写入的独立版本表。
+        let state = Arc::new(Mutex::new(test_service_state_with_parent_session(
+            session_id,
+        )));
+
+        // session_version belongs to the full session/runtime persistence lane.
+        // session_version 属于完整会话与运行态持久化通道。
+        let session_version = next_webui_session_persist_version(&state, session_id)
+            .expect("session persist version should allocate");
+        // transcript_version belongs to the live transcript-only persistence lane.
+        // transcript_version 属于仅运行中转录持久化通道。
+        let transcript_version = next_webui_session_transcript_persist_version(&state, session_id)
+            .expect("transcript persist version should allocate");
+
+        assert!(webui_session_persist_version_is_current(
+            &state,
+            session_id,
+            session_version
+        ));
+        assert!(webui_session_transcript_persist_version_is_current(
+            &state,
+            session_id,
+            transcript_version
+        ));
+        assert!(!webui_session_persist_version_is_current(
+            &state,
+            session_id,
+            session_version.saturating_add(1)
+        ));
     }
 
     /// Verifies detached subagent completion enqueues parent mailbox input without using the pending prompt queue.
@@ -35177,6 +35678,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         }
     }
@@ -35919,6 +36421,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         };
         let child_message =
@@ -36020,6 +36523,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
@@ -36114,6 +36618,7 @@ mod tests {
             active_stream_tasks: BTreeMap::new(),
             session_runtime_kernels: BTreeMap::new(),
             session_persist_versions: BTreeMap::new(),
+            session_transcript_persist_versions: BTreeMap::new(),
             session_addon_persist_versions: BTreeMap::new(),
         };
         let workspace_snapshot = WorkspaceSnapshot {
