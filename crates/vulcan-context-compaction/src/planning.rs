@@ -1,6 +1,7 @@
 //! Context-compaction planning and summary-shaping helpers.
 //! 上下文压缩规划与摘要整形辅助模块。
 
+use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vulcan_context::{
     ContextCompactionPolicy, SessionCompactionEntry, SessionMessageEntry, SessionMessageKind,
@@ -71,11 +72,11 @@ pub struct CompactionPlan {
     /// Optional source tail message identifier covered by the planned compaction window.
     /// 被计划压缩窗口覆盖的可选源历史尾消息标识。
     pub source_until_message_id: Option<String>,
-    /// Optional last user-turn index covered by the compaction source window.
-    /// 被压缩源窗口覆盖的可选最后一个用户轮次索引。
+    /// Optional last user-turn index covered by the compaction source window when available.
+    /// 可用时记录被压缩源窗口覆盖的最后一个用户轮次索引。
     pub source_until_turn_index: Option<i64>,
-    /// Optional first retained user-turn index kept verbatim after the compaction rewrite.
-    /// 压缩改写后按原样保留的可选第一个用户轮次索引。
+    /// Optional first retained user-turn index kept verbatim after the compaction rewrite when the tail starts on a user turn.
+    /// 当尾部从用户轮次开始时，记录压缩改写后按原样保留的第一个用户轮次索引。
     pub retained_tail_start_turn_index: Option<i64>,
     /// Stable compaction identifier prepared for the next checkpoint.
     /// 为下一枚检查点准备的稳定压缩标识。
@@ -641,22 +642,22 @@ fn recent_tail_start_index(
         return 0;
     }
 
-    let target_turns = policy.tail_turns.max(1usize);
-    let segments = session_tail_segments(messages);
+    let target_rounds = policy.tail_turns.max(1usize);
+    let segments = session_api_round_segments(messages);
     let mut retained_start = messages.len().saturating_sub(1);
     let mut retained_tokens = 0usize;
-    let mut retained_turns = 0usize;
+    let mut retained_rounds = 0usize;
 
     for segment in segments.iter().rev() {
-        if retained_turns >= target_turns {
+        if retained_rounds >= target_rounds {
             break;
         }
         let segment_tokens = estimated_session_tail_tokens(&messages[segment.start..segment.end]);
-        if retained_turns == 0 || retained_tokens + segment_tokens <= policy.preserve_recent_tokens
+        if retained_rounds == 0 || retained_tokens + segment_tokens <= policy.preserve_recent_tokens
         {
             retained_start = segment.start;
             retained_tokens = retained_tokens.saturating_add(segment_tokens);
-            retained_turns += 1;
+            retained_rounds += 1;
         } else {
             break;
         }
@@ -665,8 +666,8 @@ fn recent_tail_start_index(
     retained_start
 }
 
-/// Transcript-index segment representing one user turn plus following assistant-visible entries.
-/// 表示一个用户轮次及其后续助手可见条目的转录索引段。
+/// Transcript-index segment representing one API round plus its following tool-visible entries.
+/// 表示一个 API 执行轮次及其后续工具可见条目的转录索引段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SessionTailSegment {
     /// Inclusive segment start index.
@@ -677,34 +678,40 @@ struct SessionTailSegment {
     end: usize,
 }
 
-/// Builds transcript tail segments at user-turn boundaries.
-/// 按用户轮次边界构建转录尾部段。
-fn session_tail_segments(messages: &[SessionMessageEntry]) -> Vec<SessionTailSegment> {
+/// Builds transcript tail segments at assistant API-round boundaries.
+/// 按 Assistant API 执行轮次边界构建转录尾部段。
+fn session_api_round_segments(messages: &[SessionMessageEntry]) -> Vec<SessionTailSegment> {
     if messages.is_empty() {
         return Vec::new();
     }
 
-    let mut user_starts = messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| message_is_user_turn_boundary(message).then_some(index))
-        .collect::<Vec<_>>();
-    if user_starts.is_empty() {
+    let mut round_starts = Vec::new();
+    let mut last_round_key: Option<String> = None;
+    for (index, message) in messages.iter().enumerate() {
+        let Some(round_key) = message_api_round_key(message) else {
+            continue;
+        };
+        if last_round_key.as_deref() != Some(round_key.as_str()) {
+            round_starts.push(index);
+            last_round_key = Some(round_key);
+        }
+    }
+    if round_starts.is_empty() {
         return vec![SessionTailSegment {
             start: 0,
             end: messages.len(),
         }];
     }
-    if user_starts[0] != 0 {
-        user_starts.insert(0, 0);
+    if round_starts[0] != 0 {
+        round_starts.insert(0, 0);
     }
 
-    user_starts
+    round_starts
         .iter()
         .enumerate()
         .map(|(position, start)| SessionTailSegment {
             start: *start,
-            end: user_starts
+            end: round_starts
                 .get(position + 1)
                 .copied()
                 .unwrap_or(messages.len()),
@@ -712,11 +719,26 @@ fn session_tail_segments(messages: &[SessionMessageEntry]) -> Vec<SessionTailSeg
         .collect()
 }
 
-/// Returns whether one transcript entry starts a user-authored turn.
-/// 返回一条转录项是否标记一个用户发起轮次的开始。
-fn message_is_user_turn_boundary(message: &SessionMessageEntry) -> bool {
-    message.kind == SessionMessageKind::User
-        && message.record_kind == SessionMessageRecordKind::Transcript
+/// Returns the stable API-round key for one assistant transcript entry.
+/// 返回一条 Assistant 转录项的稳定 API 执行轮次键。
+fn message_api_round_key(message: &SessionMessageEntry) -> Option<String> {
+    if message.kind != SessionMessageKind::Assistant
+        || !matches!(
+            message.record_kind,
+            SessionMessageRecordKind::AssistantOutput | SessionMessageRecordKind::ToolCallOutput
+        )
+    {
+        return None;
+    }
+    message
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.get("provider_message_id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(message.id.clone()))
 }
 
 /// Estimates the approximate token footprint of retained transcript entries.
@@ -853,7 +875,7 @@ fn drop_oldest_compaction_source_messages_for_budget(
     let protected_start = recent_tail_start.min(messages.len().saturating_sub(1));
     let mut drop_until = 0usize;
     if protected_start > 0 {
-        for segment in session_tail_segments(&messages) {
+        for segment in session_api_round_segments(&messages) {
             if segment.end > protected_start {
                 break;
             }
@@ -1421,6 +1443,67 @@ mod tests {
         assert_eq!(plan.retained_tail_start_turn_index, Some(1));
     }
 
+    /// Verifies assistant entries with the same provider message id count as one retained API round.
+    /// 验证拥有相同 Provider 消息标识的 Assistant 条目会作为一个保留 API 执行轮次。
+    #[test]
+    fn plan_context_compaction_groups_provider_message_id_as_one_api_round() {
+        let mut assistant_a = test_context_message(
+            "assistant-a",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "first chunk from one provider round",
+        );
+        assistant_a.metadata = Some(serde_json::json!({ "provider_message_id": "provider-a" }));
+        let mut assistant_b = test_context_message(
+            "assistant-b",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "second chunk from one provider round",
+        );
+        assistant_b.metadata = Some(serde_json::json!({ "provider_message_id": "provider-a" }));
+        let mut assistant_c = test_context_message(
+            "assistant-c",
+            SessionMessageKind::Assistant,
+            SessionMessageRecordKind::AssistantOutput,
+            "newer provider round",
+        );
+        assistant_c.metadata = Some(serde_json::json!({ "provider_message_id": "provider-b" }));
+        let messages = vec![
+            test_context_message(
+                "user-0",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "旧用户请求",
+            ),
+            assistant_a,
+            assistant_b,
+            assistant_c,
+        ];
+
+        let plan = plan_context_compaction(CompactionPlanInput {
+            session_label: "test-session",
+            messages: &messages,
+            all_messages: &messages,
+            context_start_message_id: None,
+            source_until_message_id: None,
+            policy: ContextCompactionPolicy {
+                tail_turns: 2,
+                preserve_recent_tokens: 10_000,
+                ..ContextCompactionPolicy::default()
+            },
+        })
+        .expect("provider-grouped API rounds should produce a compaction plan");
+
+        assert_eq!(plan.source_until_message_id.as_deref(), Some("user-0"));
+        assert_eq!(
+            plan.source_messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["user-0"]
+        );
+    }
+
     /// Verifies compaction input keeps full source messages when the target budget is sufficient.
     /// 验证目标预算充足时压缩输入会保留完整源消息。
     #[test]
@@ -1465,12 +1548,24 @@ mod tests {
                 SessionMessageRecordKind::Transcript,
                 "旧请求",
             ),
+            test_context_message(
+                "assistant-old",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "old tool call",
+            ),
             test_tool_result_message("tool-old", &long_output),
             test_context_message(
                 "user-1",
                 SessionMessageKind::User,
                 SessionMessageRecordKind::Transcript,
                 "当前请求",
+            ),
+            test_context_message(
+                "assistant-recent",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "recent tool call",
             ),
             test_tool_result_message("tool-recent", "recent output must stay"),
         ];
@@ -1492,13 +1587,13 @@ mod tests {
 
         assert_eq!(messages, original, "source input must remain unchanged");
         assert!(
-            prepared.source_messages[1]
+            prepared.source_messages[2]
                 .body
                 .contains("[Tool result compacted for context-compaction input only]")
         );
-        assert_eq!(prepared.source_messages[3].body, "recent output must stay");
-        assert_eq!(prepared.prune_report.pruned_tool_output_count, 1);
-        assert_eq!(prepared.prune_report.preserved_tool_output_count, 1);
+        assert_eq!(prepared.source_messages[5].body, "recent output must stay");
+        assert_eq!(prepared.prune_report.pruned_tool_output_count, 2);
+        assert_eq!(prepared.prune_report.preserved_tool_output_count, 2);
         assert_eq!(prepared.prune_report.dropped_source_message_count, 0);
     }
 
@@ -1624,16 +1719,28 @@ mod tests {
                 SessionMessageRecordKind::Transcript,
                 "旧请求",
             ),
+            test_context_message(
+                "assistant-old",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "old tool call",
+            ),
             test_tool_result_message("tool-old", &long_output),
+            test_context_message(
+                "assistant-error",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::ToolCallOutput,
+                "error tool call",
+            ),
             test_tool_result_message(
                 "tool-error",
                 "stderr: compilation failed\nerror[E0425]: cannot find value",
             ),
             test_context_message(
-                "user-1",
-                SessionMessageKind::User,
-                SessionMessageRecordKind::Transcript,
-                "当前请求",
+                "assistant-recent",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "recent final answer",
             ),
         ];
 
@@ -1652,11 +1759,11 @@ mod tests {
         );
 
         assert_eq!(
-            prepared.source_messages[2].body,
+            prepared.source_messages[4].body,
             "stderr: compilation failed\nerror[E0425]: cannot find value"
         );
-        assert_eq!(prepared.prune_report.preserved_tool_output_count, 1);
-        assert_eq!(prepared.prune_report.pruned_tool_output_count, 1);
+        assert_eq!(prepared.prune_report.preserved_tool_output_count, 2);
+        assert_eq!(prepared.prune_report.pruned_tool_output_count, 2);
         assert_eq!(prepared.prune_report.dropped_source_message_count, 0);
         assert_eq!(prepared.prune_report.truncated_source_message_count, 0);
     }

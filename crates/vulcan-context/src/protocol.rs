@@ -613,8 +613,15 @@ fn conversation_message_to_compaction_source_message(
             text,
             reasoning,
             tool_calls,
+            provider_message_id,
             ..
-        } => compaction_assistant_message(message.id.clone(), text, reasoning, tool_calls),
+        } => compaction_assistant_message(
+            message.id.clone(),
+            text,
+            reasoning,
+            tool_calls,
+            provider_message_id.as_deref(),
+        ),
         SessionConversationPayload::ToolResult {
             tool_result_id,
             tool_call_id,
@@ -662,6 +669,7 @@ fn compaction_assistant_message(
     text: &str,
     reasoning: &str,
     tool_calls: &[SessionConversationToolCall],
+    provider_message_id: Option<&str>,
 ) -> SessionMessageEntry {
     let body = if tool_calls.is_empty() {
         let mut parts = Vec::new();
@@ -678,9 +686,23 @@ fn compaction_assistant_message(
         visible: true,
         title: String::from("AI"),
         body,
-        metadata: None,
+        metadata: compaction_provider_message_metadata(provider_message_id),
         created_at: String::new(),
     }
+}
+
+/// Builds compact compaction metadata for stable provider API-round grouping.
+/// 为稳定的 Provider API 执行轮次分组构建紧凑压缩元数据。
+fn compaction_provider_message_metadata(provider_message_id: Option<&str>) -> Option<Value> {
+    let provider_message_id = provider_message_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        String::from("provider_message_id"),
+        Value::String(provider_message_id.to_string()),
+    );
+    Some(Value::Object(metadata))
 }
 
 /// Builds one compaction-only tool-result transcript entry from canonical tool output.
@@ -1224,7 +1246,7 @@ mod tests {
                     payload: SessionConversationPayload::Assistant {
                         text: String::from("运行时助手回答"),
                         reasoning: String::from("简短推理"),
-                        provider_message_id: None,
+                        provider_message_id: Some(String::from("provider-runtime-1")),
                         provider_message_state: None,
                         usage: None,
                         tool_calls: Vec::new(),
@@ -1244,6 +1266,14 @@ mod tests {
         assert_eq!(messages[1].kind, SessionMessageKind::Assistant);
         assert!(messages[1].body.contains("运行时助手回答"));
         assert!(messages[1].body.contains("简短推理"));
+        assert_eq!(
+            messages[1]
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get("provider_message_id"))
+                .and_then(Value::as_str),
+            Some("provider-runtime-1")
+        );
     }
 
     /// Verifies display records cannot become compaction source messages.

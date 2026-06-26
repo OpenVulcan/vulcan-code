@@ -93,8 +93,8 @@ use vulcan_agent_runtime::{
     },
 };
 use vulcan_context::{
-    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationRecord, append_record,
-    append_record_body_delta,
+    ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationMessage,
+    SessionConversationPayload, SessionConversationRecord, append_record, append_record_body_delta,
 };
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
@@ -20233,6 +20233,78 @@ fn append_webui_context_compaction_progress(
     .map(|_| ())
 }
 
+/// Maximum user-message characters embedded into the automatic compaction continuation note.
+/// 自动压缩续接提示中嵌入的用户消息最大字符数。
+const AUTO_COMPACTION_CONTINUATION_LAST_USER_MAX_CHARS: usize = 4_000;
+
+/// Stable prefix for model-visible automatic compaction continuation notes.
+/// 模型可见自动压缩续接提示的稳定前缀。
+const AUTO_COMPACTION_CONTINUATION_PREFIX: &str =
+    "Automatic context compaction was applied while the current task was in progress.";
+
+/// Appends one model-visible continuation note after automatic context compaction.
+/// 在自动上下文压缩后追加一条模型可见的续接提示。
+fn append_auto_context_compaction_continuation_message(
+    draft_runtime_state: &mut SessionRuntimeStateEntry,
+    session_id: SessionId,
+    created_at: &str,
+    active_runtime_state: &SessionRuntimeStateEntry,
+) {
+    let Some(last_user_message) =
+        last_runtime_user_message_text(&active_runtime_state.conversation_state)
+    else {
+        return;
+    };
+    let last_user_message = truncate_auto_compaction_last_user_message(&last_user_message);
+    let message_id = build_session_record_message_id(
+        session_id,
+        created_at,
+        draft_runtime_state.conversation_state.messages.len(),
+    );
+    let text = format!(
+        "{AUTO_COMPACTION_CONTINUATION_PREFIX} Continue the ongoing work from the retained context. The last user message before compaction was:\n<last_user_message>\n{last_user_message}\n</last_user_message>"
+    );
+    draft_runtime_state
+        .conversation_state
+        .messages
+        .push(SessionConversationMessage {
+            id: message_id,
+            payload: SessionConversationPayload::UserText {
+                text,
+                attachments: Vec::new(),
+            },
+        });
+}
+
+/// Returns the latest real user-text payload from one runtime conversation state.
+/// 返回运行时会话状态中的最后一条真实用户文本载荷。
+fn last_runtime_user_message_text(state: &SessionConversationState) -> Option<String> {
+    state.messages.iter().rev().find_map(|message| {
+        let SessionConversationPayload::UserText { text, .. } = &message.payload else {
+            return None;
+        };
+        let text = text.trim();
+        (!text.is_empty() && !text.starts_with(AUTO_COMPACTION_CONTINUATION_PREFIX))
+            .then(|| text.to_string())
+    })
+}
+
+/// Truncates the embedded last-user message while preserving its leading content.
+/// 截断嵌入的最后用户消息，同时保留其开头内容。
+fn truncate_auto_compaction_last_user_message(message: &str) -> String {
+    let char_count = message.chars().count();
+    if char_count <= AUTO_COMPACTION_CONTINUATION_LAST_USER_MAX_CHARS {
+        return message.to_string();
+    }
+    let preserved = message
+        .chars()
+        .take(AUTO_COMPACTION_CONTINUATION_LAST_USER_MAX_CHARS)
+        .collect::<String>();
+    format!(
+        "{preserved}\n[Last user message truncated after {AUTO_COMPACTION_CONTINUATION_LAST_USER_MAX_CHARS} chars for automatic context-compaction continuation.]"
+    )
+}
+
 /// Builds one validated WebUI compaction draft without mutating the active runtime state.
 /// 在不修改活跃运行时状态的情况下构建一份已校验的 WebUI 压缩候选状态。
 ///
@@ -20349,6 +20421,14 @@ fn build_webui_context_compaction_draft(
             .as_deref(),
         execution.compaction_result.policy,
     );
+    if trigger == AUTO_CONTEXT_COMPACTION_TRIGGER {
+        append_auto_context_compaction_continuation_message(
+            &mut draft_runtime_state,
+            session_id,
+            &checkpoint.created_at,
+            active_runtime_state,
+        );
+    }
     compact_conversation_records_after_summary(
         &mut draft_runtime_state.conversation_state,
         &summary_message_id,
@@ -32513,6 +32593,144 @@ mod tests {
                 .and_then(|metadata| metadata.get("context_compaction_insert_before_message_id"))
                 .is_none()
         }));
+    }
+
+    /// Verifies only automatic compaction appends one runtime-only continuation note.
+    /// 验证只有自动压缩会追加一条仅存在于运行态的续接提示。
+    #[test]
+    fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigger() {
+        let session_id = SessionId::new_v4();
+        let messages = vec![
+            SessionMessageEntry::new(SessionMessageKind::User, "用户", "旧问题")
+                .with_runtime_metadata("user-old", "1780000000000"),
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "旧回答")
+                .with_runtime_metadata("assistant-old", "1780000000001"),
+            SessionMessageEntry::new(SessionMessageKind::User, "用户", "请继续真实任务")
+                .with_runtime_metadata("user-latest", "1780000000002"),
+        ];
+        let active_runtime_state = SessionRuntimeStateEntry {
+            conversation_state: conversation_state_from_session_messages(&messages),
+            live_context_budget_fingerprint: Some(String::from("budget-live")),
+            live_context_assembly_fingerprint: Some(String::from("assembly-live")),
+            ..SessionRuntimeStateEntry::default()
+        };
+        let plan = CompactionPlan {
+            source_messages: vec![messages[0].clone()],
+            source_until_message_id: Some(String::from("user-old")),
+            source_until_turn_index: Some(0),
+            retained_tail_start_turn_index: Some(1),
+            compaction_id: String::from("test-auto-continuation"),
+            created_at: String::from("1780000000100"),
+            policy: vulcan_context::ContextCompactionPolicy::default(),
+        };
+        let manual_execution = PromptCompactionExecution {
+            compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
+                &plan,
+                "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            ),
+            fallback_used: false,
+            provider_request_count: 1,
+            input_prune_report: None,
+        };
+        let manual_draft = build_webui_context_compaction_draft(
+            &active_runtime_state,
+            session_id,
+            "section-manual",
+            "预算快照",
+            MANUAL_CONTEXT_COMPACTION_TRIGGER,
+            1,
+            "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            &manual_execution,
+        )
+        .expect("manual draft should be built from a valid summary");
+        assert!(
+            !manual_draft
+                .runtime_state
+                .conversation_state
+                .messages
+                .iter()
+                .any(|message| matches!(
+                    &message.payload,
+                    SessionConversationPayload::UserText { text, .. }
+                        if text.starts_with(AUTO_COMPACTION_CONTINUATION_PREFIX)
+                )),
+            "manual compaction must not append the automatic continuation note"
+        );
+
+        let auto_execution = PromptCompactionExecution {
+            compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
+                &plan,
+                "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            ),
+            fallback_used: false,
+            provider_request_count: 1,
+            input_prune_report: None,
+        };
+        let auto_draft = build_webui_context_compaction_draft(
+            &active_runtime_state,
+            session_id,
+            "section-auto",
+            "预算快照",
+            AUTO_CONTEXT_COMPACTION_TRIGGER,
+            1,
+            "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            &auto_execution,
+        )
+        .expect("automatic draft should be built from a valid summary");
+        let continuation_messages = auto_draft
+            .runtime_state
+            .conversation_state
+            .messages
+            .iter()
+            .filter_map(|message| {
+                let SessionConversationPayload::UserText { text, .. } = &message.payload else {
+                    return None;
+                };
+                text.starts_with(AUTO_COMPACTION_CONTINUATION_PREFIX)
+                    .then_some(text.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(continuation_messages.len(), 1);
+        assert!(continuation_messages[0].contains("请继续真实任务"));
+        assert!(
+            auto_draft
+                .runtime_state
+                .conversation_state
+                .records
+                .iter()
+                .all(|record| !record.body.contains(AUTO_COMPACTION_CONTINUATION_PREFIX)),
+            "automatic continuation is model-visible runtime state, not a visible transcript record"
+        );
+    }
+
+    /// Verifies repeated automatic compaction ignores previous continuation notes when finding the last user prompt.
+    /// 验证重复自动压缩查找最后用户提示时会忽略旧续接提示。
+    #[test]
+    fn last_runtime_user_message_text_skips_previous_auto_continuation() {
+        let state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("real-user"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("真正的最后用户请求"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("old-auto-continuation"),
+                    payload: SessionConversationPayload::UserText {
+                        text: format!("{AUTO_COMPACTION_CONTINUATION_PREFIX} stale note"),
+                        attachments: Vec::new(),
+                    },
+                },
+            ],
+            ..SessionConversationState::default()
+        };
+
+        assert_eq!(
+            last_runtime_user_message_text(&state).as_deref(),
+            Some("真正的最后用户请求")
+        );
     }
 
     /// Verifies OpenRouter endpoint records are normalized into secondary route choices.

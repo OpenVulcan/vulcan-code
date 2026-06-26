@@ -25,8 +25,8 @@ const COMPACTED_TOOL_RESULT_PLACEHOLDER: &str = "Tool output omitted during cont
 /// 用于将一份 `change_set` 宿主结果压缩为最小可转录安全形态的函数指针。
 pub type ChangeSetCompactor = fn(&Value) -> Option<Value>;
 
-/// Message-index segment representing one user turn plus its following assistant/tool responses.
-/// 表示一个用户轮次及其后续助手与工具响应的消息索引段。
+/// Message-index segment representing one API round plus its following tool responses.
+/// 表示一个 API 执行轮次及其后续工具响应的消息索引段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CanonicalTailSegment {
     /// Inclusive start index of the retained segment.
@@ -194,8 +194,8 @@ pub fn compact_conversation_records_after_summary(
     state.records = retained_records;
 }
 
-/// Selects the canonical message tail retained after summary insertion without splitting tool-call turns.
-/// 在不切断工具调用轮次的前提下，选择摘要插入后保留的规范消息尾部。
+/// Selects the canonical message tail retained after summary insertion without splitting API rounds.
+/// 在不切断 API 执行轮次的前提下，选择摘要插入后保留的规范消息尾部。
 fn canonical_recent_tail_messages(
     messages: &[SessionConversationMessage],
     policy: ContextCompactionPolicy,
@@ -204,15 +204,15 @@ fn canonical_recent_tail_messages(
         return Vec::new();
     }
 
-    let target_turns = policy.tail_turns.max(1usize);
+    let target_rounds = policy.tail_turns.max(1usize);
     let budget = policy.preserve_recent_tokens;
-    let segments = canonical_tail_segments(messages);
+    let segments = canonical_api_round_segments(messages);
     let mut retained_tail = Vec::new();
     let mut retained_tokens = 0usize;
-    let mut retained_turns = 0usize;
+    let mut retained_rounds = 0usize;
 
     for segment in segments.iter().rev() {
-        if retained_turns >= target_turns {
+        if retained_rounds >= target_rounds {
             break;
         }
 
@@ -228,7 +228,7 @@ fn canonical_recent_tail_messages(
             retained_tokens = retained_tokens.saturating_add(candidate_tokens);
             candidate.extend(retained_tail);
             retained_tail = candidate;
-            retained_turns += 1;
+            retained_rounds += 1;
         } else {
             break;
         }
@@ -243,45 +243,66 @@ fn canonical_recent_tail_messages(
     }
 }
 
-/// Builds safe tail segments at user-turn boundaries so tool calls and tool results stay together.
-/// 按用户轮次边界构建安全尾部段，确保工具调用与工具结果保持在同一组内。
-fn canonical_tail_segments(messages: &[SessionConversationMessage]) -> Vec<CanonicalTailSegment> {
+/// Builds safe tail segments at assistant API-round boundaries so tool calls and tool results stay together.
+/// 按 Assistant API 执行轮次边界构建安全尾部段，确保工具调用与工具结果保持在同一组内。
+fn canonical_api_round_segments(
+    messages: &[SessionConversationMessage],
+) -> Vec<CanonicalTailSegment> {
     if messages.is_empty() {
         return Vec::new();
     }
 
-    let mut user_starts = messages
-        .iter()
-        .enumerate()
-        .filter_map(|(index, message)| {
-            matches!(
-                &message.payload,
-                SessionConversationPayload::UserText { .. }
-            )
-            .then_some(index)
-        })
-        .collect::<Vec<_>>();
-    if user_starts.is_empty() {
+    let mut round_starts = Vec::new();
+    let mut last_assistant_round_key: Option<String> = None;
+    for (index, message) in messages.iter().enumerate() {
+        let Some(round_key) = canonical_assistant_round_key(message) else {
+            continue;
+        };
+        if last_assistant_round_key.as_deref() != Some(round_key.as_str()) {
+            round_starts.push(index);
+            last_assistant_round_key = Some(round_key);
+        }
+    }
+
+    if round_starts.is_empty() {
         return vec![CanonicalTailSegment {
             start: 0,
             end: messages.len(),
         }];
     }
-    if user_starts[0] != 0 {
-        user_starts.insert(0, 0);
+    if round_starts[0] != 0 {
+        round_starts.insert(0, 0);
     }
 
-    user_starts
+    round_starts
         .iter()
         .enumerate()
         .map(|(position, start)| CanonicalTailSegment {
             start: *start,
-            end: user_starts
+            end: round_starts
                 .get(position + 1)
                 .copied()
                 .unwrap_or(messages.len()),
         })
         .collect()
+}
+
+/// Returns the stable assistant API-round key for one canonical message.
+/// 返回一条规范消息的稳定 Assistant API 执行轮次键。
+fn canonical_assistant_round_key(message: &SessionConversationMessage) -> Option<String> {
+    let SessionConversationPayload::Assistant {
+        provider_message_id,
+        ..
+    } = &message.payload
+    else {
+        return None;
+    };
+    provider_message_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(message.id.clone()))
 }
 
 /// Returns a cloned message slice where tool results are compacted into protocol-safe placeholders.
@@ -781,17 +802,14 @@ mod tests {
             policy,
         );
 
-        assert_eq!(state.messages.len(), 4);
+        assert_eq!(state.messages.len(), 3);
+        assert_eq!(state.messages[0].id, "summary");
         assert!(matches!(
             &state.messages[1].payload,
-            SessionConversationPayload::UserText { text, .. } if text == "读取文件"
-        ));
-        assert!(matches!(
-            &state.messages[2].payload,
             SessionConversationPayload::Assistant { tool_calls, .. } if tool_calls.len() == 1
         ));
         assert!(matches!(
-            &state.messages[3].payload,
+            &state.messages[2].payload,
             SessionConversationPayload::ToolResult { text, .. }
                 if text == COMPACTED_TOOL_RESULT_PLACEHOLDER
         ));

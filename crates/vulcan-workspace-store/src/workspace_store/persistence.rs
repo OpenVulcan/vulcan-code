@@ -14,8 +14,8 @@ use super::segmented_session_store::{
     patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
     replay_segmented_session_context, restore_segmented_session_by_created_date,
     segmented_session_directory, state_document_from_runtime_state,
-    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
-    write_segmented_session_fork_source, write_state,
+    sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
+    truncate_segmented_session_before_message, write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -1006,11 +1006,42 @@ async fn persist_segmented_session_runtime_state_checkpoint(
     };
     let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
     write_state(&session_dir, &state_document)?;
-    sync_runtime_log_from_conversation_state(
-        &session_dir,
-        &runtime_state.conversation_state,
-        &runtime_state.updated_at,
-    )?;
+    sync_segmented_runtime_log_for_state(&session_dir, runtime_state)?;
+    Ok(())
+}
+
+/// Syncs one segmented runtime log using the active compaction-aware persistence policy.
+/// 使用当前压缩感知持久化策略同步单个分段运行时日志。
+///
+/// # Parameters
+/// # 参数
+/// `session_dir` is the segmented session directory that owns the runtime files.
+/// `session_dir` 是拥有运行时文件的分段会话目录。
+/// `runtime_state` is the canonical runtime state to mirror into provider-facing JSONL.
+/// `runtime_state` 是要镜像到 Provider 可见 JSONL 的规范运行态。
+///
+/// # Returns
+/// # 返回值
+/// Returns `Ok(())` after the runtime log is synchronized.
+/// 运行时日志同步完成后返回 `Ok(())`。
+fn sync_segmented_runtime_log_for_state(
+    session_dir: &std::path::Path,
+    runtime_state: &SessionRuntimeStateEntry,
+) -> Result<(), String> {
+    if let Some(compaction_id) = runtime_state.last_compaction_id.as_deref() {
+        sync_runtime_log_from_compacted_conversation_state(
+            session_dir,
+            &runtime_state.conversation_state,
+            &runtime_state.updated_at,
+            compaction_id,
+        )?;
+    } else {
+        sync_runtime_log_from_conversation_state(
+            session_dir,
+            &runtime_state.conversation_state,
+            &runtime_state.updated_at,
+        )?;
+    }
     Ok(())
 }
 
@@ -1037,11 +1068,7 @@ async fn persist_segmented_session_tail_update(
     if let Some(runtime_state) = runtime_state {
         let state_document = state_document_from_runtime_state(&session_id_text, runtime_state)?;
         write_state(&session_dir, &state_document)?;
-        sync_runtime_log_from_conversation_state(
-            &session_dir,
-            &runtime_state.conversation_state,
-            &runtime_state.updated_at,
-        )?;
+        sync_segmented_runtime_log_for_state(&session_dir, runtime_state)?;
     }
     if let Some(error) = transcript_tail_error {
         return Err(error);

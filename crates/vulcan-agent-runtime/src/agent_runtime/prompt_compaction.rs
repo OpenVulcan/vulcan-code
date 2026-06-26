@@ -324,7 +324,6 @@ pub fn stream_prompt_compaction_job(
                 drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
             futures_util::pin_mut!(runtime_stream);
             let mut terminal_error = None;
-            let mut attempt_events = Vec::new();
             while let Some(event) = runtime_stream.next().await {
                 match event {
                     ExecutionStreamEvent::Finished(report) => {
@@ -340,9 +339,6 @@ pub fn stream_prompt_compaction_job(
                                 execution.input_prune_report = input_prune_report_for_execution(
                                     &prepared_source.prune_report,
                                 );
-                                for event in attempt_events {
-                                    yield PromptCompactionStreamEvent::Stream(event);
-                                }
                                 yield PromptCompactionStreamEvent::Finished(Ok(execution));
                                 return;
                             }
@@ -357,7 +353,7 @@ pub fn stream_prompt_compaction_job(
                         {
                             yield progress;
                         }
-                        attempt_events.push(event);
+                        yield PromptCompactionStreamEvent::Stream(event);
                     }
                 }
             }
@@ -504,7 +500,6 @@ pub fn stream_prompt_compaction_foundation_job(
                 drive_runtime_stream_launch(request.provider_configuration.clone(), launch, None);
             futures_util::pin_mut!(runtime_stream);
             let mut terminal_error = None;
-            let mut attempt_events = Vec::new();
             while let Some(event) = runtime_stream.next().await {
                 match event {
                     ExecutionStreamEvent::Finished(report) => {
@@ -520,9 +515,6 @@ pub fn stream_prompt_compaction_foundation_job(
                                 execution.input_prune_report = input_prune_report_for_execution(
                                     &prepared_source.prune_report,
                                 );
-                                for event in attempt_events {
-                                    yield PromptCompactionStreamEvent::Stream(event);
-                                }
                                 yield PromptCompactionStreamEvent::Finished(Ok(execution));
                                 return;
                             }
@@ -537,7 +529,7 @@ pub fn stream_prompt_compaction_foundation_job(
                         {
                             yield progress;
                         }
-                        attempt_events.push(event);
+                        yield PromptCompactionStreamEvent::Stream(event);
                     }
                 }
             }
@@ -966,6 +958,52 @@ mod tests {
         );
         assert_eq!(prepared.source_messages.len(), 2);
         assert_eq!(prepared.prune_report.mode, CompactionInputPruneMode::None);
+    }
+
+    /// Verifies full-fidelity summaries still commit the planner boundary.
+    /// 验证完整保真摘要仍按规划器边界提交。
+    #[test]
+    fn full_fidelity_result_boundary_preserves_planned_tail() {
+        let old_message = test_message("old-user", "old context");
+        let mut plan = test_plan(vec![old_message.clone()]);
+        plan.source_until_message_id = Some(old_message.id.clone());
+        plan.source_until_turn_index = Some(0);
+        plan.retained_tail_start_turn_index = Some(1);
+        let result = CompactionResult::from_model_summary(&plan, "summary");
+
+        assert_eq!(
+            result.source_until_message_id.as_deref(),
+            Some(old_message.id.as_str())
+        );
+        assert_eq!(result.source_until_turn_index, Some(0));
+        assert_eq!(result.retained_tail_start_turn_index, Some(1));
+    }
+
+    /// Verifies applying the planned boundary keeps recent tail messages.
+    /// 验证应用规划边界后会保留最近尾部消息。
+    #[test]
+    fn full_fidelity_boundary_rewrite_keeps_planned_tail() {
+        let old_message = test_message("old-user", "old context");
+        let tail_message = test_message("tail-user", "recent tail");
+        let mut state =
+            conversation_state_from_session_messages(&[old_message.clone(), tail_message.clone()]);
+        let mut plan = test_plan(vec![old_message.clone()]);
+        plan.source_until_message_id = Some(old_message.id.clone());
+        let result = CompactionResult::from_model_summary(&plan, "summary");
+
+        vulcan_context_compaction::compact_conversation_with_summary_until(
+            &mut state,
+            "summary-message",
+            vulcan_context::SessionMessageKind::User,
+            "summary",
+            "t2",
+            result.source_until_message_id.as_deref(),
+            result.policy,
+        );
+
+        assert_eq!(state.messages.len(), 2);
+        assert_eq!(state.messages[0].id, "summary-message");
+        assert_eq!(state.messages[1].id, tail_message.id);
     }
 
     /// Verifies observed provider usage decides initial downgrade before local estimates.

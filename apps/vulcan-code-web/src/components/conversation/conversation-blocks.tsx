@@ -106,7 +106,8 @@ export function ContextCompactionBlock(props: {
       ? t("contextCompaction.title.running")
       : t("contextCompaction.title.completed");
   const detailBody = bodyBlock?.body?.trim() || (displayStatus === "failed" ? contextCompactionFailedDetail(endBlock, t) : "");
-  const hasExpandedContent = progressBlocks.length > 0 || thinkingBlocks.length > 0 || Boolean(detailBody);
+  const shouldShowProgress = progressBlocks.length > 0 && thinkingBlocks.length === 0 && !detailBody;
+  const hasExpandedContent = shouldShowProgress || thinkingBlocks.length > 0 || Boolean(detailBody);
 
   return (
     <section className={cn("context-compaction-block", displayStatus, expanded && "expanded")}>
@@ -126,7 +127,7 @@ export function ContextCompactionBlock(props: {
       </button>
       <ConversationMeasuredCollapse collapseId={collapseId} expanded={expanded}>
         <div className="context-compaction-body">
-          {progressBlocks.map((block) => {
+          {shouldShowProgress ? progressBlocks.map((block) => {
             // content keeps progress rendering stable when the record is still being appended.
             // content 在记录仍持续追加时保持进度渲染稳定。
             const content = localizedContextCompactionProgress(block, t);
@@ -135,15 +136,18 @@ export function ContextCompactionBlock(props: {
                 <MarkdownMessage content={content} eager onOpenMedia={props.onOpenMedia} />
               </div>
             ) : null;
-          })}
+          }) : null}
           {thinkingBlocks.map((block) => {
-            const content = block.body.trim() || block.summary || t("contextCompaction.emptyThinking");
             return (
-              <div className="context-compaction-thinking thinking-block" key={block.id}>
-                <div className="thinking-body">
-                  <MarkdownMessage content={`**${t("contextCompaction.thinkingLabel")}:** ${content}`} eager onOpenMedia={props.onOpenMedia} />
-                </div>
-              </div>
+              <ThinkingBlock
+                autoExpanded={false}
+                autoExpandWhileStreaming={false}
+                block={block}
+                key={block.id}
+                sessionRunning={running}
+                streaming={running}
+                onOpenMedia={props.onOpenMedia}
+              />
             );
           })}
           {detailBody ? (
@@ -257,13 +261,16 @@ export function ThinkingBlock(props: {
   // streaming marks the currently growing thinking row.
   // streaming 标记当前仍在增长的思考行。
   streaming: boolean;
+  // autoExpandWhileStreaming controls whether streaming thinking opens itself.
+  // autoExpandWhileStreaming 控制流式思考是否自动展开自身。
+  autoExpandWhileStreaming?: boolean;
   // onOpenMedia opens generated media referenced from markdown content.
   // onOpenMedia 打开 Markdown 内容引用的生成媒体。
   onOpenMedia: (attachment: GeneratedMediaAttachment) => void;
 }) {
   const { t } = useI18n();
   const content = props.block.body.trim() || props.block.summary || t("contextCompaction.emptyThinking");
-  const shouldAutoExpand = props.streaming || props.autoExpanded;
+  const shouldAutoExpand = props.autoExpanded || (props.streaming && (props.autoExpandWhileStreaming ?? true));
   const collapseId = `thinking:${props.block.id}`;
   const [expanded, setExpanded] = useConversationMeasuredExpansion(collapseId, shouldAutoExpand);
   const wasStreamingRef = React.useRef(props.streaming);

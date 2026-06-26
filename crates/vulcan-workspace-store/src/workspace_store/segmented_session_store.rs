@@ -2478,6 +2478,91 @@ pub(super) fn sync_runtime_log_from_conversation_state(
     append_runtime_log_tail(session_dir, tail)
 }
 
+/// Syncs provider-facing runtime JSONL after compaction while dropping pre-compaction audit tails.
+/// 在压缩后同步 Provider 可见运行时 JSONL，并丢弃压缩前审计尾巴。
+///
+/// # Parameters
+/// # 参数
+/// `session_dir` is the segmented session directory that owns the runtime log.
+/// `session_dir` 是拥有运行时日志的分段会话目录。
+/// `conversation_state` is the compacted canonical provider conversation.
+/// `conversation_state` 是已压缩的规范 Provider 会话。
+/// `updated_at` is written onto rebuilt runtime lines.
+/// `updated_at` 会写入重建后的运行时行。
+/// `compaction_id` identifies the compaction boundary that must remain in the main runtime log.
+/// `compaction_id` 标识必须保留在主运行时日志中的压缩边界。
+///
+/// # Returns
+/// # 返回值
+/// Returns updated runtime-log metadata after append or rebuild.
+/// 返回追加或重建后的运行时日志元数据。
+pub(super) fn sync_runtime_log_from_compacted_conversation_state(
+    session_dir: &Path,
+    conversation_state: &SessionConversationState,
+    updated_at: &str,
+    compaction_id: &str,
+) -> Result<RuntimeLogMetadata, String> {
+    if !runtime_metadata_path(session_dir).exists() {
+        return rebuild_runtime_log_from_conversation_state(
+            session_dir,
+            conversation_state,
+            updated_at,
+        );
+    }
+    let desired_lines =
+        runtime_log_lines_from_conversation_state(conversation_state, updated_at, 1);
+    let existing_lines = match read_runtime_log_lines(session_dir) {
+        Ok(Some(lines)) => lines,
+        Ok(None) => {
+            return rebuild_runtime_log_from_conversation_state(
+                session_dir,
+                conversation_state,
+                updated_at,
+            );
+        }
+        Err(_) => {
+            return rebuild_runtime_log_from_conversation_state(
+                session_dir,
+                conversation_state,
+                updated_at,
+            );
+        }
+    };
+    let existing_extra_events = runtime_extra_event_lines(&existing_lines);
+    let extra_events =
+        runtime_extra_event_lines_from_compaction_boundary(&existing_lines, compaction_id);
+    let existing_conversation_lines = runtime_conversation_event_lines(&existing_lines);
+    if !runtime_log_prefix_matches(&existing_conversation_lines, &desired_lines) {
+        return rebuild_runtime_log_from_conversation_state_with_extra_events(
+            session_dir,
+            conversation_state,
+            updated_at,
+            extra_events,
+        );
+    }
+    if existing_conversation_lines.len() == desired_lines.len() {
+        if !runtime_extra_event_lines_match(&existing_extra_events, &extra_events) {
+            return rebuild_runtime_log_from_conversation_state_with_extra_events(
+                session_dir,
+                conversation_state,
+                updated_at,
+                extra_events,
+            );
+        }
+        return read_runtime_metadata(session_dir);
+    }
+    if !extra_events.is_empty() {
+        return rebuild_runtime_log_from_conversation_state_with_extra_events(
+            session_dir,
+            conversation_state,
+            updated_at,
+            extra_events,
+        );
+    }
+    let tail = &desired_lines[existing_conversation_lines.len()..];
+    append_runtime_log_tail(session_dir, tail)
+}
+
 /// Ensures a provider-facing runtime log exists, rebuilding it from display segments when needed.
 /// 确保存在 Provider 可见运行时日志，缺失时从展示分段重建。
 pub(super) fn ensure_runtime_log_from_segmented_context(
@@ -2844,6 +2929,41 @@ fn runtime_extra_event_lines(lines: &[RuntimeLogEventLine]) -> Vec<RuntimeLogEve
         .filter(|line| !runtime_event_projects_to_conversation(&line.event))
         .cloned()
         .collect()
+}
+
+/// Returns non-conversation audit lines at or after one compaction boundary.
+/// 返回某个压缩边界及其之后的非会话审计行。
+fn runtime_extra_event_lines_from_compaction_boundary(
+    lines: &[RuntimeLogEventLine],
+    compaction_id: &str,
+) -> Vec<RuntimeLogEventLine> {
+    let Some(boundary_index) = lines.iter().rposition(|line| {
+        matches!(
+            &line.event,
+            RuntimeLogEvent::ContextCompactionApplied(event)
+                if event.compaction_id == compaction_id
+        )
+    }) else {
+        return Vec::new();
+    };
+    lines[boundary_index..]
+        .iter()
+        .filter(|line| !runtime_event_projects_to_conversation(&line.event))
+        .cloned()
+        .collect()
+}
+
+/// Returns whether two runtime extra-event slices describe the same retained audit facts.
+/// 返回两组运行时额外事件切片是否描述相同的保留审计事实。
+fn runtime_extra_event_lines_match(
+    left: &[RuntimeLogEventLine],
+    right: &[RuntimeLogEventLine],
+) -> bool {
+    left.len() == right.len()
+        && left.iter().zip(right).all(|(left, right)| {
+            left.created_at == right.created_at
+                && serde_json::to_value(&left.event).ok() == serde_json::to_value(&right.event).ok()
+        })
 }
 
 /// Reports whether one runtime event contributes to canonical conversation replay.
@@ -6735,6 +6855,102 @@ mod tests {
                 .iter()
                 .any(|line| { matches!(line.event, RuntimeLogEvent::ProviderLoweringRepair(_)) })
         );
+    }
+
+    /// Verifies compacted runtime sync drops provider checkpoints that predate the compaction boundary.
+    /// 验证压缩后的运行时同步会丢弃早于压缩边界的 Provider 检查点。
+    #[test]
+    fn compacted_runtime_log_sync_prunes_pre_compaction_provider_checkpoints() {
+        let root =
+            test_root("compacted_runtime_log_sync_prunes_pre_compaction_provider_checkpoints");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let first_state = conversation_state_from_session_messages(&[test_message(
+            "m-user-1",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::Transcript,
+            "first prompt",
+        )]);
+        sync_runtime_log_from_conversation_state(&session_dir, &first_state, "t1")
+            .expect("sync first runtime log");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t2",
+            RuntimeLogEvent::ProviderRequestCheckpoint(RuntimeProviderRequestCheckpointEvent {
+                turn_id: Some(String::from("turn-before")),
+                checkpoint_id: String::from("request-before"),
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                provider_family: String::from("deepseek"),
+                capability_fingerprint: None,
+                prompt_fingerprint: Some(String::from("prompt-before")),
+                injection_fingerprint: None,
+                request_fingerprint: Some(String::from("request-before-fp")),
+                cache_policy_fingerprint: None,
+                cache_policy_diagnostic: None,
+                converter_version: 1,
+            }),
+        )
+        .expect("record pre-compaction provider request checkpoint");
+        backup_runtime_log_before_compaction(&session_dir, "compaction-a", "t3")
+            .expect("record compaction backup");
+        append_runtime_log_event_if_present(
+            &session_dir,
+            "t4",
+            RuntimeLogEvent::ProviderRequestCheckpoint(RuntimeProviderRequestCheckpointEvent {
+                turn_id: Some(String::from("turn-after")),
+                checkpoint_id: String::from("request-after"),
+                provider_id: String::from("deepseek"),
+                model_id: String::from("deepseek-v4-pro"),
+                provider_family: String::from("deepseek"),
+                capability_fingerprint: None,
+                prompt_fingerprint: Some(String::from("prompt-after")),
+                injection_fingerprint: None,
+                request_fingerprint: Some(String::from("request-after-fp")),
+                cache_policy_fingerprint: None,
+                cache_policy_diagnostic: None,
+                converter_version: 1,
+            }),
+        )
+        .expect("record post-compaction provider request checkpoint");
+        let compacted_state = conversation_state_from_session_messages(&[test_message(
+            "summary-message",
+            SessionMessageKind::User,
+            SessionMessageRecordKind::CompactionSummary,
+            "summary prompt",
+        )]);
+
+        sync_runtime_log_from_compacted_conversation_state(
+            &session_dir,
+            &compacted_state,
+            "t5",
+            "compaction-a",
+        )
+        .expect("sync compacted runtime log");
+        let lines = read_runtime_log_lines(&session_dir)
+            .expect("read runtime lines")
+            .expect("runtime lines exist");
+
+        assert!(
+            lines
+                .iter()
+                .any(|line| matches!(line.event, RuntimeLogEvent::ContextCompactionApplied(_)))
+        );
+        assert!(lines.iter().any(|line| {
+            matches!(
+                &line.event,
+                RuntimeLogEvent::ProviderRequestCheckpoint(event)
+                    if event.checkpoint_id == "request-after"
+            )
+        }));
+        assert!(!lines.iter().any(|line| {
+            matches!(
+                &line.event,
+                RuntimeLogEvent::ProviderRequestCheckpoint(event)
+                    if event.checkpoint_id == "request-before"
+            )
+        }));
     }
 
     /// Verifies child task sessions use the same segment model and begin with SubagentTaskMeta.

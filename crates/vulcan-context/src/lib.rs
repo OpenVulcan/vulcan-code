@@ -73,8 +73,8 @@ pub struct ContextCompactionPolicy {
     /// Whether old tool outputs should be pruned into compact placeholders during compaction.
     /// 压缩期间是否应将旧工具输出剪枝为紧凑占位内容。
     pub prune: bool,
-    /// Number of recent user turns retained verbatim after compaction.
-    /// 压缩后按原样保留的最近用户轮次数。
+    /// Number of recent API rounds retained verbatim after compaction.
+    /// 压缩后按原样保留的最近 API 执行轮次数。
     pub tail_turns: usize,
     /// Maximum approximate token budget retained for the recent tail.
     /// 为最近尾部保留的近似 Token 上限。
