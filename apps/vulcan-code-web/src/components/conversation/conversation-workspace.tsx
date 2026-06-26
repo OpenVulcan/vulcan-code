@@ -227,6 +227,8 @@ export function ConversationWorkspace(props: {
   const [measuredCollapseById, setMeasuredCollapseById] = React.useState<ConversationMeasuredCollapseMap>(
     () => ({ ...(props.initialExpandedState?.measuredCollapseById ?? {}) }),
   );
+  const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
+  const expandedStateSurfaceRestoreIdRef = React.useRef(surfaceRestoreId);
   const timelineItems = React.useMemo(
     () => projectConversationTimelineItems(props.renderItems, props.conversation, nowMs, props.sessionRunning),
     [props.renderItems, props.conversation, nowMs, props.sessionRunning],
@@ -318,7 +320,6 @@ export function ConversationWorkspace(props: {
     const surfaceId = props.conversation?.id ?? props.parentConversationId ?? "unknown";
     return `${surfaceId}:${process.id}`;
   }, [props.conversation?.id, props.parentConversationId]);
-  const surfaceRestoreId = props.conversation?.id ?? props.parentConversationId ?? null;
   const onExpandedStateChange = props.onExpandedStateChange;
   const persistExpandedState = React.useCallback((
     processCollapsedByKey: Map<string, boolean>,
@@ -376,6 +377,10 @@ export function ConversationWorkspace(props: {
   }, [persistExpandedState, processCollapseOverrides, userPromptExpansionOverrides]);
 
   React.useEffect(() => {
+    if (expandedStateSurfaceRestoreIdRef.current === surfaceRestoreId) {
+      return;
+    }
+    expandedStateSurfaceRestoreIdRef.current = surfaceRestoreId;
     const nextExpandedState = props.initialExpandedState ?? createEmptyConversationSurfaceExpandedState();
     const nextProcessCollapseOverrides = new Map(Object.entries(nextExpandedState.processCollapsedByKey));
     const nextUserPromptExpansionOverrides = new Set(nextExpandedState.expandedUserPromptIds);
@@ -822,7 +827,11 @@ function timelineItemVisibleInMainTranscript(item: ConversationTimelineItem, hid
   }
   const hasVisibleGuidanceItem = item.process.guidanceItems.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
   const hasVisibleProcessItem = item.process.items.some((processItem) => !renderItemHiddenByThinkingDisplay(processItem, hiddenThinkingBlockIds));
-  return hasVisibleGuidanceItem || hasVisibleProcessItem || item.process.running || item.process.stopped;
+  return hasVisibleGuidanceItem
+    || hasVisibleProcessItem
+    || item.process.items.length > 0
+    || item.process.running
+    || item.process.stopped;
 }
 
 // stringBooleanMapEqual compares small expansion maps without rebuilding state for equal content.

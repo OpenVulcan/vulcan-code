@@ -2,6 +2,8 @@ import type {
   ConversationBlock,
   ConversationRenderItem,
 } from "@/components/conversation/conversation-model";
+import { isContextCompactionBlock } from "@/components/conversation/conversation-classifiers";
+import { metadataValue } from "@/components/conversation/conversation-metadata";
 
 // ThinkingDisplayMode stores the WebUI-only display preference for reasoning output.
 // ThinkingDisplayMode 保存仅 WebUI 使用的思考过程展示偏好。
@@ -115,13 +117,17 @@ function collectThinkingBlockVisibility(renderItems: ConversationRenderItem[]): 
 
   for (const item of renderItems) {
     if (item.role === "user") {
-      if (!hasOpenTurn || currentTurnHasStats) {
+      if (isThinkingDisplayTurnProcessUserItem(item)) {
+        continue;
+      }
+      if (!hasOpenTurn || currentTurnHasStats || isThinkingDisplayTurnStartUserItem(item)) {
         hasOpenTurn = true;
         currentTurnHasStats = false;
         currentProcessFirstThinkingId = null;
       }
       continue;
     }
+    const contextCompactionItem = item.blocks.some(isContextCompactionBlock);
     if (!hasOpenTurn || currentTurnHasStats) {
       hasOpenTurn = true;
       currentTurnHasStats = false;
@@ -140,8 +146,33 @@ function collectThinkingBlockVisibility(renderItems: ConversationRenderItem[]): 
     if (item.blocks.some((block) => block.kind === "turn-stats")) {
       currentTurnHasStats = true;
       currentProcessFirstThinkingId = null;
+      continue;
+    }
+    if (contextCompactionItem) {
+      currentTurnHasStats = true;
+      currentProcessFirstThinkingId = null;
     }
   }
 
   return { all, firstByProcess };
+}
+
+// isThinkingDisplayTurnProcessUserItem returns whether one user row belongs inside an existing process.
+// isThinkingDisplayTurnProcessUserItem 判断单条用户记录是否属于已有过程内部。
+function isThinkingDisplayTurnProcessUserItem(item: ConversationRenderItem): boolean {
+  if (item.role !== "user") {
+    return false;
+  }
+  return metadataValue(item.userMessage?.metadata ?? item.sourceMessage?.metadata, ["turn_process"]) === true;
+}
+
+// isThinkingDisplayTurnStartUserItem returns whether one user row explicitly starts a new process.
+// isThinkingDisplayTurnStartUserItem 判断单条用户记录是否显式开启新的过程。
+function isThinkingDisplayTurnStartUserItem(item: ConversationRenderItem): boolean {
+  if (item.role !== "user") {
+    return false;
+  }
+  const metadata = item.userMessage?.metadata ?? item.sourceMessage?.metadata;
+  return metadataValue(metadata, ["starts_user_turn"]) === true
+    && metadataValue(metadata, ["turn_process"]) !== true;
 }

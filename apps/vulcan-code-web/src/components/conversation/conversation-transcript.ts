@@ -66,6 +66,7 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
     const projectionId = projectionIds[messageIndex] ?? message.id;
     const projectionMessage = projectionId === message.id ? message : { ...message, id: projectionId };
     if (message.role === "user") {
+      activeCompactionSectionId = null;
       items.push({
         id: projectionId,
         renderKey: `item:${projectionId}`,
@@ -92,7 +93,7 @@ export function projectConversationRenderItems(messages: ConversationMessage[]):
           activeCompactionSectionId = sectionKey;
         }
         if (block.compactionRole === "end") {
-          activeCompactionSectionId = activeCompactionSectionId === sectionKey ? null : activeCompactionSectionId;
+          activeCompactionSectionId = null;
         }
         continue;
       }

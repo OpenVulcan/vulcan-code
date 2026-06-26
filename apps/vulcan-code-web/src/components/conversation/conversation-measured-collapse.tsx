@@ -60,12 +60,7 @@ export function ConversationMeasuredCollapseProvider(props: ConversationMeasured
       scopeIdRef.current = scopeId;
       pendingNotificationRef.current = null;
       setMemory({ ...initialMemory });
-      return;
     }
-    if (pendingNotificationRef.current !== null) {
-      return;
-    }
-    setMemory((current) => (conversationMeasuredCollapseMapEqual(current, initialMemory) ? current : { ...initialMemory }));
   }, [initialMemory, scopeId]);
 
   React.useEffect(() => {
@@ -159,7 +154,7 @@ export function useConversationMeasuredExpansion(
     setLocalExpanded(expanded);
   }, [collapseId, contextSetExpanded]);
 
-  return [remembered ?? localExpanded, setExpanded];
+  return [localExpanded, setExpanded];
 }
 
 // ConversationMeasuredCollapseProps describes one virtual-scroll-aware collapse shell.
