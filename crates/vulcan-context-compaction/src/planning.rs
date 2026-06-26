@@ -7,7 +7,10 @@ use vulcan_context::{
     ContextCompactionPolicy, SessionCompactionEntry, SessionMessageEntry, SessionMessageKind,
     SessionMessageRecordKind, estimate_mixed_language_text_tokens,
 };
-use vulcan_prompt_composer::build_context_compaction_request_prompt;
+use vulcan_prompt_composer::{
+    ContextCompactionRequestPromptMode, build_context_compaction_request_prompt,
+    build_context_compaction_request_prompt_for_mode,
+};
 
 const PREVIOUS_SUMMARY_START_TAG: &str = "<previous-summary>";
 const PREVIOUS_SUMMARY_END_TAG: &str = "</previous-summary>";
@@ -37,6 +40,15 @@ pub struct CompactionSummaryRecord {
     /// Compact preview extracted from the summary body for diagnostics and UI reuse.
     /// 从摘要正文中提取的紧凑预览，供诊断与界面复用。
     pub preview: String,
+}
+
+/// Options used when building the synthetic post-compaction continuation prompt.
+/// 构建压缩后合成续写提示词时使用的选项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CompactionContinuationPromptOptions {
+    /// Whether recent messages are known to be preserved verbatim after the summary.
+    /// 是否已知摘要后会按原文保留最近消息。
+    pub recent_messages_preserved: bool,
 }
 
 /// Input consumed by the context compaction planner.
@@ -435,10 +447,57 @@ pub fn build_compaction_request_prompt() -> String {
     build_context_compaction_request_prompt()
 }
 
+/// Builds the internal user prompt for one mode-specific compact continuation summary.
+/// 构建指定模式的紧凑续写总结内部用户提示词。
+///
+/// # Parameters
+/// # 参数
+/// `mode` selects the compaction source assumptions explained to the model.
+/// `mode` 选择告知模型的压缩源假设。
+///
+/// # Returns
+/// # 返回值
+/// The mode-aware prompt used by prompt-based compaction attempts.
+/// 返回提示词式压缩尝试使用的模式感知提示词。
+pub fn build_compaction_request_prompt_for_mode(
+    mode: ContextCompactionRequestPromptMode,
+) -> String {
+    build_context_compaction_request_prompt_for_mode(mode)
+}
+
 /// Builds the synthetic continuation prompt injected as the first user message after compaction completes.
 /// 构建在压缩完成后注入为首条用户消息的合成续写提示词。
 pub fn build_compaction_continuation_prompt(summary_text: &str) -> String {
+    build_compaction_continuation_prompt_with_options(
+        summary_text,
+        CompactionContinuationPromptOptions::default(),
+    )
+}
+
+/// Builds the synthetic continuation prompt with explicit post-compaction context facts.
+/// 根据明确的压缩后上下文事实构建合成续写提示词。
+///
+/// # Parameters
+/// # 参数
+/// `summary_text` is the durable summary payload to wrap.
+/// `summary_text` 是需要包装的持久摘要正文。
+/// `options` contains facts about the post-compaction retained context.
+/// `options` 包含压缩后保留上下文的事实。
+///
+/// # Returns
+/// # 返回值
+/// The synthetic continuation prompt inserted as the new context anchor.
+/// 返回作为新上下文锚点插入的合成续写提示词。
+pub fn build_compaction_continuation_prompt_with_options(
+    summary_text: &str,
+    options: CompactionContinuationPromptOptions,
+) -> String {
     let normalized_summary = normalize_compaction_summary_text(summary_text);
+    let retained_tail_note = if options.recent_messages_preserved {
+        "Recent messages after this summary are preserved verbatim below. Treat them as the live continuation and do not repeat them.\n\n"
+    } else {
+        ""
+    };
     format!(
         "This session is being continued from earlier context that was compacted to fit the model context window.\n\
 \n\
@@ -446,6 +505,7 @@ pub fn build_compaction_continuation_prompt(summary_text: &str) -> String {
 {normalized_summary}\n\
 </previous-summary>\n\
 \n\
+{retained_tail_note}\
 Continue from the newer messages below without restarting the conversation, repeating this summary, or asking for the same information again."
     )
 }
@@ -581,7 +641,12 @@ fn build_compaction_result_from_summary_text(
     summary_text: String,
 ) -> CompactionResult {
     let normalized_summary = normalize_compaction_summary_text(&summary_text);
-    let continuation_prompt = build_compaction_continuation_prompt(&normalized_summary);
+    let continuation_prompt = build_compaction_continuation_prompt_with_options(
+        &normalized_summary,
+        CompactionContinuationPromptOptions {
+            recent_messages_preserved: plan.retained_tail_start_turn_index.is_some(),
+        },
+    );
     CompactionResult {
         summary_record: CompactionSummaryRecord {
             kind: SessionMessageKind::User,
@@ -1251,6 +1316,52 @@ mod tests {
                 .summary_record
                 .body
                 .contains("<previous-summary>\n保留目标、约束和未完成工作，同时不要重复工具说明。\n</previous-summary>")
+        );
+        assert!(
+            result
+                .summary_record
+                .body
+                .contains("Recent messages after this summary are preserved verbatim below.")
+        );
+    }
+
+    /// Verifies continuation prompts only mention preserved recent messages when that fact is explicit.
+    /// 验证续写提示词只在明确存在最近消息保留事实时才提及该事实。
+    #[test]
+    fn continuation_prompt_tail_note_requires_explicit_option() {
+        let default_prompt = build_compaction_continuation_prompt("摘要");
+        let prompt_with_tail = build_compaction_continuation_prompt_with_options(
+            "摘要",
+            CompactionContinuationPromptOptions {
+                recent_messages_preserved: true,
+            },
+        );
+
+        assert!(!default_prompt.contains("preserved verbatim below"));
+        assert!(prompt_with_tail.contains("preserved verbatim below"));
+    }
+
+    /// Verifies compaction results omit the retained-tail note when no tail remains.
+    /// 验证压缩结果在没有尾部保留时不会写入尾部保留提示。
+    #[test]
+    fn compaction_result_omits_tail_note_without_retained_tail() {
+        let plan = CompactionPlan {
+            source_messages: Vec::new(),
+            source_until_message_id: Some(String::from("m-1")),
+            source_until_turn_index: Some(1),
+            retained_tail_start_turn_index: None,
+            compaction_id: String::from("cp-1"),
+            created_at: String::from("20"),
+            policy: ContextCompactionPolicy::default(),
+        };
+
+        let result = CompactionResult::from_model_summary(&plan, "摘要");
+
+        assert!(
+            !result
+                .summary_record
+                .body
+                .contains("preserved verbatim below")
         );
     }
 

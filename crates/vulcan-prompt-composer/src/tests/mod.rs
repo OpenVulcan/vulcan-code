@@ -5,7 +5,8 @@ use crate::composer::engine::PromptComposerEngine;
 use crate::composer::request::PromptAssemblyInput;
 use crate::composer::resources::PromptComposerResourceConfig;
 use crate::session::compaction::{
-    build_context_compaction_developer_segment, build_context_compaction_request_prompt,
+    ContextCompactionRequestPromptMode, build_context_compaction_developer_segment,
+    build_context_compaction_request_prompt, build_context_compaction_request_prompt_for_mode,
 };
 use crate::session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
 use crate::source::project_rules::{DEFAULT_PROJECT_RULES_FILE_NAME, ProjectRulesFileCache};
@@ -89,6 +90,25 @@ fn context_compaction_prompt_helpers_share_one_source() {
     assert!(developer_segment.contains("Tool calls will be rejected"));
     assert!(!request_prompt.is_empty());
     assert!(!developer_segment.is_empty());
+}
+
+/// Verifies compaction prompt variants explain the correct source scope.
+/// 验证上下文压缩提示词变体会说明正确的源范围。
+#[test]
+fn context_compaction_prompt_variants_explain_source_scope() {
+    let full_prompt = build_context_compaction_request_prompt_for_mode(
+        ContextCompactionRequestPromptMode::FullFidelityMerge,
+    );
+    let pruned_prompt = build_context_compaction_request_prompt_for_mode(
+        ContextCompactionRequestPromptMode::PrunedFallback,
+    );
+
+    assert!(full_prompt.contains("full cloned runtime conversation"));
+    assert!(full_prompt.contains("merge newer facts"));
+    assert!(!full_prompt.contains("clone-pruned source"));
+    assert!(pruned_prompt.contains("clone-pruned source"));
+    assert!(pruned_prompt.contains("do not invent omitted details"));
+    assert!(pruned_prompt.contains("record that limitation"));
 }
 
 /// Verifies directory resources can override personality and tool-help entries.

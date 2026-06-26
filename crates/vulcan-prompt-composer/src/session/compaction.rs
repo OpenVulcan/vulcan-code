@@ -10,6 +10,18 @@ pub enum PromptCompactionSignal {
     RebuildFromBaseline,
 }
 
+/// Prompt variant used for one context-compaction request.
+/// 单次上下文压缩请求使用的提示词变体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextCompactionRequestPromptMode {
+    /// Full-fidelity mode keeps the cloned runtime conversation visible to preserve provider cache continuity.
+    /// 完整保真模式保留克隆运行时会话可见，以维持 Provider 缓存连续性。
+    FullFidelityMerge,
+    /// Pruned-fallback mode is used when the target model window cannot hold the full cloned source.
+    /// 剪枝降级模式用于目标模型窗口无法容纳完整克隆源的情况。
+    PrunedFallback,
+}
+
 /// Builds the user-facing prompt used to ask the model for one compact continuation summary.
 /// 构建用于请求模型生成紧凑续写总结的用户侧提示词。
 ///
@@ -18,10 +30,46 @@ pub enum PromptCompactionSignal {
 /// The user prompt that defines the compaction summary structure and no-tool protocol.
 /// 返回定义压缩摘要结构与禁止工具协议的用户提示词。
 pub fn build_context_compaction_request_prompt() -> String {
-    String::from(
+    build_context_compaction_request_prompt_for_mode(
+        ContextCompactionRequestPromptMode::FullFidelityMerge,
+    )
+}
+
+/// Builds the user-facing prompt for a specific context-compaction source mode.
+/// 为指定的上下文压缩源模式构建用户侧提示词。
+///
+/// # Parameters
+/// # 参数
+/// `mode` selects the source-scope instructions used by this compaction attempt.
+/// `mode` 选择本次压缩尝试使用的源范围指令。
+///
+/// # Returns
+/// # 返回值
+/// The mode-aware user prompt that defines the summary structure and no-tool protocol.
+/// 返回定义摘要结构与禁止工具协议的模式感知用户提示词。
+pub fn build_context_compaction_request_prompt_for_mode(
+    mode: ContextCompactionRequestPromptMode,
+) -> String {
+    let source_scope = match mode {
+        ContextCompactionRequestPromptMode::FullFidelityMerge => {
+            "Source scope:\n\
+- You can see the full cloned runtime conversation for this compaction attempt.\n\
+- Treat any <previous-summary> block as durable carried-forward memory, then merge newer facts into it.\n\
+- Do not duplicate the retained recent tail; it may remain below the final continuation summary."
+        }
+        ContextCompactionRequestPromptMode::PrunedFallback => {
+            "Source scope:\n\
+- You may see only the clone-pruned source that fits the target model context window.\n\
+- Summarize only the visible source plus any <previous-summary> durable memory; do not invent omitted details.\n\
+- If pruning or truncation may hide important details, record that limitation in Problem Solving or Current Work."
+        }
+    };
+    format!(
         "CRITICAL: Respond with text only. Do not call tools. Tool calls will be rejected and will waste the only compaction turn.\n\
 \n\
 Create a detailed continuation summary for an AI coding workflow. The summary must let the next turn continue without losing user intent, technical state, or current work.\n\
+\n\
+{source_scope}\n\
 \n\
 Output format:\n\
 - Respond with an <analysis> block followed by a <summary> block.\n\

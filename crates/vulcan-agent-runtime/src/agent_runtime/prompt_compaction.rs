@@ -28,8 +28,9 @@ use vulcan_context::{
 };
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
-    CompactionResult, build_compaction_request_prompt, estimate_compaction_source_tokens,
-    extract_compaction_model_summary, prepare_compaction_source_for_target_budget,
+    CompactionResult, ContextCompactionRequestPromptMode, build_compaction_request_prompt_for_mode,
+    estimate_compaction_source_tokens, extract_compaction_model_summary,
+    prepare_compaction_source_for_target_budget,
 };
 
 /// Maximum full-fidelity prompt-compaction attempts before clone-only downgrade is allowed.
@@ -266,6 +267,8 @@ pub fn stream_prompt_compaction_job(
                 &prepared_source.source_messages,
                 prune_mode,
             );
+            let prompt_mode =
+                compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
             let launch_request = build_prompt_compaction_launch_request(
                 request.session_id,
                 &request.session_title,
@@ -273,6 +276,7 @@ pub fn stream_prompt_compaction_job(
                 request.reasoning_effort,
                 request.ai_tool_configuration.clone(),
                 source_conversation_state,
+                prompt_mode,
             );
 
             yield prompt_compaction_progress("prepare_runtime");
@@ -416,6 +420,8 @@ pub fn stream_prompt_compaction_foundation_job(
                 &prepared_source.source_messages,
                 prune_mode,
             );
+            let prompt_mode =
+                compaction_prompt_mode_for_prune_mode(prepared_source.prune_report.mode);
             let launch_request = build_prompt_compaction_launch_request(
                 request.session_id,
                 &request.session_title,
@@ -423,6 +429,7 @@ pub fn stream_prompt_compaction_foundation_job(
                 request.reasoning_effort,
                 request.ai_tool_configuration.clone(),
                 source_conversation_state,
+                prompt_mode,
             );
 
             yield prompt_compaction_progress("prepare_execution");
@@ -745,6 +752,28 @@ fn input_prune_report_for_execution(
     (prune_report.mode != CompactionInputPruneMode::None).then(|| prune_report.clone())
 }
 
+/// Selects the compaction prompt variant that matches one prepared input pruning mode.
+/// 选择与已准备输入剪枝模式匹配的压缩提示词变体。
+///
+/// # Parameters
+/// # 参数
+/// `prune_mode` is the actual pruning mode used by the prepared compaction source.
+/// `prune_mode` 是已准备压缩源实际使用的剪枝模式。
+///
+/// # Returns
+/// # 返回值
+/// Returns the full-fidelity merge prompt for unpruned input, otherwise the pruned-fallback prompt.
+/// 未剪枝输入返回完整保真合并提示词，否则返回剪枝降级提示词。
+fn compaction_prompt_mode_for_prune_mode(
+    prune_mode: CompactionInputPruneMode,
+) -> ContextCompactionRequestPromptMode {
+    if prune_mode == CompactionInputPruneMode::None {
+        ContextCompactionRequestPromptMode::FullFidelityMerge
+    } else {
+        ContextCompactionRequestPromptMode::PrunedFallback
+    }
+}
+
 /// Returns whether one provider or preparation error clearly indicates context overflow.
 /// 判断 provider 或准备错误是否明确表示上下文溢出。
 ///
@@ -812,6 +841,11 @@ fn append_prune_report_to_error(
 
 /// Builds the shared execution-preparation request for prompt-based context compaction.
 /// 构建提示词式上下文压缩使用的共享执行准备请求。
+///
+/// # Parameters
+/// # 参数
+/// `prompt_mode` selects the prompt variant that matches the prepared compaction input.
+/// `prompt_mode` 选择与已准备压缩输入匹配的提示词变体。
 fn build_prompt_compaction_launch_request(
     session_id: crate::model::SessionId,
     session_title: &str,
@@ -819,6 +853,7 @@ fn build_prompt_compaction_launch_request(
     reasoning_effort: ReasoningEffortLevel,
     ai_tool_configuration: PersistedAiToolConfiguration,
     conversation_state: vulcan_context::SessionConversationState,
+    prompt_mode: ContextCompactionRequestPromptMode,
 ) -> ExecutionPreparationRequest {
     ExecutionPreparationRequest {
         session_id,
@@ -831,7 +866,7 @@ fn build_prompt_compaction_launch_request(
         task_session_store_root: None,
         session_title: session_title.to_string(),
         workspace_path: workspace_path.to_string(),
-        prompt: build_compaction_request_prompt(),
+        prompt: build_compaction_request_prompt_for_mode(prompt_mode),
         conversation_state,
         execution_mode: String::from("Compaction"),
         temperature: None,
@@ -1004,6 +1039,26 @@ mod tests {
         assert_eq!(state.messages.len(), 2);
         assert_eq!(state.messages[0].id, "summary-message");
         assert_eq!(state.messages[1].id, tail_message.id);
+    }
+
+    /// Verifies prompt variants follow the prepared input pruning mode.
+    /// 验证提示词变体会跟随已准备输入的剪枝模式。
+    #[test]
+    fn prompt_mode_follows_input_prune_mode() {
+        assert_eq!(
+            compaction_prompt_mode_for_prune_mode(CompactionInputPruneMode::None),
+            ContextCompactionRequestPromptMode::FullFidelityMerge
+        );
+        assert_eq!(
+            compaction_prompt_mode_for_prune_mode(
+                CompactionInputPruneMode::RequiredForWindowDowngrade
+            ),
+            ContextCompactionRequestPromptMode::PrunedFallback
+        );
+        assert_eq!(
+            compaction_prompt_mode_for_prune_mode(CompactionInputPruneMode::RetryAfterFailure),
+            ContextCompactionRequestPromptMode::PrunedFallback
+        );
     }
 
     /// Verifies observed provider usage decides initial downgrade before local estimates.

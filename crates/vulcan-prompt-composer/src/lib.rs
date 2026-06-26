@@ -47,8 +47,9 @@ pub use error::PromptComposerError;
 pub use personality::catalog::{PersonalityCatalog, PersonalityDefinition};
 pub use session::baseline::PromptSessionBaseline;
 pub use session::compaction::{
-    PromptCompactionSignal, build_context_compaction_developer_segment,
-    build_context_compaction_request_prompt,
+    ContextCompactionRequestPromptMode, PromptCompactionSignal,
+    build_context_compaction_developer_segment, build_context_compaction_request_prompt,
+    build_context_compaction_request_prompt_for_mode,
 };
 pub use session::delta_state::{ProjectRulesDeltaKind, ProjectRulesDeltaState};
 pub use source::project_prompt::ProjectPromptFileCache;
