@@ -41,5 +41,6 @@ target
 # WebUI 生成的依赖与构建产物。
 /apps/vulcan-code-web/node_modules/
 /apps/vulcan-code-web/dist/
+/apps/vulcan-code-web/.vite/
 /apps/vulcan-code-web/tsconfig.tsbuildinfo
 /apps/vulcan-code-tauri/gen/
