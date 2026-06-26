@@ -61,7 +61,7 @@ pub fn build_context_compaction_request_prompt_for_mode(
             "Source scope:\n\
 - You may see only the clone-pruned source that fits the target model context window.\n\
 - Summarize only the visible source plus any <previous-summary> durable memory; do not invent omitted details.\n\
-- If pruning or truncation may hide important details, record that limitation in Problem Solving or Current Work."
+- If pruning or truncation may hide important details, record that limitation in Progress / Blocked or Next Steps."
         }
     };
     format!(
@@ -89,12 +89,12 @@ Summary requirements:\n\
 - If the input contains a <previous-summary> block, earlier compacted summary, or continuation prompt, treat it as durable memory rather than ordinary dialogue.\n\
 - Preserve still-relevant details from earlier summaries by carrying them forward with minimal rewriting; only remove details that are clearly obsolete, contradicted, or duplicated by newer context.\n\
 - Focus new summarization effort on context added after the previous summary, then merge it into the carried-forward memory.\n\
-- Include these sections in <summary>: Primary Request and Intent; Key Technical Concepts; Files and Code Sections; Errors and Fixes; Problem Solving; All User Messages; Completed Work; Pending Tasks; Current Work; Optional Next Step.\n\
+- Structure <summary> with these Markdown sections and subsections: Goal; Constraints & Preferences; Progress / Done; Progress / In Progress; Progress / Blocked; Key Decisions; Technical Context; Relevant Files and Symbols; Errors and Fixes; User Messages and Corrections; Next Steps.\n\
 - Keep every listed summary section; if a section has no durable content, write \"(none)\".\n\
 - Mention exact file paths, function/type names, commands, and verification outcomes when they are needed to continue safely.\n\
 - Preserve user corrections and preferences, especially any instruction that changed how work should proceed.\n\
-- For Optional Next Step, include only the next step directly aligned with the most recent active task; do not resurrect older completed work.\n\
-- When Optional Next Step is present, include one or two short direct quotes from the most recent user/assistant messages that prove exactly where continuation should resume.\n\
+- For Next Steps, include only the next action directly aligned with the most recent active task; do not resurrect older completed work.\n\
+- When Next Steps is present, include one or two short direct quotes from the most recent user/assistant messages that prove exactly where continuation should resume.\n\
 - Assume newer messages will remain below this summary, so do not repeat the retained recent tail.\n\
 - Do not greet, do not ask follow-up questions, and do not claim you called tools during this compaction run.\n\
 \n\
@@ -106,39 +106,44 @@ Check the conversation chronologically, identify durable user intent, merge any 
 </analysis>\n\
 \n\
 <summary>\n\
-1. Primary Request and Intent:\n\
-   - [Concise but complete description of the user's active request and why it matters.]\n\
+## Goal\n\
+- [Concise but complete description of the user's active request and why it matters.]\n\
 \n\
-2. Key Technical Concepts:\n\
-   - [Important framework, runtime, protocol, architecture, or policy concept.]\n\
+## Constraints & Preferences\n\
+- [Still-active user instruction, preference, boundary, or acceptance rule.]\n\
+- [Write \"(none)\" if there is no durable constraint.]\n\
 \n\
-3. Files and Code Sections:\n\
-   - [path/to/file.ext]\n\
-     - [Why this file matters.]\n\
-     - [Relevant function, type, command, or code section if needed to continue safely.]\n\
+## Progress\n\
+### Done\n\
+- [Concrete completed implementation, verification, decision, or investigation result.]\n\
 \n\
-4. Errors and Fixes:\n\
-   - [Exact error or symptom.]\n\
-     - [Root cause found.]\n\
-     - [Fix or mitigation applied, including user corrections when relevant.]\n\
+### In Progress\n\
+- [What was happening immediately before compaction, including files, commands, and state.]\n\
 \n\
-5. Problem Solving:\n\
-   - [Problem solved, investigation result, or remaining diagnostic state.]\n\
+### Blocked\n\
+- [Blocker, missing evidence, failed validation, or \"(none)\".]\n\
 \n\
-6. All User Messages:\n\
-   - [Durable non-tool user instruction, correction, preference, or change of direction.]\n\
+## Key Decisions\n\
+- [Decision, accepted tradeoff, or rejected approach that still matters.]\n\
 \n\
-7. Completed Work:\n\
-   - [Concrete completed implementation, verification, or decision.]\n\
+## Technical Context\n\
+- [Important framework, runtime, protocol, architecture, policy, or data-flow concept.]\n\
 \n\
-8. Pending Tasks:\n\
-   - [Explicitly requested work that is not complete, or \"(none)\".]\n\
+## Relevant Files and Symbols\n\
+- [path/to/file.ext]\n\
+  - [Why this file matters.]\n\
+  - [Relevant function, type, command, or code section if needed to continue safely.]\n\
 \n\
-9. Current Work:\n\
-   - [What was happening immediately before compaction, including files, commands, and state.]\n\
+## Errors and Fixes\n\
+- [Exact error or symptom.]\n\
+  - [Root cause found.]\n\
+  - [Fix or mitigation applied, including user corrections when relevant.]\n\
 \n\
-10. Optional Next Step:\n\
-   - [Only the next action aligned with the latest active request, with 1-2 verbatim quotes from the last exchange that prove the exact resume point.]\n\
+## User Messages and Corrections\n\
+- [Durable non-tool user instruction, correction, preference, or change of direction.]\n\
+\n\
+## Next Steps\n\
+- [Only the next action aligned with the latest active request, with 1-2 verbatim quotes from the last exchange that prove the exact resume point.]\n\
 </summary>\n\
 </example>\n\
 \n\

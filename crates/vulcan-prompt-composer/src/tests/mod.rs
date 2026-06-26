@@ -16,6 +16,17 @@ use crate::source::snapshot::{
 };
 use crate::types::{ModelDescriptor, PersonalitySelection, PromptAssemblyMode, ToolDescriptor};
 
+/// Returns whether text contains CJK characters.
+/// 返回文本是否包含 CJK 字符。
+fn contains_cjk_text(text: &str) -> bool {
+    text.chars().any(|character| {
+        let codepoint = character as u32;
+        (0x4E00..=0x9FFF).contains(&codepoint)
+            || (0x3400..=0x4DBF).contains(&codepoint)
+            || (0xF900..=0xFAFF).contains(&codepoint)
+    })
+}
+
 /// Verifies the built-in catalog defaults to friendly.
 /// 验证内置目录默认使用 friendly。
 #[test]
@@ -70,14 +81,18 @@ fn context_compaction_prompt_helpers_share_one_source() {
     assert!(request_prompt.contains("Keep every listed summary section"));
     assert!(request_prompt.contains("Example output structure:"));
     assert!(request_prompt.contains("<example>"));
-    assert!(request_prompt.contains("All User Messages"));
-    assert!(request_prompt.contains("Problem Solving"));
-    assert!(request_prompt.contains("Files and Code Sections"));
+    assert!(request_prompt.contains("## Goal"));
+    assert!(request_prompt.contains("## Constraints & Preferences"));
+    assert!(request_prompt.contains("## Progress"));
+    assert!(request_prompt.contains("### Done"));
+    assert!(request_prompt.contains("### In Progress"));
+    assert!(request_prompt.contains("### Blocked"));
+    assert!(request_prompt.contains("## Key Decisions"));
+    assert!(request_prompt.contains("## Technical Context"));
+    assert!(request_prompt.contains("## Relevant Files and Symbols"));
     assert!(request_prompt.contains("Errors and Fixes"));
-    assert!(request_prompt.contains("Completed Work"));
-    assert!(request_prompt.contains("Pending Tasks"));
-    assert!(request_prompt.contains("Current Work"));
-    assert!(request_prompt.contains("Optional Next Step"));
+    assert!(request_prompt.contains("User Messages and Corrections"));
+    assert!(request_prompt.contains("## Next Steps"));
     assert!(request_prompt.contains("[path/to/file.ext]"));
     assert!(request_prompt.contains("\"(none)\""));
     assert!(request_prompt.contains("1-2 verbatim quotes"));
@@ -90,6 +105,14 @@ fn context_compaction_prompt_helpers_share_one_source() {
     assert!(developer_segment.contains("Tool calls will be rejected"));
     assert!(!request_prompt.is_empty());
     assert!(!developer_segment.is_empty());
+    assert!(
+        !contains_cjk_text(&request_prompt),
+        "model-visible compaction request prompt must remain fixed English"
+    );
+    assert!(
+        !contains_cjk_text(&developer_segment),
+        "model-visible compaction developer segment must remain fixed English"
+    );
 }
 
 /// Verifies compaction prompt variants explain the correct source scope.

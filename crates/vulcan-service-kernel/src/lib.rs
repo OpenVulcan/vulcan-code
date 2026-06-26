@@ -20262,7 +20262,7 @@ fn append_auto_context_compaction_continuation_message(
         draft_runtime_state.conversation_state.messages.len(),
     );
     let text = format!(
-        "{AUTO_COMPACTION_CONTINUATION_PREFIX} Continue the ongoing work from the retained context. The last user message before compaction was:\n<last_user_message>\n{last_user_message}\n</last_user_message>"
+        "{AUTO_COMPACTION_CONTINUATION_PREFIX}\n\nThis is a synthetic continuation prompt for the resumed provider request, not a new user request. Continue the interrupted work from the retained context immediately. Do not greet, recap the compaction, or ask the user to restate the task. The last real user message before compaction was:\n<last_user_message>\n{last_user_message}\n</last_user_message>"
     );
     draft_runtime_state
         .conversation_state
@@ -32280,6 +32280,29 @@ mod tests {
     use vulcan_agent_runtime::provider_capabilities::ResolvedAiToolCapability;
     use vulcan_provider_config::config::AiToolPolicy;
 
+    /// Returns whether text contains CJK characters.
+    /// 返回文本是否包含 CJK 字符。
+    fn contains_cjk_text(text: &str) -> bool {
+        text.chars().any(|character| {
+            let codepoint = character as u32;
+            (0x4E00..=0x9FFF).contains(&codepoint)
+                || (0x3400..=0x4DBF).contains(&codepoint)
+                || (0xF900..=0xFAFF).contains(&codepoint)
+        })
+    }
+
+    /// Removes the variable last-user payload from an automatic compaction continuation prompt.
+    /// 从自动压缩续接提示中移除可变的最后用户消息载荷。
+    fn auto_compaction_continuation_shell(prompt: &str) -> String {
+        let Some((before_user, after_start)) = prompt.split_once("<last_user_message>") else {
+            return prompt.to_string();
+        };
+        let Some((_, after_user)) = after_start.split_once("</last_user_message>") else {
+            return prompt.to_string();
+        };
+        format!("{before_user}<last_user_message></last_user_message>{after_user}")
+    }
+
     /// Verifies todolist host results are projected into session runtime todolist state.
     /// 验证 todolist 宿主结果会投影为会话运行态 todolist 状态。
     #[test]
@@ -32456,7 +32479,7 @@ mod tests {
         let execution = PromptCompactionExecution {
             compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
                 &plan,
-                "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+                "## Goal\n- 保留上下文压缩升级目标。",
             ),
             fallback_used: false,
             provider_request_count: 1,
@@ -32470,7 +32493,7 @@ mod tests {
             "预算快照",
             MANUAL_CONTEXT_COMPACTION_TRIGGER,
             1,
-            "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            "## Goal\n- 保留上下文压缩升级目标。",
             &execution,
         )
         .expect("draft should be built from a valid summary");
@@ -32548,7 +32571,7 @@ mod tests {
         let execution = PromptCompactionExecution {
             compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
                 &plan,
-                "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+                "## Goal\n- 保留上下文压缩升级目标。",
             ),
             fallback_used: false,
             provider_request_count: 1,
@@ -32562,7 +32585,7 @@ mod tests {
             "预算快照",
             MANUAL_CONTEXT_COMPACTION_TRIGGER,
             1,
-            "Primary Request and Intent:\n- 保留上下文压缩升级目标。",
+            "## Goal\n- 保留上下文压缩升级目标。",
             &execution,
         )
         .expect("draft should be built from a valid summary");
@@ -32601,12 +32624,16 @@ mod tests {
     fn webui_context_compaction_draft_appends_auto_continuation_only_for_auto_trigger() {
         let session_id = SessionId::new_v4();
         let messages = vec![
-            SessionMessageEntry::new(SessionMessageKind::User, "用户", "旧问题")
+            SessionMessageEntry::new(SessionMessageKind::User, "User", "Old question")
                 .with_runtime_metadata("user-old", "1780000000000"),
-            SessionMessageEntry::new(SessionMessageKind::Assistant, "助手", "旧回答")
+            SessionMessageEntry::new(SessionMessageKind::Assistant, "Assistant", "Old answer")
                 .with_runtime_metadata("assistant-old", "1780000000001"),
-            SessionMessageEntry::new(SessionMessageKind::User, "用户", "请继续真实任务")
-                .with_runtime_metadata("user-latest", "1780000000002"),
+            SessionMessageEntry::new(
+                SessionMessageKind::User,
+                "User",
+                "Please continue the real task",
+            )
+            .with_runtime_metadata("user-latest", "1780000000002"),
         ];
         let active_runtime_state = SessionRuntimeStateEntry {
             conversation_state: conversation_state_from_session_messages(&messages),
@@ -32626,7 +32653,7 @@ mod tests {
         let manual_execution = PromptCompactionExecution {
             compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
                 &plan,
-                "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+                "## Goal\n- Keep automatic compaction continuation semantics.",
             ),
             fallback_used: false,
             provider_request_count: 1,
@@ -32636,10 +32663,10 @@ mod tests {
             &active_runtime_state,
             session_id,
             "section-manual",
-            "预算快照",
+            "Budget snapshot",
             MANUAL_CONTEXT_COMPACTION_TRIGGER,
             1,
-            "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            "## Goal\n- Keep automatic compaction continuation semantics.",
             &manual_execution,
         )
         .expect("manual draft should be built from a valid summary");
@@ -32660,7 +32687,7 @@ mod tests {
         let auto_execution = PromptCompactionExecution {
             compaction_result: vulcan_context_compaction::CompactionResult::from_model_summary(
                 &plan,
-                "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+                "## Goal\n- Keep automatic compaction continuation semantics.",
             ),
             fallback_used: false,
             provider_request_count: 1,
@@ -32670,10 +32697,10 @@ mod tests {
             &active_runtime_state,
             session_id,
             "section-auto",
-            "预算快照",
+            "Budget snapshot",
             AUTO_CONTEXT_COMPACTION_TRIGGER,
             1,
-            "Primary Request and Intent:\n- 保留自动压缩续接语义。",
+            "## Goal\n- Keep automatic compaction continuation semantics.",
             &auto_execution,
         )
         .expect("automatic draft should be built from a valid summary");
@@ -32691,7 +32718,20 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(continuation_messages.len(), 1);
-        assert!(continuation_messages[0].contains("请继续真实任务"));
+        assert!(continuation_messages[0].contains("synthetic continuation prompt"));
+        assert!(continuation_messages[0].contains("resumed provider request"));
+        assert!(continuation_messages[0].contains("Do not greet"));
+        assert!(continuation_messages[0].contains("Please continue the real task"));
+        assert!(
+            !contains_cjk_text(continuation_messages[0]),
+            "model-visible automatic compaction continuation message must remain fixed English in this host-generated test path"
+        );
+        assert!(
+            !contains_cjk_text(&auto_compaction_continuation_shell(
+                continuation_messages[0]
+            )),
+            "model-visible automatic compaction continuation shell must remain fixed English"
+        );
         assert!(
             auto_draft
                 .runtime_state

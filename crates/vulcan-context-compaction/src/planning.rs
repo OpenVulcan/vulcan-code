@@ -1254,6 +1254,32 @@ fn current_unix_millis_text() -> String {
 mod tests {
     use super::*;
 
+    /// Returns whether text contains CJK characters.
+    /// 返回文本是否包含 CJK 字符。
+    fn contains_cjk_text(text: &str) -> bool {
+        text.chars().any(|character| {
+            let codepoint = character as u32;
+            (0x4E00..=0x9FFF).contains(&codepoint)
+                || (0x3400..=0x4DBF).contains(&codepoint)
+                || (0xF900..=0xFAFF).contains(&codepoint)
+        })
+    }
+
+    /// Removes the variable previous-summary payload from a continuation prompt.
+    /// 从续写提示中移除可变的 previous-summary 载荷。
+    fn continuation_prompt_shell(prompt: &str) -> String {
+        let Some((before_summary, after_start)) = prompt.split_once(PREVIOUS_SUMMARY_START_TAG)
+        else {
+            return prompt.to_string();
+        };
+        let Some((_, after_summary)) = after_start.split_once(PREVIOUS_SUMMARY_END_TAG) else {
+            return prompt.to_string();
+        };
+        format!(
+            "{before_summary}{PREVIOUS_SUMMARY_START_TAG}{PREVIOUS_SUMMARY_END_TAG}{after_summary}"
+        )
+    }
+
     fn test_context_message(
         id: &str,
         kind: SessionMessageKind,
@@ -1339,6 +1365,14 @@ mod tests {
 
         assert!(!default_prompt.contains("preserved verbatim below"));
         assert!(prompt_with_tail.contains("preserved verbatim below"));
+        assert!(
+            !contains_cjk_text(&continuation_prompt_shell(&default_prompt)),
+            "model-visible continuation prompt shell must remain fixed English"
+        );
+        assert!(
+            !contains_cjk_text(&continuation_prompt_shell(&prompt_with_tail)),
+            "model-visible retained-tail continuation prompt shell must remain fixed English"
+        );
     }
 
     /// Verifies compaction results omit the retained-tail note when no tail remains.
