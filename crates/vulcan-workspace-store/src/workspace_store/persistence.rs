@@ -12,10 +12,11 @@ use super::segmented_session_store::{
     delete_segmented_session_by_id, find_segmented_session_directory,
     find_segmented_session_directory_by_id, fork_segmented_session_directory,
     patch_segmented_session_metadata, rebuild_runtime_log_from_conversation_state,
-    replay_segmented_session_context, restore_segmented_session_by_created_date,
-    segmented_session_directory, state_document_from_runtime_state,
-    sync_runtime_log_from_compacted_conversation_state, sync_runtime_log_from_conversation_state,
-    truncate_segmented_session_before_message, write_segmented_session_fork_source, write_state,
+    repair_segmented_session_display_if_needed, replay_segmented_session_context,
+    restore_segmented_session_by_created_date, segmented_session_directory,
+    state_document_from_runtime_state, sync_runtime_log_from_compacted_conversation_state,
+    sync_runtime_log_from_conversation_state, truncate_segmented_session_before_message,
+    write_segmented_session_fork_source, write_state,
 };
 use super::session_addon_store::{read_session_addon_state, write_session_addon_state};
 use super::*;
@@ -289,6 +290,7 @@ pub async fn append_single_session_transcript_suffix(
     else {
         return Ok(());
     };
+    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     append_segmented_session_message_suffix(&session_dir, messages)?;
     Ok(())
 }
@@ -322,6 +324,7 @@ pub async fn persist_single_session_transcript_messages(
     else {
         return Ok(());
     };
+    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     append_segmented_session_message_update(&session_dir, messages)?;
     Ok(())
 }
@@ -1169,6 +1172,12 @@ pub async fn fork_persisted_session(
 ) -> Result<PersistedSessionForkResult, String> {
     let now = current_unix_millis_text();
     let target_session_id_text = target_session_id.to_string();
+    if let Some(source_dir) = find_segmented_session_directory_by_id(
+        &controller.data_root,
+        &source_session.id.to_string(),
+    )? {
+        let _ = repair_segmented_session_display_if_needed(&source_dir)?;
+    }
     fork_segmented_session_directory(
         &controller.data_root,
         &SegmentedSessionForkRequest {
@@ -1223,6 +1232,7 @@ pub fn record_persisted_session_fork_source_marker(
         &target_session_id.to_string(),
     )?
     .ok_or_else(|| String::from("ERR_SESSION_FORK_TARGET_NOT_FOUND"))?;
+    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let replay = replay_segmented_session_context(&session_dir)?;
     let anchor_message_id = replay
         .as_ref()
@@ -1276,6 +1286,7 @@ fn locate_persisted_user_prompt_target(
     let session_dir =
         find_segmented_session_directory_by_id(&controller.data_root, &session_id.to_string())?
             .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_SESSION_NOT_FOUND"))?;
+    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let replay = replay_segmented_session_context(&session_dir)?
         .ok_or_else(|| String::from("ERR_USER_PROMPT_EDIT_EMPTY_SESSION"))?;
     let record_index = replay

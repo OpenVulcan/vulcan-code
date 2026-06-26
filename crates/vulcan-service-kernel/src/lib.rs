@@ -19327,7 +19327,6 @@ fn append_stream_delta_record(
         return Ok(());
     }
     let conversation_id = session_id.to_string();
-    let mut transcript_persist_snapshot: Option<WorkspaceSnapshot> = None;
     let event = {
         let mut guard = state
             .lock()
@@ -19384,9 +19383,6 @@ fn append_stream_delta_record(
             } else {
                 messages.push(projected_entry.clone());
             }
-            if is_new_message {
-                transcript_persist_snapshot = Some(workspace.clone());
-            }
         }
         workspace.session_run_phases.insert(session_id, run_phase);
         sync_hydrated_session_dialogue_ready_marker(workspace, session_id);
@@ -19434,17 +19430,6 @@ fn append_stream_delta_record(
         "workbench_delta_emit",
         ServiceEvent::WorkbenchDelta(Box::new(event)),
     );
-    if let Some(workspace_snapshot) = transcript_persist_snapshot
-        && let Ok(controller_runtime) = controller_runtime_from_state(state)
-    {
-        spawn_workspace_session_transcript_persist_task(
-            state.clone(),
-            controller_runtime,
-            workspace_snapshot,
-            session_id,
-            Some(String::from("stream_delta")),
-        );
-    }
     Ok(())
 }
 

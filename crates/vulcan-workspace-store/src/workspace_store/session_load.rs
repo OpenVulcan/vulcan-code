@@ -6,7 +6,8 @@ use super::segmented_session_store::{
     find_segmented_session_directory, find_segmented_session_directory_by_id,
     read_segmented_session_complete_tool_detail_turn, read_segmented_session_event_window,
     read_segmented_session_tool_detail_window, read_segmented_session_turn_window, read_state,
-    replay_segmented_session_context, segmented_lines_to_session_messages,
+    repair_segmented_session_display_if_needed, replay_segmented_session_context,
+    segmented_lines_to_session_messages,
 };
 use super::session_addon_store::read_session_addon_state;
 use super::*;
@@ -514,6 +515,7 @@ fn load_segmented_window_messages(
     else {
         return Ok(None);
     };
+    let _ = repair_segmented_session_display_if_needed(&session_dir)?;
     let before_seq = before_ordinal.and_then(|value| u64::try_from(value).ok());
     if matches!(
         source_preference,
@@ -822,6 +824,7 @@ fn runtime_state_from_segmented_replay(
     session_id: SessionId,
     session_dir: &std::path::Path,
 ) -> Result<Option<SessionRuntimeStateEntry>, String> {
+    let _ = repair_segmented_session_display_if_needed(session_dir)?;
     let Some(replay) = replay_segmented_session_context(session_dir)? else {
         return Ok(None);
     };

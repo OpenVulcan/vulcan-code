@@ -56,6 +56,9 @@ pub(super) const SEGMENTED_RUNTIME_DIR: &str = "runtime";
 /// Runtime backup directory name used before context compaction.
 /// 上下文压缩前使用的运行时备份目录名。
 pub(super) const SEGMENTED_RUNTIME_BACKUP_DIR: &str = "runtime_backup";
+/// Display maintenance backup directory name stored beside one session directory.
+/// 保存在单个会话目录旁边的显示层维护备份目录名。
+const SEGMENTED_DISPLAY_MAINTENANCE_BACKUP_DIR: &str = ".display_maintenance_backup";
 /// Child task directory name used by the new session layout.
 /// 新会话布局中用于保存子任务的目录名称。
 pub(super) const SEGMENTED_TASK_DIR: &str = "task";
@@ -806,15 +809,18 @@ pub(super) struct SegmentedSessionMetadataPatch {
     pub archived_at: Option<Option<String>>,
 }
 
-/// Latest compaction anchor discovered by reverse segment scanning.
-/// 通过分段倒扫发现的最新压缩锚点。
+/// Latest replacement-history anchor discovered by reverse segment scanning.
+/// 通过分段倒扫发现的最新 replacement-history 锚点。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct SegmentedCompactionAnchor {
-    /// Sequence number of the compaction event.
-    /// 压缩事件的序号。
-    pub compaction_seq: u64,
-    /// Segment file that contains the compaction event.
-    /// 包含压缩事件的分段文件。
+    /// Sequence number of the replacement anchor event.
+    /// replacement 锚点事件的序号。
+    pub anchor_seq: u64,
+    /// Event kind that supplied the replacement history.
+    /// 提供 replacement history 的事件类型。
+    pub anchor_kind: SegmentedSessionEventKind,
+    /// Segment file that contains the replacement anchor event.
+    /// 包含 replacement 锚点事件的分段文件。
     pub segment_file: String,
     /// Zero-based line index inside the segment file.
     /// 分段文件内从零开始的行索引。
@@ -860,12 +866,12 @@ pub(super) struct SegmentedRollbackMarker {
     pub payload: Value,
 }
 
-/// Result returned by a reverse compaction anchor scan.
-/// 压缩锚点倒扫返回的结果。
+/// Result returned by a reverse replacement anchor scan.
+/// replacement 锚点倒扫返回的结果。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(super) struct SegmentedCompactionScanResult {
-    /// Latest compaction anchor when one was found.
-    /// 找到时记录的最新压缩锚点。
+    /// Latest replacement-history anchor when one was found.
+    /// 找到时记录的最新 replacement-history 锚点。
     pub anchor: Option<SegmentedCompactionAnchor>,
     /// Events after the anchor in forward replay order, or all scanned events when no anchor exists.
     /// 按正向重放顺序排列的锚点后事件；没有锚点时为全部已扫描事件。
@@ -879,6 +885,38 @@ pub(super) struct SegmentedCompactionScanResult {
     /// Number of segment files read by the scan.
     /// 本次扫描读取的分段文件数量。
     pub scanned_segment_count: usize,
+}
+
+/// Report produced after rewriting an invalid display transcript.
+/// 重写无效显示转录后生成的报告。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct SegmentedDisplayMaintenanceReport {
+    /// Maintenance reason chosen by the detector.
+    /// 检测器选择的维护原因。
+    pub reason: String,
+    /// Backup directory containing the original session files.
+    /// 包含原始会话文件的备份目录。
+    pub backup_dir: String,
+    /// Number of physical segment files before rebuilding.
+    /// 重建前的物理分段文件数量。
+    pub original_segment_count: usize,
+    /// Number of physical segment files after rebuilding.
+    /// 重建后的物理分段文件数量。
+    pub rebuilt_segment_count: usize,
+    /// Number of effective display messages restored into clean segments.
+    /// 恢复到干净分段中的有效显示消息数量。
+    pub effective_message_count: usize,
+}
+
+/// Temporary output produced while building repaired display segments.
+/// 构建修复后显示分段时产生的临时输出。
+struct RepairedDisplayBuild {
+    /// Metadata that matches the repaired temporary segment files.
+    /// 与修复后临时分段文件匹配的元数据。
+    metadata: SegmentedSessionMetadata,
+    /// Temporary directory containing repaired segment files.
+    /// 包含修复后分段文件的临时目录。
+    temp_dir: PathBuf,
 }
 
 /// Rebuilt conversation state produced by replaying segmented compaction history.
@@ -2345,12 +2383,13 @@ pub(super) fn replay_segmented_session_context(
         .or_else(|| {
             scan.anchor
                 .as_ref()
-                .map(|anchor| anchor.compaction_seq.to_string())
+                .map(|anchor| anchor.anchor_seq.to_string())
         });
     let last_compaction_id = scan
         .anchor
         .as_ref()
-        .map(|anchor| format!("segmented-compaction-{}", anchor.compaction_seq));
+        .filter(|anchor| anchor.anchor_kind == SegmentedSessionEventKind::Compacted)
+        .map(|anchor| format!("segmented-compaction-{}", anchor.anchor_seq));
     let context_start_message_id = messages
         .first()
         .and_then(|message| (!message.id.trim().is_empty()).then(|| message.id.clone()));
@@ -2360,6 +2399,272 @@ pub(super) fn replay_segmented_session_context(
         context_start_message_id,
         updated_at,
     }))
+}
+
+/// Rebuilds one bloated display transcript from its effective replacement-anchor view when needed.
+/// 在需要时根据有效 replacement 锚点视图重建一个膨胀的显示转录。
+pub(super) fn repair_segmented_session_display_if_needed(
+    session_dir: &Path,
+) -> Result<Option<SegmentedDisplayMaintenanceReport>, String> {
+    let _guard = segmented_append_file_io_lock()
+        .lock()
+        .map_err(to_store_error)?;
+    let metadata = read_session_metadata(session_dir)?;
+    if !segmented_display_needs_maintenance(&metadata) {
+        return Ok(None);
+    }
+    let Some(replay) = replay_segmented_session_context(session_dir)? else {
+        return Ok(None);
+    };
+    let messages = conversation_state_to_session_messages(&replay.conversation_state);
+    if messages.is_empty() {
+        return Ok(None);
+    }
+    let retained_non_message_events =
+        retained_non_message_events_after_latest_anchor(session_dir, &metadata)?;
+    let original_segment_count = metadata.segments.len();
+    let reason = String::from("replacement_history_rollback_bloat");
+    let repaired_build = build_repaired_display_metadata_in_temp_dir(
+        session_dir,
+        &metadata,
+        &messages,
+        &retained_non_message_events,
+    )?;
+    let backup_dir = backup_segmented_session_before_display_maintenance(session_dir, &reason)?;
+    let report = SegmentedDisplayMaintenanceReport {
+        reason,
+        backup_dir: backup_dir.to_string_lossy().to_string(),
+        original_segment_count,
+        rebuilt_segment_count: repaired_build.metadata.segments.len(),
+        effective_message_count: messages.len(),
+    };
+    write_json_file_atomic(&backup_dir.join("maintenance_report.json"), &report)?;
+    replace_display_segments_with_repaired_metadata(
+        session_dir,
+        &metadata,
+        &repaired_build,
+        &backup_dir.join("original"),
+    )?;
+    Ok(Some(report))
+}
+
+/// Returns whether one metadata snapshot shows display rollback bloat that should be normalized.
+/// 返回一个元数据快照是否显示需要规整的显示层回滚膨胀。
+fn segmented_display_needs_maintenance(metadata: &SegmentedSessionMetadata) -> bool {
+    if metadata.latest_rollback_seq.is_none() {
+        return false;
+    }
+    let total_segment_bytes = metadata
+        .segments
+        .iter()
+        .map(|segment| segment.byte_len)
+        .sum::<u64>();
+    let maintenance_threshold = metadata.segment_policy.max_bytes.saturating_mul(2);
+    total_segment_bytes > maintenance_threshold
+}
+
+/// Builds repaired display segment files in an isolated temporary directory.
+/// 在隔离的临时目录中构建修复后的显示层分段文件。
+fn build_repaired_display_metadata_in_temp_dir(
+    session_dir: &Path,
+    metadata: &SegmentedSessionMetadata,
+    messages: &[SessionMessageEntry],
+    retained_non_message_events: &[SegmentedSessionEventInput],
+) -> Result<RepairedDisplayBuild, String> {
+    let temp_dir = display_maintenance_temp_dir(session_dir);
+    if temp_dir.exists() {
+        fs::remove_dir_all(&temp_dir).map_err(to_store_error)?;
+    }
+    create_dir_all(&temp_dir)?;
+    let mut repaired_metadata = metadata.clone();
+    repaired_metadata.active_segment = segment_file_name(1);
+    repaired_metadata.next_global_seq = 0;
+    repaired_metadata.message_count = 0;
+    repaired_metadata.last_message_id = None;
+    repaired_metadata.last_message_fingerprint = None;
+    repaired_metadata.latest_rollback_seq = None;
+    repaired_metadata.segments = vec![SegmentMetadata::empty(segment_file_name(1), 0)];
+    repaired_metadata.updated_at = current_unix_millis_text();
+    let session_meta_event = SegmentedSessionEventInput {
+        timestamp: repaired_metadata.updated_at.clone(),
+        kind: SegmentedSessionEventKind::SessionMeta,
+        payload: json!({
+            "session_id": repaired_metadata.session_id.clone(),
+            "project_tag": repaired_metadata.project_tag.clone(),
+            "canonical_source": repaired_metadata.canonical_source.clone(),
+            "maintenance": "display_rebuild"
+        }),
+        turn_index: None,
+    };
+    append_events_with_metadata(&temp_dir, &mut repaired_metadata, &[session_meta_event])?;
+    let turn_indexes = assign_segmented_message_turn_indexes(messages);
+    let events = messages
+        .iter()
+        .enumerate()
+        .map(|(index, message)| {
+            segmented_event_input_from_message(index, message, turn_indexes[index])
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    append_events_with_metadata(&temp_dir, &mut repaired_metadata, &events)?;
+    append_events_with_metadata(
+        &temp_dir,
+        &mut repaired_metadata,
+        retained_non_message_events,
+    )?;
+    update_segmented_message_checkpoint(&mut repaired_metadata, messages)?;
+    write_metadata(&temp_dir, &repaired_metadata)?;
+    Ok(RepairedDisplayBuild {
+        metadata: repaired_metadata,
+        temp_dir,
+    })
+}
+
+/// Extracts effective non-message events that should survive display transcript maintenance.
+/// 提取显示转录维护后仍应保留的有效非消息事件。
+fn retained_non_message_events_after_latest_anchor(
+    session_dir: &Path,
+    metadata: &SegmentedSessionMetadata,
+) -> Result<Vec<SegmentedSessionEventInput>, String> {
+    let scan = find_latest_compaction_anchor(session_dir, &metadata.segments)?;
+    let suffix = suffix_after_latest_rollback(&scan);
+    Ok(suffix
+        .into_iter()
+        .filter(|line| line.payload.get("message").is_none())
+        .filter(|line| line.kind != SegmentedSessionEventKind::SessionMeta)
+        .map(|line| SegmentedSessionEventInput {
+            timestamp: line.timestamp,
+            kind: line.kind,
+            payload: line.payload,
+            turn_index: None,
+        })
+        .collect())
+}
+
+/// Copies the original session directory into an audit backup before display maintenance.
+/// 在显示层维护前将原始会话目录复制到审计备份中。
+fn backup_segmented_session_before_display_maintenance(
+    session_dir: &Path,
+    reason: &str,
+) -> Result<PathBuf, String> {
+    let parent = session_dir
+        .parent()
+        .ok_or_else(|| format!("Session directory has no parent: {}", session_dir.display()))?;
+    let session_name = session_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    let backup_root = parent
+        .join(SEGMENTED_DISPLAY_MAINTENANCE_BACKUP_DIR)
+        .join(session_name);
+    create_dir_all(&backup_root)?;
+    let backup_dir = backup_root.join(format!(
+        "{}-{}-{}",
+        current_unix_millis_text(),
+        sanitize_file_component(reason),
+        Uuid::new_v4()
+    ));
+    create_dir_all(&backup_dir)?;
+    copy_segmented_directory_tree(session_dir, &backup_dir.join("original"))?;
+    Ok(backup_dir)
+}
+
+/// Replaces physical display segment files after repaired files were built and the original was backed up.
+/// 在修复文件构建完成且原始文件已备份后替换物理显示分段文件。
+fn replace_display_segments_with_repaired_metadata(
+    session_dir: &Path,
+    original_metadata: &SegmentedSessionMetadata,
+    repaired_build: &RepairedDisplayBuild,
+    original_backup_dir: &Path,
+) -> Result<(), String> {
+    let replace_result = (|| {
+        let temp_token = Uuid::new_v4().to_string();
+        let mut staged_files = Vec::new();
+        for segment in &repaired_build.metadata.segments {
+            let source = repaired_build.temp_dir.join(&segment.file);
+            let staged = session_dir.join(format!(".{}.{}.tmp", segment.file, temp_token));
+            fs::copy(&source, &staged).map_err(to_store_error)?;
+            staged_files.push((staged, session_dir.join(&segment.file)));
+        }
+        for segment in &original_metadata.segments {
+            let path = session_dir.join(&segment.file);
+            if path.exists() {
+                fs::remove_file(path).map_err(to_store_error)?;
+            }
+        }
+        for (staged, final_path) in staged_files {
+            fs::rename(&staged, &final_path).map_err(to_store_error)?;
+        }
+        write_metadata(session_dir, &repaired_build.metadata)?;
+        Ok::<(), String>(())
+    })();
+    if let Err(error) = replace_result {
+        let restore_result = restore_display_segments_from_backup(session_dir, original_backup_dir);
+        return match restore_result {
+            Ok(()) => Err(format!(
+                "display maintenance replacement failed and original files were restored: {error}"
+            )),
+            Err(restore_error) => Err(format!(
+                "display maintenance replacement failed: {error}; restore also failed: {restore_error}"
+            )),
+        };
+    }
+    if repaired_build.temp_dir.exists() {
+        let _ = fs::remove_dir_all(&repaired_build.temp_dir);
+    }
+    Ok(())
+}
+
+/// Restores root display segment files and metadata from one maintenance backup.
+/// 从一个维护备份恢复根显示分段文件与元数据。
+fn restore_display_segments_from_backup(
+    session_dir: &Path,
+    original_backup_dir: &Path,
+) -> Result<(), String> {
+    let backup_metadata = read_required_json::<SegmentedSessionMetadata>(
+        &original_backup_dir.join(SEGMENTED_METADATA_FILE),
+    )?;
+    remove_root_display_segment_files(session_dir)?;
+    for segment in &backup_metadata.segments {
+        fs::copy(
+            original_backup_dir.join(&segment.file),
+            session_dir.join(&segment.file),
+        )
+        .map_err(to_store_error)?;
+    }
+    write_metadata(session_dir, &backup_metadata)
+}
+
+/// Removes root display segment files without touching runtime, task, blob, or backup directories.
+/// 删除根显示分段文件，但不触碰 runtime、task、blob 或备份目录。
+fn remove_root_display_segment_files(session_dir: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(session_dir).map_err(to_store_error)? {
+        let entry = entry.map_err(to_store_error)?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if file_name.starts_with('s') && file_name.ends_with(".jsonl") {
+            fs::remove_file(path).map_err(to_store_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// Builds a unique temporary directory path for display maintenance output.
+/// 构建显示层维护输出使用的唯一临时目录路径。
+fn display_maintenance_temp_dir(session_dir: &Path) -> PathBuf {
+    let session_name = session_dir
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("session");
+    session_dir.with_file_name(format!(
+        ".{}.display_rebuild_tmp_{}",
+        sanitize_file_component(session_name),
+        Uuid::new_v4()
+    ))
 }
 
 /// Rebuilds provider-facing runtime JSONL from the canonical conversation state.
@@ -4056,6 +4361,33 @@ fn suffix_after_latest_rollback(
         .collect()
 }
 
+/// Returns suffix lines after one replacement anchor without replaying its duplicated replacement rows.
+/// 返回 replacement 锚点后的后缀行，并跳过其重复写入的 replacement 行。
+fn suffix_after_replacement_anchor(
+    anchor_line: &SegmentedSessionEventLine,
+    following_lines: &[SegmentedSessionEventLine],
+) -> Vec<SegmentedSessionEventLine> {
+    if anchor_line.kind != SegmentedSessionEventKind::ThreadRolledBack {
+        return following_lines.to_vec();
+    }
+    let Some(mut remaining_replacement_rows) = anchor_line
+        .payload
+        .get("replacement_message_count")
+        .and_then(Value::as_u64)
+    else {
+        return following_lines.to_vec();
+    };
+    let mut suffix = Vec::new();
+    for line in following_lines {
+        if remaining_replacement_rows > 0 && line.payload.get("message").is_some() {
+            remaining_replacement_rows = remaining_replacement_rows.saturating_sub(1);
+            continue;
+        }
+        suffix.push(line.clone());
+    }
+    suffix
+}
+
 /// Converts a compaction replacement-history value into transcript messages.
 /// 将压缩 replacement-history 值转换为转录消息。
 fn replacement_history_to_session_messages(
@@ -4216,8 +4548,8 @@ fn segmented_event_value_has_known_kind(value: &Value) -> bool {
         .is_some()
 }
 
-/// Reverse-scans ordered segment metadata for the latest compaction replacement-history anchor.
-/// 按倒序扫描有序分段元数据，寻找最新的 replacement-history 压缩锚点。
+/// Reverse-scans ordered segment metadata for the latest replacement-history anchor.
+/// 按倒序扫描有序分段元数据，寻找最新的 replacement-history 锚点。
 pub(super) fn find_latest_compaction_anchor(
     session_dir: &Path,
     segments: &[SegmentMetadata],
@@ -4258,23 +4590,29 @@ pub(super) fn find_latest_compaction_anchor(
                     payload: line.payload.clone(),
                 });
             }
-            if line.kind != SegmentedSessionEventKind::Compacted {
+            let is_replacement_anchor = matches!(
+                line.kind,
+                SegmentedSessionEventKind::Compacted | SegmentedSessionEventKind::ThreadRolledBack
+            ) && line.payload.get("replacement_history").is_some();
+            if !is_replacement_anchor {
                 continue;
             }
             let Some(replacement_history) = line.payload.get("replacement_history").cloned() else {
                 continue;
             };
-            // The suffix begins after the compaction line in the current segment.
-            // suffix 从当前分段中压缩行之后开始。
+            // The suffix begins after the replacement anchor line in the current segment.
+            // suffix 从当前分段中 replacement 锚点行之后开始。
             let mut suffix = lines[line_index + 1..].to_vec();
             // Newer segments were collected newest-first, so replay order needs the reverse.
             // 较新分段按最新优先收集，因此重放顺序需要反转。
             for newer_lines in newer_segment_lines.iter().rev() {
                 suffix.extend(newer_lines.clone());
             }
+            let suffix = suffix_after_replacement_anchor(line, &suffix);
             return Ok(SegmentedCompactionScanResult {
                 anchor: Some(SegmentedCompactionAnchor {
-                    compaction_seq: line.seq,
+                    anchor_seq: line.seq,
+                    anchor_kind: line.kind,
                     segment_file: segment.file.clone(),
                     line_index,
                     replacement_history,
@@ -5710,6 +6048,64 @@ mod tests {
         assert_eq!(replay_messages.len(), 1);
     }
 
+    /// Verifies rollback replacement history becomes the replay baseline instead of stale earlier segments.
+    /// 验证回滚 replacement history 会成为重放基线，而不是继续依赖更早的陈旧分段。
+    #[test]
+    fn replay_uses_rollback_replacement_history_as_anchor() {
+        let root = test_root("replay_uses_rollback_replacement_history_as_anchor");
+        let session_dir =
+            create_segmented_session(&root, test_session_request(SegmentPolicy::default()))
+                .expect("create session");
+        let original_messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "stream prefix",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &original_messages)
+            .expect("append original messages");
+        let replacement_messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "stream prefix and completed body",
+            ),
+        ];
+        append_segmented_session_message_update(&session_dir, &replacement_messages)
+            .expect("append replacement");
+        let metadata = read_session_metadata(&session_dir).expect("read metadata");
+        let scan = find_latest_compaction_anchor(&session_dir, &metadata.segments)
+            .expect("scan replacement anchor");
+        let anchor = scan.anchor.expect("replacement anchor");
+        assert_eq!(
+            anchor.anchor_kind,
+            SegmentedSessionEventKind::ThreadRolledBack
+        );
+
+        let replay =
+            replay_segmented_session_context(&session_dir).expect("replay segmented context");
+        let replay_messages = conversation_state_to_session_messages(
+            &replay.expect("replay result").conversation_state,
+        );
+        assert_eq!(replay_messages.len(), 2);
+        assert_eq!(replay_messages[1].body, "stream prefix and completed body");
+    }
+
     /// Verifies caller-confirmed suffix append never creates a rollback replacement.
     /// 验证调用方确认的尾部追加不会创建回滚替换。
     #[test]
@@ -5980,6 +6376,64 @@ mod tests {
             latest_message_ids,
             vec!["m-user-1", "m-assistant-1", "m-assistant-removed"]
         );
+    }
+
+    /// Verifies display maintenance backs up and rewrites bloated rollback replacement segments.
+    /// 验证显示层维护会备份并重写膨胀的回滚 replacement 分段。
+    #[test]
+    fn display_maintenance_rewrites_bloated_rollback_segments_with_backup() {
+        let root = test_root("display_maintenance_rewrites_bloated_rollback_segments_with_backup");
+        let mut policy = SegmentPolicy::default();
+        policy.max_bytes = 700;
+        let session_dir =
+            create_segmented_session(&root, test_session_request(policy)).expect("create session");
+        let mut messages = vec![
+            test_message(
+                "m-user-1",
+                SessionMessageKind::User,
+                SessionMessageRecordKind::Transcript,
+                "first prompt",
+            ),
+            test_message(
+                "m-assistant-1",
+                SessionMessageKind::Assistant,
+                SessionMessageRecordKind::AssistantOutput,
+                "stream prefix",
+            ),
+        ];
+        append_segmented_session_message_tail(&session_dir, &messages)
+            .expect("append initial messages");
+        for index in 0..4 {
+            messages[1].body.push_str(&format!(
+                " completed chunk {index} with enough text to force rollover"
+            ));
+            append_segmented_session_message_update(&session_dir, &messages)
+                .expect("append replacement update");
+        }
+        let before_metadata = read_session_metadata(&session_dir).expect("read before metadata");
+        assert!(before_metadata.segments.len() > 2);
+        assert!(before_metadata.latest_rollback_seq.is_some());
+
+        let report = repair_segmented_session_display_if_needed(&session_dir)
+            .expect("repair display")
+            .expect("maintenance report");
+
+        assert!(Path::new(&report.backup_dir).join("original").exists());
+        assert!(
+            Path::new(&report.backup_dir)
+                .join("maintenance_report.json")
+                .exists()
+        );
+        let after_metadata = read_session_metadata(&session_dir).expect("read after metadata");
+        assert!(after_metadata.segments.len() < before_metadata.segments.len());
+        assert_eq!(after_metadata.latest_rollback_seq, None);
+        let replay =
+            replay_segmented_session_context(&session_dir).expect("replay repaired context");
+        let replay_messages = conversation_state_to_session_messages(
+            &replay.expect("replay result").conversation_state,
+        );
+        assert_eq!(replay_messages.len(), 2);
+        assert_eq!(replay_messages[1].body, messages[1].body);
     }
 
     /// Verifies segmented event windows can be read lazily and projected back to transcript messages.
@@ -7538,7 +7992,8 @@ mod tests {
             .expect("scan compaction anchor");
 
         let anchor = scan.anchor.expect("expected compaction anchor");
-        assert_eq!(anchor.compaction_seq, 2);
+        assert_eq!(anchor.anchor_seq, 2);
+        assert_eq!(anchor.anchor_kind, SegmentedSessionEventKind::Compacted);
         assert_eq!(anchor.segment_file, "s002.jsonl");
         assert_eq!(anchor.replacement_history[0]["body"], "summary");
         assert_eq!(scan.suffix.len(), 2);
@@ -7645,7 +8100,7 @@ mod tests {
             .expect("scan recovery anchors");
 
         assert_eq!(
-            scan.anchor.as_ref().map(|anchor| anchor.compaction_seq),
+            scan.anchor.as_ref().map(|anchor| anchor.anchor_seq),
             Some(1)
         );
         let turn_context = scan

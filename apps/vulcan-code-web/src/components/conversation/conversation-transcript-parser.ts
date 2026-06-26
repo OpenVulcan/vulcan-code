@@ -294,8 +294,7 @@ function splitFencedDiffSegments(source: string): Array<{ kind: "markdown" | "di
 // detectToolBlockKind classifies legacy text-only tool and runtime blocks.
 // detectToolBlockKind 对旧版纯文本工具与运行时块进行分类。
 function detectToolBlockKind(source: string): ConversationBlockKind | null {
-  const normalized = source.toLowerCase();
-  if (normalized.includes("turn stats") || normalized.includes("provider 调用") || normalized.includes("总 tokens")) {
+  if (hasLegacyTurnStatsBlockMarker(source)) {
     return "turn-stats";
   }
   if (hasLegacyToolCallBlockMarker(source)) {
@@ -311,6 +310,38 @@ function detectToolBlockKind(source: string): ConversationBlockKind | null {
     return "thinking";
   }
   return null;
+}
+
+// hasLegacyTurnStatsBlockMarker detects explicit legacy turn-statistics transcript blocks.
+// hasLegacyTurnStatsBlockMarker 检测明确的旧版轮次统计转录块。
+function hasLegacyTurnStatsBlockMarker(source: string): boolean {
+  if (/^#{1,6}\s*Turn Stats\b/im.test(source) || /(?:^|\n)\s*Turn Stats\s*(?:[·:：-]|$)/im.test(source)) {
+    return true;
+  }
+
+  const metricLineCount = source
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter(isLegacyTurnStatsMetricLine)
+    .length;
+
+  return metricLineCount >= 3;
+}
+
+// isLegacyTurnStatsMetricLine returns whether one line is a standalone turn-statistics metric.
+// isLegacyTurnStatsMetricLine 返回单行是否为独立轮次统计指标。
+function isLegacyTurnStatsMetricLine(line: string): boolean {
+  return /^(状态|status)\s*[:：]/iu.test(line)
+    || /^(provider\s+(calls?|requests?)|provider\s+(调用|请求))\s*[:：]/iu.test(line)
+    || /^(工具调用|tool\s+calls?)\s*[:：]/iu.test(line)
+    || /^(输入\s*tokens?|input\s+tokens?)\s*[:：]/iu.test(line)
+    || /^(输出\s*tokens?|output\s+tokens?)\s*[:：]/iu.test(line)
+    || /^(思考\s*tokens?|reasoning\s+tokens?)\s*[:：]/iu.test(line)
+    || /^(总\s*tokens?|total\s+tokens?)\s*[:：]/iu.test(line)
+    || /^(耗时|duration)\s*[:：]/iu.test(line)
+    || /^(输出速度|output\s+speed)\s*[:：]/iu.test(line)
+    || /^(缓存命中\s*tokens?|cached\s+input\s+tokens?)\s*[:：]/iu.test(line);
 }
 
 // hasLegacyToolCallBlockMarker detects explicit legacy tool-call transcript blocks.
