@@ -66,9 +66,22 @@ fn context_compaction_prompt_helpers_share_one_source() {
     assert!(request_prompt.contains("durable memory"));
     assert!(request_prompt.contains("minimal rewriting"));
     assert!(request_prompt.contains("context added after the previous summary"));
+    assert!(request_prompt.contains("Keep every listed summary section"));
+    assert!(request_prompt.contains("Example output structure:"));
+    assert!(request_prompt.contains("<example>"));
     assert!(request_prompt.contains("All User Messages"));
     assert!(request_prompt.contains("Problem Solving"));
+    assert!(request_prompt.contains("Files and Code Sections"));
+    assert!(request_prompt.contains("Errors and Fixes"));
+    assert!(request_prompt.contains("Completed Work"));
+    assert!(request_prompt.contains("Pending Tasks"));
+    assert!(request_prompt.contains("Current Work"));
     assert!(request_prompt.contains("Optional Next Step"));
+    assert!(request_prompt.contains("[path/to/file.ext]"));
+    assert!(request_prompt.contains("\"(none)\""));
+    assert!(request_prompt.contains("1-2 verbatim quotes"));
+    assert!(request_prompt.contains("REMINDER: Do not call any tools"));
+    assert!(request_prompt.contains("fail this compaction task"));
     assert!(
         developer_segment.contains("Internal host task: summarize earlier conversation context")
     );
