@@ -119,6 +119,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         }
     }
 

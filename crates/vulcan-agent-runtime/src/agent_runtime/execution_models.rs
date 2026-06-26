@@ -30,6 +30,7 @@ use vulcan_session_boundary::{
 use vulcan_session_core::{ExecutionRuntimePolicy, ExecutionScope, ToolExposureSnapshot};
 use vulcan_tools_manager::{VulcanToolDescriptor, VulcanToolSourceKind};
 use vulcan_vmm::VmmConfigLayer;
+use vulcan_workbench_model::SessionTurnUsageSegment;
 use vulcan_workspace_store::data_plane::ControllerRuntimeHandle;
 
 /// Minimal execution request captured from the current workbench state.
@@ -118,6 +119,9 @@ pub struct ExecutionPreparationRequest {
     /// Optional Plan-mode developer guidance injected for the current session activation.
     /// 为当前会话计划模式激活注入的可选开发者引导。
     pub session_plan_context: Option<String>,
+    /// Usage segments already consumed by internal work before this request continues.
+    /// 本次请求继续执行前已经由内部工作消耗的用量分段。
+    pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
 }
 
 /// Runtime purpose attached to one provider-facing prompt execution.
@@ -127,6 +131,9 @@ pub enum ExecutionPromptPurpose {
     /// Normal user-authored conversation turn.
     /// 普通用户发起的会话回合。
     UserTurn,
+    /// Cache-preserving internal context-compaction summary request.
+    /// 保持缓存的内部上下文压缩摘要请求。
+    ContextCompactionCachePreserving,
     /// Internal context-compaction summary request.
     /// 内部上下文压缩摘要请求。
     ContextCompaction,
@@ -147,10 +154,22 @@ impl ExecutionPromptPurpose {
         matches!(self, Self::ContextCompaction)
     }
 
+    /// Returns whether tool requests must be rejected before host execution.
+    /// 返回工具请求是否必须在宿主执行前拒绝。
+    pub const fn rejects_tool_requests(self) -> bool {
+        matches!(
+            self,
+            Self::ContextCompaction | Self::ContextCompactionCachePreserving
+        )
+    }
+
     /// Returns whether this purpose may use normal user-turn tool affordances.
     /// 返回该用途是否可以使用普通用户回合的工具能力。
     pub const fn supports_user_turn_tooling(self) -> bool {
-        matches!(self, Self::UserTurn)
+        matches!(
+            self,
+            Self::UserTurn | Self::ContextCompactionCachePreserving
+        )
     }
 
     /// Returns whether this purpose should run completed-turn hooks.
@@ -164,6 +183,7 @@ impl ExecutionPromptPurpose {
     pub const fn max_turns_override(self) -> Option<usize> {
         match self {
             Self::UserTurn => None,
+            Self::ContextCompactionCachePreserving => Some(1),
             Self::ContextCompaction => Some(1),
         }
     }
@@ -173,6 +193,7 @@ impl ExecutionPromptPurpose {
     pub const fn diagnostics_label(self) -> &'static str {
         match self {
             Self::UserTurn => "user-turn",
+            Self::ContextCompactionCachePreserving => "context-compaction-cache-preserving",
             Self::ContextCompaction => "context-compaction",
         }
     }
@@ -302,6 +323,9 @@ pub struct ExecutionPreparation {
     /// Optional Plan-mode developer guidance injected for the current session activation.
     /// 为当前会话计划模式激活注入的可选开发者引导。
     pub session_plan_context: Option<String>,
+    /// Usage segments already consumed by internal work before this prepared execution continues.
+    /// 本次已准备执行继续前已经由内部工作消耗的用量分段。
+    pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
 }
 
 /// Convert a persisted personality selection into prompt-composer input.
@@ -574,6 +598,9 @@ pub struct ExecutionRunReport {
     /// Controller-owned event trace captured while the run was executing.
     /// 运行执行期间捕获的控制器自有事件轨迹。
     pub controller_events: Vec<CoreControllerEvent>,
+    /// Usage segments embedded before the visible assistant response of this run.
+    /// 本次运行可见助手响应之前嵌入的用量分段。
+    pub embedded_turn_usage_segments: Vec<SessionTurnUsageSegment>,
 }
 
 impl ExecutionRunReport {
@@ -592,6 +619,7 @@ impl ExecutionRunReport {
         controller_events: Vec<CoreControllerEvent>,
         last_successful_provider_usage: Option<ProviderUsageSnapshot>,
     ) -> Self {
+        let embedded_turn_usage_segments = preparation.embedded_turn_usage_segments.clone();
         Self {
             session_id,
             preparation: Some(preparation),
@@ -605,6 +633,7 @@ impl ExecutionRunReport {
             warnings,
             error: None,
             controller_events,
+            embedded_turn_usage_segments,
         }
     }
 
@@ -622,6 +651,10 @@ impl ExecutionRunReport {
         conversation_state: Option<SessionConversationState>,
         error: impl Into<String>,
     ) -> Self {
+        let embedded_turn_usage_segments = preparation
+            .as_ref()
+            .map(|preparation| preparation.embedded_turn_usage_segments.clone())
+            .unwrap_or_default();
         Self {
             session_id,
             preparation,
@@ -635,6 +668,7 @@ impl ExecutionRunReport {
             warnings,
             error: Some(error.into()),
             controller_events,
+            embedded_turn_usage_segments,
         }
     }
 

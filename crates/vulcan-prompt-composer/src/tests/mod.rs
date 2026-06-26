@@ -351,13 +351,13 @@ fn overlapping_tool_catalogs_reuse_per_tool_cache_entries() {
     );
 }
 
-/// Verifies context-compaction mode excludes tool-help nodes while preserving runtime instructions.
-/// 验证上下文压缩模式会排除工具帮助节点，同时保留运行时指令。
+/// Verifies minimal context-compaction mode excludes tool-help nodes while preserving runtime instructions.
+/// 验证极简上下文压缩模式会排除工具帮助节点，同时保留运行时指令。
 #[test]
-fn context_compaction_mode_excludes_tool_help_nodes() {
+fn context_compaction_minimal_mode_excludes_tool_help_nodes() {
     let engine = PromptComposerEngine::with_builtins();
     let input = PromptAssemblyInput {
-        mode: PromptAssemblyMode::ContextCompaction,
+        mode: PromptAssemblyMode::ContextCompactionMinimal,
         model: ModelDescriptor {
             family: String::from("openai"),
             model_id: String::from("gpt-test"),
@@ -383,13 +383,14 @@ fn context_compaction_mode_excludes_tool_help_nodes() {
 
     let output = engine.compose(&input).expect("compose should succeed");
 
-    assert_eq!(output.diagnostics.strategy_id, "context-compaction");
+    assert_eq!(output.diagnostics.strategy_id, "context-compaction-minimal");
     assert!(output.tool_metadata_segments.is_empty());
     assert!(
         output
             .render_developer_text()
             .contains("Return plain text only.")
     );
+    assert!(!output.render_developer_text().contains("Provider base"));
     assert!(!output.render_tool_metadata_text().contains("shell_command"));
 }
 

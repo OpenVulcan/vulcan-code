@@ -45,6 +45,7 @@ pub(crate) fn execute_cohere_stream(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    reject_tool_requests: bool,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let base_url = normalize_optional_base_url(base_url);
@@ -65,6 +66,7 @@ pub(crate) fn execute_cohere_stream(
         task_runtime,
         request_budget_guard,
         retry_policy,
+        reject_tool_requests,
     );
 
     execute_host_controlled_stream_with_prepared_inputs(

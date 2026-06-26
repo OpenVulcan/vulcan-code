@@ -44,9 +44,9 @@ pub enum PromptAssemblyMode {
     /// Primary/root agent composition.
     /// 主代理组合模式。
     Primary,
-    /// Internal context-compaction composition.
-    /// 内部上下文压缩组合模式。
-    ContextCompaction,
+    /// Minimal pruned context-compaction composition.
+    /// 极简裁剪上下文压缩组合模式。
+    ContextCompactionMinimal,
     /// Subagent clone composition.
     /// 子代理分身组合模式。
     SubagentClone,

@@ -1,32 +1,23 @@
 use crate::composer::request::PromptAssemblyInput;
 use crate::ids::PromptStrategyId;
+use crate::strategy::PromptAssemblyPlan;
 use crate::strategy::traits::PromptAssemblyStrategy;
-use crate::strategy::{PlannedNode, PromptAssemblyPlan};
 
-/// Internal context-compaction strategy.
-/// 内部上下文压缩策略。
+/// Minimal internal context-compaction strategy used after pruning is required.
+/// 在必须裁剪后使用的极简内部上下文压缩策略。
 #[derive(Debug, Default)]
-pub struct ContextCompactionStrategy;
+pub struct MinimalContextCompactionStrategy;
 
-impl PromptAssemblyStrategy for ContextCompactionStrategy {
-    /// Return the context-compaction strategy identifier.
-    /// 返回上下文压缩策略标识。
+impl PromptAssemblyStrategy for MinimalContextCompactionStrategy {
+    /// Return the minimal context-compaction strategy identifier.
+    /// 返回极简上下文压缩策略标识。
     fn id(&self) -> PromptStrategyId {
-        "context-compaction"
+        "context-compaction-minimal"
     }
 
-    /// Build the context-compaction ordered node plan.
-    /// 构建上下文压缩的有序节点计划。
+    /// Build the minimal context-compaction ordered node plan.
+    /// 构建极简上下文压缩的有序节点计划。
     fn build_plan(&self, _input: &PromptAssemblyInput) -> PromptAssemblyPlan {
-        PromptAssemblyPlan {
-            nodes: vec![
-                PlannedNode::ProviderBaseSystem,
-                PlannedNode::AgentBaseSystem,
-                PlannedNode::Personality,
-                PlannedNode::ProjectRules,
-                PlannedNode::EnvironmentContext,
-                PlannedNode::TaskGoal,
-            ],
-        }
+        PromptAssemblyPlan { nodes: Vec::new() }
     }
 }

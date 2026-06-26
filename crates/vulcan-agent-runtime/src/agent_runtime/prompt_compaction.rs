@@ -32,6 +32,7 @@ use vulcan_context_compaction::{
     estimate_compaction_source_tokens, extract_compaction_model_summary,
     prepare_compaction_source_for_target_budget,
 };
+use vulcan_core::types::ProviderUsageSnapshot;
 
 /// Maximum full-fidelity prompt-compaction attempts before clone-only downgrade is allowed.
 /// 允许仅克隆降级前的最大完整保真提示词压缩尝试次数。
@@ -161,9 +162,44 @@ pub struct PromptCompactionExecution {
     /// Number of provider requests dispatched while producing the summary.
     /// 产出该总结期间发出的 Provider 请求次数。
     pub provider_request_count: usize,
+    /// Latest successful provider usage captured while producing the summary.
+    /// 产出该总结期间捕获到的最近一次成功 Provider 用量。
+    pub last_successful_provider_usage: Option<ProviderUsageSnapshot>,
+    /// Provider identifier used by the successful compaction request.
+    /// 成功压缩请求使用的 Provider 标识。
+    pub provider_id: Option<String>,
+    /// Model identifier used by the successful compaction request.
+    /// 成功压缩请求使用的模型标识。
+    pub model_id: Option<String>,
+    /// Execution profile used by the successful compaction request.
+    /// 成功压缩请求使用的执行配置。
+    pub execution_profile: PromptCompactionExecutionProfile,
     /// Optional clone-only pruning report for the successful compaction attempt.
     /// 成功压缩尝试对应的可选仅克隆剪枝报告。
     pub input_prune_report: Option<CompactionInputPruneReport>,
+}
+
+/// Provider-facing launch profile selected for one prompt-compaction attempt.
+/// 单次提示词压缩尝试选择的 Provider 可见启动配置。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptCompactionExecutionProfile {
+    /// Full-fidelity cache-preserving launch that keeps normal prompt topology and tool schemas.
+    /// 保持完整保真缓存的启动方式，保留普通提示词拓扑与工具 schema。
+    CachePreservingFullFidelity,
+    /// Minimal pruned launch that strips tool schemas and normal assistant prompt overhead.
+    /// 极简裁剪启动方式，移除工具 schema 与普通助手提示词开销。
+    PrunedMinimal,
+}
+
+impl PromptCompactionExecutionProfile {
+    /// Returns the stable persisted label for this execution profile.
+    /// 返回该执行配置的稳定持久化标签。
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::CachePreservingFullFidelity => "cache_preserving_full_fidelity",
+            Self::PrunedMinimal => "pruned_minimal",
+        }
+    }
 }
 
 /// Lightweight progress update emitted before buffered model output is committed.
@@ -855,6 +891,14 @@ fn build_prompt_compaction_launch_request(
     conversation_state: vulcan_context::SessionConversationState,
     prompt_mode: ContextCompactionRequestPromptMode,
 ) -> ExecutionPreparationRequest {
+    let prompt_purpose = match prompt_mode {
+        ContextCompactionRequestPromptMode::FullFidelityMerge => {
+            ExecutionPromptPurpose::ContextCompactionCachePreserving
+        }
+        ContextCompactionRequestPromptMode::PrunedFallback => {
+            ExecutionPromptPurpose::ContextCompaction
+        }
+    };
     ExecutionPreparationRequest {
         session_id,
         execution_scope: vulcan_session_core::ExecutionScope::ContextCompaction {
@@ -873,7 +917,7 @@ fn build_prompt_compaction_launch_request(
         reasoning_effort,
         ai_tool_configuration,
         tool_exposure_override: Default::default(),
-        prompt_purpose: ExecutionPromptPurpose::ContextCompaction,
+        prompt_purpose,
         project_prompt_skills: Default::default(),
         session_prompt_skill_overrides: Default::default(),
         context_injection: None,
@@ -885,6 +929,7 @@ fn build_prompt_compaction_launch_request(
         controller_runtime: None,
         session_goal_context: None,
         session_plan_context: None,
+        embedded_turn_usage_segments: Vec::new(),
     }
 }
 
@@ -896,6 +941,25 @@ fn finalize_prompt_compaction_report(
     report: ExecutionRunReport,
 ) -> Result<PromptCompactionExecution, String> {
     if report.is_success() {
+        let provider_id = report
+            .preparation
+            .as_ref()
+            .map(|preparation| preparation.model_blueprint.provider_id.clone());
+        let model_id = report
+            .preparation
+            .as_ref()
+            .map(|preparation| preparation.model_blueprint.model_id.clone());
+        let execution_profile = match report
+            .preparation
+            .as_ref()
+            .map(|preparation| preparation.prompt_purpose)
+        {
+            Some(ExecutionPromptPurpose::ContextCompactionCachePreserving) => {
+                PromptCompactionExecutionProfile::CachePreservingFullFidelity
+            }
+            _ => PromptCompactionExecutionProfile::PrunedMinimal,
+        };
+        let last_successful_provider_usage = report.last_successful_provider_usage.clone();
         let summary_text = report
             .assistant_output
             .as_deref()
@@ -908,6 +972,10 @@ fn finalize_prompt_compaction_report(
             compaction_result: CompactionResult::from_model_summary(plan, summary_text),
             fallback_used: false,
             provider_request_count: report.provider_request_count,
+            last_successful_provider_usage,
+            provider_id,
+            model_id,
+            execution_profile,
             input_prune_report: None,
         });
     }

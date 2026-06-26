@@ -36,6 +36,9 @@ pub(crate) struct StreamingRuntimeToolExecutor {
     /// Live sender used to forward tool boundary runtime events into the host stream.
     /// 用于把工具边界运行时事件转发进宿主流中的实时发送器。
     live_sender: ProviderLiveDeltaSender,
+    /// Whether provider-requested tools must be rejected before host execution.
+    /// Provider 请求的工具是否必须在宿主执行前拒绝。
+    reject_tool_requests: bool,
 }
 
 impl StreamingRuntimeToolExecutor {
@@ -44,10 +47,12 @@ impl StreamingRuntimeToolExecutor {
     pub(crate) fn new(
         runtime_bridge: Arc<VulcanManagedToolRuntimeBridge>,
         live_sender: ProviderLiveDeltaSender,
+        reject_tool_requests: bool,
     ) -> Self {
         Self {
             runtime_bridge,
             live_sender,
+            reject_tool_requests,
         }
     }
 }
@@ -60,6 +65,12 @@ impl VulcanToolExecutor for StreamingRuntimeToolExecutor {
         &self,
         request: &CoreToolInvocationRequest,
     ) -> Result<CoreToolInvocationResult, VulcanCoreError> {
+        if self.reject_tool_requests {
+            return Err(VulcanCoreError::ToolFailure {
+                tool_name: request.tool_name.clone(),
+                message: String::from("Tool calls are not allowed during context compaction."),
+            });
+        }
         let (tool_started_event, projection_barrier) = attach_runtime_event_projection_barrier(
             RuntimeEvent::new(
                 RuntimeEventKind::ToolStarted,

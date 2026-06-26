@@ -3,7 +3,8 @@
 
 use serde_json::Value;
 use vulcan_workbench_model::{
-    SessionMessageKind, SessionMessageRecordKind, SessionTurnStats, SessionTurnStatsStatus,
+    SessionMessageKind, SessionMessageRecordKind, SessionTurnStats, SessionTurnStatsKind,
+    SessionTurnStatsStatus, SessionTurnUsageSegment, SessionTurnUsageSegmentKind,
 };
 
 use crate::conversation_protocol::{
@@ -18,6 +19,26 @@ pub fn build_session_turn_stats_from_state(
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
     provider_request_count_override: Option<usize>,
+) -> Option<SessionTurnStats> {
+    build_session_turn_stats_from_state_with_segments(
+        conversation_state,
+        closing_record_id,
+        status,
+        provider_request_count_override,
+        SessionTurnStatsKind::UserTurn,
+        Vec::new(),
+    )
+}
+
+/// Builds one best-effort turn-statistics snapshot and merges explicit usage segments into the aggregate.
+/// 构建一份最佳努力轮次统计快照，并将显式用量分段合并进聚合值。
+pub fn build_session_turn_stats_from_state_with_segments(
+    conversation_state: &SessionConversationState,
+    closing_record_id: &str,
+    status: SessionTurnStatsStatus,
+    provider_request_count_override: Option<usize>,
+    turn_kind: SessionTurnStatsKind,
+    mut explicit_usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Option<SessionTurnStats> {
     let records = &conversation_state.records;
     let closing_index = records
@@ -64,6 +85,8 @@ pub fn build_session_turn_stats_from_state(
 
     let mut stats = SessionTurnStats {
         status,
+        turn_kind,
+        usage_segments: Vec::new(),
         provider_call_count: 0,
         tool_call_count: 0,
         input_tokens: 0,
@@ -78,6 +101,21 @@ pub fn build_session_turn_stats_from_state(
 
     stats.tool_call_count = count_turn_tool_calls_from_records(turn_records);
 
+    let mut assistant_segment = SessionTurnUsageSegment {
+        kind: SessionTurnUsageSegmentKind::AssistantResponse,
+        trigger: None,
+        execution_profile: None,
+        provider_id: None,
+        model_id: None,
+        provider_call_count: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        reasoning_tokens: 0,
+        total_tokens: 0,
+        cached_input_tokens: None,
+        cache_creation_input_tokens: None,
+    };
+
     for message in turn_messages {
         match &message.payload {
             SessionConversationPayload::Assistant {
@@ -85,6 +123,8 @@ pub fn build_session_turn_stats_from_state(
             } => {
                 if assistant_payload_contributes_to_turn_stats(message) {
                     stats.provider_call_count = stats.provider_call_count.saturating_add(1);
+                    assistant_segment.provider_call_count =
+                        assistant_segment.provider_call_count.saturating_add(1);
                 }
                 if stats.tool_call_count == 0 {
                     stats.tool_call_count = stats.tool_call_count.saturating_add(tool_calls.len());
@@ -95,31 +135,47 @@ pub fn build_session_turn_stats_from_state(
                 stats.input_tokens = stats
                     .input_tokens
                     .saturating_add(usage.input_tokens.unwrap_or(0));
+                assistant_segment.input_tokens = assistant_segment
+                    .input_tokens
+                    .saturating_add(usage.input_tokens.unwrap_or(0));
                 stats.output_tokens = stats
+                    .output_tokens
+                    .saturating_add(usage.output_tokens.unwrap_or(0));
+                assistant_segment.output_tokens = assistant_segment
                     .output_tokens
                     .saturating_add(usage.output_tokens.unwrap_or(0));
                 stats.reasoning_tokens = stats
                     .reasoning_tokens
                     .saturating_add(usage.reasoning_tokens.unwrap_or(0));
-                stats.total_tokens =
-                    stats
-                        .total_tokens
-                        .saturating_add(usage.total_tokens.unwrap_or_else(|| {
-                            usage
-                                .input_tokens
-                                .unwrap_or(0)
-                                .saturating_add(usage.output_tokens.unwrap_or(0))
-                                .saturating_add(usage.reasoning_tokens.unwrap_or(0))
-                        }));
+                assistant_segment.reasoning_tokens = assistant_segment
+                    .reasoning_tokens
+                    .saturating_add(usage.reasoning_tokens.unwrap_or(0));
+                let total_tokens = usage.total_tokens.unwrap_or_else(|| {
+                    usage
+                        .input_tokens
+                        .unwrap_or(0)
+                        .saturating_add(usage.output_tokens.unwrap_or(0))
+                        .saturating_add(usage.reasoning_tokens.unwrap_or(0))
+                });
+                stats.total_tokens = stats.total_tokens.saturating_add(total_tokens);
+                assistant_segment.total_tokens =
+                    assistant_segment.total_tokens.saturating_add(total_tokens);
                 if let Some(cached_input_tokens) = usage.cached_input_tokens {
                     let accumulated = stats.cached_input_tokens.unwrap_or(0);
                     stats.cached_input_tokens =
                         Some(accumulated.saturating_add(cached_input_tokens));
+                    let segment_accumulated = assistant_segment.cached_input_tokens.unwrap_or(0);
+                    assistant_segment.cached_input_tokens =
+                        Some(segment_accumulated.saturating_add(cached_input_tokens));
                 }
                 if let Some(cache_creation_input_tokens) = usage.cache_creation_input_tokens {
                     let accumulated = stats.cache_creation_input_tokens.unwrap_or(0);
                     stats.cache_creation_input_tokens =
                         Some(accumulated.saturating_add(cache_creation_input_tokens));
+                    let segment_accumulated =
+                        assistant_segment.cache_creation_input_tokens.unwrap_or(0);
+                    assistant_segment.cache_creation_input_tokens =
+                        Some(segment_accumulated.saturating_add(cache_creation_input_tokens));
                 }
             }
             SessionConversationPayload::ToolResult { .. }
@@ -131,6 +187,24 @@ pub fn build_session_turn_stats_from_state(
         && provider_request_count_override > 0
     {
         stats.provider_call_count = provider_request_count_override;
+        if turn_kind == SessionTurnStatsKind::UserTurn {
+            assistant_segment.provider_call_count = provider_request_count_override;
+        }
+    }
+
+    if assistant_segment.provider_call_count > 0
+        || assistant_segment.input_tokens > 0
+        || assistant_segment.output_tokens > 0
+        || assistant_segment.reasoning_tokens > 0
+        || assistant_segment.total_tokens > 0
+        || assistant_segment.cached_input_tokens.is_some()
+        || assistant_segment.cache_creation_input_tokens.is_some()
+    {
+        stats.usage_segments.push(assistant_segment);
+    }
+    for segment in explicit_usage_segments.drain(..) {
+        merge_usage_segment_into_stats(&mut stats, &segment);
+        stats.usage_segments.push(segment);
     }
 
     let started_at = turn_records
@@ -168,6 +242,29 @@ pub fn build_session_turn_stats_from_state(
     });
 
     Some(stats)
+}
+
+/// Merges one explicit usage segment into aggregate turn statistics.
+/// 将一个显式用量分段合并到聚合轮次统计中。
+fn merge_usage_segment_into_stats(stats: &mut SessionTurnStats, segment: &SessionTurnUsageSegment) {
+    stats.provider_call_count = stats
+        .provider_call_count
+        .saturating_add(segment.provider_call_count);
+    stats.input_tokens = stats.input_tokens.saturating_add(segment.input_tokens);
+    stats.output_tokens = stats.output_tokens.saturating_add(segment.output_tokens);
+    stats.reasoning_tokens = stats
+        .reasoning_tokens
+        .saturating_add(segment.reasoning_tokens);
+    stats.total_tokens = stats.total_tokens.saturating_add(segment.total_tokens);
+    if let Some(cached_input_tokens) = segment.cached_input_tokens {
+        let accumulated = stats.cached_input_tokens.unwrap_or(0);
+        stats.cached_input_tokens = Some(accumulated.saturating_add(cached_input_tokens));
+    }
+    if let Some(cache_creation_input_tokens) = segment.cache_creation_input_tokens {
+        let accumulated = stats.cache_creation_input_tokens.unwrap_or(0);
+        stats.cache_creation_input_tokens =
+            Some(accumulated.saturating_add(cache_creation_input_tokens));
+    }
 }
 
 /// Returns whether one visible transcript row starts a user-authored turn.
@@ -792,5 +889,257 @@ mod tests {
         assert_eq!(stats.output_tokens, 25);
         assert_eq!(stats.total_tokens, 75);
         assert_eq!(stats.cached_input_tokens, Some(10));
+    }
+
+    /// Verifies embedded compaction usage segments are aggregated into a normal user turn.
+    /// 验证嵌入式压缩用量分段会聚合进普通用户轮次。
+    #[test]
+    fn user_turn_stats_merge_embedded_context_compaction_segment() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-2000", "当前任务"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(40),
+                        output_tokens: Some(12),
+                        total_tokens: Some(52),
+                        cached_input_tokens: Some(16),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-current", "2000", "当前任务"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+        let mut compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::ContextCompaction,
+            1,
+            Some(&ProviderUsageSnapshot {
+                input_tokens: Some(20),
+                output_tokens: Some(4),
+                reasoning_tokens: Some(2),
+                total_tokens: Some(26),
+                cached_input_tokens: Some(5),
+                ..ProviderUsageSnapshot::default()
+            }),
+        );
+        compaction_segment.trigger = Some(String::from("auto_budget"));
+        compaction_segment.execution_profile = Some(String::from("cache_preserving_full_fidelity"));
+
+        let stats = build_session_turn_stats_from_state_with_segments(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            Some(1),
+            SessionTurnStatsKind::UserTurn,
+            vec![compaction_segment],
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.turn_kind, SessionTurnStatsKind::UserTurn);
+        assert_eq!(stats.provider_call_count, 2);
+        assert_eq!(stats.input_tokens, 60);
+        assert_eq!(stats.output_tokens, 16);
+        assert_eq!(stats.reasoning_tokens, 2);
+        assert_eq!(stats.total_tokens, 78);
+        assert_eq!(stats.cached_input_tokens, Some(21));
+        assert_eq!(stats.usage_segments.len(), 2);
+        assert_eq!(
+            stats.usage_segments[0].kind,
+            SessionTurnUsageSegmentKind::AssistantResponse
+        );
+        assert_eq!(
+            stats.usage_segments[1].kind,
+            SessionTurnUsageSegmentKind::ContextCompaction
+        );
+    }
+
+    /// Verifies assistant provider retries remain visible when compaction usage is embedded.
+    /// 验证嵌入压缩用量时仍能保留助手响应的 Provider 重试次数。
+    #[test]
+    fn user_turn_stats_apply_provider_override_to_assistant_segment_with_compaction_segment() {
+        let closing_record_id = "summary-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                user_message("session-1-protocol-user-2000", "当前任务"),
+                assistant_message(
+                    "session-1-protocol-assistant-2001",
+                    ProviderUsageSnapshot {
+                        input_tokens: Some(40),
+                        output_tokens: Some(12),
+                        total_tokens: Some(52),
+                        cached_input_tokens: Some(16),
+                        ..ProviderUsageSnapshot::default()
+                    },
+                    false,
+                ),
+            ],
+            records: vec![
+                user_record("user-current", "2000", "当前任务"),
+                summary_record(closing_record_id, "2002"),
+            ],
+            continuation: Default::default(),
+        };
+        let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::ContextCompaction,
+            1,
+            Some(&ProviderUsageSnapshot {
+                input_tokens: Some(20),
+                output_tokens: Some(4),
+                total_tokens: Some(24),
+                ..ProviderUsageSnapshot::default()
+            }),
+        );
+
+        let stats = build_session_turn_stats_from_state_with_segments(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            Some(2),
+            SessionTurnStatsKind::UserTurn,
+            vec![compaction_segment],
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 3);
+        assert_eq!(stats.usage_segments.len(), 2);
+        assert_eq!(stats.usage_segments[0].provider_call_count, 2);
+        assert_eq!(stats.usage_segments[1].provider_call_count, 1);
+        assert_eq!(
+            stats
+                .usage_segments
+                .iter()
+                .map(|segment| segment.provider_call_count)
+                .sum::<usize>(),
+            stats.provider_call_count
+        );
+    }
+
+    /// Verifies failed assistant requests remain represented when compaction usage is embedded.
+    /// 验证嵌入压缩用量时失败的助手请求仍会保留统计分段。
+    #[test]
+    fn user_turn_stats_keep_failed_assistant_request_segment_with_compaction_segment() {
+        let closing_record_id = "terminated-current";
+        let conversation_state = SessionConversationState {
+            messages: vec![user_message("session-1-protocol-user-2000", "当前任务")],
+            records: vec![
+                user_record("user-current", "2000", "当前任务"),
+                SessionConversationRecord {
+                    id: closing_record_id.to_string(),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::TurnTerminated,
+                    visible: true,
+                    title: String::from("执行失败"),
+                    body: String::from(
+                        "Provider request failed before assistant usage was recorded.",
+                    ),
+                    metadata: None,
+                    created_at: String::from("2003"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+        let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::ContextCompaction,
+            1,
+            Some(&ProviderUsageSnapshot {
+                input_tokens: Some(20),
+                output_tokens: Some(4),
+                total_tokens: Some(24),
+                ..ProviderUsageSnapshot::default()
+            }),
+        );
+
+        let stats = build_session_turn_stats_from_state_with_segments(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Failed,
+            Some(2),
+            SessionTurnStatsKind::UserTurn,
+            vec![compaction_segment],
+        )
+        .expect("turn stats should be built");
+
+        assert_eq!(stats.status, SessionTurnStatsStatus::Failed);
+        assert_eq!(stats.provider_call_count, 3);
+        assert_eq!(stats.usage_segments.len(), 2);
+        assert_eq!(
+            stats.usage_segments[0].kind,
+            SessionTurnUsageSegmentKind::AssistantResponse
+        );
+        assert_eq!(stats.usage_segments[0].provider_call_count, 2);
+        assert_eq!(stats.usage_segments[0].total_tokens, 0);
+        assert_eq!(
+            stats.usage_segments[1].kind,
+            SessionTurnUsageSegmentKind::ContextCompaction
+        );
+        assert_eq!(
+            stats
+                .usage_segments
+                .iter()
+                .map(|segment| segment.provider_call_count)
+                .sum::<usize>(),
+            stats.provider_call_count
+        );
+    }
+
+    /// Verifies manual compaction can produce an independent context-compaction turn without a user prompt.
+    /// 验证手动压缩可以在没有用户提示词的情况下生成独立上下文压缩轮次。
+    #[test]
+    fn context_compaction_turn_stats_can_be_built_from_explicit_segment_only() {
+        let closing_record_id = "compaction-end";
+        let conversation_state = SessionConversationState {
+            messages: Vec::new(),
+            records: vec![SessionConversationRecord {
+                id: closing_record_id.to_string(),
+                kind: SessionMessageKind::Assistant,
+                record_kind: SessionMessageRecordKind::CompactionStatus,
+                visible: true,
+                title: String::from("context_compaction.completed"),
+                body: String::new(),
+                metadata: None,
+                created_at: String::from("3000"),
+            }],
+            continuation: Default::default(),
+        };
+        let compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::ContextCompaction,
+            1,
+            Some(&ProviderUsageSnapshot {
+                input_tokens: Some(100),
+                output_tokens: Some(30),
+                total_tokens: Some(130),
+                cache_creation_input_tokens: Some(10),
+                ..ProviderUsageSnapshot::default()
+            }),
+        );
+
+        let stats = build_session_turn_stats_from_state_with_segments(
+            &conversation_state,
+            closing_record_id,
+            SessionTurnStatsStatus::Completed,
+            None,
+            SessionTurnStatsKind::ContextCompaction,
+            vec![compaction_segment],
+        )
+        .expect("context-compaction stats should be built");
+
+        assert_eq!(stats.turn_kind, SessionTurnStatsKind::ContextCompaction);
+        assert_eq!(stats.provider_call_count, 1);
+        assert_eq!(stats.input_tokens, 100);
+        assert_eq!(stats.output_tokens, 30);
+        assert_eq!(stats.total_tokens, 130);
+        assert_eq!(stats.cache_creation_input_tokens, Some(10));
+        assert_eq!(stats.usage_segments.len(), 1);
+        assert_eq!(
+            stats.usage_segments[0].kind,
+            SessionTurnUsageSegmentKind::ContextCompaction
+        );
     }
 }

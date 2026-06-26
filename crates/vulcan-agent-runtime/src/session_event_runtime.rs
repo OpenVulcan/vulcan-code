@@ -6,7 +6,8 @@ use std::collections::BTreeSet;
 use vulcan_core::types::ConversationAttachment;
 use vulcan_workbench_model::{
     PendingSessionPromptSource, SessionId, SessionMessageKind, SessionMessageRecordKind,
-    SessionRuntimeStateEntry, SessionTurnStatsStatus,
+    SessionRuntimeStateEntry, SessionTurnStatsKind, SessionTurnStatsStatus,
+    SessionTurnUsageSegment,
 };
 
 use crate::{
@@ -18,7 +19,7 @@ use crate::{
         append_user_text_message,
     },
     skills::{SessionDerivedRecord, SessionDerivedSkillChain, SummarySkillInput},
-    turn_stats::build_session_turn_stats_from_state,
+    turn_stats::build_session_turn_stats_from_state_with_segments,
 };
 
 /// Local identifiers for records created while one streaming run is active.
@@ -1225,6 +1226,8 @@ pub fn apply_terminal_execution_report_to_state(
         &closing_record_id,
         status,
         Some(report.provider_request_count),
+        SessionTurnStatsKind::UserTurn,
+        report.embedded_turn_usage_segments.clone(),
     );
     runtime_state.updated_at = now.to_string();
     SessionTerminalReportApplyResult {
@@ -1444,12 +1447,16 @@ fn append_terminal_turn_stats_record(
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
     provider_request_count_override: Option<usize>,
+    turn_kind: SessionTurnStatsKind,
+    usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Option<String> {
-    let turn_stats = build_session_turn_stats_from_state(
+    let turn_stats = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
         closing_record_id,
         status,
         provider_request_count_override,
+        turn_kind,
+        usage_segments,
     )?;
     let record_id = build_session_record_message_id(
         session_id,
@@ -1771,6 +1778,7 @@ mod tests {
             conversation_state: Some(SessionConversationState::default()),
             provider_request_count: 1,
             last_successful_provider_usage: None,
+            embedded_turn_usage_segments: Vec::new(),
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),

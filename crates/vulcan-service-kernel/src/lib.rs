@@ -81,7 +81,7 @@ use vulcan_agent_runtime::{
     },
     stream_runtime_run_with_intervention,
     tooling::{CommandSessionRuntime, command_session_runtime::CommandSessionInputEvent},
-    turn_stats::build_session_turn_stats_from_state,
+    turn_stats::build_session_turn_stats_from_state_with_segments,
     workbench_ai_capability_router::{
         WORKBENCH_QUICK_TOGGLE_AI_TOOL_KINDS, effective_ai_tool_configuration_for_prompt_overrides,
         effective_workbench_disabled_ai_capability_kinds,
@@ -171,8 +171,9 @@ use vulcan_workbench_model::{
     SessionMessageRecordKind, SessionPlanArtifactState, SessionPlanModeState, SessionRunPhase,
     SessionRuntimeControls, SessionRuntimeStateEntry, SessionState, SessionSummary,
     SessionTitleSource, SessionTodolistItem, SessionTodolistItemStatus, SessionTodolistState,
-    SessionTurnStats, SessionTurnStatsStatus, SessionWorkMode, SubagentTaskPanelState,
-    SubagentTaskRunState, TaskProjectSummary, apply_pending_prompt_panel_drop_target,
+    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
+    SessionTurnUsageSegmentKind, SessionWorkMode, SubagentTaskPanelState, SubagentTaskRunState,
+    TaskProjectSummary, apply_pending_prompt_panel_drop_target,
     attach_tool_display_state_to_metadata, build_session_record_message_id,
     build_stopped_task_session_metadata, clear_internal_pending_prompt_queue_and_restore_panel,
     collect_running_subagent_task_states_for_tree, enqueue_pending_prompt_internal_queue_entry,
@@ -13139,6 +13140,8 @@ fn stop_webui_session_work(
         &terminated_message_id,
         SessionTurnStatsStatus::Stopped,
         provider_request_count,
+        SessionTurnStatsKind::UserTurn,
+        Vec::new(),
     );
     let runtime_state_snapshot = runtime_state.clone();
     workspace_snapshot
@@ -13221,12 +13224,16 @@ fn append_webui_session_turn_stats_to_state(
     closing_record_id: &str,
     status: SessionTurnStatsStatus,
     provider_request_count_override: Option<usize>,
+    turn_kind: SessionTurnStatsKind,
+    usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Option<String> {
-    let turn_stats = build_session_turn_stats_from_state(
+    let turn_stats = build_session_turn_stats_from_state_with_segments(
         &runtime_state.conversation_state,
         closing_record_id,
         status,
         provider_request_count_override,
+        turn_kind,
+        usage_segments,
     )?;
     let mut entry = SessionMessageEntry::new(
         SessionMessageKind::Assistant,
@@ -13244,6 +13251,36 @@ fn append_webui_session_turn_stats_to_state(
         session_id,
         entry,
     ))
+}
+
+/// Builds one usage segment from a completed context-compaction execution.
+/// 从已完成的上下文压缩执行结果构建一段用量统计。
+///
+/// # Parameters
+/// # 参数
+/// `trigger` is the stable compaction trigger label stored in metadata.
+/// `trigger` 是写入元数据的稳定压缩触发标签。
+/// `execution` is the completed compaction execution carrying provider usage.
+/// `execution` 是携带 Provider 用量的已完成压缩执行结果。
+///
+/// # Returns
+/// # 返回值
+/// Returns one context-compaction usage segment ready to merge into turn statistics.
+/// 返回一段可合并进轮次统计的上下文压缩用量。
+fn context_compaction_usage_segment_from_execution(
+    trigger: &str,
+    execution: &PromptCompactionExecution,
+) -> SessionTurnUsageSegment {
+    let mut segment = SessionTurnUsageSegment::from_provider_usage(
+        SessionTurnUsageSegmentKind::ContextCompaction,
+        execution.provider_request_count,
+        execution.last_successful_provider_usage.as_ref(),
+    );
+    segment.trigger = Some(trigger.to_string());
+    segment.execution_profile = Some(execution.execution_profile.label().to_string());
+    segment.provider_id = execution.provider_id.clone();
+    segment.model_id = execution.model_id.clone();
+    segment
 }
 
 /// Marks one idle WebUI session as waiting for an already guided internal prompt.
@@ -15855,6 +15892,10 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
     .await;
     match terminal_result {
         Ok(execution) => {
+            let compaction_usage_segment = context_compaction_usage_segment_from_execution(
+                AUTO_CONTEXT_COMPACTION_TRIGGER,
+                &execution,
+            );
             let snapshot = finish_webui_context_compaction_execution(
                 app,
                 state,
@@ -15874,7 +15915,12 @@ async fn maybe_auto_compact_webui_session_before_provider_request(
                 status_message_id.clone(),
                 Some(String::from("auto_context_compaction")),
             );
-            refreshed_execution_request_after_context_compaction(state, request).map(Some)
+            let mut refreshed =
+                refreshed_execution_request_after_context_compaction(state, request)?;
+            refreshed
+                .embedded_turn_usage_segments
+                .push(compaction_usage_segment);
+            Ok(Some(refreshed))
         }
         Err(error) => {
             persist_failed_webui_context_compaction(
@@ -20004,6 +20050,9 @@ struct WebuiContextCompactionDraft {
     /// Checkpoint that should be appended only after the runtime state is accepted.
     /// 仅在运行时状态被接受后追加的检查点。
     checkpoint: vulcan_context::SessionCompactionEntry,
+    /// Visible terminal record id that closes the committed compaction section.
+    /// 闭合已提交压缩分段的可见终态记录标识。
+    terminal_record_id: String,
     /// Optional runtime audit event produced when persistent injections are folded.
     /// 持久注入被折叠时产出的可选运行时审计事件。
     injection_merge_event: Option<vulcan_context::RuntimeInjectionMergedEvent>,
@@ -20444,7 +20493,7 @@ fn build_webui_context_compaction_draft(
         trigger,
     );
     update_webui_context_compaction_body_state(&mut draft_runtime_state, section_id, "completed");
-    append_webui_context_compaction_end_message_to_state(
+    let terminal_record_id = append_webui_context_compaction_end_message_to_state(
         &mut draft_runtime_state,
         session_id,
         section_id,
@@ -20461,6 +20510,7 @@ fn build_webui_context_compaction_draft(
         baseline,
         runtime_state: draft_runtime_state,
         checkpoint,
+        terminal_record_id,
         injection_merge_event,
         injection_merge_timestamp: now,
         ttl_prune_report,
@@ -20567,8 +20617,22 @@ fn finish_webui_context_compaction_execution(
             injection_merge_event = draft.injection_merge_event.clone();
             injection_merge_timestamp = draft.injection_merge_timestamp.clone();
             ttl_prune_report = draft.ttl_prune_report;
+            let terminal_record_id = draft.terminal_record_id.clone();
             let checkpoint = draft.checkpoint;
             *runtime_state = draft.runtime_state;
+            if trigger != AUTO_CONTEXT_COMPACTION_TRIGGER {
+                let usage_segment =
+                    context_compaction_usage_segment_from_execution(trigger, &execution);
+                let _ = append_webui_session_turn_stats_to_state(
+                    runtime_state,
+                    session_id,
+                    &terminal_record_id,
+                    SessionTurnStatsStatus::Completed,
+                    None,
+                    SessionTurnStatsKind::ContextCompaction,
+                    vec![usage_segment],
+                );
+            }
             workspace
                 .session_compactions
                 .entry(session_id)
@@ -20818,6 +20882,11 @@ fn append_webui_context_compaction_failed_message_to_state(
 /// `provider_request_count` 是成功与失败尝试累计的 Provider 请求次数。
 /// `input_prune_report` is the optional clone-only pruning report for the successful attempt.
 /// `input_prune_report` 是成功尝试对应的可选仅克隆剪枝报告。
+///
+/// # Returns
+/// # 返回值
+/// Returns the newly appended terminal record id.
+/// 返回新追加的终态记录标识。
 fn append_webui_context_compaction_end_message_to_state(
     runtime_state: &mut SessionRuntimeStateEntry,
     session_id: SessionId,
@@ -20826,7 +20895,7 @@ fn append_webui_context_compaction_end_message_to_state(
     trigger: &str,
     provider_request_count: usize,
     input_prune_report: Option<&CompactionInputPruneReport>,
-) {
+) -> String {
     let mut metadata = json!({
         "context_compaction_status": true,
         "context_compaction_section_id": section_id,
@@ -20863,7 +20932,7 @@ fn append_webui_context_compaction_end_message_to_state(
         metadata: Some(metadata),
         created_at: String::new(),
     };
-    append_webui_session_message_entry_to_state(runtime_state, session_id, entry);
+    append_webui_session_message_entry_to_state(runtime_state, session_id, entry)
 }
 
 /// Builds the visible terminal note for one completed context-compaction section.
@@ -21285,6 +21354,7 @@ async fn account_session_goal_from_report(
             latest_session_turn_stats_from_state(
                 conversation_state,
                 Some(report.provider_request_count),
+                report.embedded_turn_usage_segments.clone(),
             )
         });
     let token_delta = turn_stats
@@ -21410,9 +21480,11 @@ fn cache_session_goal_live_usage_from_checkpoint(
     provider_request_count: usize,
     add_turn_usage_to_accounted_total: bool,
 ) -> Result<(), String> {
-    let Some(turn_stats) =
-        latest_session_turn_stats_from_state(conversation_state, Some(provider_request_count))
-    else {
+    let Some(turn_stats) = latest_session_turn_stats_from_state(
+        conversation_state,
+        Some(provider_request_count),
+        Vec::new(),
+    ) else {
         return Ok(());
     };
     let mut guard = state
@@ -21445,13 +21517,16 @@ fn cache_session_goal_live_usage_from_checkpoint(
 fn latest_session_turn_stats_from_state(
     conversation_state: &SessionConversationState,
     provider_request_count_override: Option<usize>,
+    usage_segments: Vec<SessionTurnUsageSegment>,
 ) -> Option<SessionTurnStats> {
     let closing_record_id = conversation_state.records.last()?.id.as_str();
-    build_session_turn_stats_from_state(
+    build_session_turn_stats_from_state_with_segments(
         conversation_state,
         closing_record_id,
         SessionTurnStatsStatus::Completed,
         provider_request_count_override,
+        SessionTurnStatsKind::UserTurn,
+        usage_segments,
     )
 }
 
@@ -32274,6 +32349,7 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
     use vulcan_agent_runtime::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload,
     };
@@ -32483,6 +32559,10 @@ mod tests {
             ),
             fallback_used: false,
             provider_request_count: 1,
+            last_successful_provider_usage: None,
+            provider_id: None,
+            model_id: None,
+            execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
             input_prune_report: None,
         };
 
@@ -32575,6 +32655,10 @@ mod tests {
             ),
             fallback_used: false,
             provider_request_count: 1,
+            last_successful_provider_usage: None,
+            provider_id: None,
+            model_id: None,
+            execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
             input_prune_report: None,
         };
 
@@ -32657,6 +32741,10 @@ mod tests {
             ),
             fallback_used: false,
             provider_request_count: 1,
+            last_successful_provider_usage: None,
+            provider_id: None,
+            model_id: None,
+            execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
             input_prune_report: None,
         };
         let manual_draft = build_webui_context_compaction_draft(
@@ -32691,6 +32779,10 @@ mod tests {
             ),
             fallback_used: false,
             provider_request_count: 1,
+            last_successful_provider_usage: None,
+            provider_id: None,
+            model_id: None,
+            execution_profile: PromptCompactionExecutionProfile::CachePreservingFullFidelity,
             input_prune_report: None,
         };
         let auto_draft = build_webui_context_compaction_draft(
@@ -34441,6 +34533,98 @@ mod tests {
         assert!(messages[1].body.contains("运行时日志里的助手回答"));
     }
 
+    /// Verifies live goal-accounting turn stats include embedded auto-compaction usage.
+    /// 验证目标结算使用的实时轮次统计会包含嵌入式自动压缩用量。
+    #[test]
+    fn latest_session_turn_stats_includes_embedded_compaction_usage_segments() {
+        let conversation_state = SessionConversationState {
+            messages: vec![
+                SessionConversationMessage {
+                    id: String::from("session-user-2000"),
+                    payload: SessionConversationPayload::UserText {
+                        text: String::from("继续当前任务"),
+                        attachments: Vec::new(),
+                    },
+                },
+                SessionConversationMessage {
+                    id: String::from("session-assistant-2001"),
+                    payload: SessionConversationPayload::Assistant {
+                        text: String::from("已继续处理"),
+                        reasoning: String::new(),
+                        provider_message_id: None,
+                        provider_message_state: None,
+                        usage: Some(ProviderUsageSnapshot {
+                            input_tokens: Some(40),
+                            output_tokens: Some(12),
+                            total_tokens: Some(52),
+                            cached_input_tokens: Some(16),
+                            ..ProviderUsageSnapshot::default()
+                        }),
+                        tool_calls: Vec::new(),
+                    },
+                },
+            ],
+            records: vec![
+                SessionConversationRecord {
+                    id: String::from("record-user-2000"),
+                    kind: SessionMessageKind::User,
+                    record_kind: SessionMessageRecordKind::Transcript,
+                    visible: true,
+                    title: String::new(),
+                    body: String::from("继续当前任务"),
+                    metadata: None,
+                    created_at: String::from("2000"),
+                },
+                SessionConversationRecord {
+                    id: String::from("record-summary-2002"),
+                    kind: SessionMessageKind::Assistant,
+                    record_kind: SessionMessageRecordKind::SummaryOutput,
+                    visible: true,
+                    title: String::new(),
+                    body: String::from("已继续处理"),
+                    metadata: None,
+                    created_at: String::from("2002"),
+                },
+            ],
+            continuation: Default::default(),
+        };
+        let mut compaction_segment = SessionTurnUsageSegment::from_provider_usage(
+            SessionTurnUsageSegmentKind::ContextCompaction,
+            1,
+            Some(&ProviderUsageSnapshot {
+                input_tokens: Some(20),
+                output_tokens: Some(4),
+                total_tokens: Some(24),
+                cached_input_tokens: Some(5),
+                ..ProviderUsageSnapshot::default()
+            }),
+        );
+        compaction_segment.trigger = Some(String::from(AUTO_CONTEXT_COMPACTION_TRIGGER));
+
+        let stats = latest_session_turn_stats_from_state(
+            &conversation_state,
+            Some(1),
+            vec![compaction_segment],
+        )
+        .expect("latest turn stats should be built");
+
+        assert_eq!(stats.provider_call_count, 2);
+        assert_eq!(stats.input_tokens, 60);
+        assert_eq!(stats.output_tokens, 16);
+        assert_eq!(stats.total_tokens, 76);
+        assert_eq!(stats.cached_input_tokens, Some(21));
+        assert_eq!(goal_token_delta_for_turn_stats(&stats), Some(55));
+        assert_eq!(stats.usage_segments.len(), 2);
+        assert_eq!(
+            stats.usage_segments[0].kind,
+            SessionTurnUsageSegmentKind::AssistantResponse
+        );
+        assert_eq!(
+            stats.usage_segments[1].kind,
+            SessionTurnUsageSegmentKind::ContextCompaction
+        );
+    }
+
     /// Verifies runtime-only compaction sources do not become display fallback rows.
     /// 验证仅运行态压缩来源不会变成显示层回退行。
     #[test]
@@ -35384,6 +35568,7 @@ mod tests {
             conversation_state: None,
             provider_request_count: 1,
             last_successful_provider_usage: None,
+            embedded_turn_usage_segments: Vec::new(),
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),

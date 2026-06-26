@@ -5966,6 +5966,7 @@ mod tests {
             controller_runtime: None,
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         }
     }
 
@@ -6394,6 +6395,7 @@ mod tests {
             conversation_state: Some(core_snapshot_to_session_conversation_state(&snapshot)),
             provider_request_count: 1,
             last_successful_provider_usage: None,
+            embedded_turn_usage_segments: Vec::new(),
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),

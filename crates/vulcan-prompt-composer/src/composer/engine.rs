@@ -7,7 +7,7 @@ use crate::error::PromptComposerError;
 use crate::node::render_node;
 use crate::personality::catalog::PersonalityCatalog;
 use crate::source::hashing::stable_text_hash;
-use crate::strategy::compaction::ContextCompactionStrategy;
+use crate::strategy::compaction::MinimalContextCompactionStrategy;
 use crate::strategy::primary::PrimaryAgentStrategy;
 use crate::strategy::subagent_clone::SubagentCloneStrategy;
 use crate::strategy::subagent_functional::SubagentFunctionalStrategy;
@@ -169,7 +169,9 @@ impl PromptComposerEngine {
     fn select_strategy(&self, mode: PromptAssemblyMode) -> Box<dyn PromptAssemblyStrategy> {
         match mode {
             PromptAssemblyMode::Primary => Box::new(PrimaryAgentStrategy),
-            PromptAssemblyMode::ContextCompaction => Box::new(ContextCompactionStrategy),
+            PromptAssemblyMode::ContextCompactionMinimal => {
+                Box::new(MinimalContextCompactionStrategy)
+            }
             PromptAssemblyMode::SubagentClone => Box::new(SubagentCloneStrategy),
             PromptAssemblyMode::SubagentFunctional => Box::new(SubagentFunctionalStrategy),
         }

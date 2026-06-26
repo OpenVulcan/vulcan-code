@@ -48,6 +48,7 @@ pub(crate) fn execute_openai_compatible_stream(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    reject_tool_requests: bool,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let provider_label = provider_label.to_string();
@@ -69,6 +70,7 @@ pub(crate) fn execute_openai_compatible_stream(
         task_runtime,
         request_budget_guard,
         retry_policy,
+        reject_tool_requests,
     );
     let base_url = normalize_optional_base_url(base_url);
 

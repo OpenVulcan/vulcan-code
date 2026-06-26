@@ -312,6 +312,7 @@ mod tests {
             conversation_state: None,
             provider_request_count: 0,
             last_successful_provider_usage: None,
+            embedded_turn_usage_segments: Vec::new(),
             mcp_discovery_rows: Vec::new(),
             mcp_discovery_errors: Vec::new(),
             warnings: Vec::new(),

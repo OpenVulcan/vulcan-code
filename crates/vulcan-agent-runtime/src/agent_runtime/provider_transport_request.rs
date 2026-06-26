@@ -95,6 +95,9 @@ pub(crate) struct ProviderTransportExecutionRequest {
     /// Optional host intervention invoked at replay-safe tool boundaries.
     /// 在可回放安全工具边界调用的可选宿主干预钩子。
     pub(crate) prompt_intervention: Option<RuntimePromptIntervention>,
+    /// Whether host-managed tool requests must be rejected before execution.
+    /// 宿主管理工具请求是否必须在执行前被拒绝。
+    pub(crate) reject_tool_requests: bool,
 }
 
 /// Builds one owned provider transport execution request from already resolved runtime inputs.
@@ -124,6 +127,7 @@ pub(crate) fn build_provider_transport_execution_request(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    reject_tool_requests: bool,
 ) -> ProviderTransportExecutionRequest {
     ProviderTransportExecutionRequest {
         api_family: runtime_kind.api_family(),
@@ -151,5 +155,6 @@ pub(crate) fn build_provider_transport_execution_request(
         request_budget_guard,
         retry_policy,
         prompt_intervention,
+        reject_tool_requests,
     }
 }

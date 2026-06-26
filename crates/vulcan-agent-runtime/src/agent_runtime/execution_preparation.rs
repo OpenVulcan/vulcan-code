@@ -309,6 +309,7 @@ pub(crate) fn prepare_execution_with_tool_snapshot(
         runtime_system_updates: request.runtime_system_updates.clone(),
         session_goal_context: request.session_goal_context.clone(),
         session_plan_context: request.session_plan_context.clone(),
+        embedded_turn_usage_segments: request.embedded_turn_usage_segments.clone(),
     };
     let tool_snapshot = PreparedToolSnapshot {
         tools_manager,
@@ -1317,6 +1318,38 @@ mod tests {
         assert!(prepared.tool_snapshot.resolved_tool_definitions.is_empty());
     }
 
+    /// Verifies cache-preserving compaction preparation keeps provider-visible tool snapshots.
+    /// 验证保缓存压缩准备阶段会保留 Provider 可见工具快照。
+    #[test]
+    fn prepare_execution_keeps_tools_for_cache_preserving_context_compaction_purpose() {
+        let config = test_provider_config();
+        let foundation = RuntimeFoundation::build_from_optional_mcp_access(
+            &config,
+            &AgentProfileCatalog::default(),
+            None,
+            Some(configured_mcp_runtime_access(&config)),
+        );
+        let mut request = test_execution_preparation_request();
+        request.prompt_purpose = ExecutionPromptPurpose::ContextCompactionCachePreserving;
+        request.runtime_policy = ExecutionRuntimePolicy::context_compaction();
+        request.execution_scope = ExecutionScope::ContextCompaction {
+            node_id: SessionNodeId::from(request.session_id),
+        };
+        request.execution_mode = String::from("Compaction");
+
+        let prepared = prepare_execution_with_tool_snapshot(&foundation, None, &config, &request)
+            .expect("cache-preserving context compaction preparation should still resolve");
+
+        assert!(
+            !prepared.preparation.tool_descriptors.is_empty(),
+            "cache-preserving compaction must keep tool descriptors for provider cache continuity"
+        );
+        assert!(
+            !prepared.tool_snapshot.resolved_tool_definitions.is_empty(),
+            "cache-preserving compaction must keep provider-visible tool definitions"
+        );
+    }
+
     /// Builds one provider configuration that can resolve a provider blueprint without touching the network.
     /// 构建一份无需访问网络即可解析 Provider 蓝图的供应商配置。
     fn test_provider_config() -> ProviderConfigurationFile {
@@ -1409,6 +1442,7 @@ mod tests {
             controller_runtime: None,
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         }
     }
 }

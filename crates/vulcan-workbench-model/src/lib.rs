@@ -64,7 +64,10 @@ pub use subagent::{
     task_session_prompt_text_from_tool_metadata, task_session_public_id_from_payload,
     task_session_subagent_from_tool_metadata, task_session_tool_display_label,
 };
-pub use turn_stats::{SessionTurnStats, SessionTurnStatsStatus};
+pub use turn_stats::{
+    SessionTurnStats, SessionTurnStatsKind, SessionTurnStatsStatus, SessionTurnUsageSegment,
+    SessionTurnUsageSegmentKind,
+};
 pub use vulcan_context::{
     SessionCompactionEntry, SessionMessageEntry, SessionMessageKind, SessionMessageRecordKind,
 };

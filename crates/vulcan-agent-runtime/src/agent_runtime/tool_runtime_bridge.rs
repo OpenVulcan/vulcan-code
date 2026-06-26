@@ -868,7 +868,7 @@ mod tests {
             ProviderLiveDeltaSender,
             tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
         ) = tokio::sync::mpsc::unbounded_channel();
-        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender, false);
         let request = ToolInvocationRequest {
             tool_call_id: String::from("panic-call-1"),
             tool_name: String::from("panic_tool"),
@@ -929,7 +929,7 @@ mod tests {
             ProviderLiveDeltaSender,
             tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
         ) = tokio::sync::mpsc::unbounded_channel();
-        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender, false);
         let request = ToolInvocationRequest {
             tool_call_id: String::from("failing-call-1"),
             tool_name: String::from("failing_tool"),
@@ -959,6 +959,55 @@ mod tests {
         )));
     }
 
+    /// Verifies rejected tool requests do not emit a start event or enter the tool body.
+    /// 验证被拒绝的工具请求不会发出开始事件，也不会进入工具主体。
+    #[test]
+    fn streaming_tool_executor_rejects_tool_requests_before_host_execution() {
+        let entered_tool_body = Arc::new(AtomicBool::new(false));
+        let release_tool_body = Arc::new(Notify::new());
+        let (manager, definitions) = build_gated_demo_manager(
+            Arc::clone(&entered_tool_body),
+            Arc::clone(&release_tool_body),
+        );
+        let runtime_bridge = Arc::new(VulcanManagedToolRuntimeBridge::new(
+            Arc::new(manager),
+            &definitions,
+            Uuid::nil(),
+            "Compaction",
+        ));
+        let (sender, mut receiver): (
+            ProviderLiveDeltaSender,
+            tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
+        ) = tokio::sync::mpsc::unbounded_channel();
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender, true);
+        let request = ToolInvocationRequest {
+            tool_call_id: String::from("rejected-call-1"),
+            tool_name: String::from("gated_tool"),
+            arguments: json!({ "query": "must not run" }),
+        };
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
+
+        let result = runtime.block_on(executor.execute_tool(&request));
+
+        assert!(matches!(
+            result,
+            Err(VulcanCoreError::ToolFailure { ref tool_name, ref message })
+                if tool_name == "gated_tool"
+                    && message.contains("Tool calls are not allowed during context compaction")
+        ));
+        assert!(
+            !entered_tool_body.load(Ordering::SeqCst),
+            "rejected tool request must not enter the host tool body"
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "rejected tool request must not emit a tool-start event"
+        );
+    }
+
     /// Verifies the streaming executor yields the tool-start event before the actual tool body begins.
     /// 验证流式执行器会在真实工具主体开始前先产出工具开始事件。
     #[test]
@@ -979,7 +1028,7 @@ mod tests {
             ProviderLiveDeltaSender,
             tokio::sync::mpsc::UnboundedReceiver<Result<ProviderStreamDelta, String>>,
         ) = tokio::sync::mpsc::unbounded_channel();
-        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender);
+        let executor = StreamingRuntimeToolExecutor::new(runtime_bridge, sender, false);
         let request = ToolInvocationRequest {
             tool_call_id: String::from("gated-call-1"),
             tool_name: String::from("gated_tool"),

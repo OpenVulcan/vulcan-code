@@ -751,6 +751,7 @@ pub fn continue_shared_prompt_turn_after_precheck_with_runtime_state(
         controller_runtime: None,
         session_goal_context: None,
         session_plan_context: None,
+        embedded_turn_usage_segments: Vec::new(),
     };
     Ok(SharedPromptTurnContinuation {
         request,

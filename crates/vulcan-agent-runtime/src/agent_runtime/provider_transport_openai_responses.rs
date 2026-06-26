@@ -45,6 +45,7 @@ pub(crate) fn execute_openai_responses_stream(
     request_budget_guard: Option<ProviderRequestBudgetGuard>,
     retry_policy: ProviderRetryPolicy,
     prompt_intervention: Option<RuntimePromptIntervention>,
+    reject_tool_requests: bool,
 ) -> ProviderDeltaStream {
     let api_key = api_key.to_string();
     let prepared_runtime_inputs = prepare_provider_transport_runtime_inputs(
@@ -64,6 +65,7 @@ pub(crate) fn execute_openai_responses_stream(
         task_runtime,
         request_budget_guard,
         retry_policy,
+        reject_tool_requests,
     );
     let base_url = normalize_optional_base_url(base_url);
 

@@ -152,6 +152,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         };
         let request_snapshot = CoreProviderRequestSnapshot {
             provider_id: String::from("openai"),
@@ -300,6 +301,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         };
         let conversation_state = SessionConversationState {
             messages: vec![
@@ -647,6 +649,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 
@@ -729,6 +732,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         };
         let preamble = build_runtime_system_preamble(&preparation);
 

@@ -139,8 +139,13 @@ fn build_runtime_prompt_assembly_input(
 
     PromptAssemblyInput {
         mode: match preparation.prompt_purpose {
-            ExecutionPromptPurpose::UserTurn => PromptAssemblyMode::Primary,
-            ExecutionPromptPurpose::ContextCompaction => PromptAssemblyMode::ContextCompaction,
+            ExecutionPromptPurpose::UserTurn
+            | ExecutionPromptPurpose::ContextCompactionCachePreserving => {
+                PromptAssemblyMode::Primary
+            }
+            ExecutionPromptPurpose::ContextCompaction => {
+                PromptAssemblyMode::ContextCompactionMinimal
+            }
         },
         model: ModelDescriptor {
             family: preparation.model_blueprint.api_family_key().to_string(),
@@ -183,7 +188,8 @@ fn build_runtime_prompt_assembly_input(
 /// 构建特殊提示词用途所需的开发者侧运行时指令。
 fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> Vec<String> {
     match purpose {
-        ExecutionPromptPurpose::UserTurn => Vec::new(),
+        ExecutionPromptPurpose::UserTurn
+        | ExecutionPromptPurpose::ContextCompactionCachePreserving => Vec::new(),
         ExecutionPromptPurpose::ContextCompaction => {
             vec![build_context_compaction_developer_segment()]
         }
@@ -864,6 +870,7 @@ mod tests {
             runtime_system_updates: Vec::new(),
             session_goal_context: None,
             session_plan_context: None,
+            embedded_turn_usage_segments: Vec::new(),
         }
     }
 
