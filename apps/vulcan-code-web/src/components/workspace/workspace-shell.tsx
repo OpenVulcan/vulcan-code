@@ -659,9 +659,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // gitCommitDialogOpen stores the shared commit dialog state across chat and review surfaces.
   // gitCommitDialogOpen 保存聊天区与审核区共享的提交弹窗状态。
   const [gitCommitDialogOpen, setGitCommitDialogOpen] = React.useState(false);
-  // gitCommitBusyState stores the shared Git action phase shown by every commit trigger.
-  // gitCommitBusyState 保存每个提交入口展示的共享 Git 操作阶段。
-  const [gitCommitBusyState, setGitCommitBusyState] = React.useState<ConversationSessionCommitBusyState>(null);
+  // gitCommitBusyStateByWorkspace stores running Git actions by workspace path.
+  // gitCommitBusyStateByWorkspace 按工作区路径保存正在执行的 Git 动作状态。
+  const [gitCommitBusyStateByWorkspace, setGitCommitBusyStateByWorkspace] = React.useState<Record<string, NonNullable<ConversationSessionCommitBusyState>>>({});
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -681,6 +681,33 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const selectedChatProject = hasSelectedChatConversation && props.selectedConversation?.projectId
     ? props.workbench.projects.find((project) => project.id === props.selectedConversation?.projectId) ?? null
     : null;
+  // selectedGitCommitWorkspaceKey identifies the Git workspace whose commit state is currently shown.
+  // selectedGitCommitWorkspaceKey 标识当前展示提交状态的 Git 工作区。
+  const selectedGitCommitWorkspaceKey = selectedChatProject?.path ?? null;
+  // gitCommitBusyState stores the selected workspace's shared Git action phase.
+  // gitCommitBusyState 保存当前选中工作区的共享 Git 操作阶段。
+  const gitCommitBusyState = selectedGitCommitWorkspaceKey
+    ? gitCommitBusyStateByWorkspace[selectedGitCommitWorkspaceKey] ?? null
+    : null;
+  // updateGitCommitBusyState updates the running Git action state for the captured workspace.
+  // updateGitCommitBusyState 更新当前闭包捕获工作区的 Git 动作状态。
+  const updateGitCommitBusyState = React.useCallback((state: ConversationSessionCommitBusyState) => {
+    const workspaceKey = selectedGitCommitWorkspaceKey;
+    if (!workspaceKey) {
+      return;
+    }
+    setGitCommitBusyStateByWorkspace((current) => {
+      if (state) {
+        return { ...current, [workspaceKey]: state };
+      }
+      if (!Object.prototype.hasOwnProperty.call(current, workspaceKey)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[workspaceKey];
+      return next;
+    });
+  }, [selectedGitCommitWorkspaceKey]);
   // sessionTerminalSessions stores terminal sessions relevant to the selected conversation.
   // sessionTerminalSessions 保存与当前选中会话相关的终端会话。
   const sessionTerminalSessions = React.useMemo(
@@ -921,7 +948,6 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !sessionReviewSummary) {
       setGitCommitDialogOpen(false);
-      setGitCommitBusyState(null);
     }
   }, [hasSelectedChatConversation, sessionReviewSummary]);
 
@@ -1286,7 +1312,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           open={gitCommitDialogOpen}
           reviewSummary={sessionReviewSummary}
           workspacePath={selectedChatProject?.path ?? null}
-          onBusyStateChange={setGitCommitBusyState}
+          onBusyStateChange={updateGitCommitBusyState}
           onOpenChange={setGitCommitDialogOpen}
           onRefreshReviewSummary={refreshSessionReviewSummary}
         />
