@@ -137,6 +137,9 @@ pub enum ExecutionPromptPurpose {
     /// Internal context-compaction summary request.
     /// 内部上下文压缩摘要请求。
     ContextCompaction,
+    /// Internal Git commit-message summary request.
+    /// 内部 Git 提交信息总结请求。
+    GitCommitSummary,
 }
 
 impl Default for ExecutionPromptPurpose {
@@ -151,7 +154,7 @@ impl ExecutionPromptPurpose {
     /// Returns whether this purpose must hide provider-visible tools.
     /// 返回该用途是否必须隐藏 Provider 可见工具。
     pub const fn disables_provider_tools(self) -> bool {
-        matches!(self, Self::ContextCompaction)
+        matches!(self, Self::ContextCompaction | Self::GitCommitSummary)
     }
 
     /// Returns whether tool requests must be rejected before host execution.
@@ -160,6 +163,7 @@ impl ExecutionPromptPurpose {
         matches!(
             self,
             Self::ContextCompaction | Self::ContextCompactionCachePreserving
+                | Self::GitCommitSummary
         )
     }
 
@@ -185,6 +189,7 @@ impl ExecutionPromptPurpose {
             Self::UserTurn => None,
             Self::ContextCompactionCachePreserving => Some(1),
             Self::ContextCompaction => Some(1),
+            Self::GitCommitSummary => Some(1),
         }
     }
 
@@ -195,6 +200,7 @@ impl ExecutionPromptPurpose {
             Self::UserTurn => "user-turn",
             Self::ContextCompactionCachePreserving => "context-compaction-cache-preserving",
             Self::ContextCompaction => "context-compaction",
+            Self::GitCommitSummary => "git-commit-summary",
         }
     }
 }

@@ -133,6 +133,91 @@ export async function sendCommandSessionInput(
   });
 }
 
+// GitCommitSummaryGenerateResponse describes backend-generated commit message text and accounting metadata.
+// GitCommitSummaryGenerateResponse 描述后端生成的提交信息文本与统计元数据。
+export interface GitCommitSummaryGenerateResponse {
+  // Generated commit message text.
+  // 生成的提交信息文本。
+  message: string;
+  // Provider id used for the internal generation request.
+  // 内部生成请求使用的 Provider 标识。
+  providerId: string;
+  // Model id used for the internal generation request.
+  // 内部生成请求使用的模型标识。
+  modelId: string;
+  // Number of real provider requests used for generation.
+  // 生成过程使用的真实 Provider 请求次数。
+  providerRequestCount: number;
+  // Whether the full diff was replaced by compact metadata.
+  // 完整 diff 是否被紧凑元数据替换。
+  inputWasTruncated: boolean;
+  // Estimated input tokens used by the generation prompt.
+  // 生成提示词使用的输入 Token 估算值。
+  estimatedInputTokens: number;
+  // Provider-reported usage from the successful generation request when available.
+  // 成功生成请求返回的 Provider 用量；不可用时为空。
+  providerUsage?: {
+    inputTokens?: number | null;
+    outputTokens?: number | null;
+    reasoningTokens?: number | null;
+    totalTokens?: number | null;
+    cachedInputTokens?: number | null;
+    cacheCreationInputTokens?: number | null;
+  } | null;
+}
+
+// GitCommitActionTarget describes the commit target selected by the WebUI.
+// GitCommitActionTarget 描述 WebUI 选择的提交目标。
+export type GitCommitActionTarget =
+  | { mode: "current" }
+  | { mode: "new"; branchName: string };
+
+// GitCommitActionResponse describes a completed backend Git commit/push action.
+// GitCommitActionResponse 描述已完成的后端 Git 提交/推送操作。
+export interface GitCommitActionResponse {
+  // Human-readable operation summary.
+  // 面向用户的操作摘要。
+  summary: string;
+  // Whether a commit was created.
+  // 是否创建了提交。
+  committed: boolean;
+  // Whether a push command was executed.
+  // 是否执行了推送。
+  pushed: boolean;
+  // Current branch after the action.
+  // 操作后的当前分支。
+  branchName?: string | null;
+}
+
+// generateGitCommitMessage asks the backend to generate a commit message for the selected session repository.
+// generateGitCommitMessage 请求后端为当前会话仓库生成提交信息。
+export async function generateGitCommitMessage(request: {
+  conversationId: string;
+  workspacePath: string;
+  includeUnstaged: boolean;
+}): Promise<GitCommitSummaryGenerateResponse | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<GitCommitSummaryGenerateResponse>("service_generate_git_commit_message", { request });
+}
+
+// runGitCommitAction asks the backend to create a commit and optionally push it.
+// runGitCommitAction 请求后端创建提交并可选推送。
+export async function runGitCommitAction(request: {
+  conversationId: string;
+  workspacePath: string;
+  target: GitCommitActionTarget;
+  includeUnstaged: boolean;
+  message: string;
+  push: boolean;
+}): Promise<GitCommitActionResponse | null> {
+  if (!hasServiceRuntime()) {
+    return null;
+  }
+  return serviceClient.request<GitCommitActionResponse>("service_run_git_commit_action", { request });
+}
+
 // resizeCommandSession resizes one live terminal session.
 // resizeCommandSession 调整单条实时终端会话尺寸。
 export async function resizeCommandSession(

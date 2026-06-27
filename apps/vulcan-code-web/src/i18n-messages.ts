@@ -185,6 +185,43 @@ export type TranslationKey =
   | "settings.mcpServers.description"
   | "settings.runtimeDiagnostics.description"
   | "settings.gitCommit.description"
+  | "settings.gitCommit.active"
+  | "settings.gitCommit.autoSummary"
+  | "settings.gitCommit.summaryModel"
+  | "settings.gitCommit.followSessionModel"
+  | "settings.gitCommit.chooseSummaryModel"
+  | "settings.gitCommit.resetSummaryModel"
+  | "settings.gitCommit.followSessionModelHelp"
+  | "settings.gitCommit.fixedSummaryModelHelp"
+  | "settings.gitCommit.fixedSummaryModelUnavailable"
+  | "settings.gitCommit.summaryExtraPrompt"
+  | "settings.gitCommit.summaryExtraPromptPlaceholder"
+  | "settings.gitCommit.summaryExtraPromptHelp"
+  | "gitCommitDialog.generateEmpty"
+  | "gitCommitDialog.generated"
+  | "gitCommitDialog.generatedTruncated"
+  | "gitCommitDialog.actionDone"
+  | "gitCommitDialog.pushDone"
+  | "gitCommitDialog.generating"
+  | "gitCommitDialog.running"
+  | "gitCommitDialog.pushing"
+  | "gitCommitDialog.toolsTitle"
+  | "gitCommitDialog.changes"
+  | "gitCommitDialog.open"
+  | "gitCommitDialog.title"
+  | "gitCommitDialog.description"
+  | "gitCommitDialog.currentBranch"
+  | "gitCommitDialog.newBranch"
+  | "gitCommitDialog.recommendedPrefix"
+  | "gitCommitDialog.noChanges"
+  | "gitCommitDialog.branchName"
+  | "gitCommitDialog.message"
+  | "gitCommitDialog.messagePlaceholder"
+  | "gitCommitDialog.includeUnstaged"
+  | "gitCommitDialog.commit"
+  | "gitCommitDialog.commitAndPush"
+  | "gitCommitDialog.push"
+  | "gitCommitDialog.commitTo"
   | "settings.promptComposer.description"
   | "settings.aboutLicenses.description"
   | "settings.archivedRestore.description"
@@ -432,6 +469,43 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers.description": "MCP Runtime、服务连接、工具、提示词与资源状态。",
     "settings.runtimeDiagnostics.description": "启动链路、运行时模块与诊断日志。",
     "settings.gitCommit.description": "提交弹窗的新分支命名前缀与默认分支名规则。",
+    "settings.gitCommit.active": "已生效",
+    "settings.gitCommit.autoSummary": "自动总结",
+    "settings.gitCommit.summaryModel": "提交总结模型",
+    "settings.gitCommit.followSessionModel": "跟随提交所属会话模型",
+    "settings.gitCommit.chooseSummaryModel": "选择提交总结模型",
+    "settings.gitCommit.resetSummaryModel": "恢复跟随会话",
+    "settings.gitCommit.followSessionModelHelp": "不固定模型时，自动总结会使用触发提交动作的会话当前模型。",
+    "settings.gitCommit.fixedSummaryModelHelp": "已固定模型时，自动总结会优先使用该模型；模型不可用时后端会拒绝保存或提示重新选择。",
+    "settings.gitCommit.fixedSummaryModelUnavailable": "当前快照中找不到该固定模型，请重新选择或恢复跟随会话。",
+    "settings.gitCommit.summaryExtraPrompt": "额外总结提示词",
+    "settings.gitCommit.summaryExtraPromptPlaceholder": "例如：提交信息必须使用中文；首行不超过 50 字；正文按要点分行。",
+    "settings.gitCommit.summaryExtraPromptHelp": "该内容会追加到固定英文基础提示词之后，用于表达你的提交信息习惯。",
+    "gitCommitDialog.generateEmpty": "未生成提交信息。",
+    "gitCommitDialog.generated": "已生成提交信息，约",
+    "gitCommitDialog.generatedTruncated": "已生成提交信息，diff 已裁剪，约",
+    "gitCommitDialog.actionDone": "Git 操作已完成。",
+    "gitCommitDialog.pushDone": "Git 推送已完成。",
+    "gitCommitDialog.generating": "生成中",
+    "gitCommitDialog.running": "执行中",
+    "gitCommitDialog.pushing": "推送中",
+    "gitCommitDialog.toolsTitle": "GIT 工具",
+    "gitCommitDialog.changes": "更改",
+    "gitCommitDialog.open": "提交或推送",
+    "gitCommitDialog.title": "提交或推送",
+    "gitCommitDialog.description": "选择提交目标、填写提交信息，并根据 Git 变更状态启用提交操作。",
+    "gitCommitDialog.currentBranch": "当前分支",
+    "gitCommitDialog.newBranch": "新分支",
+    "gitCommitDialog.recommendedPrefix": "推荐：",
+    "gitCommitDialog.noChanges": "无更改",
+    "gitCommitDialog.branchName": "新分支名称",
+    "gitCommitDialog.message": "提交信息",
+    "gitCommitDialog.messagePlaceholder": "提交信息（留空将自动生成）...",
+    "gitCommitDialog.includeUnstaged": "包含未暂存的更改",
+    "gitCommitDialog.commit": "提交",
+    "gitCommitDialog.commitAndPush": "提交并推送",
+    "gitCommitDialog.push": "推送",
+    "gitCommitDialog.commitTo": "提交到",
     "settings.promptComposer.description": "输入区 slash 指令、附件能力与推理选择。",
     "settings.aboutLicenses.description": "应用版本、许可证入口与合规说明。",
     "settings.archivedRestore.description": "归档项目与会话恢复入口。",
@@ -676,6 +750,43 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "settings.mcpServers.description": "MCP runtime, server connections, tools, prompts, and resources.",
     "settings.runtimeDiagnostics.description": "Startup flow, runtime modules, and diagnostic logs.",
     "settings.gitCommit.description": "New-branch naming prefix and default branch-name rules for the commit dialog.",
+    "settings.gitCommit.active": "Active",
+    "settings.gitCommit.autoSummary": "Auto summary",
+    "settings.gitCommit.summaryModel": "Commit summary model",
+    "settings.gitCommit.followSessionModel": "Follow the owning session model",
+    "settings.gitCommit.chooseSummaryModel": "Choose commit summary model",
+    "settings.gitCommit.resetSummaryModel": "Follow session again",
+    "settings.gitCommit.followSessionModelHelp": "When no model is fixed, automatic summaries use the current model from the session that starts the commit action.",
+    "settings.gitCommit.fixedSummaryModelHelp": "When a model is fixed, automatic summaries prefer that model; unavailable models are rejected or must be reselected.",
+    "settings.gitCommit.fixedSummaryModelUnavailable": "This fixed model is not available in the current snapshot. Choose another model or follow the session model.",
+    "settings.gitCommit.summaryExtraPrompt": "Extra summary prompt",
+    "settings.gitCommit.summaryExtraPromptPlaceholder": "Example: write the commit message in Chinese; keep the title under 50 characters; split the body into bullet lines.",
+    "settings.gitCommit.summaryExtraPromptHelp": "This text is appended after the fixed English base prompt to express your commit-message preferences.",
+    "gitCommitDialog.generateEmpty": "No commit message was generated.",
+    "gitCommitDialog.generated": "Commit message generated, about",
+    "gitCommitDialog.generatedTruncated": "Commit message generated with truncated diff input, about",
+    "gitCommitDialog.actionDone": "Git action completed.",
+    "gitCommitDialog.pushDone": "Git push completed.",
+    "gitCommitDialog.generating": "Generating",
+    "gitCommitDialog.running": "Running",
+    "gitCommitDialog.pushing": "Pushing",
+    "gitCommitDialog.toolsTitle": "Git tools",
+    "gitCommitDialog.changes": "Changes",
+    "gitCommitDialog.open": "Commit or push",
+    "gitCommitDialog.title": "Commit or push",
+    "gitCommitDialog.description": "Choose a commit target, enter a commit message, and run commit actions based on the current Git changes.",
+    "gitCommitDialog.currentBranch": "Current branch",
+    "gitCommitDialog.newBranch": "New branch",
+    "gitCommitDialog.recommendedPrefix": "Recommended: ",
+    "gitCommitDialog.noChanges": "No changes",
+    "gitCommitDialog.branchName": "New branch name",
+    "gitCommitDialog.message": "Commit message",
+    "gitCommitDialog.messagePlaceholder": "Commit message (leave empty to generate one)...",
+    "gitCommitDialog.includeUnstaged": "Include unstaged changes",
+    "gitCommitDialog.commit": "Commit",
+    "gitCommitDialog.commitAndPush": "Commit and push",
+    "gitCommitDialog.push": "Push",
+    "gitCommitDialog.commitTo": "Commit to",
     "settings.promptComposer.description": "Composer slash commands, attachment capability, and reasoning selection.",
     "settings.aboutLicenses.description": "Application version, license entry points, and compliance notes.",
     "settings.archivedRestore.description": "Archived project and conversation restore entry.",

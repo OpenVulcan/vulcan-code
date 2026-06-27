@@ -1816,7 +1816,33 @@ export interface GitCommitSettingsSummary {
   // Default namespace prefix used when the current branch has no namespace.
   // 当前分支没有命名空间时使用的默认命名空间前缀。
   newBranchPrefix: string;
+  // Model selection used when commit messages are generated automatically.
+  // 自动生成提交信息时使用的模型选择。
+  summaryModel: GitCommitSummaryModelSelectionSummary;
+  // User-authored extra prompt appended to commit-message generation.
+  // 追加到提交信息生成中的用户额外提示词。
+  summaryExtraPrompt: string;
 }
+
+// GitCommitSummaryModelSelectionSummary describes the automatic commit-summary model setting.
+// GitCommitSummaryModelSelectionSummary 描述自动提交总结模型设置。
+export type GitCommitSummaryModelSelectionSummary =
+  | {
+    // Selection mode that follows the owning conversation session.
+    // 跟随所属会话的选择模式。
+    mode: "session";
+  }
+  | {
+    // Selection mode that uses a fixed provider/model pair.
+    // 使用固定 Provider/模型组合的选择模式。
+    mode: "fixed";
+    // Stable provider identifier.
+    // 稳定 Provider 标识。
+    providerId: string;
+    // Stable model identifier.
+    // 稳定模型标识。
+    modelId: string;
+  };
 
 // HydratedConversationWindowSummary describes one retained lazy conversation body window.
 // HydratedConversationWindowSummary 描述一个已保留的懒加载会话正文窗口。

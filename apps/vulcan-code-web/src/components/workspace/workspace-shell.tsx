@@ -837,63 +837,69 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     Boolean(sessionReviewSummary && sessionReviewSummary.changedFiles > 0) || visibleSessionTerminalSessions.length > 0
   );
 
-  React.useEffect(() => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
+  // refreshSessionReviewSummary reloads the compact Git summary for the selected chat project.
+  // refreshSessionReviewSummary 重新加载当前聊天项目的紧凑 Git 摘要。
+  const refreshSessionReviewSummary = React.useCallback(async () => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path || !selectedChatProject?.id) {
       setSessionReviewSummary(null);
-      return undefined;
+      return;
     }
+    const [unstagedResult, stagedResult] = await Promise.allSettled([
+      props.onLoadWorkspaceDiffSnapshot(
+        selectedChatProject.path,
+        selectedChatProject.id,
+        props.selectedConversationId,
+        { mode: "unstaged" },
+      ),
+      props.onLoadWorkspaceDiffSnapshot(
+        selectedChatProject.path,
+        selectedChatProject.id,
+        props.selectedConversationId,
+        { mode: "staged" },
+      ),
+    ]);
+    const snapshots = [unstagedResult, stagedResult]
+      .filter((result): result is PromiseFulfilledResult<WorkspaceDiffSnapshotResponse> => result.status === "fulfilled")
+      .map((result) => result.value);
+    const primarySnapshot = snapshots[0] ?? null;
+    const branchName = primarySnapshot?.currentBranch ?? null;
+    if (!branchName) {
+      setSessionReviewSummary(null);
+      return;
+    }
+    // branchNames keeps the concrete Git branch labels returned by the review snapshot.
+    // branchNames 保存审查快照返回的真实 Git 分支标签。
+    const branchNames = (primarySnapshot?.branches ?? []).map((branch) => branch.name);
+    // unstagedSnapshot keeps the working-tree diff counts used by the commit popover gate.
+    // unstagedSnapshot 保存提交浮层门禁使用的工作区 diff 计数。
+    const unstagedSnapshot = unstagedResult.status === "fulfilled" ? unstagedResult.value : null;
+    // stagedSnapshot keeps the index diff counts used when unstaged changes are excluded.
+    // stagedSnapshot 保存排除未暂存变更时使用的暂存区 diff 计数。
+    const stagedSnapshot = stagedResult.status === "fulfilled" ? stagedResult.value : null;
+    setSessionReviewSummary({
+      additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
+      branchName,
+      branchNames,
+      changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
+      deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
+      stagedAdditions: stagedSnapshot?.additions ?? 0,
+      stagedChangedFiles: stagedSnapshot?.changedFiles ?? 0,
+      stagedDeletions: stagedSnapshot?.deletions ?? 0,
+      unstagedAdditions: unstagedSnapshot?.additions ?? 0,
+      unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
+      unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
+    });
+  }, [
+    hasSelectedChatConversation,
+    props.onLoadWorkspaceDiffSnapshot,
+    props.selectedConversationId,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+  ]);
+
+  React.useEffect(() => {
     let cancelled = false;
-    const loadSessionReviewSummary = async () => {
-      const [unstagedResult, stagedResult] = await Promise.allSettled([
-        props.onLoadWorkspaceDiffSnapshot(
-          selectedChatProject.path,
-          selectedChatProject.id,
-          props.selectedConversationId,
-          { mode: "unstaged" },
-        ),
-        props.onLoadWorkspaceDiffSnapshot(
-          selectedChatProject.path,
-          selectedChatProject.id,
-          props.selectedConversationId,
-          { mode: "staged" },
-        ),
-      ]);
-      if (cancelled) {
-        return;
-      }
-      const snapshots = [unstagedResult, stagedResult]
-        .filter((result): result is PromiseFulfilledResult<WorkspaceDiffSnapshotResponse> => result.status === "fulfilled")
-        .map((result) => result.value);
-      const primarySnapshot = snapshots[0] ?? null;
-      const branchName = primarySnapshot?.currentBranch ?? null;
-      if (!branchName) {
-        setSessionReviewSummary(null);
-        return;
-      }
-      // branchNames keeps the concrete Git branch labels returned by the review snapshot.
-      // branchNames 保存审查快照返回的真实 Git 分支标签。
-      const branchNames = (primarySnapshot?.branches ?? []).map((branch) => branch.name);
-      // unstagedSnapshot keeps the working-tree diff counts used by the commit popover gate.
-      // unstagedSnapshot 保存提交浮层门禁使用的工作区 diff 计数。
-      const unstagedSnapshot = unstagedResult.status === "fulfilled" ? unstagedResult.value : null;
-      // stagedSnapshot keeps the index diff counts used when unstaged changes are excluded.
-      // stagedSnapshot 保存排除未暂存变更时使用的暂存区 diff 计数。
-      const stagedSnapshot = stagedResult.status === "fulfilled" ? stagedResult.value : null;
-      setSessionReviewSummary({
-        additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
-        branchName,
-        branchNames,
-        changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
-        deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
-        stagedAdditions: stagedSnapshot?.additions ?? 0,
-        stagedChangedFiles: stagedSnapshot?.changedFiles ?? 0,
-        stagedDeletions: stagedSnapshot?.deletions ?? 0,
-        unstagedAdditions: unstagedSnapshot?.additions ?? 0,
-        unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
-        unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
-      });
-    };
-    void loadSessionReviewSummary().catch(() => {
+    void refreshSessionReviewSummary().catch(() => {
       if (!cancelled) {
         setSessionReviewSummary(null);
       }
@@ -902,12 +908,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       cancelled = true;
     };
   }, [
-    hasSelectedChatConversation,
-    props.onLoadWorkspaceDiffSnapshot,
-    props.selectedConversationId,
+    refreshSessionReviewSummary,
     props.workbench.messages.length,
-    selectedChatProject?.id,
-    selectedChatProject?.path,
   ]);
 
   // rightPanelLabel describes the page-registered context panel toggle action.
@@ -1155,12 +1157,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       panel: sessionToolPanelVisible ? (
         <ConversationSessionTodolistPanel
           commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
+          conversationId={props.selectedConversationId}
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
           terminalSessions={sessionTerminalSessions}
           todolist={null}
+          workspacePath={selectedChatProject?.path ?? null}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
+          onRefreshReviewSummary={refreshSessionReviewSummary}
           onStopCommandSession={props.onStopCommandSession}
         />
       ) : null,

@@ -146,6 +146,7 @@ fn build_runtime_prompt_assembly_input(
             ExecutionPromptPurpose::ContextCompaction => {
                 PromptAssemblyMode::ContextCompactionMinimal
             }
+            ExecutionPromptPurpose::GitCommitSummary => PromptAssemblyMode::ContextCompactionMinimal,
         },
         model: ModelDescriptor {
             family: preparation.model_blueprint.api_family_key().to_string(),
@@ -193,7 +194,18 @@ fn build_prompt_purpose_developer_segments(purpose: ExecutionPromptPurpose) -> V
         ExecutionPromptPurpose::ContextCompaction => {
             vec![build_context_compaction_developer_segment()]
         }
+        ExecutionPromptPurpose::GitCommitSummary => {
+            vec![build_git_commit_summary_developer_segment()]
+        }
     }
+}
+
+/// Builds the fixed developer instruction used by internal Git commit-message summaries.
+/// 构建内部 Git 提交信息总结使用的固定开发者指令。
+fn build_git_commit_summary_developer_segment() -> String {
+    String::from(
+        "You generate Git commit messages for a local desktop client. Do not call tools. Use only the repository change data in the user message. Output only the final commit message text.",
+    )
 }
 
 /// Builds the optional session-goal prompt snapshot for the current request.

@@ -23,7 +23,13 @@ import {
 } from "@/components/conversation/conversation-terminal-model";
 import { TerminalOutputView } from "@/components/conversation/conversation-terminal-output";
 import { TerminalStopConfirmDialog } from "@/components/conversation/terminal-stop-confirm-dialog";
-import { getCommandSessionSnapshot, sendCommandSessionInput, type TerminalInputEvent } from "@/service/conversation-actions-service";
+import {
+  generateGitCommitMessage,
+  getCommandSessionSnapshot,
+  runGitCommitAction,
+  sendCommandSessionInput,
+  type TerminalInputEvent,
+} from "@/service/conversation-actions-service";
 import {
   Dialog,
   DialogContent,
@@ -36,6 +42,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useI18n } from "@/i18n";
 import { cn } from "@/lib/utils";
 import type { CommandSessionSummary, SessionTodolistItemSummary, SessionTodolistSummary } from "@/types";
 
@@ -101,6 +108,12 @@ export function ConversationSessionTodolistPanel(props: {
   // Shared Git commit new-branch prefix projected from service configuration.
   // 从服务端配置投影出的共享 Git 提交新分支前缀。
   commitBranchPrefix: string;
+  // Selected conversation id that owns Git commit generation.
+  // 拥有 Git 提交生成动作的当前会话标识。
+  conversationId: string | null;
+  // Workspace path used to resolve the Git repository on the backend.
+  // 后端用于解析 Git 仓库的工作区路径。
+  workspacePath: string | null;
   // Current terminal sessions owned by the selected conversation.
   // 当前选中会话拥有的终端会话集合。
   terminalSessions: CommandSessionSummary[];
@@ -113,6 +126,9 @@ export function ConversationSessionTodolistPanel(props: {
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: () => void;
+  // Refreshes the compact Git review summary after backend Git actions.
+  // 后端 Git 动作完成后刷新紧凑 Git 审查摘要。
+  onRefreshReviewSummary: () => Promise<void>;
   // Force-stops one live terminal session.
   // 强制停止单条实时终端会话。
   onStopCommandSession: (commandSessionId: string, ownerSessionId?: string | null) => Promise<void>;
@@ -233,9 +249,12 @@ export function ConversationSessionTodolistPanel(props: {
       {props.reviewSummary ? (
         <ConversationSessionReviewSection
           commitBranchPrefix={props.commitBranchPrefix}
+          conversationId={props.conversationId}
           reviewSummary={props.reviewSummary}
+          workspacePath={props.workspacePath}
           onCollapse={() => requestExpandedChange(false)}
           onOpenReviewChanges={props.onOpenReviewChanges}
+          onRefreshReviewSummary={props.onRefreshReviewSummary}
         />
       ) : null}
       {hasTerminalSessions ? (
@@ -592,16 +611,26 @@ function ConversationSessionReviewSection(props: {
   // Shared Git commit new-branch prefix projected from service configuration.
   // 从服务端配置投影出的共享 Git 提交新分支前缀。
   commitBranchPrefix: string;
+  // Selected conversation id that owns Git commit generation.
+  // 拥有 Git 提交生成动作的当前会话标识。
+  conversationId: string | null;
+  // Workspace path used to resolve the Git repository on the backend.
+  // 后端用于解析 Git 仓库的工作区路径。
+  workspacePath: string | null;
   // Review summary rendered by this section.
   // 当前区域渲染的审查摘要。
   reviewSummary: ConversationSessionReviewSummary;
   // Opens the workspace review panel focused on uncommitted changes.
   // 打开工作区审核面板并聚焦未提交变更。
   onOpenReviewChanges: () => void;
+  // Refreshes the compact Git review summary after backend Git actions.
+  // 后端 Git 动作完成后刷新紧凑 Git 审查摘要。
+  onRefreshReviewSummary: () => Promise<void>;
   // Collapses the expanded session tool panel.
   // 折叠当前展开的会话工具面板。
   onCollapse: () => void;
 }) {
+  const { t } = useI18n();
   // commitPanelOpen stores whether the local commit draft surface is visible.
   // commitPanelOpen 保存本地提交草稿界面是否可见。
   const [commitPanelOpen, setCommitPanelOpen] = React.useState(false);
@@ -609,7 +638,7 @@ function ConversationSessionReviewSection(props: {
   return (
     <section className="conversation-session-tool-section conversation-session-review-section">
       <div className="conversation-session-tool-section-title with-action">
-        <span>GIT 工具</span>
+        <span>{t("gitCommitDialog.toolsTitle")}</span>
         <button
           aria-label="折叠会话工具"
           className="workspace-tool-panel-menu-icon-button"
@@ -623,7 +652,7 @@ function ConversationSessionReviewSection(props: {
       <div className="workspace-tool-panel-menu-list conversation-session-review-list">
         <button className="workspace-tool-panel-menu-row conversation-session-review-row" onClick={props.onOpenReviewChanges} type="button">
           <FileDiff size={15} />
-          <span>更改</span>
+          <span>{t("gitCommitDialog.changes")}</span>
           {conversationSessionReviewDelta(props.reviewSummary)}
         </button>
         {props.reviewSummary.branchName ? (
@@ -643,17 +672,20 @@ function ConversationSessionReviewSection(props: {
               type="button"
             >
               <GitCommitHorizontal size={15} />
-              <span>提交或推送</span>
+              <span>{t("gitCommitDialog.open")}</span>
             </button>
           </DialogTrigger>
           <DialogContent className="conversation-session-commit-dialog">
-            <DialogTitle className="sr-only">提交或推送</DialogTitle>
+            <DialogTitle className="sr-only">{t("gitCommitDialog.title")}</DialogTitle>
             <DialogDescription className="sr-only">
-              选择提交目标、填写提交信息，并根据 Git 变更状态启用提交操作。
+              {t("gitCommitDialog.description")}
             </DialogDescription>
             <ConversationSessionCommitPanel
               commitBranchPrefix={props.commitBranchPrefix}
+              conversationId={props.conversationId}
               reviewSummary={props.reviewSummary}
+              workspacePath={props.workspacePath}
+              onRefreshReviewSummary={props.onRefreshReviewSummary}
             />
           </DialogContent>
         </Dialog>
@@ -668,10 +700,20 @@ function ConversationSessionCommitPanel(props: {
   // Shared Git commit new-branch prefix projected from service configuration.
   // 从服务端配置投影出的共享 Git 提交新分支前缀。
   commitBranchPrefix: string;
+  // Selected conversation id that owns Git commit generation.
+  // 拥有 Git 提交生成动作的当前会话标识。
+  conversationId: string | null;
   // Review summary used to gate local commit actions.
   // 用于限制本地提交动作的审核摘要。
   reviewSummary: ConversationSessionReviewSummary;
+  // Workspace path used to resolve the Git repository on the backend.
+  // 后端用于解析 Git 仓库的工作区路径。
+  workspacePath: string | null;
+  // Refreshes the compact Git review summary after backend Git actions.
+  // 后端 Git 动作完成后刷新紧凑 Git 审查摘要。
+  onRefreshReviewSummary: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   // includeUnstaged stores whether unstaged working tree changes are included by default.
   // includeUnstaged 保存默认是否包含工作区未暂存变更。
   const [includeUnstaged, setIncludeUnstaged] = React.useState(props.reviewSummary.unstagedChangedFiles > 0);
@@ -690,9 +732,18 @@ function ConversationSessionCommitPanel(props: {
   // commitMessage stores the manually typed commit message draft.
   // commitMessage 保存用户手动输入的提交信息草稿。
   const [commitMessage, setCommitMessage] = React.useState("");
+  // busyAction stores the backend Git action currently in progress.
+  // busyAction 保存当前正在执行的后端 Git 动作。
+  const [busyAction, setBusyAction] = React.useState<"generate" | "commit" | "commitPush" | "push" | null>(null);
+  // statusMessage stores the latest successful backend action summary.
+  // statusMessage 保存最近一次成功后端动作摘要。
+  const [statusMessage, setStatusMessage] = React.useState<string | null>(null);
+  // errorMessage stores the latest failed backend action summary.
+  // errorMessage 保存最近一次失败后端动作摘要。
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
   const currentBranchName = props.reviewSummary.branchName
     ? conversationSessionBranchDisplayName(props.reviewSummary.branchName)
-    : "当前分支";
+    : t("gitCommitDialog.currentBranch");
   const defaultNewBranchName = React.useMemo(
     () => conversationSessionDefaultNewBranchName(currentBranchName, props.reviewSummary.branchNames, props.commitBranchPrefix),
     [currentBranchName, props.commitBranchPrefix, props.reviewSummary.branchNames],
@@ -706,8 +757,10 @@ function ConversationSessionCommitPanel(props: {
     + (includeUnstaged ? props.reviewSummary.unstagedDeletions : 0);
   const hasValidCommitTarget = target === "current" || branchName.trim().length > 0;
   const includeUnstagedDisabled = !hasUnstagedChanges;
-  const effectiveTargetLabel = target === "new" ? (branchName.trim() || "新分支") : currentBranchName;
-  const newBranchPlaceholder = `推荐：${defaultNewBranchName}`;
+  const effectiveTargetLabel = target === "new" ? (branchName.trim() || t("gitCommitDialog.newBranch")) : currentBranchName;
+  const newBranchPlaceholder = `${t("gitCommitDialog.recommendedPrefix")}${defaultNewBranchName}`;
+  const backendReady = Boolean(props.conversationId && props.workspacePath);
+  const controlsDisabled = busyAction !== null || !backendReady;
 
   React.useEffect(() => {
     if (!hasUnstagedChanges) {
@@ -720,6 +773,104 @@ function ConversationSessionCommitPanel(props: {
       setBranchName(defaultNewBranchName);
     }
   }, [branchNameEdited, defaultNewBranchName, target]);
+
+  // commitTargetRequest builds the backend target payload from the current branch controls.
+  // commitTargetRequest 根据当前分支控件构建后端目标载荷。
+  const commitTargetRequest = React.useCallback(() => {
+    if (target === "new") {
+      return { mode: "new" as const, branchName: branchName.trim() };
+    }
+    return { mode: "current" as const };
+  }, [branchName, target]);
+
+  // generateCommitMessage fills the draft message without mutating the repository.
+  // generateCommitMessage 在不修改仓库的情况下填充提交信息草稿。
+  const generateCommitMessage = React.useCallback(async () => {
+    if (!props.conversationId || !props.workspacePath || busyAction) {
+      return false;
+    }
+    setBusyAction("generate");
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      const response = await generateGitCommitMessage({
+        conversationId: props.conversationId,
+        workspacePath: props.workspacePath,
+        includeUnstaged,
+      });
+      if (!response?.message) {
+        throw new Error(t("gitCommitDialog.generateEmpty"));
+      }
+      setCommitMessage(response.message);
+      setStatusMessage(response.inputWasTruncated
+        ? `${t("gitCommitDialog.generatedTruncated")} ${response.estimatedInputTokens} tokens.`
+        : `${t("gitCommitDialog.generated")} ${response.estimatedInputTokens} tokens.`);
+      return true;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+      return false;
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, includeUnstaged, props.conversationId, props.workspacePath, t]);
+
+  // runCommitAction executes a commit or commit-and-push when the message draft is ready.
+  // runCommitAction 在提交信息草稿就绪后执行提交或提交并推送。
+  const runCommitAction = React.useCallback(async (push: boolean) => {
+    if (!props.conversationId || !props.workspacePath || busyAction) {
+      return;
+    }
+    if (!commitMessage.trim()) {
+      await generateCommitMessage();
+      return;
+    }
+    setBusyAction(push ? "commitPush" : "commit");
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      await runGitCommitAction({
+        conversationId: props.conversationId,
+        workspacePath: props.workspacePath,
+        target: commitTargetRequest(),
+        includeUnstaged,
+        message: commitMessage,
+        push,
+      });
+      setStatusMessage(push ? t("gitCommitDialog.pushDone") : t("gitCommitDialog.actionDone"));
+      await props.onRefreshReviewSummary();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, commitMessage, commitTargetRequest, generateCommitMessage, includeUnstaged, props, t]);
+
+  // runPushAction pushes the current branch without creating a commit.
+  // runPushAction 推送当前分支且不创建提交。
+  const runPushAction = React.useCallback(async () => {
+    if (!props.conversationId || !props.workspacePath || busyAction) {
+      return;
+    }
+    setBusyAction("push");
+    setErrorMessage(null);
+    setStatusMessage(null);
+    try {
+      await runGitCommitAction({
+        conversationId: props.conversationId,
+        workspacePath: props.workspacePath,
+        target: { mode: "current" },
+        includeUnstaged: false,
+        message: "",
+        push: true,
+      });
+      setStatusMessage(t("gitCommitDialog.pushDone"));
+      await props.onRefreshReviewSummary();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setBusyAction(null);
+    }
+  }, [busyAction, props, t]);
 
   return (
     <div className="conversation-session-commit-panel">
@@ -737,7 +888,7 @@ function ConversationSessionCommitPanel(props: {
           </button>
           {branchMenuOpen ? (
             <div className="conversation-session-commit-branch-menu">
-              <span className="conversation-session-commit-branch-menu-title">提交到</span>
+              <span className="conversation-session-commit-branch-menu-title">{t("gitCommitDialog.commitTo")}</span>
               <button
                 className="conversation-session-commit-branch-option"
                 onClick={() => {
@@ -761,7 +912,7 @@ function ConversationSessionCommitPanel(props: {
                 type="button"
               >
                 <PlusIcon />
-                <span>新分支</span>
+                <span>{t("gitCommitDialog.newBranch")}</span>
                 {target === "new" ? <Check size={14} /> : null}
               </button>
             </div>
@@ -773,12 +924,12 @@ function ConversationSessionCommitPanel(props: {
             <span className="removed">-{includedDeletions}</span>
           </strong>
         ) : (
-          <strong className="conversation-session-commit-empty">无更改</strong>
+          <strong className="conversation-session-commit-empty">{t("gitCommitDialog.noChanges")}</strong>
         )}
       </div>
       {target === "new" ? (
         <input
-          aria-label="新分支名称"
+          aria-label={t("gitCommitDialog.branchName")}
           className="conversation-session-commit-branch-input"
           onChange={(event) => {
             setBranchNameEdited(true);
@@ -789,10 +940,20 @@ function ConversationSessionCommitPanel(props: {
         />
       ) : null}
       <textarea
-        aria-label="提交信息"
+        aria-label={t("gitCommitDialog.message")}
         className="conversation-session-commit-message"
-        onChange={(event) => setCommitMessage(event.currentTarget.value)}
-        placeholder="提交信息（留空将自动生成）..."
+        onChange={(event) => {
+          setCommitMessage(event.currentTarget.value);
+          setErrorMessage(null);
+          setStatusMessage(null);
+        }}
+        onKeyDown={(event) => {
+          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+            event.preventDefault();
+            void runCommitAction(false);
+          }
+        }}
+        placeholder={t("gitCommitDialog.messagePlaceholder")}
         rows={2}
         value={commitMessage}
       />
@@ -803,33 +964,42 @@ function ConversationSessionCommitPanel(props: {
           onChange={(event) => setIncludeUnstaged(event.currentTarget.checked)}
           type="checkbox"
         />
-        <span>包含未暂存的更改</span>
+        <span>{t("gitCommitDialog.includeUnstaged")}</span>
       </label>
+      {statusMessage ? (
+        <p className="conversation-session-commit-status">{statusMessage}</p>
+      ) : null}
+      {errorMessage ? (
+        <p className="conversation-session-commit-status error">{errorMessage}</p>
+      ) : null}
       <div className="conversation-session-commit-actions">
         <button
           className="conversation-session-commit-action primary"
-          disabled={!hasIncludedChanges || !hasValidCommitTarget}
+          disabled={controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget}
+          onClick={() => void runCommitAction(false)}
           type="button"
         >
-          <GitCommitHorizontal size={15} />
-          <span>提交</span>
+          {busyAction === "commit" || busyAction === "generate" ? <LoaderCircle className="spin" size={15} /> : <GitCommitHorizontal size={15} />}
+          <span>{busyAction === "generate" ? t("gitCommitDialog.generating") : t("gitCommitDialog.commit")}</span>
           <kbd>Ctrl+↵</kbd>
         </button>
         <button
           className="conversation-session-commit-action"
-          disabled={!hasIncludedChanges || !hasValidCommitTarget}
+          disabled={controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget}
+          onClick={() => void runCommitAction(true)}
           type="button"
         >
-          <CloudUpload size={15} />
-          <span>提交并推送</span>
+          {busyAction === "commitPush" ? <LoaderCircle className="spin" size={15} /> : <CloudUpload size={15} />}
+          <span>{busyAction === "commitPush" ? t("gitCommitDialog.running") : t("gitCommitDialog.commitAndPush")}</span>
         </button>
         <button
           className="conversation-session-commit-action"
-          disabled
+          disabled={controlsDisabled}
+          onClick={() => void runPushAction()}
           type="button"
         >
-          <CloudUpload size={15} />
-          <span>推送</span>
+          {busyAction === "push" ? <LoaderCircle className="spin" size={15} /> : <CloudUpload size={15} />}
+          <span>{busyAction === "push" ? t("gitCommitDialog.pushing") : t("gitCommitDialog.push")}</span>
         </button>
       </div>
     </div>

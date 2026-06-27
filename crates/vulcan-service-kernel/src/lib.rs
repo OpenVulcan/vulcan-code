@@ -95,6 +95,7 @@ use vulcan_agent_runtime::{
 use vulcan_context::{
     ContextBudgetSeverity, ContextBudgetSnapshot, SessionConversationMessage,
     SessionConversationPayload, SessionConversationRecord, append_record, append_record_body_delta,
+    estimate_mixed_language_text_tokens,
 };
 use vulcan_context_compaction::{
     CompactionInputBudget, CompactionInputPruneMode, CompactionInputPruneReport, CompactionPlan,
@@ -111,7 +112,8 @@ use vulcan_core::types::{
 };
 use vulcan_provider_config::config::{
     AiCapabilityVendorConnectionMode, AiToolKind, PersistedAiCapabilityTargetBinding,
-    PersistedAiCapabilityVendorEntry, PersistedLuaSkillToolRegistrationState,
+    GitCommitSummaryModelSelection, PersistedAiCapabilityVendorEntry,
+    PersistedLuaSkillToolRegistrationState,
     PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
     PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions, ProviderFieldKey,
 };
@@ -124,10 +126,11 @@ use vulcan_service_api::{
     ConversationForkSourceSummary, ConversationHistoryPageResponse, ConversationHydrationProgress,
     ConversationHydrationStatus, ConversationMessage, ConversationMessagesLoadResponse,
     ConversationSummary, FeatureAreaSummary, GitCommitSettingsSummary,
-    HydratedConversationWindowSummary, KeyValueSummary, LogEntrySummary, LuaSkillSummary,
-    LuaSkillToolSummary, LuaSkillsCatalogSummary, McpServerSummary, MemorySummary, MessageRole,
-    PendingPromptSummary, PendingQuestionOptionSummary, PendingQuestionPromptSummary,
-    PendingQuestionSnapshot, PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
+    GitCommitSummaryModelSelectionSummary, HydratedConversationWindowSummary, KeyValueSummary,
+    LogEntrySummary, LuaSkillSummary, LuaSkillToolSummary, LuaSkillsCatalogSummary,
+    McpServerSummary, MemorySummary, MessageRole, PendingPromptSummary,
+    PendingQuestionOptionSummary, PendingQuestionPromptSummary, PendingQuestionSnapshot,
+    PluginSummary, ProjectDirectoryEntrySummary, ProjectDirectoryListing,
     ProjectDirectoryRootSummary, ProjectSummary, ProviderFieldSummary,
     ProviderModelSecondaryRouteSelection, ProviderModelSecondaryRouteSummary, ProviderModelSummary,
     ProviderSummary, ReasoningSelectionOptionSummary, ReasoningSelectionSummary,
@@ -157,8 +160,8 @@ use vulcan_session_boundary::{
     SessionLifecycleHook, SessionLifecycleRunner, SessionTurnTerminalStatus,
 };
 use vulcan_session_core::{
-    ActiveTurnKind, SessionNodeId, SessionRuntimeKernel, TurnInput, TurnInputKind,
-    TurnTerminalStatus,
+    ActiveTurnKind, ExecutionRuntimePolicy, ExecutionScope, SessionNodeId, SessionRuntimeKernel,
+    TurnInput, TurnInputKind, TurnTerminalStatus,
 };
 use vulcan_task_session::SegmentedTaskSessionStore;
 use vulcan_workbench_model::{
@@ -356,6 +359,119 @@ struct GitCommitSettingsSaveRequest {
     /// Default namespace prefix used when the current branch has no namespace.
     /// 当前分支没有命名空间时使用的默认命名空间前缀。
     new_branch_prefix: String,
+    /// Model selection used when commit messages are generated automatically.
+    /// 自动生成提交信息时使用的模型选择。
+    #[serde(default)]
+    summary_model: GitCommitSummaryModelSelectionSummary,
+    /// User-authored extra prompt appended to commit-message generation.
+    /// 追加到提交信息生成中的用户额外提示词。
+    #[serde(default)]
+    summary_extra_prompt: String,
+}
+
+/// Git commit-message generation request sent by the WebUI commit dialog.
+/// WebUI 提交弹窗发送的 Git 提交信息生成请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitSummaryGenerateRequest {
+    /// Conversation id whose active model may be used for generation.
+    /// 可用于生成提交信息的会话标识。
+    conversation_id: String,
+    /// Workspace path used to resolve the Git repository.
+    /// 用于解析 Git 仓库的工作区路径。
+    workspace_path: String,
+    /// Whether unstaged and untracked changes are included in the summary input.
+    /// 是否将未暂存与未跟踪变更纳入总结输入。
+    include_unstaged: bool,
+}
+
+/// Git commit-message generation response returned to the WebUI commit dialog.
+/// 返回给 WebUI 提交弹窗的 Git 提交信息生成响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitSummaryGenerateResponse {
+    /// Generated commit message text.
+    /// 生成的提交信息文本。
+    message: String,
+    /// Provider id used for the internal summary request.
+    /// 内部总结请求使用的 Provider 标识。
+    provider_id: String,
+    /// Model id used for the internal summary request.
+    /// 内部总结请求使用的模型标识。
+    model_id: String,
+    /// Real provider request count consumed by the internal summary request.
+    /// 内部总结请求消耗的真实 Provider 请求次数。
+    provider_request_count: usize,
+    /// Whether the full diff exceeded the configured prompt budget and was replaced by summaries.
+    /// 完整 diff 是否超过提示预算并被替换为摘要。
+    input_was_truncated: bool,
+    /// Input-token estimate for the final summary prompt.
+    /// 最终总结提示词的输入 Token 估算值。
+    estimated_input_tokens: usize,
+    /// Provider-reported usage from the successful generation request when available.
+    /// 成功生成请求返回的 Provider 用量；不可用时为空。
+    provider_usage: Option<ProviderUsageSnapshot>,
+}
+
+/// Git commit action request sent by the WebUI commit dialog.
+/// WebUI 提交弹窗发送的 Git 提交操作请求。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitActionRequest {
+    /// Conversation id that owns the commit action.
+    /// 拥有本次提交动作的会话标识。
+    conversation_id: String,
+    /// Workspace path used to resolve the Git repository.
+    /// 用于解析 Git 仓库的工作区路径。
+    workspace_path: String,
+    /// Target branch selection for the commit.
+    /// 本次提交的目标分支选择。
+    target: GitCommitActionTargetRequest,
+    /// Whether unstaged and untracked changes should be staged before committing.
+    /// 是否在提交前暂存未暂存与未跟踪变更。
+    include_unstaged: bool,
+    /// Commit message text passed to `git commit`.
+    /// 传递给 `git commit` 的提交信息文本。
+    message: String,
+    /// Whether the resulting branch should be pushed after commit.
+    /// 提交完成后是否推送当前分支。
+    push: bool,
+}
+
+/// Git commit target selected by the WebUI commit dialog.
+/// WebUI 提交弹窗选择的 Git 提交目标。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+enum GitCommitActionTargetRequest {
+    /// Commit directly on the current branch.
+    /// 直接提交到当前分支。
+    Current,
+    /// Create a new branch before committing.
+    /// 提交前创建新分支。
+    New {
+        /// New branch name requested by the user.
+        /// 用户请求的新分支名称。
+        branch_name: String,
+    },
+}
+
+/// Git commit action response returned to the WebUI commit dialog.
+/// 返回给 WebUI 提交弹窗的 Git 提交操作响应。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GitCommitActionResponse {
+    /// Human-readable operation summary.
+    /// 面向用户的操作摘要。
+    summary: String,
+    /// Whether a new commit was created.
+    /// 是否创建了新提交。
+    committed: bool,
+    /// Whether a push command was executed.
+    /// 是否执行了推送命令。
+    pushed: bool,
+    /// Current branch name after the operation.
+    /// 操作完成后的当前分支名称。
+    branch_name: Option<String>,
 }
 
 /// User prompt edit submit request sent by the WebUI transcript action.
@@ -2534,6 +2650,13 @@ async fn dispatch_service_rpc(
         "service_save_git_commit_settings" => rpc_json_result(
             service_save_git_commit_settings(app, state, rpc_required_param(&params, "request")?)
                 .await,
+        ),
+        "service_generate_git_commit_message" => rpc_json_result(
+            service_generate_git_commit_message(state, rpc_required_param(&params, "request")?)
+                .await,
+        ),
+        "service_run_git_commit_action" => rpc_json_result(
+            service_run_git_commit_action(state, rpc_required_param(&params, "request")?).await,
         ),
         "service_save_ai_capability_vendor" => rpc_json_result(
             service_save_ai_capability_vendor(app, state, rpc_required_param(&params, "request")?)
@@ -7692,6 +7815,8 @@ async fn service_save_git_commit_settings(
     request: GitCommitSettingsSaveRequest,
 ) -> Result<WorkbenchSnapshot, String> {
     let normalized_prefix = normalize_git_commit_new_branch_prefix(&request.new_branch_prefix);
+    let summary_model = persisted_git_commit_summary_model_selection(request.summary_model);
+    let summary_extra_prompt = request.summary_extra_prompt.trim().to_string();
     let workbench = {
         let mut guard = state
             .lock()
@@ -7701,7 +7826,10 @@ async fn service_save_git_commit_settings(
             .as_mut()
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?;
         let mut next_configuration = agent_runtime.provider_configuration.clone();
+        validate_git_commit_summary_model_selection(&summary_model, &next_configuration)?;
         next_configuration.git_commit.new_branch_prefix = normalized_prefix;
+        next_configuration.git_commit.summary_model = summary_model;
+        next_configuration.git_commit.summary_extra_prompt = summary_extra_prompt;
         next_configuration.git_commit.normalize();
         provider_config::save_configuration_file(&next_configuration)
             .map_err(|error| format!("保存 Git 提交设置失败：{error}"))?;
@@ -7711,6 +7839,185 @@ async fn service_save_git_commit_settings(
     };
     emit_workbench_event(&app, &workbench);
     Ok(workbench)
+}
+
+/// Generates a Git commit message through the configured internal summary model.
+/// 通过已配置的内部总结模型生成 Git 提交信息。
+async fn service_generate_git_commit_message(
+    state: SharedServiceBridgeState,
+    request: GitCommitSummaryGenerateRequest,
+) -> Result<GitCommitSummaryGenerateResponse, String> {
+    let session_id = request
+        .conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
+    let repository_root = resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt) = {
+        let guard = state
+            .lock()
+            .map_err(|error| format!("failed to lock service state: {error}"))?;
+        let mut agent_runtime = guard
+            .agent_runtime
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
+            .clone();
+        let workspace_snapshot = guard
+            .workspace_snapshot
+            .as_ref()
+            .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+        let runtime_state = workspace_snapshot
+            .session_runtime_state
+            .get(&session_id)
+            .ok_or_else(|| String::from("无法找到提交所属会话的运行时状态。"))?;
+        let (provider_id, model_id) = resolve_git_commit_summary_model(
+            &agent_runtime.provider_configuration.git_commit.summary_model,
+            runtime_state,
+            &agent_runtime.provider_configuration,
+        )?;
+        let mut summary_provider_configuration = agent_runtime.provider_configuration.clone();
+        summary_provider_configuration.model = Some(format!("{provider_id}/{model_id}"));
+        let reasoning_effort = runtime_state
+            .active_reasoning_effort
+            .or_else(|| active_reasoning_selection_effort(&summary_provider_configuration))
+            .unwrap_or(ReasoningEffortLevel::Medium);
+        let extra_prompt = summary_provider_configuration
+            .git_commit
+            .summary_extra_prompt
+            .trim()
+            .to_string();
+        agent_runtime.provider_configuration = summary_provider_configuration;
+        (
+            agent_runtime,
+            provider_id,
+            model_id,
+            reasoning_effort,
+            extra_prompt,
+        )
+    };
+    let summary_input = build_git_commit_summary_input(
+        &repository_root,
+        request.include_unstaged,
+        &model_id,
+        agent_runtime.token_budget_runtime.estimator(),
+    )?;
+    let prompt = build_git_commit_summary_prompt(&summary_input, &extra_prompt);
+    let estimated_input_tokens = estimate_git_commit_prompt_tokens(
+        &model_id,
+        &prompt,
+        agent_runtime.token_budget_runtime.estimator(),
+    );
+    let report = run_git_commit_summary_model(
+        agent_runtime,
+        session_id,
+        &request.workspace_path,
+        reasoning_effort,
+        prompt,
+    )
+    .await?;
+    let message = report
+        .assistant_output
+        .as_deref()
+        .map(clean_generated_git_commit_message)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| String::from("提交信息生成结果为空。"))?;
+    Ok(GitCommitSummaryGenerateResponse {
+        message,
+        provider_id,
+        model_id,
+        provider_request_count: report.provider_request_count,
+        input_was_truncated: summary_input.truncated,
+        estimated_input_tokens,
+        provider_usage: report.last_successful_provider_usage,
+    })
+}
+
+/// Runs the requested Git commit and optional push operation.
+/// 执行请求的 Git 提交与可选推送操作。
+async fn service_run_git_commit_action(
+    state: SharedServiceBridgeState,
+    request: GitCommitActionRequest,
+) -> Result<GitCommitActionResponse, String> {
+    let session_id = request
+        .conversation_id
+        .parse::<SessionId>()
+        .map_err(|error| format!("会话标识无效，无法执行提交：{error}"))?;
+    validate_git_commit_action_session_exists(&state, session_id)?;
+    let repository_root = resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let commit_message = request.message.trim();
+    if commit_message.is_empty() {
+        if request.include_unstaged {
+            return Err(String::from("只推送时不能暂存工作区变更。"));
+        }
+        if matches!(request.target, GitCommitActionTargetRequest::New { .. }) {
+            return Err(String::from("创建新分支需要同时创建提交。"));
+        }
+    }
+    let mut committed = false;
+    let mut pushed = false;
+    let mut summary_rows = Vec::new();
+
+    match request.target {
+        GitCommitActionTargetRequest::Current => {}
+        GitCommitActionTargetRequest::New { branch_name } => {
+            let branch_name = normalize_git_commit_action_branch_name(&branch_name)?;
+            ensure_git_commit_action_new_branch_available(&repository_root, &branch_name)?;
+            let output =
+                run_webui_git_mutating_command(&repository_root, &["checkout", "-b", &branch_name])?;
+            if !output.status.success() {
+                return Err(format_webui_git_error("git checkout -b", &output));
+            }
+            summary_rows.push(format!("已创建并切换到分支 `{branch_name}`。"));
+        }
+    }
+
+    if request.include_unstaged {
+        let output = run_webui_git_mutating_command(&repository_root, &["add", "-A"])?;
+        if !output.status.success() {
+            return Err(format_webui_git_error("git add -A", &output));
+        }
+        summary_rows.push(String::from("已暂存工作区变更。"));
+    }
+
+    if !commit_message.is_empty() {
+        ensure_git_commit_action_has_staged_changes(&repository_root)?;
+        let output = run_webui_git_mutating_command_with_stdin(
+            &repository_root,
+            &["commit", "-F", "-"],
+            commit_message.as_bytes(),
+        )?;
+        if !output.status.success() {
+            return Err(format_webui_git_error("git commit", &output));
+        }
+        committed = true;
+        summary_rows.push(String::from("已创建 Git 提交。"));
+    }
+
+    if request.push {
+        let branch_name = load_webui_current_git_branch(&repository_root)?
+            .ok_or_else(|| String::from("当前处于 detached HEAD，无法推送分支。"))?;
+        let push_args = if webui_current_branch_has_upstream(&repository_root) {
+            vec!["push"]
+        } else {
+            vec!["push", "-u", "origin", branch_name.as_str()]
+        };
+        let output = run_webui_git_mutating_command(&repository_root, &push_args)?;
+        if !output.status.success() {
+            return Err(format_webui_git_error("git push", &output));
+        }
+        pushed = true;
+        summary_rows.push(String::from("已推送当前分支。"));
+    }
+
+    let branch_name = load_webui_current_git_branch(&repository_root)?;
+    if summary_rows.is_empty() {
+        summary_rows.push(String::from("没有执行提交或推送操作。"));
+    }
+    Ok(GitCommitActionResponse {
+        summary: summary_rows.join(" "),
+        committed,
+        pushed,
+        branch_name,
+    })
 }
 
 /// Saves one shared AI capability vendor from the WebUI settings page.
@@ -14971,6 +15278,158 @@ fn git_commit_settings(
         new_branch_prefix: normalize_git_commit_new_branch_prefix(
             &provider_configuration.git_commit.new_branch_prefix,
         ),
+        summary_model: api_git_commit_summary_model_selection(
+            &provider_configuration.git_commit.summary_model,
+        ),
+        summary_extra_prompt: provider_configuration
+            .git_commit
+            .summary_extra_prompt
+            .trim()
+            .to_string(),
+    }
+}
+
+/// Converts a persisted commit-summary model selection into the WebUI API shape.
+/// 将持久化提交总结模型选择转换为 WebUI API 形状。
+fn api_git_commit_summary_model_selection(
+    selection: &GitCommitSummaryModelSelection,
+) -> GitCommitSummaryModelSelectionSummary {
+    match selection.normalized() {
+        GitCommitSummaryModelSelection::Session => GitCommitSummaryModelSelectionSummary::Session,
+        GitCommitSummaryModelSelection::Fixed {
+            provider_id,
+            model_id,
+        } => GitCommitSummaryModelSelectionSummary::Fixed {
+            provider_id,
+            model_id,
+        },
+    }
+}
+
+/// Converts the WebUI API commit-summary model selection into the persisted shape.
+/// 将 WebUI API 提交总结模型选择转换为持久化形状。
+fn persisted_git_commit_summary_model_selection(
+    selection: GitCommitSummaryModelSelectionSummary,
+) -> GitCommitSummaryModelSelection {
+    match selection {
+        GitCommitSummaryModelSelectionSummary::Session => GitCommitSummaryModelSelection::Session,
+        GitCommitSummaryModelSelectionSummary::Fixed {
+            provider_id,
+            model_id,
+        } => GitCommitSummaryModelSelection::Fixed {
+            provider_id,
+            model_id,
+        }
+        .normalized(),
+    }
+}
+
+/// Validates that a fixed commit-summary model exists in the current effective model list.
+/// 校验固定提交总结模型存在于当前生效模型列表中。
+fn validate_git_commit_summary_model_selection(
+    selection: &GitCommitSummaryModelSelection,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Result<(), String> {
+    match selection.normalized() {
+        GitCommitSummaryModelSelection::Session => Ok(()),
+        GitCommitSummaryModelSelection::Fixed {
+            provider_id,
+            model_id,
+        } => {
+            let exists = provider_config::effective_model_choices(&provider_id, provider_configuration)
+                .into_iter()
+                .any(|model| model.id == model_id);
+            if exists {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Git 提交总结模型 `{provider_id}/{model_id}` 当前不可用，请重新选择模型。"
+                ))
+            }
+        }
+    }
+}
+
+/// Resolved Git commit-summary input passed into the internal summary prompt.
+/// 传入内部总结提示词的 Git 提交总结输入。
+struct GitCommitSummaryInput {
+    /// Full or summarized repository change text.
+    /// 完整或摘要化的仓库变更文本。
+    content: String,
+    /// Whether the full diff was replaced by summarized change metadata.
+    /// 完整 diff 是否被摘要化变更元数据替换。
+    truncated: bool,
+}
+
+/// Resolves the provider/model pair used for Git commit-message generation.
+/// 解析 Git 提交信息生成使用的 Provider/模型组合。
+fn resolve_git_commit_summary_model(
+    selection: &GitCommitSummaryModelSelection,
+    runtime_state: &SessionRuntimeStateEntry,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Result<(String, String), String> {
+    match selection.normalized() {
+        GitCommitSummaryModelSelection::Session => {
+            let provider_id = runtime_state
+                .active_provider_id
+                .as_ref()
+                .ok_or_else(|| String::from("提交所属会话没有可用的当前 Provider。"))?;
+            let model_id = runtime_state
+                .active_model_id
+                .as_ref()
+                .ok_or_else(|| String::from("提交所属会话没有可用的当前模型。"))?;
+            validate_git_commit_summary_model_pair(provider_id, model_id, provider_configuration)?;
+            Ok((provider_id.clone(), model_id.clone()))
+        }
+        GitCommitSummaryModelSelection::Fixed {
+            provider_id,
+            model_id,
+        } => {
+            validate_git_commit_summary_model_pair(&provider_id, &model_id, provider_configuration)?;
+            Ok((provider_id, model_id))
+        }
+    }
+}
+
+/// Validates that one provider/model pair exists in the effective model choices.
+/// 校验单个 Provider/模型组合存在于生效模型列表中。
+fn validate_git_commit_summary_model_pair(
+    provider_id: &str,
+    model_id: &str,
+    provider_configuration: &ProviderConfigurationFile,
+) -> Result<(), String> {
+    let exists = provider_config::effective_model_choices(provider_id, provider_configuration)
+        .into_iter()
+        .any(|model| model.id == model_id);
+    if exists {
+        Ok(())
+    } else {
+        Err(format!(
+            "Git 提交总结模型 `{provider_id}/{model_id}` 当前不可用。"
+        ))
+    }
+}
+
+/// Validates that a Git commit action is attached to a known session.
+/// 校验 Git 提交动作附着在已知会话上。
+fn validate_git_commit_action_session_exists(
+    state: &SharedServiceBridgeState,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let guard = state
+        .lock()
+        .map_err(|error| format!("failed to lock service state: {error}"))?;
+    let workspace_snapshot = guard
+        .workspace_snapshot
+        .as_ref()
+        .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+    if workspace_snapshot
+        .session_runtime_state
+        .contains_key(&session_id)
+    {
+        Ok(())
+    } else {
+        Err(String::from("无法找到提交动作所属会话。"))
     }
 }
 
@@ -29316,6 +29775,242 @@ fn load_webui_workspace_diff_snapshot(
     })
 }
 
+/// Maximum token budget reserved for Git commit-message diff input.
+/// Git 提交信息 diff 输入预留的最大 Token 预算。
+const GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET: usize = 100_000;
+
+/// Resolves a WebUI workspace path into a concrete Git repository root.
+/// 将 WebUI 工作区路径解析为明确的 Git 仓库根目录。
+fn resolve_webui_repository_root_from_workspace_text(workspace_path: &str) -> Result<PathBuf, String> {
+    let requested_path = PathBuf::from(workspace_path.trim());
+    let workspace_path = if requested_path.as_os_str().is_empty() {
+        workspace_root()
+    } else {
+        requested_path
+    };
+    let workspace_path = fs::canonicalize(&workspace_path).map_err(|error| {
+        format!("failed to resolve workspace path `{workspace_path:?}`: {error}")
+    })?;
+    resolve_webui_git_repository_root(&workspace_path)?
+        .ok_or_else(|| String::from("当前工作区不是 Git 仓库，无法执行 Git 提交操作。"))
+}
+
+/// Builds the repository change input for Git commit-message generation.
+/// 构建 Git 提交信息生成使用的仓库变更输入。
+fn build_git_commit_summary_input(
+    repository_root: &Path,
+    include_unstaged: bool,
+    model_id: &str,
+    estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
+) -> Result<GitCommitSummaryInput, String> {
+    let mut notices = Vec::new();
+    let mut sections = Vec::new();
+    let staged_diff = load_webui_staged_git_diff(repository_root)?;
+    if !staged_diff.trim().is_empty() {
+        sections.push(format!("## Staged changes\n\n{staged_diff}"));
+    }
+    if include_unstaged {
+        let unstaged_diff = load_webui_unstaged_git_diff(repository_root)?;
+        if !unstaged_diff.trim().is_empty() {
+            sections.push(format!("## Unstaged tracked changes\n\n{unstaged_diff}"));
+        }
+        let untracked_diff = load_webui_untracked_git_diff(repository_root, &mut notices)?;
+        if !untracked_diff.trim().is_empty() {
+            sections.push(format!("## Untracked files\n\n{untracked_diff}"));
+        }
+    }
+    if sections.is_empty() {
+        return Err(String::from("当前没有可用于生成提交信息的变更。"));
+    }
+    if !notices.is_empty() {
+        sections.insert(0, format!("## Notices\n\n{}", notices.join("\n")));
+    }
+    let full_content = sections.join("\n\n");
+    let token_estimate = estimate_git_commit_prompt_tokens(model_id, &full_content, estimator);
+    if token_estimate <= GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET {
+        return Ok(GitCommitSummaryInput {
+            content: full_content,
+            truncated: false,
+        });
+    }
+    Ok(GitCommitSummaryInput {
+        content: build_git_commit_summary_metadata_input(repository_root, include_unstaged)?,
+        truncated: true,
+    })
+}
+
+/// Builds a compact change-metadata fallback when the full diff is too large.
+/// 在完整 diff 过大时构建紧凑的变更元数据回退输入。
+fn build_git_commit_summary_metadata_input(
+    repository_root: &Path,
+    include_unstaged: bool,
+) -> Result<String, String> {
+    let mut sections = Vec::new();
+    sections.push(load_git_commit_summary_command_section(
+        repository_root,
+        "Status",
+        &["status", "--short", "--branch"],
+    )?);
+    sections.push(load_git_commit_summary_command_section(
+        repository_root,
+        "Staged diff stat",
+        &["diff", "--cached", "--stat", "--no-color"],
+    )?);
+    sections.push(load_git_commit_summary_command_section(
+        repository_root,
+        "Staged file status",
+        &["diff", "--cached", "--name-status", "--no-color"],
+    )?);
+    if include_unstaged {
+        sections.push(load_git_commit_summary_command_section(
+            repository_root,
+            "Unstaged diff stat",
+            &["diff", "--stat", "--no-color"],
+        )?);
+        sections.push(load_git_commit_summary_command_section(
+            repository_root,
+            "Unstaged file status",
+            &["diff", "--name-status", "--no-color"],
+        )?);
+    }
+    Ok(sections.join("\n\n"))
+}
+
+/// Runs one read-only Git metadata command and formats its output as a prompt section.
+/// 执行单条只读 Git 元数据命令并将输出格式化为提示词片段。
+fn load_git_commit_summary_command_section(
+    repository_root: &Path,
+    title: &str,
+    args: &[&str],
+) -> Result<String, String> {
+    let output = run_webui_git_command(repository_root, args)?;
+    if !output.status.success() {
+        return Err(format_webui_git_error(&format!("git {}", args.join(" ")), &output));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let body = if stdout.is_empty() {
+        "(none)".to_string()
+    } else {
+        stdout
+    };
+    Ok(format!("## {title}\n\n```text\n{body}\n```"))
+}
+
+/// Builds the fixed English prompt used by the commit-message summary model.
+/// 构建提交信息总结模型使用的固定英文提示词。
+fn build_git_commit_summary_prompt(input: &GitCommitSummaryInput, extra_prompt: &str) -> String {
+    let mut prompt = String::from(
+        "Generate a Git commit message for the repository changes below.\n\
+         Requirements:\n\
+         - Output only the commit message text.\n\
+         - Do not wrap the result in Markdown or a code fence.\n\
+         - Use a concise subject line followed by an optional blank line and body when useful.\n\
+         - Base the message only on the provided change data.\n",
+    );
+    if input.truncated {
+        prompt.push_str(
+            "- The full diff exceeded the input budget, so only status, file lists, and diff stats are provided. Produce a higher-level message from that metadata.\n",
+        );
+    }
+    if !extra_prompt.trim().is_empty() {
+        prompt.push_str("\nAdditional user preferences:\n");
+        prompt.push_str(extra_prompt.trim());
+        prompt.push('\n');
+    }
+    prompt.push_str("\nRepository change data:\n");
+    prompt.push_str(&input.content);
+    prompt
+}
+
+/// Estimates text tokens for Git commit-message prompt budgeting.
+/// 为 Git 提交信息提示预算估算文本 Token 数。
+fn estimate_git_commit_prompt_tokens(
+    model_id: &str,
+    text: &str,
+    estimator: Option<&dyn vulcan_context::ContextTokenEstimator>,
+) -> usize {
+    estimator
+        .and_then(|estimator| estimator.estimate_text_tokens(model_id, text))
+        .unwrap_or_else(|| estimate_mixed_language_text_tokens(text))
+        .max(1usize)
+}
+
+/// Runs the internal provider request that generates a Git commit message.
+/// 执行生成 Git 提交信息的内部 Provider 请求。
+async fn run_git_commit_summary_model(
+    agent_runtime: AgentRuntimeBridge,
+    session_id: SessionId,
+    workspace_path: &str,
+    reasoning_effort: ReasoningEffortLevel,
+    prompt: String,
+) -> Result<ExecutionRunReport, String> {
+    let request = ExecutionPreparationRequest {
+        session_id,
+        execution_scope: ExecutionScope::ContextCompaction {
+            node_id: SessionNodeId::from(session_id),
+        },
+        runtime_policy: ExecutionRuntimePolicy::context_compaction(),
+        execution_agent_id: None,
+        agent_system_prompt_override: None,
+        task_session_store_root: None,
+        session_title: String::from("Git commit summary"),
+        workspace_path: workspace_path.to_string(),
+        prompt,
+        conversation_state: SessionConversationState::default(),
+        execution_mode: String::from("GitCommitSummary"),
+        temperature: None,
+        reasoning_effort,
+        ai_tool_configuration: agent_runtime.ai_tool_configuration.clone(),
+        tool_exposure_override: Default::default(),
+        prompt_purpose: ExecutionPromptPurpose::GitCommitSummary,
+        project_prompt_skills: Default::default(),
+        session_prompt_skill_overrides: Default::default(),
+        context_injection: None,
+        system_prompt_hook_blocks: Vec::new(),
+        project_vmm: Default::default(),
+        session_vmm: Default::default(),
+        boundary_events: Vec::new(),
+        runtime_system_updates: Vec::new(),
+        controller_runtime: None,
+        session_goal_context: None,
+        session_plan_context: None,
+        embedded_turn_usage_segments: Vec::new(),
+    };
+    let mut stream = Box::pin(stream_runtime_run_with_intervention(
+        agent_runtime.provider_configuration.clone(),
+        agent_runtime.agent_profile_catalog.clone(),
+        agent_runtime.luaskills_runtime.clone(),
+        agent_runtime.mcp_runtime.clone(),
+        Arc::clone(&agent_runtime.task_runtime),
+        Arc::clone(&agent_runtime.question_runtime),
+        Arc::clone(&agent_runtime.command_session_runtime),
+        Arc::clone(&agent_runtime.token_budget_runtime),
+        request,
+        None,
+    ));
+    while let Some(event) = stream.next().await {
+        if let ExecutionStreamEvent::Finished(report) = event {
+            if let Some(error) = report.error.as_ref() {
+                return Err(error.clone());
+            }
+            return Ok(report);
+        }
+    }
+    Err(String::from("提交信息生成请求未返回终态报告。"))
+}
+
+/// Cleans model-generated commit message text before it reaches `git commit`.
+/// 在生成文本进入 `git commit` 前清理提交信息。
+fn clean_generated_git_commit_message(message: &str) -> String {
+    message
+        .trim()
+        .trim_start_matches("```text")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim()
+        .to_string()
+}
+
 /// Loads a complete Git diff detail for one requested file.
 /// 为请求的单个文件加载完整 Git diff 详情。
 fn load_webui_workspace_diff_file_detail(
@@ -30930,6 +31625,118 @@ fn run_webui_git_command_with_stdin(
             args.join(" ")
         )
     })
+}
+
+/// Runs one real Git action command without disabling repository hooks.
+/// 在不禁用仓库 hooks 的情况下运行一条真实 Git 操作命令。
+fn run_webui_git_mutating_command(
+    working_directory: &Path,
+    args: &[&str],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(working_directory)
+        .env("GIT_PAGER", "")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .args(args);
+    command.output().map_err(|error| {
+        format!(
+            "failed to run git action command `{}`: {error}",
+            args.join(" ")
+        )
+    })
+}
+
+/// Runs one real Git action command with stdin and without disabling repository hooks.
+/// 在不禁用仓库 hooks 的情况下使用 stdin 运行一条真实 Git 操作命令。
+fn run_webui_git_mutating_command_with_stdin(
+    working_directory: &Path,
+    args: &[&str],
+    stdin: &[u8],
+) -> Result<std::process::Output, String> {
+    let mut command = Command::new("git");
+    command
+        .current_dir(working_directory)
+        .env("GIT_PAGER", "")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "failed to run git action command `{}` with stdin: {error}",
+            args.join(" ")
+        )
+    })?;
+    if let Some(mut child_stdin) = child.stdin.take() {
+        child_stdin.write_all(stdin).map_err(|error| {
+            format!(
+                "failed to write stdin for git action command `{}`: {error}",
+                args.join(" ")
+            )
+        })?;
+    }
+    child.wait_with_output().map_err(|error| {
+        format!(
+            "failed to wait for git action command `{}` with stdin: {error}",
+            args.join(" ")
+        )
+    })
+}
+
+/// Normalizes and validates a branch name requested by the commit dialog.
+/// 归一化并校验提交弹窗请求的分支名称。
+fn normalize_git_commit_action_branch_name(branch_name: &str) -> Result<String, String> {
+    let branch_name = branch_name.trim().to_string();
+    ensure_webui_git_ref_text(&branch_name)?;
+    let output = run_webui_git_mutating_command(
+        &workspace_root(),
+        &["check-ref-format", "--branch", branch_name.as_str()],
+    )?;
+    if output.status.success() {
+        Ok(branch_name)
+    } else {
+        Err(format_webui_git_error("git check-ref-format --branch", &output))
+    }
+}
+
+/// Ensures the requested new branch does not already exist locally.
+/// 确保请求的新分支在本地尚不存在。
+fn ensure_git_commit_action_new_branch_available(
+    repository_root: &Path,
+    branch_name: &str,
+) -> Result<(), String> {
+    if webui_git_ref_exists(repository_root, &format!("refs/heads/{branch_name}"))? {
+        return Err(format!("本地分支 `{branch_name}` 已存在。"));
+    }
+    Ok(())
+}
+
+/// Ensures the Git index contains staged changes before committing.
+/// 在提交前确保 Git 索引中存在已暂存变更。
+fn ensure_git_commit_action_has_staged_changes(repository_root: &Path) -> Result<(), String> {
+    let output = run_webui_git_command(repository_root, &["diff", "--cached", "--quiet"])?;
+    if output.status.success() {
+        return Err(String::from("当前没有已暂存变更，无法提交。"));
+    }
+    match output.status.code() {
+        Some(1) => Ok(()),
+        _ => Err(format_webui_git_error("git diff --cached --quiet", &output)),
+    }
+}
+
+/// Returns whether the current branch already has an upstream branch.
+/// 返回当前分支是否已经配置上游分支。
+fn webui_current_branch_has_upstream(repository_root: &Path) -> bool {
+    run_webui_git_command(
+        repository_root,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .map(|output| output.status.success())
+    .unwrap_or(false)
 }
 
 /// Formats a Git command failure with stderr preserved for diagnostics.

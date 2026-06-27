@@ -123,7 +123,11 @@ export async function saveProviderModelOverride(request: {
 
 // saveGitCommitSettings persists Git commit settings through the desktop service.
 // saveGitCommitSettings 通过桌面服务持久化 Git 提交设置。
-export async function saveGitCommitSettings(request: { newBranchPrefix: string }): Promise<WorkbenchSnapshot | null> {
+export async function saveGitCommitSettings(request: {
+  newBranchPrefix: string;
+  summaryModel: { mode: "session" } | { mode: "fixed"; providerId: string; modelId: string };
+  summaryExtraPrompt: string;
+}): Promise<WorkbenchSnapshot | null> {
   if (!hasServiceRuntime()) {
     return null;
   }
