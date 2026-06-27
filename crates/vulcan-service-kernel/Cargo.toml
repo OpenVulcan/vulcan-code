@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 base64 = "0.22.1"
 dirs.workspace = true
+encoding_rs = "0.8.35"
 futures-util = "0.3.31"
 ignore.workspace = true
 reqwest.workspace = true

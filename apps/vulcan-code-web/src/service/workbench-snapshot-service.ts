@@ -48,6 +48,7 @@ export const DEFAULT_WORKSPACE_FILE_FILTERS: WorkspaceFileFilterOptions = {
   ignoreDotNames: true,
   useIgnoreFiles: true,
   useGitignore: true,
+  filterNonPreviewFiles: false,
   allowImages: false,
   allowVideos: false,
 };

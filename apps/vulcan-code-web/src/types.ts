@@ -293,6 +293,9 @@ export interface WorkspaceFileFilterOptions {
   // Whether `.gitignore` and Git ignore sources are applied.
   // 是否应用 `.gitignore` 与 Git 忽略来源。
   useGitignore: boolean;
+  // Whether files outside code, image, and video preview groups are filtered out.
+  // 是否过滤代码、图片和视频预览组之外的文件。
+  filterNonPreviewFiles: boolean;
   // Whether image files may be previewed after selection.
   // 选中后是否允许预览图片文件。
   allowImages: boolean;

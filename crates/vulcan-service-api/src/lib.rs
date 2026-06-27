@@ -1375,6 +1375,10 @@ pub struct WorkspaceFileFilterOptions {
     /// Whether Git ignore sources are applied while listing the tree.
     /// 列出文件树时是否应用 Git ignore 来源。
     pub use_gitignore: bool,
+    /// Whether files outside code, image, and video preview groups are filtered out.
+    /// 是否过滤代码、图片和视频预览组之外的文件。
+    #[serde(default)]
+    pub filter_non_preview_files: bool,
     /// Whether image files may be previewed after selection.
     /// 选中后是否允许预览图片文件。
     pub allow_images: bool,
@@ -1392,6 +1396,7 @@ impl Default for WorkspaceFileFilterOptions {
             ignore_dot_names: true,
             use_ignore_files: true,
             use_gitignore: true,
+            filter_non_preview_files: false,
             allow_images: false,
             allow_videos: false,
         }

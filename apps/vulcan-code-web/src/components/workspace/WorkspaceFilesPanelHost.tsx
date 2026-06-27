@@ -159,7 +159,7 @@ export function WorkspaceFilesPanelHost(props: {
   // listingFilters 保存目录树过滤器，并始终让媒体文件在目录树中可见。
   const listingFilters = React.useMemo(
     () => workspaceFileListingFilters(filters),
-    [filters.ignoreDotNames, filters.ignoreHidden, filters.useGitignore, filters.useIgnoreFiles],
+    [filters.filterNonPreviewFiles, filters.ignoreDotNames, filters.ignoreHidden, filters.useGitignore, filters.useIgnoreFiles],
   );
   // filterText stores the local file tree filter query.
   // filterText 保存本地文件树过滤查询。
@@ -366,6 +366,9 @@ export function WorkspaceFilesPanelHost(props: {
     if (!selectedEntry || selectedEntry.isDirectory || preview || previewLoading || previewError || mediaPermissionEntry) {
       return;
     }
+    if (selectedEntry.kind === "other") {
+      return;
+    }
     if (workspaceFileEntryNeedsMediaPermission(selectedEntry, filters)) {
       setMediaPermissionEntry(selectedEntry);
       return;
@@ -382,6 +385,13 @@ export function WorkspaceFilesPanelHost(props: {
     setSelectedPath(entry.path);
     setSelectedEntrySnapshot(entry);
     props.onTitleChange(entry.name || workspaceFileNameFromPath(entry.relativePath || entry.path));
+    if (entry.kind === "other") {
+      setPreview(null);
+      setPreviewError(null);
+      setPreviewLoading(false);
+      setMediaPermissionEntry(null);
+      return;
+    }
     if (workspaceFileEntryNeedsMediaPermission(entry, filters)) {
       setPreview(null);
       setPreviewError(null);
@@ -556,6 +566,12 @@ function WorkspaceFilesFilterMenu(props: {
         >
           使用 .gitignore 规则
         </DropdownMenuCheckboxItem>
+        <DropdownMenuCheckboxItem
+          checked={props.filters.filterNonPreviewFiles}
+          onCheckedChange={(value) => props.onFilterChange("filterNonPreviewFiles", Boolean(value))}
+        >
+          过滤非代码、图片、视频文件
+        </DropdownMenuCheckboxItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -664,6 +680,15 @@ function WorkspaceFilePreview(props: {
     );
   }
   if (!props.preview) {
+    if (props.entry.kind === "other") {
+      return (
+        <div className="workspace-file-preview empty">
+          <FileText size={24} />
+          <strong>暂不支持预览</strong>
+          <span>该文件会显示在文件树中，但不会自动读取内容。</span>
+        </div>
+      );
+    }
     return <div className="workspace-file-preview empty">暂无预览内容。</div>;
   }
   if (props.preview.kind === "image") {
@@ -838,9 +863,6 @@ function workspaceFileEntryToTreeNode(
   const children = childEntries
     .map((child) => workspaceFileEntryToTreeNode(child, directories, query))
     .filter((node): node is WorkspaceFileTreeNode<WorkspaceFileEntrySummary> => Boolean(node));
-  if (entry.isDirectory && directories.has(entry.path) && children.length === 0) {
-    return null;
-  }
   const matches = !query || workspaceFileTreeEntryMatchesQuery(entry, query) || children.length > 0;
   if (!matches) {
     return null;
@@ -1202,6 +1224,7 @@ function normalizeWorkspaceFileFilters(
   return {
     allowImages: typeof filters.allowImages === "boolean" ? filters.allowImages : DEFAULT_WORKSPACE_FILE_FILTERS.allowImages,
     allowVideos: typeof filters.allowVideos === "boolean" ? filters.allowVideos : DEFAULT_WORKSPACE_FILE_FILTERS.allowVideos,
+    filterNonPreviewFiles: typeof filters.filterNonPreviewFiles === "boolean" ? filters.filterNonPreviewFiles : DEFAULT_WORKSPACE_FILE_FILTERS.filterNonPreviewFiles,
     ignoreDotNames: typeof filters.ignoreDotNames === "boolean" ? filters.ignoreDotNames : DEFAULT_WORKSPACE_FILE_FILTERS.ignoreDotNames,
     ignoreHidden: typeof filters.ignoreHidden === "boolean" ? filters.ignoreHidden : DEFAULT_WORKSPACE_FILE_FILTERS.ignoreHidden,
     useGitignore: typeof filters.useGitignore === "boolean" ? filters.useGitignore : DEFAULT_WORKSPACE_FILE_FILTERS.useGitignore,

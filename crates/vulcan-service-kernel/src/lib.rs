@@ -14,6 +14,7 @@ use std::{
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use encoding_rs::GB18030;
 use futures_util::StreamExt;
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -9308,9 +9309,15 @@ fn workspace_file_entry_summary(
     let visible_kind = match kind {
         WorkspaceFileEntryKind::Directory | WorkspaceFileEntryKind::Code => true,
         WorkspaceFileEntryKind::Image | WorkspaceFileEntryKind::Video => true,
-        WorkspaceFileEntryKind::Other => false,
+        WorkspaceFileEntryKind::Other => !filters.filter_non_preview_files,
     };
     if !visible_kind {
+        return None;
+    }
+    if is_directory
+        && filters.filter_non_preview_files
+        && !workspace_directory_has_previewable_descendant(workspace_root, &canonical, filters)
+    {
         return None;
     }
 
@@ -9327,6 +9334,68 @@ fn workspace_file_entry_summary(
         is_directory,
         kind,
     })
+}
+
+/// Returns whether a directory contains a visible code, image, or video descendant.
+/// 返回目录是否包含可见的代码、图片或视频后代。
+fn workspace_directory_has_previewable_descendant(
+    workspace_root: &Path,
+    directory: &Path,
+    filters: &WorkspaceFileFilterOptions,
+) -> bool {
+    let mut walker = WalkBuilder::new(directory);
+    walker
+        .follow_links(false)
+        .hidden(false)
+        .ignore(filters.use_ignore_files)
+        .git_ignore(filters.use_gitignore)
+        .git_global(filters.use_gitignore)
+        .git_exclude(filters.use_gitignore)
+        .parents(filters.use_ignore_files || filters.use_gitignore);
+
+    for walked_entry in walker.build() {
+        let Ok(walked_entry) = walked_entry else {
+            continue;
+        };
+        if walked_entry.depth() == 0 {
+            continue;
+        }
+        let path = walked_entry.path();
+        let Ok(canonical) = fs::canonicalize(path) else {
+            continue;
+        };
+        if !workspace_path_is_inside_root(&canonical, workspace_root) {
+            continue;
+        }
+        let Ok(metadata) = fs::metadata(&canonical) else {
+            continue;
+        };
+        let Some(name) = canonical
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+        else {
+            continue;
+        };
+        let is_dot_hidden = workspace_file_name_is_dot_hidden(&name);
+        let is_platform_hidden = workspace_file_is_platform_hidden(&canonical, &metadata);
+        if (filters.ignore_dot_names && is_dot_hidden)
+            || (filters.ignore_hidden && is_platform_hidden)
+        {
+            continue;
+        }
+        if !metadata.is_file() {
+            continue;
+        }
+        if matches!(
+            workspace_file_kind_from_path(&canonical),
+            WorkspaceFileEntryKind::Code
+                | WorkspaceFileEntryKind::Image
+                | WorkspaceFileEntryKind::Video
+        ) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Sorts workspace file rows with directories first and names case-insensitively.
@@ -9434,13 +9503,8 @@ fn workspace_file_read_code_response(
     if bytes.contains(&0) {
         return Err(String::from("该文件包含二进制内容，无法作为代码预览。"));
     }
-    let content = String::from_utf8(bytes).map_err(|error| {
-        format!(
-            "文件不是有效 UTF-8，无法预览 `{}`：{error}",
-            normalized_workspace_path_text_from_path(file)
-        )
-    })?;
-    let line_count = content.lines().count();
+    let decoded = workspace_file_decode_text_preview(&bytes);
+    let line_count = decoded.content.lines().count();
     Ok(WorkspaceFileReadResponse {
         workspace_path: normalized_workspace_path_text_from_path(workspace_root),
         path: normalized_workspace_path_text_from_path(file),
@@ -9448,11 +9512,47 @@ fn workspace_file_read_code_response(
         kind,
         mime_type: workspace_file_mime_type(file, &WorkspaceFileEntryKind::Code),
         size_bytes: metadata.len(),
-        content: Some(content),
-        encoding: Some(String::from("utf-8")),
+        content: Some(decoded.content),
+        encoding: Some(decoded.encoding),
         line_count: Some(line_count),
         truncated,
     })
+}
+
+/// Stores decoded text and the encoding label used for a workspace file preview.
+/// 保存工作区文件预览使用的解码文本与编码标签。
+struct WorkspaceFileDecodedText {
+    /// Decoded text content ready for WebUI rendering.
+    /// 可供 WebUI 渲染的解码文本内容。
+    content: String,
+    /// Stable encoding label reported to the WebUI.
+    /// 返回给 WebUI 的稳定编码标签。
+    encoding: String,
+}
+
+/// Decodes workspace text preview bytes with UTF-8 first and GB18030 fallback.
+/// 优先使用 UTF-8 解码工作区文本预览字节，并回退到 GB18030。
+fn workspace_file_decode_text_preview(bytes: &[u8]) -> WorkspaceFileDecodedText {
+    match std::str::from_utf8(bytes) {
+        Ok(content) => {
+            return WorkspaceFileDecodedText {
+                content: content.to_string(),
+                encoding: String::from("utf-8"),
+            };
+        }
+        Err(error) if error.error_len().is_none() && error.valid_up_to() > 0 => {
+            return WorkspaceFileDecodedText {
+                content: String::from_utf8_lossy(&bytes[..error.valid_up_to()]).into_owned(),
+                encoding: String::from("utf-8"),
+            };
+        }
+        Err(_) => {}
+    }
+    let (content, _, _) = GB18030.decode(bytes);
+    WorkspaceFileDecodedText {
+        content: content.into_owned(),
+        encoding: String::from("gb18030"),
+    }
 }
 
 /// Builds one media metadata response without reading the file bytes.
@@ -38451,8 +38551,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Verifies workspace file kind classification keeps raw files out of the default tree.
-    /// 验证工作区文件类别识别会将 raw 文件排除在默认树之外。
+    /// Verifies workspace file kind classification marks raw files as other files.
+    /// 验证工作区文件类别识别会将 raw 文件标记为其他文件。
     #[test]
     fn workspace_file_kind_classifies_code_media_and_other_files() {
         assert_eq!(
@@ -38471,6 +38571,41 @@ mod tests {
             workspace_file_kind_from_path(Path::new("capture.raw")),
             WorkspaceFileEntryKind::Other
         );
+    }
+
+    /// Verifies non-preview files are visible unless the dedicated filter is enabled.
+    /// 验证非预览文件默认可见，仅在专用过滤器启用后隐藏。
+    #[test]
+    fn workspace_file_entry_summary_filters_non_preview_files_only_when_requested() {
+        let root = test_workspace_file_temp_dir("non-preview-filter");
+        let data_directory = root.join("DATA").join("yycfg");
+        std::fs::create_dir_all(&data_directory).expect("create data directory");
+        let spreadsheet = data_directory.join("中文配置.xls");
+        std::fs::write(&spreadsheet, "spreadsheet placeholder").expect("write spreadsheet");
+
+        let default_file_summary = workspace_file_entry_summary(
+            &root,
+            &spreadsheet,
+            &WorkspaceFileFilterOptions::default(),
+        )
+        .expect("non-preview file should be visible by default");
+        let default_directory_summary = workspace_file_entry_summary(
+            &root,
+            &root.join("DATA"),
+            &WorkspaceFileFilterOptions::default(),
+        )
+        .expect("directory containing non-preview files should be visible by default");
+        let mut filters = WorkspaceFileFilterOptions::default();
+        filters.filter_non_preview_files = true;
+
+        assert_eq!(default_file_summary.kind, WorkspaceFileEntryKind::Other);
+        assert_eq!(
+            default_directory_summary.kind,
+            WorkspaceFileEntryKind::Directory
+        );
+        assert!(workspace_file_entry_summary(&root, &spreadsheet, &filters).is_none());
+        assert!(workspace_file_entry_summary(&root, &root.join("DATA"), &filters).is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Verifies large code previews are truncated by the backend read limit.
@@ -38497,6 +38632,44 @@ mod tests {
             Some(WORKSPACE_FILE_READ_LIMIT_BYTES)
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies non-UTF-8 text files can be previewed through the GB18030 fallback.
+    /// 验证非 UTF-8 文本文件可以通过 GB18030 回退编码预览。
+    #[test]
+    fn workspace_file_read_code_response_decodes_gb18030_text() {
+        let root = test_workspace_file_temp_dir("gb18030-read");
+        let file = root.join("Nations.ini");
+        let source = "[国家]\r\n名称=盟重\r\n";
+        let (encoded, _, had_errors) = GB18030.encode(source);
+        assert!(!had_errors);
+        std::fs::write(&file, encoded.as_ref()).expect("write gb18030 ini");
+        let metadata = std::fs::metadata(&file).expect("gb18030 file metadata");
+
+        let response = workspace_file_read_code_response(
+            &root,
+            &file,
+            &metadata,
+            WorkspaceFileEntryKind::Code,
+        )
+        .expect("gb18030 code preview should decode");
+
+        assert_eq!(response.encoding.as_deref(), Some("gb18030"));
+        assert_eq!(response.content.as_deref(), Some(source));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Verifies truncated UTF-8 previews keep valid text instead of falling back to GB18030.
+    /// 验证被截断的 UTF-8 预览会保留有效文本，而不是回退到 GB18030。
+    #[test]
+    fn workspace_file_decode_text_preview_keeps_truncated_utf8_prefix() {
+        let mut bytes = "配置😀".as_bytes().to_vec();
+        bytes.pop();
+
+        let decoded = workspace_file_decode_text_preview(&bytes);
+
+        assert_eq!(decoded.encoding, "utf-8");
+        assert_eq!(decoded.content, "配置");
     }
 
     /// Builds one parent spawn-agent tool output message with task-session metadata.
