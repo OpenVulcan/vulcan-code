@@ -31650,6 +31650,8 @@ fn run_webui_git_command(
         .arg("-c")
         .arg("diff.external=")
         .arg("-c")
+        .arg("core.quotepath=false")
+        .arg("-c")
         .arg(format!("core.hooksPath={hooks_path}"));
     command.args(args);
     command
@@ -31674,6 +31676,8 @@ fn run_webui_git_command_with_stdin(
         .arg("core.fsmonitor=false")
         .arg("-c")
         .arg("diff.external=")
+        .arg("-c")
+        .arg("core.quotepath=false")
         .arg("-c")
         .arg(format!("core.hooksPath={hooks_path}"))
         .args(args)
@@ -32560,6 +32564,7 @@ fn tokenize_webui_diff_header_paths(value: &str) -> Vec<String> {
     let mut escaped = false;
     for character in value.chars() {
         if escaped {
+            current.push('\\');
             current.push(character);
             escaped = false;
             continue;
@@ -32589,12 +32594,61 @@ fn tokenize_webui_diff_header_paths(value: &str) -> Vec<String> {
 /// Trims Git's a/ and b/ prefixes from one diff path.
 /// 从单个 diff 路径中移除 Git 的 a/ 与 b/ 前缀。
 fn trim_webui_diff_path(path: &str) -> String {
-    let normalized = path.trim().trim_matches('"').replace("\\\"", "\"");
+    let normalized = unescape_webui_git_quoted_path(path.trim().trim_matches('"'));
     normalized
         .strip_prefix("a/")
         .or_else(|| normalized.strip_prefix("b/"))
         .unwrap_or(&normalized)
         .to_string()
+}
+
+/// Decodes Git's C-style quoted path escapes into UTF-8 text.
+/// 将 Git 的 C 风格路径转义解码为 UTF-8 文本。
+fn unescape_webui_git_quoted_path(path: &str) -> String {
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut chars = path.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character != '\\' {
+            let mut encoded = [0; 4];
+            bytes.extend_from_slice(character.encode_utf8(&mut encoded).as_bytes());
+            continue;
+        }
+        let Some(escaped) = chars.next() else {
+            bytes.push(b'\\');
+            break;
+        };
+        if ('0'..='7').contains(&escaped) {
+            let mut value = escaped.to_digit(8).unwrap_or(0);
+            for _ in 0..2 {
+                let Some(next) = chars.peek().copied() else {
+                    break;
+                };
+                let Some(digit) = next.to_digit(8) else {
+                    break;
+                };
+                chars.next();
+                value = value * 8 + digit;
+            }
+            bytes.push(value.min(u8::MAX as u32) as u8);
+            continue;
+        }
+        match escaped {
+            'a' => bytes.push(0x07),
+            'b' => bytes.push(0x08),
+            'f' => bytes.push(0x0c),
+            'n' => bytes.push(b'\n'),
+            'r' => bytes.push(b'\r'),
+            't' => bytes.push(b'\t'),
+            'v' => bytes.push(0x0b),
+            '\\' => bytes.push(b'\\'),
+            '"' => bytes.push(b'"'),
+            other => {
+                let mut encoded = [0; 4];
+                bytes.extend_from_slice(other.encode_utf8(&mut encoded).as_bytes());
+            }
+        }
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| path.replace("\\\"", "\"").replace("\\\\", "\\"))
 }
 
 /// Stores one parsed file mode and detects gitlinks.
@@ -33251,6 +33305,7 @@ fn first_existing_path(workspace_root: &Path, candidates: &[&str]) -> Option<Pat
 mod tests {
     use super::*;
     use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use vulcan_agent_runtime::agent_runtime::prompt_compaction::PromptCompactionExecutionProfile;
     use vulcan_agent_runtime::conversation_protocol::{
         SessionConversationMessage, SessionConversationPayload,
@@ -34488,6 +34543,29 @@ mod tests {
         assert_eq!(stats.deletions, 1);
     }
 
+    /// Verifies Git quoted UTF-8 path escapes are decoded for WebUI file summaries.
+    /// 验证 WebUI 文件摘要会解码 Git 引号内的 UTF-8 路径转义。
+    #[test]
+    fn webui_diff_summary_scanner_decodes_git_quoted_utf8_paths() {
+        let unified_diff = concat!(
+            "diff --git \"a/\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/old.txt\" \"b/\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/new.txt\"\n",
+            "similarity index 80%\n",
+            "rename from \"\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/old.txt\"\n",
+            "rename to \"\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/new.txt\"\n",
+            "--- \"a/\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/old.txt\"\n",
+            "+++ \"b/\\344\\270\\255\\346\\226\\207 \\347\\233\\256\\345\\275\\225/new.txt\"\n",
+            "@@ -1 +1 @@\n",
+            "-old value\n",
+            "+new value\n",
+        );
+        let summaries = webui_unified_diff_file_summaries(unified_diff);
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].old_path, "中文 目录/old.txt");
+        assert_eq!(summaries[0].new_path, "中文 目录/new.txt");
+        assert_eq!(summaries[0].status, "renamed");
+    }
+
     /// Verifies the backend WebUI diff service paths work against a real temporary Git repository.
     /// 验证后端 WebUI diff 服务路径可在真实临时 Git 仓库中工作。
     #[test]
@@ -34756,6 +34834,53 @@ mod tests {
         assert!(search.matches[0].first_preview.contains("branch target"));
     }
 
+    /// Verifies the WebUI Git command layer preserves UTF-8 paths from real Git output.
+    /// 验证 WebUI Git 命令层会保留真实 Git 输出中的 UTF-8 路径。
+    #[test]
+    fn webui_diff_service_preserves_utf8_paths_from_git_output() {
+        let repository = WebuiDiffTestRepository::new();
+        run_webui_diff_test_git(repository.path(), &["init"]);
+        run_webui_diff_test_git(
+            repository.path(),
+            &["config", "user.email", "webui@example.test"],
+        );
+        run_webui_diff_test_git(
+            repository.path(),
+            &["config", "user.name", "WebUI Diff Test"],
+        );
+        write_webui_diff_test_file(
+            repository.path(),
+            "中文目录/中文文件.txt",
+            "initial value\n",
+        );
+        run_webui_diff_test_git(repository.path(), &["add", "中文目录/中文文件.txt"]);
+        run_webui_diff_test_git(repository.path(), &["commit", "-m", "initial utf8 path"]);
+        write_webui_diff_test_file(
+            repository.path(),
+            "中文目录/中文文件.txt",
+            "updated value\n",
+        );
+
+        let snapshot = load_webui_workspace_diff_snapshot(
+            &repository.path().to_string_lossy(),
+            Some(WebuiWorkspaceDiffRequest {
+                mode: WebuiWorkspaceDiffMode::Unstaged,
+                base_branch: None,
+                compare_branch: None,
+                commit_hash: None,
+            }),
+        )
+        .expect("utf8 path snapshot should load");
+
+        assert_eq!(snapshot.files.len(), 1);
+        assert_eq!(snapshot.files[0].new_path, "中文目录/中文文件.txt");
+        assert!(
+            snapshot
+                .unified_diff
+                .contains("diff --git a/中文目录/中文文件.txt b/中文目录/中文文件.txt")
+        );
+    }
+
     /// Verifies indexed diff search keeps first-match line metadata.
     /// 验证索引式 diff 搜索会保留首条命中的行元数据。
     #[test]
@@ -34880,10 +35005,13 @@ mod tests {
         /// Creates one empty temporary repository directory.
         /// 创建一个空的临时仓库目录。
         fn new() -> Self {
+            static NEXT_WEBUI_DIFF_TEST_REPOSITORY_ID: AtomicU64 = AtomicU64::new(1);
+            let repository_id = NEXT_WEBUI_DIFF_TEST_REPOSITORY_ID.fetch_add(1, Ordering::Relaxed);
             let path = env::temp_dir().join(format!(
-                "vulcan-webui-diff-test-{}-{}",
+                "vulcan-webui-diff-test-{}-{}-{}",
                 std::process::id(),
-                current_unix_millis_value()
+                current_unix_millis_value(),
+                repository_id
             ));
             fs::create_dir_all(&path).expect("temporary WebUI diff repository should be created");
             Self { path }

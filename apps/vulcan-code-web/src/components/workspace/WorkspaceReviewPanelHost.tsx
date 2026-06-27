@@ -45,9 +45,6 @@ interface WorkspaceReviewPanelCacheEntry {
   // Git review source selection used by the cached snapshot.
   // 缓存快照对应的 Git 审核来源选择。
   selection: DiffReviewSelection;
-  // Conversation or subagent surface that produced the cached snapshot.
-  // 生成缓存快照的会话或子代理界面标识。
-  surfaceId: string | null;
   // Workspace path that produced the cached snapshot.
   // 生成缓存快照的工作区路径。
   workspacePath: string | null;
@@ -63,9 +60,9 @@ interface WorkspaceReviewPanelCacheEntry {
 // workspaceReviewPanelCache 在右侧栏临时折叠时保留审核内容。
 const workspaceReviewPanelCache = new Map<string, WorkspaceReviewPanelCacheEntry>();
 
-// lastWorkspaceReviewVisibleSurfaceId tracks the latest conversation surface that the review panel represented.
-// lastWorkspaceReviewVisibleSurfaceId 跟踪审核面板最近代表的会话界面。
-let lastWorkspaceReviewVisibleSurfaceId: string | null = null;
+// lastWorkspaceReviewVisibleWorkspacePath tracks the latest project path represented by the review panel.
+// lastWorkspaceReviewVisibleWorkspacePath 跟踪审核面板最近代表的项目路径。
+let lastWorkspaceReviewVisibleWorkspacePath: string | null = null;
 
 // workspaceReviewPanelCacheLimit caps cached review states to avoid retaining old diff trees forever.
 // workspaceReviewPanelCacheLimit 限制缓存的审核状态数量，避免长期保留旧 diff 树。
@@ -135,6 +132,21 @@ export function WorkspaceReviewPanelHost(props: {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Records one loaded workspace diff snapshot in the project-level Git store.
+  // 将一次已加载的工作区 diff 快照记录到项目级 Git 状态。
+  onWorkspaceDiffSnapshotLoaded?: (
+    workspacePath: string,
+    projectId: string | null,
+    selection: DiffReviewSelection,
+    response: WorkspaceDiffSnapshotResponse,
+  ) => void;
+  // Refreshes the project-level Git summary after a Git mutation.
+  // Git 变更后刷新项目级 Git 摘要。
+  onWorkspaceGitStateChanged?: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+  ) => Promise<void>;
   // Optional shared Git commit action label shown in the review toolbar.
   // 审核工具栏中展示的可选共享 Git 提交动作标签。
   gitCommitActionLabel?: string;
@@ -172,11 +184,11 @@ export function WorkspaceReviewPanelHost(props: {
     () => selectedConversationWorkspacePath(props.workbench, props.selectedConversationId, props.selectedDraftConversation),
     [props.selectedConversationId, props.selectedDraftConversation, props.workbench],
   );
-  // reviewPanelCacheKey stores the cache bucket for this visible conversation surface.
-  // reviewPanelCacheKey 保存当前可见会话界面的审核缓存桶。
+  // reviewPanelCacheKey stores the project-level cache bucket for Git review state.
+  // reviewPanelCacheKey 保存 Git 审核状态的项目级缓存桶。
   const reviewPanelCacheKey = React.useMemo(
-    () => workspaceReviewPanelCacheKey(activeSurfaceId, workspacePath),
-    [activeSurfaceId, workspacePath],
+    () => workspaceReviewPanelCacheKey(workspacePath),
+    [workspacePath],
   );
   // initialReviewPanelCache restores a prior collapsed-panel state for this surface.
   // initialReviewPanelCache 恢复该界面先前折叠面板时保留的状态。
@@ -199,11 +211,6 @@ export function WorkspaceReviewPanelHost(props: {
   const diffReviewSelectionKey = React.useMemo(
     () => diffReviewSelectionStableKey(diffReviewSelection),
     [diffReviewSelection],
-  );
-  // workspaceReviewSurfaceId stores the surface that produced the current workspace diff snapshot.
-  // workspaceReviewSurfaceId 保存生成当前工作区 diff 快照的界面标识。
-  const [workspaceReviewSurfaceId, setWorkspaceReviewSurfaceId] = React.useState<string | null>(
-    () => initialReviewPanelCache?.surfaceId ?? null,
   );
   // workspaceReviewPath stores the project path that produced the current workspace diff snapshot.
   // workspaceReviewPath 保存生成当前工作区 diff 快照的项目路径。
@@ -244,8 +251,8 @@ export function WorkspaceReviewPanelHost(props: {
   // hydratedReviewPanelCacheKeyRef prevents stale state from being saved under a newly selected surface.
   // hydratedReviewPanelCacheKeyRef 防止旧状态被写入新选中界面的缓存桶。
   const hydratedReviewPanelCacheKeyRef = React.useRef(reviewPanelCacheKey);
-  // forceWorkspaceReviewRefreshRef marks real conversation switches while ignoring simple collapse/reopen cycles.
-  // forceWorkspaceReviewRefreshRef 标记真实会话切换，同时忽略单纯折叠再展开。
+  // forceWorkspaceReviewRefreshRef marks real project switches while ignoring simple collapse/reopen cycles.
+  // forceWorkspaceReviewRefreshRef 标记真实项目切换，同时忽略单纯折叠再展开。
   const forceWorkspaceReviewRefreshRef = React.useRef(false);
   // workspaceDetailPendingRef prevents duplicate lazy file-detail requests.
   // workspaceDetailPendingRef 防止重复发起文件详情懒加载请求。
@@ -256,8 +263,7 @@ export function WorkspaceReviewPanelHost(props: {
   // handledReviewFocusRequestRef stores the latest external focus request already applied.
   // handledReviewFocusRequestRef 保存已经应用的最近一次外部聚焦请求。
   const handledReviewFocusRequestRef = React.useRef(0);
-  const activeWorkspaceReviewSnapshot = workspaceReviewSurfaceId === activeSurfaceId
-    && workspaceReviewPath === workspacePath
+  const activeWorkspaceReviewSnapshot = workspaceReviewPath === workspacePath
     && workspaceReviewKey === diffReviewSelectionKey
       ? workspaceReviewSnapshot
       : null;
@@ -321,12 +327,12 @@ export function WorkspaceReviewPanelHost(props: {
       if (workspaceReviewRequestSeqRef.current !== requestSeq) {
         return;
       }
+      props.onWorkspaceDiffSnapshotLoaded?.(workspacePath, workspaceProjectId, requestSelection, response);
       const snapshot = await diffSnapshotFromWorkspaceResponseAsync(response);
       if (workspaceReviewRequestSeqRef.current !== requestSeq) {
         return;
       }
       setWorkspaceReviewSnapshot(snapshot);
-      setWorkspaceReviewSurfaceId(activeSurfaceId);
       setWorkspaceReviewPath(workspacePath);
       setWorkspaceReviewKey(requestKey);
       workspaceDetailPendingRef.current.clear();
@@ -343,7 +349,14 @@ export function WorkspaceReviewPanelHost(props: {
         setWorkspaceReviewLoading(false);
       }
     }
-  }, [activeSurfaceId, diffReviewSelection, props, workspacePath, workspaceProjectId]);
+  }, [
+    activeSurfaceId,
+    diffReviewSelection,
+    props.loadWorkspaceDiffSnapshot,
+    props.onWorkspaceDiffSnapshotLoaded,
+    workspacePath,
+    workspaceProjectId,
+  ]);
 
   // handleLoadWorkspaceDiffFileDetail lazily hydrates one partial file from the backend.
   // handleLoadWorkspaceDiffFileDetail 从后端懒加载并水合单个局部文件。
@@ -424,7 +437,7 @@ export function WorkspaceReviewPanelHost(props: {
     activeWorkspaceReviewSnapshot,
     diffReviewSelection,
     diffReviewSelectionKey,
-    props,
+    props.loadWorkspaceDiffFileDetail,
     workspacePath,
     workspaceProjectId,
   ]);
@@ -446,7 +459,7 @@ export function WorkspaceReviewPanelHost(props: {
     activeSurfaceId,
     activeWorkspaceReviewSnapshot,
     diffReviewSelection,
-    props,
+    props.loadWorkspaceDiffSearch,
     workspacePath,
     workspaceProjectId,
   ]);
@@ -482,6 +495,7 @@ export function WorkspaceReviewPanelHost(props: {
       setWorkspaceReviewKey(null);
       workspaceDetailPendingRef.current.clear();
       workspaceDetailAttemptedRef.current.clear();
+      await props.onWorkspaceGitStateChanged?.(workspacePath, workspaceProjectId, activeSurfaceId);
       await handleRefreshWorkspaceDiff(diffReviewSelection);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -493,7 +507,8 @@ export function WorkspaceReviewPanelHost(props: {
     activeSurfaceId,
     diffReviewSelection,
     handleRefreshWorkspaceDiff,
-    props,
+    props.onWorkspaceGitStateChanged,
+    props.runWorkspaceGitFileAction,
     workspaceGitActionPending,
     workspacePath,
     workspaceProjectId,
@@ -504,13 +519,12 @@ export function WorkspaceReviewPanelHost(props: {
   const handleDiffReviewSelectionChange = React.useCallback((selection: DiffReviewSelection) => {
     setDiffReviewSelection(selection);
     setWorkspaceReviewSnapshot(null);
-    setWorkspaceReviewSurfaceId(activeSurfaceId);
     setWorkspaceReviewPath(workspacePath);
     setWorkspaceReviewKey(null);
     workspaceDetailPendingRef.current.clear();
     workspaceDetailAttemptedRef.current.clear();
     void handleRefreshWorkspaceDiff(selection);
-  }, [activeSurfaceId, handleRefreshWorkspaceDiff, workspacePath]);
+  }, [handleRefreshWorkspaceDiff, workspacePath]);
 
   React.useEffect(() => {
     if (props.reviewFocusRequest <= 0 || handledReviewFocusRequestRef.current === props.reviewFocusRequest) {
@@ -521,11 +535,11 @@ export function WorkspaceReviewPanelHost(props: {
   }, [handleDiffReviewSelectionChange, props.reviewFocusRequest]);
 
   React.useEffect(() => {
-    if (lastWorkspaceReviewVisibleSurfaceId !== activeSurfaceId) {
+    if (lastWorkspaceReviewVisibleWorkspacePath !== workspacePath) {
       forceWorkspaceReviewRefreshRef.current = true;
-      lastWorkspaceReviewVisibleSurfaceId = activeSurfaceId;
+      lastWorkspaceReviewVisibleWorkspacePath = workspacePath;
     }
-  }, [activeSurfaceId]);
+  }, [workspacePath]);
 
   React.useEffect(() => {
     if (hydratedReviewPanelCacheKeyRef.current === reviewPanelCacheKey) {
@@ -536,14 +550,13 @@ export function WorkspaceReviewPanelHost(props: {
     const cachedEntry = workspaceReviewPanelCache.get(reviewPanelCacheKey) ?? null;
     setDiffReviewSelection(cachedEntry?.selection ?? DEFAULT_WORKSPACE_REVIEW_SELECTION);
     setWorkspaceReviewSnapshot(cachedEntry?.snapshot ?? null);
-    setWorkspaceReviewSurfaceId(cachedEntry?.surfaceId ?? activeSurfaceId);
     setWorkspaceReviewPath(cachedEntry?.workspacePath ?? workspacePath);
     setWorkspaceReviewKey(cachedEntry?.reviewKey ?? null);
     setWorkspaceReviewError(cachedEntry?.error ?? null);
     setWorkspaceReviewLoading(false);
     workspaceDetailPendingRef.current.clear();
     workspaceDetailAttemptedRef.current.clear();
-  }, [activeSurfaceId, reviewPanelCacheKey, workspacePath]);
+  }, [reviewPanelCacheKey, workspacePath]);
 
   React.useEffect(() => {
     if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
@@ -552,7 +565,6 @@ export function WorkspaceReviewPanelHost(props: {
     rememberWorkspaceReviewPanelCache(reviewPanelCacheKey, {
       snapshot: workspaceReviewSnapshot,
       selection: diffReviewSelection,
-      surfaceId: workspaceReviewSurfaceId,
       workspacePath: workspaceReviewPath,
       reviewKey: workspaceReviewKey,
       error: workspaceReviewError,
@@ -564,18 +576,16 @@ export function WorkspaceReviewPanelHost(props: {
     workspaceReviewKey,
     workspaceReviewPath,
     workspaceReviewSnapshot,
-    workspaceReviewSurfaceId,
   ]);
 
   React.useEffect(() => {
     if (hydratedReviewPanelCacheKeyRef.current !== reviewPanelCacheKey) {
       return;
     }
-    const forceRefreshForSurface = forceWorkspaceReviewRefreshRef.current;
+    const forceRefreshForProject = forceWorkspaceReviewRefreshRef.current;
     if (!workspacePath) {
       forceWorkspaceReviewRefreshRef.current = false;
       setWorkspaceReviewSnapshot(null);
-      setWorkspaceReviewSurfaceId(activeSurfaceId);
       setWorkspaceReviewPath(null);
       setWorkspaceReviewKey(null);
       setWorkspaceReviewError(null);
@@ -585,25 +595,22 @@ export function WorkspaceReviewPanelHost(props: {
       return;
     }
     if (
-      workspaceReviewSurfaceId === activeSurfaceId
-      && workspaceReviewPath === workspacePath
+      workspaceReviewPath === workspacePath
       && workspaceReviewKey === diffReviewSelectionKey
       && workspaceReviewSnapshot
-      && !forceRefreshForSurface
+      && !forceRefreshForProject
     ) {
       setWorkspaceReviewError(null);
       return;
     }
     forceWorkspaceReviewRefreshRef.current = false;
     setWorkspaceReviewSnapshot(null);
-    setWorkspaceReviewSurfaceId(activeSurfaceId);
     setWorkspaceReviewPath(workspacePath);
     setWorkspaceReviewKey(diffReviewSelectionKey);
     workspaceDetailPendingRef.current.clear();
     workspaceDetailAttemptedRef.current.clear();
     void handleRefreshWorkspaceDiff();
   }, [
-    activeSurfaceId,
     diffReviewSelectionKey,
     handleRefreshWorkspaceDiff,
     reviewPanelCacheKey,
@@ -611,7 +618,6 @@ export function WorkspaceReviewPanelHost(props: {
     workspaceReviewKey,
     workspaceReviewPath,
     workspaceReviewSnapshot,
-    workspaceReviewSurfaceId,
   ]);
 
   return (
@@ -636,10 +642,10 @@ export function WorkspaceReviewPanelHost(props: {
   );
 }
 
-// workspaceReviewPanelCacheKey builds a per-surface cache key for right-panel review state.
-// workspaceReviewPanelCacheKey 为右侧审核状态构建按界面隔离的缓存键。
-function workspaceReviewPanelCacheKey(surfaceId: string | null, workspacePath: string | null): string {
-  return `${surfaceId ?? "none"}::${workspacePath ?? "no-workspace"}`;
+// workspaceReviewPanelCacheKey builds a project-level cache key for right-panel Git review state.
+// workspaceReviewPanelCacheKey 为右侧 Git 审核状态构建项目级缓存键。
+function workspaceReviewPanelCacheKey(workspacePath: string | null): string {
+  return workspacePath ?? "no-workspace";
 }
 
 // rememberWorkspaceReviewPanelCache records one bounded review panel cache entry.

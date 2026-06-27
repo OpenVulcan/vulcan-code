@@ -5,6 +5,10 @@ import { diffFileLargeReasons, diffStatsLargeReasons } from "./limits";
 // textEncoder 用于估算 diff 变更行的 UTF-8 字节体积。
 const textEncoder = new TextEncoder();
 
+// gitQuotedPathDecoder decodes Git C-style octal path byte escapes.
+// gitQuotedPathDecoder 用于解码 Git C 风格八进制路径字节转义。
+const gitQuotedPathDecoder = new TextDecoder();
+
 // INLINE_DIFF_MAX_LINE_LENGTH bounds parser-time character range detection.
 // INLINE_DIFF_MAX_LINE_LENGTH 限制解析阶段行内变更范围检测的单行长度。
 const INLINE_DIFF_MAX_LINE_LENGTH = 4000;
@@ -295,10 +299,75 @@ function trimDiffPath(path: string): string {
   return normalized.replace(/^[ab]\//, "");
 }
 
-// unescapeQuotedPath normalizes simple git quoted-path escape sequences.
-// unescapeQuotedPath 规范化简单的 git 引号路径转义序列。
+// unescapeQuotedPath normalizes Git quoted-path escape sequences.
+// unescapeQuotedPath 规范化 Git 引号路径转义序列。
 function unescapeQuotedPath(path: string): string {
-  return path.replace(/\\"/g, "\"").replace(/\\\\/g, "\\").replace(/\\t/g, "\t");
+  const bytes: number[] = [];
+  for (let index = 0; index < path.length;) {
+    const character = path[index];
+    if (character !== "\\") {
+      const codePoint = path.codePointAt(index) ?? character.charCodeAt(0);
+      const literal = String.fromCodePoint(codePoint);
+      bytes.push(...textEncoder.encode(literal));
+      index += literal.length;
+      continue;
+    }
+    const escaped = path[index + 1];
+    if (escaped === undefined) {
+      bytes.push("\\".charCodeAt(0));
+      index += 1;
+      continue;
+    }
+    if (escaped >= "0" && escaped <= "7") {
+      let value = 0;
+      let offset = 1;
+      while (offset <= 3) {
+        const digit = path[index + offset];
+        if (digit === undefined || digit < "0" || digit > "7") {
+          break;
+        }
+        value = value * 8 + Number.parseInt(digit, 8);
+        offset += 1;
+      }
+      bytes.push(Math.min(value, 0xff));
+      index += offset;
+      continue;
+    }
+    bytes.push(...gitQuotedEscapedCharacterBytes(escaped));
+    index += 2;
+  }
+  return gitQuotedPathDecoder.decode(new Uint8Array(bytes));
+}
+
+// gitQuotedEscapedCharacterBytes returns UTF-8 bytes for one non-octal Git path escape.
+// gitQuotedEscapedCharacterBytes 返回单个非八进制 Git 路径转义对应的 UTF-8 字节。
+function gitQuotedEscapedCharacterBytes(
+  // Escaped character following the backslash.
+  // 反斜杠后的被转义字符。
+  escaped: string,
+): number[] {
+  switch (escaped) {
+    case "a":
+      return [0x07];
+    case "b":
+      return [0x08];
+    case "f":
+      return [0x0c];
+    case "n":
+      return [0x0a];
+    case "r":
+      return [0x0d];
+    case "t":
+      return [0x09];
+    case "v":
+      return [0x0b];
+    case "\\":
+      return [0x5c];
+    case "\"":
+      return [0x22];
+    default:
+      return Array.from(textEncoder.encode(escaped));
+  }
 }
 
 // lastWhitespaceSeparatedToken returns the final token without allocating split arrays.

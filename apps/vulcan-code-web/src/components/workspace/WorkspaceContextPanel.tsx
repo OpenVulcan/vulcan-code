@@ -206,6 +206,21 @@ export interface WorkspaceContextPanelProps {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Records one loaded workspace diff snapshot in the project-level Git store.
+  // 将一次已加载的工作区 diff 快照记录到项目级 Git 状态。
+  onWorkspaceDiffSnapshotLoaded?: (
+    workspacePath: string,
+    projectId: string | null,
+    selection: DiffReviewSelection,
+    response: WorkspaceDiffSnapshotResponse,
+  ) => void;
+  // Refreshes the project-level Git summary after a Git mutation.
+  // Git 变更后刷新项目级 Git 摘要。
+  onWorkspaceGitStateChanged?: (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+  ) => Promise<void>;
   // Optional shared Git commit action label shown in the review toolbar.
   // 审核工具栏中展示的可选共享 Git 提交动作标签。
   gitCommitActionLabel?: string;
@@ -603,6 +618,8 @@ function WorkspaceContextTabContent(args: {
             loadWorkspaceDiffSnapshot={args.props.loadWorkspaceDiffSnapshot}
             parseConversationBlocks={args.props.parseConversationBlocks}
             runWorkspaceGitFileAction={args.props.runWorkspaceGitFileAction}
+            onWorkspaceDiffSnapshotLoaded={args.props.onWorkspaceDiffSnapshotLoaded}
+            onWorkspaceGitStateChanged={args.props.onWorkspaceGitStateChanged}
             gitCommitActionBusy={args.props.gitCommitActionBusy}
             gitCommitActionDisabled={args.props.gitCommitActionDisabled}
             gitCommitActionLabel={args.props.gitCommitActionLabel}

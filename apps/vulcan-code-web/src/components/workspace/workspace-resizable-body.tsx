@@ -161,6 +161,12 @@ export function WorkspaceResizableBody(props: {
   // Runs one file-level Git action for the right context panel.
   // 为右侧上下文面板执行一次文件级 Git 操作。
   runWorkspaceGitFileAction: WorkspaceContextPanelProps["runWorkspaceGitFileAction"];
+  // Records one loaded workspace diff snapshot in the project-level Git store.
+  // 将一次已加载的工作区 diff 快照记录到项目级 Git 状态。
+  onWorkspaceDiffSnapshotLoaded?: WorkspaceContextPanelProps["onWorkspaceDiffSnapshotLoaded"];
+  // Refreshes the project-level Git summary after a Git mutation.
+  // Git 变更后刷新项目级 Git 摘要。
+  onWorkspaceGitStateChanged?: WorkspaceContextPanelProps["onWorkspaceGitStateChanged"];
   // Optional shared Git commit action label shown in the review toolbar.
   // 审核工具栏中展示的可选共享 Git 提交动作标签。
   gitCommitActionLabel?: string;
@@ -383,6 +389,8 @@ export function WorkspaceResizableBody(props: {
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
+              onWorkspaceDiffSnapshotLoaded={props.onWorkspaceDiffSnapshotLoaded}
+              onWorkspaceGitStateChanged={props.onWorkspaceGitStateChanged}
               gitCommitActionBusy={props.gitCommitActionBusy}
               gitCommitActionDisabled={props.gitCommitActionDisabled}
               gitCommitActionLabel={props.gitCommitActionLabel}

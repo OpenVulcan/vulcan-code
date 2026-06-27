@@ -112,6 +112,42 @@ const workspaceContextTabStateCache = new Map<string, WorkspaceContextTabState>(
 // workspaceContextTabStateCacheLimit 限制保留的会话页签工作区数量。
 const workspaceContextTabStateCacheLimit = 32;
 
+// WorkspaceProjectGitSummaryEntry stores shared Git status for one workspace project.
+// WorkspaceProjectGitSummaryEntry 保存单个工作区项目共享的 Git 状态。
+interface WorkspaceProjectGitSummaryEntry {
+  // Compact review summary derived from live Git snapshots.
+  // 从实时 Git 快照派生出的紧凑审核摘要。
+  summary: ConversationSessionReviewSummary | null;
+  // Latest unstaged diff snapshot used to derive summary counts.
+  // 用于派生摘要计数的最近未暂存 diff 快照。
+  unstagedSnapshot: WorkspaceDiffSnapshotResponse | null;
+  // Latest staged diff snapshot used to derive summary counts.
+  // 用于派生摘要计数的最近已暂存 diff 快照。
+  stagedSnapshot: WorkspaceDiffSnapshotResponse | null;
+  // Stable workspace path that owns this summary.
+  // 拥有该摘要的稳定工作区路径。
+  workspacePath: string;
+  // Optional project id used by backend Git requests.
+  // 后端 Git 请求使用的可选项目标识。
+  projectId: string | null;
+  // Monotonic revision bumped whenever the project Git state changes.
+  // 项目 Git 状态变化时递增的单调版本。
+  revision: number;
+  // Whether a project-level summary refresh is currently running.
+  // 项目级摘要刷新当前是否正在运行。
+  loading: boolean;
+  // Latest refresh error for diagnostics.
+  // 最近一次刷新错误，供诊断使用。
+  error: string | null;
+  // Latest project refresh request id accepted by this entry.
+  // 该条目当前接受的最近项目刷新请求标识。
+  refreshRequestId: number;
+}
+
+// WorkspaceProjectGitStateMap stores shared Git state keyed by workspace path.
+// WorkspaceProjectGitStateMap 按工作区路径保存共享 Git 状态。
+type WorkspaceProjectGitStateMap = Record<string, WorkspaceProjectGitSummaryEntry>;
+
 // workspaceContextFileTabCounter keeps file tab ids unique in the current runtime.
 // workspaceContextFileTabCounter 保持当前运行期内文件页签标识唯一。
 let workspaceContextFileTabCounter = 1;
@@ -157,6 +193,58 @@ function workspaceContextTabCacheKey(
   // workspacePath 为跨来源共享标识的会话补充项目根目录隔离。
   const workspacePath = selectedConversationWorkspacePath(workbench, selectedConversationId, selectedDraftConversation);
   return `${surfaceId ?? selectedDraftConversation?.id ?? "none"}:${workspacePath ?? selectedDraftConversation?.projectId ?? "none"}`;
+}
+
+// buildWorkspaceProjectGitSummary creates the shared compact Git summary from live snapshots.
+// buildWorkspaceProjectGitSummary 根据实时快照创建共享的紧凑 Git 摘要。
+function buildWorkspaceProjectGitSummary(
+  // Unstaged diff snapshot returned by the backend.
+  // 后端返回的未暂存 diff 快照。
+  unstagedSnapshot: WorkspaceDiffSnapshotResponse | null,
+  // Staged diff snapshot returned by the backend.
+  // 后端返回的已暂存 diff 快照。
+  stagedSnapshot: WorkspaceDiffSnapshotResponse | null,
+): ConversationSessionReviewSummary | null {
+  const primarySnapshot = unstagedSnapshot ?? stagedSnapshot;
+  if (!primarySnapshot) {
+    return null;
+  }
+  if (!workspaceDiffSnapshotHasGitRepository(primarySnapshot)) {
+    return null;
+  }
+  const snapshots = [unstagedSnapshot, stagedSnapshot].filter((snapshot): snapshot is WorkspaceDiffSnapshotResponse => Boolean(snapshot));
+  return {
+    additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
+    branchName: primarySnapshot.currentBranch ?? null,
+    branchNames: (primarySnapshot.branches ?? []).map((branch) => branch.name),
+    changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
+    deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
+    stagedAdditions: stagedSnapshot?.additions ?? 0,
+    stagedChangedFiles: stagedSnapshot?.changedFiles ?? 0,
+    stagedDeletions: stagedSnapshot?.deletions ?? 0,
+    unstagedAdditions: unstagedSnapshot?.additions ?? 0,
+    unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
+    unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
+    unpushedCommits: primarySnapshot.currentBranchUnpushedCommits ?? 0,
+  };
+}
+
+// workspaceDiffSnapshotHasGitRepository checks whether a diff snapshot came from a real Git repository.
+// workspaceDiffSnapshotHasGitRepository 检查 diff 快照是否来自真实 Git 仓库。
+function workspaceDiffSnapshotHasGitRepository(
+  // Snapshot returned by the workspace diff backend.
+  // 工作区 diff 后端返回的快照。
+  snapshot: WorkspaceDiffSnapshotResponse,
+): boolean {
+  return Boolean(
+    snapshot.currentBranch
+    || snapshot.defaultBranch
+    || snapshot.selectedBaseBranch
+    || snapshot.selectedCompareBranch
+    || snapshot.selectedCommitHash
+    || snapshot.branches?.length
+    || snapshot.recentCommits?.length
+  );
 }
 
 // normalizeWorkspaceContextTabState removes stale active ids from a tab state.
@@ -653,15 +741,18 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
   // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
   const [sessionToolExpanded, setSessionToolExpanded] = React.useState(false);
-  // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
-  // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
-  const [sessionReviewSummary, setSessionReviewSummary] = React.useState<ConversationSessionReviewSummary | null>(null);
+  // workspaceGitStateByProject stores project-level Git state shared by all conversations.
+  // workspaceGitStateByProject 保存所有会话共享的项目级 Git 状态。
+  const [workspaceGitStateByProject, setWorkspaceGitStateByProject] = React.useState<WorkspaceProjectGitStateMap>({});
   // gitCommitDialogOpen stores the shared commit dialog state across chat and review surfaces.
   // gitCommitDialogOpen 保存聊天区与审核区共享的提交弹窗状态。
   const [gitCommitDialogOpen, setGitCommitDialogOpen] = React.useState(false);
   // gitCommitBusyStateByWorkspace stores running Git actions by workspace path.
   // gitCommitBusyStateByWorkspace 按工作区路径保存正在执行的 Git 动作状态。
   const [gitCommitBusyStateByWorkspace, setGitCommitBusyStateByWorkspace] = React.useState<Record<string, NonNullable<ConversationSessionCommitBusyState>>>({});
+  // workspaceGitRefreshRequestSeqRef provides monotonic ids for project-level Git refreshes.
+  // workspaceGitRefreshRequestSeqRef 为项目级 Git 刷新提供单调请求标识。
+  const workspaceGitRefreshRequestSeqRef = React.useRef(0);
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -684,6 +775,14 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // selectedGitCommitWorkspaceKey identifies the Git workspace whose commit state is currently shown.
   // selectedGitCommitWorkspaceKey 标识当前展示提交状态的 Git 工作区。
   const selectedGitCommitWorkspaceKey = selectedChatProject?.path ?? null;
+  // selectedWorkspaceGitState stores the selected project's shared Git state entry.
+  // selectedWorkspaceGitState 保存当前选中项目的共享 Git 状态条目。
+  const selectedWorkspaceGitState = selectedGitCommitWorkspaceKey
+    ? workspaceGitStateByProject[selectedGitCommitWorkspaceKey] ?? null
+    : null;
+  // sessionReviewSummary exposes the selected project's Git summary to chat and review triggers.
+  // sessionReviewSummary 向会话和审核入口暴露当前选中项目的 Git 摘要。
+  const sessionReviewSummary = selectedWorkspaceGitState?.summary ?? null;
   // gitCommitBusyState stores the selected workspace's shared Git action phase.
   // gitCommitBusyState 保存当前选中工作区的共享 Git 操作阶段。
   const gitCommitBusyState = selectedGitCommitWorkspaceKey
@@ -868,7 +967,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     : null;
   // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
   // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
-  const sessionGitRepositoryAvailable = Boolean(sessionReviewSummary);
+  const sessionGitRepositoryAvailable = Boolean(sessionReviewSummary || selectedWorkspaceGitState?.loading);
   // sessionGitCommitActionAvailable tracks whether commit or push has a runnable target.
   // sessionGitCommitActionAvailable 标记提交或推送是否存在可执行目标。
   const sessionGitCommitActionAvailable = Boolean(sessionReviewSummary && (
@@ -884,66 +983,134 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     sessionGitCommitActionVisible || visibleSessionTerminalSessions.length > 0
   );
 
-  // refreshSessionReviewSummary reloads the compact Git summary for the selected chat project.
-  // refreshSessionReviewSummary 重新加载当前聊天项目的紧凑 Git 摘要。
-  const refreshSessionReviewSummary = React.useCallback(async () => {
-    if (!hasSelectedChatConversation || !selectedChatProject?.path || !selectedChatProject?.id) {
-      setSessionReviewSummary(null);
-      return;
-    }
+  // refreshProjectGitSummary reloads the shared Git summary for one project path.
+  // refreshProjectGitSummary 重新加载单个项目路径的共享 Git 摘要。
+  const refreshProjectGitSummary = React.useCallback(async (
+    workspacePath: string,
+    projectId: string | null,
+    conversationId: string | null,
+  ) => {
+    const requestId = workspaceGitRefreshRequestSeqRef.current + 1;
+    workspaceGitRefreshRequestSeqRef.current = requestId;
+    setWorkspaceGitStateByProject((current) => {
+      const previous = current[workspacePath];
+      return {
+        ...current,
+        [workspacePath]: {
+          error: null,
+          loading: true,
+          projectId,
+          refreshRequestId: requestId,
+          revision: previous?.revision ?? 0,
+          stagedSnapshot: previous?.stagedSnapshot ?? null,
+          summary: previous?.summary ?? null,
+          unstagedSnapshot: previous?.unstagedSnapshot ?? null,
+          workspacePath,
+        },
+      };
+    });
     const [unstagedResult, stagedResult] = await Promise.allSettled([
       props.onLoadWorkspaceDiffSnapshot(
-        selectedChatProject.path,
-        selectedChatProject.id,
-        props.selectedConversationId,
+        workspacePath,
+        projectId,
+        conversationId,
         { mode: "unstaged" },
       ),
       props.onLoadWorkspaceDiffSnapshot(
-        selectedChatProject.path,
-        selectedChatProject.id,
-        props.selectedConversationId,
+        workspacePath,
+        projectId,
+        conversationId,
         { mode: "staged" },
       ),
     ]);
-    const snapshots = [unstagedResult, stagedResult]
-      .filter((result): result is PromiseFulfilledResult<WorkspaceDiffSnapshotResponse> => result.status === "fulfilled")
-      .map((result) => result.value);
-    const primarySnapshot = snapshots[0] ?? null;
-    const branchName = primarySnapshot?.currentBranch ?? null;
-    if (!branchName) {
-      setSessionReviewSummary(null);
+    const rejectedError = [unstagedResult, stagedResult]
+      .find((result): result is PromiseRejectedResult => result.status === "rejected")
+      ?.reason;
+    setWorkspaceGitStateByProject((current) => {
+      const previous = current[workspacePath];
+      if (previous && previous.refreshRequestId !== requestId) {
+        return current;
+      }
+      const unstagedSnapshot = unstagedResult.status === "fulfilled"
+        ? unstagedResult.value
+        : previous?.unstagedSnapshot ?? null;
+      const stagedSnapshot = stagedResult.status === "fulfilled"
+        ? stagedResult.value
+        : previous?.stagedSnapshot ?? null;
+      return {
+        ...current,
+        [workspacePath]: {
+          error: rejectedError instanceof Error ? rejectedError.message : rejectedError ? String(rejectedError) : null,
+          loading: false,
+          projectId,
+          refreshRequestId: requestId,
+          revision: (previous?.revision ?? 0) + 1,
+          stagedSnapshot,
+          summary: buildWorkspaceProjectGitSummary(unstagedSnapshot, stagedSnapshot),
+          unstagedSnapshot,
+          workspacePath,
+        },
+      };
+    });
+  }, [props.onLoadWorkspaceDiffSnapshot]);
+
+  // refreshSessionReviewSummary reloads Git state for the currently selected project.
+  // refreshSessionReviewSummary 重新加载当前选中项目的 Git 状态。
+  const refreshSessionReviewSummary = React.useCallback(async () => {
+    if (!hasSelectedChatConversation || !selectedChatProject?.path) {
       return;
     }
-    // branchNames keeps the concrete Git branch labels returned by the review snapshot.
-    // branchNames 保存审查快照返回的真实 Git 分支标签。
-    const branchNames = (primarySnapshot?.branches ?? []).map((branch) => branch.name);
-    // unstagedSnapshot keeps the working-tree diff counts used by the commit popover gate.
-    // unstagedSnapshot 保存提交浮层门禁使用的工作区 diff 计数。
-    const unstagedSnapshot = unstagedResult.status === "fulfilled" ? unstagedResult.value : null;
-    // stagedSnapshot keeps the index diff counts used when unstaged changes are excluded.
-    // stagedSnapshot 保存排除未暂存变更时使用的暂存区 diff 计数。
-    const stagedSnapshot = stagedResult.status === "fulfilled" ? stagedResult.value : null;
-    setSessionReviewSummary({
-      additions: snapshots.reduce((total, snapshot) => total + snapshot.additions, 0),
-      branchName,
-      branchNames,
-      changedFiles: snapshots.reduce((total, snapshot) => total + snapshot.changedFiles, 0),
-      deletions: snapshots.reduce((total, snapshot) => total + snapshot.deletions, 0),
-      stagedAdditions: stagedSnapshot?.additions ?? 0,
-      stagedChangedFiles: stagedSnapshot?.changedFiles ?? 0,
-      stagedDeletions: stagedSnapshot?.deletions ?? 0,
-      unstagedAdditions: unstagedSnapshot?.additions ?? 0,
-      unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
-      unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
-      unpushedCommits: primarySnapshot?.currentBranchUnpushedCommits ?? 0,
-    });
+    await refreshProjectGitSummary(
+      selectedChatProject.path,
+      selectedChatProject.id ?? null,
+      props.selectedConversationId,
+    );
   }, [
     hasSelectedChatConversation,
-    props.onLoadWorkspaceDiffSnapshot,
     props.selectedConversationId,
+    refreshProjectGitSummary,
     selectedChatProject?.id,
     selectedChatProject?.path,
   ]);
+
+  // recordWorkspaceDiffSnapshotForProject merges a panel-loaded snapshot into the shared project Git state.
+  // recordWorkspaceDiffSnapshotForProject 将面板加载的快照合并进共享项目 Git 状态。
+  const recordWorkspaceDiffSnapshotForProject = React.useCallback((
+    workspacePath: string,
+    projectId: string | null,
+    selection: DiffReviewSelection,
+    response: WorkspaceDiffSnapshotResponse,
+  ) => {
+    if (selection.mode !== "unstaged" && selection.mode !== "staged") {
+      return;
+    }
+    setWorkspaceGitStateByProject((current) => {
+      const previous = current[workspacePath];
+      if (previous?.loading) {
+        return current;
+      }
+      const nextUnstagedSnapshot = selection.mode === "unstaged"
+        ? response
+        : previous?.unstagedSnapshot ?? null;
+      const nextStagedSnapshot = selection.mode === "staged"
+        ? response
+        : previous?.stagedSnapshot ?? null;
+      return {
+        ...current,
+        [workspacePath]: {
+          error: null,
+          loading: false,
+          projectId,
+          revision: (previous?.revision ?? 0) + 1,
+          refreshRequestId: previous?.refreshRequestId ?? 0,
+          stagedSnapshot: nextStagedSnapshot,
+          summary: buildWorkspaceProjectGitSummary(nextUnstagedSnapshot, nextStagedSnapshot),
+          unstagedSnapshot: nextUnstagedSnapshot,
+          workspacePath,
+        },
+      };
+    });
+  }, []);
 
   React.useEffect(() => {
     if (!hasSelectedChatConversation || !sessionReviewSummary) {
@@ -953,17 +1120,40 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
 
   React.useEffect(() => {
     let cancelled = false;
-    void refreshSessionReviewSummary().catch(() => {
-      if (!cancelled) {
-        setSessionReviewSummary(null);
-      }
-    });
+    if (
+      hasSelectedChatConversation
+      && selectedChatProject?.path
+      && !selectedWorkspaceGitState
+    ) {
+      void refreshSessionReviewSummary().catch((error) => {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : String(error);
+          setWorkspaceGitStateByProject((current) => ({
+            ...current,
+            [selectedChatProject.path]: {
+              error: message,
+              loading: false,
+              projectId: selectedChatProject.id ?? null,
+              refreshRequestId: current[selectedChatProject.path]?.refreshRequestId ?? 0,
+              revision: current[selectedChatProject.path]?.revision ?? 0,
+              stagedSnapshot: current[selectedChatProject.path]?.stagedSnapshot ?? null,
+              summary: current[selectedChatProject.path]?.summary ?? null,
+              unstagedSnapshot: current[selectedChatProject.path]?.unstagedSnapshot ?? null,
+              workspacePath: selectedChatProject.path,
+            },
+          }));
+        }
+      });
+    }
     return () => {
       cancelled = true;
     };
   }, [
+    hasSelectedChatConversation,
     refreshSessionReviewSummary,
-    props.workbench.messages.length,
+    selectedChatProject?.id,
+    selectedChatProject?.path,
+    selectedWorkspaceGitState,
   ]);
 
   // rightPanelLabel describes the page-registered context panel toggle action.
@@ -1289,6 +1479,8 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           loadWorkspaceFileDirectory={props.onLoadWorkspaceFileDirectory}
           loadWorkspaceFilePreview={props.onLoadWorkspaceFilePreview}
           runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
+          onWorkspaceDiffSnapshotLoaded={recordWorkspaceDiffSnapshotForProject}
+          onWorkspaceGitStateChanged={refreshProjectGitSummary}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
