@@ -39,6 +39,10 @@ SourceResourcesDir="$ProjectDir/crates/vulcan-runtime-assets/resources"
 # SourceSystemPromptSkillsDir 指向仓库持有的系统 Agent Skills 目录。
 SourceSystemPromptSkillsDir="$ProjectDir/crates/vulcan-prompt-skills/src/assets/system"
 
+# SourceRtkBinDir points at the RTK executable installed by make deps.
+# SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
+SourceRtkBinDir="$ProjectDir/third_party/rtk/bin"
+
 # IsWindowsPlatform records whether the current shell host is Windows-like.
 # IsWindowsPlatform 记录当前 shell 宿主是否类似 Windows。
 IsWindowsPlatform=0
@@ -162,6 +166,14 @@ OutputResourcesDir="$ProjectDir/output/resources"
 # OutputSystemPromptSkillsDir 保存运行时直接读取的打包系统 Agent Skills。
 OutputSystemPromptSkillsDir="$OutputResourcesDir/prompt-skills/system"
 
+# OutputToolsDir stores packaged auxiliary host tool executables.
+# OutputToolsDir 保存打包后的辅助宿主工具可执行文件。
+OutputToolsDir="$ProjectDir/output/tools"
+
+# LegacyOutputRtkToolDir stores the previous nested RTK output directory for cleanup.
+# LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
+LegacyOutputRtkToolDir="$OutputToolsDir/rtk"
+
 if [ ! -f "$BuiltBinaryPath" ]; then
     echo "Built Tauri binary was not found: $BuiltBinaryPath" >&2
     exit 1
@@ -185,6 +197,25 @@ copy_directory_contents "$SourceResourcesDir" "$OutputResourcesDir" 0
 
 echo "==> Syncing packaged system Agent Skills..."
 copy_directory_contents "$SourceSystemPromptSkillsDir" "$OutputSystemPromptSkillsDir" 1
+
+if [ -d "$SourceRtkBinDir" ]; then
+    echo "==> Syncing packaged RTK host tool..."
+    if [ -e "$LegacyOutputRtkToolDir" ]; then
+        case "$LegacyOutputRtkToolDir" in
+            "$ProjectDir"/output/*)
+                rm -rf "$LegacyOutputRtkToolDir"
+                ;;
+            *)
+                echo "Refusing to clean path outside output: $LegacyOutputRtkToolDir" >&2
+                exit 1
+                ;;
+        esac
+    fi
+    mkdir -p "$OutputToolsDir"
+    find "$SourceRtkBinDir" -maxdepth 1 -type f -exec cp {} "$OutputToolsDir"/ \;
+else
+    echo "==> RTK host tool not installed; run make deps-host to package it."
+fi
 
 echo "==> Done. Binary: $OutputBinaryPath"
 if [ "$IsWindowsPlatform" = "1" ]; then

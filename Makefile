@@ -42,7 +42,15 @@ define route-command
 endef
 endif
 
-.PHONY: help build build-release release run run-release br br-release licenses deps deps-all deps-host deps-lua
+.PHONY: help build build-release release run run-release br br-release licenses deps deps-all deps-host deps-vldb deps-rtk deps-lua host vldb rtk lua all
+
+# DEPS_COMPANION_GOALS captures optional secondary dependency goals such as `make deps rtk`.
+# DEPS_COMPANION_GOALS 捕获 `make deps rtk` 这类可选的依赖二级目标。
+DEPS_COMPANION_GOALS := $(filter-out deps,$(MAKECMDGOALS))
+
+# DEPS_ROUTE_COMMAND selects the command forwarded by the deps router.
+# DEPS_ROUTE_COMMAND 选择 deps 路由需要转发的命令。
+DEPS_ROUTE_COMMAND := $(if $(DEPS_COMPANION_GOALS),deps $(DEPS_COMPANION_GOALS),deps)
 
 # help prints the supported Makefile router targets.
 # help 输出 Makefile 路由层支持的目标。
@@ -58,6 +66,8 @@ help:
 	@echo "  make licenses      # generate Rust third-party notices"
 	@echo "  make deps          # install host + Lua dependencies"
 	@echo "  make deps-host     # install host dependencies"
+	@echo "  make deps-vldb     # install vldb-controller host dependency"
+	@echo "  make deps-rtk      # install RTK host dependency"
 	@echo "  make deps-lua      # install Lua dependencies"
 
 # build routes debug by default, or release when the release companion goal is present.
@@ -107,7 +117,7 @@ licenses:
 # deps routes all dependency installation steps.
 # deps 路由全部依赖安装步骤。
 deps:
-	$(call route-command,deps)
+	$(call route-command,$(DEPS_ROUTE_COMMAND))
 
 # deps-all routes the explicit all-dependencies installation step.
 # deps-all 路由显式全部依赖安装步骤。
@@ -119,7 +129,62 @@ deps-all:
 deps-host:
 	$(call route-command,deps host)
 
+# deps-vldb routes vldb-controller host dependency installation.
+# deps-vldb 路由 vldb-controller 宿主依赖安装步骤。
+deps-vldb:
+	$(call route-command,deps vldb)
+
+# deps-rtk routes RTK host dependency installation.
+# deps-rtk 路由 RTK 宿主依赖安装步骤。
+deps-rtk:
+	$(call route-command,deps rtk)
+
 # deps-lua routes Lua dependency installation.
 # deps-lua 路由 Lua 依赖安装步骤。
 deps-lua:
 	$(call route-command,deps lua)
+
+# all is a deps companion no-op when used as `make deps all`.
+# all 在 `make deps all` 形式中作为 deps 的伴随空目标。
+all:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,build)
+endif
+
+# host is a deps companion no-op when used as `make deps host`.
+# host 在 `make deps host` 形式中作为 deps 的伴随空目标。
+host:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps host)
+endif
+
+# vldb is a deps companion no-op when used as `make deps vldb`.
+# vldb 在 `make deps vldb` 形式中作为 deps 的伴随空目标。
+vldb:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps vldb)
+endif
+
+# rtk is a deps companion no-op when used as `make deps rtk`.
+# rtk 在 `make deps rtk` 形式中作为 deps 的伴随空目标。
+rtk:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps rtk)
+endif
+
+# lua is a deps companion no-op when used as `make deps lua`.
+# lua 在 `make deps lua` 形式中作为 deps 的伴随空目标。
+lua:
+ifneq ($(filter deps,$(MAKECMDGOALS)),)
+	@:
+else
+	$(call route-command,deps lua)
+endif

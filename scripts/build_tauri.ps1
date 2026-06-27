@@ -57,6 +57,10 @@ $SourceResourcesDir = Join-Path $ProjectDir "crates\vulcan-runtime-assets\resour
 # SourceSystemPromptSkillsDir 指向仓库持有的系统 Agent Skills 目录。
 $SourceSystemPromptSkillsDir = Join-Path $ProjectDir "crates\vulcan-prompt-skills\src\assets\system"
 
+# SourceRtkBinDir points at the RTK executable installed by make deps.
+# SourceRtkBinDir 指向 make deps 安装的 RTK 可执行文件目录。
+$SourceRtkBinDir = Join-Path $ProjectDir "third_party\rtk\bin"
+
 Set-Location $ProjectDir
 
 # Copy-DirectoryContents overlays one source directory onto one output directory.
@@ -173,6 +177,14 @@ $OutputResourcesDir = Join-Path $ProjectDir "output\resources"
 # OutputSystemPromptSkillsDir 保存运行时直接读取的打包系统 Agent Skills。
 $OutputSystemPromptSkillsDir = Join-Path $OutputResourcesDir "prompt-skills\system"
 
+# OutputToolsDir stores packaged auxiliary host tool executables.
+# OutputToolsDir 保存打包后的辅助宿主工具可执行文件。
+$OutputToolsDir = Join-Path $ProjectDir "output\tools"
+
+# LegacyOutputRtkToolDir stores the previous nested RTK output directory for cleanup.
+# LegacyOutputRtkToolDir 保存旧版嵌套 RTK 输出目录，用于清理。
+$LegacyOutputRtkToolDir = Join-Path $OutputToolsDir "rtk"
+
 if (-not (Test-Path -LiteralPath $BuiltBinaryPath)) {
     throw "Built Tauri binary was not found: $BuiltBinaryPath"
 }
@@ -194,6 +206,19 @@ Copy-DirectoryContents -SourceDirectory $SourceResourcesDir -DestinationDirector
 
 Write-Host "==> Syncing packaged system Agent Skills..."
 Copy-DirectoryContents -SourceDirectory $SourceSystemPromptSkillsDir -DestinationDirectory $OutputSystemPromptSkillsDir -Clean
+
+if (Test-Path -LiteralPath $SourceRtkBinDir -PathType Container) {
+    Write-Host "==> Syncing packaged RTK host tool..."
+    if (Test-Path -LiteralPath $LegacyOutputRtkToolDir) {
+        Remove-Item -LiteralPath $LegacyOutputRtkToolDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $OutputToolsDir -Force | Out-Null
+    Get-ChildItem -LiteralPath $SourceRtkBinDir -File -Force | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $OutputToolsDir $_.Name) -Force
+    }
+} else {
+    Write-Host "==> RTK host tool not installed; run make deps-host to package it."
+}
 
 Write-Host "==> Done. Binary: $OutputBinaryPath"
 if ($IsWindowsPlatform) {

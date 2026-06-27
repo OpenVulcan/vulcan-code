@@ -147,12 +147,14 @@ function Invoke-TauriBuildAndRun {
 # DependencyKind 用于选择要初始化的依赖域。
 function Invoke-DependencyInstall {
     param(
-        [ValidateSet("host", "lua")]
+        [ValidateSet("host", "vldb", "rtk", "lua")]
         [string]$DependencyKind
     )
 
     $ScriptPath = switch ($DependencyKind) {
         "host" { $HostDepsScriptPath }
+        "vldb" { $HostDepsScriptPath }
+        "rtk"  { $HostDepsScriptPath }
         "lua"  { $LuaDepsScriptPath }
         default { throw "Unsupported dependency kind: $DependencyKind" }
     }
@@ -162,11 +164,16 @@ function Invoke-DependencyInstall {
     }
 
     $PowerShellCommand = Get-Command "pwsh" -ErrorAction SilentlyContinue
+    $ScriptArguments = @()
+    if ($DependencyKind -eq "vldb" -or $DependencyKind -eq "rtk") {
+        $ScriptArguments += $DependencyKind
+    }
+
     if ($PowerShellCommand) {
-        & $PowerShellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
+        & $PowerShellCommand.Source -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArguments
     }
     else {
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @ScriptArguments
     }
     if ($LASTEXITCODE -ne 0) {
         exit $LASTEXITCODE
@@ -200,6 +207,8 @@ function Show-Usage {
     Write-Host "  ./make run release # run Tauri/WebUI release build"
     Write-Host "  ./make deps        # install host + official LuaSkills runtime dependencies"
     Write-Host "  ./make deps host   # install host native dependencies only"
+    Write-Host "  ./make deps vldb   # install vldb-controller host dependency only"
+    Write-Host "  ./make deps rtk    # install RTK host dependency only"
     Write-Host "  ./make deps lua    # install official LuaSkills runtime dependencies only"
 }
 
@@ -210,6 +219,12 @@ $NormalizedMode = Normalize-Command -Value $CommandMode
 # NormalizedVariant stores the canonical secondary token used to distinguish release runs from default runs.
 # NormalizedVariant 用于保存规范化的二级标记，以区分 release 运行与默认运行。
 $NormalizedVariant = Normalize-Command -Value $CommandVariant
+
+if ($RemainingArgs.Count -gt 0) {
+    Write-Error ("Unsupported trailing arguments: {0}" -f ($RemainingArgs -join " "))
+    Show-Usage
+    exit 1
+}
 
 switch ($NormalizedMode) {
     "" {
@@ -268,6 +283,12 @@ switch ($NormalizedMode) {
             }
             "host" {
                 Invoke-DependencyInstall -DependencyKind "host"
+            }
+            "vldb" {
+                Invoke-DependencyInstall -DependencyKind "vldb"
+            }
+            "rtk" {
+                Invoke-DependencyInstall -DependencyKind "rtk"
             }
             "lua" {
                 Invoke-DependencyInstall -DependencyKind "lua"
