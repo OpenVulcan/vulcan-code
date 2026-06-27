@@ -206,6 +206,15 @@ export interface WorkspaceContextPanelProps {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Optional shared Git commit action label shown in the review toolbar.
+  // 审核工具栏中展示的可选共享 Git 提交动作标签。
+  gitCommitActionLabel?: string;
+  // Whether the shared Git commit action is currently running.
+  // 共享 Git 提交动作当前是否正在运行。
+  gitCommitActionBusy?: boolean;
+  // Opens the shared Git commit or push dialog.
+  // 打开共享 Git 提交或推送弹窗。
+  onOpenGitCommitAction?: () => void;
   // Loads one lazy workspace file directory.
   // 加载单个懒加载工作区文件目录。
   loadWorkspaceFileDirectory: (
@@ -591,11 +600,14 @@ function WorkspaceContextTabContent(args: {
             loadWorkspaceDiffSnapshot={args.props.loadWorkspaceDiffSnapshot}
             parseConversationBlocks={args.props.parseConversationBlocks}
             runWorkspaceGitFileAction={args.props.runWorkspaceGitFileAction}
+            gitCommitActionBusy={args.props.gitCommitActionBusy}
+            gitCommitActionLabel={args.props.gitCommitActionLabel}
             reviewFocusRequest={args.props.reviewFocusRequest}
             selectedConversationId={args.props.selectedConversationId}
             selectedDraftConversation={args.props.selectedDraftConversation}
             workbench={args.props.workbench}
             onCopyRawDiff={args.props.onCopyRawDiff}
+            onOpenGitCommitAction={args.props.onOpenGitCommitAction}
           />
         </React.Suspense>
       </div>

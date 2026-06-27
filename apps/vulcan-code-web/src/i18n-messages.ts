@@ -203,6 +203,10 @@ export type TranslationKey =
   | "gitCommitDialog.actionDone"
   | "gitCommitDialog.pushDone"
   | "gitCommitDialog.generating"
+  | "gitCommitDialog.preparingCommitContent"
+  | "gitCommitDialog.generatingCommitMessage"
+  | "gitCommitDialog.committing"
+  | "gitCommitDialog.pushingDetailed"
   | "gitCommitDialog.running"
   | "gitCommitDialog.pushing"
   | "gitCommitDialog.toolsTitle"
@@ -487,6 +491,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.actionDone": "Git 操作已完成。",
     "gitCommitDialog.pushDone": "Git 推送已完成。",
     "gitCommitDialog.generating": "生成中",
+    "gitCommitDialog.preparingCommitContent": "正在整理提交内容",
+    "gitCommitDialog.generatingCommitMessage": "正在生成提交提示词",
+    "gitCommitDialog.committing": "正在提交",
+    "gitCommitDialog.pushingDetailed": "正在推送",
     "gitCommitDialog.running": "执行中",
     "gitCommitDialog.pushing": "推送中",
     "gitCommitDialog.toolsTitle": "GIT 工具",
@@ -768,6 +776,10 @@ export const translations: Record<LocaleCode, Record<TranslationKey, string>> = 
     "gitCommitDialog.actionDone": "Git action completed.",
     "gitCommitDialog.pushDone": "Git push completed.",
     "gitCommitDialog.generating": "Generating",
+    "gitCommitDialog.preparingCommitContent": "Preparing changes",
+    "gitCommitDialog.generatingCommitMessage": "Generating commit message",
+    "gitCommitDialog.committing": "Committing",
+    "gitCommitDialog.pushingDetailed": "Pushing",
     "gitCommitDialog.running": "Running",
     "gitCommitDialog.pushing": "Pushing",
     "gitCommitDialog.toolsTitle": "Git tools",

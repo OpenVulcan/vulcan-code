@@ -161,6 +161,15 @@ export function WorkspaceResizableBody(props: {
   // Runs one file-level Git action for the right context panel.
   // 为右侧上下文面板执行一次文件级 Git 操作。
   runWorkspaceGitFileAction: WorkspaceContextPanelProps["runWorkspaceGitFileAction"];
+  // Optional shared Git commit action label shown in the review toolbar.
+  // 审核工具栏中展示的可选共享 Git 提交动作标签。
+  gitCommitActionLabel?: string;
+  // Whether the shared Git commit action is currently running.
+  // 共享 Git 提交动作当前是否正在运行。
+  gitCommitActionBusy?: boolean;
+  // Opens the shared Git commit or push dialog.
+  // 打开共享 Git 提交或推送弹窗。
+  onOpenGitCommitAction?: () => void;
   // Loads one lazy workspace file directory for the right context panel.
   // 为右侧上下文面板加载单个懒加载工作区文件目录。
   loadWorkspaceFileDirectory: WorkspaceContextPanelProps["loadWorkspaceFileDirectory"];
@@ -371,6 +380,9 @@ export function WorkspaceResizableBody(props: {
               loadWorkspaceDiffSearch={props.loadWorkspaceDiffSearch}
               loadWorkspaceDiffSnapshot={props.loadWorkspaceDiffSnapshot}
               runWorkspaceGitFileAction={props.runWorkspaceGitFileAction}
+              gitCommitActionBusy={props.gitCommitActionBusy}
+              gitCommitActionLabel={props.gitCommitActionLabel}
+              onOpenGitCommitAction={props.onOpenGitCommitAction}
             />
           </div>
         ) : null}

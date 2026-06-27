@@ -476,6 +476,12 @@ struct GitCommitActionResponse {
     /// Current branch name after the operation.
     /// 操作完成后的当前分支名称。
     branch_name: Option<String>,
+    /// Short hash for the HEAD commit affected by the operation.
+    /// 本次操作涉及的 HEAD 提交短哈希。
+    commit_hash: Option<String>,
+    /// Commit message subject for the HEAD commit affected by the operation.
+    /// 本次操作涉及的 HEAD 提交信息标题。
+    commit_message: Option<String>,
 }
 
 /// User prompt edit submit request sent by the WebUI transcript action.
@@ -1581,6 +1587,18 @@ struct WebuiGitCommitSummary {
     /// Relative commit time.
     /// 相对提交时间。
     relative_time: String,
+}
+
+/// Compact identity for one Git commit used by action completion notices.
+/// Git 操作完成提示使用的紧凑提交身份信息。
+#[derive(Debug, Clone)]
+struct WebuiGitCommitIdentity {
+    /// Short commit hash shown to users.
+    /// 展示给用户的短提交哈希。
+    hash: String,
+    /// First-line commit message subject.
+    /// 提交信息首行标题。
+    subject: String,
 }
 
 /// Shared process-wide gate for WebUI workspace persistence.
@@ -8025,6 +8043,11 @@ async fn service_run_git_commit_action(
     }
 
     let branch_name = load_webui_current_git_branch(&repository_root)?;
+    let head_commit = if committed || pushed {
+        load_webui_head_commit_identity(&repository_root)?
+    } else {
+        None
+    };
     if summary_rows.is_empty() {
         summary_rows.push(String::from("没有执行提交或推送操作。"));
     }
@@ -8033,6 +8056,8 @@ async fn service_run_git_commit_action(
         committed,
         pushed,
         branch_name,
+        commit_hash: head_commit.as_ref().map(|commit| commit.hash.clone()),
+        commit_message: head_commit.map(|commit| commit.subject),
     })
 }
 
@@ -31411,6 +31436,27 @@ fn load_webui_recent_commits(repository_root: &Path) -> Result<Vec<WebuiGitCommi
         });
     }
     Ok(commits)
+}
+
+/// Loads the current HEAD commit identity for Git action completion notices.
+/// 加载当前 HEAD 提交身份信息，用于 Git 操作完成提示。
+fn load_webui_head_commit_identity(
+    repository_root: &Path,
+) -> Result<Option<WebuiGitCommitIdentity>, String> {
+    let output =
+        run_webui_git_command(repository_root, &["log", "-1", "--pretty=format:%h%x1f%s"])?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let fields = text.trim().split('\x1f').collect::<Vec<_>>();
+    if fields.len() < 2 || fields[0].trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(WebuiGitCommitIdentity {
+        hash: fields[0].trim().to_string(),
+        subject: fields[1].trim().to_string(),
+    }))
 }
 
 /// Checks whether one Git ref exists.

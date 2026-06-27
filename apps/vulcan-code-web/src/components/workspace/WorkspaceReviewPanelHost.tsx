@@ -135,6 +135,15 @@ export function WorkspaceReviewPanelHost(props: {
     conversationId: string | null,
     request: WorkspaceGitFileActionRequest,
   ) => Promise<WorkspaceGitFileActionResult>;
+  // Optional shared Git commit action label shown in the review toolbar.
+  // 审核工具栏中展示的可选共享 Git 提交动作标签。
+  gitCommitActionLabel?: string;
+  // Whether the shared Git commit action is currently running.
+  // 共享 Git 提交动作当前是否正在运行。
+  gitCommitActionBusy?: boolean;
+  // Opens the shared Git commit or push dialog.
+  // 打开共享 Git 提交或推送弹窗。
+  onOpenGitCommitAction?: () => void;
 }) {
   // t translates the review panel shell labels.
   // t 翻译审核面板外壳标签。
@@ -612,8 +621,11 @@ export function WorkspaceReviewPanelHost(props: {
       onLoadFileDetail={activeWorkspaceReviewSnapshot ? handleLoadWorkspaceDiffFileDetail : undefined}
       onSearchWorkspaceDiff={activeWorkspaceReviewSnapshot ? handleSearchWorkspaceDiff : undefined}
       onCopyRaw={props.onCopyRawDiff}
+      gitCommitActionBusy={props.gitCommitActionBusy}
+      gitCommitActionLabel={props.gitCommitActionLabel}
       gitFileActionPending={workspaceGitActionPending}
       onGitFileAction={activeWorkspaceReviewSnapshot ? handleWorkspaceGitFileAction : undefined}
+      onOpenGitCommitAction={props.onOpenGitCommitAction}
       onRefresh={handleRefreshWorkspaceDiff}
       onSelectionChange={handleDiffReviewSelectionChange}
     />

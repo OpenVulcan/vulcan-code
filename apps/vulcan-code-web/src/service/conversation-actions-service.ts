@@ -187,6 +187,12 @@ export interface GitCommitActionResponse {
   // Current branch after the action.
   // 操作后的当前分支。
   branchName?: string | null;
+  // Short hash for the commit affected by the action.
+  // 本次操作涉及的提交短哈希。
+  commitHash?: string | null;
+  // Commit message subject for the commit affected by the action.
+  // 本次操作涉及的提交信息标题。
+  commitMessage?: string | null;
 }
 
 // generateGitCommitMessage asks the backend to generate a commit message for the selected session repository.

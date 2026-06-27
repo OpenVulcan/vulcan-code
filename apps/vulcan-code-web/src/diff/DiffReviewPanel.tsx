@@ -190,9 +190,18 @@ export function DiffReviewPanel(props: {
   // Whether a Git file action is currently running.
   // 是否有 Git 文件操作正在运行。
   gitFileActionPending?: boolean;
+  // Optional shared Git commit action label shown in the toolbar.
+  // 工具栏中展示的可选共享 Git 提交动作标签。
+  gitCommitActionLabel?: string;
+  // Whether the shared Git commit action is currently running.
+  // 共享 Git 提交动作当前是否正在运行。
+  gitCommitActionBusy?: boolean;
   // Optional file-level Git action dispatcher for live workspace diffs.
   // 用于实时工作区 diff 的可选文件级 Git 操作派发器。
   onGitFileAction?: (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => void | Promise<void>;
+  // Opens the shared Git commit or push dialog.
+  // 打开共享 Git 提交或推送弹窗。
+  onOpenGitCommitAction?: () => void;
 }) {
   const fileListRef = React.useRef<HTMLDivElement | null>(null);
   const summarySearchRequestSeqRef = React.useRef(0);
@@ -633,6 +642,9 @@ export function DiffReviewPanel(props: {
           setActiveSearchIndex(0);
         }}
         onSearchSubmit={handleSearchNext}
+        gitCommitActionBusy={props.gitCommitActionBusy}
+        gitCommitActionLabel={props.gitCommitActionLabel}
+        onOpenGitCommitAction={props.onOpenGitCommitAction}
         onSelectionChange={props.onSelectionChange}
         onRenderPreferencesChange={setRenderPreferences}
         onViewModeChange={setViewMode}

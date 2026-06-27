@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, ChevronDown, ChevronUp, Columns2, Copy, Diff, GitBranch, GitCompareArrows, ListCollapse, MoreHorizontal, RefreshCw, Rows3, Search, SquarePlus, WrapText } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Columns2, Copy, Diff, GitBranch, GitCommitHorizontal, GitCompareArrows, ListCollapse, LoaderCircle, MoreHorizontal, RefreshCw, Rows3, Search, SquarePlus, WrapText } from "lucide-react";
 
 import {
   DropdownMenu,
@@ -96,6 +96,15 @@ export function DiffPanelToolbar(props: {
   // Search submit handler used by Enter navigation.
   // Enter 导航使用的搜索提交处理器。
   onSearchSubmit?: () => void;
+  // Optional shared Git commit action label shown before search controls.
+  // 搜索控件前展示的可选共享 Git 提交动作标签。
+  gitCommitActionLabel?: string;
+  // Whether the shared Git commit action is currently running.
+  // 共享 Git 提交动作当前是否正在运行。
+  gitCommitActionBusy?: boolean;
+  // Opens the shared Git commit or push dialog.
+  // 打开共享 Git 提交或推送弹窗。
+  onOpenGitCommitAction?: () => void;
   // Visual diff layout mode change handler.
   // diff 视觉布局模式变更处理器。
   onViewModeChange: (viewMode: DiffViewMode) => void;
@@ -158,6 +167,21 @@ export function DiffPanelToolbar(props: {
         >
           {props.viewMode === "split" ? <Rows3 size={12} /> : <Columns2 size={12} />}
         </button>
+        {props.onOpenGitCommitAction ? (
+          <button
+            className="diff-icon-button"
+            disabled={Boolean(props.gitCommitActionBusy)}
+            onClick={props.onOpenGitCommitAction}
+            title={props.gitCommitActionLabel}
+            type="button"
+          >
+            {props.gitCommitActionBusy ? (
+              <LoaderCircle className="diff-refresh-icon loading" size={12} />
+            ) : (
+              <GitCommitHorizontal size={12} />
+            )}
+          </button>
+        ) : null}
         {props.onSearchQueryChange ? (
           <DiffSearchControl
             canSearchNext={Boolean(props.canSearchNext)}

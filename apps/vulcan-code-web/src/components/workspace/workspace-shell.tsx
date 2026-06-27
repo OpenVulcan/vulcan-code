@@ -1,7 +1,9 @@
 import React from "react";
 import { ChatArea } from "@/components/conversation/chat-area";
 import {
+  ConversationSessionCommitDialog,
   ConversationSessionTodolistPanel,
+  type ConversationSessionCommitBusyState,
   type ConversationSessionReviewSummary,
 } from "@/components/conversation/session-todolist-panel";
 import type {
@@ -654,6 +656,12 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
   // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
   const [sessionReviewSummary, setSessionReviewSummary] = React.useState<ConversationSessionReviewSummary | null>(null);
+  // gitCommitDialogOpen stores the shared commit dialog state across chat and review surfaces.
+  // gitCommitDialogOpen 保存聊天区与审核区共享的提交弹窗状态。
+  const [gitCommitDialogOpen, setGitCommitDialogOpen] = React.useState(false);
+  // gitCommitBusyState stores the shared Git action phase shown by every commit trigger.
+  // gitCommitBusyState 保存每个提交入口展示的共享 Git 操作阶段。
+  const [gitCommitBusyState, setGitCommitBusyState] = React.useState<ConversationSessionCommitBusyState>(null);
   // notifyConversationLayoutWillChange lets the active chat preserve scroll before shell geometry changes.
   // notifyConversationLayoutWillChange 让当前会话在外壳几何变化前保留滚动位置。
   const notifyConversationLayoutWillChange = React.useCallback(() => {
@@ -831,10 +839,17 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
     ? props.workbench.sessionTodolist
     : null;
+  // sessionGitCommitActionVisible keeps shared commit triggers visible for actionable or running Git work.
+  // sessionGitCommitActionVisible 在存在可操作或正在执行的 Git 工作时保持共享提交入口可见。
+  const sessionGitCommitActionVisible = Boolean(sessionReviewSummary && (
+    sessionReviewSummary.changedFiles > 0
+    || sessionReviewSummary.unpushedCommits > 0
+    || gitCommitBusyState
+  ));
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
-    Boolean(sessionReviewSummary && (sessionReviewSummary.changedFiles > 0 || sessionReviewSummary.unpushedCommits > 0)) || visibleSessionTerminalSessions.length > 0
+    sessionGitCommitActionVisible || visibleSessionTerminalSessions.length > 0
   );
 
   // refreshSessionReviewSummary reloads the compact Git summary for the selected chat project.
@@ -897,6 +912,13 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
     selectedChatProject?.id,
     selectedChatProject?.path,
   ]);
+
+  React.useEffect(() => {
+    if (!hasSelectedChatConversation || !sessionReviewSummary) {
+      setGitCommitDialogOpen(false);
+      setGitCommitBusyState(null);
+    }
+  }, [hasSelectedChatConversation, sessionReviewSummary]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -1157,16 +1179,15 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       onLayoutModeWillChange: notifyConversationLayoutWillChange,
       panel: sessionToolPanelVisible ? (
         <ConversationSessionTodolistPanel
-          commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
-          conversationId={props.selectedConversationId}
+          commitBusyState={gitCommitBusyState}
+          commitDialogOpen={gitCommitDialogOpen}
           expanded={sessionToolExpanded}
           reviewSummary={sessionReviewSummary}
           terminalSessions={sessionTerminalSessions}
           todolist={null}
-          workspacePath={selectedChatProject?.path ?? null}
+          onCommitDialogOpenChange={setGitCommitDialogOpen}
           onExpandedChange={handleSessionToolExpandedChange}
           onOpenReviewChanges={handleOpenReviewChanges}
-          onRefreshReviewSummary={refreshSessionReviewSummary}
           onStopCommandSession={props.onStopCommandSession}
         />
       ) : null,
@@ -1239,6 +1260,9 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           runWorkspaceGitFileAction={props.onRunWorkspaceGitFileAction}
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
+          gitCommitActionBusy={Boolean(gitCommitBusyState)}
+          gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
+          onOpenGitCommitAction={sessionGitCommitActionVisible ? () => setGitCommitDialogOpen(true) : undefined}
         >
           {pageDescriptor.content}
         </WorkspaceResizableBody>
@@ -1248,6 +1272,19 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           </div>
         ) : null}
       </SidebarInset>
+      {sessionGitCommitActionVisible && sessionReviewSummary ? (
+        <ConversationSessionCommitDialog
+          busyState={gitCommitBusyState}
+          commitBranchPrefix={props.workbench.gitCommit?.newBranchPrefix ?? "vulcan/"}
+          conversationId={props.selectedConversationId}
+          open={gitCommitDialogOpen}
+          reviewSummary={sessionReviewSummary}
+          workspacePath={selectedChatProject?.path ?? null}
+          onBusyStateChange={setGitCommitBusyState}
+          onOpenChange={setGitCommitDialogOpen}
+          onRefreshReviewSummary={refreshSessionReviewSummary}
+        />
+      ) : null}
     </div>
   );
 }
