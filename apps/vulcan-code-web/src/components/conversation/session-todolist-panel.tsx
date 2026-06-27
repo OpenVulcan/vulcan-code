@@ -100,6 +100,10 @@ export interface ConversationSessionReviewSummary {
 // ConversationSessionCommitTarget 标识本地提交草稿的目标分支位置。
 type ConversationSessionCommitTarget = "current" | "new";
 
+// ConversationSessionCommitActionId identifies one runnable action in the commit dialog.
+// ConversationSessionCommitActionId 标识提交弹窗内的单个可执行动作。
+type ConversationSessionCommitActionId = "commit" | "commitPush" | "push";
+
 // ConversationSessionCommitBusyState describes the Git action phase shown on shared commit triggers.
 // ConversationSessionCommitBusyState 描述共享提交入口展示的 Git 动作阶段。
 export type ConversationSessionCommitBusyState = {
@@ -784,6 +788,16 @@ function ConversationSessionCommitPanel(props: {
   // commitMessage stores the manually typed commit message draft.
   // commitMessage 保存用户手动输入的提交信息草稿。
   const [commitMessage, setCommitMessage] = React.useState("");
+  // lockedAction stores the action confirmed by Ctrl+Enter.
+  // lockedAction 保存 Ctrl+Enter 当前确认执行的动作。
+  const [lockedAction, setLockedAction] = React.useState<ConversationSessionCommitActionId>("commit");
+  // actionButtonRefs store focus targets for keyboard action locking.
+  // actionButtonRefs 保存键盘动作锁定使用的焦点目标。
+  const actionButtonRefs = React.useRef<Record<ConversationSessionCommitActionId, HTMLButtonElement | null>>({
+    commit: null,
+    commitPush: null,
+    push: null,
+  });
   const currentBranchName = props.reviewSummary.branchName
     ? conversationSessionBranchDisplayName(props.reviewSummary.branchName)
     : t("gitCommitDialog.currentBranch");
@@ -912,8 +926,87 @@ function ConversationSessionCommitPanel(props: {
     }
   }, [props, t]);
 
+  const commitActionChoices = React.useMemo(() => ([
+    {
+      disabled: commitActionDisabled,
+      id: "commit" as const,
+      run: () => {
+        void runCommitAction(false);
+      },
+    },
+    {
+      disabled: commitActionDisabled,
+      id: "commitPush" as const,
+      run: () => {
+        void runCommitAction(true);
+      },
+    },
+    {
+      disabled: pushOnlyActionDisabled,
+      id: "push" as const,
+      run: () => {
+        void runPushAction();
+      },
+    },
+  ]), [commitActionDisabled, pushOnlyActionDisabled, runCommitAction, runPushAction]);
+
+  React.useEffect(() => {
+    const lockedChoice = commitActionChoices.find((choice) => choice.id === lockedAction);
+    if (lockedChoice && !lockedChoice.disabled) {
+      return;
+    }
+    const nextChoice = commitActionChoices.find((choice) => !choice.disabled);
+    if (nextChoice) {
+      setLockedAction(nextChoice.id);
+    }
+  }, [commitActionChoices, lockedAction]);
+
+  // moveLockedCommitAction rotates the keyboard-confirmed action among enabled choices.
+  // moveLockedCommitAction 在可用动作之间轮换键盘确认的锁定项。
+  const moveLockedCommitAction = React.useCallback((direction: -1 | 1) => {
+    const enabledChoices = commitActionChoices.filter((choice) => !choice.disabled);
+    if (!enabledChoices.length) {
+      return;
+    }
+    const currentIndex = enabledChoices.findIndex((choice) => choice.id === lockedAction);
+    const safeIndex = currentIndex >= 0 ? currentIndex : 0;
+    const nextIndex = (safeIndex + direction + enabledChoices.length) % enabledChoices.length;
+    const nextActionId = enabledChoices[nextIndex].id;
+    setBranchMenuOpen(false);
+    setLockedAction(nextActionId);
+    actionButtonRefs.current[nextActionId]?.focus();
+  }, [commitActionChoices, lockedAction]);
+
+  // executeLockedCommitAction runs the action currently selected for Ctrl+Enter.
+  // executeLockedCommitAction 执行当前为 Ctrl+Enter 锁定的动作。
+  const executeLockedCommitAction = React.useCallback(() => {
+    const choice = commitActionChoices.find((candidate) => candidate.id === lockedAction);
+    if (!choice || choice.disabled) {
+      return;
+    }
+    choice.run();
+  }, [commitActionChoices, lockedAction]);
+
+  // handleCommitPanelKeyDown applies dialog-level shortcuts without stealing text editing arrows.
+  // handleCommitPanelKeyDown 应用弹窗级快捷键，同时不抢占文本编辑方向键。
+  const handleCommitPanelKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      event.preventDefault();
+      executeLockedCommitAction();
+      return;
+    }
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+      return;
+    }
+    if (!commitPanelTargetAllowsActionNavigation(event.target)) {
+      return;
+    }
+    event.preventDefault();
+    moveLockedCommitAction(event.key === "ArrowUp" ? -1 : 1);
+  }, [executeLockedCommitAction, moveLockedCommitAction]);
+
   return (
-    <div className="conversation-session-commit-panel">
+    <div className="conversation-session-commit-panel" onKeyDown={handleCommitPanelKeyDown}>
       <div className="conversation-session-commit-header">
         <div className="conversation-session-commit-target">
           <button
@@ -986,12 +1079,6 @@ function ConversationSessionCommitPanel(props: {
         onChange={(event) => {
           setCommitMessage(event.currentTarget.value);
         }}
-        onKeyDown={(event) => {
-          if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-            event.preventDefault();
-            void runCommitAction(false);
-          }
-        }}
         placeholder={t("gitCommitDialog.messagePlaceholder")}
         rows={2}
         value={commitMessage}
@@ -1007,32 +1094,49 @@ function ConversationSessionCommitPanel(props: {
       </label>
       <div className="conversation-session-commit-actions">
         <button
-          className="conversation-session-commit-action primary"
+          aria-pressed={lockedAction === "commit"}
+          className={cn("conversation-session-commit-action", lockedAction === "commit" && "locked")}
           disabled={commitActionDisabled}
           onClick={() => void runCommitAction(false)}
+          onFocus={() => setLockedAction("commit")}
+          ref={(element) => {
+            actionButtonRefs.current.commit = element;
+          }}
           type="button"
         >
           <GitCommitHorizontal size={15} />
           <span>{t("gitCommitDialog.commit")}</span>
-          <kbd>Ctrl+↵</kbd>
+          {lockedAction === "commit" ? <kbd>Ctrl+↵</kbd> : null}
         </button>
         <button
-          className="conversation-session-commit-action"
+          aria-pressed={lockedAction === "commitPush"}
+          className={cn("conversation-session-commit-action", lockedAction === "commitPush" && "locked")}
           disabled={commitActionDisabled}
           onClick={() => void runCommitAction(true)}
+          onFocus={() => setLockedAction("commitPush")}
+          ref={(element) => {
+            actionButtonRefs.current.commitPush = element;
+          }}
           type="button"
         >
           <CloudUpload size={15} />
           <span>{t("gitCommitDialog.commitAndPush")}</span>
+          {lockedAction === "commitPush" ? <kbd>Ctrl+↵</kbd> : null}
         </button>
         <button
-          className="conversation-session-commit-action"
+          aria-pressed={lockedAction === "push"}
+          className={cn("conversation-session-commit-action", lockedAction === "push" && "locked")}
           disabled={pushOnlyActionDisabled}
           onClick={() => void runPushAction()}
+          onFocus={() => setLockedAction("push")}
+          ref={(element) => {
+            actionButtonRefs.current.push = element;
+          }}
           type="button"
         >
           <CloudUpload size={15} />
           <span>{t("gitCommitDialog.push")}</span>
+          {lockedAction === "push" ? <kbd>Ctrl+↵</kbd> : null}
         </button>
       </div>
     </div>
@@ -1049,6 +1153,16 @@ function showGitCommitActionToast(response: GitCommitActionResponse | null | und
   toast.success(title, {
     description: details.length > 0 ? details.join("\n") : response?.summary,
   });
+}
+
+// commitPanelTargetAllowsActionNavigation returns whether arrow keys should switch locked actions.
+// commitPanelTargetAllowsActionNavigation 返回方向键是否应切换锁定动作。
+function commitPanelTargetAllowsActionNavigation(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return true;
+  }
+  const tagName = target.tagName.toLowerCase();
+  return tagName !== "select" && !target.isContentEditable;
 }
 
 // PlusIcon renders the compact plus mark used by the branch target menu.

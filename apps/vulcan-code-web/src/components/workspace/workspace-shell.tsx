@@ -652,7 +652,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const [memoryMenuExpanded, setMemoryMenuExpanded] = React.useState(true);
   // sessionToolExpanded stores the shared adaptive menu state for the chat tool panel.
   // sessionToolExpanded 保存会话工具共享自适应面板展开状态。
-  const [sessionToolExpanded, setSessionToolExpanded] = React.useState(true);
+  const [sessionToolExpanded, setSessionToolExpanded] = React.useState(false);
   // sessionReviewSummary stores compact Git review state for the selected chat tool panel.
   // sessionReviewSummary 保存当前会话工具面板使用的紧凑 Git 审查状态。
   const [sessionReviewSummary, setSessionReviewSummary] = React.useState<ConversationSessionReviewSummary | null>(null);
@@ -839,13 +839,18 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   const sessionTodolist = hasSelectedChatConversation && props.workbench.sessionTodolist?.items.length
     ? props.workbench.sessionTodolist
     : null;
-  // sessionGitCommitActionVisible keeps shared commit triggers visible for actionable or running Git work.
-  // sessionGitCommitActionVisible 在存在可操作或正在执行的 Git 工作时保持共享提交入口可见。
-  const sessionGitCommitActionVisible = Boolean(sessionReviewSummary && (
+  // sessionGitRepositoryAvailable tracks whether the current chat project resolved as a Git repository.
+  // sessionGitRepositoryAvailable 标记当前聊天项目是否已解析为 Git 仓库。
+  const sessionGitRepositoryAvailable = Boolean(sessionReviewSummary);
+  // sessionGitCommitActionAvailable tracks whether commit or push has a runnable target.
+  // sessionGitCommitActionAvailable 标记提交或推送是否存在可执行目标。
+  const sessionGitCommitActionAvailable = Boolean(sessionReviewSummary && (
     sessionReviewSummary.changedFiles > 0
     || sessionReviewSummary.unpushedCommits > 0
-    || gitCommitBusyState
   ));
+  // sessionGitCommitActionVisible keeps shared commit triggers visible for Git repositories or running Git work.
+  // sessionGitCommitActionVisible 在 Git 仓库或正在执行 Git 工作时保持共享提交入口可见。
+  const sessionGitCommitActionVisible = sessionGitRepositoryAvailable || Boolean(gitCommitBusyState);
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
@@ -1261,6 +1266,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
           onRunVmmAction={props.memoryActions.onRunVmmAction}
           onTrace={props.onTrace}
           gitCommitActionBusy={Boolean(gitCommitBusyState)}
+          gitCommitActionDisabled={!sessionGitCommitActionAvailable}
           gitCommitActionLabel={gitCommitBusyState?.label ?? t("gitCommitDialog.open")}
           onOpenGitCommitAction={sessionGitCommitActionVisible ? () => setGitCommitDialogOpen(true) : undefined}
         >

@@ -196,6 +196,9 @@ export function DiffReviewPanel(props: {
   // Whether the shared Git commit action is currently running.
   // 共享 Git 提交动作当前是否正在运行。
   gitCommitActionBusy?: boolean;
+  // Whether the shared Git commit action is currently unavailable.
+  // 共享 Git 提交动作当前是否不可用。
+  gitCommitActionDisabled?: boolean;
   // Optional file-level Git action dispatcher for live workspace diffs.
   // 用于实时工作区 diff 的可选文件级 Git 操作派发器。
   onGitFileAction?: (action: WorkspaceGitFileActionKind, file?: DiffFile | null) => void | Promise<void>;
@@ -643,6 +646,7 @@ export function DiffReviewPanel(props: {
         }}
         onSearchSubmit={handleSearchNext}
         gitCommitActionBusy={props.gitCommitActionBusy}
+        gitCommitActionDisabled={props.gitCommitActionDisabled}
         gitCommitActionLabel={props.gitCommitActionLabel}
         onOpenGitCommitAction={props.onOpenGitCommitAction}
         onSelectionChange={props.onSelectionChange}

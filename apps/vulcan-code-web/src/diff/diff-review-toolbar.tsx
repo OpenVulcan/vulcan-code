@@ -102,6 +102,9 @@ export function DiffPanelToolbar(props: {
   // Whether the shared Git commit action is currently running.
   // 共享 Git 提交动作当前是否正在运行。
   gitCommitActionBusy?: boolean;
+  // Whether the shared Git commit action is currently unavailable.
+  // 共享 Git 提交动作当前是否不可用。
+  gitCommitActionDisabled?: boolean;
   // Opens the shared Git commit or push dialog.
   // 打开共享 Git 提交或推送弹窗。
   onOpenGitCommitAction?: () => void;
@@ -170,7 +173,7 @@ export function DiffPanelToolbar(props: {
         {props.onOpenGitCommitAction ? (
           <button
             className="diff-icon-button"
-            disabled={Boolean(props.gitCommitActionBusy)}
+            disabled={Boolean(props.gitCommitActionBusy || props.gitCommitActionDisabled)}
             onClick={props.onOpenGitCommitAction}
             title={props.gitCommitActionLabel}
             type="button"
