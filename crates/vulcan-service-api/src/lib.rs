@@ -307,7 +307,11 @@ impl Default for GitCommitSettingsSummary {
 /// Describes the model selection used for automatic Git commit summaries.
 /// 描述自动 Git 提交总结使用的模型选择。
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum GitCommitSummaryModelSelectionSummary {
     /// Follow the model selected by the session that owns the commit action.
     /// 跟随发起提交动作的会话当前模型。

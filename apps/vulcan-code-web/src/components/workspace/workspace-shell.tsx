@@ -834,7 +834,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
   // sessionToolPanelVisible opens the floating chat tool panel only when it has renderable content.
   // sessionToolPanelVisible 仅在浮动工具面板存在可渲染内容时打开。
   const sessionToolPanelVisible = hasSelectedChatConversation && (
-    Boolean(sessionReviewSummary && sessionReviewSummary.changedFiles > 0) || visibleSessionTerminalSessions.length > 0
+    Boolean(sessionReviewSummary && (sessionReviewSummary.changedFiles > 0 || sessionReviewSummary.unpushedCommits > 0)) || visibleSessionTerminalSessions.length > 0
   );
 
   // refreshSessionReviewSummary reloads the compact Git summary for the selected chat project.
@@ -888,6 +888,7 @@ function WorkspaceShellContent(props: WorkspaceShellProps) {
       unstagedAdditions: unstagedSnapshot?.additions ?? 0,
       unstagedChangedFiles: unstagedSnapshot?.changedFiles ?? 0,
       unstagedDeletions: unstagedSnapshot?.deletions ?? 0,
+      unpushedCommits: primarySnapshot?.currentBranchUnpushedCommits ?? 0,
     });
   }, [
     hasSelectedChatConversation,

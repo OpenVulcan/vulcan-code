@@ -551,6 +551,9 @@ export interface DiffPanelSnapshot {
   // Current Git branch name when available.
   // 可用时的当前 Git 分支名称。
   currentBranch?: string | null;
+  // Number of current-branch commits that have not reached the remote view.
+  // 当前分支尚未进入远端视图的提交数量。
+  currentBranchUnpushedCommits?: number | null;
   // Default mainline branch resolved by the backend.
   // 后端解析出的默认主线分支。
   defaultBranch?: string | null;
@@ -607,6 +610,9 @@ export interface WorkspaceDiffSnapshotResponse {
   // Current Git branch name when available.
   // 可用时的当前 Git 分支名称。
   currentBranch?: string | null;
+  // Number of current-branch commits that have not reached the remote view.
+  // 当前分支尚未进入远端视图的提交数量。
+  currentBranchUnpushedCommits?: number | null;
   // Default mainline branch resolved by the backend.
   // 后端解析出的默认主线分支。
   defaultBranch?: string | null;

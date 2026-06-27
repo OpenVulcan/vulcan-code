@@ -111,11 +111,11 @@ use vulcan_core::types::{
     ProviderUsageSnapshot,
 };
 use vulcan_provider_config::config::{
-    AiCapabilityVendorConnectionMode, AiToolKind, PersistedAiCapabilityTargetBinding,
-    GitCommitSummaryModelSelection, PersistedAiCapabilityVendorEntry,
-    PersistedLuaSkillToolRegistrationState,
-    PersistedMcpOAuthConfig, PersistedMcpServerEntry, PersistedMcpTransportKind,
-    PersistedPromptSkillState, PersistedProviderEntry, PersistedProviderOptions, ProviderFieldKey,
+    AiCapabilityVendorConnectionMode, AiToolKind, GitCommitSummaryModelSelection,
+    PersistedAiCapabilityTargetBinding, PersistedAiCapabilityVendorEntry,
+    PersistedLuaSkillToolRegistrationState, PersistedMcpOAuthConfig, PersistedMcpServerEntry,
+    PersistedMcpTransportKind, PersistedPromptSkillState, PersistedProviderEntry,
+    PersistedProviderOptions, ProviderFieldKey,
 };
 use vulcan_service_api::{
     AgentSkillLoadIssueSummary, AgentSkillSummary, AgentSkillsCatalogSummary, AiCapabilitySummary,
@@ -441,7 +441,11 @@ struct GitCommitActionRequest {
 /// Git commit target selected by the WebUI commit dialog.
 /// WebUI 提交弹窗选择的 Git 提交目标。
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 enum GitCommitActionTargetRequest {
     /// Commit directly on the current branch.
     /// 直接提交到当前分支。
@@ -1213,6 +1217,9 @@ struct WebuiWorkspaceDiffSnapshot {
     /// Current Git branch name when available.
     /// 可用时的当前 Git 分支名称。
     current_branch: Option<String>,
+    /// Number of current-branch commits that are not present on the configured remote view.
+    /// 当前分支中尚未出现在远端视图中的提交数量。
+    current_branch_unpushed_commits: usize,
     /// Default mainline branch resolved by the backend.
     /// 后端解析出的默认主线分支。
     default_branch: Option<String>,
@@ -7851,7 +7858,8 @@ async fn service_generate_git_commit_message(
         .conversation_id
         .parse::<SessionId>()
         .map_err(|error| format!("会话标识无效，无法生成提交信息：{error}"))?;
-    let repository_root = resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let repository_root =
+        resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
     let (agent_runtime, provider_id, model_id, reasoning_effort, extra_prompt) = {
         let guard = state
             .lock()
@@ -7861,16 +7869,18 @@ async fn service_generate_git_commit_message(
             .as_ref()
             .ok_or_else(|| String::from("service is still starting; agent runtime is not ready"))?
             .clone();
-        let workspace_snapshot = guard
-            .workspace_snapshot
-            .as_ref()
-            .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+        let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+            String::from("service is still starting; workspace snapshot is not ready")
+        })?;
         let runtime_state = workspace_snapshot
             .session_runtime_state
             .get(&session_id)
             .ok_or_else(|| String::from("无法找到提交所属会话的运行时状态。"))?;
         let (provider_id, model_id) = resolve_git_commit_summary_model(
-            &agent_runtime.provider_configuration.git_commit.summary_model,
+            &agent_runtime
+                .provider_configuration
+                .git_commit
+                .summary_model,
             runtime_state,
             &agent_runtime.provider_configuration,
         )?;
@@ -7942,7 +7952,8 @@ async fn service_run_git_commit_action(
         .parse::<SessionId>()
         .map_err(|error| format!("会话标识无效，无法执行提交：{error}"))?;
     validate_git_commit_action_session_exists(&state, session_id)?;
-    let repository_root = resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
+    let repository_root =
+        resolve_webui_repository_root_from_workspace_text(&request.workspace_path)?;
     let commit_message = request.message.trim();
     if commit_message.is_empty() {
         if request.include_unstaged {
@@ -7950,6 +7961,9 @@ async fn service_run_git_commit_action(
         }
         if matches!(request.target, GitCommitActionTargetRequest::New { .. }) {
             return Err(String::from("创建新分支需要同时创建提交。"));
+        }
+        if request.push && load_webui_current_branch_unpushed_commit_count(&repository_root)? == 0 {
+            return Err(String::from("当前分支没有已提交但未推送的内容。"));
         }
     }
     let mut committed = false;
@@ -7961,8 +7975,10 @@ async fn service_run_git_commit_action(
         GitCommitActionTargetRequest::New { branch_name } => {
             let branch_name = normalize_git_commit_action_branch_name(&branch_name)?;
             ensure_git_commit_action_new_branch_available(&repository_root, &branch_name)?;
-            let output =
-                run_webui_git_mutating_command(&repository_root, &["checkout", "-b", &branch_name])?;
+            let output = run_webui_git_mutating_command(
+                &repository_root,
+                &["checkout", "-b", &branch_name],
+            )?;
             if !output.status.success() {
                 return Err(format_webui_git_error("git checkout -b", &output));
             }
@@ -15336,9 +15352,10 @@ fn validate_git_commit_summary_model_selection(
             provider_id,
             model_id,
         } => {
-            let exists = provider_config::effective_model_choices(&provider_id, provider_configuration)
-                .into_iter()
-                .any(|model| model.id == model_id);
+            let exists =
+                provider_config::effective_model_choices(&provider_id, provider_configuration)
+                    .into_iter()
+                    .any(|model| model.id == model_id);
             if exists {
                 Ok(())
             } else {
@@ -15385,7 +15402,11 @@ fn resolve_git_commit_summary_model(
             provider_id,
             model_id,
         } => {
-            validate_git_commit_summary_model_pair(&provider_id, &model_id, provider_configuration)?;
+            validate_git_commit_summary_model_pair(
+                &provider_id,
+                &model_id,
+                provider_configuration,
+            )?;
             Ok((provider_id, model_id))
         }
     }
@@ -15419,10 +15440,9 @@ fn validate_git_commit_action_session_exists(
     let guard = state
         .lock()
         .map_err(|error| format!("failed to lock service state: {error}"))?;
-    let workspace_snapshot = guard
-        .workspace_snapshot
-        .as_ref()
-        .ok_or_else(|| String::from("service is still starting; workspace snapshot is not ready"))?;
+    let workspace_snapshot = guard.workspace_snapshot.as_ref().ok_or_else(|| {
+        String::from("service is still starting; workspace snapshot is not ready")
+    })?;
     if workspace_snapshot
         .session_runtime_state
         .contains_key(&session_id)
@@ -29654,6 +29674,8 @@ fn load_webui_workspace_diff_snapshot(
 
     let request = request.unwrap_or_else(default_webui_workspace_diff_request);
     let current_branch = load_webui_current_git_branch(&repository_root)?;
+    let current_branch_unpushed_commits =
+        load_webui_current_branch_unpushed_commit_count(&repository_root)?;
     let default_branch = load_webui_default_git_branch(&repository_root)?;
     let branches = load_webui_git_branches(&repository_root, current_branch.as_deref())?;
     let recent_commits = load_webui_recent_commits(&repository_root)?;
@@ -29766,6 +29788,7 @@ fn load_webui_workspace_diff_snapshot(
         truncated: omitted_large_file_count > 0,
         notice,
         current_branch,
+        current_branch_unpushed_commits,
         default_branch,
         selected_base_branch,
         selected_compare_branch,
@@ -29781,7 +29804,9 @@ const GIT_COMMIT_SUMMARY_DIFF_TOKEN_BUDGET: usize = 100_000;
 
 /// Resolves a WebUI workspace path into a concrete Git repository root.
 /// 将 WebUI 工作区路径解析为明确的 Git 仓库根目录。
-fn resolve_webui_repository_root_from_workspace_text(workspace_path: &str) -> Result<PathBuf, String> {
+fn resolve_webui_repository_root_from_workspace_text(
+    workspace_path: &str,
+) -> Result<PathBuf, String> {
     let requested_path = PathBuf::from(workspace_path.trim());
     let workspace_path = if requested_path.as_os_str().is_empty() {
         workspace_root()
@@ -29885,7 +29910,10 @@ fn load_git_commit_summary_command_section(
 ) -> Result<String, String> {
     let output = run_webui_git_command(repository_root, args)?;
     if !output.status.success() {
-        return Err(format_webui_git_error(&format!("git {}", args.join(" ")), &output));
+        return Err(format_webui_git_error(
+            &format!("git {}", args.join(" ")),
+            &output,
+        ));
     }
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let body = if stdout.is_empty() {
@@ -30591,6 +30619,7 @@ fn empty_webui_diff_snapshot(
         truncated: false,
         notice: Some(notice),
         current_branch: None,
+        current_branch_unpushed_commits: 0,
         default_branch: None,
         selected_base_branch: None,
         selected_compare_branch: None,
@@ -31699,7 +31728,10 @@ fn normalize_git_commit_action_branch_name(branch_name: &str) -> Result<String, 
     if output.status.success() {
         Ok(branch_name)
     } else {
-        Err(format_webui_git_error("git check-ref-format --branch", &output))
+        Err(format_webui_git_error(
+            "git check-ref-format --branch",
+            &output,
+        ))
     }
 }
 
@@ -31737,6 +31769,38 @@ fn webui_current_branch_has_upstream(repository_root: &Path) -> bool {
     )
     .map(|output| output.status.success())
     .unwrap_or(false)
+}
+
+/// Counts commits on the current branch that have not reached the relevant remote view.
+/// 统计当前分支中尚未进入相关远端视图的提交数量。
+fn load_webui_current_branch_unpushed_commit_count(
+    repository_root: &Path,
+) -> Result<usize, String> {
+    if load_webui_current_git_branch(repository_root)?.is_none() {
+        return Ok(0);
+    }
+    if webui_current_branch_has_upstream(repository_root) {
+        return load_webui_git_revision_count(repository_root, &["@{u}..HEAD"]);
+    }
+    load_webui_git_revision_count(repository_root, &["HEAD", "--not", "--remotes"])
+}
+
+/// Loads one Git revision count from `git rev-list --count`.
+/// 通过 `git rev-list --count` 读取一个 Git 修订范围数量。
+fn load_webui_git_revision_count(
+    repository_root: &Path,
+    revision_args: &[&str],
+) -> Result<usize, String> {
+    let mut args = vec!["rev-list", "--count"];
+    args.extend_from_slice(revision_args);
+    let output = run_webui_git_command(repository_root, &args)?;
+    if !output.status.success() {
+        return Err(format_webui_git_error("git rev-list --count", &output));
+    }
+    let count_text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    count_text
+        .parse::<usize>()
+        .map_err(|error| format!("failed to parse git revision count `{count_text}`: {error}"))
 }
 
 /// Formats a Git command failure with stderr preserved for diagnostics.

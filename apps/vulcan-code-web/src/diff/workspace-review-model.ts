@@ -161,6 +161,7 @@ function diffSnapshotFromParsedWorkspaceResponse(
     completeness: response.truncated ? "truncated" : snapshot.completeness,
     isTruncated: Boolean(response.truncated) || snapshot.isTruncated,
     currentBranch: response.currentBranch ?? null,
+    currentBranchUnpushedCommits: response.currentBranchUnpushedCommits ?? 0,
     defaultBranch: response.defaultBranch ?? null,
     selectedBaseBranch: response.selectedBaseBranch ?? null,
     selectedCompareBranch: response.selectedCompareBranch ?? null,

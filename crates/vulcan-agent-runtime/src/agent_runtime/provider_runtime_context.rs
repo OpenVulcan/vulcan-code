@@ -146,7 +146,9 @@ fn build_runtime_prompt_assembly_input(
             ExecutionPromptPurpose::ContextCompaction => {
                 PromptAssemblyMode::ContextCompactionMinimal
             }
-            ExecutionPromptPurpose::GitCommitSummary => PromptAssemblyMode::ContextCompactionMinimal,
+            ExecutionPromptPurpose::GitCommitSummary => {
+                PromptAssemblyMode::ContextCompactionMinimal
+            }
         },
         model: ModelDescriptor {
             family: preparation.model_blueprint.api_family_key().to_string(),

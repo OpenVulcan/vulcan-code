@@ -60,6 +60,9 @@ export interface ConversationSessionReviewSummary {
   // Current checked-out branch name.
   // 当前检出的分支名称。
   branchName: string | null;
+  // Number of current-branch commits that can be pushed without creating a new commit.
+  // 当前分支可在不创建新提交时直接推送的提交数量。
+  unpushedCommits: number;
   // Known Git branch names from the review snapshot.
   // 审核快照中已知的 Git 分支名称。
   branchNames: string[];
@@ -751,6 +754,7 @@ function ConversationSessionCommitPanel(props: {
   const hasStagedChanges = props.reviewSummary.stagedChangedFiles > 0;
   const hasUnstagedChanges = props.reviewSummary.unstagedChangedFiles > 0;
   const hasIncludedChanges = hasStagedChanges || (includeUnstaged && hasUnstagedChanges);
+  const hasPushOnlyChanges = props.reviewSummary.unpushedCommits > 0;
   const includedAdditions = props.reviewSummary.stagedAdditions
     + (includeUnstaged ? props.reviewSummary.unstagedAdditions : 0);
   const includedDeletions = props.reviewSummary.stagedDeletions
@@ -761,6 +765,8 @@ function ConversationSessionCommitPanel(props: {
   const newBranchPlaceholder = `${t("gitCommitDialog.recommendedPrefix")}${defaultNewBranchName}`;
   const backendReady = Boolean(props.conversationId && props.workspacePath);
   const controlsDisabled = busyAction !== null || !backendReady;
+  const commitActionDisabled = controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget;
+  const pushOnlyActionDisabled = controlsDisabled || hasIncludedChanges || !hasPushOnlyChanges;
 
   React.useEffect(() => {
     if (!hasUnstagedChanges) {
@@ -820,6 +826,9 @@ function ConversationSessionCommitPanel(props: {
     if (!props.conversationId || !props.workspacePath || busyAction) {
       return;
     }
+    if (!hasIncludedChanges || !hasValidCommitTarget) {
+      return;
+    }
     if (!commitMessage.trim()) {
       await generateCommitMessage();
       return;
@@ -843,7 +852,7 @@ function ConversationSessionCommitPanel(props: {
     } finally {
       setBusyAction(null);
     }
-  }, [busyAction, commitMessage, commitTargetRequest, generateCommitMessage, includeUnstaged, props, t]);
+  }, [busyAction, commitMessage, commitTargetRequest, generateCommitMessage, hasIncludedChanges, hasValidCommitTarget, includeUnstaged, props, t]);
 
   // runPushAction pushes the current branch without creating a commit.
   // runPushAction 推送当前分支且不创建提交。
@@ -942,6 +951,7 @@ function ConversationSessionCommitPanel(props: {
       <textarea
         aria-label={t("gitCommitDialog.message")}
         className="conversation-session-commit-message"
+        disabled={controlsDisabled || !hasIncludedChanges}
         onChange={(event) => {
           setCommitMessage(event.currentTarget.value);
           setErrorMessage(null);
@@ -975,7 +985,7 @@ function ConversationSessionCommitPanel(props: {
       <div className="conversation-session-commit-actions">
         <button
           className="conversation-session-commit-action primary"
-          disabled={controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget}
+          disabled={commitActionDisabled}
           onClick={() => void runCommitAction(false)}
           type="button"
         >
@@ -985,7 +995,7 @@ function ConversationSessionCommitPanel(props: {
         </button>
         <button
           className="conversation-session-commit-action"
-          disabled={controlsDisabled || !hasIncludedChanges || !hasValidCommitTarget}
+          disabled={commitActionDisabled}
           onClick={() => void runCommitAction(true)}
           type="button"
         >
@@ -994,7 +1004,7 @@ function ConversationSessionCommitPanel(props: {
         </button>
         <button
           className="conversation-session-commit-action"
-          disabled={controlsDisabled}
+          disabled={pushOnlyActionDisabled}
           onClick={() => void runPushAction()}
           type="button"
         >

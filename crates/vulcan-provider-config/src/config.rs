@@ -71,7 +71,11 @@ fn git_commit_summary_extra_prompt_is_empty(value: &str) -> bool {
 /// Selects which model should generate Git commit summaries.
 /// 选择用于生成 Git 提交总结的模型。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "mode", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "mode",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum GitCommitSummaryModelSelection {
     /// Follow the model selected by the session that owns the commit action.
     /// 跟随发起提交动作的会话当前模型。
@@ -141,11 +145,17 @@ pub struct PersistedGitCommitConfiguration {
     pub new_branch_prefix: String,
     /// Model selection used when commit messages are generated automatically.
     /// 自动生成提交信息时使用的模型选择。
-    #[serde(default, skip_serializing_if = "GitCommitSummaryModelSelection::is_session")]
+    #[serde(
+        default,
+        skip_serializing_if = "GitCommitSummaryModelSelection::is_session"
+    )]
     pub summary_model: GitCommitSummaryModelSelection,
     /// User-authored extra prompt appended to commit-message generation.
     /// 追加到提交信息生成中的用户额外提示词。
-    #[serde(default, skip_serializing_if = "git_commit_summary_extra_prompt_is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "git_commit_summary_extra_prompt_is_empty"
+    )]
     pub summary_extra_prompt: String,
 }
 

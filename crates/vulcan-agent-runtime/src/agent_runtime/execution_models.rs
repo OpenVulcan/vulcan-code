@@ -162,7 +162,8 @@ impl ExecutionPromptPurpose {
     pub const fn rejects_tool_requests(self) -> bool {
         matches!(
             self,
-            Self::ContextCompaction | Self::ContextCompactionCachePreserving
+            Self::ContextCompaction
+                | Self::ContextCompactionCachePreserving
                 | Self::GitCommitSummary
         )
     }
